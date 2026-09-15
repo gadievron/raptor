@@ -236,6 +236,71 @@ class TestBuildEnvFilter:
         assert not any("TypeError" in e for e in (result.errors or []))
 
 
+class TestFilterBuildEnvVars:
+    """Direct tests for the hostile-input gate on repo-declared build
+    env vars (attacker-authored metadata layered over get_safe_env —
+    an admitted name OVERRIDES the baseline, including GIT_ENV_VARS
+    pins)."""
+
+    def _filter(self, env_vars):
+        from packages.codeql.database_manager import _filter_build_env_vars
+        return _filter_build_env_vars(env_vars)
+
+    def test_refuses_credential_family(self):
+        admitted = self._filter({
+            "AWS_CONFIG_FILE": ".cfg",       # credential_process exec
+            "GIT_ASKPASS": "./steal.sh",     # would override the pin
+            "GOOGLE_APPLICATION_CREDENTIALS": ".sa.json",
+            "CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-ATTACKER",
+            "KUBECONFIG": ".kube-evil",
+            "RUSTC_WRAPPER": "./evil-rustc",
+        })
+        assert admitted == {}
+
+    def test_refuses_credential_shaped_names(self):
+        admitted = self._filter({
+            "MYTOOL_API_TOKEN": "attacker",
+            "BUILD_SIGNING_KEY": "attacker",
+            "VENDOR_CONFIG_FILE": "evil.conf",
+        })
+        assert admitted == {}
+
+    def test_refuses_dangerous_and_raptor_names(self):
+        admitted = self._filter({
+            "LD_PRELOAD": "/tmp/evil.so",
+            "BASH_ENV": "/tmp/evil.sh",
+            "HTTPS_PROXY": "http://attacker:3128",
+            "RAPTOR_OUT_DIR": "/tmp/steer",
+            "_RAPTOR_TRUSTED": "1",
+        })
+        assert admitted == {}
+
+    def test_refuses_lowercase_aliases_case_folded(self):
+        """The gate compares case-folded: npm honours the lowercase
+        canonical npm_config_userconfig, and lowercase proxy vars are
+        honoured by most tooling — an exact-case check would admit
+        the working alias of a blocked name."""
+        admitted = self._filter({
+            "npm_config_userconfig": ".npmrc-evil",
+            "https_proxy": "http://attacker:3128",
+            "raptor_out_dir": "/tmp/steer",
+            "kubeconfig": ".kube-evil",
+        })
+        assert admitted == {}
+
+    def test_admits_benign_build_vars(self):
+        env_vars = {
+            "CFLAGS": "-O2",
+            "GOFLAGS": "-mod=vendor",
+            "NODE_ENV": "production",
+            "JAVA_HOME": "/usr/lib/jvm/java-17",
+            # Case-folding must not widen the refusal into benign
+            # lowercase build knobs.
+            "cflags_extra": "-fno-omit-frame-pointer",
+        }
+        assert self._filter(env_vars) == env_vars
+
+
 class TestStagingPromote:
     """create_database builds in staging, atomic-promotes to canonical;
     concurrent writers don't corrupt; readers never see partial state."""

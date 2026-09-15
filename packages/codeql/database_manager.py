@@ -39,9 +39,64 @@ from core.hash import sha256_string
 from core.json import load_json, save_json
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
+from core.security.credential_env import (
+    CREDENTIAL_ENV_FAMILY,
+    is_credential_redirect_shaped,
+)
 from packages.codeql.tunables import CodeQLTunables
 
 logger = get_logger()
+
+
+def _filter_build_env_vars(env_vars: dict) -> dict:
+    """Admit build-system-reported env vars past the hostile-input gate.
+
+    ``build_system.env_vars`` comes from the SCANNED REPO's build
+    metadata — attacker-authored on untrusted targets — and is layered
+    on top of ``get_safe_env()``, so an unblocked name OVERRIDES the
+    baseline (including the ``GIT_ENV_VARS`` pins). Refused:
+
+    * the DANGEROUS_ENV_VARS + PROXY_ENV_VARS blocklists (LD_PRELOAD /
+      BASH_ENV re-injection, proxy redirect);
+    * the full credential-env family plus credential-redirect SHAPED
+      names (core/security/credential_env.py) — a repo's build
+      metadata has no legitimate reason to set a credential, a
+      credential-config pointer (``AWS_CONFIG_FILE`` →
+      ``credential_process`` exec), or an askpass-style helper;
+    * RAPTOR_*-prefixed names wholesale: repo content must never set
+      the session credential, the out-dir override, or any other
+      RAPTOR control var.
+
+    Membership is CASE-FOLDED: several tools that read these names
+    honour lowercase spellings (npm's canonical form is
+    ``npm_config_userconfig``; the proxy family has lowercase-
+    canonical variants), so an exact-case check admits the working
+    lowercase alias of a blocked name.
+    """
+    blocked_upper = {
+        name.upper()
+        for name in (
+            set(RaptorConfig.DANGEROUS_ENV_VARS)
+            | set(RaptorConfig.PROXY_ENV_VARS)
+            | CREDENTIAL_ENV_FAMILY
+        )
+    }
+    admitted = {}
+    refused = []
+    for k, v in env_vars.items():
+        k_upper = k.upper()
+        if (k_upper in blocked_upper
+                or k_upper.startswith(("RAPTOR_", "_RAPTOR"))
+                or is_credential_redirect_shaped(k)):
+            refused.append(k)
+            continue
+        admitted[k] = v
+    if refused:
+        logger.info(
+            "build env filter: refused repo-declared env vars: %s",
+            sorted(refused),
+        )
+    return admitted
 
 # Languages whose databases are created with ``--build-mode=none``
 # (buildless extraction) BY DEFAULT.  A traced build (and the
@@ -1248,16 +1303,7 @@ class DatabaseManager:
             env.pop(_ident, None)
         env["USER"] = env["LOGNAME"] = "sandbox"
         if build_system and build_system.env_vars:
-            # Filter build env vars through the same blocklist — a malicious
-            # repo's build config could try to re-inject LD_PRELOAD, BASH_ENV, etc.
-            # RAPTOR_*-prefixed names are blocked wholesale:
-            # repo content must never set the session credential, the
-            # out-dir override, or any other RAPTOR control var.
-            blocked = set(RaptorConfig.DANGEROUS_ENV_VARS) | set(RaptorConfig.PROXY_ENV_VARS)
-            for k, v in build_system.env_vars.items():
-                if k in blocked or k.startswith(("RAPTOR_", "_RAPTOR")):
-                    continue
-                env[k] = v
+            env.update(_filter_build_env_vars(build_system.env_vars))
         # Auto-detect toolchain-home env vars (JAVA_HOME, GOROOT, etc.)
         # per build system's env_detect list. Per-subprocess scope —
         # these land only in this build invocation, not in other sandbox

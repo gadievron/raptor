@@ -776,6 +776,18 @@ def _get_safe_env() -> dict[str, str]:
         env = dict(os.environ)
         for key in ("TERMINAL", "EDITOR", "VISUAL", "BROWSER", "PAGER"):
             env.pop(key, None)
+        # Degraded-fallback belt: this branch hands the child a
+        # full-environ copy, so at minimum drop the credential-env
+        # family (the canonical vocabulary is stdlib-only and imports
+        # even where core.config cannot; guard anyway — this fallback
+        # exists precisely for broken-install conditions).
+        try:
+            from core.security.credential_env import CREDENTIAL_ENV_FAMILY
+        except ImportError:
+            pass
+        else:
+            for key in CREDENTIAL_ENV_FAMILY:
+                env.pop(key, None)
     env["ASAN_OPTIONS"] = "detect_leaks=1:abort_on_error=1:handle_segv=0"
     # abort_on_error=1 is load-bearing for the signal-grade sanitizer
     # classification: halt_on_error alone makes UBSan STOP (exit 1,
