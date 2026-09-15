@@ -595,3 +595,90 @@ def test_sink_exception_aborts_walk():
             raw, selector=lambda m: m.name, mode="r:", sink=sink,
         )
     assert seen == ["a.txt"]
+
+
+def test_truncated_gz_via_seekable_mode_raises_typed_mid_iteration():
+    """Seekable auto-detect mode ("r:*" — the SCA consumer's mode)
+    defers decompression, so a .tar.gz truncated mid-stream OPENS fine
+    and only fails inside the member walk — pre-fix that surfaced as a
+    raw builtins.EOFError ("Compressed file ended before the
+    end-of-stream marker"), crashing consumers that guard the
+    documented ``except (TarOpenError, tarfile.TarError)`` shape.
+    The mid-iteration failure must be typed like the open path."""
+    from core.tar.extract import TarReadError
+
+    import os as _os
+    raw = _make_tar(
+        [("pkg/a.py", b"x" * 512), ("pkg/b.py", _os.urandom(200_000))],
+        gzipped=True,
+    )
+    # Cut near the END: tarfile.open's firstmember parse succeeds (a
+    # truncation early enough fails AT OPEN, which was already typed);
+    # the corruption then surfaces from the second member's read,
+    # inside the iteration loop.
+    truncated = raw[: len(raw) - 4096]
+    with pytest.raises(TarReadError) as excinfo:
+        extract_files_from_tar(truncated, selector=_select_all, mode="r:*")
+    # The typed contract: TarReadError IS a TarOpenError IS a
+    # tarfile.TarError — every existing guard catches it.
+    assert isinstance(excinfo.value, TarOpenError)
+    assert isinstance(excinfo.value, tarfile.TarError)
+
+
+def test_intact_seekable_archive_still_extracts():
+    # Two-direction: the translation wrappers must not perturb a
+    # healthy r:* walk.
+    raw = _make_tar([("pkg/a.py", b"data")], gzipped=True)
+    out = extract_files_from_tar(raw, selector=_select_all, mode="r:*")
+    assert out == {"pkg/a.py": b"data"}
+
+
+def test_bitflipped_xz_via_seekable_mode_raises_typed():
+    """A bit-flipped ``.tar.xz`` (the SCA consumer's ``r:*`` mode
+    auto-detects xz) opens fine and surfaces ``lzma.LZMAError`` from
+    the member read mid-walk — LZMAError subclasses neither TarError
+    nor OSError, so pre-fix it escaped every translation wrap raw and
+    crashed consumers guarding the documented typed shape.
+    (``zlib.error`` is the raw-deflate sibling in the same tuple;
+    open-time gz corruption is wrapped by tarfile itself.)"""
+    import io as _io
+    import os as _os
+
+    from core.tar.extract import TarReadError
+
+    lzma = pytest.importorskip("lzma")
+
+    buf = _io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:xz") as tf:
+        for name in ("pkg/a.bin", "pkg/b.bin"):
+            data = _os.urandom(300_000)  # incompressible: flips land in payload
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tf.addfile(info, _io.BytesIO(data))
+    blob = bytearray(buf.getvalue())
+    # Flip one bit well past the xz/tar headers so tarfile.open's
+    # firstmember parse succeeds and the corruption surfaces from the
+    # second member's read, inside the iteration loop.
+    blob[int(len(blob) * 0.75)] ^= 0x01
+
+    with pytest.raises(TarReadError) as excinfo:
+        extract_files_from_tar(bytes(blob), selector=_select_all, mode="r:*")
+    assert isinstance(excinfo.value, TarOpenError)
+    assert isinstance(excinfo.value, tarfile.TarError)
+    assert isinstance(excinfo.value.__cause__, lzma.LZMAError)
+
+
+def test_intact_xz_archive_still_extracts():
+    # Two-direction: the widened translation tuple must not perturb a
+    # healthy xz walk.
+    import io as _io
+
+    pytest.importorskip("lzma")
+    buf = _io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:xz") as tf:
+        info = tarfile.TarInfo(name="pkg/a.py")
+        info.size = 4
+        tf.addfile(info, _io.BytesIO(b"data"))
+    out = extract_files_from_tar(
+        buf.getvalue(), selector=_select_all, mode="r:*")
+    assert out == {"pkg/a.py": b"data"}

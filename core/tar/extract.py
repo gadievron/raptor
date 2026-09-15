@@ -60,6 +60,30 @@ from .safe_member import DEFAULT_MAX_MEMBER_BYTES, safe_member_reason
 
 logger = logging.getLogger(__name__)
 
+# Everything the tarfile-driven read of untrusted bytes can raise for
+# corrupt input, translated at the boundaries below. ``TarError``
+# covers ReadError/CompressionError, ``EOFError``/``OSError`` cover
+# truncated gzip streams — but the per-codec decompressors ALSO leak
+# their own exception types raw through tarfile: a bit-flipped
+# ``.tar.xz`` surfaces ``lzma.LZMAError`` from the member read (not an
+# OSError subclass), and corrupt deflate data can surface
+# ``zlib.error``. ``bz2`` reports corruption as OSError (covered).
+# The codec modules are optional CPython builds — a missing module
+# just means that compression can't have produced the error.
+_TAR_CORRUPTION_ERRORS: tuple[type[BaseException], ...] = (
+    tarfile.TarError, EOFError, OSError,
+)
+try:
+    import lzma
+    _TAR_CORRUPTION_ERRORS += (lzma.LZMAError,)
+except ImportError:  # pragma: no cover - lzma-less CPython build
+    pass
+try:
+    import zlib
+    _TAR_CORRUPTION_ERRORS += (zlib.error,)
+except ImportError:  # pragma: no cover - zlib-less CPython build
+    pass
+
 
 class _ChunkStream(io.RawIOBase):
     """File-like adapter over a chunk iterator.
@@ -116,6 +140,16 @@ class TarOpenError(tarfile.TarError):
     the alternative — returning an empty dict — silently converted
     corrupt attacker-influenced input into a "successfully empty"
     result downstream consumers treated as complete."""
+
+
+class TarReadError(TarOpenError):
+    """Raised when the archive turns corrupt MID-ITERATION (seekable
+    modes like ``"r:*"`` surface a truncated compressed stream as a
+    raw ``EOFError`` from the member read, not at open). Subclasses
+    :class:`TarOpenError` so every existing ``except (TarOpenError,
+    tarfile.TarError)`` guard keeps working — the module's FAIL CLOSED
+    contract ("a corrupt archive must surface as an error") is typed
+    end-to-end, not only at open time."""
 
 
 class TarEntryCountExceeded(Exception):
@@ -245,7 +279,7 @@ def extract_files_from_tar(
             max_total_bytes, consumed)
     try:
         tf = tarfile.open(fileobj=fileobj, mode=mode, **open_kwargs)
-    except (tarfile.TarError, EOFError, OSError) as e:
+    except _TAR_CORRUPTION_ERRORS as e:
         # ``TarError`` covers ReadError + CompressionError + other
         # malformed-archive cases. ``OSError`` covers truncated
         # gzip streams that surface from the underlying decompress
@@ -255,7 +289,22 @@ def extract_files_from_tar(
 
     try:
         count = 0
-        for member in tf:
+        # Iteration and member reads are tarfile-driven work over the
+        # same untrusted bytes the open path guards: seekable modes
+        # ("r:*", "r:gz") defer decompression, so a truncated stream
+        # that opened fine raises raw EOFError/OSError from next() or
+        # f.read() mid-walk. Translate exactly those calls (never the
+        # caller's selector/sink callbacks) so the typed fail-closed
+        # contract holds end-to-end.
+        members = iter(tf)
+        while True:
+            try:
+                member = next(members)
+            except StopIteration:
+                break
+            except _TAR_CORRUPTION_ERRORS as e:
+                msg = f"tar archive corrupt mid-iteration: {e}"
+                raise TarReadError(msg) from e
             count += 1
             if max_entry_count is not None and count > max_entry_count:
                 msg = f"tar exceeds {max_entry_count} entries (bomb-shape); refusing"
@@ -298,7 +347,11 @@ def extract_files_from_tar(
             key = selector(member)
             if key is None:
                 continue
-            f = tf.extractfile(member)
+            try:
+                f = tf.extractfile(member)
+            except _TAR_CORRUPTION_ERRORS as e:
+                msg = f"tar archive corrupt mid-iteration: {e}"
+                raise TarReadError(msg) from e
             if f is None:
                 continue
             if unique_keys and key in found:
@@ -316,6 +369,9 @@ def extract_files_from_tar(
                 raise ValueError(msg)
             try:
                 data = f.read()
+            except _TAR_CORRUPTION_ERRORS as e:
+                msg = f"tar member read failed mid-iteration: {e}"
+                raise TarReadError(msg) from e
             finally:
                 f.close()
             if sink is not None:
@@ -333,5 +389,6 @@ def extract_files_from_tar(
 
 __all__ = [
     "TarOpenError",
+    "TarReadError",
     "extract_files_from_tar",
 ]
