@@ -87,6 +87,28 @@ class CTaintApprox:
         }
 
 
+def function_key(rel_path: str, func_name: str) -> str:
+    """THE producer join key for per-function taint results.
+
+    ``"<rel_path>:<func_name>"`` — minted by the audit loader when it
+    aggregates per-file extraction results, and the key vocabulary the
+    evidence index joins on. Every producer of a cross-file
+    ``per_function`` map and every consumer that joins against it must
+    construct keys through this function; hand-built f-strings on one
+    side are exactly how the multi-hop lane went silently inert.
+    """
+    return f"{rel_path}:{func_name}"
+
+
+def bare_function_name(key: str) -> str:
+    """Bare function name of a :func:`function_key` (or already-bare) key.
+
+    ``rsplit`` from the right: relative paths may themselves contain
+    colons on exotic filesystems, function names cannot.
+    """
+    return key.rsplit(":", 1)[-1]
+
+
 def extract_taint_approx_c(content: str) -> dict[str, CTaintApprox]:
     """Extract taint approximations for all functions in C source.
 
@@ -530,8 +552,15 @@ def compute_transitive_taint(
     (e.g. from ``context-map.json``) to bridge functions whose
     ``direct_flows`` only cover intra-file relationships.
 
-    Returns a dict keyed by function name mapping to ``TransitiveTaint``.
-    Only functions with at least one reachable sink path are included.
+    *per_function* accepts both key vocabularies: bare function names
+    and the loader's :func:`function_key` (``"rel/path.c:func"``) —
+    the only production caller passes the latter. ``direct_flows``
+    record callees by BARE name, so hop resolution goes through a
+    bare-name view; result keys always mirror the input keys.
+
+    Returns a dict keyed by the input keys mapping to
+    ``TransitiveTaint``. Only functions with at least one reachable
+    sink path are included.
     """
 
     # -- Build a supplementary adjacency set from call_edges ----------------
@@ -545,6 +574,27 @@ def compute_transitive_taint(
             if caller and callee:
                 extra_edges.setdefault(caller, set()).add(callee)
 
+    # -- Bare-name view for hop resolution -----------------------------------
+    # direct_flows name callees bare; joining them against the
+    # producer's path-prefixed keys missed for every project function,
+    # so only the direct 1-hop sink terminal ever fired. Two files
+    # defining the same function name make the bare name ambiguous —
+    # refuse those rather than extending a chain through an arbitrary
+    # same-named function (these results feed review prompts; a
+    # confidently wrong cross-file chain steers worse than a missing
+    # one).
+    hop_view: dict[str, CTaintApprox] = {}
+    ambiguous: set[str] = set()
+    for key, approx in per_function.items():
+        bare = bare_function_name(key)
+        existing = hop_view.get(bare)
+        if existing is not None and existing is not approx:
+            ambiguous.add(bare)
+            continue
+        hop_view[bare] = approx
+    for bare in ambiguous:
+        del hop_view[bare]
+
     results: dict[str, TransitiveTaint] = {}
 
     for func_name, approx in per_function.items():
@@ -552,19 +602,31 @@ def compute_transitive_taint(
 
         for param_idx, flows in approx.direct_flows.items():
             paths: list[TaintPath] = []
-            for callee_name, arg_idx in flows:
+            # dict.fromkeys: duplicate (callee, arg) flow entries
+            # (repeated call sites) would multiply identical search
+            # trees — dedupe while preserving order.
+            for callee_name, arg_idx in dict.fromkeys(
+                (c, a) for c, a in flows
+            ):
                 _follow_taint(
                     callee_name,
                     arg_idx,
-                    per_function,
+                    hop_view,
                     extra_edges,
-                    visited=frozenset({func_name}),
+                    visited=frozenset({bare_function_name(func_name)}),
                     hops_so_far=[func_name],
                     max_depth=max_depth,
                     out_paths=paths,
                 )
             if paths:
-                param_sinks[param_idx] = paths
+                # A callee whose dangerous_flows duplicate its
+                # direct_flows produces the same terminal path via
+                # both branches — keep one of each.
+                unique = {
+                    (tuple(p.hops), p.sink_name, p.sink_arg): p
+                    for p in paths
+                }
+                param_sinks[param_idx] = list(unique.values())
 
         if param_sinks:
             results[func_name] = TransitiveTaint(
@@ -573,6 +635,9 @@ def compute_transitive_taint(
             )
 
     return results
+
+
+_MAX_PATHS_PER_PARAM = 32
 
 
 def _follow_taint(
@@ -595,7 +660,16 @@ def _follow_taint(
     *arg_idx* has ``direct_flows``, the search continues along those edges.
     """
 
-    # -- Depth / cycle guard ------------------------------------------------
+    # -- Depth / cycle / volume guard ----------------------------------------
+    # _MAX_PATHS_PER_PARAM caps the DFS output: visited is per-PATH, so
+    # branchy call graphs are exponential in max_depth once multi-hop
+    # resolution actually joins. Too low loses alternative sink routes
+    # for genuinely fan-shaped flows (the prompt renderer shows each
+    # path); too high lets one hub function stall the evidence pass.
+    # 32 paths per parameter is already far beyond what a review prompt
+    # can usefully carry.
+    if len(out_paths) >= _MAX_PATHS_PER_PARAM:
+        return
     if len(hops_so_far) >= max_depth:
         return
     if callee in visited:
@@ -624,6 +698,8 @@ def _follow_taint(
         # Terminal: callee marks this arg position as dangerous
         if callee_approx.has_dangerous_param(arg_idx):
             for sink_callee, sink_arg in callee_approx.dangerous_flows[arg_idx]:
+                if len(out_paths) >= _MAX_PATHS_PER_PARAM:
+                    return
                 out_paths.append(TaintPath(
                     hops=list(current_hops) + [sink_callee],
                     sink_name=sink_callee,
@@ -669,6 +745,8 @@ def _follow_taint(
                         )
                 if bridged_approx.has_dangerous_param(arg_idx):
                     for sink_callee, sink_arg in bridged_approx.dangerous_flows[arg_idx]:
+                        if len(out_paths) >= _MAX_PATHS_PER_PARAM:
+                            return
                         out_paths.append(TaintPath(
                             hops=list(current_hops) + [bridged_callee, sink_callee],
                             sink_name=sink_callee,

@@ -197,6 +197,7 @@ def _build_taint_approx(
         from core.analysis.taint_approx import (
             extract_taint_approx_c,
             extract_taint_approx_cpp,
+            function_key,
         )
     except ImportError:
         return None
@@ -249,8 +250,11 @@ def _build_taint_approx(
                 "(%s: %s)", rel, e.__class__.__name__, e)
             continue
 
+        # The shared constructor is the seam contract: the evidence
+        # index and compute_transitive_taint join on exactly this
+        # spelling.
         for func_name, approx in approxes.items():
-            results[f"{rel}:{func_name}"] = approx
+            results[function_key(rel, func_name)] = approx
 
     if skipped_large:
         logger.info(

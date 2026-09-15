@@ -19,7 +19,10 @@ from core.analysis.taint_approx import (
     _scan_calls,
     _scan_opaque_assignments,
     _walk_top_level,
+    bare_function_name,
+    compute_transitive_taint,
     extract_taint_approx_c,
+    function_key,
 )
 
 
@@ -395,3 +398,128 @@ public:
 void plain(char *s) { strcpy(dst, s); }
 """
         assert "plain" in extract_taint_approx_cpp(code)
+
+
+class TestTransitiveTaintJoinContract:
+    """compute_transitive_taint must join the loader's real key shape.
+
+    The producing side is exercised for real (core.audit.loaders builds
+    ``"rel:func"`` keys over an actual C tree) — hand-built bare-name
+    fixture keys are exactly the phantom shape that masked the inert
+    multi-hop lane.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _require_c_grammar(self):
+        pytest.importorskip("tree_sitter_c")
+
+    @staticmethod
+    def _tree(tmp_path):
+        (tmp_path / "a.c").write_text(
+            "void handle(char *input, int n) { copy_data(dst, input, n); }\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "b.c").write_text(
+            "void copy_data(char *dst, char *src, int n) "
+            "{ memcpy(dst, src, n); }\n",
+            encoding="utf-8",
+        )
+
+    def test_production_keys_produce_multi_hop_paths(self, tmp_path):
+        from core.audit.loaders import _build_taint_approx
+
+        self._tree(tmp_path)
+        per_function = _build_taint_approx(tmp_path)
+        assert sorted(per_function) == ["a.c:handle", "b.c:copy_data"]
+
+        from core.analysis.taint_approx import compute_transitive_taint
+
+        transitive = compute_transitive_taint(per_function)
+        # Result keys mirror the producer keys (the evidence index
+        # joins on them), and the multi-hop chain resolves the bare
+        # callee name against the prefixed entry.
+        assert "a.c:handle" in transitive
+        paths = transitive["a.c:handle"].param_sinks[0]
+        assert [p.hops for p in paths] == [
+            ["a.c:handle", "copy_data", "memcpy"],
+        ]
+        assert paths[0].sink_name == "memcpy"
+
+    def test_bare_keys_still_produce_multi_hop_paths(self, tmp_path):
+        # Control: the legacy bare-name vocabulary keeps working.
+        from core.audit.loaders import _build_taint_approx
+
+        self._tree(tmp_path)
+        per_function = {
+            bare_function_name(k): v
+            for k, v in _build_taint_approx(tmp_path).items()
+        }
+        transitive = compute_transitive_taint(per_function)
+        assert "handle" in transitive
+        assert transitive["handle"].param_sinks[0][0].hops == [
+            "handle", "copy_data", "memcpy",
+        ]
+
+    def test_ambiguous_bare_names_refused_for_hop_resolution(self):
+        # Two files defining copy_data: the chain must not extend
+        # through an arbitrary same-named function.
+        mid_a = CTaintApprox(
+            function="copy_data", params=["d", "s"],
+            direct_flows={1: [("memcpy", 1)]},
+            dangerous_flows={1: [("memcpy", 1)]},
+        )
+        mid_b = CTaintApprox(
+            function="copy_data", params=["d", "s"],
+            direct_flows={}, dangerous_flows={},
+        )
+        top = CTaintApprox(
+            function="handle", params=["input"],
+            direct_flows={0: [("copy_data", 1)]},
+            dangerous_flows={},
+        )
+        transitive = compute_transitive_taint({
+            "a.c:handle": top,
+            "b.c:copy_data": mid_a,
+            "c.c:copy_data": mid_b,
+        })
+        assert "a.c:handle" not in transitive
+
+    def test_path_volume_capped_both_directions(self):
+        from core.analysis.taint_approx import _MAX_PATHS_PER_PARAM
+
+        fan = _MAX_PATHS_PER_PARAM + 8
+        top = CTaintApprox(
+            function="hub", params=["x"],
+            direct_flows={0: [(f"mid{i}", 0) for i in range(fan)]},
+            dangerous_flows={},
+        )
+        mids = {
+            f"m{i}.c:mid{i}": CTaintApprox(
+                function=f"mid{i}", params=["y"],
+                direct_flows={0: [("memcpy", 0)]},
+                dangerous_flows={0: [("memcpy", 0)]},
+            )
+            for i in range(fan)
+        }
+        transitive = compute_transitive_taint({"h.c:hub": top, **mids})
+        capped = transitive["h.c:hub"].param_sinks[0]
+        assert len(capped) <= _MAX_PATHS_PER_PARAM
+
+        small = CTaintApprox(
+            function="hub", params=["x"],
+            direct_flows={0: [("mid0", 0), ("mid1", 0)]},
+            dangerous_flows={},
+        )
+        transitive = compute_transitive_taint({
+            "h.c:hub": small,
+            "m0.c:mid0": mids["m0.c:mid0"],
+            "m1.c:mid1": mids["m1.c:mid1"],
+        })
+        # Below the cap nothing is dropped.
+        assert len(transitive["h.c:hub"].param_sinks[0]) == 2
+
+    def test_function_key_round_trip(self):
+        key = function_key("src/net/parse.c", "handle")
+        assert key == "src/net/parse.c:handle"
+        assert bare_function_name(key) == "handle"
+        assert bare_function_name("handle") == "handle"
