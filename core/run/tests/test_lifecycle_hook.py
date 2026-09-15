@@ -85,19 +85,52 @@ class TestToolFailureMarker(unittest.TestCase):
             self.assertTrue((run / FAILURE_MARKER).exists())
             self.assertEqual(_status(run), STATUS_RUNNING)
 
-    def test_marks_all_running_in_session(self):
+    def test_marks_only_newest_running_in_session(self):
+        # Stamping EVERY running run let a failed single-call command
+        # poison an unrelated in-flight run (the next Stop fail_run's
+        # it). With no run dir named in the command, only the newest
+        # running run — the one a just-failed single-call belongs to —
+        # gets the marker.
         with TemporaryDirectory() as tmp:
             out = Path(tmp) / "out"
             run1 = _make_running_run(out, "scan-001", "scan")
             run2 = _make_running_run(out, "agentic-002", "agentic")
+            meta = load_json(run2 / RUN_METADATA_FILE)
+            meta["timestamp"] = "2026-05-03T13:00:00+00:00"  # newer
+            save_json(run2 / RUN_METADATA_FILE, meta)
             with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
                  patch("core.run.metadata._get_session_pid",
                        return_value=SESSION_PID), \
                  _stdin(RAPTOR_BASH_FAILURE):
                 sys.argv = ["hook", "tool-failure"]
                 _hook_mod.main()
-            self.assertTrue((run1 / FAILURE_MARKER).exists())
+            self.assertFalse((run1 / FAILURE_MARKER).exists())
             self.assertTrue((run2 / FAILURE_MARKER).exists())
+
+    def test_marks_the_run_named_in_the_command(self):
+        # A failing command that carries a run dir (lifecycle-managed
+        # commands carry their OUTPUT_DIR) attributes the marker to
+        # THAT run, even when a newer run is in flight.
+        with TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out"
+            run1 = _make_running_run(out, "scan-001", "scan")
+            run2 = _make_running_run(out, "agentic-002", "agentic")
+            meta = load_json(run2 / RUN_METADATA_FILE)
+            meta["timestamp"] = "2026-05-03T13:00:00+00:00"  # newer
+            save_json(run2 / RUN_METADATA_FILE, meta)
+            payload = json.dumps({
+                "tool_name": "Bash",
+                "tool_input": {"command":
+                               f"libexec/raptor-run-lifecycle complete {run1}"},
+            })
+            with patch.object(_hook_mod, "REPO_ROOT", Path(tmp)), \
+                 patch("core.run.metadata._get_session_pid",
+                       return_value=SESSION_PID), \
+                 _stdin(payload):
+                sys.argv = ["hook", "tool-failure"]
+                _hook_mod.main()
+            self.assertTrue((run1 / FAILURE_MARKER).exists())
+            self.assertFalse((run2 / FAILURE_MARKER).exists())
 
     def test_skips_different_session(self):
         with TemporaryDirectory() as tmp:
@@ -177,6 +210,47 @@ class TestToolFailureFiltering(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             run = self._run_hook(tmp, RAPTOR_BASH_FAILURE)
             self.assertTrue((run / FAILURE_MARKER).exists())
+
+    def test_mention_only_command_writes_no_marker(self):
+        # Commands that merely MENTION the dispatch surface fail for
+        # their own reasons: CLAUDE.md's dispatch rule instructs
+        # `ls libexec/raptor-<name>*`, which exits 2 on a glob miss —
+        # a marker here flips a successful run to Failed at Stop.
+        for command in (
+            "ls libexec/raptor-coverage*",
+            "grep -n verdict libexec/raptor-agentic",
+            "cat libexec/raptor-run-lifecycle",
+        ):
+            payload = json.dumps({
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+            })
+            with TemporaryDirectory() as tmp:
+                run = self._run_hook(tmp, payload)
+                self.assertFalse(
+                    (run / FAILURE_MARKER).exists(),
+                    f"mention-only command stamped a marker: {command}",
+                )
+
+    def test_invocation_shapes_write_marker(self):
+        # Command-position invocations, including behind a path
+        # prefix or a shell separator, are the relevant shapes.
+        for command in (
+            "libexec/raptor-coverage-summary --gaps",
+            '"$CLAUDE_PROJECT_DIR"/libexec/raptor-run-lifecycle start scan',
+            "cd /repo && libexec/raptor-agentic --repo /x",
+            "true; libexec/raptor-verified-outcomes out/run",
+        ):
+            payload = json.dumps({
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+            })
+            with TemporaryDirectory() as tmp:
+                run = self._run_hook(tmp, payload)
+                self.assertTrue(
+                    (run / FAILURE_MARKER).exists(),
+                    f"invocation shape missed: {command}",
+                )
 
 
 class TestStopHook(unittest.TestCase):

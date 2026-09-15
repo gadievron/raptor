@@ -61,8 +61,27 @@ _MAX_META_BYTES = 8 * 1024 * 1024
 _MULTI_TURN_COMMANDS = frozenset({"validate", "understand", "audit"})
 
 
-def _tool_failure_relevant(stream) -> bool:
-    """Only failures of RAPTOR pipeline commands mark a live run.
+# A raptor dispatch INVOCATION: `libexec/raptor-<name>` (optionally
+# behind an absolute / "$CLAUDE_PROJECT_DIR" path prefix) in COMMAND
+# position — start of string, or right after a shell command separator
+# (;, &, &&, |, ||, subshell paren, newline). A bare substring match
+# stamped the marker for commands that merely MENTION the surface:
+# the documented `ls libexec/raptor-<name>*` dispatch probe exits 2
+# on a glob miss, and grep/cat over a script path behaves the same —
+# each flipped an unrelated successful run to Failed at the next
+# Stop. Not matched (accepted, per the fail direction below):
+# interpreter/wrapper/env-var prefixes (`bash x`, `timeout 60 x`,
+# `VAR=y x`) — EXECUTION RULES forbid those spellings for dispatch.
+import re  # noqa: E402
+
+_RAPTOR_INVOCATION_RE = re.compile(
+    r'(?:\A|[;&|(]|\n)\s*(?:\S*/)?libexec/raptor-[A-Za-z0-9._-]+'
+)
+
+
+def _tool_failure_command(stream) -> str | None:
+    """The failing Bash command when it is a RAPTOR pipeline
+    invocation, else ``None`` — only such failures mark a live run.
 
     settings.json registers the tool-failure hook with a ``Bash``
     matcher, but tool-NAME matching alone would stamp the failure
@@ -70,8 +89,8 @@ def _tool_failure_relevant(stream) -> bool:
     an unrelated build command) — the next Stop then finalizes a
     SUCCESSFUL run as failed. Command-string filtering isn't a
     supported hook-config field, so read the hook's stdin JSON here
-    and require a Bash tool_input whose command references the
-    ``libexec/raptor-`` dispatch surface.
+    and require a Bash tool_input whose command INVOKES the
+    ``libexec/raptor-`` dispatch surface (see the regex above).
 
     Fail direction (both-directions trade-off): unreadable, malformed,
     or non-matching stdin → NOT relevant, no marker. A spurious marker
@@ -83,12 +102,38 @@ def _tool_failure_relevant(stream) -> bool:
     try:
         payload = json.load(stream)
     except (OSError, ValueError):
-        return False
+        return None
     if not isinstance(payload, dict) or payload.get("tool_name") != "Bash":
-        return False
+        return None
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    return isinstance(command, str) and "libexec/raptor-" in command
+    if isinstance(command, str) and _RAPTOR_INVOCATION_RE.search(command):
+        return command
+    return None
+
+
+def _pick_failure_run(matching: list, command: str) -> "Path | None":
+    """Attribute a tool failure to ONE running run.
+
+    Stamping every running run of the session let a failed read-only
+    query poison an unrelated in-flight run (the next Stop then
+    fail_run's it). Prefer the run whose directory the failing
+    command names (longest path match — lifecycle-managed commands
+    carry their OUTPUT_DIR); otherwise the newest running run, which
+    is the one a just-failed single-call command belongs to.
+
+    ``matching`` holds ``(run_dir, metadata)`` pairs.
+    """
+    named = [d for d, _m in matching if str(d) in command]
+    if named:
+        return max(named, key=lambda d: len(str(d)))
+
+    def _started(pair):
+        ts = pair[1].get("timestamp")
+        return ts if isinstance(ts, str) else ""
+
+    newest = max(matching, key=_started, default=None)
+    return newest[0] if newest else None
 
 
 def main():
@@ -99,8 +144,11 @@ def main():
 
     event = sys.argv[1]
 
-    if event == "tool-failure" and not _tool_failure_relevant(sys.stdin):
-        return
+    failing_command = None
+    if event == "tool-failure":
+        failing_command = _tool_failure_command(sys.stdin)
+        if failing_command is None:
+            return
 
     from core.json import load_json
     from core.run.metadata import (
@@ -208,6 +256,10 @@ def main():
                 seen.add(key)
                 candidates.append(d)
 
+    # tool-failure: collect this session's running runs, then stamp
+    # exactly ONE below (see _pick_failure_run).
+    failure_candidates = []
+
     for d in candidates:
             try:
                 meta_path = d / RUN_METADATA_FILE
@@ -225,10 +277,7 @@ def main():
                 continue
 
             if event == "tool-failure":
-                try:
-                    (d / FAILURE_MARKER).write_text("")
-                except OSError:
-                    pass
+                failure_candidates.append((d, meta))
                 continue
 
             tool_pid = meta.get("tool_pid")
@@ -263,6 +312,14 @@ def main():
                     # failure — report and keep scanning other runs.
                     print(f"lifecycle-hook: failed to finalize {d}: {e}",
                           file=sys.stderr)
+
+    if event == "tool-failure" and failure_candidates:
+        target = _pick_failure_run(failure_candidates, failing_command or "")
+        if target is not None:
+            try:
+                (target / FAILURE_MARKER).write_text("")
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":
