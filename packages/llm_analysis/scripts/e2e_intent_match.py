@@ -256,9 +256,12 @@ def scenario_7_no_exploit() -> None:
 
 def scenario_8_unknown_cwe() -> None:
     _hr("Scenario 8: unknown CWE (no detector) → cwe_shape abstains")
-    # File + function fire (2/3 evaluated since CWE-416 has no v1
-    # detector and cwe_shape returns None). 2/3 = uncertain → LLM
-    # tiebreak. Provide canned responses so the demo lands cleanly.
+    # File + function fire and cwe_shape ABSTAINS (CWE-416 has no v1
+    # detector), so matched == evaluated == 2: the strong-partial
+    # rule returns `matches` at reduced confidence WITHOUT the LLM
+    # tiebreak. The canned responses below are deliberately unused —
+    # they only demonstrate that an available LLM is not consulted
+    # on this path.
     llm = FakeLLMProvider([
         _FakeLLMResponse(
             "The exploit invokes a virtual call on a freed object — "

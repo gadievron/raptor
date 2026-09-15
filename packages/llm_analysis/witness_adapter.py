@@ -2,9 +2,9 @@
 
 ``/agentic`` synthesises an exploit per finding (via
 ``AutonomousSecurityAgentV2``), compile-verifies it, and runs the
-intent-match judge over the result — but never *executes* the
-exploit. The exploit-source bytes are still a witness of intent:
-recording them under the canonical Witness type makes them
+intent-match judge over the result. By default the exploit is not
+executed, but the exploit-source bytes are still a witness of
+intent: recording them under the canonical Witness type makes them
 available alongside fuzz-generated witnesses for downstream
 consumers (reporting, future ZKPoX bundle assembly, future
 calibrated IntentMatchJudge) on the same data path.
@@ -12,12 +12,12 @@ calibrated IntentMatchJudge) on the same data path.
 The witness records:
 
   * ``source = LLM_EMIT_RUN``
-  * ``observed_outcome = NOT_RUN`` — by design, ``/agentic``
-    doesn't execute exploits. Future Tier-1.5 native execution
-    will produce ``EXIT_SIGNAL`` / ``SANITIZER_REPORT`` /
-    ``FLAG_CAPTURED`` witnesses for the same finding; the
-    bytes_hash matches across both, so the witness store
-    dedups the LLM artefact when the executed run lands.
+  * ``observed_outcome = NOT_RUN`` by default (no execution).
+    When the execution oracle ran (``--execute-exploits`` /
+    ``compile_and_execute``), the caller passes the observed
+    ``executed_outcome`` (``EXIT_SIGNAL`` / ``SANITIZER_REPORT`` /
+    ``FLAG_CAPTURED`` / ...) and it overrides the default — see
+    :func:`witness_from_exploit_result`.
   * ``outcome_detail`` carries the compile verdict + intent-match
     verdict so reporting can filter without re-reading the
     exploit text.
