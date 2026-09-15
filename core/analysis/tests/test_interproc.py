@@ -482,3 +482,119 @@ class TestStarredArgsDeclineBinding:
         )
         _, bindings = _bindings_for(src, "handle")
         assert len(bindings) == 1
+
+
+class TestOpaqueArgsDeclineBinding:
+    """Non-Name, non-Constant arguments at return-tainting positions.
+
+    The dirty-symbol exclusion reasons over bare names; an opaque
+    expression (``g(x)``, ``x.attr``, ``x + ""``, ``d[k]``) at a
+    return-tainting unsanitized position carries taint the exclusion
+    cannot see, so the whole binding must decline. ``helper(a, b):
+    return html.escape(a) + b`` called as ``helper(x, g(x))`` binds
+    ``escape(x) + g(x)`` — tainted — into y; a binding claiming x
+    cleanly sanitized would hard-suppress ``render(y)``.
+    """
+
+    _MIX = (
+        "def _mix(a, b):\n"
+        "    return html.escape(a) + b\n"
+    )
+
+    def test_nested_call_at_dirty_position_no_binding(self):
+        src = self._MIX + (
+            "def handle(x):\n"
+            "    y = _mix(x, g(x))\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
+    def test_attribute_at_dirty_position_no_binding(self):
+        src = self._MIX + (
+            "def handle(x):\n"
+            "    y = _mix(x, x.attr)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
+    def test_binop_at_dirty_position_no_binding(self):
+        src = self._MIX + (
+            "def handle(x):\n"
+            "    y = _mix(x, x + \"\")\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
+    def test_keyword_opaque_at_dirty_position_no_binding(self):
+        src = self._MIX + (
+            "def handle(x):\n"
+            "    y = _mix(x, b=g(x))\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
+    def test_kwargs_expansion_no_binding(self):
+        # ``**opts`` can route taint through its VALUES into any
+        # parameter; excluding the mapping's own name is not enough.
+        src = self._MIX + (
+            "def handle(x, opts):\n"
+            "    y = _mix(x, **opts)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
+    def test_literal_at_dirty_position_still_binds(self):
+        # A literal cannot carry taint — the exemption keeps the
+        # common ``helper(x, "suffix")`` shape suppressible.
+        src = self._MIX + (
+            "def handle(x):\n"
+            "    y = _mix(x, \"suffix\")\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert len(bindings) == 1
+        assert next(iter(bindings)).input_symbols == frozenset({"x"})
+
+    def test_opaque_at_non_tainting_position_still_binds(self):
+        # Position b never reaches the return — an opaque value there
+        # is irrelevant to the return's cleanliness.
+        src = (
+            "def _log_and_clean(s, note):\n"
+            "    log(note)\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    y = _log_and_clean(x, g(x))\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert len(bindings) == 1
+
+    def test_extra_positional_args_no_binding(self):
+        # More positional args than the summary has params: the
+        # extras have no parameter mapping (vararg helpers) —
+        # uncertainty declines.
+        src = (
+            "def _clean(s, *rest):\n"
+            "    return html.escape(s)\n"
+            "def handle(x, w):\n"
+            "    y = _clean(x, w, w)\n"
+            "    render(y)\n"
+        )
+        _, bindings = _bindings_for(src, "handle")
+        assert bindings == frozenset()
+
+    def test_verdict_not_suppressed_for_opaque_dirty_arg(self):
+        # End-to-end: the gate must not hard-suppress render(y) when
+        # y = escape(x) + g(x) at runtime.
+        src = self._MIX + (
+            "def handle(x):\n"
+            "    y = _mix(x, g(x))\n"
+            "    render(y)\n"
+        )
+        result = _evaluate(src, "handle", ["x"], "y", 4)
+        assert not result.suppress

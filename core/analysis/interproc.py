@@ -131,18 +131,44 @@ def _param_cleanly_sanitized(
     )
 
 
+class _ConstArg:
+    """Sentinel argument entry: a literal (``ast.Constant``) — it
+    carries no symbol and cannot carry taint, so it is exempt from
+    the dirty-flow exclusion below. Everything else that is not a
+    bare ``ast.Name`` stays ``None`` (opaque): a nested call,
+    subscript, attribute, or binop can carry taint the bare-name
+    model cannot see, so an opaque value at a return-tainting
+    position must decline the whole binding."""
+
+    __slots__ = ()
+
+
+_CONST_ARG = _ConstArg()
+
+
+def _arg_entry(node: ast.AST) -> str | _ConstArg | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Constant):
+        return _CONST_ARG
+    return None
+
+
 def _call_arg_names(
     fn_ast: ast.AST, lineno: int, col_offset: int, callee_chain: str,
-) -> tuple[list[str | None], list[tuple[str | None, str | None]]] | None:
-    """Argument bare-names for the call to ``callee_chain`` at
+) -> tuple[
+    list[str | _ConstArg | None],
+    list[tuple[str | None, str | _ConstArg | None]],
+] | None:
+    """Argument entries for the call to ``callee_chain`` at
     ``(lineno, col_offset)``. Returns ``(positional, keywords)``:
     ``positional`` has one entry per positional arg — the arg's
-    identifier (``ast.Name``) or None for non-name args (literals,
-    nested calls, subscripts); ``keywords`` has one
-    ``(keyword_name, value_name)`` entry per keyword arg, where
-    ``keyword_name`` is None for ``**kwargs`` expansion and
-    ``value_name`` is the value's identifier or None for non-name
-    values. None if no matching call is found.
+    identifier (``ast.Name``), :data:`_CONST_ARG` for a literal, or
+    None for opaque expressions (nested calls, subscripts, binops);
+    ``keywords`` has one ``(keyword_name, value_entry)`` entry per
+    keyword arg, where ``keyword_name`` is None for ``**kwargs``
+    expansion and ``value_entry`` follows the positional encoding.
+    None if no matching call is found.
 
     Keyword args matter for soundness, not just coverage: a symbol
     passed BOTH positionally into a sanitized parameter AND by keyword
@@ -173,14 +199,12 @@ def _call_arg_names(
             # cleanly-sanitized one). Uncertainty → decline the
             # binding (the docstring contract).
             return None
-        out: list[str | None] = [arg.id if isinstance(arg, ast.Name) else None for arg in node.args]
-        kw_out: list[tuple[str | None, str | None]] = []
-        for kw in node.keywords:
-            val = kw.value
-            kw_out.append((
-                kw.arg,
-                val.id if isinstance(val, ast.Name) else None,
-            ))
+        out: list[str | _ConstArg | None] = [
+            _arg_entry(arg) for arg in node.args
+        ]
+        kw_out: list[tuple[str | None, str | _ConstArg | None]] = [
+            (kw.arg, _arg_entry(kw.value)) for kw in node.keywords
+        ]
         return out, kw_out
     return None
 
@@ -235,6 +259,13 @@ def synthetic_sanitizer_bindings(
                 continue
             arg_names, kw_args = resolved
             sanitized_set = set(sanitized_positions)
+            if len(arg_names) > len(summary.params):
+                # More positional args than the summary has params:
+                # the extras have no parameter mapping (a vararg
+                # helper, or an ill-formed call) — index-based flow
+                # reasoning is meaningless past the end. Uncertainty
+                # → decline the binding (the docstring contract).
+                continue
             # Review #1: a symbol passed at a position that taints the
             # return but is NOT cleanly sanitized reaches the sink
             # unsanitized through that position — so the helper does not
@@ -243,36 +274,59 @@ def synthetic_sanitizer_bindings(
             # called as ``helper(x, x)``, x flows clean through ``a``
             # AND dirty through ``b``; the synthetic binding must not
             # claim x is sanitized. Exclude any such symbol so the gate
-            # declines to suppress (stays conservative).
+            # declines to suppress (stays conservative). The exclusion
+            # must cover NON-NAME values too: ``helper(x, g(x))``
+            # taints the return through position 1 just as surely,
+            # but carries no bare name to exclude — an opaque value
+            # at a return-tainting unsanitized position therefore
+            # declines the WHOLE binding (a literal is exempt: it
+            # cannot carry taint).
+            binding_ok = True
             unsanitized_symbols: set[str] = set()
-            for i, name in enumerate(arg_names):
-                if name is None or i in sanitized_set:
+            for i, entry in enumerate(arg_names):
+                if i in sanitized_set or entry is _CONST_ARG:
                     continue
-                if i < len(summary.params) and summary.param_taints_return(i):
-                    unsanitized_symbols.add(name)
+                if not summary.param_taints_return(i):
+                    continue
+                if entry is None:
+                    binding_ok = False
+                    break
+                unsanitized_symbols.add(entry)  # type: ignore[arg-type]
+            if not binding_ok:
+                continue
             # Keyword-passed flows of the same symbol are just as
             # dirty as positional ones: ``helper(x, b=x)`` sends x
             # into the unsanitized ``b`` no matter how ``a`` cleans
             # it. Map keyword name → parameter position and apply the
-            # same rule; anything unresolvable (``**kwargs``
-            # expansion, a keyword that matches no known parameter)
-            # is uncertainty — the docstring's contract is to decline
-            # to suppress on uncertainty, so treat the symbol as
-            # unsanitized.
-            for kw_name, val_name in kw_args:
-                if val_name is None:
+            # same rule. Anything unresolvable is uncertainty — the
+            # docstring's contract is to decline to suppress: a
+            # ``**kwargs`` expansion can route taint through its
+            # VALUES into any parameter (excluding the mapping's own
+            # name is not enough), an unknown keyword name has no
+            # position to reason about, and an opaque value at a
+            # return-tainting position is the keyword twin of the
+            # positional case above — all three decline the binding.
+            # Literal values stay exempt.
+            for kw_name, val_entry in kw_args:
+                if val_entry is _CONST_ARG:
                     continue
                 if kw_name is None or kw_name not in summary.params:
-                    unsanitized_symbols.add(val_name)
-                    continue
+                    binding_ok = False
+                    break
                 idx = summary.params.index(kw_name)
                 if idx in sanitized_set:
                     continue
-                if summary.param_taints_return(idx):
-                    unsanitized_symbols.add(val_name)
+                if not summary.param_taints_return(idx):
+                    continue
+                if val_entry is None:
+                    binding_ok = False
+                    break
+                unsanitized_symbols.add(val_entry)  # type: ignore[arg-type]
+            if not binding_ok:
+                continue
             input_symbols: set[str] = set()
             for i in sanitized_positions:
-                if i < len(arg_names) and arg_names[i] is not None:
+                if i < len(arg_names) and isinstance(arg_names[i], str):
                     name = arg_names[i]
                     if name in unsanitized_symbols:
                         continue
