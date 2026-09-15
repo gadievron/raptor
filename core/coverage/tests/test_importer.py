@@ -422,3 +422,137 @@ def test_import_record_passes_version_through_to_stamp(tmp_path):
     # Verify the stamp landed via provenance_summary aggregation.
     summary = s.provenance_summary()
     assert "1.79.0" in summary["tools"].get("semgrep", [])
+
+
+# --- hostile run-dir JSON containment ---------------------------------------
+#
+# findings.json / checklist.json / coverage records live inside the
+# sandbox write grant. One malformed row must degrade to that row (or
+# that record / that run) — the store is rebuilt from the raw files on
+# every render, so an exception here crashed every coverage consumer
+# on every query until the file was hand-deleted.
+
+
+def test_forged_finding_line_survives_verdict_join(tmp_path):
+    s = _store(tmp_path)
+    run = tmp_path / "run1"
+    run.mkdir()
+    (run / "findings.json").write_text(json.dumps({
+        "findings": [
+            {"file": "a.c", "line": "42", "id": "forged"},
+            {"file": "a.c", "line": 5, "id": "real"},
+        ],
+    }))
+    backfill(s, [run], _CHECKLIST, project_dir=None)
+    verdicts = dict(
+        ((f, n), v) for f, n, _lo, v in s.function_verdicts(_CHECKLIST))
+    # The genuine finding still attributes; the forged one degrades to
+    # a file-level link instead of crashing the join.
+    assert verdicts[("a.c", "f1")] == "open"
+    assert "forged" in s.finding_ids("a.c")
+
+
+def test_forged_checklist_numerics_survive_backfill(tmp_path):
+    s = _store(tmp_path)
+    run = tmp_path / "run1"
+    run.mkdir()
+    (run / "coverage-semgrep.json").write_text(json.dumps({
+        "tool": "semgrep", "files_examined": ["a.c", 7, None],
+    }))
+    hostile = {"files": [
+        {"path": "a.c", "lines": "100", "items": [
+            {"name": "f", "line_start": "1", "line_end": 50},
+        ]},
+        {"path": "b", "items": [{"name": "g", "address": "0x10", "size": "9"}]},
+        {"path": "c.c", "lines": 10, "items": [
+            {"name": "h", "line_start": 1, "line_end": 10,
+             "checked_by": ["audit", 5]},
+        ]},
+        "junk",
+    ]}
+    total = backfill(s, [run], hostile, project_dir=None)
+    # The genuine checked_by mark still lands.
+    assert s.function_covered("c.c", 1, 10) is True
+    assert total >= 1
+    assert [v for *_, v in s.function_verdicts(hostile)]
+
+
+def test_backfill_quarantines_a_hostile_run_dir(tmp_path, monkeypatch):
+    """A run dir whose import raises an unforeseen shape quarantines to
+    that run; other runs still import."""
+    import core.coverage.importer as imp
+
+    s = _store(tmp_path)
+    bad, good = tmp_path / "bad", tmp_path / "good"
+    bad.mkdir()
+    good.mkdir()
+    (good / "coverage-semgrep.json").write_text(json.dumps({
+        "tool": "semgrep", "files_examined": ["a.c"],
+    }))
+
+    real = imp.import_run_dir
+
+    def _boom(store, run_dir, checklist):
+        if run_dir == bad:
+            raise RuntimeError("next-generation shape")
+        return real(store, run_dir, checklist)
+
+    monkeypatch.setattr(imp, "import_run_dir", _boom)
+    total = backfill(s, [bad, good], _CHECKLIST, project_dir=None)
+    assert total >= 1                   # good run's whole-file mark landed
+    assert "semgrep" in s.who_checked("a.c", 5)
+
+
+def test_import_run_dir_quarantines_a_hostile_record(tmp_path, monkeypatch):
+    import core.coverage.importer as imp
+
+    s = _store(tmp_path)
+    run = tmp_path / "run1"
+    run.mkdir()
+    (run / "coverage-evil.json").write_text(json.dumps({
+        "tool": "evil", "files_examined": ["a.c"],
+    }))
+    (run / "coverage-semgrep.json").write_text(json.dumps({
+        "tool": "semgrep", "files_examined": ["b.c"],
+    }))
+
+    real = imp.import_record
+
+    def _boom(store, record, total_lines, provenance=None):
+        if record.get("tool") == "evil":
+            raise RuntimeError("next-generation shape")
+        return real(store, record, total_lines, provenance)
+
+    monkeypatch.setattr(imp, "import_record", _boom)
+    import_run_dir(s, run, _CHECKLIST)
+    assert s.who_checked("b.c", 5) == ["semgrep"]
+
+
+def test_load_records_skips_unusable_tool_labels(tmp_path):
+    from core.coverage.record import load_records
+
+    run = tmp_path / "run1"
+    run.mkdir()
+    (run / "coverage-a.json").write_text(json.dumps({
+        "tool": ["not", "a", "string"], "files_examined": ["a.c"],
+    }))
+    (run / "coverage-b.json").write_text(json.dumps({
+        "tool": "semgrep", "files_examined": ["a.c"],
+    }))
+    recs = load_records(run)
+    assert [r["tool"] for r in recs] == ["semgrep"]
+    # Legacy single-file fallback: a LIST of records is a documented
+    # historical shape (spliced flat by core.audit.loaders); every
+    # other non-object payload is refused.
+    run2 = tmp_path / "run2"
+    run2.mkdir()
+    (run2 / "coverage-record.json").write_text(
+        '[{"tool": "semgrep", "files": {}}]')
+    assert load_records(run2) == [[{"tool": "semgrep", "files": {}}]]
+    run3 = tmp_path / "run3"
+    run3.mkdir()
+    (run3 / "coverage-record.json").write_text('"not a record"')
+    assert load_records(run3) == []
+    # The importer contains the legacy list shape instead of crashing.
+    s = _store(tmp_path)
+    assert import_run_dir(s, run2, _CHECKLIST) == 0

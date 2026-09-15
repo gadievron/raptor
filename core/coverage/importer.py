@@ -32,6 +32,7 @@ from core.run.provenance import (
 
 from .record import load_records
 from .registry import category_of
+from .schema import _opt_int, iter_file_entries, iter_item_entries
 from .summary import _inventory_name_index, _match_to_inventory
 
 if TYPE_CHECKING:
@@ -42,7 +43,10 @@ logger = logging.getLogger(__name__)
 
 
 def _inventory_paths(checklist: dict[str, Any]) -> set:
-    return {fe.get("path") for fe in checklist.get("files", []) if fe.get("path")}
+    return {
+        fe.get("path") for fe in iter_file_entries(checklist)
+        if fe.get("path") and isinstance(fe.get("path"), str)
+    }
 
 
 def _to_inventory_path(
@@ -128,10 +132,13 @@ def _tool_stamp(tool: str, prov: dict[str, Any],
 
 def _total_lines_by_file(checklist: dict[str, Any]) -> dict[str, int]:
     out: dict[str, int] = {}
-    for fe in checklist.get("files", []):
+    for fe in iter_file_entries(checklist):
         path = fe.get("path")
-        tl = fe.get("lines")
-        if path and tl:
+        # Genuine ints only (schema._opt_int): a forged string count
+        # flowed into mark()'s interval arithmetic and the coverage-%
+        # division.
+        tl = _opt_int(fe.get("lines"))
+        if path and isinstance(path, str) and tl:
             out[path] = tl
     return out
 
@@ -147,17 +154,22 @@ def import_checked_by(store: CoverageStore, checklist: dict[str, Any]) -> int:
     settles.
     """
     marks = 0
-    for fe in checklist.get("files", []):
+    for fe in iter_file_entries(checklist):
         path = fe.get("path")
-        if not path:
+        if not path or not isinstance(path, str):
             continue
-        for fn in fe.get("items", fe.get("functions", [])) or []:
-            lo = fn.get("line_start")
+        for fn in iter_item_entries(fe):
+            lo = _opt_int(fn.get("line_start"))
             if lo is None:
                 continue
-            hi = fn.get("line_end")
+            hi = _opt_int(fn.get("line_end"))
             hi = hi if hi is not None else lo
-            for tool in fn.get("checked_by", []) or []:
+            checked_by = fn.get("checked_by")
+            if not isinstance(checked_by, list):
+                continue
+            for tool in checked_by:
+                if not isinstance(tool, str):
+                    continue
                 store.mark(path, lo, hi, tool)
                 marks += 1
     return marks
@@ -273,7 +285,12 @@ def import_record(
     inv_paths = set(total_lines)                     # inventory keys (target-relative)
     inv_index = _inventory_name_index(inv_paths)     # once per record, not per path
     marked = 0
-    for path in record.get("files_examined", []) or []:
+    files_examined = record.get("files_examined")
+    if not isinstance(files_examined, list):
+        files_examined = []
+    for path in files_examined:
+        if not isinstance(path, str):
+            continue
         key = _to_inventory_path(path, inv_paths, inv_index)  # tools may report abs paths
         tl = total_lines.get(key)
         if not tl:
@@ -303,20 +320,27 @@ def import_findings(
     """
     linked = 0
     inv_index = _inventory_name_index(inventory_paths) if inventory_paths else None
-    for f in findings or []:
+    if not isinstance(findings, list):
+        findings = []
+    for f in findings:
         if not isinstance(f, dict):
             continue
         file = _field(f, "file", "file_path", "path")
-        if not file:
+        if not file or not isinstance(file, str):
             continue
         if inventory_paths:
             file = _to_inventory_path(file, inventory_paths, inv_index)   # match verdict's key
-        line = _field(f, "line", "line_start", "start_line")
+        # Genuine ints only (schema._opt_int): findings.json is
+        # LLM-written inside the sandbox write grant, and a forged
+        # `"line": "42"` crashed function_verdict at every render. An
+        # unusable line degrades to a file-level link — the finding is
+        # never dropped.
+        line = _opt_int(_field(f, "line", "line_start", "start_line"))
         if not line and f.get("address") is not None:
             # Binary findings: the store's intervals for binary:<stem>
             # files live in address space — the finding's address IS
             # its position, so function_verdict can attribute it.
-            line = f.get("address")
+            line = _opt_int(f.get("address"))
         # A stable, position-independent id so re-linking the same finding
         # (e.g. backfill then a clean snapshot's retained flip) targets the
         # SAME store entry rather than appending a duplicate. The list index
@@ -535,26 +559,29 @@ def _function_ranges(
     ``line_start`` so consumers can mark ``(lo, hi)`` directly.
     """
     out: dict[tuple, tuple] = {}
-    for fe in checklist.get("files", []):
+    for fe in iter_file_entries(checklist):
         path = fe.get("path")
-        if not path:
+        if not path or not isinstance(path, str):
             continue
-        for it in fe.get("items", fe.get("functions", [])) or []:
+        for it in iter_item_entries(fe):
             name = it.get("name")
-            if not name:
+            if not name or not isinstance(name, str):
                 continue
-            address = it.get("address")
+            # Genuine ints only (schema._opt_int) — the checklist is a
+            # run-dir JSON artifact, and a forged string span crashed
+            # every consumer of these ranges in interval arithmetic.
+            address = _opt_int(it.get("address"))
             if address is not None:
                 # Binary items have no line numbers — project onto the
                 # function's address range instead. Coherent within
                 # the store: binary:<stem> file entries never mix with
                 # line-numbered intervals.
-                size = it.get("size") or 0
+                size = _opt_int(it.get("size")) or 0
                 out[(path, name)] = (address, address + max(size - 1, 0))
                 continue
-            lo = it.get("line_start")
+            lo = _opt_int(it.get("line_start"))
             if lo is not None:
-                hi = it.get("line_end")
+                hi = _opt_int(it.get("line_end"))
                 if normalise_hi and hi is None:
                     hi = lo
                 out[(path, name)] = (lo, hi)
@@ -577,7 +604,7 @@ def import_functions_analysed(
     don't resolve to an inventory function are skipped. Returns the count."""
     tool = record.get("tool")
     fa_list = record.get("functions_analysed")
-    if not tool or not fa_list:
+    if not tool or not fa_list or not isinstance(fa_list, list):
         return 0
     stamp = _tool_stamp(
         tool, provenance, record_version=record.get("version"),
@@ -585,7 +612,7 @@ def import_functions_analysed(
     marked = 0
     inv_index = _inventory_name_index(inventory_paths)
     for fa in fa_list:
-        if not isinstance(fa, dict):
+        if not isinstance(fa, dict) or not isinstance(fa.get("file"), str):
             continue
         f = _to_inventory_path(fa.get("file") or "", inventory_paths, inv_index)
         rng = ranges.get((f, fa.get("function")))
@@ -612,8 +639,32 @@ def import_run_dir(
     prov = run_provenance(run_dir)
     total = 0
     for rec in load_records(Path(run_dir)):
-        total += import_record(store, rec, total_lines, prov)
-        total += import_functions_analysed(store, rec, ranges, inv_paths, prov)
+        if not isinstance(rec, dict):
+            # The legacy list-of-records shape is an audit-loader
+            # contract (core.audit.loaders splices it flat) — the
+            # coverage importer consumes record OBJECTS only, so a
+            # list element quarantines here instead of detonating
+            # inside import_record.
+            logger.warning(
+                "coverage import: skipping non-object record (%s) "
+                "in %s", type(rec).__name__, run_dir)
+            continue
+        try:
+            total += import_record(store, rec, total_lines, prov)
+            total += import_functions_analysed(
+                store, rec, ranges, inv_paths, prov)
+        except Exception as exc:  # noqa: BLE001 — record containment boundary
+            # Coverage records are run-dir JSON: the per-field
+            # normalisation above covers the fields the importer
+            # consumes, and this arm contains whatever shape the next
+            # generation plants to the RECORD that carries it — one
+            # hostile record must never crash the whole rebuild (the
+            # store re-imports raw files at every render). Driven by
+            # the generative containment oracle
+            # (core/coverage/tests/test_intake_containment.py).
+            logger.warning(
+                "coverage import: skipping record %r in %s: %s: %s",
+                rec.get("tool"), run_dir, type(exc).__name__, exc)
     return total
 
 
@@ -649,9 +700,21 @@ def backfill(
         total = import_checked_by(store, checklist)
     run_dir_list = list(run_dirs)
     for run_dir in run_dir_list:
-        total += import_run_dir(store, run_dir, checklist)
-        total += import_understand(store, run_dir, checklist)   # /understand fold-in
-        import_run_findings(store, run_dir, inv_paths)   # link findings for verdicts
+        try:
+            total += import_run_dir(store, run_dir, checklist)
+            total += import_understand(store, run_dir, checklist)   # /understand fold-in
+            import_run_findings(store, run_dir, inv_paths)   # link findings for verdicts
+        except Exception as exc:  # noqa: BLE001 — run containment boundary
+            # One hostile run dir (every file in it sits inside the
+            # sandbox write grant) quarantines to that run — the
+            # backfill is the single store-construction path, so an
+            # exception here crashed every coverage consumer on every
+            # render until the file was hand-deleted. Driven by the
+            # generative containment oracle
+            # (core/coverage/tests/test_intake_containment.py).
+            logger.warning(
+                "coverage import: skipping run dir %s: %s: %s",
+                run_dir, type(exc).__name__, exc)
     try:
         from core.coverage.frida_bridge import import_frida_coverage
         total += import_frida_coverage(

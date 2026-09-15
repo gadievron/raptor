@@ -576,8 +576,14 @@ def write_record(run_dir: Path, record: dict[str, Any],
     return path
 
 
-def load_records(run_dir: Path) -> list[dict[str, Any]]:
+def load_records(run_dir: Path) -> list[dict[str, Any] | list[Any]]:
     """Load all coverage records from a run directory.
+
+    Per-tool entries are record OBJECTS; the legacy fallback may
+    contribute one LIST element (the historical list-of-records
+    shape — core.audit.loaders.load_coverage_records splices it
+    flat, and the coverage importer's per-record boundary contains
+    it), so the element type is genuinely ``dict | list``.
 
     The per-tool glob `coverage-*.json` overlaps the legacy
     single-file name `coverage-record.json` (`record` matches
@@ -594,7 +600,7 @@ def load_records(run_dir: Path) -> list[dict[str, Any]]:
     path.
     """
     run_dir = Path(run_dir)
-    records = []
+    records: list[dict[str, Any] | list[Any]] = []
     seen_tools = set()
     # Per-tool files at the run-dir top level AND in immediate tool subdirs.
     # Producers write coverage records into their own subdir (agentic's scanner
@@ -610,14 +616,24 @@ def load_records(run_dir: Path) -> list[dict[str, Any]]:
         data = load_json(p)
         if isinstance(data, dict) and "tool" in data:
             tool = data.get("tool")
+            if not isinstance(tool, str):
+                # Records are run-dir JSON; a non-string tool label is
+                # unusable by every consumer (registry lookup, tool-key
+                # dicts, sorted views) and an unhashable one crashed
+                # the de-dup below. Skip the record, keep the rest.
+                continue
             if tool in seen_tools:
                 continue
             seen_tools.add(tool)
             records.append(data)
-    # Legacy single file (if no per-tool files found)
+    # Legacy single file (if no per-tool files found). Historical
+    # shapes are a record OBJECT or a LIST of records (downstream,
+    # core.audit.loaders.load_coverage_records splices the list flat)
+    # — any other JSON shape is refused rather than handed to
+    # consumers that expect a mapping.
     if not records:
         legacy = load_json(run_dir / COVERAGE_RECORD_FILE)
-        if legacy:
+        if legacy and isinstance(legacy, (dict, list)):
             records.append(legacy)
     return records
 
