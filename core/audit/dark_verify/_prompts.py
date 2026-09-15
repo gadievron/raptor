@@ -113,7 +113,7 @@ with that would trigger the bug.
 
 Return a JSON object with these fields:
 - "function": the function name
-- "require_path": the require() path relative to the project root (e.g. "./src/auth")
+- "require_path": the require() path relative to the project root — the finding file's exact path with extension (e.g. "./src/auth.js")
 - "args": list of argument values (JSON-serialisable)
 - "expected_return": expected return value (null if expecting an error)
 - "expected_exception": the Error class name if you expect a throw (e.g. "TypeError"), empty string otherwise
@@ -131,7 +131,7 @@ with that would trigger the bug.
 
 Return a JSON object with these fields:
 - "function": the function name
-- "require_path": the require() path relative to the project root (e.g. "./src/auth")
+- "require_path": the require() path relative to the project root — the finding file's exact path with extension (e.g. "./src/auth.ts")
 - "args": list of argument values (JSON-serialisable)
 - "expected_return": expected return value (null if expecting an error)
 - "expected_exception": the Error class name if you expect a throw (e.g. "TypeError"), empty string otherwise
@@ -208,7 +208,7 @@ with that would trigger the bug.
 Return a JSON object with these fields:
 - "function": the method name
 - "class_name": the class containing the method (e.g. "AuthUtils")
-- "imports": list of import statements needed (e.g. ["java.util.HashMap"])
+- "imports": list of import statements needed (e.g. ["java.util.HashMap"]). If the target class is declared in a package, include exactly `<package>.<ClassName>` for it (its own package-qualified name); an import of a same-named class from any other package is rejected.
 - "arg_expressions": list of Java literal expressions for each argument (e.g. ["null", "\\"admin\\"", "0"])
 - "return_type": the Java return type (e.g. "String", "void", "int")
 - "is_static": true if the method is static, false if it needs an instance

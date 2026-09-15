@@ -453,6 +453,11 @@
     "count": 11,
     "kind": "literal"
   },
+  "core/audit/dark_verify/_resolve.py::_LANE_BINDINGS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "language-lane registry of the module-binding resolution engine (same closed language taxonomy as _EXECUTORS/_SUPPORTED_LANGS, pinned to _SUPPORTED_LANGS by a closure test) \u2014 infrastructure lane keys, not a learned name vocabulary"
+  },
   "core/audit/dark_verify/_types.py::_SUPPORTED_LANGS": {
     "count": 12,
     "kind": "literal"

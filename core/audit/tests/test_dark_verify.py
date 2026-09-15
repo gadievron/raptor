@@ -4454,11 +4454,26 @@ class TestModuleBindingToFindingFile:
         ("require_path", "ruby", "lib/auth.rb", "lib/auth.rb"),
         ("require_path", "php", "src/auth.php", "src/auth.php"),
         ("require_path", "lua", "lib/auth.lua", "lib.auth"),
-        ("require_path", "lua", "lib/auth/init.lua", "lib.auth"),
+        # Dot-spelled directory module: require "lib.auth.init" maps to
+        # lib/auth/init.lua through the ?.lua template — deterministic.
+        ("require_path", "lua", "lib/auth/init.lua", "lib.auth.init"),
         ("use_module", "perl", "lib/Auth.pm", "lib::Auth"),
     ])
     def test_bound_module_accepted(self, field, language, file, value):
         assert validate_spec(self._spec(field, value, language, file)) is None
+
+    def test_lua_init_directory_spelling_rejected(self):
+        # require "lib.auth" reaches lib/auth/init.lua only through a
+        # ?/init.lua template the harness's package.path does not
+        # install (the inherited default's ./?/init.lua is
+        # cwd-dependent) — and the ?.lua template it DOES install
+        # tries the plantable sibling lib/auth.lua first. No
+        # deterministic resolution = refuse.
+        err = validate_spec(
+            self._spec("require_path", "lib.auth", "lua",
+                       "lib/auth/init.lua"))
+        assert err is not None
+        assert "not bound to the finding's file" in err
 
     def test_empty_override_uses_derived_default(self):
         spec = DarkWitnessSpec(
@@ -4604,6 +4619,554 @@ class TestGoImportBinding:
             },
         )
         assert validate_spec(spec, root) is None
+
+
+# -- resolution-direction engine: registry closure + shadow batteries ---------
+
+
+class TestLaneBindingClosure:
+    """Every supported language answers the module-binding question
+    through the resolution engine — a lane outside the registry, or a
+    registered lane validate_spec does not route through it, would
+    re-open the per-lane drift the engine exists to close."""
+
+    def test_registry_covers_every_supported_language(self):
+        from core.audit.dark_verify import _resolve
+        from core.audit.dark_verify._types import _SUPPORTED_LANGS
+        assert set(_resolve._LANE_BINDINGS) == set(_SUPPORTED_LANGS)
+
+    def test_every_lane_declares_a_binding_mode(self):
+        from core.audit.dark_verify import _resolve
+        for lang, lane in _resolve._LANE_BINDINGS.items():
+            assert lane.mode in ("resolver", "structural"), lang
+            if lane.mode == "resolver":
+                assert lane.resolver is not None, lang
+            else:
+                # Structural lanes must NAME the mechanism that binds
+                # the load without a loader search.
+                assert lane.rationale, lang
+
+    def test_unregistered_language_is_refused(self):
+        from core.audit.dark_verify._resolve import binding_error
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="a.zig", function="check",
+            language="zig",
+        )
+        err = binding_error(spec, "zig", None)
+        assert err is not None and "no module-binding lane" in err
+
+    def test_validate_spec_routes_through_the_engine(self, monkeypatch):
+        # validate_spec must surface the engine's verdict for every
+        # language — a lane that skips the engine call would fall back
+        # to nothing at all.
+        from core.audit.dark_verify import _execute
+        from core.audit.dark_verify._types import _SUPPORTED_LANGS
+        seen = []
+
+        def sentinel(spec, lang, target_root=None):
+            seen.append(lang)
+            return f"engine sentinel for {lang}"
+
+        monkeypatch.setattr(_execute, "binding_error", sentinel)
+        by_lang = {
+            "python": "a.py", "c": "a.c", "cpp": "a.cpp", "go": "a.go",
+            "javascript": "a.js", "typescript": "a.ts", "ruby": "a.rb",
+            "php": "a.php", "rust": "a.rs", "java": "A.java",
+            "lua": "a.lua", "perl": "A.pm",
+        }
+        assert set(by_lang) == set(_SUPPORTED_LANGS)
+        for lang, file in by_lang.items():
+            spec = DarkWitnessSpec(
+                finding_key="f1", file=file, function="check",
+                language=lang,
+            )
+            err = _execute.validate_spec(spec)
+            assert err == f"engine sentinel for {lang}", lang
+        assert set(seen) == set(_SUPPORTED_LANGS)
+
+    # One plantable-lookalike reference per resolver lane: the engine
+    # must refuse each one, whatever the lane.  Module-level so the
+    # coverage-totality test below derives its lane set from the SAME
+    # rows the battery runs — a lane added here is exercised, a
+    # resolver lane missing here fails the totality test.
+    _LOOKALIKE_ROWS = [
+        ("python", "src/auth.py", {}, "src.lookalike"),
+        ("javascript", "src/auth.js", {"require_path": "./src/auth"}, ""),
+        ("typescript", "src/auth.ts", {"require_path": "./src/auth"}, ""),
+        ("ruby", "lib/auth.rb", {"require_path": "lib/lookalike"}, ""),
+        ("php", "src/auth.php", {"require_path": "src/lookalike.php"}, ""),
+        ("lua", "lib/auth.lua", {"require_path": "lib.lookalike"}, ""),
+        ("perl", "lib/Auth.pm", {"use_module": "lib::Lookalike"}, ""),
+        ("go", "pkg/a/f.go",
+         {"package": "a", "import_path": "example.com/m/pkg/b"}, ""),
+        ("java", "src/Auth.java",
+         {"class_name": "Auth", "imports": ["com.evil.Auth"]}, ""),
+    ]
+
+    @pytest.mark.parametrize("lang,file,lang_config,module_path",
+                             _LOOKALIKE_ROWS)
+    def test_resolver_lanes_refuse_lookalikes(
+            self, tmp_path, lang, file, lang_config, module_path):
+        from core.audit.dark_verify._resolve import (
+            _LANE_BINDINGS, binding_error,
+        )
+        assert _LANE_BINDINGS[lang].mode == "resolver"
+        src = tmp_path / file
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text("// finding\n", encoding="utf-8")
+        if lang == "go":
+            (tmp_path / "go.mod").write_text(
+                "module example.com/m\n", encoding="utf-8")
+        spec = DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language=lang, module_path=module_path,
+            lang_config=lang_config,
+        )
+        assert binding_error(spec, lang, tmp_path) is not None
+
+    def test_resolver_lane_coverage_is_total(self):
+        # The lookalike battery above must cover every resolver lane;
+        # a new resolver lane without a battery row fails here.  The
+        # battery set is DERIVED from the parametrize rows, never
+        # hand-duplicated — a lane listed here but absent from the
+        # rows cannot pass vacuously.
+        from core.audit.dark_verify._resolve import _LANE_BINDINGS
+        battery = {row[0] for row in self._LOOKALIKE_ROWS}
+        resolver_lanes = {
+            lang for lang, lane in _LANE_BINDINGS.items()
+            if lane.mode == "resolver"
+        }
+        assert battery == resolver_lanes
+
+    def test_generator_derivations_are_engine_derivations(self):
+        # The engine validates exactly the reference the generators
+        # feed the loader — both sides call the same derivation
+        # helper, asserted here against the rendered harness text.
+        from core.audit.dark_verify import _resolve
+        ruby = DarkWitnessSpec(
+            finding_key="f1", file="lib/auth.rb", function="check",
+            language="ruby",
+        )
+        assert (_resolve.derive_ruby_require_path(ruby)
+                in hy.generate_ruby_harness(ruby, Path("/t")))
+        lua = DarkWitnessSpec(
+            finding_key="f1", file="lib/auth.lua", function="check",
+            language="lua",
+        )
+        assert (_resolve.derive_lua_require_path(lua)
+                in hy.generate_lua_harness(lua, Path("/t")))
+        perl = DarkWitnessSpec(
+            finding_key="f1", file="lib/Auth.pm", function="check",
+            language="perl",
+        )
+        assert (_resolve.derive_perl_use_module(perl)
+                in hy.generate_perl_harness(perl, Path("/t")))
+        js = DarkWitnessSpec(
+            finding_key="f1", file="src/auth.js", function="check",
+            language="javascript",
+        )
+        assert (json.dumps(_resolve.derive_js_require_path(js))
+                in hy.generate_js_harness(js, Path("/t")))
+
+
+class TestPythonPackageShadowBinding:
+    """CPython resolves a regular PACKAGE before a same-named module:
+    a repo-planted ``src/auth/__init__.py`` directory shadows the
+    finding's ``src/auth.py``, so ``from src.auth import f`` executes
+    the plant and mints a verdict for code that never ran."""
+
+    def _spec(self, file="src/auth.py", module_path="src.auth"):
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language="python", module_path=module_path,
+        )
+
+    def _tree(self, tmp_path, *, shadow):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "auth.py").write_text(
+            "def check():\n    return 1\n", encoding="utf-8")
+        if shadow:
+            (tmp_path / "src" / "auth").mkdir()
+            (tmp_path / "src" / "auth" / "__init__.py").write_text(
+                "def check():\n    return 99\n", encoding="utf-8")
+        return tmp_path
+
+    def test_clean_tree_accepted(self, tmp_path):
+        root = self._tree(tmp_path, shadow=False)
+        assert validate_import_path(self._spec(), root) is None
+        assert validate_spec(self._spec(), root) is None
+
+    def test_package_shadow_refused(self, tmp_path):
+        root = self._tree(tmp_path, shadow=True)
+        err = validate_import_path(self._spec(), root)
+        assert err is not None and "shadow" in err
+        err = validate_spec(self._spec(), root)
+        assert err is not None and "shadow" in err
+
+    def test_shadowed_witness_errors_not_verdicts(self, tmp_path):
+        root = self._tree(tmp_path, shadow=True)
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="src/auth.py", function="check",
+            language="python", module_path="src.auth",
+            expected_return="99",
+        )
+        r = execute_witness(spec, root)
+        assert r.verdict == "error"
+        assert r.verdict not in ("confirmed", "refuted")
+
+    def test_package_finding_outranks_module_plant(self, tmp_path):
+        # A directory with an __init__ binds before any same-named
+        # module file — a planted module file cannot shadow an
+        # __init__.py finding (only an extension __init__ in the same
+        # directory can, covered below).
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "auth").mkdir()
+        (tmp_path / "src" / "auth" / "__init__.py").write_text(
+            "def check():\n    return 1\n", encoding="utf-8")
+        (tmp_path / "src" / "auth.py").write_text(
+            "def check():\n    return 99\n", encoding="utf-8")
+        spec = self._spec(file="src/auth/__init__.py",
+                          module_path="src.auth")
+        assert validate_import_path(spec, tmp_path) is None
+
+    def test_shadow_check_requires_tree(self):
+        # Without a target tree the shadow slot cannot be verified
+        # vacant — fail closed, never assume.
+        err = validate_spec(self._spec())
+        assert err is not None and "without the target tree" in err
+
+
+class TestPythonNamespaceParentShadowBinding:
+    """CPython defers a PEP 420 namespace portion below every module
+    and extension hit at the same level: for a finding ``pkg/mod.py``
+    whose ``pkg/`` has no ``__init__.py``, a repo-planted ``pkg.py``
+    binds the ``pkg`` name FIRST — its import-time code owns
+    ``sys.modules['pkg.mod']`` before the finding's file is ever
+    considered.  Intermediate components carry hijack direction at
+    every namespace level."""
+
+    def _spec(self, file="pkg/mod.py", module_path="pkg.mod", **kw):
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language="python", module_path=module_path, **kw,
+        )
+
+    def _tree(self, tmp_path):
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "mod.py").write_text(
+            "def check():\n    return 7\n", encoding="utf-8")
+        return tmp_path
+
+    def test_namespace_layout_accepted_when_vacant(self, tmp_path):
+        root = self._tree(tmp_path)
+        assert validate_spec(self._spec(), root) is None
+
+    def test_namespace_parent_module_plant_refused(self, tmp_path):
+        root = self._tree(tmp_path)
+        (root / "pkg.py").write_text("# plant\n", encoding="utf-8")
+        err = validate_spec(self._spec(), root)
+        assert err is not None and "pkg.py" in err
+
+    def test_deep_namespace_ancestor_plant_refused(self, tmp_path):
+        (tmp_path / "a" / "b").mkdir(parents=True)
+        (tmp_path / "a" / "b" / "mod.py").write_text(
+            "def check():\n    return 7\n", encoding="utf-8")
+        (tmp_path / "a" / "b.py").write_text("# plant\n", encoding="utf-8")
+        err = validate_spec(
+            self._spec(file="a/b/mod.py", module_path="a.b.mod"), tmp_path)
+        assert err is not None and "a/b.py" in err
+
+    def test_regular_package_parent_ignores_module_plant(self, tmp_path):
+        # A regular package (own __init__.py) binds before a same-named
+        # module file — the parent-level plant carries no hijack
+        # direction there.
+        root = self._tree(tmp_path)
+        (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+        (root / "pkg.py").write_text("# plant\n", encoding="utf-8")
+        assert validate_spec(self._spec(), root) is None
+
+    def test_plain_sibling_dir_is_not_a_shadow(self, tmp_path):
+        # The reverse layout: a bare directory named like the finding's
+        # module is a namespace portion and LOSES to the module file —
+        # must stay accepted.
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "auth.py").write_text(
+            "def check():\n    return 7\n", encoding="utf-8")
+        (tmp_path / "src" / "auth").mkdir()
+        (tmp_path / "src" / "auth" / ".keep").write_text("", encoding="utf-8")
+        assert validate_spec(
+            self._spec(file="src/auth.py", module_path="src.auth"),
+            tmp_path) is None
+
+    def test_hijacking_plant_errors_not_verdicts(self, tmp_path):
+        # End to end: a plant that installs an impostor
+        # sys.modules['pkg.mod'] with a FORGED __file__ would satisfy
+        # both the from-import and the runtime __file__ belt — the
+        # static gate must refuse it before anything executes.
+        root = self._tree(tmp_path)
+        (root / "pkg.py").write_text(
+            "import sys, types, os.path\n"
+            "_m = types.ModuleType('pkg.mod')\n"
+            "_m.check = lambda: 7\n"
+            "_m.__file__ = os.path.join("
+            "os.path.dirname(__file__), 'pkg', 'mod.py')\n"
+            "sys.modules['pkg.mod'] = _m\n", encoding="utf-8")
+        r = execute_witness(self._spec(expected_return="7"), root)
+        assert r.verdict == "error"
+        assert r.verdict not in ("confirmed", "refuted")
+
+
+class TestPythonExtensionSuffixShadowBinding:
+    """CPython's FileFinder tries EXTENSION suffixes before ``.py``
+    for the same name, and any ``__init__`` artifact makes a directory
+    a regular package regardless of suffix — so a repo-planted
+    ``pkg/mod.so`` (or ``pkg/mod/__init__.so``) binds ahead of the
+    finding's ``pkg/mod.py``."""
+
+    def _spec(self, file="pkg/mod.py", module_path="pkg.mod", **kw):
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language="python", module_path=module_path, **kw,
+        )
+
+    def _tree(self, tmp_path):
+        (tmp_path / "pkg").mkdir()
+        (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+        (tmp_path / "pkg" / "mod.py").write_text(
+            "def check():\n    return 7\n", encoding="utf-8")
+        return tmp_path
+
+    def test_clean_tree_accepted(self, tmp_path):
+        root = self._tree(tmp_path)
+        assert validate_spec(self._spec(), root) is None
+
+    @pytest.mark.parametrize("plant", [
+        "pkg/mod.so",
+        "pkg/mod.cpython-314-x86_64-linux-gnu.so",
+        "pkg/mod.pyd",
+        "pkg/mod/__init__.so",
+        "pkg/mod/__init__.pyc",
+    ])
+    def test_extension_plant_refused(self, tmp_path, plant):
+        root = self._tree(tmp_path)
+        p = root / plant
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\x7fELF-plant")
+        err = validate_spec(self._spec(), root)
+        assert err is not None and "shadow" in err
+
+    def test_bytecode_ranks_after_source(self, tmp_path):
+        # Sourceless bytecode for the SAME name is a later slot than
+        # the finding's .py — not a shadow.
+        root = self._tree(tmp_path)
+        (root / "pkg" / "mod.pyc").write_bytes(b"\x00\x00\x00\x00")
+        assert validate_spec(self._spec(), root) is None
+
+    def test_package_finding_extension_init_plant_refused(self, tmp_path):
+        # An __init__.py finding is outranked by an extension init in
+        # its own directory.
+        root = self._tree(tmp_path)
+        (root / "pkg" / "__init__.so").write_bytes(b"\x7fELF-plant")
+        err = validate_spec(
+            self._spec(file="pkg/__init__.py", module_path="pkg"), root)
+        assert err is not None and "shadow" in err
+
+    def test_regular_package_ancestor_extension_init_refused(self, tmp_path):
+        # Even a regular-package ancestor keeps one plantable slot: an
+        # extension __init__ outranks its source __init__.
+        root = self._tree(tmp_path)
+        (root / "pkg" / "__init__.so").write_bytes(b"\x7fELF-plant")
+        err = validate_spec(self._spec(), root)
+        assert err is not None and "shadow" in err
+
+    def test_extension_plant_errors_not_verdicts(self, tmp_path):
+        # End to end: a valid planted extension module loads AS
+        # pkg.mod with in-process control of __file__ — the static
+        # gate must refuse before the interpreter ever sees it.
+        root = self._tree(tmp_path)
+        (root / "pkg" / "mod.so").write_bytes(b"\x7fELF-plant")
+        r = execute_witness(self._spec(expected_return="7"), root)
+        assert r.verdict == "error"
+        assert r.verdict not in ("confirmed", "refuted")
+
+
+class TestNativeSuffixOrderingOtherLanes:
+    """The extension-suffix shadow class, checked across the other
+    resolver lanes: Ruby resolves ``.rb`` across the load path before
+    native suffixes, Lua's package.path searcher runs before the
+    C-library searcher, and Node's suffix ladder only starts after the
+    exact-path hit — so a planted native artifact never outranks the
+    accepted reference, and these lanes stay accept."""
+
+    @pytest.mark.parametrize("lang,file,lang_config,plant", [
+        ("ruby", "lib/auth.rb", {"require_path": "lib/auth"},
+         "lib/auth.so"),
+        ("lua", "lib/auth.lua", {"require_path": "lib.auth"},
+         "lib/auth.so"),
+        ("javascript", "src/auth.js", {"require_path": "./src/auth.js"},
+         "src/auth.node"),
+        ("javascript", "src/auth.js", {"require_path": "./src/auth.js"},
+         "src/auth.json"),
+    ])
+    def test_native_plant_does_not_shadow(
+            self, tmp_path, lang, file, lang_config, plant):
+        from core.audit.dark_verify._resolve import binding_error
+        src = tmp_path / file
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text("-- finding\n", encoding="utf-8")
+        (tmp_path / plant).write_bytes(b"\x7fELF-plant")
+        spec = DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language=lang, lang_config=lang_config,
+        )
+        assert binding_error(spec, lang, tmp_path) is None
+
+
+class TestPerlBarewordResolution:
+    """``require Bareword`` maps ``::`` to ``/`` and appends ``.pm``
+    ONLY — no bareword spelling can ever load a ``.pl`` finding; the
+    loader would bind a same-stem ``.pm`` plant instead."""
+
+    def _spec(self, file, use_module=""):
+        lc = {"use_module": use_module} if use_module else {}
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language="perl", lang_config=lc,
+        )
+
+    def test_pl_finding_refused_on_derived_default(self):
+        err = validate_spec(self._spec("lib/auth.pl"))
+        assert err is not None
+        assert "declining to verify" in err
+
+    def test_pl_finding_refused_on_explicit_module(self):
+        err = validate_spec(self._spec("lib/auth.pl", "lib::auth"))
+        assert err is not None
+        assert "declining to verify" in err
+
+    def test_pl_lookalike_pm_never_reached(self, tmp_path):
+        # The exact plant shape: same-stem .pm next to the .pl finding.
+        (tmp_path / "lib").mkdir()
+        (tmp_path / "lib" / "auth.pl").write_text(
+            "sub check { return 1; }\n1;\n", encoding="utf-8")
+        (tmp_path / "lib" / "auth.pm").write_text(
+            "sub check { return 99; }\n1;\n", encoding="utf-8")
+        r = execute_witness(self._spec("lib/auth.pl"), tmp_path)
+        assert r.verdict == "error"
+        assert r.verdict not in ("confirmed", "refuted")
+
+    def test_pm_finding_still_accepted(self):
+        assert validate_spec(self._spec("lib/Auth.pm", "lib::Auth")) is None
+        assert validate_spec(self._spec("lib/Auth.pm")) is None
+
+
+class TestJavaImportBinding:
+    """The harness's class reference resolves through javac's
+    simple-name rules: a single-type import whose terminal name is the
+    finding's class stem re-binds every reference to whatever class it
+    names on the whole-tree compile classpath — the import must be the
+    finding's own package-qualified name, derived from the file's
+    package declaration, or the spec is refused."""
+
+    def _spec(self, file="src/Auth.java", imports=(), class_name="Auth"):
+        return DarkWitnessSpec(
+            finding_key="f1", file=file, function="check",
+            language="java",
+            lang_config={
+                "class_name": class_name,
+                "imports": list(imports),
+                "arg_expressions": [],
+            },
+        )
+
+    def _tree(self, tmp_path, package="com.example"):
+        src = tmp_path / "src" / "Auth.java"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        decl = f"package {package};\n" if package else ""
+        src.write_text(
+            decl + "public class Auth {\n"
+            "    public static int check() { return 1; }\n"
+            "}\n", encoding="utf-8")
+        return tmp_path
+
+    def test_lookalike_import_refused(self, tmp_path):
+        root = self._tree(tmp_path)
+        err = validate_spec(
+            self._spec(imports=["com.evil.Auth"]), root)
+        assert err is not None and "not bound" in err
+
+    def test_own_package_import_accepted(self, tmp_path):
+        root = self._tree(tmp_path)
+        assert validate_spec(
+            self._spec(imports=["com.example.Auth"]), root) is None
+
+    def test_packaged_class_requires_its_import(self, tmp_path):
+        # Without the single-type import the harness's reference can
+        # only resolve through an on-demand import — a channel a
+        # planted package on the whole-tree classpath can serve.
+        root = self._tree(tmp_path)
+        err = validate_spec(self._spec(imports=[]), root)
+        assert err is not None and "single-type import" in err
+
+    def test_default_package_rejects_stem_imports(self, tmp_path):
+        # The default package cannot be imported (JLS 7.5.1) — a stem
+        # import can only name a lookalike.
+        root = self._tree(tmp_path, package="")
+        err = validate_spec(
+            self._spec(imports=["com.evil.Auth"]), root)
+        assert err is not None and "default package" in err
+
+    def test_default_package_plain_spec_accepted(self, tmp_path):
+        root = self._tree(tmp_path, package="")
+        assert validate_spec(
+            self._spec(imports=["java.util.HashMap"]), root) is None
+
+    def test_static_stem_import_refused(self, tmp_path):
+        # `import static com.evil.Util.Auth` binds a member (or nested
+        # type) named like the stem — never the finding's class.
+        root = self._tree(tmp_path)
+        err = validate_spec(
+            self._spec(imports=["com.example.Auth",
+                                "static com.evil.Util.Auth"]), root)
+        assert err is not None and "not bound" in err
+
+    def test_on_demand_imports_stay_allowed(self, tmp_path):
+        # On-demand imports are shadowed by both single-type imports
+        # and same-package types (JLS 6.4.1) — they cannot re-bind the
+        # stem once the single-type discipline holds.
+        root = self._tree(tmp_path)
+        assert validate_spec(
+            self._spec(imports=["com.example.Auth", "java.util.*"]),
+            root) is None
+
+    def test_comment_wrapped_package_decl_parses(self, tmp_path):
+        src = tmp_path / "src" / "Auth.java"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text(
+            "/* copyright\n * package com.wrong; in prose\n */\n"
+            "// package com.also.wrong;\n"
+            "package com.example;\n"
+            "public class Auth { public static int check()"
+            " { return 1; } }\n", encoding="utf-8")
+        assert validate_spec(
+            self._spec(imports=["com.example.Auth"]), tmp_path) is None
+        err = validate_spec(
+            self._spec(imports=["com.wrong.Auth"]), tmp_path)
+        assert err is not None
+
+    def test_unreadable_finding_file_refused(self, tmp_path):
+        # No package declaration to resolve against = decline.
+        err = validate_spec(
+            self._spec(imports=["com.example.Auth"]), tmp_path)
+        assert err is not None and "declining to verify" in err
+
+    def test_stem_import_without_tree_refused(self):
+        err = validate_spec(self._spec(imports=["com.evil.Auth"]))
+        assert err is not None and "without the target tree" in err
+
+    def test_class_name_binding_still_enforced(self):
+        err = validate_spec(self._spec(class_name="SomeOtherClass"))
+        assert err is not None and "not bound" in err
 
 
 # -- scripting-language string args render as data, never code ----------------

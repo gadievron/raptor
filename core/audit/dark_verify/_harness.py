@@ -15,6 +15,15 @@ import textwrap
 from pathlib import Path, PurePosixPath
 from typing import Any, TYPE_CHECKING
 
+from ._resolve import (
+    binding_error,
+    derive_lua_require_path,
+    derive_perl_use_module,
+    derive_php_require_path,
+    derive_ruby_require_path,
+    derive_js_require_path as _js_require_path,
+    file_to_import_path,
+)
 
 if TYPE_CHECKING:
     from ._types import DarkWitnessSpec
@@ -127,26 +136,17 @@ def _format_args_scripting(
 # ---------------------------------------------------------------------------
 
 
-def file_to_import_path(file_path: str, _target_root: Path) -> str | None:
-    """``core/audit/gate.py`` → ``core.audit.gate``. None for non-Python."""
-    rel = file_path.replace("\\", "/")
-    p = PurePosixPath(rel)
-    if p.suffix != ".py":
-        return None
-    parts = list(p.parts)
-    parts[-1] = p.stem
-    if parts[-1] == "__init__":
-        parts = parts[:-1]
-    if not parts:
-        return None
-    return ".".join(parts)
-
-
 def validate_import_path(
     spec: DarkWitnessSpec,
     target_root: Path,
 ) -> str | None:
-    """Returns an error string if invalid, None if ok."""
+    """Returns an error string if invalid, None if ok.
+
+    The Python executor's binding gate: module_path must be present,
+    the finding's file must exist, and the reference must resolve to
+    it under CPython's own rules (the resolution engine also refuses a
+    repo-planted package-directory shadow of the finding's module).
+    """
     expected = file_to_import_path(spec.file, target_root)
     if expected is None:
         return f"non-Python file: {spec.file}"
@@ -158,7 +158,7 @@ def validate_import_path(
     source_file = target_root / spec.file
     if not source_file.is_file():
         return f"source file not found: {spec.file}"
-    return None
+    return binding_error(spec, "python", target_root)
 
 
 def generate_witness_script(
@@ -365,21 +365,6 @@ def generate_go_harness(
 # ---------------------------------------------------------------------------
 
 
-def _js_require_path(spec: DarkWitnessSpec) -> str:
-    """Resolve require path from spec or file.
-
-    The derived default is the EXACT file path with extension: a
-    stripped stem inherits Node's resolution ambiguity (the
-    extensionless path is tried first, so a repo-planted `src/auth`
-    file would shadow `src/auth.js`), and the exact spelling is the
-    one require() resolves unambiguously.
-    """
-    rp = spec.lang_config.get("require_path", "")
-    if rp:
-        return rp
-    return "./" + spec.file
-
-
 def generate_js_harness(
     spec: DarkWitnessSpec,
     target_root: Path,
@@ -505,12 +490,7 @@ def generate_ruby_harness(
     witness_token: str = "",
 ) -> str:
     """Render a fixed-template Ruby harness."""
-    lc = spec.lang_config
-    require_path = lc.get("require_path", "")
-    if not require_path:
-        rel = spec.file
-        rel = rel.removesuffix(".rb")
-        require_path = rel
+    require_path = derive_ruby_require_path(spec)
 
     target_str = str(target_root.resolve())
     args_str = _format_args_scripting(spec.args, nil_kw="nil")
@@ -552,8 +532,7 @@ def generate_php_harness(
     witness_token: str = "",
 ) -> str:
     """Render a fixed-template PHP harness."""
-    lc = spec.lang_config
-    require_path = lc.get("require_path", spec.file)
+    require_path = derive_php_require_path(spec)
     target_str = str(target_root.resolve())
     args_str = _format_args_scripting(
         spec.args, nil_kw="null",
@@ -757,12 +736,7 @@ def generate_lua_harness(
     witness_token: str = "",
 ) -> str:
     """Render a fixed-template Lua harness."""
-    lc = spec.lang_config
-    require_path = lc.get("require_path", "")
-    if not require_path:
-        rel = spec.file
-        rel = rel.removesuffix(".lua")
-        require_path = rel.replace("/", ".")
+    require_path = derive_lua_require_path(spec)
 
     args_str = _format_args_scripting(
         spec.args, nil_kw="nil", quote=_lua_quote,
@@ -833,13 +807,7 @@ def generate_perl_harness(
     witness_token: str = "",
 ) -> str:
     """Render a fixed-template Perl harness."""
-    lc = spec.lang_config
-    use_module = lc.get("use_module", "")
-    if not use_module:
-        rel = spec.file
-        if rel.endswith((".pl", ".pm")):
-            rel = rel[:-3]
-        use_module = rel.replace("/", "::")
+    use_module = derive_perl_use_module(spec)
 
     target_str = str(target_root.resolve())
     args_str = _format_args_scripting(spec.args, nil_kw="undef")

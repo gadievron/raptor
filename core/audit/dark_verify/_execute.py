@@ -18,12 +18,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 from core.paths import confine
 from core.run.scratch import scratch_dir
 from core.run.workdir import exec_workdir
 
+from ._resolve import binding_error
 from ._harness import (
     _CALL_MARKER_PREFIX,
     generate_c_harness,
@@ -524,23 +525,12 @@ def validate_spec(
         # imports are pasted into `import <x>;` lines — allowlist to a
         # dotted identifier path (an embedded newline used to survive
         # the generator's ';' strip and inject top-level Java code).
+        # Binding the imports and class_name to the finding's file is
+        # the resolution engine's job (binding_error below).
         for imp in lc.get("imports", []):
             imp_s = str(imp).strip()
             if imp_s and not _JAVA_IMPORT_RE.match(imp_s):
                 return f"invalid java import: {imp_s[:60]!r}"
-        # Bind the harness to the finding's FILE: the compile classpath
-        # spans the whole target tree, so an unbound class_name reaches
-        # any class in the repo — a lookalike method on another class
-        # would mint a verdict for this finding. Java's public-class
-        # rule ties the file stem to the class; nested classes keep the
-        # stem as their outer prefix.
-        if cn:
-            stem = PurePosixPath(spec.file.replace("\\", "/")).stem
-            if cn != stem and not cn.startswith(stem + "."):
-                return (
-                    f"class_name {cn!r} not bound to the finding's file "
-                    f"({spec.file!r} implies {stem!r})"
-                )
 
     up = lc.get("use_path", "")
     if up:
@@ -574,149 +564,11 @@ def validate_spec(
         if err:
             return err
 
-    return _module_binding_error(spec, lang, target_root)
-
-
-def _go_module_path(target_root: Path | None) -> str | None:
-    """Module path declared by the target's root go.mod, or None when
-    unreadable/undeclared."""
-    if target_root is None:
-        return None
-    try:
-        text = (target_root / "go.mod").read_text(
-            encoding="utf-8", errors="replace",
-        )
-    except OSError:
-        return None
-    for line in text.splitlines():
-        m = re.match(r'\s*module\s+"?([^\s"]+)"?\s*(?://.*)?$', line)
-        if m:
-            return m.group(1)
-    return None
-
-
-def _module_binding_error(
-    spec: DarkWitnessSpec,
-    lang: str,
-    target_root: Path | None = None,
-) -> str | None:
-    """Bind require/use/import module overrides to the finding's FILE.
-
-    Python (validate_import_path), C/C++/Rust (compiled against
-    spec.file), and Java (class-stem check above) already tie the load
-    target to the finding's file. The require-shaped languages only
-    charset/containment-checked the LLM-supplied module reference — a
-    witness pointing require_path at a lookalike module exporting a
-    same-named function would execute the WRONG code and mint a
-    confirmed/refuted verdict for the original finding. The binding
-    holds in the RESOLUTION direction per language: accept a spelling
-    only when the language's own loader mapping lands on the finding's
-    file (JS/TS: the exact file path with extension — Node tries the
-    extensionless path and a plantable package.json "main" first;
-    Go: the go.mod module path joined with the package directory,
-    refused when go.mod is unreadable; Ruby/Perl/PHP/Lua: their
-    established exact mappings); anything else is rejected, never
-    executed.
-    """
-    lc = spec.lang_config
-    file = spec.file.replace("\\", "/")
-
-    def _reject(field: str, value: str) -> str:
-        return (
-            f"{field} {value!r} not bound to the finding's file "
-            f"{spec.file!r}"
-        )
-
-    if lang in ("javascript", "typescript"):
-        rp = lc.get("require_path", "")
-        if not rp:
-            return None
-        # Only the exact file path (with extension) resolves
-        # unambiguously: for a stem spelling Node's LOAD_AS_FILE tries
-        # the extensionless path FIRST (a repo-planted file named
-        # `src/auth` shadows `src/auth.js`) and tries `.js` before
-        # `.ts` under the TS loaders; the directory/index spelling
-        # consults a repo-plantable package.json "main" before index
-        # files. The harness default derives the exact-file spelling,
-        # so nothing is lost by rejecting the ambiguous forms.
-        cand = rp[2:] if rp.startswith("./") else rp
-        if cand != file:
-            return _reject("require_path", rp)
-    elif lang == "ruby":
-        rp = lc.get("require_path", "")
-        if not rp:
-            return None
-        stem = file[:-3] if file.endswith(".rb") else file
-        if rp not in (file, stem):
-            return _reject("require_path", rp)
-    elif lang == "php":
-        rp = lc.get("require_path", "")
-        if rp and rp != file:
-            return _reject("require_path", rp)
-    elif lang == "lua":
-        # require() maps EVERY dot in the module name to a directory
-        # separator, so the binding must hold in the RESOLUTION
-        # direction: accept a spelling only when Lua's own mapping
-        # lands on the finding's file. The old spelling-direction
-        # check (rp == stem-with-dots) accepted "a.b.c" for a finding
-        # in "a.b/c.lua" — which Lua resolves to "a/b/c.lua", a
-        # plantable lookalike. A stem that itself contains a dot has
-        # NO unambiguous spelling (the harness default would inherit
-        # the same ambiguity), so it is rejected outright.
-        stem = file[:-4] if file.endswith(".lua") else file
-        rp = lc.get("require_path", "")
-        if not rp:
-            if "." in stem:
-                return (
-                    f"finding file {spec.file!r} has no unambiguous "
-                    f"Lua require spelling (require maps dots to "
-                    f"directory separators)"
-                )
-            return None
-        resolved = rp.replace(".", "/")
-        if file not in (resolved + ".lua", resolved + "/init.lua"):
-            return _reject("require_path", rp)
-    elif lang == "perl":
-        um = lc.get("use_module", "")
-        if not um:
-            return None
-        # The harness puts ONLY the target root on @INC, so the one
-        # module reference that loads spec.file is the file-derived
-        # spelling ("lib/Auth.pm" -> "lib::Auth"). A bare suffix form
-        # would let a root-level lookalike shadow the finding's file.
-        rel = um.replace("::", "/")
-        if file not in (rel + ".pm", rel + ".pl"):
-            return _reject("use_module", um)
-    elif lang == "go":
-        ip = lc.get("import_path", "")
-        if not ip:
-            return None
-        # Go resolves an import path by stripping the module prefix
-        # (from go.mod) and mapping the remainder to a directory — the
-        # old suffix check accepted "example.com/m/x/a/b" for a
-        # finding in a/b/ (Go resolves it to x/a/b, a plantable
-        # lookalike package), and root-package findings were not
-        # checked at all. Bind in the resolution direction: the one
-        # import path that loads the finding's package is the module
-        # path joined with its directory. No readable go.mod = no
-        # resolution to verify — refuse (mirrors the dotted-Lua-stem
-        # refusal); GOPATH-mode imports could not resolve inside the
-        # harness's scratch GOPATH anyway.
-        pkg_dir = str(PurePosixPath(file).parent)
-        module = _go_module_path(target_root)
-        if module is None:
-            return (
-                f"cannot bind import_path {ip!r} to the finding's file "
-                f"{spec.file!r}: no readable module declaration in "
-                f"go.mod at the target root"
-            )
-        expected = (
-            module if pkg_dir in (".", "") else f"{module}/{pkg_dir}"
-        )
-        if ip != expected:
-            return _reject("import_path", ip)
-
-    return None
+    # Module binding holds in the RESOLUTION direction for every lane:
+    # the reference the harness will hand the loader must resolve to
+    # the finding's file under the loader's real rules, or the spec is
+    # refused (see core/audit/dark_verify/_resolve.py).
+    return binding_error(spec, lang, target_root)
 
 
 # ---------------------------------------------------------------------------
