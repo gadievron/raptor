@@ -37,6 +37,7 @@ import errno  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 import stat  # noqa: E402
+import struct  # noqa: E402
 import textwrap  # noqa: E402
 import time  # noqa: E402
 import unittest  # noqa: E402
@@ -316,6 +317,46 @@ class TestDaemonDiedDiagnostic(unittest.TestCase):
         # store).
         self.assertIn("rc=97", msg)
         self.assertIn("daemon exploded", msg)
+
+
+class TestWriteFrameCompletes(unittest.TestCase):
+    """``_write_frame`` must deliver the WHOLE frame even when
+    os.write returns partial counts (a signal landing mid-transfer of
+    a >PIPE_BUF frame): a truncated frame desynchronises the
+    persistent channel and the daemon parses the next request from
+    mid-frame bytes. Simulated partial writes — runs in the default
+    (non-integration) suite."""
+
+    def test_partial_os_write_still_delivers_full_frame(self):
+        r, w = os.pipe()
+        host_obj = object.__new__(SandboxHost)
+        host_obj._write_fd = w
+        payload = {"cmd": "spawn", "stdin_hex": "ab" * 4096}
+
+        real_write = os.write
+
+        def _dribble(fd, data):
+            # Cap every transfer to 7 bytes for the frame fd only —
+            # the maximal partial-write hostile shape.
+            if fd == w:
+                return real_write(fd, bytes(data)[:7])
+            return real_write(fd, data)
+
+        with patch("core.sandbox.host.os.write", side_effect=_dribble):
+            host_obj._write_frame(payload)
+        os.close(w)
+
+        received = b""
+        while True:
+            chunk = os.read(r, 65536)
+            if not chunk:
+                break
+            received += chunk
+        os.close(r)
+        (length,) = struct.unpack("!I", received[:4])
+        body = received[4:]
+        self.assertEqual(length, len(body))
+        self.assertEqual(json.loads(body.decode("utf-8")), payload)
 
 
 if __name__ == "__main__":

@@ -464,8 +464,17 @@ class SandboxHost:
     def _write_frame(self, payload: dict) -> None:
         body = json.dumps(payload).encode("utf-8")
         hdr = struct.pack("!I", len(body))
+        # Write ALL the bytes: os.write can return a partial count on
+        # a >PIPE_BUF frame (spawn requests embed unbounded caller
+        # stdin_hex) when a signal lands after a partial transfer —
+        # PEP 475 only retries zero-progress EINTR. A truncated frame
+        # desynchronises the persistent channel: the daemon parses
+        # the next request from mid-frame bytes.
+        view = memoryview(hdr + body)
         try:
-            os.write(self._write_fd, hdr + body)
+            while view:
+                n = os.write(self._write_fd, view)
+                view = view[n:]
         except OSError as e:
             msg = f"write to daemon failed: {e}"
             raise HostRPCError(msg) from e
