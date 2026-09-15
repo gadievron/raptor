@@ -38,7 +38,14 @@ def validate_constraint_file(
     except ImportError:
         logger.debug("z3/smt_path not available; skipping constraint validation")
         return payload, []
-    profile = str(payload.get("profile") or "uint64")
+    # A constraint file without a declared profile carries GUESSED
+    # signedness: pass None through so validate_path reports
+    # infeasible only when both signedness profiles agree. Pinning
+    # "uint64" asserted knowledge the file never declared — the
+    # ubiquitous C signed error check (ret < 0) encoded as
+    # ULT(ret, 0), unsat, refuting satisfiable conditions.
+    raw_profile = payload.get("profile")
+    profile = str(raw_profile) if raw_profile else None
     result = validate_path(
         conditions,
         profile=profile,
@@ -49,7 +56,10 @@ def validate_constraint_file(
         binary_sha256,
         kind="smt_constraint_check",
         source="operator_constraint_file",
-        summary=f"SMT checked {len(conditions)} explicit path conditions using {profile}",
+        summary=(
+            f"SMT checked {len(conditions)} explicit path conditions "
+            f"using {profile or 'dual-signedness (undeclared profile)'}"
+        ),
         tier=EvidenceTier.SMT_PROVED,
         confidence="confirmed" if result.get("feasible") is not None else "candidate",
         reproducible=True,

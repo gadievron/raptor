@@ -1624,13 +1624,18 @@ class AutonomousSecurityAgentV2:
         # Same schema-drift coercion as the Tier 4 twin
         # (`dataflow_validation._tier4_smt_refine_inner`): LLMs
         # routinely emit `path_profile` as an int/list/dict — the
-        # shared to_lower_token_safe degrades to the default profile
-        # instead of crashing `.strip()` (which would abort the whole
-        # sequential run out of `generate_exploit`).
+        # shared to_lower_token_safe degrades to None instead of
+        # crashing `.strip()` (which would abort the whole sequential
+        # run out of `generate_exploit`). None means GUESSED
+        # signedness: validate_path then reports infeasible only when
+        # both signedness profiles agree. A pinned "uint64" default
+        # asserted knowledge the LLM never declared — the ubiquitous
+        # C signed error check (ret < 0) encoded as ULT(ret, 0),
+        # unsat, and refuted a live finding outright.
         profile = to_lower_token_safe(
             nested.get("path_profile") or analysis.get("path_profile"),
-            "uint64",
-        )
+            "",
+        ) or None
 
         try:
             from packages.exploit_feasibility.smt_path import validate_path

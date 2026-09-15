@@ -1490,14 +1490,19 @@ def _tier4_smt_refine_inner(
     if not conditions:
         return result, "no_check"
     # LLMs routinely violate structured-output schemas: `path_profile`
-    # can arrive as an int/list/dict. Coerce non-strings to the default
-    # profile instead of crashing on `.strip()` — shared with the
+    # can arrive as an int/list/dict. Coerce non-strings to None
+    # instead of crashing on `.strip()` — shared with the
     # `_smt_pre_flight` twin in agent.py so the sites cannot drift.
+    # None means GUESSED signedness: validate_path reports infeasible
+    # only when both signedness profiles agree. A pinned "uint64"
+    # default asserted knowledge the LLM never declared — the
+    # ubiquitous C signed error check (ret < 0) encoded as
+    # ULT(ret, 0), unsat, and refuted a live finding outright.
     profile_name = to_lower_token_safe(
         dataflow_validation.get("path_profile")
         or (analysis or {}).get("path_profile"),
-        "uint64",
-    )
+        "",
+    ) or None
 
     try:
         from packages.exploit_feasibility.smt_path import validate_path
