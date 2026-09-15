@@ -141,6 +141,10 @@ class TestJoernServerQuery:
 
         mock_proc = MagicMock()
         mock_proc.poll.return_value = 1  # process exited
+        # A real (but inert, beyond pid_max) pid: the handle is GC'd
+        # after the test and __del__ → stop() → group verification
+        # would otherwise walk a MagicMock pgid into the kill ladder.
+        mock_proc.pid = 2_000_000_000
         srv._proc = mock_proc
 
         result = srv.query("cpg.method.l")

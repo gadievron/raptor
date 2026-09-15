@@ -147,6 +147,22 @@ class TestEnsureGroupDead:
         assert _ensure_group_dead(None, label="test")
         assert _ensure_group_dead(2_000_000_000, label="test")
 
+    def test_non_int_pgid_is_a_clean_no_op(self, monkeypatch):
+        """Handle- and state-file-sourced pgids are not statically
+        guaranteed to be ints (a mocked Popen's ``.pid``, a corrupt
+        state record) — the guard must refuse the shape without
+        signalling anything or raising."""
+        from unittest.mock import Mock
+
+        signalled: list[tuple] = []
+        monkeypatch.setattr(
+            server_mod.os, "killpg",
+            lambda *args: signalled.append(args),
+        )
+        for bad in (Mock(), "5555", 5555.0, True):
+            assert _ensure_group_dead(bad, label="test") is True
+        assert signalled == []
+
 
 class TestStopKillsSurvivingMembers:
     def test_dead_leader_surviving_member_is_killed(self, _reap_all):

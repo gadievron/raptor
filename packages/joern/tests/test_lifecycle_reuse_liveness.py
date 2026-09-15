@@ -187,10 +187,20 @@ class TestKillServerSignalsGroup(_StateDirFixture):
     def test_group_leader_gets_killpg(self):
         state = {"pid": 5555, "comm": "java"}
         calls = []
+        # ``_pgid_alive`` must be stubbed dead at the SERVER module
+        # (``_kill_server`` imports it from there at call time): the
+        # mocked ``os.getpgid`` answers 5555 for EVERY pid, so the
+        # real procfs probe would read the whole host as group
+        # members and spin the full TERM/KILL escalation ladder
+        # against them. The group reads dead on the first grace-loop
+        # check instead — this test pins the signal CHOICE, not the
+        # escalation.
         with patch.object(lifecycle, "_pid_is_our_server",
                           return_value=True), \
                 patch.object(lifecycle, "_pid_alive",
                              return_value=False), \
+                patch("packages.joern.server._pgid_alive",
+                      return_value=False), \
                 patch.object(lifecycle.os, "getpgid",
                              return_value=5555), \
                 patch.object(lifecycle.os, "killpg",

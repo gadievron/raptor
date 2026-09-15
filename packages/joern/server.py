@@ -270,7 +270,17 @@ def _ensure_group_dead(
     the own-group guard keeps a corrupted value from killing the
     caller's own session.
     """
-    if not pgid or pgid <= 0:
+    # Shape guard before any arithmetic: pgid reaches here from
+    # process handles and lifecycle state files (``_proc.pid`` on a
+    # test double, a corrupt state record), so int-ness is not
+    # statically guaranteed — and ``<=`` on a non-int would raise,
+    # breaking the never-raises contract. bool is rejected too:
+    # ``True`` would otherwise read as pgid 1. A refused shape is
+    # nothing verifiable to kill; report the group dead so cleanup
+    # proceeds.
+    if not isinstance(pgid, int) or isinstance(pgid, bool):
+        return True
+    if pgid <= 0:
         return True
     try:
         if pgid == os.getpgrp():
