@@ -50,6 +50,7 @@ def parse_record(record: dict[str, Any]) -> OsvRecord:
         published=_parse_iso(record.get("published")),
         modified=_parse_iso(record.get("modified")),
         raw=record,
+        upstream=_string_tuple(record.get("upstream")),
     )
 
 

@@ -64,3 +64,9 @@ class OsvRecord:
     published: datetime | None
     modified: datetime | None
     raw: dict[str, Any]                          # full original JSON
+    # ``upstream`` ids: the vulnerabilities this record derives from.
+    # Distro-scoped databases (Debian/Ubuntu secdb) publish records with
+    # NO aliases and the CVE identity ONLY here — dropping the field
+    # loses the CVE for those records entirely. Defaulted so existing
+    # constructors stay valid.
+    upstream: tuple[str, ...] = ()

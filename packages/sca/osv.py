@@ -812,9 +812,21 @@ def _record_to_advisory(rec: OsvRecord) -> Advisory:
                 informational = v.strip()
                 break
 
+    # Fold ``upstream`` ids into the alias list. Debian/Ubuntu secdb
+    # records ship ``aliases: null`` with the CVE identity ONLY in
+    # ``upstream`` (DEBIAN-CVE-… → upstream ["CVE-…"]); an alias list
+    # without them loses KEV / EPSS / SSVC enrichment and the
+    # ``--fail-on-kev`` gate for every distro base-image finding.
+    # ``upstream`` means "the same vulnerability as tracked upstream"
+    # (identity-equivalent), unlike ``related`` which stays unfolded.
+    aliases = list(rec.aliases)
+    for up in rec.upstream:
+        if up and up != rec.id and up not in aliases:
+            aliases.append(up)
+
     return Advisory(
         osv_id=rec.id,
-        aliases=list(rec.aliases),
+        aliases=aliases,
         summary=rec.summary,
         details=rec.details,
         affected=affected,

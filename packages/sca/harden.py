@@ -65,7 +65,7 @@ from core.json import JsonCache, save_json
 
 from . import SCA_CACHE_ROOT, default_client
 from .discovery import find_manifests
-from .models import Dependency, PinStyle
+from .models import Dependency, PinStyle, cve_ids
 from .osv import OsvClient
 from .parsers import parse_manifest
 from .parsers._safe_read import scan_root_context
@@ -1077,12 +1077,7 @@ def _max_severity(advisories) -> int:
 
 def _cve_aliases(advisory) -> list[str]:
     """All CVE-shaped IDs for an advisory (its osv_id + aliases)."""
-    out: list[str] = []
-    osv_id = getattr(advisory, "osv_id", None)
-    if isinstance(osv_id, str) and osv_id.upper().startswith("CVE-"):
-        out.append(osv_id)
-    out.extend(a for a in getattr(advisory, "aliases", None) or [] if isinstance(a, str) and a.upper().startswith("CVE-"))
-    return out
+    return cve_ids(advisory)
 
 
 def _advisory_in_kev(advisory, kev) -> bool:

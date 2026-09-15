@@ -55,6 +55,7 @@ from .models import (
     Severity,
     SupplyChainFinding,
     VulnFinding,
+    cve_ids,
 )
 from .osv import OsvResult
 from .versions import VersionError, _canonical_ecosystem
@@ -411,14 +412,19 @@ def _assemble_finding(
     alias can therefore add scrutiny but never defang the genuine
     record's severity, fix version, or summary.
     """
-    # Union of CVE aliases across the group, first-seen order. The
+    # Union of CVE-shaped ids across the group, first-seen order. The
     # alias-graph grouping merges members whose CVE sets intersect
     # without being identical, so the union (not the representative's
     # own list) is what keeps KEV / EPSS / SSVC enrichment complete.
+    # ``cve_ids`` folds in each member's PRIMARY id too — OSV serves
+    # CVE-primary records with no self-alias (distro secdb /
+    # kernel-CNA), and keying enrichment off aliases alone rendered
+    # those ``in_kev=false`` while the exploit-evidence annotation on
+    # the same finding (which does read ``osv_id``) said KEV-listed.
     cve_aliases: list[str] = []
     for a in group:
-        for alias in a.aliases:
-            if alias.upper().startswith("CVE-") and alias not in cve_aliases:
+        for alias in cve_ids(a):
+            if alias not in cve_aliases:
                 cve_aliases.append(alias)
     in_kev = bool(kev and any(kev.contains(c) for c in cve_aliases))
     epss_score: float | None = None

@@ -276,6 +276,24 @@ class Advisory:
     severity_fallback: str | None = None
 
 
+def cve_ids(advisory: Advisory) -> list[str]:
+    """All CVE-shaped ids for ``advisory`` — primary ``osv_id`` first,
+    then aliases, first-seen order, deduplicated.
+
+    OSV serves records whose PRIMARY id IS the CVE with no self-alias
+    (distro secdb and kernel-CNA records — exactly the rows image-source
+    scans inject). A consumer that keys KEV / EPSS / SSVC enrichment off
+    the alias list alone silently loses those signals for CVE-primary
+    advisories, so every CVE-list consumer routes through here.
+    """
+    out: list[str] = []
+    for cand in (advisory.osv_id, *(advisory.aliases or [])):
+        if (isinstance(cand, str) and cand.upper().startswith("CVE-")
+                and cand not in out):
+            out.append(cand)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Reachability — module-level (default) + Go function-level
 # ---------------------------------------------------------------------------

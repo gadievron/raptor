@@ -78,11 +78,30 @@ def test_missing_id_raises() -> None:
         parse_record({"id": "", "summary": "empty id"})
 
 
+def test_upstream_field_parsed() -> None:
+    """Distro secdb records (Debian/Ubuntu) carry ``aliases: null`` and
+    the CVE identity ONLY in ``upstream`` — the field must survive
+    parsing or the CVE is lost for every distro base-image record."""
+    rec = parse_record({
+        "id": "DEBIAN-CVE-2024-6387",
+        "aliases": None,
+        "upstream": ["CVE-2024-6387"],
+    })
+    assert rec.aliases == ()
+    assert rec.upstream == ("CVE-2024-6387",)
+    # Bare-string upstream (same malformed-mirror shape as aliases) is
+    # ONE id; non-list/non-string drops to empty.
+    assert parse_record({"id": "X", "upstream": "CVE-2024-1"}).upstream \
+        == ("CVE-2024-1",)
+    assert parse_record({"id": "X", "upstream": 7}).upstream == ()
+
+
 def test_minimal_record() -> None:
     """Only ``id`` is required — everything else defaults to empty."""
     rec = parse_record({"id": "OSV-1"})
     assert rec.id == "OSV-1"
     assert rec.aliases == ()
+    assert rec.upstream == ()
     assert rec.summary == ""
     assert rec.details == ""
     assert rec.references == ()

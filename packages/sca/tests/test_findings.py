@@ -120,6 +120,94 @@ def test_kev_and_epss_enrichment() -> None:
     assert findings[0].epss == 0.97
 
 
+def test_cve_primary_advisory_gets_kev_epss_ssvc() -> None:
+    """A record whose PRIMARY id is the CVE (no self-alias — distro
+    secdb / kernel-CNA shape) must still drive KEV / EPSS / SSVC
+    enrichment; keying off ``aliases`` alone rendered it invisible."""
+    class FakeDecision:
+        is_active = True
+        has_exploit = True
+        automatable = "yes"
+
+    class FakeVulnrichment:
+        def lookup(self, cve: str):
+            return FakeDecision() if cve == "CVE-2024-31337" else None
+
+    d = _dep()
+    adv = _adv(osv_id="CVE-2024-31337", aliases=[])
+    osv = [OsvResult(dep_key=d.key(), advisories=[adv])]
+    kev = FakeKev(hits=["CVE-2024-31337"])
+    epss = FakeEpss(scores={"CVE-2024-31337": 0.91})
+    findings = build_vuln_findings(
+        [d], osv, kev=kev, epss=epss,
+        vulnrichment=FakeVulnrichment(),  # type: ignore[arg-type]
+    )
+    assert findings[0].in_kev is True
+    assert findings[0].epss == 0.91
+    assert findings[0].ssvc_exploitation == "active"
+    assert findings[0].ssvc_automatable == "yes"
+
+
+def test_cve_primary_kev_agrees_with_exploit_evidence() -> None:
+    """Closure across the CVE-list consumers: the finding-level KEV
+    verdict and the exploit-evidence annotation on the SAME finding
+    must agree on a CVE-primary advisory (they diverged when only the
+    latter consulted ``osv_id``)."""
+    from packages.sca.exploit_evidence import ExploitCorpus, annotate_findings
+
+    d = _dep()
+    adv = _adv(osv_id="CVE-2024-31337", aliases=[])
+    osv = [OsvResult(dep_key=d.key(), advisories=[adv])]
+    kev = FakeKev(hits=["CVE-2024-31337"])
+    findings = build_vuln_findings([d], osv, kev=kev)
+    corpus = ExploitCorpus(kev={"CVE-2024-31337"})
+    annotate_findings(findings, corpus=corpus)
+    assert findings[0].in_kev is True
+    assert findings[0].exploit_evidence is not None
+    assert findings[0].exploit_evidence.kev_listed is True
+
+
+def test_upstream_only_cve_drives_kev_gate_end_to_end() -> None:
+    """Debian/Ubuntu secdb shape: ``aliases: null`` with the CVE
+    identity ONLY in ``upstream``. Driven end-to-end (wire record →
+    Advisory → finding → row → threshold gate): the KEV verdict and
+    the ``--fail-on-kev`` gate must fire exactly as they do for the
+    alias-carrying shape."""
+    from packages.sca import thresholds
+    from packages.sca.findings import _vuln_finding_to_row
+    from packages.sca.osv import parse_osv_record
+
+    record = {
+        "id": "DEBIAN-CVE-2024-6387",
+        "aliases": None,
+        "upstream": ["CVE-2024-6387"],
+        "summary": "openssh - security update",
+        "affected": [{
+            "package": {"name": "openssh", "ecosystem": "Debian:12"},
+            "ranges": [{
+                "type": "ECOSYSTEM",
+                "events": [{"introduced": "0"},
+                           {"fixed": "1:9.2p1-2+deb12u3"}],
+            }],
+        }],
+    }
+    adv = parse_osv_record(record)
+    assert "CVE-2024-6387" in adv.aliases
+
+    d = _dep(name="openssh", version="1:9.2p1-2",
+             ecosystem="Debian:12", path=Path("/repo/Dockerfile"))
+    osv = [OsvResult(dep_key=d.key(), advisories=[adv])]
+    kev = FakeKev(hits=["CVE-2024-6387"])
+    findings = build_vuln_findings([d], osv, kev=kev)
+    assert findings[0].in_kev is True
+
+    row = _vuln_finding_to_row(findings[0])
+    cfg = thresholds.ThresholdConfig(fail_on_kev=True)
+    passed, fails = thresholds.evaluate([row], cfg)
+    assert passed is False
+    assert any("KEV" in m for m in fails)
+
+
 def test_no_advisories_no_findings() -> None:
     d = _dep()
     osv = [OsvResult(dep_key=d.key(), advisories=[])]
