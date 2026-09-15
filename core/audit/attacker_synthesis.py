@@ -250,6 +250,13 @@ def synthesize_chains(
 
     chains: list[AttackChain] = []
     chain_counter = 0
+    # Run-level dedup: a finding reachable from two entry points lands
+    # in both groups, and each group's pairwise loop would mint the
+    # same (A,B) composition twice under fresh CHAIN-nnn ids —
+    # inflating attack-chains.json and the report's totals. Keyed on
+    # the index pair/set so order-swapped duplicates collapse too.
+    seen_pairs: set[frozenset] = set()
+    seen_key_sets: set[frozenset] = set()
 
     for group in groups:
         if len(group) < 2:
@@ -288,6 +295,11 @@ def synthesize_chains(
                 else:
                     first_idx, first_prim = idx_a, prim_a
                     second_idx, second_prim = idx_b, prim_b
+
+                pair_key = frozenset((idx_a, idx_b))
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
 
                 chain_counter += 1
                 key_a = f"{getattr(outcomes[first_idx], 'file', '')}:{getattr(outcomes[first_idx], 'function', '')}"
@@ -337,6 +349,7 @@ def synthesize_chains(
         multi, chain_counter = _build_multi_step_chains(
             outcomes, pairwise_for_group, primitives_cache,
             group, chain_counter,
+            seen_key_sets=seen_key_sets,
         )
         chains.extend(multi)
 
@@ -412,6 +425,8 @@ def _build_multi_step_chains(
     primitives_cache: dict[int, AttackPrimitive],
     group_indices: list[int],
     chain_counter: int,
+    *,
+    seen_key_sets: set[frozenset] | None = None,
 ) -> tuple:
     """Extend pairwise chains to multi-step chains (3-5 steps).
 
@@ -440,7 +455,11 @@ def _build_multi_step_chains(
             seeds.append(idxs)
 
     multi_chains: list[AttackChain] = []
-    seen_key_sets: set[frozenset] = set()
+    # Run-level when the caller threads it (multi-group dedup: the
+    # same extended index set otherwise re-mints per group); local
+    # fallback keeps direct callers working.
+    if seen_key_sets is None:
+        seen_key_sets = set()
 
     # BFS-style extension: grow each seed by one step at a time.
     queue = list(seeds)

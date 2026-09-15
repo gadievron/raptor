@@ -495,3 +495,56 @@ class TestFormatChainsSummary:
         assert "CHAIN-001" in text
         assert "CHAIN-002" in text
         assert "auth required" in text
+
+
+class TestCrossGroupDedup:
+    """A finding reachable from two entry points lands in both groups
+    — the same (A,B) composition must not mint two chains with fresh
+    CHAIN-nnn ids (attack-chains.json and the report totals
+    double-counted)."""
+
+    _CONTEXT_MAP = {
+        "entry_points": [
+            {"file": "main.c", "name": "handle_request"},
+            {"file": "main.c", "name": "handle_upload"},
+        ],
+        "call_edges": {
+            "main.c:handle_request": ["a.c:leak", "a.c:overflow"],
+            "main.c:handle_upload": ["a.c:leak", "a.c:overflow"],
+        },
+    }
+
+    _OUTCOMES = [
+        FakeOutcome(
+            file="a.c", function="leak", status="finding",
+            review_result={"cwe_class": "CWE-200"},
+        ),
+        FakeOutcome(
+            file="a.c", function="overflow", status="finding",
+            review_result={"cwe_class": "CWE-120"},
+        ),
+    ]
+
+    def test_pair_reachable_from_two_entries_chains_once(self):
+        chains = synthesize_chains(
+            list(self._OUTCOMES), self._CONTEXT_MAP,
+        )
+        pair_chains = [
+            c for c in chains
+            if set(c.finding_keys) == {"a.c:leak", "a.c:overflow"}
+        ]
+        assert len(pair_chains) == 1, [c.chain_id for c in pair_chains]
+
+    def test_single_entry_still_chains(self):
+        # Both directions: dedup must not eat the one legitimate chain.
+        cm = {
+            "entry_points": [{"file": "main.c", "name": "handle_request"}],
+            "call_edges": {
+                "main.c:handle_request": ["a.c:leak", "a.c:overflow"],
+            },
+        }
+        chains = synthesize_chains(list(self._OUTCOMES), cm)
+        assert len([
+            c for c in chains
+            if set(c.finding_keys) == {"a.c:leak", "a.c:overflow"}
+        ]) == 1
