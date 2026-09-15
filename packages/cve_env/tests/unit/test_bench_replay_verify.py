@@ -40,16 +40,25 @@ _AUDIT_ROOT = pathlib.Path(__file__).parent.parent.parent.parent / "output" / "a
 _RETIRED_CHECK_TYPES = frozenset({"http_payload_check", "tcp_payload_check"})
 
 
-def _collect_verify_cases() -> list[tuple[str, dict[str, Any]]]:
+def _collect_verify_cases(
+    root: pathlib.Path = _AUDIT_ROOT,
+) -> list[tuple[str, dict[str, Any]]]:
     """Return (case_id, verify_kwargs) for every verify call in the corpus."""
     cases: list[tuple[str, dict[str, Any]]] = []
-    for jsonl in sorted(_AUDIT_ROOT.glob("manual-*/CVE-*.jsonl")):
+    for jsonl in sorted(root.glob("manual-*/CVE-*.jsonl")):
         run_id = jsonl.parent.name
         with jsonl.open() as fh:
             for line in fh:
                 if '"verify"' not in line:
                     continue
-                obj = json.loads(line)
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    # A truncated tail line (an agentic run appending
+                    # to the same audit file mid-collection) must not
+                    # error the whole session at collection time; the
+                    # other, complete recordings still replay.
+                    continue
                 if obj.get("tool_name") != "verify":
                     continue
                 tool_input = obj.get("tool_input") or {}
@@ -169,3 +178,24 @@ def test_bench_replay_verify_no_schema_rejection(
         f"{case_id}: verify() schema-rejected {len(bad)} step(s): "
         + ", ".join(r.get("reason", "") for r in bad)
     )
+
+
+def test_collect_tolerates_truncated_tail_line(tmp_path: pathlib.Path) -> None:
+    """A truncated tail line (audit file mid-append) must be skipped,
+    never error collection — pre-fix it raised JSONDecodeError at
+    import time and killed the whole test session."""
+    run_dir = tmp_path / "manual-x"
+    run_dir.mkdir()
+    good = json.dumps(
+        {
+            "tool_name": "verify",
+            "tool_input": {"plan": []},
+            "cve_id": "CVE-0000-0001",
+            "turn": 1,
+        }
+    )
+    truncated = '{"tool_name": "verify", "tool_input": {"pl'
+    (run_dir / "CVE-0000-0001.jsonl").write_text(good + "\n" + truncated)
+    cases = _collect_verify_cases(tmp_path)
+    assert len(cases) == 1
+    assert cases[0][0].startswith("CVE-0000-0001@manual-x")
