@@ -63,8 +63,16 @@ def redb_cache_candidates(gpr_path: Path) -> List[Path]:
             )
     except Exception:  # noqa: BLE001
         logger.debug("failed to resolve project for redb cache candidates", exc_info=True)
+    # Configured out base, NOT the process CWD: a caller launched
+    # outside the repo root silently missed the cache (context
+    # injection disabled) from a bare Path("out").
+    try:
+        from core.config import RaptorConfig
+        out_base = RaptorConfig.get_out_dir()
+    except Exception:  # noqa: BLE001 — probe fallback only
+        out_base = Path("out")
     candidates.append(
-        Path(f"out/ghidra-import-{gpr_path.stem}") / "re-database.json")
+        out_base / f"ghidra-import-{gpr_path.stem}" / "re-database.json")
     return candidates
 
 

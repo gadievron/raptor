@@ -229,3 +229,23 @@ class TestRedbCacheCandidates:
         assert len(candidates) == 2
         assert "ghidra-target" in str(candidates[0])
         assert "ghidra-import-target" in str(candidates[1])
+
+
+class TestRedbCandidatesOutBase:
+    def test_fallback_candidate_uses_configured_out_base(
+            self, tmp_path, monkeypatch):
+        # A bare Path("out/...") resolved against the process CWD —
+        # callers outside the repo root missed the cache and context
+        # injection silently disabled itself.
+        from packages.ghidra.roundtrip import redb_cache_candidates
+
+        out_base = tmp_path / "custom-out"
+        from core.config import RaptorConfig
+        monkeypatch.setattr(
+            RaptorConfig, "get_out_dir", staticmethod(lambda: out_base))
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        cands = redb_cache_candidates(tmp_path / "proj.gpr")
+        expected = out_base / "ghidra-import-proj" / "re-database.json"
+        assert expected in cands

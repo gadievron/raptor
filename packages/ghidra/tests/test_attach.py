@@ -842,8 +842,12 @@ class TestCacheLayoutAndCollectorHardening:
         with patch("core.project.project.ProjectManager", FakeMgr):
             cands = redb_cache_candidates(gpr)
         assert cands[0] == attach_dir(proj, gpr) / "re-database.json"
+        # Legacy global candidate stays LAST — resolved against the
+        # configured out base, not the process CWD.
+        from core.config import RaptorConfig
         assert cands[-1] == (
-            Path("out/ghidra-import-fw") / "re-database.json")
+            RaptorConfig.get_out_dir() / "ghidra-import-fw"
+            / "re-database.json")
 
     def test_sequential_shape_records_export(self):
         """Sequential runs (vuln.to_dict() in the autonomous report)

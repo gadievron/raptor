@@ -237,3 +237,40 @@ class TestAtomicChecklistWrite:
             if i["function"] == "parse_input"
         )
         assert parse["priority"] == "high"
+
+
+class TestFindVersionDiffOutBase:
+    def test_fallback_glob_uses_configured_out_base(
+            self, tmp_path, monkeypatch):
+        # A bare Path("out") resolved against the process CWD — any
+        # caller not launched from the repo root silently got "no
+        # version diff" (diff priority skipped, no error).
+        from packages.ghidra.diff_priority import _find_version_diff
+
+        out_base = tmp_path / "custom-out"
+        diff_dir = out_base / "ghidra-diff-20260914"
+        diff_dir.mkdir(parents=True)
+        (diff_dir / "version-diff.json").write_text('{"added": []}')
+
+        from core.config import RaptorConfig
+        monkeypatch.setattr(
+            RaptorConfig, "get_out_dir", staticmethod(lambda: out_base))
+
+        # A project resolves but carries no diff in its run dirs —
+        # the glob fallback lane. It must search the CONFIGURED base
+        # even from a foreign CWD.
+        class _Project:
+            def get_run_dirs(self):
+                return []
+
+        class _Mgr:
+            def find_project_for_target(self, target):
+                return _Project()
+
+        import core.project.project as project_mod
+        monkeypatch.setattr(project_mod, "ProjectManager", _Mgr)
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+        found = _find_version_diff(tmp_path / "no-such-target")
+        assert found == diff_dir / "version-diff.json"

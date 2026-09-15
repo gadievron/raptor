@@ -33,7 +33,15 @@ def _find_version_diff(target_path: Path) -> Optional[Path]:
     except Exception:  # noqa: BLE001
         pass
 
-    for candidate in Path("out").glob("ghidra-diff-*/version-diff.json"):
+    # Configured out base, NOT the process CWD: a caller launched
+    # outside the repo root (API consumers, tests, a future daemon)
+    # silently got "no version diff" from a bare Path("out").
+    try:
+        from core.config import RaptorConfig
+        out_base = RaptorConfig.get_out_dir()
+    except Exception:  # noqa: BLE001 — probe fallback only
+        out_base = Path("out")
+    for candidate in out_base.glob("ghidra-diff-*/version-diff.json"):
         if candidate.is_file():
             return candidate
 
