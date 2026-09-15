@@ -104,6 +104,8 @@ def observe_target(
         cmd.extend(["--out", str(out_dir)])
 
     env = _safe_env()
+    nonce = _mint_nonce()
+    env["RAPTOR_FRIDA_RUNDIR_NONCE"] = nonce
 
     log.info("launching frida observation: %s (template=%s, duration=%ds)",
              target, template, duration_sec)
@@ -126,10 +128,12 @@ def observe_target(
                   result.returncode, stderr_tail)
         return None
 
-    # The wrapper echoes the lifecycle output — the only OUTPUT_DIR=
-    # line — to STDERR (operator visibility); scan both streams.
-    run_dir = (_extract_output_dir(result.stdout)
-               or _extract_output_dir(result.stderr or ""))
+    # An explicit out_dir is the caller's choice and always wins —
+    # parsed sentinels only resolve wrapper-owned lifecycle dirs.
+    if out_dir is not None:
+        run_dir = Path(out_dir)
+    else:
+        run_dir = _extract_output_dir(result.stderr or "", nonce)
     if run_dir and run_dir.is_dir() and (run_dir / "metadata.json").is_file():
         log.info("observation complete: %s", run_dir)
         return run_dir
@@ -194,6 +198,8 @@ def watch_sinks(
         cmd.extend(["--out", str(out_dir)])
 
     env = _safe_env()
+    nonce = _mint_nonce()
+    env["RAPTOR_FRIDA_RUNDIR_NONCE"] = nonce
 
     log.info("launching frida sink watch: %s (sinks=%s, duration=%ds%s)",
              target, sinks_file, duration_sec,
@@ -217,8 +223,10 @@ def watch_sinks(
                   result.returncode, stderr_tail)
         return None
 
-    run_dir = (_extract_output_dir(result.stdout)
-               or _extract_output_dir(result.stderr or ""))
+    if out_dir is not None:
+        run_dir = Path(out_dir)
+    else:
+        run_dir = _extract_output_dir(result.stderr or "", nonce)
     if run_dir and run_dir.is_dir() and (run_dir / "metadata.json").is_file():
         log.info("sink watch complete: %s", run_dir)
         return run_dir
@@ -421,13 +429,36 @@ def auto_observe(
     )
 
 
-def _extract_output_dir(stdout: str) -> Path | None:
-    """Parse OUTPUT_DIR=<path> from libexec output."""
-    for line in stdout.splitlines():
-        if line.startswith("OUTPUT_DIR="):
-            p = Path(line[len("OUTPUT_DIR="):].strip())
+_RUN_DIR_SENTINEL = "RAPTOR_FRIDA_RUN_DIR:"
+
+
+def _mint_nonce() -> str:
+    """Fresh per-launch sentinel nonce."""
+    return os.urandom(8).hex()
+
+
+def _extract_output_dir(stderr: str, nonce: str) -> Path | None:
+    """Parse the nonce-framed run-dir sentinel from WRAPPER stderr.
+
+    The spawned target inherits the wrapper's stdio, so both captured
+    streams carry attacker bytes once the target runs — the previous
+    stdout-first scan for a bare ``OUTPUT_DIR=`` line let the target
+    substitute a pre-planted evidence directory. The wrapper emits
+    ``RAPTOR_FRIDA_RUN_DIR:<nonce>=<path>`` on stderr BEFORE spawning
+    the target (and unsets the nonce from the child env): the nonce
+    is unguessable to bytes baked into the target, and the FIRST
+    framed line wins, so a later forged line can never displace the
+    wrapper's own. The bare ``OUTPUT_DIR=`` lifecycle line stays on
+    stderr for operators and downstream lifecycle steps; it is no
+    longer trusted for evidence-dir selection.
+    """
+    marker = f"{_RUN_DIR_SENTINEL}{nonce}="
+    for line in (stderr or "").splitlines():
+        if line.startswith(marker):
+            p = Path(line[len(marker):].strip())
             if p.is_dir():
                 return p
+            return None  # first framed line decides; never fall through
     return None
 
 

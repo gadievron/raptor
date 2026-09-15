@@ -240,6 +240,19 @@ else
     LIFECYCLE_OWNED=0
 fi
 
+# ─── nonce-framed run-dir sentinel (evidence-dir integrity) ─────────
+# The spawned target inherits this process's stdio, so a bare
+# OUTPUT_DIR= line in the captured streams is forgeable by target
+# bytes. When the programmatic caller (packages/frida/active.py)
+# supplies a per-launch nonce, echo the framed sentinel BEFORE any
+# target code can run, then unset the nonce so the instrumented
+# target never sees it. The bare OUTPUT_DIR= lifecycle line above
+# stays: operators and downstream lifecycle steps parse it.
+if [ -n "${RAPTOR_FRIDA_RUNDIR_NONCE:-}" ]; then
+    echo "RAPTOR_FRIDA_RUN_DIR:${RAPTOR_FRIDA_RUNDIR_NONCE}=${OUT}" >&2
+    unset RAPTOR_FRIDA_RUNDIR_NONCE
+fi
+
 PASS_ARGS+=("--out" "$OUT")
 # Re-attach the verbatim post--- tail AFTER every wrapper-owned flag.
 PASS_ARGS+=(${TAIL_ARGS[@]+"${TAIL_ARGS[@]}"})
