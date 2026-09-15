@@ -94,7 +94,9 @@ class TestWriter:
         db = _db(functions=[
             _fn("evil\x1b]0;pwn\x07‮name", 0x1000,
                 sig="void evil\x1b[2J(void)",
-                decomp="void f(void){}"),
+                decomp=("void f(void){\n"
+                        "  puts(\"lit\x1b]0;pwn\x07\x9b2J‮lit\");\n"
+                        "}")),
         ])
         tree = write_decomp_tree(db, tmp_path)
         fname = [f for f in tree.files if f.endswith(".c")][0]
@@ -103,8 +105,11 @@ class TestWriter:
         for emitted in (text, sidecar):
             assert "\x1b" not in emitted
             assert "\x07" not in emitted
+            assert "\x9b" not in emitted
             assert "‮" not in emitted
         assert "evil" in text
+        # The multi-line body survives structurally (newlines intact).
+        assert "  puts(" in text
 
     def test_byte_ceiling_truncates_loudly(self, tmp_path, monkeypatch):
         import packages.ghidra.decomp_tree as mod

@@ -224,3 +224,60 @@ def test_app_ingress_with_recovered_parser_boundary_surfaces_that_in_plan(tmp_pa
     assert len(spec["linked_evidence"]["parser_boundaries"]) == 1
     assert "parse_url_payload" in spec["reason"]
     assert "PARSER_BOUNDARY_FOR_INGRESS" in spec["next_step"]
+
+
+def test_hostile_ingress_names_scrubbed_from_report(tmp_path: Path) -> None:
+    # Ingress names come from the hostile binary's symbols/plist —
+    # harness-report.md is catted by operators and must carry no raw
+    # control/bidi bytes, same chokepoint as the investigation report.
+    hostile = "evil\x1b]0;pwn\x07\x9b2J‮name"
+    run_dir = _write_run(
+        tmp_path,
+        target_kind="macho",
+        platform="macos",
+        ingress={
+            "kind": "ipc_listener",
+            "name": f"Demo.{hostile}:conn:",
+            "bound_function_id": "BFN-1000",
+            "bound_function_name": f"method.Demo.{hostile}:conn:",
+        },
+    )
+    spec = generate_binary_harness(run_dir)
+    from packages.binary_analysis.harness import render_harness_report
+    report = render_harness_report(spec)
+    for raw in ("\x1b", "\x07", "\x9b", "‮"):
+        assert raw not in report
+    assert "evil" in report
+
+
+def test_hostile_ingress_names_scrubbed_from_harness_prints(
+    tmp_path: Path, capsys, monkeypatch,
+) -> None:
+    # The /binary harness terminal summary is the sibling surface of
+    # the report — same binary-derived names, same scrub requirement.
+    import argparse
+
+    from packages.binary_analysis import cli as cli_mod
+
+    hostile = "evil\x1b]0;pwn\x07\x9b2J‮name"
+    run_dir = _write_run(
+        tmp_path,
+        target_kind="macho",
+        platform="macos",
+        ingress={
+            "kind": "ipc_listener",
+            "name": f"Demo.{hostile}:conn:",
+            "bound_function_id": "BFN-1000",
+            "bound_function_name": f"method.Demo.{hostile}:conn:",
+        },
+    )
+    args = argparse.Namespace(
+        run_dir=str(run_dir), json=False, ingress=None, abi=None, device=None,
+        ioctl_code=None, llm_rank=False,
+    )
+    rc = cli_mod._run_harness(args)
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Mode: harness" in out
+    for raw in ("\x1b", "\x07", "\x9b", "‮"):
+        assert raw not in out

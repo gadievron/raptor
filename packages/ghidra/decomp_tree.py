@@ -27,6 +27,17 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .match import _CONTROL
+
+# Body variant of ``match._CONTROL``: the same class with \t/\n carved
+# out. Decompiled C is multi-line; raw control/bidi bytes are never
+# legal in it (r2's pdc/pdg reproduce string-literal bytes from the
+# hostile binary verbatim), and the .c tree is catted by operators and
+# fed to raptor-study-prep.
+_BODY_CONTROL = re.compile(
+    "[\x00-\x08\x0b-\x1f\x7f-\x9f"
+    "\u200b-\u200f\u2028\u2029"
+    "\u202a-\u202e\u2066-\u2069"
+    "\ufeff]")
 from .model import REDatabase, REFunction
 
 logger = logging.getLogger(__name__)
@@ -270,7 +281,9 @@ def _render_function(
         lines.append(" * external (import)")
     lines.append(" */")
     if func.decompilation:
-        lines.append(func.decompilation.rstrip("\n"))
+        # Same scrub class as the header/sidecar fields — the body is
+        # the most attacker-shaped surface of the whole emission.
+        lines.append(_BODY_CONTROL.sub(" ", func.decompilation).rstrip("\n"))
     else:
         sig = _clip(func.signature, _MAX_SIG_CHARS) if func.signature \
             else f"void {name}(void)"

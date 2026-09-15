@@ -31,6 +31,7 @@ from typing import Any
 from core.json import load_json, save_json
 
 from .graph_store import BinaryGraphStore, graph_path_for_run, stable_node_id
+from .investigation import _md_escape
 
 logger = logging.getLogger(__name__)
 
@@ -686,58 +687,67 @@ def generate_binary_harness(
 
 
 def render_harness_report(spec: dict[str, Any]) -> str:
+    # Every name-bearing field below is recovered from the hostile
+    # binary (symbols, plist, r2 output) — route through the same
+    # _md_escape chokepoint the investigation report uses so
+    # harness-report.md carries no raw control/pipe bytes.
     ingress = spec["ingress"]
     target = spec["target"]
     lines = [
         "# RAPTOR Binary Harness Plan",
         "",
-        f"Target: `{target['path']}`",
-        f"SHA-256: `{target['binary_sha256']}`",
-        f"Ingress: `{ingress['name']}`",
-        f"Family: `{spec['family']}`",
-        f"Status: `{spec['status']}`",
+        f"Target: `{_md_escape(target['path'])}`",
+        f"SHA-256: `{_md_escape(target['binary_sha256'])}`",
+        f"Ingress: `{_md_escape(ingress['name'])}`",
+        f"Family: `{_md_escape(spec['family'])}`",
+        f"Status: `{_md_escape(spec['status'])}`",
         "",
         "## Evidence",
         "",
-        f"- Ingress kind: `{ingress['kind']}`",
-        f"- Bound function: `{ingress.get('bound_function_name') or 'not bound'}`",
-        f"- Evidence tier: `{ingress.get('evidence_tier')}`",
-        f"- Evidence ids: `{', '.join(ingress.get('evidence_ids') or []) or 'none'}`",
+        f"- Ingress kind: `{_md_escape(ingress['kind'])}`",
+        f"- Bound function: `{_md_escape(ingress.get('bound_function_name') or 'not bound')}`",
+        f"- Evidence tier: `{_md_escape(ingress.get('evidence_tier'))}`",
+        f"- Evidence ids: `{_md_escape(', '.join(ingress.get('evidence_ids') or []) or 'none')}`",
         f"- Linked candidate flows: {len((spec.get('linked_evidence') or {}).get('candidate_flows') or [])}",
         f"- Linked runtime input flows: {len((spec.get('linked_evidence') or {}).get('runtime_input_flows') or [])}",
         f"- Linked parser boundary candidates: {len((spec.get('linked_evidence') or {}).get('parser_boundaries') or [])}",
         "",
         "## Decision",
         "",
-        f"- {spec['reason']}",
-        f"- Next step: `{spec['next_step']}`",
+        f"- {_md_escape(spec['reason'])}",
+        f"- Next step: `{_md_escape(spec['next_step'])}`",
     ]
     if spec.get("operator_inputs"):
         lines.extend(["", "## Operator-supplied Contract", ""])
         lines.extend(
-            f"- `{key}`: `{value}`"
+            f"- `{_md_escape(key)}`: `{_md_escape(value)}`"
             for key, value in spec["operator_inputs"].items()
         )
     if spec.get("unknowns"):
         lines.extend(["", "## Still Unknown", ""])
-        lines.extend(f"- {item}" for item in spec["unknowns"])
+        lines.extend(f"- {_md_escape(item)}" for item in spec["unknowns"])
     parser_boundaries = (spec.get("linked_evidence") or {}).get("parser_boundaries") or []
     if parser_boundaries:
         lines.extend(["", "## Recovered Parser Boundary", ""])
-        lines.extend(f"- `{item['boundary_function_name']}` -> `{item['parser_surface_name']}` "
-                f"(depth {item['path']['depth']}, tier `{item['evidence_tier']}`)" for item in parser_boundaries[:5])
+        lines.extend(
+            f"- `{_md_escape(item['boundary_function_name'])}` -> "
+            f"`{_md_escape(item['parser_surface_name'])}` "
+            f"(depth {item['path']['depth']}, "
+            f"tier `{_md_escape(item['evidence_tier'])}`)"
+            for item in parser_boundaries[:5]
+        )
     if spec.get("generated"):
         lines.extend([
             "",
             "## Generated Candidate",
             "",
-            f"- Source: `{spec['generated'].get('source')}`",
-            f"- Build script: `{spec['generated'].get('build_script')}`",
-            f"- Compile command: `{spec['generated'].get('compile_command')}`",
+            f"- Source: `{_md_escape(spec['generated'].get('source'))}`",
+            f"- Build script: `{_md_escape(spec['generated'].get('build_script'))}`",
+            f"- Compile command: `{_md_escape(spec['generated'].get('compile_command'))}`",
         ])
     lines.extend(["", "## Verification Contract", ""])
     lines.extend(
-        f"- `{item['step']}`: {item['proof']}"
+        f"- `{_md_escape(item['step'])}`: {_md_escape(item['proof'])}"
         for item in spec["verification_contract"]
     )
     lines.extend([

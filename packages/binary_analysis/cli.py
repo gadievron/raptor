@@ -711,12 +711,16 @@ def _run_harness(args: argparse.Namespace) -> int:
     if args.json:
         print(dumps_display(spec, indent=None, sort_keys=True))
         return 0
+    # Ingress names come from the hostile binary's symbols/plist and
+    # spec['reason'] embeds recovered boundary names verbatim — same
+    # scrub as the investigation/map summaries.
     print("Mode: harness")
-    print(f"Status: {spec['status']}")
-    print(f"Family: {spec['family']}")
-    print(f"Ingress: {spec['ingress']['name']} ({spec['ingress']['kind']})")
-    print(f"Reason: {spec['reason']}")
-    print(f"Next step: {spec['next_step']}")
+    print(f"Status: {sanitise_for_terminal(str(spec['status']), max_len=64)}")
+    print(f"Family: {sanitise_for_terminal(str(spec['family']), max_len=64)}")
+    print(f"Ingress: {sanitise_for_terminal(str(spec['ingress']['name']))} "
+          f"({sanitise_for_terminal(str(spec['ingress']['kind']), max_len=64)})")
+    print(f"Reason: {sanitise_for_terminal(str(spec['reason']))}")
+    print(f"Next step: {sanitise_for_terminal(str(spec['next_step']))}")
     print(f"Spec: {spec['artifacts']['spec']}")
     print(f"Report: {spec['artifacts']['report']}")
     if spec.get("generated"):

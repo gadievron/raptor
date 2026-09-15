@@ -124,6 +124,10 @@ _SANITISERS = frozenset({
     "_fence",
     "_err",
     "_md_heading",
+    # binary_analysis' shared markdown-cell chokepoint
+    # (investigation._md_escape: escape_nonprintable + pipe/newline
+    # escaping — table-cell grade for binary-derived names).
+    "_md_escape",
     "_md_escape_inline",
     "_md_table_cell",
     "_render_detail",
@@ -168,11 +172,16 @@ _REPORT_WRITER_FILES = (
     "core/project/report.py",
     "core/reporting/findings.py",
     "core/sandbox/triage.py",
+    "packages/binary_analysis/cli.py",
+    "packages/binary_analysis/harness.py",
+    "packages/binary_analysis/investigation.py",
+    "packages/binary_analysis/pipeline.py",
     "packages/exploitability_validation/report.py",
     # Second validation-report.md generator (the orchestrator's
     # inline _generate_report/_render_finding_lines) — same artifact,
     # same finding-derived interpolations, must stay under audit.
     "packages/exploitability_validation/orchestrator.py",
+    "packages/ghidra/decomp_tree.py",
     "packages/llm_analysis/agent.py",
     "packages/llm_analysis/dispatch.py",
     "packages/llm_analysis/orchestrator.py",
@@ -252,6 +261,41 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "_format_summary — a registered writer that routes every "
             "free-text field through _line — so the string is "
             "sanitised at construction"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/cli.py",
+        func_name="_print_map_summary",
+        kind="unsanitised_llm_value",
+        detail="summary",
+        audit_note=(
+            "payload['correlation']['summary'] is the internally-built "
+            "count dict (surfaces/flows/... integers); the taint is the "
+            "'summary' key name, not LLM text"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/cli.py",
+        func_name="_print_investigation_summary",
+        kind="unsanitised_llm_value",
+        detail="summary",
+        audit_note=(
+            "investigation['summary'] is the internally-built count "
+            "dict; only integer counters are interpolated — the "
+            "name-bearing fields on the same surface go through "
+            "sanitise_for_terminal"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/pipeline.py",
+        func_name="_write_report",
+        kind="unsanitised_llm_value",
+        detail="lines",
+        audit_note=(
+            "'lines' is tainted only via class_summary "
+            "(class_inventory['summary'] — internally-built integer "
+            "counts); every name-bearing interpolation in the report "
+            "goes through the _esc chokepoint"
         ),
     ),
     AllowlistEntry(

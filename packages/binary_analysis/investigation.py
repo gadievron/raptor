@@ -748,7 +748,11 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
             )
 
     lines.extend(["", "## Automatic Graph Queries", ""])
-    lines.extend(f"- `{item['kind']}`: {item['edge_count']} edge(s). {item['description']}" for item in investigation["automatic_graph_queries"])
+    lines.extend(
+        f"- `{_md_escape(item['kind'])}`: {item['edge_count']} edge(s). "
+        f"{_md_escape(item['description'])}"
+        for item in investigation["automatic_graph_queries"]
+    )
 
     lines.extend(["", "## Hypotheses Requiring Evidence", ""])
     if investigation["hypotheses"]:
