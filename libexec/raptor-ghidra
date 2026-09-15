@@ -144,8 +144,18 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+# \x80-\x9f: the FULL C1 range, not just CSI 0x9B \u2014 U+009D is a
+# single-character OSC introducer and U+0090 a DCS introducer on
+# 8-bit-clean terminals, and ghidra-derived names/decompilation are
+# attacker bytes end-to-end. Matches escape_nonprintable's coverage,
+# plus the invisible/reordering class decomp_tree._BODY_CONTROL
+# strips (ZWSP..RLM, line/para separators, BOM) so the two
+# ghidra-derived-text scrubbers cover the same character set.
 _CTRL_CHARS = re.compile(
-    r"[\x00-\x08\x0b-\x1f\x7f\x9b\u202a-\u202e\u2066-\u2069]"
+    r"[\x00-\x08\x0b-\x1f\x7f\x80-\x9f"
+    r"\u200b-\u200f\u2028\u2029"
+    r"\u202a-\u202e\u2066-\u2069"
+    r"\ufeff]"
 )
 
 

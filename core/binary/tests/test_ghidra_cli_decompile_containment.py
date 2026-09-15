@@ -179,3 +179,40 @@ def test_binary_with_enrich_does_not_warn(monkeypatch, tmp_path, proj, capsys):
     captured = capsys.readouterr()
     assert "--binary is only used with --enrich" not in captured.err
     assert calls == ["import_and_enrich"]
+
+
+class TestCtrlCharClassCoversC1:
+    """_safe_name/_safe_line guard attacker bytes from ghidra-derived
+    names and decompilation; the class must cover the FULL C1 range —
+    U+009D is a single-char OSC introducer and U+0090 a DCS introducer,
+    not just CSI 0x9B."""
+
+    def test_full_c1_range_stripped(self, monkeypatch):
+        mod = _load_script(monkeypatch)
+        hostile = ("evil\x1b]0;t\x07\x9b2J"
+                   + "".join(chr(c) for c in range(0x80, 0xA0))
+                   + "‮end")
+        out = mod._safe_name(hostile)
+        assert out == "evilt2Jend" or (
+            # exact glyph fold aside, no control byte survives
+            all(ord(ch) >= 0x20 and not (0x7F <= ord(ch) <= 0x9F)
+                and ch != "‮" for ch in out)
+        )
+        line = mod._safe_line("a\nb" + hostile)
+        assert "\n" not in line
+        for ch in line:
+            assert not (ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F)
+
+    def test_invisible_and_reordering_class_stripped(self, monkeypatch):
+        # Parity with decomp_tree._BODY_CONTROL: zero-width and
+        # directional marks (U+200B..U+200F), line/paragraph
+        # separators (U+2028/U+2029), and the BOM (U+FEFF) are
+        # invisible-spoofing bytes in ghidra-derived names too.
+        mod = _load_script(monkeypatch)
+        hostile = ("fn​name‎‏ x y﻿z")
+        out = mod._safe_name(hostile)
+        assert out == "fnnamexyz"
+        line = mod._safe_line(hostile)
+        for ch in ("​", "‎", "‏",
+                   " ", " ", "﻿"):
+            assert ch not in line
