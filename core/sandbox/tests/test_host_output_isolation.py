@@ -177,6 +177,59 @@ class TestOutputEqualsTargetRefused:
                 with pytest.raises(ValueError, match="distinct output"):
                     SandboxHost.start(target=target, output=link)
 
+    def test_start_refuses_output_ancestor_of_target(self):
+        # Third element of the relation enumeration: output=<parent>,
+        # target=<parent>/repo. The mount-ns setup binds the target
+        # ro first, then the output rw ON TOP — the ancestor mount
+        # shadows the target's ro bind, and Landlock's writable grant
+        # on output is a subtree grant covering the target. Both
+        # containment layers silently fail open, so the guard must
+        # refuse this direction too.
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            target.mkdir()
+            with patch("core.sandbox.run", _RunRecorder()) as fake:
+                with pytest.raises(ValueError, match="ancestor"):
+                    SandboxHost.start(target=target, output=Path(tmp))
+                assert fake.kwargs is None, "refusal must precede any spawn"
+
+    def test_one_shot_refuses_output_ancestor_of_target(self):
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            target.mkdir()
+            with patch("core.sandbox.run", _RunRecorder()) as fake:
+                with pytest.raises(ValueError, match="ancestor"):
+                    one_shot_call(cmd="ping", payload={},
+                                  target=target, output=Path(tmp))
+                assert fake.kwargs is None
+
+    def test_start_refuses_symlink_ancestor_of_target(self):
+        # realpath must decide the relation: a symlink elsewhere that
+        # resolves to an ancestor of the target is the same hole.
+        with TemporaryDirectory() as tmp:
+            parent = Path(tmp) / "parent"
+            target = parent / "repo"
+            target.mkdir(parents=True)
+            link = Path(tmp) / "out-link"
+            link.symlink_to(parent)
+            with patch("core.sandbox.run", _RunRecorder()):
+                with pytest.raises(ValueError, match="ancestor"):
+                    SandboxHost.start(target=target, output=link)
+
+    def test_output_with_target_name_prefix_allowed(self):
+        # Reverse-direction sibling: target=/x/repo-src, output=/x/repo
+        # shares a name prefix but is NOT an ancestor — a naive
+        # startswith on the raw string would wrongly refuse it.
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo-src"
+            target.mkdir()
+            out = Path(tmp) / "repo"
+            out.mkdir()
+            from core.sandbox.host import _resolve_output
+            out_dir, owned = _resolve_output(target, out)
+            assert out_dir == os.path.realpath(str(out))
+            assert owned is None
+
     def test_sibling_with_target_name_prefix_allowed(self):
         # Both directions: /x/repo-out is a SIBLING of /x/repo, not a
         # descendant — a naive startswith on the raw string would
@@ -188,7 +241,48 @@ class TestOutputEqualsTargetRefused:
             sibling.mkdir()
             from core.sandbox.host import _resolve_output
             out_dir, owned = _resolve_output(target, sibling)
-            assert out_dir == str(sibling)
+            assert out_dir == os.path.realpath(str(sibling))
+            assert owned is None
+
+
+class TestOutputResolvedPathUsed:
+    """The mount must consume the exact path the guard vetted.
+
+    The guard compares realpaths; returning the raw argument leaves a
+    check-to-use gap — a symlink swapped after the check (or a
+    dangling link) would re-route the rw bind to a location the guard
+    never saw.
+    """
+
+    def test_symlink_output_returns_resolved_path(self):
+        from core.sandbox.host import _resolve_output
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            target.mkdir()
+            real_out = Path(tmp) / "real-out"
+            real_out.mkdir()
+            link = Path(tmp) / "out-link"
+            link.symlink_to(real_out)
+            out_dir, owned = _resolve_output(target, link)
+            assert out_dir == os.path.realpath(str(real_out)), (
+                "the returned path must be the resolved one the guard "
+                "checked, never the raw symlink"
+            )
+            assert owned is None
+
+    def test_dangling_symlink_output_returns_resolved_path(self):
+        from core.sandbox.host import _resolve_output
+        with TemporaryDirectory() as tmp:
+            target = Path(tmp) / "repo"
+            target.mkdir()
+            link = Path(tmp) / "out-link"
+            link.symlink_to(Path(tmp) / "does-not-exist")
+            out_dir, owned = _resolve_output(target, link)
+            assert out_dir == os.path.realpath(str(link))
+            assert out_dir != str(link), (
+                "a dangling symlink must not be handed to the mount "
+                "as-is — downstream consumes what the guard resolved"
+            )
             assert owned is None
 
 
