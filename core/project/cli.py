@@ -1753,16 +1753,20 @@ def _get_active_project():
     return mgr.get_active()
 
 
-def _count_sarif_results(run_dir: Path):
-    """Count total results across all SARIF files in a run directory."""
+def _count_sarif_results_in_dir(run_dir: Path) -> int:
+    """Count total results across all SARIF files in a run directory.
+
+    Per-file counting goes through the shared shape-tolerant
+    ``core.sarif.parser.count_results`` — these files sit in run
+    directories (tool-emitted, operator-editable), and the inline
+    loop this replaces raised on a non-dict run entry, taking the
+    whole /project status rendering down with one malformed file.
+    """
     from core.json import load_json
+    from core.sarif.parser import count_results
     count = 0
     for sarif_path in run_dir.glob("*.sarif"):
-        data = load_json(sarif_path)
-        if not data or not isinstance(data, dict):
-            continue
-        for run in (data.get("runs") or []):
-            count += len(run.get("results") or [])
+        count += count_results(load_json(sarif_path))
     return count
 
 
@@ -1802,7 +1806,7 @@ def _get_output_summary(run_dir, meta):
         # preserving for code-only runs and additive for SCA.
         result = f"{count_vulns(findings)} findings"
     else:
-        sarif_count = _count_sarif_results(run_dir)
+        sarif_count = _count_sarif_results_in_dir(run_dir)
         result = f"{sarif_count} results" if sarif_count else ""
 
     # Cache in metadata for completed/failed runs (won't change)

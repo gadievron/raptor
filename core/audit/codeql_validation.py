@@ -221,7 +221,7 @@ def validate_dataflow_claim(
                         ),
                         query_text=query_text,
                     )
-                match_count = _count_sarif_results(sarif_data)
+                match_count = _count_codeflow_results(sarif_data)
                 smt_pruned = 0
                 smt_receipts: list[dict[str, Any]] = []
                 if match_count > 0 and target_path is not None:
@@ -275,8 +275,13 @@ def validate_dataflow_claim(
         )
 
 
-def _count_sarif_results(sarif: dict[str, Any]) -> int:
-    """Count the number of results with codeFlows in SARIF output."""
+def _count_codeflow_results(sarif: dict[str, Any]) -> int:
+    """Count the number of results with codeFlows in SARIF output.
+
+    NOT a plain result count (that is core.sarif.parser.count_results)
+    — a result without a codeFlow proves nothing about dataflow here,
+    so only flow-carrying results count toward validation evidence.
+    """
     count = 0
     for run in sarif.get("runs", []):
         for result in run.get("results", []):
@@ -454,7 +459,7 @@ def _smt_prune_sarif_matches(
     try:
         from packages.exploit_feasibility.smt_path import validate_path
     except ImportError:
-        return _count_sarif_results(sarif), 0, []
+        return _count_codeflow_results(sarif), 0, []
 
     kept = 0
     pruned = 0

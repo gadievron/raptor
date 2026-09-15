@@ -50,6 +50,26 @@ def _write_sca(run_dir: Path, rows):
     (run_dir / "sca" / "findings.json").write_text(json.dumps(rows), encoding="utf-8")
 
 
+class TestCountSarifResultsInDir(unittest.TestCase):
+    """The run-dir SARIF counter must survive malformed files.
+
+    These files are tool-emitted and operator-editable; pre-fix a
+    non-dict run entry raised AttributeError and took the whole
+    /project status rendering down with one bad file."""
+
+    def test_malformed_run_entry_does_not_abort_count(self):
+        from core.project.cli import _count_sarif_results_in_dir
+        with TemporaryDirectory() as d:
+            run_dir = Path(d)
+            (run_dir / "bad.sarif").write_text(json.dumps(
+                {"runs": ["corrupt-entry",
+                          {"results": [{"ruleId": "x"}]}]}))
+            (run_dir / "good.sarif").write_text(json.dumps(
+                {"runs": [{"results": [{"ruleId": "a"},
+                                       {"ruleId": "b"}]}]}))
+            self.assertEqual(_count_sarif_results_in_dir(run_dir), 3)
+
+
 class TestRunSummarySca(unittest.TestCase):
     """The per-run summary count (run list) includes SCA findings, so it
     matches what /project findings shows."""

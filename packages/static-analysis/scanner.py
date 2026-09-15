@@ -40,6 +40,7 @@ from core.run.output import unique_run_suffix
 from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
 from core.sarif import emit as sarif_emit
+from core.sarif.parser import count_results
 from core.sarif.parser import generate_scan_metrics, merge_sarif, validate_sarif
 from packages import semgrep as semgrep_pkg
 
@@ -2627,24 +2628,6 @@ def cleanup_per_pack_artifacts(out_dir: Path) -> int:
     return removed
 
 
-def _count_sarif_results(sarif_data) -> int:
-    """Return the total number of results across runs in a parsed SARIF dict.
-
-    Tolerates malformed shapes — non-dict / non-list members count as zero
-    rather than raising. This is a provenance signal, not a validator.
-    """
-    if not isinstance(sarif_data, dict):
-        return 0
-    total = 0
-    for run_obj in sarif_data.get("runs", []) or []:
-        if not isinstance(run_obj, dict):
-            continue
-        results = run_obj.get("results") or []
-        if isinstance(results, list):
-            total += len(results)
-    return total
-
-
 def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
     """Compute provenance for one per-pack SARIF.
 
@@ -2693,7 +2676,7 @@ def _pack_provenance_from_sarif(sarif_path: Path, out_dir: Path) -> dict:
             # wrong-schema JSON has no `runs` list): uncountable —
             # same null as the unparseable case, keep the real hash.
             data = None
-        findings = _count_sarif_results(data) if data is not None else None
+        findings = count_results(data) if data is not None else None
     except OSError:
         # Missing (FileNotFoundError) or unreadable (EACCES, EIO, …)
         # — best-effort provenance, leave hash empty. findings null:

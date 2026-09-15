@@ -36,7 +36,7 @@ from core.dataflow.codeql_augmented_run import (
 from core.json import load_json
 from core.llm.coerce import extract_fenced_code
 from core.run.scratch import scratch_dir
-from core.sarif.parser import SARIF_MAX_BYTES
+from core.sarif.parser import SARIF_MAX_BYTES, count_results
 
 # CodeQL SARIF over corpus code — the SARIF budget class shared with
 # core.sarif.parser.load_sarif (one constant, aliased for the local
@@ -462,8 +462,8 @@ select sink, "synthesized-barrier {sink_class} [go]"
 """
 
 
-def _count_sarif_results(sarif_path: Path, target_uri: str | None = None,
-                         target_line: int | None = None) -> int:
+def _count_results_for_target(sarif_path: Path, target_uri: str | None = None,
+                              target_line: int | None = None) -> int:
     """Count SARIF results. With ``target_uri`` (+ optional ``target_line``),
     count only findings at that file (and line) — so the suppress check can be
     scoped to the SPECIFIC flagged finding rather than all findings in the file
@@ -474,7 +474,8 @@ def _count_sarif_results(sarif_path: Path, target_uri: str | None = None,
     if not isinstance(data, dict):
         return 0
     if target_uri is None:
-        return sum(len(r.get("results") or []) for r in (data.get("runs") or []))
+        # Unscoped mode is exactly the shared tolerant counter.
+        return count_results(data)
     n = 0
     for run in (data.get("runs") or []):
         for res in (run.get("results") or []):
@@ -497,7 +498,7 @@ def _summarise_surviving_finding(
     barrier, formatted for the LLM refinement prompt.
 
     Picks the first result matching ``target_uri`` (+ optional
-    ``target_line``) — same scoping logic as :func:`_count_sarif_results`
+    ``target_line``) — same scoping logic as :func:`_count_results_for_target`
     so the summary describes the SPECIFIC finding the synth was scoped
     to.  Returns ``""`` on missing file, parse error, no matching result,
     or empty codeFlows.  Conservative by design — a noisy summary
@@ -583,7 +584,7 @@ def adjudicate(
         db_path, [str(ql)], pack / "out.sarif",
         codeql_bin=codeql_bin, runner=runner, extra_args=extra,
     )
-    return _count_sarif_results(Path(result.sarif_path), target_uri, target_line)
+    return _count_results_for_target(Path(result.sarif_path), target_uri, target_line)
 
 
 class _BarrierProposerAdapter:

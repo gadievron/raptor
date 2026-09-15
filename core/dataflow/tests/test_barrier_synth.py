@@ -255,10 +255,10 @@ def test_go_system_prompt_is_wired():
     assert "(DataFlow::Node g, Expr e, boolean branch)" in _SYSTEM_PROMPTS["go"]
 
 
-def test_count_sarif_results_scopes_to_uri_and_line(tmp_path):
+def test_count_results_for_target_scopes_to_uri_and_line(tmp_path):
     import json
 
-    from core.dataflow.barrier_synth import _count_sarif_results
+    from core.dataflow.barrier_synth import _count_results_for_target
     sarif = tmp_path / "s.sarif"
 
     def loc(uri, line):
@@ -266,11 +266,11 @@ def test_count_sarif_results_scopes_to_uri_and_line(tmp_path):
                                                     "region": {"startLine": line}}}]}
     sarif.write_text(json.dumps({"runs": [{"results": [
         loc("a.py", 10), loc("a.py", 20), loc("b.py", 5)]}]}))
-    assert _count_sarif_results(sarif) == 3                   # unscoped: all findings
-    assert _count_sarif_results(sarif, "a.py") == 2           # file-scoped (preserve check)
-    assert _count_sarif_results(sarif, "a.py", 10) == 1       # line-scoped (suppress check): only a.py:10
-    assert _count_sarif_results(sarif, "a.py", 99) == 0       # no finding at that line
-    assert _count_sarif_results(sarif, "c.py") == 0           # file with no findings
+    assert _count_results_for_target(sarif) == 3                   # unscoped: all findings
+    assert _count_results_for_target(sarif, "a.py") == 2           # file-scoped (preserve check)
+    assert _count_results_for_target(sarif, "a.py", 10) == 1       # line-scoped (suppress check): only a.py:10
+    assert _count_results_for_target(sarif, "a.py", 99) == 0       # no finding at that line
+    assert _count_results_for_target(sarif, "c.py") == 0           # file with no findings
 
 
 def test_model_completer_pinned_config_bypasses_auto_resolution(monkeypatch):

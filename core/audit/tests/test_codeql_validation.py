@@ -10,7 +10,7 @@ import pytest
 
 from core.audit.codeql_validation import (
     DataflowClaim,
-    _count_sarif_results,
+    _count_codeflow_results,
     _guard_condition_on_line,
     _path_conditions,
     _sarif_result_paths,
@@ -84,11 +84,11 @@ class TestGenerateTaintQuery:
 
 class TestCountSarifResults:
     def test_empty_sarif(self):
-        assert _count_sarif_results({}) == 0
+        assert _count_codeflow_results({}) == 0
 
     def test_no_codeflows(self):
         sarif = {"runs": [{"results": [{"message": {"text": "found"}}]}]}
-        assert _count_sarif_results(sarif) == 0
+        assert _count_codeflow_results(sarif) == 0
 
     def test_with_codeflows(self):
         sarif = {
@@ -100,7 +100,7 @@ class TestCountSarifResults:
                 ],
             }],
         }
-        assert _count_sarif_results(sarif) == 2
+        assert _count_codeflow_results(sarif) == 2
 
 
 class TestValidateDataflowClaim:

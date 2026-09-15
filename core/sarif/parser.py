@@ -451,6 +451,33 @@ def _extract_cwe_from_rule(rule: dict[str, Any]) -> str | None:
     return None
 
 
+def count_results(sarif_data: Any) -> int:
+    """Total number of results across all runs of a parsed SARIF dict.
+
+    Shape-tolerant by contract: this is a provenance/summary signal,
+    not a validator, and its inputs include SARIF files found on disk
+    in run directories (operator-editable, tool-emitted, or hostile).
+    A non-dict document, a non-list ``runs``, a non-dict run entry, or
+    a non-list ``results`` each count as zero instead of raising —
+    per-module copies of this loop drifted exactly on that tolerance
+    (one raised ``AttributeError`` on a non-dict run entry and took
+    the whole rendering path down with it).
+    """
+    if not isinstance(sarif_data, dict):
+        return 0
+    runs = sarif_data.get("runs")
+    if not isinstance(runs, list):
+        return 0
+    total = 0
+    for run_obj in runs:
+        if not isinstance(run_obj, dict):
+            continue
+        results = run_obj.get("results")
+        if isinstance(results, list):
+            total += len(results)
+    return total
+
+
 def load_sarif(sarif_path: Path) -> dict[str, Any] | None:
     """
     Load a SARIF file with safety guards.

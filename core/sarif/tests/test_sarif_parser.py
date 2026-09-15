@@ -1162,3 +1162,40 @@ class TestSeverityInheritance(unittest.TestCase):
             )
         self.assertEqual(metrics["findings_by_severity"]["error"], 1)
         self.assertEqual(metrics["findings_by_severity"]["warning"], 0)
+
+
+class TestCountResults(unittest.TestCase):
+    """count_results — the one shared SARIF result counter.
+
+    Shape-tolerant by contract (summary signal, not a validator):
+    every malformed layer counts as zero instead of raising. The
+    per-module copies this replaced drifted exactly on that
+    tolerance."""
+
+    def test_counts_across_runs(self):
+        from core.sarif.parser import count_results
+        sarif = {"runs": [
+            {"results": [{"ruleId": "a"}, {"ruleId": "b"}]},
+            {"results": [{"ruleId": "c"}]},
+        ]}
+        self.assertEqual(count_results(sarif), 3)
+
+    def test_empty_and_missing_shapes(self):
+        from core.sarif.parser import count_results
+        self.assertEqual(count_results({}), 0)
+        self.assertEqual(count_results({"runs": []}), 0)
+        self.assertEqual(count_results({"runs": [{}]}), 0)
+        self.assertEqual(count_results({"runs": [{"results": []}]}), 0)
+
+    def test_hostile_shapes_count_zero_not_raise(self):
+        from core.sarif.parser import count_results
+        # Non-dict document / non-list runs / non-dict run entry /
+        # non-list results: each layer degrades, never raises.
+        self.assertEqual(count_results(None), 0)
+        self.assertEqual(count_results([{"results": [1]}]), 0)
+        self.assertEqual(count_results({"runs": "corrupt"}), 0)
+        self.assertEqual(count_results({"runs": {"results": [1]}}), 0)
+        self.assertEqual(
+            count_results({"runs": ["corrupt", {"results": [{}]}]}), 1)
+        self.assertEqual(
+            count_results({"runs": [{"results": "corrupt"}]}), 0)
