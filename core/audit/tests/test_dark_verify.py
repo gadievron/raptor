@@ -1463,6 +1463,72 @@ class TestGenerateLuaHarness:
         harness = generate_lua_harness(spec, tmp_path)
         assert "scripts.parser" in harness
 
+    def test_package_path_renders_engine_templates_in_order(self, tmp_path):
+        # The harness search order IS the engine's candidate order —
+        # both render from _LUA_PATH_TEMPLATES, asserted here against
+        # the generated text.
+        from core.audit.dark_verify._resolve import _LUA_PATH_TEMPLATES
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="lib/auth.lua", function="validate",
+            language="lua", lang_config={"require_path": "lib.auth"},
+        )
+        harness = generate_lua_harness(spec, tmp_path)
+        path_line = harness.splitlines()[0]
+        positions = [path_line.index("/" + t + ";")
+                     for t in _LUA_PATH_TEMPLATES]
+        assert positions == sorted(positions)
+        assert path_line.rstrip().endswith(".. package.path")
+
+    def test_searchpath_binding_assert_present(self, tmp_path):
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="lib/auth.lua", function="validate",
+            language="lua", lang_config={"require_path": "lib.auth"},
+        )
+        harness = generate_lua_harness(spec, tmp_path)
+        assert "package.searchpath" in harness
+        assert "binding_error" in harness
+        assert str(tmp_path.resolve()) + "/lib/auth.lua" in harness
+        # The assert must run BEFORE require executes any target code.
+        assert harness.index("package.searchpath") < harness.index(
+            "pcall(require")
+
+    @pytest.mark.skipif(
+        not (shutil.which("lua") or shutil.which("lua5.4")
+             or shutil.which("lua5.3") or shutil.which("luajit")),
+        reason="Lua not available")
+    def test_live_shadowed_init_reports_binding_error(self, tmp_path):
+        # Runtime belt: the plantable sibling occupies the earlier
+        # ?.lua slot, so searchpath lands on the plant, not the
+        # finding's init.lua.
+        lua = shutil.which("lua") or shutil.which("lua5.4") \
+            or shutil.which("lua5.3") or shutil.which("luajit")
+        (tmp_path / "lib" / "auth").mkdir(parents=True)
+        (tmp_path / "lib" / "auth" / "init.lua").write_text(
+            "return { validate = function() return 1 end }\n",
+            encoding="utf-8")
+        (tmp_path / "lib" / "auth.lua").write_text(
+            "return { validate = function() return 99 end }\n",
+            encoding="utf-8")
+        spec = DarkWitnessSpec(
+            finding_key="f1", file="lib/auth/init.lua",
+            function="validate", language="lua",
+            lang_config={"require_path": "lib.auth"},
+        )
+        harness = generate_lua_harness(spec, tmp_path, witness_token="ab12")
+        script = tmp_path / "witness.lua"
+        script.write_text(harness, encoding="utf-8")
+        out = _run_stdout([lua, str(script)])
+        data = json.loads(out.strip().splitlines()[-1])
+        # Lua 5.1 without package.searchpath skips the runtime belt;
+        # the static engine still refuses this spec pre-execution.
+        assert data["status"] in ("binding_error", "returned")
+        if data["status"] == "returned":
+            import subprocess
+            has_searchpath = subprocess.run(
+                [lua, "-e", "os.exit(package.searchpath and 1 or 0)"],
+                check=False).returncode
+            assert has_searchpath == 0
+
     def test_json_encode_escapes_backslash_and_control_chars(self, tmp_path):
         """A message containing backslash-quote or a raw newline must
         survive json_encode as parseable single-line JSON — malformed
@@ -1485,7 +1551,7 @@ class TestGenerateLuaHarness:
         lua = shutil.which("lua") or shutil.which("lua5.4") \
             or shutil.which("lua5.3") or shutil.which("luajit")
         if lua:
-            prologue = harness.split("local ok_req")[0]
+            prologue = harness.split("if package.searchpath")[0]
             hostile = 'boom \\" quote\nnewline\ttab'
             snippet = prologue + (
                 'io.write(json_encode({status="exception", token=_tok,'
@@ -4628,18 +4694,31 @@ class TestModuleBindingToFindingFile:
     def test_bound_module_accepted(self, field, language, file, value):
         assert validate_spec(self._spec(field, value, language, file)) is None
 
-    def test_lua_init_directory_spelling_rejected(self):
-        # require "lib.auth" reaches lib/auth/init.lua only through a
-        # ?/init.lua template the harness's package.path does not
-        # install (the inherited default's ./?/init.lua is
-        # cwd-dependent) — and the ?.lua template it DOES install
-        # tries the plantable sibling lib/auth.lua first. No
-        # deterministic resolution = refuse.
-        err = validate_spec(
-            self._spec("require_path", "lib.auth", "lua",
-                       "lib/auth/init.lua"))
+    def test_lua_init_directory_spelling_needs_vacant_sibling(
+            self, tmp_path):
+        # The harness's ?.lua template is tried BEFORE ?/init.lua, so
+        # require "lib.auth" binds lib/auth/init.lua only when the
+        # plantable sibling slot lib/auth.lua is verified vacant —
+        # occupied means the loader picks the plant, no tree means the
+        # slot cannot be verified at all.
+        spec = self._spec(
+            "require_path", "lib.auth", "lua", "lib/auth/init.lua")
+        err = validate_spec(spec)
         assert err is not None
-        assert "not bound to the finding's file" in err
+        assert "without the target tree" in err
+
+        (tmp_path / "lib" / "auth").mkdir(parents=True)
+        (tmp_path / "lib" / "auth" / "init.lua").write_text(
+            "return { check = function() return 1 end }\n",
+            encoding="utf-8")
+        assert validate_spec(spec, tmp_path) is None
+
+        (tmp_path / "lib" / "auth.lua").write_text(
+            "return { check = function() return 99 end }\n",
+            encoding="utf-8")
+        err = validate_spec(spec, tmp_path)
+        assert err is not None
+        assert "shadow slot occupied" in err
 
     def test_empty_override_uses_derived_default(self):
         spec = DarkWitnessSpec(

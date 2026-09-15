@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, TYPE_CHECKING
 
 from ._resolve import (
+    _LUA_PATH_TEMPLATES,
     binding_error,
     derive_lua_require_path,
     derive_perl_use_module,
@@ -758,7 +759,20 @@ def generate_lua_harness(
     *,
     witness_token: str = "",
 ) -> str:
-    """Render a fixed-template Lua harness."""
+    """Render a fixed-template Lua harness.
+
+    package.path is rendered from ``_LUA_PATH_TEMPLATES`` — the same
+    tuple the resolution engine derives its candidate slots from — so
+    the search order the validator reasoned about IS the search order
+    the interpreter runs.  Where the interpreter provides
+    ``package.searchpath`` (5.2+, LuaJIT) the harness also re-runs the
+    search at execution time and reports binding_error when it does
+    not land on the finding's file.  Unlike the Python/Perl/Ruby
+    post-load belts, this check runs BEFORE ``require`` executes
+    anything — it is the one runtime belt target code cannot have
+    forged (though the static engine remains the refusal authority
+    for plants visible at validation time).
+    """
     require_path = derive_lua_require_path(spec)
 
     args_str = _format_args_scripting(
@@ -768,9 +782,15 @@ def generate_lua_harness(
     )
     target_str = str(target_root.resolve())
     token_lit = _lua_quote(_checked_token(witness_token))
+    path_prefix = " .. ".join(
+        f"{_lua_quote(target_str)} .. {_lua_quote('/' + t + ';')}"
+        for t in _LUA_PATH_TEMPLATES
+    )
+    expected_lit = _lua_quote(
+        target_str + "/" + spec.file.replace("\\", "/"))
 
     return textwrap.dedent(f"""\
-        package.path = {_lua_quote(target_str)} .. '/?.lua;' .. package.path
+        package.path = {path_prefix} .. package.path
         local _tok = {token_lit}
         local json_ok = true
         local function json_escape(s)
@@ -795,6 +815,14 @@ def generate_lua_harness(
                 parts[#parts+1] = '"' .. k .. '":' .. vstr
             end
             return '{{' .. table.concat(parts, ',') .. '}}'
+        end
+        if package.searchpath then
+            local _resolved = package.searchpath({_lua_quote(require_path)}, package.path)
+            if _resolved ~= {expected_lit} then
+                print(json_encode({{status="binding_error", token=_tok,
+                    message="loaded " .. tostring(_resolved) .. ", expected " .. {expected_lit}}}))
+                os.exit(0)
+            end
         end
         local ok_req, mod = pcall(require, {_lua_quote(require_path)})
         if not ok_req then

@@ -62,12 +62,11 @@ _JAVA_PACKAGE_RE = re.compile(
 # the interpreter's inherited default.  Single-homed: the generator
 # renders package.path from this tuple and the Lua adapter derives its
 # candidate slots from it, so search order can never drift between the
-# validator and the harness.  ``?.lua`` only: the harness does not
-# install a ``?/init.lua`` template, so an ``init.lua`` finding has no
-# deterministic spelling and is refused (the inherited default's
-# ``./?/init.lua`` is cwd-dependent — the sandbox cwd is not the
-# target root).
-_LUA_PATH_TEMPLATES: tuple[str, ...] = ("?.lua",)
+# validator and the harness.  ``?.lua`` before ``?/init.lua`` (the
+# standard order): an ``init.lua`` finding therefore binds only when
+# the earlier ``<dir>.lua`` slot is verified vacant — occupied or
+# unverifiable means the loader would pick the plantable sibling.
+_LUA_PATH_TEMPLATES: tuple[str, ...] = ("?.lua", "?/init.lua")
 
 
 def _norm(file_path: str) -> str:
