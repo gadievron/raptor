@@ -20,6 +20,7 @@ The CLI does not silently execute an unknown target during ``map``.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -38,7 +39,6 @@ from core.security.log_sanitisation import (
     escape_nonprintable,
     sanitise_for_terminal,
 )
-from core.json import dumps_display
 from core.config import RaptorConfig
 from core.json import load_json, save_json
 from core.run.metadata import complete_run, fail_run, start_run
@@ -709,7 +709,12 @@ def _run_harness(args: argparse.Namespace) -> int:
         print(f"raptor-binary: harness failed: {exc}", file=sys.stderr)
         return 2
     if args.json:
-        print(dumps_display(spec, indent=None, sort_keys=True))
+        # ensure_ascii: JSON escapes C0 but passes C1 terminal
+        # controls raw when off — dumps_display is exactly that, and
+        # spec embeds boundary names recovered from the hostile
+        # binary verbatim. Still valid JSON, still one line.
+        print(json.dumps(spec, sort_keys=True, ensure_ascii=True,
+                         default=str))
         return 0
     # Ingress names come from the hostile binary's symbols/plist and
     # spec['reason'] embeds recovered boundary names verbatim — same
@@ -770,7 +775,8 @@ def _print_file(run_dir: str, filename: str, *, json_output: bool = False) -> in
     except ValueError as exc:
         print(f"raptor-binary: invalid JSON in {path}: {exc}", file=sys.stderr)
         return 1
-    print(dumps_display(payload, indent=None, sort_keys=True))
+    print(json.dumps(payload, sort_keys=True, ensure_ascii=True,
+                     default=str))
     return 0
 
 

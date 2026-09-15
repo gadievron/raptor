@@ -13,7 +13,7 @@ from typing import Any
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.json import dumps_display
+import json
 from core.run.output import unique_run_suffix
 
 from .oplock import OpLockContention, project_op_lock
@@ -178,7 +178,13 @@ def _emit_json_payload(payload) -> None:
     payload, indent=2, sort_keys=True))`` — pipe-friendly, one
     trailing newline.
     """
-    data = dumps_display(payload, sort_keys=True).encode("utf-8")
+    # ensure_ascii: JSON escapes C0 but passes C1 terminal controls
+    # (U+0080-U+009F, incl. single-byte CSI/OSC) through raw when
+    # ensure_ascii is off — dumps_display is exactly that, and these
+    # payloads carry target-derived strings; ASCII-encode the terminal
+    # JSON lane (still valid JSON, pipe-friendly).
+    data = json.dumps(payload, indent=2, sort_keys=True,
+                      ensure_ascii=True, default=str).encode("utf-8")
     sys.stdout.buffer.write(data)
     sys.stdout.buffer.write(b"\n")
 
@@ -2802,7 +2808,10 @@ def _do_correlate(project, json_out: bool=False) -> None:
     result = correlate_project(project)
 
     if json_out:
-        print(dumps_display(result))
+        # ensure_ascii like _emit_json_payload (C1 controls pass raw
+        # through bare JSON); insertion order kept — this lane never
+        # sorted its keys.
+        print(json.dumps(result, indent=2, ensure_ascii=True, default=str))
         return
 
     print(f"Project: {project.name}")

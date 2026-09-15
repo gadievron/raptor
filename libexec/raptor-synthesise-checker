@@ -11,6 +11,7 @@ Usage:
       --lines <start>-<end> --cwe <id> --reasoning <text> \
       --repo <repo_root> [--out <dir>] [--no-refine] [--json]
 """
+import json
 import sys
 from pathlib import Path
 
@@ -30,7 +31,6 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-from core.json import dumps_display  # noqa: E402
 from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
 
 
@@ -207,7 +207,11 @@ def main() -> int:
         )
 
     if args.json_output:
-        print(dumps_display(result.to_dict(), indent=2))
+        # ensure_ascii: JSON escapes C0 but passes C1 terminal
+        # controls raw when off — dumps_display is exactly that, and
+        # the result embeds LLM-authored rule text. Still valid JSON.
+        print(json.dumps(result.to_dict(), indent=2,
+                         ensure_ascii=True, default=str))
         return 0
 
     if result.rule is None:

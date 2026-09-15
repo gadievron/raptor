@@ -32,6 +32,7 @@ Common options:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -51,7 +52,7 @@ if not (os.environ.get("CLAUDECODE")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
-from core.json import dumps_display, load_json, loads  # noqa: E402
+from core.json import load_json, loads  # noqa: E402
 from core.security.prompt_output_sanitise import sanitise_string  # noqa: E402
 
 # Byte budgets for run artifacts this CLI renders: context maps /
@@ -347,7 +348,12 @@ def _show_function(file, function, cm, entries, index, ann_dir, args, out_dir=No
         journal_entry = index[key]
 
     if getattr(args, "raw", False) and journal_entry:
-        print(dumps_display(journal_entry.to_dict(), indent=2))
+        # ensure_ascii on every --json lane: JSON escapes C0 but
+        # passes C1 terminal controls (single-byte CSI/OSC) raw when
+        # off — dumps_display is exactly that, and journal/finding
+        # content is LLM-derived. Still valid JSON for consumers.
+        print(json.dumps(journal_entry.to_dict(), indent=2,
+                         ensure_ascii=True, default=str))
         return
 
     header = f"─── {_line(file)} :: {_line(function)} "
@@ -469,7 +475,8 @@ def cmd_findings(args):
             all_findings[key] = e
 
     if getattr(args, "raw", False):
-        print(dumps_display([e.to_dict() for e in all_findings.values()], indent=2))
+        print(json.dumps([e.to_dict() for e in all_findings.values()],
+                 indent=2, ensure_ascii=True, default=str))
         return
 
     if not all_findings:
@@ -516,7 +523,7 @@ def cmd_gaps(args) -> None:
         return
 
     if getattr(args, "raw", False):
-        print(dumps_display(gaps, indent=2))
+        print(json.dumps(gaps, indent=2, ensure_ascii=True, default=str))
         return
 
     print(f"  {len(gaps)} function(s) need review")
@@ -611,7 +618,8 @@ def cmd_history(args):
         return
 
     if getattr(args, "raw", False):
-        print(dumps_display([e.to_dict() for e in entries], indent=2))
+        print(json.dumps([e.to_dict() for e in entries],
+                 indent=2, ensure_ascii=True, default=str))
         return
 
     for e in entries:
@@ -902,7 +910,7 @@ def cmd_edges(args):
         print("edge-obligations.json unreadable.")
         return
     if getattr(args, "raw", False):
-        print(dumps_display(ob, indent=2))
+        print(json.dumps(ob, indent=2, ensure_ascii=True, default=str))
         return
 
     reviewed = {}
@@ -1015,7 +1023,7 @@ def cmd_diff(args):
         elif prior.verdict != entry.verdict:
             changed.append((prior, entry))
     if getattr(args, "raw", False):
-        print(dumps_display({
+        print(json.dumps({
             "run_a": run_a.name, "run_b": run_b.name,
             "changed": [
                 {"file": e.file, "function": e.function,
@@ -1027,7 +1035,7 @@ def cmd_diff(args):
                  "verdict": e.verdict, "model": e.model}
                 for e in new_reviews
             ],
-        }, indent=2))
+        }, indent=2, ensure_ascii=True, default=str))
         return
     print(f"─── {_line(run_a.name, 60)} → "
           f"{_line(run_b.name, 60)} ───")

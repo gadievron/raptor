@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from core.json import dumps_display
+import json
 from core.security.log_sanitisation import sanitise_for_terminal
 from packages.describe.recommendations import recommend_next
 from packages.describe.target_shape import TargetShape, infer_target_shape
@@ -503,7 +503,11 @@ def format_json(report: DescribeReport) -> str:
             for r in recommend_next(s)
         ],
     }
-    return dumps_display(doc, indent=2)
+    # ensure_ascii: JSON escapes C0 but passes C1 terminal controls
+    # raw when off — dumps_display is exactly that, and this string
+    # is printed to the operator terminal by the --json lane with
+    # target-derived names inside. Still valid JSON.
+    return json.dumps(doc, indent=2, ensure_ascii=True, default=str)
 
 
 # Shared with the start-line renderer — one implementation so the two

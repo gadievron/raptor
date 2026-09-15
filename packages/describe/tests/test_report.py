@@ -392,3 +392,18 @@ class TestLicenseLinesEscaped:
         out = self._out(lic)
         for raw in ("\x1b", "\x07", "\x9b", "‮"):
             assert raw not in out
+
+
+class TestFormatJsonAsciiEncoded:
+    def test_c1_controls_never_raw(self):
+        """The --json lane prints this string to the operator terminal;
+        bare JSON escapes C0 but passes C1 controls (single-byte
+        CSI/OSC) raw — the renderer must ASCII-encode."""
+        report = _report(_shape(
+            target_path=Path("/targets/x\x9b2J\x9d0;pwn\x1bdir"),
+        ))
+        out = format_json(report)
+        for raw in ("\x9b", "\x9d", "\x1b"):
+            assert raw not in out
+        doc = json.loads(out)  # still valid JSON
+        assert "x\x9b2J" in doc["target_path"]  # value survives, escaped

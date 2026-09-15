@@ -49,3 +49,20 @@ def test_correlate_counts_are_int_only(capsys):
     with pytest.raises((ValueError, TypeError)):
         _print_correlate_counts({"runs": HOSTILE,
                                  "total_unique_findings": 1})
+
+
+def test_emit_json_payload_ascii_encodes_c1(capfdbinary):
+    """--json lanes: bare JSON escapes C0 but passes C1 terminal
+    controls (single-byte CSI/OSC) raw — the funnel must ASCII-encode
+    while staying valid, pipe-friendly JSON."""
+    import json as _json
+
+    from core.project.cli import _emit_json_payload
+
+    _emit_json_payload({"threats": [{"title": f"t{HOSTILE}\x9d0;x"}]})
+    out = capfdbinary.readouterr().out
+    for raw in (b"\x1b", b"\x07", b"\x9b", b"\x9d"):
+        assert raw not in out
+    doc = _json.loads(out)
+    assert doc["threats"][0]["title"].startswith("t\x1b")  # escaped, intact
+    assert out.endswith(b"\n")

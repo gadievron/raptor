@@ -477,3 +477,22 @@ def test_investigate_active_does_not_try_frida_against_driver_file(tmp_path: Pat
     active_phases = write_investigation.call_args.kwargs["active_phases"]
     assert active_phases[0]["kind"] == "runtime"
     assert active_phases[0]["status"] == "skipped"
+
+
+def test_print_file_json_lane_ascii_encodes_c1(tmp_path, capsys) -> None:
+    """--json artifact relay: bare JSON escapes C0 but passes C1
+    terminal controls (single-byte CSI/OSC) raw — the lane must
+    ASCII-encode while staying valid JSON."""
+    from packages.binary_analysis.cli import _print_file
+
+    hostile = "sym\x9b2J\x9d0;pwn\x1b]t\x07‮x"
+    (tmp_path / "graph.json").write_text(
+        json.dumps({"nodes": [{"name": hostile}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    rc = _print_file(str(tmp_path), "graph.json", json_output=True)
+    assert rc == 0
+    out = capsys.readouterr().out
+    for raw in ("\x1b", "\x07", "\x9b", "\x9d", "‮"):
+        assert raw not in out
+    assert json.loads(out)["nodes"][0]["name"] == hostile  # intact

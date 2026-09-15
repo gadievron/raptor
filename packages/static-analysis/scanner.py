@@ -31,7 +31,6 @@ from pathlib import Path
 # guess could silently pick up another checkout's modules).
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
-from core.json import dumps_display
 from core.config import RaptorConfig
 from core.git import clone_repository
 from core.hash import sha256_bytes, sha256_tree
@@ -3707,7 +3706,11 @@ def main() -> None:
             "metrics": metrics,
             "duration": duration,
         }
-        print(dumps_display(result, indent=2))
+        # ensure_ascii: JSON escapes C0 but passes C1 terminal
+        # controls raw when off — dumps_display is exactly that, and
+        # the manifest quotes target-derived paths. Still valid JSON
+        # for the parent process that parses this stdout.
+        print(json.dumps(result, indent=2, ensure_ascii=True, default=str))
         # Aggregate any tracer-emitted .sandbox-denials.jsonl into
         # sandbox-summary.json. The lifecycle hook lives in raptor.py
         # / raptor_agentic.py for top-level invocations — neither

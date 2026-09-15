@@ -377,3 +377,35 @@ def test_rule_passes_sanitised_typer_echo():
         "    typer.echo(sanitise_for_terminal(r.error, max_len=512))\n"
     )
     assert audit_source(src) == []
+
+
+def test_registered_files_have_no_dumps_display_terminal_lane():
+    """dumps_display leaves C1 terminal controls raw (ensure_ascii is
+    off by contract) — a registered writer's --json terminal lane must
+    ASCII-encode via json.dumps(..., ensure_ascii=True) instead.
+    File-writer/report-content uses of dumps_display (markdown
+    artifacts, prompt embeds) are out of this pin's scope: only
+    direct-to-terminal shapes are matched."""
+    from core.security.report_writer_audit import (
+        _REPO_ROOT,
+        _REPORT_WRITER_FILES,
+    )
+    terminal_shapes = (
+        "print(dumps_display(",
+        "stdout.write(dumps_display(",
+        "buffer.write(dumps_display(",
+        "echo(dumps_display(",
+    )
+    offenders = []
+    for rel in _REPORT_WRITER_FILES:
+        path = _REPO_ROOT / rel
+        if not path.is_file():
+            continue
+        src = path.read_text(encoding="utf-8")
+        offenders.extend(
+            (rel, shape) for shape in terminal_shapes if shape in src
+        )
+    assert not offenders, (
+        f"dumps_display terminal lane(s) in registered writers "
+        f"(use json.dumps(..., ensure_ascii=True)): {offenders}"
+    )
