@@ -752,13 +752,17 @@ class TestLifecycle:
         upstream = _Upstream("json")
         d = _make_dispatcher(fake_creds, tmp_path, upstream)
         try:
+            # Generous TTL + direct expires_at rewind instead of racing
+            # a 1 s wall clock: on a loaded parallel runner a >1 s
+            # scheduling stall between allocate and the first POST
+            # 401'd the "fresh" request.
             token, info = d.allocate_child(
-                "cc-ttl", budget_usd=1.0, ttl_s=1,
+                "cc-ttl", budget_usd=1.0, ttl_s=600,
             )
             with _uds_client(d) as client:
                 first = _messages_post(client, token)
                 assert first.status_code == 200
-                time.sleep(1.1)
+                d._tokens[token].expires_at = time.time() - 1.0
                 late = _messages_post(client, token)
             assert late.status_code == 401
             assert "expired" in late.json()["error"]
