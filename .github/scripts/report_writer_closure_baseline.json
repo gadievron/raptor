@@ -475,9 +475,6 @@
     "libexec/raptor-startup-check::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
-    "libexec/raptor-understand::_main_body::unsanitised_exception_text::e": {
-      "note": "broad-handler exception relay at the top-level entry point; exception text is from internal library calls, not raw LLM output"
-    },
     "libexec/raptor-zkpox::_cmd_reproduce::unsanitised_llm_value::reason": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
     },

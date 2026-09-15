@@ -456,6 +456,17 @@ class AllowlistEntry:
 # the test suite: empty / TODO notes are rejected).
 _ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry(
+        file="libexec/raptor-understand",
+        func_name="_main_body",
+        kind="unsanitised_exception_text",
+        detail="e",
+        audit_note=(
+            "broad-handler exception relay at the top-level entry "
+            "point; exception text is from internal library calls, "
+            "not raw LLM output"
+        ),
+    ),
+    AllowlistEntry(
         file="packages/cve_diff/cve_diff/cli/bench.py",
         func_name="_render_html",
         kind="unsanitised_llm_value",
