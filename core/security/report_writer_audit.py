@@ -277,6 +277,14 @@ _REPORT_WRITER_FILES = (
     "packages/sca/health.py",
     "packages/sca/diff.py",
     "packages/sca/review.py",
+    # sca terminal lanes on the default-scan and CI-gate paths: the
+    # transitive summary quotes resolver stderr (hostile-manifest
+    # bytes), the threshold gate quotes OSV advisory free text, and
+    # the suppress CLI prints fields from the SCANNED target's
+    # suppress YAML. Terminal writers — sanitise_for_terminal grade.
+    "packages/sca/cli.py",
+    "packages/sca/thresholds.py",
+    "packages/sca/suppress_cli.py",
 )
 
 

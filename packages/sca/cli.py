@@ -44,6 +44,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from core.security.log_sanitisation import sanitise_for_terminal as _sft
 
 from .pipeline import run_sca
 from typing import TYPE_CHECKING
@@ -511,10 +512,11 @@ def _format_transitive_line(result) -> str | None:
     # Collapse whitespace so the summary stays one line. Truncate
     # only at very long lengths — earlier 90-char cap silently hid
     # critical context (e.g., the full path the resolver couldn't
-    # find a manifest in).
-    collapsed = " ".join(top_reason.split())
-    if len(collapsed) > 200:
-        collapsed = collapsed[:197] + "..."
+    # find a manifest in). The reason text quotes resolver stderr,
+    # which echoes hostile-manifest bytes — escape control characters
+    # before the summary reaches the operator terminal (str.split
+    # collapses whitespace but passes ESC/C1 through).
+    collapsed = _sft(" ".join(top_reason.split()), max_len=200)
     return (f"raptor-sca: transitive        skipped — {collapsed} "
             f"({eco_list})")
 

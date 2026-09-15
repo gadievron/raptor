@@ -16,6 +16,8 @@ import sys
 from dataclasses import dataclass
 from typing import TextIO, TYPE_CHECKING
 
+from core.security.log_sanitisation import sanitise_for_terminal as _sft
+
 from .findings import severity_rank
 from .kinds import SUPPLY_CHAIN_IMAGE_CAPABILITY_DRIFT
 from .rows import FindingRow
@@ -86,7 +88,11 @@ def evaluate(
             continue
         sev = fr.severity
         rank = severity_rank(sev)
-        desc = fr.description or fr.id or "(no description)"
+        # The description embeds OSV advisory free text (attacker-
+        # writable markdown) — escape control bytes and bound length
+        # at construction so every fail line print_result later emits
+        # to the CI/operator terminal is already terminal-safe.
+        desc = _sft(fr.description or fr.id or "(no description)")
         if fr.is_vulnerable_dependency:
             if sev_floor is not None and rank >= sev_floor:
                 fails.append(f"[{sev}] {desc}")

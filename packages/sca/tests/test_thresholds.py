@@ -452,3 +452,17 @@ def test_max_added_capability_buckets_passes_on_pipeline_row_shape() -> None:
     passed, fails = thresholds.evaluate(rows, cfg)
     assert passed is True
     assert fails == []
+
+
+def test_fail_lines_escape_hostile_description_bytes() -> None:
+    """Advisory descriptions are attacker-writable OSV free text; the
+    gate's fail lines reach the CI/operator terminal via print_result.
+    Control bytes must be escaped at construction (both directions:
+    the escaped spelling must still carry the readable content)."""
+    cfg = thresholds.ThresholdConfig(fail_on_severity="high")
+    rows = [_vuln("critical", desc="bad \x1b[2Jdep \x9bhidden")]
+    passed, fails = thresholds.evaluate(rows, cfg)
+    assert passed is False
+    assert "\x1b" not in fails[0]
+    assert "\x9b" not in fails[0]
+    assert "bad" in fails[0] and "dep" in fails[0]

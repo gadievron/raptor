@@ -119,3 +119,27 @@ def test_verbose_flag_lowers_log_level(
     rc = cli.main([str(offline_target), "--out", str(tmp_path / "out"),
                    "--offline", "-vv"])
     assert rc == 0
+
+
+def test_transitive_skip_line_escapes_resolver_stderr_bytes() -> None:
+    """The skip-reason headline quotes resolver stderr, which echoes
+    hostile-manifest bytes — control characters must be escaped
+    before the default-scan summary line reaches the terminal."""
+    from types import SimpleNamespace
+
+    from packages.sca.transitive import TransitiveStatus
+
+    status = TransitiveStatus(
+        manifest=Path("requirements.txt"),
+        ecosystem="PyPI",
+        method="skipped_no_method_succeeded",
+        reason="pip failed: \x1b[2Jboom \x9bhidden",
+    )
+    result = SimpleNamespace(
+        transitive_statuses=[status], transitive_added=0,
+    )
+    line = cli._format_transitive_line(result)
+    assert line is not None
+    assert "\x1b" not in line
+    assert "\x9b" not in line
+    assert "pip failed" in line
