@@ -165,6 +165,46 @@ class TestControlFlowSoundness:
         )
         assert result.verdict != VERDICT_SUPPRESS
 
+    def test_do_while_continue_targets_condition(self):
+        # JLS 14.16: ``continue`` in a do-while transfers to the
+        # CONDITION. Linking it to the body entry instead forces every
+        # modelled continue path back through the whole body — the
+        # "sanitizer skipped via continue" route disappears and the
+        # value gate falsely suppresses. The C/C++ leg targets the
+        # condition; this pins the Java leg to the same contract.
+        cfg, _ = _cfg(
+            "        String y = x;\n"
+            "        do {\n"
+            "            if (cond(x)) continue;\n"
+            "            y = Encode.forHtml(x);\n"
+            "        } while (more(x));\n"
+            "        out.println(y);\n",
+        )
+        assert cfg is not None
+        cont = next(n for n in cfg.nodes() if n.label == "continue;")
+        succ = list(cfg.successors(cont))
+        assert any(s.label.startswith("do-while") for s in succ), (
+            "continue must link to the do-while condition"
+        )
+        assert not any(s.label == "do" for s in succ), (
+            "continue must not re-enter the body head"
+        )
+        # E2E: runtime can reach the sink with the tainted initial
+        # binding via continue → condition-false → exit, never running
+        # the sanitizer — the gate must refuse to suppress.
+        from core.analysis.sanitizer_cut import (
+            VERDICT_SUPPRESS,
+            evaluate_finding,
+        )
+        sink = next(n for n in cfg.nodes() if "println" in n.label)
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink, cwe="CWE-79", language="java",
+            source_symbols=frozenset(cfg.params), sink_arg="y",
+        )
+        assert result.verdict != VERDICT_SUPPRESS, (
+            "do-while continue→condition path missing: false suppression"
+        )
+
     def test_try_body_statement_reaches_catch(self):
         cfg, _ = _cfg(
             "        try {\n"

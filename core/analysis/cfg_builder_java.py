@@ -1127,7 +1127,14 @@ class _JavaCFGBuilder:
         self._link_many(incoming, head)
         self._ambient_catch_link(head)
         header = self._cond_node(stmt, "do-while")
-        self._loop_stack.append((header, head))
+        # ``continue`` in a do-while transfers to the CONDITION (JLS
+        # 14.16), not the body entry: continue → header → exit is a
+        # real path that skips the rest of the body. Targeting the
+        # head instead forced every modelled continue path back
+        # through the whole body, hiding the "sanitizer skipped via
+        # continue" route — a missing path, the unsound direction for
+        # the vertex cut. The C/C++ leg already targets the condition.
+        self._loop_stack.append((header, header))
         self._break_targets.append(header)
         body = stmt.child_by_field_name("body")
         body_out = self._build_stmts(body, [head]) \
