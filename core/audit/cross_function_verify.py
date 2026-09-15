@@ -407,7 +407,11 @@ def _verify_taint_to_arithmetic(
         "kmalloc|kzalloc|vmalloc|krealloc|__get_free_pages"
         "|malloc|calloc|realloc|alloca"
         "|memcpy|memmove|copy_from_user|copy_to_user"
-        "|make\\\\(|append\\\\(|len\\\\("
+        # Go builtins: bare NAMES — this alternation is matched
+        # against Joern call names, which never contain "(", so the
+        # old paren-suffixed arms (make\(, append\(, len\() were
+        # unmatchable and the verifier was silently C-only.
+        "|make|append|len"
     )
 
     query = (

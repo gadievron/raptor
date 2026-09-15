@@ -510,3 +510,38 @@ class TestCallerConstraintQueryShape:
         assert result is not None and result.verified is False
         assert "presence" in result.evidence
         assert "hold" not in result.evidence
+
+
+class TestAllocSinkNamePattern:
+    """The alloc-sink alternation is matched against Joern call NAMES
+    (``.ast.isCall.name(...)``), which never contain "(" — the old
+    paren-suffixed Go arms (``make\\(`` etc.) were unmatchable and the
+    verifier silently never covered Go allocation-overflow shapes."""
+
+    def test_go_builtin_names_matchable(self):
+        import ast
+        import re
+        from pathlib import Path
+
+        from core.audit import cross_function_verify as cfv
+
+        tree = ast.parse(Path(cfv.__file__).read_text())
+        pattern = None
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and any(
+                    isinstance(t, ast.Name) and t.id == "alloc_sinks"
+                    for t in node.targets
+                )
+                and isinstance(node.value, ast.Constant)
+            ):
+                pattern = node.value.value
+        assert pattern, "alloc_sinks literal not found"
+        # The Scala string sees one unescape level: "\\(" -> \( .
+        rx = re.compile(pattern.replace("\\\\", "\\"))
+        for name in ("make", "append", "len", "kmalloc", "memcpy"):
+            assert rx.fullmatch(name), name
+        # Call names never carry parens — a paren-suffixed arm can
+        # match nothing.
+        assert "\\(" not in pattern
