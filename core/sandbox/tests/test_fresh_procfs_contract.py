@@ -78,10 +78,20 @@ def test_scrub_env_image_values_zeroes_only_named_values():
 
 def test_scrub_names_cover_credentials_and_provider_keys():
     """Source pin: the pre-fork scrub-name computation covers the
-    target strip set, the LLM provider credentials, and RAPTOR_DIR."""
+    target strip set, the LLM provider credentials, RAPTOR_DIR, and —
+    derived from the canonical credential vocabulary, not hand-typed —
+    the credential-bearing tier (the first-party session credentials
+    live there; the enumerated LLM_API_KEY_VARS list misses them)."""
     src = (_REPO_ROOT / "core" / "sandbox" / "_spawn.py").read_text(
         encoding="utf-8")
-    block = src[src.index("_env_image_scrub_names = tuple"):][:400]
+    import_at = src.index(
+        "from core.security.credential_env import",
+        src.index("def run_sandboxed"))
+    block = src[import_at:][:2600]
+    assert "CREDENTIAL_BEARING_ENV_VARS" in block
+    assert "is_credential_shaped" in block
+    assert "/proc/self/environ" in block
+    assert "_env_image_scrub_names = tuple" in block
     assert "TARGET_ENV_STRIP_SET" in block
     assert "LLM_API_KEY_VARS" in block
     assert '"RAPTOR_DIR"' in block
@@ -189,7 +199,7 @@ def _decoy_value() -> str:
 
 def _drive_run_in_subprocess(tmp_path, beacon_name, payload_sh,
                              decoy_value="chain-scrub-decoy",
-                             timeout=120):
+                             timeout=120, extra_env=None):
     """Launch run_untrusted from a SUBPROCESS whose execve-time env
     carries the decoy credential and a beacon marker.
 
@@ -216,6 +226,8 @@ def _drive_run_in_subprocess(tmp_path, beacon_name, payload_sh,
         beacon_name: "1",
         "RAPTOR_SESSION_TOKEN": decoy_value,
     }
+    if extra_env:
+        env.update(extra_env)
     return subprocess.run(
         [sys.executable, "-c", driver], env=env,
         capture_output=True, text=True, timeout=timeout, check=False,
@@ -1335,3 +1347,77 @@ def test_run_marker_content_masked_in_target_view(tmp_path):
     real = marker.read_text(encoding="utf-8")
     assert "mask-me-sha" in real and "tamper" not in real, (
         "the real run marker was altered through the child view")
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "linux", reason="namespace sandbox")
+def test_agent_credentials_scrubbed_from_chain_environ(tmp_path):
+    """Same channel as test_spawn_chain_environ_image_is_scrubbed, for
+    the agent-credential class: a session running under Claude Code
+    first-party auth carries CLAUDE_CODE_OAUTH_TOKEN /
+    ANTHROPIC_AUTH_TOKEN (and possibly ANTHROPIC_CUSTOM_HEADERS, which
+    rides Authorization overrides). The scrub set is derived from the
+    credential-bearing vocabulary tier, so every foreign-userns chain
+    process must publish ZEROED values for them — pre-fix the
+    hand-typed union missed all three and the operator's primary
+    session credential was one /proc read away from the target on
+    host-procfs-visible lanes."""
+    import uuid
+    beacon = f"SBX_CRED_SCRUB_BEACON_{uuid.uuid4().hex[:8].upper()}"
+    run_tag = uuid.uuid4().hex[:12]
+    decoys = {
+        name: f"{name.lower()}-decoy-{run_tag}"
+        # GITHUB_TOKEN pins the name-SHAPE sweep: it is in no
+        # consumed exact-name set, only the shape grammar covers it.
+        for name in ("CLAUDE_CODE_OAUTH_TOKEN",
+                     "ANTHROPIC_AUTH_TOKEN",
+                     "ANTHROPIC_CUSTOM_HEADERS",
+                     "GITHUB_TOKEN")
+    }
+    my_userns = os.readlink("/proc/self/ns/user")
+    seen: dict[str, tuple[str, bytes]] = {}
+    stop = threading.Event()
+
+    def watcher() -> None:
+        me = str(os.getpid())
+        while not stop.is_set():
+            for pid in os.listdir("/proc"):
+                if not pid.isdigit() or pid == me:
+                    continue
+                try:
+                    with open(f"/proc/{pid}/environ", "rb") as f:
+                        img = f.read()
+                    userns = os.readlink(f"/proc/{pid}/ns/user")
+                except OSError:
+                    continue
+                if beacon.encode() + b"=1" in img:
+                    seen[pid] = (userns, img)
+            time.sleep(0.005)
+
+    t = threading.Thread(target=watcher)
+    t.start()
+    try:
+        r = _drive_run_in_subprocess(
+            tmp_path, beacon, "sleep 1.5", timeout=150,
+            extra_env=decoys)
+    finally:
+        stop.set()
+        t.join()
+    if "RC=0" not in r.stdout:
+        pytest.skip(f"sandbox unavailable: {r.stdout} {r.stderr[-300:]}")
+    foreign = {pid: img for pid, (ns, img) in seen.items()
+               if ns != my_userns}
+    if not foreign:
+        pytest.skip("no foreign-userns chain process observed")
+    leaks = sorted(
+        f"{pid}:{name}"
+        for pid, img in foreign.items()
+        for name, value in decoys.items()
+        if f"{name}={value}".encode() in img)
+    assert not leaks, (
+        f"spawn-chain forks readable from inside the sandbox still "
+        f"publish agent credentials: {leaks}")
+    for img in foreign.values():
+        for name in decoys:
+            assert f"{name}=".encode() in img, (
+                "scrub should empty the value, not remove the name")

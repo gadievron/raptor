@@ -2188,23 +2188,67 @@ def run_sandboxed(
         # Names whose values the child zeroes from its inherited
         # environ image (see _scrub_env_image_values): the target-env
         # strip set (trust markers + session credential), RAPTOR_DIR,
-        # and every LLM provider credential the orchestrator may
+        # and every credential-bearing name the orchestrator may
         # carry — none of these is consumed via getenv() anywhere in
         # the spawn chain, so emptying the image values is free.
+        # The credential class is DERIVED from the canonical
+        # vocabulary (core.security.credential_env), not hand-typed:
+        # CREDENTIAL_BEARING_ENV_VARS is exactly the value-IS-the-
+        # secret tier — the zero-the-value semantic — and covers the
+        # first-party session credentials (ANTHROPIC_AUTH_TOKEN,
+        # CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_CUSTOM_HEADERS) that the
+        # enumerated LLM_API_KEY_VARS list misses; LLM_API_KEY_VARS
+        # stays in the union for its provider-key members that are
+        # deliberately NOT general-blocklist credential vocabulary;
+        # and a name-SHAPE sweep of the image's own names catches
+        # operator-environment credentials no consumed set enumerates.
         # Computed PRE-FORK — the child must not import post-pivot,
-        # and the config module is already loaded here.
+        # and both source modules are already loaded here.
         from core.config import RaptorConfig as _RC_scrub
-        _env_image_scrub_names = tuple(
+        from core.security.credential_env import (
+            CREDENTIAL_BEARING_ENV_VARS as _CRED_BEARING_scrub,
+        )
+        from core.security.credential_env import (
+            is_credential_shaped as _is_cred_shaped,
+        )
+        # Shape sweep over the image's OWN names: the exact-name sets
+        # cannot enumerate every credential the operator's launcher
+        # environment happens to carry (GITHUB_TOKEN / GH_TOKEN /
+        # HF_TOKEN and kin have no consumed set), so the names in
+        # /proc/self/environ — the parent's execve image, which is
+        # byte-identical to what every un-exec'd fork republishes —
+        # are filtered through the vocabulary's name-shape grammar
+        # (segment-exact TOKEN/KEY/SECRET/... with the documented
+        # benign-knob carve-outs). Best-effort: an unreadable procfs
+        # skips the sweep, the exact-name union still applies.
+        _image_shaped_names: set[str] = set()
+        try:
+            with open("/proc/self/environ", "rb") as _envf:
+                for _entry in _envf.read().split(b"\0"):
+                    _nm = _entry.split(b"=", 1)[0]
+                    if not _nm:
+                        continue
+                    try:
+                        _nm_s = _nm.decode("utf-8")
+                    except UnicodeDecodeError:
+                        continue
+                    if _is_cred_shaped(_nm_s):
+                        _image_shaped_names.add(_nm_s)
+        except OSError:
+            pass
+        _env_image_scrub_names = tuple(sorted(
             n.encode() for n in
-            (*_RC_scrub.TARGET_ENV_STRIP_SET,
+            {*_RC_scrub.TARGET_ENV_STRIP_SET,
              *_RC_scrub.LLM_API_KEY_VARS,
+             *_CRED_BEARING_scrub,
+             *_image_shaped_names,
              "RAPTOR_DIR",
              # Endpoint-locating values: the LLM backend location and
              # proxy URLs (which may embed credentials) identify the
              # deployment even when every key is elsewhere.
              "OLLAMA_HOST",
              "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
-             "http_proxy", "https_proxy", "all_proxy"))
+             "http_proxy", "https_proxy", "all_proxy"}))
 
         # Fresh-proc-mount expectation — resolved PRE-FORK (the probe
         # spawns a subprocess and logs; both are off-limits after
