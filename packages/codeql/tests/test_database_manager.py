@@ -289,16 +289,36 @@ class TestFilterBuildEnvVars:
         assert admitted == {}
 
     def test_admits_benign_build_vars(self):
+        # CFLAGS and GOFLAGS are NOT in this set: both are flags-
+        # injection members of the ecosystem env family (GOFLAGS can
+        # carry -toolexec=<cmd>, CFLAGS -fplugin=<so>), and repo build
+        # metadata is attacker-authored — the gate fails closed on
+        # them even though most repos use them benignly. The cost is
+        # a default-flags build; the alternative is exec on the
+        # traced-build lane.
         env_vars = {
-            "CFLAGS": "-O2",
-            "GOFLAGS": "-mod=vendor",
             "NODE_ENV": "production",
+            # JAVA_HOME admission is sound HERE because the traced
+            # build runs inside the sandbox (repo-code exec is already
+            # assumed on that lane, and env_detect injects toolchain
+            # homes deliberately). The settings-scan lane blocks the
+            # same name via TOOLCHAIN_HOME_ENV_VARS — a future
+            # consumer of this filter OUTSIDE the sandbox must not
+            # inherit this admission silently.
             "JAVA_HOME": "/usr/lib/jvm/java-17",
             # Case-folding must not widen the refusal into benign
-            # lowercase build knobs.
+            # lookalike build knobs (CFLAGS_EXTRA is not CFLAGS).
             "cflags_extra": "-fno-omit-frame-pointer",
         }
         assert self._filter(env_vars) == env_vars
+
+    def test_refuses_flag_injection_spellings(self):
+        # The flags-injection members, in the exact spellings the
+        # admit-direction pin above used to carry.
+        assert self._filter({
+            "CFLAGS": "-O2",
+            "GOFLAGS": "-mod=vendor",
+        }) == {}
 
 
 class TestStagingPromote:

@@ -1578,10 +1578,20 @@
     "count": 60,
     "kind": "literal"
   },
-  "core/security/credential_env.py::CREDENTIAL_FILE_POINTER_ENV_VARS": {
-    "count": 15,
+  "core/security/credential_env.py::BUILD_ECOSYSTEM_ENV_SURFACES": {
+    "count": 16,
     "kind": "literal",
-    "note": "closed security taxonomy: environment-variable NAMES that point at credential/config files (canonical credential-env vocabulary, the single home every strip/blocklist surface consumes; closure-tested in core/security/tests/test_credential_env_closure.py) \u2014 env-var names, not a learned target-API vocabulary"
+    "note": "per-ecosystem build-tool env surfaces transcribed from the tools\u2019 own documentation (make manual implicit-variable catalogs, cmake env docs, go/cargo/npm/... env references) - closed security taxonomy of env-var NAMES consumed by the credential-env blocklist derivation, not a learnable target-API vocabulary"
+  },
+  "core/security/credential_env.py::BUILD_SYSTEM_ECOSYSTEM_MAP": {
+    "count": 18,
+    "kind": "literal",
+    "note": "build-system-type -> ecosystem-surface adjudication map for the census closure test (mirrors BuildDetector.BUILD_SYSTEMS keys - infrastructure constants, not a learnable name vocabulary)"
+  },
+  "core/security/credential_env.py::_BASE_CREDENTIAL_FILE_POINTER_ENV_VARS": {
+    "count": 12,
+    "kind": "literal",
+    "note": "cloud-SDK/network-tool credential+config pointer env names (security blocklist infrastructure constants, not a learnable name vocabulary); renamed from CREDENTIAL_FILE_POINTER_ENV_VARS when the build-tool members moved to the per-ecosystem surfaces"
   },
   "core/security/credential_env.py::_CREDENTIAL_NAME_SEGMENTS": {
     "count": 11,
