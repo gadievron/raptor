@@ -14,13 +14,29 @@ class TestRenderReport(unittest.TestCase):
         self.assertIn("# Test", result)
 
     def test_metadata(self):
+        # Markup belongs to the TEMPLATE, never to the value:
+        # sanitise_inline entity-escapes in-value backticks/pipes, so a
+        # caller-authored `...` wrapper inside a metadata VALUE renders
+        # as entities. Values are plain text.
         spec = ReportSpec(
             title="Report",
-            metadata={"Target": "`/tmp/test`", "Date": "2026-04-04"},
+            metadata={"Target": "/tmp/test", "Date": "2026-04-04"},
         )
         result = render_report(spec)
-        self.assertIn("**Target:** `/tmp/test`", result)
+        self.assertIn("**Target:** /tmp/test", result)
         self.assertIn("**Date:** 2026-04-04", result)
+
+    def test_metadata_value_cannot_carry_live_span_markup(self):
+        # The structure-escape direction: a hostile value cannot open
+        # or close inline-code spans / split cells in the rendered
+        # report — the raw delimiters never survive.
+        spec = ReportSpec(
+            title="Report",
+            metadata={"Target": "`x` | pwned"},
+        )
+        result = render_report(spec)
+        self.assertNotIn("`", result.split("\n")[2])
+        self.assertIn("&#96;x&#96; &#124; pwned", result)
 
     def test_summary(self):
         spec = ReportSpec(summary={"Files": 10, "Findings": 5})

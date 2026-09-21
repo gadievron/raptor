@@ -143,6 +143,15 @@ def sanitise_inline(s: str, *, max_chars: int = 300) -> str:
     mid-string ``#``/``*``/``-`` inert, and stripping them would eat
     legitimate label text (a literal ``#`` column header, a ``-``
     placeholder cell).
+
+    In-slot STRUCTURE characters are entity-escaped (the ``_md_cell``
+    idiom, cf. cve-diff's table renderer): an in-cell ``|`` splits the
+    table row and shifts attacker text under different column
+    headers, and a backtick closes a wrapping `` ` `` code span so
+    the tail renders as live inline markdown. ``&#124;`` / ``&#96;``
+    render as the literal character in plain markdown slots; inside a
+    code span they display as the entity text — the safe direction,
+    since no raw delimiter survives to terminate the span.
     """
     s = (str(s)
          .replace("\r", " ").replace("\n", " ")
@@ -152,6 +161,7 @@ def sanitise_inline(s: str, *, max_chars: int = 300) -> str:
         '[REDACTED-AUTOFETCH-MARKUP]', s,
     )
     s = escape_nonprintable(s)
+    s = s.replace("|", "&#124;").replace("`", "&#96;")
     if len(s) > max_chars:
         s = s[: max_chars - 1] + _ELLIPSIS
     return s

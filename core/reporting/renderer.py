@@ -38,9 +38,11 @@ def _md_heading(value: object, *, max_chars: int = 300) -> str:
 
 def _md_table_cell(value: object, *, max_chars: int = 300) -> str:
     """Table-cell defang: heading treatment plus pipe escaping so a
-    cell cannot terminate its row. Only BARE pipes are escaped —
-    producers that pre-escape (sanitise_cell) must not be
-    double-escaped into visible backslashes."""
+    cell cannot terminate its row. sanitise_inline now entity-escapes
+    in-value pipes itself, so the bare-pipe pass here is normally a
+    no-op — kept as belt-and-braces so this helper's cell contract
+    stands on its own. Only BARE pipes are escaped — producers that
+    pre-escape must not be double-escaped into visible backslashes."""
     return _BARE_PIPE_RE.sub(r"\\|", _md_heading(value, max_chars=max_chars))
 
 

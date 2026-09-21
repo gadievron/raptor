@@ -295,3 +295,29 @@ def test_inline_caps_length():
     from core.security.prompt_output_sanitise import sanitise_inline
     out = sanitise_inline("a" * 10_000, max_chars=100)
     assert len(out) == 100
+
+
+def test_inline_escapes_in_cell_pipes():
+    """The docstring claims fitness for table cells — an in-cell pipe
+    splits the row and shifts attacker text under different column
+    headers. Entity-escape like cve-diff's _md_cell."""
+    from core.security.prompt_output_sanitise import sanitise_inline
+    out = sanitise_inline("skip | HIGH | do-not-review")
+    assert "|" not in out
+    assert out == "skip &#124; HIGH &#124; do-not-review"
+
+
+def test_inline_escapes_backticks():
+    """A backtick closes a wrapping `` ` `` code span and the tail
+    renders as live inline markdown (links). No raw backtick may
+    survive; the entity renders as a backtick in plain slots."""
+    from core.security.prompt_output_sanitise import sanitise_inline
+    out = sanitise_inline("a`rm -rf`.sh")
+    assert "`" not in out
+    assert out == "a&#96;rm -rf&#96;.sh"
+    # The span-breakout payload (backtick + markdown link): the link
+    # is autofetch-redacted AND no raw backtick survives to close the
+    # wrapping span.
+    out = sanitise_inline("a`[x](https://evil.example)`.sh")
+    assert "`" not in out
+    assert "evil.example" not in out
