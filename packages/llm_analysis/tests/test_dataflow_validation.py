@@ -2009,10 +2009,10 @@ class TestReconcileDataflowValidation:
         assert results_by_id["F1"]["validation_disputed"] is True
         assert "consensus" in results_by_id["F1"]["validation_disputed_by"]
 
-    def test_panel_verdict_stamp_does_not_soften_downgrade(self):
-        """consensus=="panel-verdict" means the primary ABSTAINED and
-        the panel's vote stood in — it is not primary-corroboration,
-        so a validation refutation still hard-downgrades."""
+    def test_panel_verdict_without_votes_does_not_soften_downgrade(self):
+        """A bare consensus=="panel-verdict" stamp with no recorded
+        analyses carries no derivable model votes — no support, the
+        tool wins (hard). Genuine no-support stays hard."""
         results_by_id = {
             "F1": {
                 "is_exploitable": True,
@@ -2028,6 +2028,107 @@ class TestReconcileDataflowValidation:
         assert m["n_hard_downgrades"] == 1
         assert m["n_soft_downgrades"] == 0
         assert results_by_id["F1"]["is_exploitable"] is False
+
+    def test_panel_verdict_two_votes_softens_downgrade(self):
+        """consensus=="panel-verdict" backed by two genuine True votes
+        is two model signals behind the current verdict — the same
+        weight as "agreed" (primary + one panel vote). Pre-fix the
+        stamp read as NO support and the finding hard-flipped while an
+        equal-support agreed finding took the soft path."""
+        results_by_id = {
+            "F1": {
+                "is_exploitable": True,
+                "consensus": "panel-verdict",
+                "consensus_analyses": [
+                    {"model": "m1", "is_exploitable": True,
+                     "reasoning": "r1"},
+                    {"model": "m2", "is_exploitable": True,
+                     "reasoning": "r2"},
+                ],
+                "confidence": "high",
+                "dataflow_validation": {
+                    "verdict": "refuted",
+                    "reasoning": "no path",
+                    "recommends_downgrade": True,
+                },
+            },
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 0
+        assert m["n_soft_downgrades"] == 1
+        assert results_by_id["F1"]["is_exploitable"] is True
+        assert results_by_id["F1"]["confidence"] == "low"
+        assert results_by_id["F1"]["validation_disputed"] is True
+        assert "consensus" in results_by_id["F1"]["validation_disputed_by"]
+
+    def test_panel_verdict_single_vote_stays_hard(self):
+        """A single-vote panel-verdict is one model's verdict with no
+        second signal — it loses to the tool exactly like an
+        unsupported primary."""
+        results_by_id = {
+            "F1": {
+                "is_exploitable": True,
+                "consensus": "panel-verdict",
+                "consensus_analyses": [
+                    {"model": "m1", "is_exploitable": True,
+                     "reasoning": "r1"},
+                ],
+                "dataflow_validation": {
+                    "verdict": "refuted",
+                    "reasoning": "no path",
+                    "recommends_downgrade": True,
+                },
+            },
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 1
+        assert m["n_soft_downgrades"] == 0
+        assert results_by_id["F1"]["is_exploitable"] is False
+
+    def test_panel_verdict_junk_votes_stay_hard(self):
+        """Junk / abstained entries in the recorded analyses are
+        non-votes (read_verdict) — a panel-verdict stamp cannot be
+        promoted to support by shapes that never voted."""
+        results_by_id = {
+            "F1": {
+                "is_exploitable": True,
+                "consensus": "panel-verdict",
+                "consensus_analyses": [
+                    {"model": "m1", "is_exploitable": "yes"},
+                    {"model": "m2", "is_exploitable": None},
+                    {"model": "m3", "is_exploitable": True},
+                ],
+                "dataflow_validation": {
+                    "verdict": "refuted",
+                    "reasoning": "no path",
+                    "recommends_downgrade": True,
+                },
+            },
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_hard_downgrades"] == 1
+        assert m["n_soft_downgrades"] == 0
+
+    def test_judge_panel_verdict_two_votes_softens_downgrade(self):
+        results_by_id = {
+            "F1": {
+                "is_exploitable": True,
+                "judge": "panel-verdict",
+                "judge_analyses": [
+                    {"model": "j1", "is_exploitable": True},
+                    {"model": "j2", "is_exploitable": True},
+                ],
+                "dataflow_validation": {
+                    "verdict": "refuted",
+                    "reasoning": "no path",
+                    "recommends_downgrade": True,
+                },
+            },
+        }
+        m = reconcile_dataflow_validation(results_by_id)
+        assert m["n_soft_downgrades"] == 1
+        assert results_by_id["F1"]["is_exploitable"] is True
+        assert results_by_id["F1"]["validation_disputed_by"] == ["judge"]
 
     def test_soft_downgrade_when_judge_agreed(self):
         results_by_id = {

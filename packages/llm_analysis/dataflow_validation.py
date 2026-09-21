@@ -2848,6 +2848,35 @@ def run_validation_pass(
     )
 
 
+def _panel_verdict_supports(analysis: dict, stage: str) -> bool:
+    """True when *stage*'s ``panel-verdict`` stamp stands behind the
+    finding's current verdict with at least TWO genuine model votes.
+
+    ``panel-verdict`` marks an abstained-primary finding whose verdict
+    IS the panel's own (unanimous among voters — a split panel stamps
+    ``disputed``). Support strength follows vote count, mirroring the
+    ``agreed`` gate below: ``agreed`` is the primary plus at least one
+    panel vote (two model signals), so a two-vote panel behind an
+    abstained primary carries the same weight — treating the stamp as
+    NO support hard-flipped findings with equal-or-stronger backing
+    depending only on which slot abstained. A SINGLE-vote panel-verdict
+    is one model's verdict with no second signal and still loses to the
+    tool, exactly like an unsupported primary. Votes are re-derived
+    from the stage's recorded analyses through read_verdict (junk
+    entries are non-votes; a missing analyses list means no derivable
+    support — the tool wins, the conservative direction)."""
+    if analysis.get(stage) != "panel-verdict":
+        return False
+    entries = analysis.get(f"{stage}_analyses")
+    if not isinstance(entries, list):
+        return False
+    votes = sum(
+        1 for entry in entries
+        if read_verdict(entry, "is_exploitable") is True
+    )
+    return votes >= 2
+
+
 def reconcile_dataflow_validation(results_by_id: dict[str, dict]) -> dict[str, int]:
     """Apply downgrades from the validation pass after consensus/judge.
 
@@ -2885,13 +2914,21 @@ def reconcile_dataflow_validation(results_by_id: dict[str, dict]) -> dict[str, i
             n_skipped += 1
             continue  # already not-exploitable (or abstained) — no downgrade to apply
 
-        # Soft-downgrade gate: was the original verdict supported by
-        # consensus or judge? Both fields default to absent — only
-        # explicit "agreed" counts as support, so a missing field
-        # (consensus/judge weren't run) doesn't accidentally trigger
-        # the soft path.
-        consensus_agreed = analysis.get("consensus") == "agreed"
-        judge_agreed = analysis.get("judge") == "agreed"
+        # Soft-downgrade gate: was the current verdict supported by
+        # consensus or judge? Both fields default to absent — only an
+        # explicit "agreed" stamp, or a "panel-verdict" stamp backed
+        # by two genuine votes (see _panel_verdict_supports), counts
+        # as support, so a missing field (consensus/judge weren't
+        # run), "no-verdict", or "disputed" doesn't accidentally
+        # trigger the soft path.
+        consensus_agreed = (
+            analysis.get("consensus") == "agreed"
+            or _panel_verdict_supports(analysis, "consensus")
+        )
+        judge_agreed = (
+            analysis.get("judge") == "agreed"
+            or _panel_verdict_supports(analysis, "judge")
+        )
         if consensus_agreed or judge_agreed:
             # Soft: keep exploitable, lower confidence, flag the dispute
             analysis["validation_disputed"] = True
