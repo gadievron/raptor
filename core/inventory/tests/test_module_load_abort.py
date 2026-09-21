@@ -1148,3 +1148,30 @@ def test_php_real_abort_after_prefixed_literal_still_detected():
     assert result is not None
     assert result.line == 3
     assert result.summary == "die"
+
+
+@pytest.mark.parametrize("language", ["javascript", "typescript", "tsx"])
+def test_js_family_hashbang_does_not_fabricate_abort(language):
+    # ``hash_bang_line`` parses clean and used to survive blanking:
+    # abort-looking text in a one-line hashbang read as a depth-0
+    # statement-initial throw — a whole-file dead gate fabricated on
+    # a file whose every function is live.
+    _requires_lexical_grammar(language)
+    src = (
+        "#!/usr/bin/env node; throw new Boom(1)\n"
+        "function live() { work(); }\n"
+    )
+    assert detect_module_load_abort(language, src) is None
+
+
+def test_js_real_abort_below_hashbang_still_detected():
+    _requires_lexical_grammar("javascript")
+    src = (
+        "#!/usr/bin/env node\n"
+        "throw new Boom(1);\n"
+        "function live() { work(); }\n"
+    )
+    result = detect_module_load_abort("javascript", src)
+    assert result is not None
+    assert result.line == 2
+    assert result.summary == "throw new Boom"

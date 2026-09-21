@@ -1213,6 +1213,11 @@
     "kind": "literal",
     "note": "closed grammar-node-type taxonomy: per-grammar non-code (comment/string/heredoc) node kinds the tokenizer-grade blanker spaces out; every entry is asserted producible by the installed grammar (core/inventory/tests/test_lexical_view.py) \u2014 grammar structure names, not a learned name vocabulary"
   },
+  "core/inventory/lexical_view.py::_PROSE_KIND_RE": {
+    "count": 15,
+    "kind": "alternation",
+    "note": "tree-sitter node-kind NAME morphology for the blank-table completeness oracle: substrings that mark a grammar's own node-kind identifiers as prose-bearing (comment/string/heredoc/shell/...). Grammar taxonomy over kind names, not a learned code-name vocabulary; deliberately broad \u2014 an over-match costs only a reviewed exempt entry. The pattern IS the oracle's net: a prose kind whose name avoids every substring is outside it (name-morphology bound, reviewed against the pinned grammar wheels' kind inventories)"
+  },
   "core/inventory/macro_resolve.py::_SKIP_IDENTS_C": {
     "count": 46,
     "kind": "literal"

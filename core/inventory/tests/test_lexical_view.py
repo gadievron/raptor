@@ -91,6 +91,101 @@ def test_closure_oracle_fails_on_planted_drift(language, monkeypatch):
     assert "planted_drift_kind" in _missing_node_kinds(language, lang)
 
 
+# ---------------------------------------------------------------------------
+# Completeness oracle: the closure test above only proves LISTED names
+# producible (the dead-entry direction). The completeness oracle closes
+# the LIVE direction — every prose-named node kind the grammar can
+# produce must be classified (blanked or reviewed-exempt), else its
+# content survives into the "code" view (``hash_bang_line`` did, and a
+# one-line JS hashbang minted a whole-file module-load abort).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("language", sorted(NONCODE_NODE_MODES))
+def test_prose_kind_completeness(language):
+    lang = _grammar_language(language)
+    if lang is None:
+        pytest.skip(f"{language} tree-sitter grammar module not installed")
+    gap = lexical_view._prose_completeness_gap(language, lang)
+    assert gap == [], (
+        f"{language}: grammar-producible prose node kinds neither "
+        f"blanked nor reviewed-exempt: {gap}"
+    )
+
+
+@pytest.mark.parametrize("language", sorted(NONCODE_NODE_MODES))
+def test_completeness_oracle_fails_on_planted_gap(language, monkeypatch):
+    """Negative control (mutation check of the oracle itself): drop a
+    prose-named table entry and the gap computation must REPORT it —
+    never read the shrunken table as complete."""
+    lang = _grammar_language(language)
+    if lang is None:
+        pytest.skip(f"{language} tree-sitter grammar module not installed")
+    victim = next(
+        k for k in NONCODE_NODE_MODES[language]
+        if lexical_view._PROSE_KIND_RE.search(k)
+    )
+    monkeypatch.delitem(NONCODE_NODE_MODES[language], victim)
+    assert victim in lexical_view._prose_completeness_gap(language, lang)
+
+
+@pytest.mark.parametrize(("language", "kind"), [
+    ("php", "shell_command_expression"),
+    ("ruby", "subshell"),
+])
+def test_backtick_command_kinds_are_oracle_covered(
+        language, kind, monkeypatch):
+    """Mutation control for the backtick command literals: these two
+    kinds carry full attacker-authored shell command text, and their
+    names match no obvious prose noun — dropping either table line
+    must FAIL the completeness oracle, never leave every suite green
+    while the command content leaks verbatim into the code view."""
+    assert lexical_view._PROSE_KIND_RE.search(kind), (
+        f"{kind}: not in the prose pattern's net — the oracle cannot "
+        f"see this kind at all"
+    )
+    lang = _grammar_language(language)
+    if lang is None:
+        pytest.skip(f"{language} tree-sitter grammar module not installed")
+    monkeypatch.delitem(NONCODE_NODE_MODES[language], kind)
+    assert kind in lexical_view._prose_completeness_gap(language, lang)
+
+
+@pytest.mark.parametrize("language", sorted(NONCODE_NODE_MODES))
+def test_exempt_kinds_are_producible_and_disjoint_from_table(language):
+    """Exempt-list hygiene: a dead exempt entry is cruft that could
+    mask a future rename; a table/exempt overlap would make the
+    classification ambiguous."""
+    exempt = lexical_view._PROSE_EXEMPT_KINDS[language]
+    assert not (exempt & set(NONCODE_NODE_MODES[language]))
+    lang = _grammar_language(language)
+    if lang is None:
+        pytest.skip(f"{language} tree-sitter grammar module not installed")
+    dead = [k for k in sorted(exempt) if not lang.id_for_node_kind(k, True)]
+    assert dead == [], (
+        f"{language}: exempt entries the grammar cannot produce: {dead}"
+    )
+
+
+def test_every_language_has_exempt_set():
+    assert set(lexical_view._PROSE_EXEMPT_KINDS) == set(NONCODE_NODE_MODES)
+
+
+def test_runtime_disables_language_on_completeness_gap(monkeypatch):
+    """The degrade direction stays NOT-suppress: an unclassified prose
+    kind at runtime disables the language (``None`` — consumers bail,
+    no witness), never a partial view."""
+    _requires("javascript")
+    monkeypatch.setattr(lexical_view, "_VALIDATED", {})
+    monkeypatch.delitem(
+        lexical_view.NONCODE_NODE_MODES["javascript"], "hash_bang_line",
+    )
+    try:
+        assert blank_noncode("javascript", "x = 1;") is None
+    finally:
+        lexical_view._VALIDATED.clear()
+
+
 def test_every_language_has_grammar_route_and_table():
     assert set(NONCODE_NODE_MODES) == set(lexical_view._GRAMMARS)
     for language, modes in NONCODE_NODE_MODES.items():
@@ -219,6 +314,34 @@ def test_ts_template_literal_type_blanked(language):
     assert out is not None
     assert "throw" not in out
     assert "function live()" in out
+    assert out.count("\n") == src.count("\n")
+
+
+@pytest.mark.parametrize("language", ["javascript", "typescript", "tsx"])
+def test_js_family_hashbang_blanked(language):
+    """A hashbang is a legal, idiomatic first line whose text parses
+    clean — unblanked it sits at apparent depth 0 of the code view."""
+    _requires(language)
+    src = (
+        "#!/usr/bin/env node; throw new Boom(1)\n"
+        "function live() { work(); }\n"
+    )
+    out = blank_noncode(language, src)
+    assert out is not None
+    assert "throw" not in out
+    assert "node" not in out
+    assert "function live() { work(); }" in out
+    assert out.count("\n") == src.count("\n")
+
+
+def test_rust_shebang_blanked():
+    _requires("rust")
+    src = '#!/usr/bin/env run-cargo-script "unbalanced\nfn live() {}\n'
+    out = blank_noncode("rust", src)
+    assert out is not None
+    assert "cargo" not in out
+    assert '"' not in out
+    assert "fn live() {}" in out
     assert out.count("\n") == src.count("\n")
 
 

@@ -37,6 +37,13 @@ Refusal discipline (fail toward NO suppression):
   so an unknown name disables the language entirely (``None``, loud
   log) until the table is updated. CI pins the same property via the
   node-type closure test.
+* Table completeness (the LIVE direction): the grammar's own node-kind
+  inventory is enumerated once per process, and every producible kind
+  whose name matches the prose pattern must be classified — blanked or
+  explicitly exempted with a reviewed rationale. An unclassified match
+  (a grammar upgrade adding a prose kind, or a table regression)
+  disables the language the same fail-closed way; CI mirrors the check
+  as the completeness test.
 
 Blanking is byte-based on the UTF-8 encoding (tree-sitter spans are
 byte offsets); ``\\n`` / ``\\r`` bytes inside blanked spans are
@@ -69,6 +76,7 @@ plus arbitrary nesting) can never desynchronise the code view.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections import OrderedDict
 from typing import TYPE_CHECKING
@@ -118,6 +126,11 @@ _JS_FAMILY_MODES: dict[str, str] = {
     "regex": _BLANK_EDGES,
     # JSX text is display prose, not code (the PHP ``text`` analog).
     "jsx_text": _BLANK_ALL,
+    # ``#!/usr/bin/env node`` — legal, idiomatic first line; its text
+    # is interpreter routing, not code, and (being attacker-authored
+    # prose that parses clean) it can carry abort statements or
+    # unbalanced delimiters at apparent depth 0.
+    "hash_bang_line": _BLANK_ALL,
 }
 
 # Type-level template literal text (``type T = `...`;``) is erased at
@@ -140,6 +153,9 @@ NONCODE_NODE_MODES: dict[str, dict[str, str]] = {
         "string_literal": _BLANK_EDGES,
         "raw_string_literal": _BLANK_EDGES,
         "char_literal": _BLANK_EDGES,
+        # rust-script shebang — same non-code prose as the JS
+        # hash_bang_line.
+        "shebang": _BLANK_ALL,
     },
     "ruby": {
         "comment": _BLANK_ALL,
@@ -168,6 +184,125 @@ NONCODE_NODE_MODES: dict[str, dict[str, str]] = {
     },
 }
 
+# --- Blank-table completeness oracle (the LIVE direction) ------------------
+#
+# The producibility check above (and the CI closure test) only proves
+# listed names exist — the DEAD-entry direction. Nothing there notices
+# a prose-bearing node kind the table misses entirely: ``hash_bang_line``
+# was unlisted, so a one-line JS hashbang survived into the "code" view
+# and minted a whole-file module-load abort on a live file. The oracle
+# below closes the missing-member direction mechanically: every visible
+# named node kind the installed grammar can produce whose NAME matches
+# the prose pattern must be classified — blanked (in the table) or
+# explicitly exempted with a reviewed rationale. An unclassified match
+# disables the language (fail closed, loud log), exactly like table
+# drift: better no witness than a witness minted over unblanked prose.
+#
+# The kind universe is derived from the grammar itself
+# (``node_kind_count`` / ``node_kind_for_id``), so a grammar upgrade
+# that ADDS a prose kind fails here instead of silently leaking its
+# content into the code view. The pattern errs broad (``literal``
+# matches numeric literals too); breadth costs only reviewed exempt
+# entries, never soundness.
+_PROSE_KIND_RE = re.compile(
+    r"comment|string|te?xt|regex|template|heredoc|nowdoc|char|doc"
+    r"|shebang|hash_bang|uninterpreted|symbol|literal|shell"
+)
+
+# Reviewed non-table classifications, per grammar. Two safe categories:
+#
+# * interior — the kind only occurs beneath a table-blanked span
+#   (children of a blanked node are never descended, so it is blanked
+#   with its parent);
+# * constrained charset / code — the kind's content cannot carry
+#   quotes, brackets, or prose (numeric literals, bare symbols), or it
+#   is a code construct whose name merely collides with the pattern.
+_PROSE_EXEMPT_KINDS: dict[str, frozenset[str]] = {
+    "javascript": frozenset({
+        "regex_pattern",          # interior of regex
+        "regex_flags",            # interior of regex
+        "string_fragment",        # interior of string / template_string
+        "template_substitution",  # interior of template_string
+        # ``&amp;`` — sibling of jsx_text in JSX children; token
+        # charset is ``&[A-Za-z0-9#xX];`` — no quotes / brackets.
+        "html_character_reference",
+    }),
+    "typescript": frozenset({
+        "regex_pattern",
+        "regex_flags",
+        "string_fragment",
+        "template_substitution",
+        "template_type",          # interior of template_literal_type
+        # Type-position wrapper (``type T = "a"``): a code node whose
+        # prose content is its child string / template node, blanked
+        # on descent.
+        "literal_type",
+    }),
+    "tsx": frozenset({
+        "regex_pattern",
+        "regex_flags",
+        "string_fragment",
+        "template_substitution",
+        "template_type",
+        "literal_type",
+        "html_character_reference",
+    }),
+    "rust": frozenset({
+        "string_content",             # interior of string_literal
+        "doc_comment",                # interior of line/block_comment
+        "inner_doc_comment_marker",   # interior of line/block_comment
+        "outer_doc_comment_marker",   # interior of line/block_comment
+        # Numeric / boolean token charsets — digits, sign, suffixes.
+        "boolean_literal",
+        "integer_literal",
+        "float_literal",
+        "negative_literal",
+    }),
+    "ruby": frozenset({
+        "string_content",     # interior of string / bare_string
+        "heredoc_content",    # interior of heredoc_body
+        "heredoc_end",        # interior of heredoc_body
+        "bare_string",        # interior of string_array (%w[...])
+        "bare_symbol",        # interior of symbol_array (%i[...])
+        # ``<<~EOT`` / ``<<~'EOT'`` opener token — kept deliberately
+        # as value-position evidence (``msg = <<~EOT`` still reads as
+        # assignment-with-value); a quoted delimiter's quotes pair
+        # WITHIN the token, so it can never desync a string skip.
+        "heredoc_beginning",
+        # ``:sym`` / ``key:`` — identifier charset, no delimiters.
+        "simple_symbol",
+        "hash_key_symbol",
+    }),
+    "php": frozenset({
+        "string_content",   # interior of encapsed_string / heredoc_body
+        "heredoc_start",    # interior of heredoc / nowdoc
+        "heredoc_body",     # interior of heredoc
+        "heredoc_end",      # interior of heredoc / nowdoc
+        "nowdoc_body",      # interior of nowdoc
+        "nowdoc_string",    # interior of nowdoc_body
+        "list_literal",     # ``list($a, $b) = …`` — code construct
+    }),
+}
+
+
+def _prose_completeness_gap(language: str, lang) -> list[str]:
+    """Visible named node kinds the grammar can produce whose name
+    matches the prose pattern but which are neither blanked nor
+    exempted — each is a potential unblanked-prose leak."""
+    table = NONCODE_NODE_MODES[language]
+    exempt = _PROSE_EXEMPT_KINDS[language]
+    gap = []
+    for i in range(lang.node_kind_count):
+        if not (lang.node_kind_is_named(i) and lang.node_kind_is_visible(i)):
+            continue
+        kind = lang.node_kind_for_id(i)
+        if kind is None or not _PROSE_KIND_RE.search(kind):
+            continue
+        if kind not in table and kind not in exempt:
+            gap.append(kind)
+    return gap
+
+
 # Languages whose table survived id_for_node_kind validation this
 # process (value: the language object), or None when the grammar is
 # absent / the table has drifted. Import- and thread-safe: worst case
@@ -193,6 +328,7 @@ def _language_for(language: str) -> object | None:
                     name for name in NONCODE_NODE_MODES[language]
                     if not lang.id_for_node_kind(name, True)
                 ]
+                gap = _prose_completeness_gap(language, lang)
                 if unknown:
                     # Fail CLOSED: a renamed node type would silently
                     # stop blanking its lexical class (the false-
@@ -202,6 +338,19 @@ def _language_for(language: str) -> object | None:
                         "%s — non-code blanking disabled for this "
                         "language (witnesses degrade to none)",
                         language, unknown,
+                    )
+                elif gap:
+                    # Fail CLOSED on the LIVE direction too: the
+                    # grammar produces a prose-named node kind the
+                    # table does not classify (grammar upgrade adding
+                    # a kind, or a table regression). Its content
+                    # would survive into the "code" view.
+                    logger.warning(
+                        "lexical_view: %s grammar produces unclassified "
+                        "prose node kind(s) %s — non-code blanking "
+                        "disabled for this language (witnesses degrade "
+                        "to none)",
+                        language, gap,
                     )
                 else:
                     result = lang
