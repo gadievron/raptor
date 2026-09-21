@@ -610,6 +610,9 @@
     "packages/llm_analysis/scripts/e2e_verify_exploit.py::main::raw_serialiser_at_sink::dumps_display": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
+    "packages/openant/scanner.py::_run_subprocess::unsanitised_llm_value::stderr_to_write": {
+      "note": "openant scanner: stderr relay from tool subprocess \u2014 operator-launched tool output, not raw LLM text"
+    },
     "packages/sca/bump/cli.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
@@ -720,6 +723,18 @@
     },
     "raptor_fuzzing.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "raptor_openant.py::<module>::unsanitised_exception_text::e": {
+      "note": "top-level exception handler: prints str(e) from internal library calls, not LLM output"
+    },
+    "raptor_openant.py::_write_markdown_report::unsanitised_llm_value::file": {
+      "note": "openant report writer: file path from scan inventory (operator-supplied target tree)"
+    },
+    "raptor_openant.py::_write_markdown_report::unsanitised_llm_value::function": {
+      "note": "openant report writer: function name from scan inventory (source-tree symbol, not LLM text)"
+    },
+    "raptor_openant.py::main::unsanitised_llm_value::error": {
+      "note": "openant main: error message from internal pipeline exceptions, not raw LLM output"
     }
   },
   "bash_manual_audit": {
@@ -749,6 +764,9 @@
     },
     "libexec/raptor-llm-scorecard": {
       "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
+    },
+    "libexec/raptor-openant": {
+      "note": "bash launcher: exec's raptor_openant.py with env setup; no interpolated LLM/tool text in echo/printf"
     },
     "libexec/raptor-sage-mcp": {
       "note": "manual audit: docker-exec dispatch shim \u2014 echo lanes carry $0/paths; server JSON-RPC traffic flows through the mcp-guard python filter, never through echo"

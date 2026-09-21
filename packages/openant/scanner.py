@@ -1,0 +1,245 @@
+"""OpenAnt integration — invoke OpenAnt via subprocess and collect output.
+
+Runs OpenAnt as a subprocess with PYTHONPATH set to its core directory.
+This avoids sys.path contamination: OpenAnt has its own `core/` package
+that would shadow Raptor's if added to sys.path directly.
+
+The subprocess exits 0 (no vulns) or 1 (vulns found) on success, 2 on error.
+Output is written to out_dir; pipeline_output.json is the primary artifact.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any, Optional
+
+from core.config import RaptorConfig
+from core.logging import get_logger
+
+# Maximum bytes to persist from OpenAnt subprocess stderr. Generous upper bound
+# for any reasonable error trace; bounded so a misbehaving OpenAnt that spams
+# stderr in a tight loop cannot fill the disk.
+STDERR_MAX_BYTES = 1_000_000  # 1 MiB
+
+# Languages exposed by OpenAnt's --language CLI flag.
+# Zig and others may be auto-detected but are not valid --language values.
+# Source: `openant scan --help` → `--language {auto,python,javascript,go,c,ruby,php}`
+_OPENANT_CLI_LANGUAGES = {"auto", "python", "javascript", "go", "c", "ruby", "php"}
+
+from .config import OpenAntConfig
+
+logger = get_logger()
+
+
+def run_openant_scan(
+    repo_path: str | Path,
+    out_dir: str | Path,
+    config: OpenAntConfig,
+    *,
+    commit_sha: Optional[str] = None,
+) -> dict[str, Any]:
+    """Run OpenAnt scan and return a normalised result dict.
+
+    Returns:
+        pipeline_output_path (str | None)
+        pipeline_output       (dict)
+        token_usage           (dict)
+        error                 (str | None)
+        skipped               (bool)
+    """
+    repo_path = Path(repo_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return _run_subprocess(repo_path, out_dir, config)
+
+
+def _run_subprocess(
+    repo_path: Path,
+    out_dir: Path,
+    config: OpenAntConfig,
+) -> dict[str, Any]:
+    """Run OpenAnt as a subprocess with PYTHONPATH=config.core_path.
+
+    Using PYTHONPATH (subprocess-scoped) instead of sys.path.insert prevents
+    OpenAnt's `core/` package from shadowing Raptor's `core/` in this process.
+
+    cwd is set to config.core_path so that Python's implicit '' sys.path entry
+    (the working directory) resolves to openant-core rather than Raptor's repo
+    root — which also contains a `core/` package and would otherwise shadow it.
+    """
+    env = _build_subprocess_env(config)
+    cmd = _build_command(repo_path, out_dir, config)
+
+    logger.info(f"Running OpenAnt: {' '.join(str(c) for c in cmd)}")
+    try:
+        from core.sandbox.context import run as sandbox_run
+        proc = sandbox_run(
+            cmd,
+            block_network=False,
+            target=str(repo_path),
+            output=str(out_dir),
+            readable_paths=[str(config.core_path)],
+            caller_label="openant",
+            capture_output=True,
+            text=True,
+            timeout=config.timeout_seconds,
+            env=env,
+            cwd=str(config.core_path),
+        )
+    except subprocess.TimeoutExpired:
+        return _empty_result(
+            f"OpenAnt timed out after {config.timeout_seconds}s"
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _empty_result(f"OpenAnt launch failed: {exc}")
+
+    # Persist stderr so debugging isn't capped at the 600-char snippet
+    # we surface to the caller. (Adversarial-audit finding: long warnings
+    # could push the actual error past the truncation point.)
+    # Cap at STDERR_MAX_BYTES (1 MiB) so a misbehaving subprocess cannot
+    # fill the disk by spamming stderr in a tight loop.
+    if proc.stderr:
+        try:
+            stderr_to_write = proc.stderr[:STDERR_MAX_BYTES]
+            if len(proc.stderr) > STDERR_MAX_BYTES:
+                stderr_to_write += (
+                    f"\n\n[truncated — original was {len(proc.stderr)} bytes, "
+                    f"capped at {STDERR_MAX_BYTES}]\n"
+                )
+            (out_dir / "openant.stderr.log").write_text(stderr_to_write)
+        except OSError:
+            pass
+
+    if proc.returncode not in (0, 1):
+        snippet = (proc.stderr or "")[:600].strip()
+        return _empty_result(
+            f"OpenAnt exited {proc.returncode}: {snippet} "
+            f"(full stderr in {out_dir}/openant.stderr.log)"
+        )
+
+    pipeline_output_path = out_dir / "pipeline_output.json"
+    pipeline_output = _load_json(pipeline_output_path)
+    if not pipeline_output:
+        return _empty_result(
+            f"OpenAnt produced no pipeline_output.json in {out_dir}"
+        )
+
+    token_usage = _extract_usage(proc.stdout, pipeline_output)
+    return {
+        "pipeline_output_path": str(pipeline_output_path),
+        "pipeline_output": pipeline_output,
+        "token_usage": token_usage,
+        "error": None,
+        "skipped": False,
+    }
+
+
+def _find_venv_python(core_path: Path) -> str:
+    """Return the Python executable that has OpenAnt's tree-sitter bindings.
+
+    BUG-R-017: sys.executable (Raptor's Python) lacks tree-sitter-c,
+    tree-sitter-ruby, tree-sitter-php, tree-sitter-javascript. Those packages
+    are only installed in OpenAnt's own venv at core_path/.venv/bin/python3.
+    Prefer that venv Python; fall back to sys.executable if the venv is absent.
+
+    Uses os.access(path, os.X_OK) instead of .exists() to avoid returning a
+    venv Python that exists on disk but is not executable (e.g., wrong mode bits).
+    """
+    for candidate in ("python3", "python3.11", "python3.12", "python3.13", "python"):
+        venv_python = core_path / ".venv" / "bin" / candidate
+        if os.access(venv_python, os.X_OK):
+            return str(venv_python)
+    return sys.executable
+
+
+def _build_command(
+    repo_path: Path,
+    out_dir: Path,
+    config: OpenAntConfig,
+) -> list[str]:
+    python_exe = _find_venv_python(config.core_path)
+    # BUG-R-018: not all language names are valid --language CLI choices.
+    # Languages like 'zig' are auto-detected but not exposed as CLI values.
+    # Fall back to 'auto' for unrecognized language strings.
+    lang = config.language if config.language in _OPENANT_CLI_LANGUAGES else "auto"
+    cmd: list[str] = [
+        python_exe, "-m", "openant",
+        "scan", str(repo_path),
+        "--output", str(out_dir),
+        "--model", config.model,
+        "--level", config.level,
+        "--language", lang,
+        "--workers", str(config.workers),
+        "--no-report",
+    ]
+    if not config.enhance:
+        cmd.append("--no-enhance")
+    if config.verify:
+        cmd.append("--verify")
+    return cmd
+
+
+def _build_subprocess_env(config: OpenAntConfig) -> dict[str, str]:
+    safe = RaptorConfig.get_safe_env()
+    safe["ANTHROPIC_API_KEY"] = os.environ.get("ANTHROPIC_API_KEY", "")
+    # Resolve to absolute path so .. / symlinks / relative components cannot be
+    # used to redirect Python's import resolution to an attacker-controlled dir
+    # if OPENANT_CORE is set to an untrusted value.
+    # Re-raise FileNotFoundError as RuntimeError so callers have a single
+    # exception type to handle at the boundary (cleanup C-1 from /work-audit).
+    try:
+        resolved = config.core_path.resolve(strict=True)
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            f"OpenAnt core path does not exist: {config.core_path} "
+            f"(set OPENANT_CORE to a valid libs/openant-core directory)"
+        ) from e
+    if not (resolved / "core" / "scanner.py").exists():
+        raise RuntimeError(f"PYTHONPATH target {resolved} is not an openant-core directory")
+    existing_pythonpath = os.environ.get("PYTHONPATH", "")
+    core_str = str(resolved)
+    if existing_pythonpath:
+        safe["PYTHONPATH"] = f"{core_str}{os.pathsep}{existing_pythonpath}"
+    else:
+        safe["PYTHONPATH"] = core_str
+    return safe
+
+
+def _load_json(path: Path) -> dict:
+    try:
+        with path.open(encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        logger.warning(f"Cannot load OpenAnt output {path}: {exc}")
+        return {}
+
+
+def _extract_usage(stdout: str, pipeline_output: dict) -> dict[str, Any]:
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, dict):
+            usage = data.get("data", {}).get("usage")
+            if usage:
+                return usage
+    except (json.JSONDecodeError, AttributeError):
+        pass
+    stats = pipeline_output.get("pipeline_stats") or {}
+    costs = stats.get("costs") or {}
+    total_cost = sum(
+        v.get("actual", 0) for v in costs.values() if isinstance(v, dict)
+    )
+    return {"total_cost_usd": total_cost}
+
+
+def _empty_result(error: str) -> dict[str, Any]:
+    return {
+        "pipeline_output_path": None,
+        "pipeline_output": {"findings": []},
+        "token_usage": {},
+        "error": error,
+        "skipped": True,
+    }
