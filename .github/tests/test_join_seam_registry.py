@@ -8,9 +8,23 @@ the producer/consumer files that must reference the constructor, and
 the exact phantom idiom whose reappearance would re-open the seam.
 
 The checks are mechanical text/AST proofs over the real tree — a seam
-cannot silently drop its constructor on either side, and the replaced
-idiom cannot quietly come back, without failing this test. New shared
+cannot silently drop its constructor CALL on either side, and the
+replaced idiom cannot quietly come back, without failing this test.
+Side binding is call-shaped (an AST ``Call`` whose callee names the
+constructor), not textual: a dead ``import rule_join_key`` satisfied
+the earlier substring check while the registered side minted keys by
+hand — the exact regression class the tripwire exists for. New shared
 join-key constructors must be registered here.
+
+Canonical constructors: for the ``file:function`` seams registered
+here, ``core.analysis.taint_approx.function_key`` is THE constructor
+(plain ``f"{rel}:{func}"``). ``core.coverage.journal.make_function_key``
+is a SEPARATE constructor for the coverage vocabulary with different
+injectivity (``%``-encoded ``:``-bearing paths); the two byte-agree on
+ordinary checklist paths but are deliberately NOT unified here —
+consumers joining across the coverage↔audit boundary must pick one
+side's constructor knowingly. Unifying them is recorded as an open
+residual, not attempted by this registry.
 """
 
 from __future__ import annotations
@@ -60,9 +74,31 @@ SEAMS: tuple[Seam, ...] = (
             # …and the transitive walk resolves hops through the
             # bare-name projection of the same vocabulary.
             "core/analysis/taint_approx.py": ("bare_function_name",),
+            # The evidence index joins on the same vocabulary (its
+            # index keys, Joern reachability joins, context-map sink
+            # attach)…
+            "core/evidence/__init__.py": ("function_key",),
+            # …as do the audit bridge's attack-path constraint and
+            # summary joins (bare-name fallback keys included:
+            # function_key("", func)).
+            "core/orchestration/audit_bridge.py": ("function_key",),
         },
         forbidden={
             "core/audit/loaders.py": ('f"{rel}:{func_name}"',),
+            # The hand-built spellings the conversion replaced — the
+            # seam contract was violated by these exact idioms while
+            # the substring tripwire read the constructor's IMPORT as
+            # compliance.
+            "core/evidence/__init__.py": (
+                'f"{file_path}:{func_name}"',
+                'f"{t.file}:{t.function}"',
+                'f"{s.file}:{s.function}"',
+                'f"{sink_file}:{sink_func}"',
+            ),
+            "core/orchestration/audit_bridge.py": (
+                'f"{file_path}:{func}"',
+                'f":{func}"',
+            ),
         },
     ),
     Seam(
@@ -97,6 +133,12 @@ SEAMS: tuple[Seam, ...] = (
             "packages/checker_synthesis/replay_sweep.py": (
                 "e.rule_id == rule_id",
             ),
+            # The raw-id join the constructor replaced on the followup
+            # side (the drop-the-call-keep-the-import mutation
+            # reintroduced exactly this).
+            "packages/llm_analysis/checker_followup.py": (
+                "record_match(entry.rule_id",
+            ),
         },
     ),
     Seam(
@@ -128,6 +170,27 @@ def _defined_functions(path: Path) -> set[str]:
     }
 
 
+def _called_names(path: Path) -> set[str]:
+    """Names invoked as calls: ``ctor(...)`` and ``mod.ctor(...)``.
+
+    A bare import or a mention in a comment/string is NOT a call —
+    binding the side check to call sites is what makes the
+    drop-the-call-keep-the-import mutation fail. A side that ever
+    needs to pass a registered constructor as a VALUE (map/key=
+    callbacks) must re-register with that usage recorded; today every
+    registered side calls directly."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    called: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            if isinstance(fn, ast.Name):
+                called.add(fn.id)
+            elif isinstance(fn, ast.Attribute):
+                called.add(fn.attr)
+    return called
+
+
 def test_registry_is_nonempty_and_paths_exist():
     assert SEAMS
     for seam in SEAMS:
@@ -145,15 +208,19 @@ def test_constructors_are_defined_in_their_home():
             )
 
 
-def test_both_sides_reference_the_constructor():
+def test_both_sides_call_the_constructor():
+    """Call-site presence, not text presence: a dead
+    ``from ... import rule_join_key`` satisfied a substring check
+    while the registered side minted keys by hand — the constructor
+    must appear as an actual call on every side."""
     for seam in SEAMS:
         for rel, ctors in seam.sides.items():
-            src = (REPO / rel).read_text(encoding="utf-8")
+            called = _called_names(REPO / rel)
             for ctor in ctors:
-                assert ctor in src, (
-                    f"{seam.name}: {rel} no longer references {ctor} — "
-                    "one side of the seam dropped the shared key "
-                    "constructor"
+                assert ctor in called, (
+                    f"{seam.name}: {rel} no longer CALLS {ctor} — one "
+                    "side of the seam dropped the shared key "
+                    "constructor call (an import alone is not a join)"
                 )
 
 
