@@ -51,8 +51,11 @@ def _attempt_replay(cve: CveRecord, prefill_from: str | None):
             return None
         source_run = (spec.markers.get("origin") or {}).get(
             "source_run", "(unknown run)")
+        # Markers are a recorded artifact — escape like the sibling
+        # replay/up lanes that print the same semantic (`_sft(str(
+        # pointer.source_run))` in _cmd_up).
         print(
-            f"replay: found verified spec from {source_run} — "
+            f"replay: found verified spec from {_sft(str(source_run))} — "
             f"provisioning without the agent",
             file=sys.stderr,
         )
@@ -148,7 +151,9 @@ def _cmd_up(args: argparse.Namespace) -> int:
     if getattr(getattr(spec, "network", None), "mode", "") == "unrestricted":
         print("up: egress ALLOWED for this instance (default docker "
               "bridge, full outbound)", file=sys.stderr)
-    print(f"up: provisioning recorded spec from {source_run}",
+    # Markers are a recorded artifact — same _sft discipline as the
+    # replay banner and _cmd_build's pointer lane.
+    print(f"up: provisioning recorded spec from {_sft(str(source_run))}",
           file=sys.stderr)
     from core.env.provision import provision
 

@@ -341,3 +341,46 @@ class TestScorecardSegregation:
         assert result is None  # still falls through to the agent build
         assert torn.get("yes") is True
         assert "falling through" in capsys.readouterr().err
+
+
+class TestUpBannerScrub:
+    def test_up_banner_escapes_hostile_source_run_marker(self, capsys):
+        """_cmd_up prints the same origin source_run marker the replay
+        banner and _cmd_build escape — same recorded-artifact
+        derivation, same _sft discipline."""
+        from cve_env.cli import _cmd_up
+        hostile = "/runs/\x1b]0;pwned\x07a\x9b2J"
+        spec = SimpleNamespace(
+            markers={"origin": {"source_run": hostile}},
+            verify_plan=[{"type": "container_status"}],
+            network=SimpleNamespace(mode="isolated"))
+        outcome = SimpleNamespace(ok=False, environment=None,
+                                  reason="verify failed", detail="")
+        with patch("cve_env.infra.spec_record.find_replayable_spec",
+                   return_value=spec), \
+             patch("core.env.provision.provision", return_value=outcome):
+            _cmd_up(_args())
+        err = capsys.readouterr().err
+        assert "provisioning recorded spec" in err
+        for raw in ("\x1b", "\x07", "\x9b"):
+            assert raw not in err
+
+
+class TestReplayBannerScrub:
+    def test_replay_banner_escapes_hostile_source_run_marker(self, capsys):
+        """Spec markers are a recorded artifact; the found-spec banner
+        must escape them like the sibling replay/up lanes that print
+        the same semantic (pointer.source_run through _sft)."""
+        from cve_env.cli import _attempt_replay
+        from cve_env.models import CveRecord
+        outcome = SimpleNamespace(ok=False, environment=None,
+                                  reason="verify failed", detail="")
+        hostile = "/runs/\x1b]0;pwned\x07a\x9b2J"
+        with patch("cve_env.infra.spec_record.find_replayable_spec",
+                   return_value=_spec(source_run=hostile)), \
+             patch("core.env.provision.provision", return_value=outcome):
+            _attempt_replay(CveRecord(cve_id="DESC-aaaabbbbcccc"), None)
+        err = capsys.readouterr().err
+        assert "found verified spec" in err
+        for raw in ("\x1b", "\x07", "\x9b"):
+            assert raw not in err
