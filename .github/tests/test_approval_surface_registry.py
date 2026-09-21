@@ -33,10 +33,23 @@ outside it: this is a net for honestly-written prompts, not an
 adversarial-in-repo-author defense), bash ``read`` invocations
 carrying a ``-p`` prompt flag in any legal flag-grammar spelling
 (``-p``, ``-rp``, ``-pr``, ``-r -p``, ``-t 5 -p`` …), and markdown
-files instructing AskUserQuestion use. A NEW prompt surface anywhere
+files instructing an interactive structured choice. The bash lane
+spans EVERY tracked shell file — a shell suffix or an sh-family
+shebang, anywhere in the tree — not just ``libexec/``/``bin/``: a
+``read -rp`` planted in a tracked ``.sh`` under ``core/`` passed an
+earlier walk whose bash lane only covered those two roots, silently
+narrowing this docstring's closure claim. The markdown lane keys on
+the INTERACTIVE PROMPTS doctrine's shape (the AskUserQuestion tool
+name, the doctrine's own "structured choice" vocabulary, an
+offer-the-user-choices instruction, or a rendered ``[Y/n/...]``
+consent menu), not on one tool-name token: two live consent
+instructions spelled without the literal ``AskUserQuestion``
+(create-skill's persistent-skill confirm, exploit's next-steps fork)
+were invisible to a token-keyed walk. A NEW prompt surface anywhere
 in the tree fails this test until it is adjudicated into the
-registry. Render-lane entries (``lane="render"``) feed a prompt that
-lives in another file and are pinned here without being enumerated.
+registry.
+Render-lane entries (``lane="render"``) feed a prompt that lives in
+another file and are pinned here without being enumerated.
 """
 
 from __future__ import annotations
@@ -63,6 +76,42 @@ _CONFIRM_OWNERS = {"typer", "click"}
 # other flag's argument (``-d p``, ``-dp``).
 _BASH_READ_NOARG_FLAGS = frozenset("ers")
 _BASH_READ_ARG_FLAGS = frozenset("adinNtu")  # arg-taking flags except -p
+
+
+# Shell lane universe: every tracked shell file, tree-wide. Suffix
+# spellings plus sh-family shebang detection for extensionless
+# scripts (plugins/coverage/libexec/..., subsystem scripts/ dirs).
+_SHELL_SUFFIXES = (".sh", ".bash", ".zsh", ".ksh")
+_SHELL_INTERPRETERS = frozenset({"sh", "bash", "dash", "ksh", "zsh"})
+
+
+def _shebang_interpreter(first_line: str) -> str:
+    """Interpreter basename named by a ``#!`` line ('' when none) —
+    resolves the ``env`` indirection (``#!/usr/bin/env bash``)."""
+    if not first_line.startswith("#!"):
+        return ""
+    words = first_line[2:].split()
+    if not words:
+        return ""
+    interp = words[0].rsplit("/", 1)[-1]
+    if interp == "env":
+        for w in words[1:]:
+            if not w.startswith("-"):
+                return w.rsplit("/", 1)[-1]
+        return ""
+    return interp
+
+
+def _shell_lane_member(rel: str, first_line: str) -> bool:
+    """True when a tracked file joins the tree-wide bash prompt lane:
+    a shell suffix, or an sh-family shebang. ``libexec/``/``bin/``
+    launchers are handled separately (Python parse with a bash
+    fallback); this predicate is the rest-of-tree net whose absence
+    let a ``read -rp`` in a tracked ``.sh`` outside those roots pass
+    the closure test."""
+    return rel.endswith(_SHELL_SUFFIXES) or (
+        _shebang_interpreter(first_line) in _SHELL_INTERPRETERS
+    )
 
 
 def _bash_read_has_prompt(line: str) -> bool:
@@ -100,9 +149,10 @@ class Entry:
     wire_tokens: tuple[str, ...] = field(default=())
 
 
-# The 12 approval surfaces adjudicated as rendering external
-# content. Every id must appear on exactly one registry entry's
-# ``members`` (M10 spans three instruction files and appears on each).
+# The 13 approval surfaces adjudicated as rendering external
+# content. Every id must appear on at least one registry entry's
+# ``members`` (M10 spans three instruction files, M08 two, and each
+# appears on every file carrying it).
 MEMBER_IDS = (
     "M01-sage-setup-authorize-displays",
     "M02-boot-payload-review-compare",
@@ -116,6 +166,7 @@ MEMBER_IDS = (
     "M10-completion-forks",
     "M11-project-destructive-confirms",
     "M12-startup-check-mismatch-menu",
+    "M13-create-skill-persist-consent",
 )
 
 
@@ -198,6 +249,24 @@ REGISTRY: dict[str, Entry] = {
         note="next-steps fork quotes chain_breaks/constraints, which "
              "carry raw bytes from executing the hostile binary",
     ),
+    ".claude/commands/exploit.md": Entry(
+        lane="instruction", status="doctrine-pending",
+        members=("M08-exploit-next-steps-fork",),
+        note="command file instructing the same next-steps fork as "
+             "tiers/exploit-guidance.md — options built from "
+             "mitigation-analysis output (alternative_targets, chain "
+             "breaks) derived from the analysed hostile binary",
+    ),
+    ".claude/commands/create-skill.md": Entry(
+        lane="instruction", status="doctrine-pending",
+        members=("M13-create-skill-persist-consent",),
+        note="'Create this skill?' confirm authorizes writing a "
+             "persistent .claude/skills/*/SKILL.md that auto-loads "
+             "into future sessions (a standing-instruction grant); "
+             "the preview shown at the consent moment is LLM-authored "
+             "from session content, which in a scan session carries "
+             "target-derived text",
+    ),
     ".claude/skills/code-understanding/map.md": Entry(
         lane="instruction", status="doctrine-pending",
         members=("M09-map-trace-followup",),
@@ -249,6 +318,12 @@ REGISTRY: dict[str, Entry] = {
         note="end-user documentation describing the interactivity "
              "gate; not an agent instruction surface",
     ),
+    "docs/sandbox.md": Entry(
+        lane="instruction", status="clean",
+        note="end-user documentation describing the sandbox-floor "
+             "remedy fork (the tiers/recovery.md surface); not an "
+             "agent instruction surface",
+    ),
 }
 
 
@@ -264,6 +339,36 @@ def _is_test_path(rel: str) -> bool:
     parts = rel.split("/")
     return ("tests" in parts or "fixtures" in parts
             or parts[-1].startswith("test_") or parts[-1] == "conftest.py")
+
+
+# Markdown lane: a file instructs an interactive structured choice
+# when it names the AskUserQuestion tool, speaks the INTERACTIVE
+# PROMPTS doctrine's own vocabulary ("structured choice", an
+# offer-the-user/operator-choices instruction), or renders a
+# bracketed consent menu ("[Y/n/Customize]", "[y/N]"). Derived from
+# the doctrine SHAPE, not one tool-name token: a consent instruction
+# spelled without the literal "AskUserQuestion" must still join the
+# universe. The prose alternates are matched case-insensitively —
+# sentence-initial casing ("Offer the user choices ...") must not
+# drop an instruction — while the tool name and the consent-menu
+# capitalisation grammar stay case-exact. Residue (honestly bounded):
+# a consent instruction written in a wholly novel spelling — no tool
+# name, no doctrine phrase, no menu — stays outside the net until a
+# reviewer adds its spelling.
+_MD_PROMPT_EXACT_RE = re.compile(
+    r"AskUserQuestion"
+    r"|\[[Yy]/[Nn](?:/[A-Za-z][^\]]*)?\]"
+    r"|\[[Nn]/[Yy]\]"
+)
+_MD_PROMPT_PROSE_RE = re.compile(
+    r"structured choice|offer the (?:user|operator) choices",
+    re.IGNORECASE,
+)
+
+
+def _md_prompt_instruction(text: str) -> bool:
+    return bool(_MD_PROMPT_EXACT_RE.search(text)
+                or _MD_PROMPT_PROSE_RE.search(text))
 
 
 # Call-shaped mention of a prompt callee: the exact identifier at a
@@ -308,9 +413,9 @@ def _python_prompts(tree: ast.AST) -> bool:
 
 def enumerate_surfaces(full: bool = False) -> set[str]:
     """Every git-tracked file carrying an interactive approval prompt:
-    Python ``input()``/``confirm()`` call sites and bash ``read -p``
-    in runtime code, plus markdown files instructing AskUserQuestion
-    use.
+    Python ``input()``/``confirm()`` call sites, bash ``read -p`` in
+    any tracked shell file tree-wide, plus markdown files instructing
+    an interactive structured choice (see _md_prompt_instruction).
 
     Default (smoke) mode parses only files that pass the cheap text
     prescreens — the bash line scan plus _may_carry_python_prompt —
@@ -319,7 +424,8 @@ def enumerate_surfaces(full: bool = False) -> set[str]:
     per-test budget on contended CI runners. ``full=True`` (nightly)
     parses everything and owns the NFKC-identifier residue; the
     equivalence of the two modes on the real tree is pinned nightly in
-    test_full_enumeration_matches_smoke.
+    test_full_enumeration_matches_smoke. The bash and markdown lanes
+    are mode-independent (their detectors ARE their prescreens).
     """
     found: set[str] = set()
     for rel in _git_files():
@@ -328,12 +434,35 @@ def enumerate_surfaces(full: bool = False) -> set[str]:
         path = REPO_ROOT / rel
         if rel.endswith(".md"):
             try:
-                if "AskUserQuestion" in path.read_text(encoding="utf-8"):
+                if _md_prompt_instruction(path.read_text(encoding="utf-8")):
                     found.add(rel)
             except (OSError, UnicodeDecodeError):
                 continue
             continue
         if not (rel.endswith(".py") or rel.startswith(("libexec/", "bin/"))):
+            # Shell lane, tree-wide: any tracked shell file (suffix or
+            # sh-family shebang) is scanned for prompting reads. The
+            # shebang sniff reads one line so the whole-tree walk
+            # stays cheap; only shell files get the full-text scan.
+            first = ""
+            if not rel.endswith(_SHELL_SUFFIXES):
+                try:
+                    with path.open("rb") as fh:
+                        head = fh.readline(256)
+                except OSError:
+                    continue
+                try:
+                    first = head.decode("utf-8")
+                except UnicodeDecodeError:
+                    continue
+            if not _shell_lane_member(rel, first):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if any(_bash_read_has_prompt(ln) for ln in text.splitlines()):
+                found.add(rel)
             continue
         try:
             text = path.read_text(encoding="utf-8")
@@ -533,6 +662,65 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
         )
         for line in promptless:
             self.assertFalse(_bash_read_has_prompt(line), line)
+
+    def test_shell_lane_spans_the_whole_tree(self):
+        """Shell files join the bash lane by suffix or sh-family
+        shebang at ANY path — the closure must not depend on the file
+        living under libexec/ or bin/ (a ``read -rp`` planted in a
+        tracked .sh under core/ passed the earlier two-root walk)."""
+        members = (
+            ("core/security/_dangerous_env_strip.sh", ""),
+            ("core/sandbox/scripts/feature-matrix/run-matrix.sh", ""),
+            ("some/dir/helper.bash", ""),
+            ("some/dir/helper.zsh", ""),
+            ("some/dir/helper.ksh", ""),
+            ("plugins/coverage/libexec/raptor-hook-read",
+             "#!/usr/bin/env bash"),
+            ("tools/entry", "#!/bin/sh"),
+            ("x/y/z", "#! /usr/bin/dash"),
+        )
+        for rel, first in members:
+            self.assertTrue(_shell_lane_member(rel, first), rel)
+        non_members = (
+            ("core/x/notes.txt", ""),
+            ("core/x/gen", "#!/usr/bin/env python3"),
+            ("core/x/data.json", "{"),
+            ("core/x/perl-thing", "#!/usr/bin/perl"),
+            ("core/x/no-shebang", "set -euo pipefail"),
+        )
+        for rel, first in non_members:
+            self.assertFalse(_shell_lane_member(rel, first), rel)
+
+    def test_md_lane_keys_on_doctrine_shape_not_tool_token(self):
+        """The markdown lane derives from the INTERACTIVE PROMPTS
+        doctrine shape — a consent instruction spelled without the
+        literal ``AskUserQuestion`` (create-skill's ``[Y/n/Customize]``
+        confirm, exploit's offer-the-user-choices fork) must still
+        join the universe; ordinary markdown must not."""
+        matching = (
+            "use the AskUserQuestion tool",
+            "present a structured choice (see INTERACTIVE PROMPTS)",
+            "offer the user choices:",
+            "offer the operator choices at the run boundary",
+            # sentence-initial casing must not drop an instruction —
+            # the prose vocabulary is case-insensitive
+            "Offer the user choices before proceeding.",
+            "Structured choice: pick exactly one option.",
+            "Create this skill? [Y/n/Customize]",
+            "Proceed? [y/N]",
+            "[N/y] inverted default",
+        )
+        for text in matching:
+            self.assertTrue(_md_prompt_instruction(text), text)
+        inert = (
+            "compare [a/b] table columns",
+            "an ask-user question is a different phrase",
+            "choices offered elsewhere in the doc",
+            "[Y/X] is not a consent menu",
+            "structured data, choice of encoding",
+        )
+        for text in inert:
+            self.assertFalse(_md_prompt_instruction(text), text)
 
     def test_sanitised_status_only_on_code_lanes(self):
         """Instruction surfaces cannot be code-sanitised — their fix
