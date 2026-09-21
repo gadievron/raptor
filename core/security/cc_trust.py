@@ -68,6 +68,7 @@ from pathlib import Path
 from core.security.capped_read import read_capped
 from core.security.credential_env import (
     CREDENTIAL_ENV_FAMILY,
+    TOOLCHAIN_HOME_ENV_VARS,
     is_credential_redirect_shaped,
     is_model_traffic_redirect_shaped,
 )
@@ -223,7 +224,15 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # attacker-credential substitution and header riding — live in
     # the credential-env family unioned below.)
     "ANTHROPIC_BASE_URL",
-}) | CREDENTIAL_ENV_FAMILY
+}) | CREDENTIAL_ENV_FAMILY | TOOLCHAIN_HOME_ENV_VARS
+# TOOLCHAIN_HOME_ENV_VARS joins THIS scan set only (never the general
+# blocklists): a repo-supplied env.JAVA_HOME points the operator
+# session's next mvn/gradle/ant invocation at `<repo>/jvm/bin/java` —
+# repo binary executed at operator power. With env.PATH already
+# blocked above, the toolchain-home names are the surviving
+# launcher-redirect primitive on this lane. The traced-build lane's
+# own env_detect passthrough is untouched (it reads the HOST env, not
+# repo settings, and this set feeds only the settings scan).
 # The canonical credential-env family (core/security/credential_env.py)
 # joins the settings-scan blocklist wholesale: credential material
 # (CLAUDE_CODE_OAUTH_TOKEN — attacker-credential substitution, the same

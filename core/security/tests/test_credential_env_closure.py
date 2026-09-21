@@ -255,6 +255,23 @@ class TestTrustGateLane:
         # carry the family on its own.
         assert CREDENTIAL_ENV_FAMILY <= _COMPREHENSIVE_DANGEROUS_ENV_VARS
 
+    def test_cc_trust_scan_carries_toolchain_home_class(self):
+        """Settings-scan-only class: a repo-supplied JAVA_HOME/GOROOT
+        redirects the operator session's next launcher invocation at
+        a repo binary (PATH itself is blocked on this lane, so this
+        is the surviving launcher-redirect primitive). The class must
+        be in the scan set on BOTH import branches, and must stay OUT
+        of the general blocklist (operators legitimately set these;
+        the traced-build lane carries them by design)."""
+        from core.security.cc_trust import (
+            _COMPREHENSIVE_DANGEROUS_ENV_VARS,
+        )
+        from core.security.credential_env import TOOLCHAIN_HOME_ENV_VARS
+        assert TOOLCHAIN_HOME_ENV_VARS <= _COMPREHENSIVE_DANGEROUS_ENV_VARS
+        assert not (
+            TOOLCHAIN_HOME_ENV_VARS & RaptorConfig.DANGEROUS_ENV_VARS
+        )
+
     def test_cc_trust_superset_of_core_config(self):
         # Drift closure: the trust gate's effective set contains every
         # core/config DANGEROUS member (the two lists had already
@@ -424,10 +441,20 @@ class TestEcosystemCensus:
         membership would make the vocabulary strip the lane's own
         passthrough — the two mechanisms must stay disjoint."""
         from core.build.build_detector import BuildDetector
+        from core.security.credential_env import TOOLCHAIN_HOME_ENV_VARS
         for systems in BuildDetector.BUILD_SYSTEMS.values():
             for config in systems.values():
                 for name in config.get("env_detect", ()):
                     assert name not in CREDENTIAL_ENV_FAMILY, name
+                    # ...but every passthrough must be ADJUDICATED in
+                    # the toolchain-home class the settings scan
+                    # blocks: repo-supplied spellings of these names
+                    # are launcher redirects at operator power.
+                    assert name in TOOLCHAIN_HOME_ENV_VARS, name
+        # The class stays out of the family (and thus the general
+        # blocklist) in the other direction too — the settings scan is
+        # its only consumer by design.
+        assert not (TOOLCHAIN_HOME_ENV_VARS & CREDENTIAL_ENV_FAMILY)
 
 
 class TestPatternMemberLanes:

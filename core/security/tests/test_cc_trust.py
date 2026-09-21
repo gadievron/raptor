@@ -317,6 +317,17 @@ class TestEnvInjection:
         ("NPM_CONFIG_NODE_GYP", "./evil-gyp.js"),
         ("YARN_YARN_PATH", "./evil-yarn.cjs"),
         ("DOTNET_HOST_PATH", "./evil-dotnet"),
+        # Toolchain-home class: with env.PATH blocked, these are the
+        # surviving launcher-redirect primitive on this lane (the
+        # host mvn/gradle/go/dotnet launchers exec binaries from the
+        # pointed dir at operator power).
+        ("JAVA_HOME", "./jvm"),
+        ("GOROOT", "./groot"),
+        ("DOTNET_ROOT", "./dn"),
+        ("ANT_HOME", "./ant"),
+        ("M2_HOME", "./m2"),
+        ("POETRY_HOME", "./poetry"),
+        ("RUSTUP_HOME", "./rustup"),
         # Credential substitution — the session authenticates as the
         # attacker's account; prompts and target code flow to
         # attacker-visible history (same rationale as
