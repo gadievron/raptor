@@ -772,6 +772,9 @@ class RaptorConfig:
                                # any Java process (e.g. CodeQL) and load
                                # arbitrary code at JVM startup.
         "_JAVA_OPTIONS",       # Older variant of JAVA_TOOL_OPTIONS, same hazard.
+        "JDK_JAVA_OPTIONS",    # JDK 9+ variant: the java launcher prepends it
+                               # to every invocation — same -javaagent power
+                               # as JAVA_TOOL_OPTIONS via a third env name.
         "OPENSSL_CONF",        # OpenSSL reads this config file. .conf files
                                # can load ENGINEs (arbitrary .so files) via
                                # the `engines` section — arbitrary code exec

@@ -178,7 +178,7 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # picks JAVA_TOOL_OPTIONS up unconditionally; -javaagent loads
     # arbitrary code at JVM startup. _JAVA_OPTIONS is the older
     # variant. CLASSPATH adds attacker .jar to load path.
-    "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "CLASSPATH",
+    "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH",
     # Build-tool names (MAVEN_OPTS, GRADLE_OPTS, CARGO_HOME, GEM_HOME,
     # GEM_PATH, BUNDLE_GEMFILE and their per-ecosystem siblings) come
     # from the ecosystem surfaces in core/security/credential_env.py
@@ -192,6 +192,13 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # firing on every fetch. (GIT_SSH_COMMAND / GIT_SSH / GIT_ASKPASS /
     # SSH_ASKPASS live in the credential-env family unioned below.)
     "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG",
+    # Git helper/template redirection — an env-set GIT_EXEC_PATH
+    # substitutes every git-<cmd> helper binary; GIT_TEMPLATE_DIR
+    # plants per-repo hook executables at `git init`. Both are in
+    # RaptorConfig.DANGEROUS_ENV_VARS; the standalone fallback (used
+    # when core.config is unimportable) must carry them on its own —
+    # same degraded-install parity the proxy family got above.
+    "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR",
     # OpenSSL config — .conf files can load ENGINE .so files
     # (arbitrary code in any process that initialises OpenSSL).
     "OPENSSL_CONF",
