@@ -181,6 +181,26 @@ TIERS: dict[str, dict] = {
     },
 }
 
+#: Top-level data trees with no importable code of their own. Their
+#: consumers reference them by repo-relative path (packages/sca,
+#: llm_analysis, core/startup and core/inventory suites all read
+#: test/data/...), so neither the import graph nor any tier's
+#: test_dirs can claim their files — a corpus-label or fixture-
+#: manifest edit under test/ dispatched ZERO tiers and broke the
+#: consuming suite on the next unrelated run, misattributed. Every
+#: changed path under these roots (.py fixture files included — they
+#: carry no import-graph key) routes through the resource arms; since
+#: no mapping claims a repo-root data path, that is fail-toward-full
+#: dispatch, matching the design's unmappable rule.
+DATA_ROOTS = ("test",)
+
+
+def in_data_root(path: str) -> bool:
+    return any(
+        path == r or path.startswith(r + "/") for r in DATA_ROOTS
+    )
+
+
 FAST_TIER_IGNORES = {
     "core/sandbox/tests",
     "packages/exploit_feasibility/tests",
@@ -604,7 +624,14 @@ def compute_tier_dispatch(
     all_py = discover_py_files(repo)
     total = len(all_py)
 
-    changed_py = {Path(f) for f in changed_files if f.endswith(".py")}
+    # Data-root paths never enter the .py/graph lane — a .py under
+    # test/ is fixture data with no import-graph key (seeding it would
+    # prove nothing and dispatch nothing); all of them join the
+    # resource routing below instead.
+    changed_py = {
+        Path(f) for f in changed_files
+        if f.endswith(".py") and not in_data_root(f)
+    }
     changed_non_py = [f for f in changed_files if not f.endswith(".py")]
 
     # conftest.py changes affect all tests in their directory tree.
@@ -621,13 +648,14 @@ def compute_tier_dispatch(
     # Non-Python resource files under the scan roots are runtime
     # inputs (detector data lists, parser packs, templates, fixtures)
     # — a change to them must run the tests of the code that consumes
-    # them, not zero tiers. Route each one through the first mapping
-    # that claims it; a file NO mapping claims cannot be scoped, so
-    # fail toward full dispatch rather than toward zero.
+    # them, not zero tiers. Top-level data roots (test/) join the same
+    # routing wholesale (see DATA_ROOTS). Route each one through the
+    # first mapping that claims it; a file NO mapping claims cannot be
+    # scoped, so fail toward full dispatch rather than toward zero.
     resource_files = [
         f for f in changed_non_py
         if any(f.startswith(r + "/") for r in SCAN_ROOTS)
-    ]
+    ] + [f for f in changed_files if in_data_root(f)]
     forced_tiers: set[str] = set()
     resource_seeds: set[Path] = set()
     data_map: dict[Path, set[Path]] | None = None

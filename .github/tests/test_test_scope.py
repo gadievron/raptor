@@ -408,6 +408,31 @@ class TestDispatchFailsOpen:
         assert Path("core/pkga/tests/test_mod.py") in result["python"]["files"]
         assert not _is_full_dispatch(result)
 
+    def test_top_level_test_data_forces_full_dispatch(self, mini_repo):
+        # The top-level test/ tree is data with repo-relative
+        # consumers (sca-e2e corpora, scanner fixtures): the graph
+        # cannot claim it, so a corpus-only PR must fail toward FULL
+        # dispatch — it dispatched zero tiers before DATA_ROOTS
+        # joined the resource routing.
+        result = compute_tier_dispatch(
+            ["test/data/sca-e2e/labels.json"], mini_repo,
+        )
+        assert _is_full_dispatch(result), (
+            f"test/-data change under-dispatched: only {_active(result)}"
+        )
+
+    def test_test_data_python_fixture_forces_full_dispatch(self, mini_repo):
+        # .py files under test/ are fixture data too — no import-graph
+        # key, so seeding them proves nothing; they must route through
+        # the same fail-toward-full arm, not the silent .py lane.
+        result = compute_tier_dispatch(
+            ["test/data/python_sql_injection.py"], mini_repo,
+        )
+        assert _is_full_dispatch(result), (
+            f"test/-py fixture change under-dispatched: "
+            f"only {_active(result)}"
+        )
+
     def test_fixture_data_routes_to_referencing_test(self, mini_repo):
         # Fixture data maps to the tests that reference its directory
         # (Path(__file__).parent / "fixtures" chain in the test file).
