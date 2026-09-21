@@ -462,7 +462,7 @@ void orphan_fn(char *user_input) {
                   "--annotations-dir", str(ann_dir),
                   "--audit-out", str(out_dir)])
         assert r.returncode == 0, r.stderr
-        assert "Downgraded: 1" in r.stdout
+        assert "Downgraded to clean: 1" in r.stdout
 
         # Verify journal carries the corrected verdict
         journal_path = out_dir / "review-journal.jsonl"
