@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from core.cve import EpssClient
 from core.cve.epss import EPSS_URL
 from core.cve.vulnrichment import VulnrichmentClient
@@ -172,10 +174,17 @@ def _clients(
 # Request-count bounds (the distro-scale regression)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 def test_distro_scale_scan_bounds_requests(tmp_path: Path) -> None:
     """1200 findings / 1200 unique CVEs must cost ceil(1200/100)=12
     EPSS requests and at most the SSVC fetch budget of Vulnrichment
-    GETs — not one request per finding."""
+    GETs — not one request per finding.
+
+    slow (nightly tier): the cost is genuine — 1200 findings built and
+    1000 SSVC cache files written is real distro-base-image scale, and
+    the file I/O breaches the default-tier per-test budget on contended
+    CI runners. The smoke twin below keeps every bound mechanic in the
+    default tier at a scale that stays far under the budget."""
     n, budget = 1200, 1000
     deps, results, _ = _distro_scale_inputs(n)
     http = CountingHttp()
@@ -189,6 +198,41 @@ def test_distro_scale_scan_bounds_requests(tmp_path: Path) -> None:
     assert len(findings) == n
     assert len(http.epss_requests) == 12          # ceil(1200 / 100)
     assert len(http.vuln_requests) == budget      # capped, not 1200
+    # EPSS enrichment is complete — batching is a cost fix, not a
+    # coverage change.
+    assert all(f.epss == 0.5 for f in findings)
+    # SSVC: exactly budget-many findings enriched; the rest degrade
+    # to no-signal (None) rather than eating the scan budget.
+    enriched = sum(1 for f in findings if f.ssvc_exploitation == "active")
+    degraded = sum(1 for f in findings if f.ssvc_exploitation is None)
+    assert enriched == budget
+    assert degraded == n - budget
+
+
+def test_scan_bounds_requests_smoke(tmp_path: Path) -> None:
+    """Default-tier twin of the distro-scale bounds test: identical
+    mechanics — cross-finding EPSS batching including a partial final
+    chunk, the SSVC budget cap engaging, over-budget findings degrading
+    to no-signal — at a scale cheap enough for every default-tier run.
+
+    Scale trade-off: n must exceed one EPSS chunk (100) to prove
+    batching spans chunks AND exceed the budget to prove the cap +
+    degradation, but every finding costs an SSVC cache-file write, so
+    growing n re-creates the contended-runner cost the nightly test
+    already covers. 150/100 is the smallest shape exercising both."""
+    n, budget = 150, 100
+    deps, results, _ = _distro_scale_inputs(n)
+    http = CountingHttp()
+    epss, vuln = _clients(http, tmp_path)
+
+    findings = build_vuln_findings(
+        deps, results, epss=epss, vulnrichment=vuln,
+        ssvc_fetch_budget=budget,
+    )
+
+    assert len(findings) == n
+    assert len(http.epss_requests) == 2           # ceil(150 / 100)
+    assert len(http.vuln_requests) == budget      # capped, not 150
     # EPSS enrichment is complete — batching is a cost fix, not a
     # coverage change.
     assert all(f.epss == 0.5 for f in findings)
