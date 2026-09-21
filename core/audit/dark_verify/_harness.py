@@ -722,6 +722,27 @@ def generate_java_harness(
         parts.append(f'import {safe_imp};\n')
 
     parts.append('\npublic class DarkWitnessHarness {\n')
+    # JSON-string escaper for the epilogue's repo-controlled text
+    # (return value's toString(), exception message). Per-char
+    # dispatch: backslash and quote get their JSON escapes, and every
+    # control char becomes \\uXXXX (same coverage as the Lua lane's
+    # json_escape) — so a legitimate multi-line toString()/message
+    # stays ONE parseable status line instead of degrading a truthful
+    # verdict to inconclusive on an unescaped newline.
+    parts.append(
+        '    private static String esc(String s) {\n'
+        '        StringBuilder b = new StringBuilder();\n'
+        '        for (int i = 0; i < s.length(); i++) {\n'
+        '            char c = s.charAt(i);\n'
+        '            if (c == \'\\\\\') b.append("\\\\\\\\");\n'
+        '            else if (c == \'"\') b.append("\\\\\\"");\n'
+        '            else if (c < 0x20) b.append('
+        'String.format("\\\\u%04x", (int) c));\n'
+        '            else b.append(c);\n'
+        '        }\n'
+        '        return b.toString();\n'
+        '    }\n'
+    )
     parts.append('    public static void main(String[] args) {\n')
     parts.append('        try {\n')
 
@@ -738,11 +759,20 @@ def generate_java_harness(
         parts.append(
             f'            {return_type} result = {call_target}({args_str});\n'
         )
+        # The return value is repo-controlled text (toString() of a
+        # target object): concatenating it raw let a crafted value
+        # smuggle duplicate keys into the token-authenticated verdict
+        # JSON (json.loads keeps the LAST duplicate, so the injection
+        # rode INSIDE the authenticated epilogue). esc() makes it
+        # pure data — same escaper as the exception path's _msg.
+        parts.append(
+            '            String _val = esc(String.valueOf(result));\n'
+        )
         parts.append(
             '            System.out.println('
             '"{\\"status\\":\\"returned\\",'
             f'{token_json}'
-            '\\"value\\":\\"" + result + "\\"}");\n'
+            '\\"value\\":\\"" + _val + "\\"}");\n'
         )
     else:
         parts.append(f'            {call_target}({args_str});\n')
@@ -755,8 +785,8 @@ def generate_java_harness(
 
     parts.append('        } catch (Exception e) {\n')
     parts.append(
-        '            String _msg = e.getMessage() == null ? "" : e.getMessage()'
-        '.replace("\\\\", "\\\\\\\\").replace("\\"", "\\\\\\"");\n'
+        '            String _msg = e.getMessage() == null ? "" : '
+        'esc(e.getMessage());\n'
     )
     parts.append(
         '            System.out.println('

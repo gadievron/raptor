@@ -6265,3 +6265,270 @@ class TestJavaUnicodeEscapeInjection:
             },
         )
         assert validate_spec(spec) is None
+
+
+class TestJavaReturnValueEncoding:
+    """The Java return path pastes a repo-controlled string — the
+    target's ``toString()`` — into the token-authenticated verdict
+    JSON. Raw concatenation let a crafted return value smuggle
+    duplicate keys INSIDE the authenticated epilogue (``json.loads``
+    keeps the last duplicate), flipping real refutations into
+    attacker-chosen ``exception`` shapes and minting ``confirmed``
+    whenever the injected type matched the witness's prediction."""
+
+    # The duplicate-key payload: a toString() return that, pasted raw,
+    # closes the value string and appends a forged exception epilogue.
+    _INJECTED = (
+        'X","status":"exception","type":"AssertionError",'
+        '"message":"forged'
+    )
+
+    def _spec(self, **kw):
+        base = dict(
+            finding_key="f1", file="A.java", function="parse",
+            language="java", expected_exception="AssertionError",
+            lang_config={"class_name": "A", "return_type": "String"},
+        )
+        base.update(kw)
+        return DarkWitnessSpec(**base)
+
+    @staticmethod
+    def _java_esc(s: str) -> str:
+        # Python model of the template's esc(): per-char dispatch —
+        # backslash / quote get their JSON escapes, control chars
+        # become \\uXXXX (the Lua lane's json_escape coverage).
+        return "".join(
+            "\\\\" if c == "\\"
+            else '\\"' if c == '"'
+            else "\\u%04x" % ord(c) if ord(c) < 0x20
+            else c
+            for c in s
+        )
+
+    def test_return_path_escapes_before_interpolation(self):
+        src = generate_java_harness(
+            self._spec(), Path("/t"), witness_token="ab" * 16,
+        )
+        # Both epilogue paths route their repo-controlled text through
+        # the template's esc() helper — the value is pure data.
+        assert "private static String esc(String s)" in src
+        assert 'String.format("\\\\u%04x", (int) c)' in src
+        assert "String _val = esc(String.valueOf(result));" in src
+        assert "esc(e.getMessage())" in src
+        assert '+ _val + ' in src
+        assert '+ result + ' not in src
+
+    def test_escaped_epilogue_round_trips_hostile_value(self):
+        # Simulate the template's esc() on the injection payload: the
+        # emitted line stays ONE parseable object whose value is the
+        # payload verbatim, and the classifier reads the normal return
+        # as the refutation it is (an exception was predicted).
+        line = (
+            '{"status":"returned","token":"feedface",'
+            '"value":"' + self._java_esc(self._INJECTED) + '"}'
+        )
+        data = json.loads(line)
+        assert data["status"] == "returned"
+        assert data["value"] == self._INJECTED
+        r = _classify_output(
+            self._spec(), line, "java", expected_token="feedface",
+        )
+        assert r.verdict == "refuted"
+
+    def test_multiline_return_value_keeps_its_verdict(self):
+        # Loss-direction guard: a LEGITIMATE multi-line toString()
+        # (newlines, tabs, CR) must stay one parseable status line —
+        # an unescaped control char would degrade a truthful refuted
+        # to inconclusive.
+        payload = "line one\nline two\r\n\tindented"
+        line = (
+            '{"status":"returned","token":"feedface",'
+            '"value":"' + self._java_esc(payload) + '"}'
+        )
+        data = json.loads(line)
+        assert data["value"] == payload
+        r = _classify_output(
+            self._spec(), line, "java", expected_token="feedface",
+        )
+        assert r.verdict == "refuted"
+
+    def test_multiline_exception_message_still_confirms(self):
+        # Same loss-direction guard on the exception path's _msg.
+        msg = "boom:\n  at A.parse(A.java:3)"
+        line = (
+            '{"status":"exception","token":"feedface",'
+            '"type":"AssertionError",'
+            '"message":"' + self._java_esc(msg) + '"}'
+        )
+        data = json.loads(line)
+        assert data["message"] == msg
+        r = _classify_output(
+            self._spec(), line, "java", expected_token="feedface",
+        )
+        assert r.verdict == "confirmed"
+
+    def test_duplicate_key_line_never_confirms(self):
+        # Pre-fix repro: the raw-concatenation harness emitted exactly
+        # this line for the payload; json.loads kept the LAST duplicate
+        # and _classify_json_output minted verdict="confirmed" with
+        # "exception type matches prediction" — token authentication
+        # passed because the injection rode inside the authenticated
+        # epilogue.
+        line = (
+            '{"status":"returned","token":"feedface","value":"'
+            + self._INJECTED + '"}'
+        )
+        r = _classify_output(
+            self._spec(), line, "java", expected_token="feedface",
+        )
+        assert r.verdict == "inconclusive"
+        assert "duplicate" in r.match_detail
+
+    def test_clean_exception_line_still_confirms(self):
+        # Two-direction guard: the duplicate-key gate must not tax a
+        # legitimate epilogue.
+        line = json.dumps({
+            "status": "exception", "token": "feedface",
+            "type": "AssertionError", "message": "boom",
+        })
+        r = _classify_output(
+            self._spec(), line, "java", expected_token="feedface",
+        )
+        assert r.verdict == "confirmed"
+
+    def test_clean_return_line_still_classifies(self):
+        line = json.dumps({
+            "status": "returned", "token": "feedface", "value": "ok",
+        })
+        r = _classify_output(
+            self._spec(), line, "java", expected_token="feedface",
+        )
+        assert r.verdict == "refuted"  # exception predicted, returned
+
+
+class TestLaneValueEncoderClosure:
+    """Every registry lane's RETURN-path epilogue must route the
+    runtime value through a real encoder (or a typed numeric/%p format
+    for C) — never raw interpolation into the verdict JSON. The Java
+    lane regressed exactly this way; the table below is the mechanical
+    oracle for the all-lanes claim, keyed to ``_SUPPORTED_LANGS`` so a
+    new lane cannot land without declaring its encoder here."""
+
+    _TOKEN = "ab" * 16
+
+    @staticmethod
+    def _rows():
+        troot = Path("/t")
+
+        def spec(file, lang, **kw):
+            base = dict(finding_key="f1", file=file, function="check",
+                        language=lang)
+            base.update(kw)
+            return DarkWitnessSpec(**base)
+
+        return {
+            "python": (
+                generate_witness_script(
+                    spec("src/auth.py", "python", module_path="src.auth"),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ['json.dumps({"status": "returned", "token": _tok, '
+                 '"value": repr(_result)})'],
+            ),
+            "c": (
+                generate_c_harness(
+                    spec("a.c", "c",
+                         lang_config={"return_type": "char *"}),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ['\\"value\\":\\"%p\\"'],
+            ),
+            "cpp": (
+                generate_c_harness(
+                    spec("a.cpp", "cpp",
+                         lang_config={"return_type": "int"}),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ['\\"value\\":\\"%d\\"'],
+            ),
+            "go": (
+                generate_go_harness(
+                    spec("pkg/a.go", "go",
+                         lang_config={"return_type": "string"}),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ["json.Marshal(result{", 'Value:  fmt.Sprintf("%v", v)'],
+            ),
+            "javascript": (
+                generate_js_harness(
+                    spec("src/auth.js", "javascript",
+                         lang_config={"require_path": "./src/auth"}),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ["JSON.stringify({", "value: String(result)"],
+            ),
+            "typescript": (
+                generate_ts_harness(
+                    spec("src/auth.ts", "typescript",
+                         lang_config={"require_path": "./src/auth"}),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ["JSON.stringify({", "value: String(result)"],
+            ),
+            "ruby": (
+                generate_ruby_harness(
+                    spec("lib/auth.rb", "ruby"),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ["JSON.generate({ status: 'returned', token: _tok, "
+                 "value: _result.inspect })"],
+            ),
+            "php": (
+                generate_php_harness(
+                    spec("src/auth.php", "php"),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ["json_encode([", "'value' => var_export($result, true)"],
+            ),
+            "rust": (
+                generate_rust_harness(
+                    spec("src/lib.rs", "rust",
+                         lang_config={"return_type": "String"}),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ['\\"value\\":\\"{:?}\\"'],
+            ),
+            "java": (
+                generate_java_harness(
+                    spec("A.java", "java",
+                         lang_config={"class_name": "A",
+                                      "return_type": "String"}),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ['private static String esc(String s)',
+                 'String _val = esc(String.valueOf(result));',
+                 '+ _val + '],
+            ),
+            "lua": (
+                generate_lua_harness(
+                    spec("lib/auth.lua", "lua"),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ["local function json_escape(s)",
+                 'json_encode({status="returned", token=_tok, '
+                 "value=tostring(result)})"],
+            ),
+            "perl": (
+                generate_perl_harness(
+                    spec("lib/Auth.pm", "perl"),
+                    troot, witness_token=TestLaneValueEncoderClosure._TOKEN),
+                ["encode_json({status => 'returned', token => $_tok, "
+                 'value => "$result"})'],
+            ),
+        }
+
+    def test_encoder_table_covers_every_supported_language(self):
+        from core.audit.dark_verify._types import _SUPPORTED_LANGS
+        assert set(self._rows()) == set(_SUPPORTED_LANGS)
+
+    def test_every_lane_emits_through_its_encoder(self):
+        for lang, (src, markers) in self._rows().items():
+            for marker in markers:
+                assert marker in src, (lang, marker)
+
+    def test_no_lane_concatenates_the_raw_value(self):
+        # The Java regression shape: the raw runtime value adjacent to
+        # the value field with no encoder in between. String-typed
+        # C-family formats would be the same class.
+        for lang, (src, _markers) in self._rows().items():
+            assert '+ result + ' not in src, lang
+            assert '\\"value\\":\\"%s\\"' not in src, lang

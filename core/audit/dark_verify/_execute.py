@@ -698,6 +698,28 @@ def _pointer_return(spec: DarkWitnessSpec) -> bool:
     return rt.endswith("*")
 
 
+class _DuplicateKeyError(ValueError):
+    """A witness status line carried a duplicate JSON key.
+
+    The harness epilogues emit each key exactly once, so a duplicate
+    can only come from injected text riding inside the authenticated
+    epilogue (``json.loads`` keeps the LAST duplicate — a smuggled
+    ``"status"``/``"value"`` pair would silently override the real
+    one). Belt behind the per-lane encoders: any lane that regresses
+    to raw interpolation fails here instead of minting a verdict.
+    """
+
+
+def _reject_duplicate_keys(pairs: list) -> dict:
+    """``object_pairs_hook`` that refuses duplicate keys."""
+    seen = set()
+    for key, _ in pairs:
+        if key in seen:
+            raise _DuplicateKeyError(key)
+        seen.add(key)
+    return dict(pairs)
+
+
 def _classify_json_output(
     spec: DarkWitnessSpec,
     stdout: str,
@@ -725,7 +747,17 @@ def _classify_json_output(
         )
 
     try:
-        data = json.loads(stdout)
+        data = json.loads(stdout, object_pairs_hook=_reject_duplicate_keys)
+    except _DuplicateKeyError as dup:
+        return DarkVerifyResult(
+            finding_key=spec.finding_key, verdict="inconclusive",
+            language=language,
+            match_detail=(
+                f"duplicate JSON key {dup} in witness output — the "
+                f"harness epilogue never repeats a key; tampered line "
+                f"not accepted"
+            ),
+        )
     except json.JSONDecodeError:
         return DarkVerifyResult(
             finding_key=spec.finding_key, verdict="inconclusive",
