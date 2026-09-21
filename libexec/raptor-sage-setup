@@ -95,8 +95,12 @@ usage: raptor-sage-setup [install | --uninstall | --status | review] [--reauthor
                  note, and review/status stop flagging them as pending).
                  Exit 0 = nothing pending review, 4 = undecided variant(s).
   --approve      approve the reviewed variants without the interactive prompt
-                 (review only). Approves every live variant, including
-                 previously rejected ones — this is also the un-reject path.
+                 (review only). Approves the pending ("Not Authorized")
+                 variants; previously rejected variants stay rejected — an
+                 approve of a new variant never silently re-authorizes a
+                 denied one. To reverse a rejection, re-authorize the full
+                 payload: raptor-sage-setup install --reauthorize (replaces
+                 the stamp, denied records included).
                  Requires an interactive terminal (stdin must be a TTY):
                  approval cannot be scripted or agent-run.
   --reject       reject the unauthorized live variants non-interactively
@@ -1249,9 +1253,12 @@ review_boot_payload() {
     # the flagless path's [ -t 0 ] prompt gate. Without this, a
     # mid-session prompt-injected `review --approve` (agents run this
     # script with a pipe/devnull stdin) could launder a hostile server
-    # variant into the operator-authorized record — including
-    # reversing a prior rejection. --reject stays non-interactive: it
-    # only narrows what sessions receive and is fully reversible.
+    # variant into the operator-authorized record. (Reversing a prior
+    # rejection is out of approve's reach entirely — merge keeps
+    # denied variants denied; un-rejecting requires the full
+    # `install --reauthorize` re-authorization.) --reject stays
+    # non-interactive: it only narrows what sessions receive and is
+    # reversible via that same explicit re-authorization.
     if [ "$APPROVE" = "1" ] && [ ! -t 0 ]; then
         echo "review --approve requires an interactive terminal (stdin is not a TTY)." >&2
         echo "Approval must come from the operator directly — an agent or script" >&2

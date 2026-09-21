@@ -24,9 +24,19 @@ Modes (driven by ``libexec/raptor-sage-setup``):
   merge    --authorized <stamp> --live <capture>   approved v2 BODY on stdout
   deny     --authorized <stamp> --live <capture>   rejected v2 BODY on stdout
 
-``merge`` authorizes EVERY live variant, including previously rejected
-ones (that is the un-reject path); ``deny`` rejects the live variants
-that are not authorized, leaving authorized records untouched.
+``merge`` authorizes the live variants that are PENDING — the ones the
+compare screen showed as "Not Authorized". Previously rejected
+variants stay rejected: the compare display labels them "Rejected by
+operator — nothing pending" and the approve prompt scopes itself to
+the pending set, so an approve of an unrelated new variant must never
+silently re-authorize a decided-and-denied one (a hostile server could
+otherwise launder a rejected payload back into the stamp by re-serving
+it beside any innocuous variant the operator will approve). Reversing
+a rejection is its own explicit operator act: re-authorize the full
+payload with ``raptor-sage-setup install --reauthorize``, which
+replaces the stamp (denied records included) with the fresh capture.
+``deny`` rejects the live variants that are not authorized, leaving
+authorized records untouched.
 
 Exit codes: 0 = nothing pending operator review (every live surface is
 authorized or operator-rejected), 4 = new unreviewed variant(s)
@@ -425,15 +435,25 @@ def _stamp_parts(guard, auth: dict | None, live: dict):
 
 
 def merge(guard, auth: dict | None, live: dict) -> str:
-    """Approve: union EVERY live variant into the authorized records.
+    """Approve: union the PENDING live variants into the authorized
+    records.
 
     Previously authorized variants are always kept; live variants are
-    appended when unseen — including previously rejected ones (an
-    explicit approve is the un-reject path), which are removed from
-    the denied records. A v1 stamp is upgraded: its single init text
-    becomes the first ``.json`` variant, and its message section is
-    carried through for readability (the guard ignores it once
-    ``.content`` records exist — see module docstring).
+    appended when unseen. Previously REJECTED variants stay rejected —
+    they are neither authorized nor removed from the denied records.
+    The consent surface (compare display + approve prompt) presents
+    rejected-but-live variants as decided ("Rejected by operator —
+    nothing pending") and scopes the question to the variants marked
+    "Not Authorized"; an approve that also un-rejected would let a
+    hostile server launder a denied payload back into the stamp by
+    re-serving it beside any innocuous new variant the operator
+    approves. Un-rejecting is an explicit operator act via
+    ``raptor-sage-setup install --reauthorize`` (full-payload
+    re-authorization; replaces the stamp, denied records included).
+    A v1 stamp is upgraded: its single init text becomes the first
+    ``.json`` variant, and its message section is carried through for
+    readability (the guard ignores it once ``.content`` records
+    exist — see module docstring).
     """
     (auth_init, live_init, denied_init,
      auth_content, live_content, denied_content,
@@ -441,18 +461,17 @@ def merge(guard, auth: dict | None, live: dict) -> str:
 
     init_variants = list(auth_init)
     for v in live_init:
+        if any(v.strip() == d.strip() for d in denied_init):
+            continue  # rejected stays rejected — decided, not pending
         if not any(v.strip() == a.strip() for a in init_variants):
             init_variants.append(v)
-    denied_init = [
-        d for d in denied_init
-        if not any(d.strip() == v.strip() for v in live_init)
-    ]
 
     content_variants = list(auth_content)
     for v in live_content:
+        if any(v == d for d in denied_content):
+            continue  # rejected stays rejected — decided, not pending
         if not any(v == a for a in content_variants):
             content_variants.append(v)
-    denied_content = [d for d in denied_content if d not in live_content]
 
     return _render_body(init_text, msg_text, init_variants,
                         content_variants, denied_init, denied_content)

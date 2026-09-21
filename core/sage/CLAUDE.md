@@ -58,8 +58,13 @@ because they arrived through that verified channel. Concretely:
       recorded as denied; the guard keeps them out of sessions (with
       a calm note instead of the warning) and review/status stop
       flagging them as pending. Recommended because it is the
-      conservative default and fully reversible: a later operator-run
-      `review --approve` un-rejects.
+      conservative default and reversible — though only by an
+      explicit operator act: a later `review --approve` does NOT
+      un-reject (rejected variants stay rejected across unrelated
+      approves); reversing a rejection means re-authorizing the full
+      payload at the operator's terminal with
+      `bin/raptor sage-setup install --reauthorize` (replaces the
+      stamp, denied records included).
     - "Approve": tell the operator to run
       `bin/raptor sage-setup review --approve` AT THEIR OWN TERMINAL
       — the CLI hard-refuses `--approve` on a non-TTY stdin, so you
