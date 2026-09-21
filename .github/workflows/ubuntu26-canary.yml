@@ -1,0 +1,144 @@
+name: Weekly (ubuntu-26.04 canary)
+
+# The ubuntu-latest label migrates to Ubuntu 26.04 between 2026-10-19
+# and 2026-11-19 (actions/runner-images#14748). Every Linux job in this
+# repo rides ubuntu-latest, and the jobs most exposed to what actually
+# changes underneath them are the bare-runner sandbox suites: the
+# runner VM's kernel (6.17-azure -> 7.0-azure), its Landlock ABI level,
+# and the AppArmor unprivileged-userns policy all move with the image,
+# while container jobs only inherit the new kernel.
+#
+# This canary runs the empirical feature probe and the sandbox fast
+# tier on the explicit ubuntu-26.04 label BEFORE the migration flips
+# ubuntu-latest, so a kernel/policy surprise lands as a scheduled-job
+# failure with probe JSON attached instead of a fleet-wide red on
+# migration day. The probe-shape assertion is load-bearing: degraded
+# sandbox lanes SKIP by design (fail-closed refusals), so a pytest-only
+# canary could go green while every kernel-dependent test silently
+# refused — the shape check pins the capabilities the ubuntu-24.04
+# runners provide today.
+#
+# Retire this workflow (or fold it back to ubuntu-latest) once the
+# migration completes and the fleet is green on 26.04.
+
+on:
+  schedule:
+    # 06:30 UTC Saturday — after the weekly corpus job (05:00) and the
+    # sandbox feature matrix (05:30), before the daily nightlies
+    # (07:00/07:15/07:30).
+    - cron: '30 6 * * 6'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: '3.14'
+  VENV_PATH: .venv
+  PYTEST_ADDOPTS: "-o faulthandler_timeout=120"
+  RAPTOR_MAX_TEST_SECONDS: "10"
+
+jobs:
+  sandbox-canary:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Probe kernel features (stock image)
+        # Same stdlib-only empirical probe the feature matrix runs
+        # in-container: Landlock ABI, unshare/clone NEWUSER, mount +
+        # fresh procfs in a userns, seccomp, AppArmor label. Runs
+        # BEFORE any policy adjustment to record what the stock 26.04
+        # image provides — this is the record of what a job that does
+        # NOT flip the sysctl (i.e. most of the fleet) will see.
+        run: |
+          set -o pipefail
+          SXV_LANE=u26-stock python3 core/sandbox/scripts/feature-matrix/bin/probe.py \
+            | tee "$RUNNER_TEMP/probe-stock.json"
+
+      - name: Enable unprivileged user namespaces
+        # Mirrors the sandbox jobs in tests.yml: Ubuntu 24.04 runners
+        # block unprivileged user namespaces via AppArmor by default
+        # and the mount-ns backend needs them (plus newuidmap/newgidmap
+        # from uidmap). If 26.04 renames or removes the sysctl, this
+        # step is the first loud signal.
+        run: |
+          sudo apt-get install -y --no-install-recommends uidmap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Probe kernel features (userns enabled)
+        run: |
+          set -o pipefail
+          SXV_LANE=u26-canary python3 core/sandbox/scripts/feature-matrix/bin/probe.py \
+            | tee "$RUNNER_TEMP/probe.json"
+
+      - name: Assert the ubuntu-24.04 capability baseline holds
+        # The capabilities the sandbox suites rely on from today's
+        # ubuntu-24.04 runners (post-sysctl): Landlock present,
+        # userns creation allowed, tmpfs mount + fresh procfs inside a
+        # userns. A regression here on 26.04 is exactly what this
+        # canary exists to catch early — fail loudly even though the
+        # test tier below would only SKIP its way past it.
+        run: |
+          python3 - "$RUNNER_TEMP/probe.json" <<'PYEOF'
+          import json
+          import sys
+
+          shape = json.load(open(sys.argv[1]))["shape"]
+          expected = {
+              "landlock": "present",
+              "userns": "ok",
+              "mount_in_userns": "ok",
+              "proc_mount_in_userns": "ok",
+          }
+          bad = {k: shape.get(k) for k, want in expected.items()
+                 if shape.get(k) != want}
+          if bad:
+              sys.exit(f"ubuntu-26.04 capability drift vs the u24 "
+                       f"baseline: {bad} (full shape: {shape})")
+          print(f"capability baseline holds: {shape}")
+          PYEOF
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "requirements*.txt"
+
+      - name: Create venv and install deps
+        run: |
+          uv venv $VENV_PATH
+          source $VENV_PATH/bin/activate
+          uv pip install -r requirements-dev.txt
+
+      - name: Run sandbox fast tier
+        # The default (fast) tier over the whole sandbox surface —
+        # pytest.ini deselects slow/integration. Same invocation shape
+        # as the documented local gate in docs/ci-controls.md.
+        run: |
+          source $VENV_PATH/bin/activate
+          python -m pytest core/sandbox
+
+      - name: Upload probe results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ubuntu26-canary-probes
+          path: |
+            ${{ runner.temp }}/probe-stock.json
+            ${{ runner.temp }}/probe.json
+          retention-days: 30
+          if-no-files-found: warn
