@@ -867,6 +867,16 @@
     "count": 34,
     "kind": "literal"
   },
+  "core/audit/source_view.py::_C_FAMILY_SPECS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "closed language-id routing table for the sanitized_view scanner's per-language string-grammar specs (inventory language ids -> _CFamilySpec); infrastructure routing keys, not a learned name vocabulary"
+  },
+  "core/audit/source_view.py::_JS_REGEX_PRECEDING_KEYWORDS": {
+    "count": 14,
+    "kind": "literal",
+    "note": "closed JS/TS grammar taxonomy: the keywords a `/` may directly follow while still opening a regex literal (value position) \u2014 the division-vs-regex lexer heuristic's keyword arm; language keywords, not a learned name vocabulary"
+  },
   "core/audit/spec_inference.py::_ATTR_INVARIANTS": {
     "count": 17,
     "kind": "literal"

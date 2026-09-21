@@ -285,3 +285,311 @@ class TestPreprocessorDeadBlanking:
         v = sanitized_view(src, "x.c")
         assert "dead_decl" not in v
         assert "int live;" in v
+
+
+class TestRawStrings:
+    """Multi-line/raw string grammar: a comment marker or quote inside
+    raw-string DATA must never desync the scanner (the swallow
+    direction — code after the literal blanked or treated as
+    comment), and the raw content itself must blank (absence/presence
+    receipts are not steerable through raw literals)."""
+
+    def test_cpp_raw_string_interior_quote_is_data(self):
+        src = 'helper(c, R"(a " b /* )");\nsystem(c);\n'
+        view = sanitized_view(src, "a.cpp")
+        assert "system(c);" in view
+        assert "/*" not in view
+
+    def test_cpp_raw_string_with_delimiter(self):
+        src = 'log(R"x(quote " and )" inside)x");\nrun(c);\n'
+        view = sanitized_view(src, "a.cpp")
+        assert "run(c);" in view
+        assert "quote" not in view
+
+    def test_cpp_raw_string_prefixed_forms(self):
+        for prefix in ("u8", "u", "U", "L"):
+            src = f'log({prefix}R"(data /* )");\nrun(c);\n'
+            view = sanitized_view(src, "a.cpp")
+            assert "run(c);" in view, prefix
+            assert "data" not in view, prefix
+
+    def test_identifier_ending_in_r_is_not_raw_opener(self):
+        # `FOOR"..."` — the R is the tail of an identifier, so the
+        # quote opens a PLAIN string (escapes honoured).
+        src = 'x = FOOR"plain popen( data";\nrun(c);\n'
+        view = sanitized_view(src, "a.cpp")
+        assert "popen" not in view
+        assert "run(c);" in view
+
+    def test_cpp_raw_string_multiline_content_blanked(self):
+        src = 'const char *s = R"(line one\nsystem( two\n)";\nlive(c);\n'
+        view = sanitized_view(src, "a.cpp")
+        assert "system" not in view
+        assert "live(c);" in view
+        assert view.count("\n") == src.count("\n")
+
+    def test_rust_raw_string_interior_quote_is_data(self):
+        src = 'let q = r#""/*"#;\nCommand::new(cmd);\n'
+        view = sanitized_view(src, "lib.rs")
+        assert "Command::new(cmd);" in view
+        assert "/*" not in view
+
+    def test_rust_raw_string_hash_depths(self):
+        src = 'let q = r##"data "# still /* "##;\nrun(c);\n'
+        view = sanitized_view(src, "lib.rs")
+        assert "run(c);" in view
+        assert "data" not in view
+
+    def test_rust_byte_raw_string(self):
+        src = 'let q = br#"bytes /* "#;\nrun(c);\n'
+        view = sanitized_view(src, "lib.rs")
+        assert "run(c);" in view
+        assert "bytes" not in view
+
+    def test_rust_identifier_ending_in_r_is_not_raw(self):
+        src = 'let x = attr"..."; run(c);\n'
+        view = sanitized_view(src, "lib.rs")
+        assert "run(c);" in view
+
+
+class TestJavaTextBlock:
+    def test_text_block_content_blanked_across_lines(self):
+        src = 'String s = """\nprose /* with system( calls\n""";\nrun(c);\n'
+        view = sanitized_view(src, "A.java")
+        assert "system" not in view
+        assert "run(c);" in view
+
+    def test_empty_string_pair_still_plain(self):
+        # `"" + x` — two plain strings, not a text-block opener... but
+        # `""` followed by `"` IS the opener per JLS; the scanner
+        # treats the triple as a block and must still terminate at the
+        # next triple.
+        src = 'String s = "a" + "b";\nrun(c);\n'
+        view = sanitized_view(src, "A.java")
+        assert "run(c);" in view
+
+
+class TestTemplateInterpolation:
+    def test_template_continuation_comment_marker_is_data(self):
+        src = "const q = `data\n/* more data`;\nexecSync(cmd);\n"
+        view = sanitized_view(src, "a.js")
+        assert "execSync(cmd);" in view
+        assert "more data" not in view
+
+    def test_interpolation_code_stays_visible(self):
+        # `${…}` is executable code — blanking it forged absence
+        # receipts (a sink call hidden inside a template).
+        src = "run(`pre ${sink(x)} post`);\n"
+        view = sanitized_view(src, "a.js")
+        assert "sink(x)" in view
+        assert "pre" not in view
+        assert "post" not in view
+
+    def test_nested_template_in_interpolation(self):
+        src = "run(`a ${f(`inner ${g(y)} text`)} b`);\n"
+        view = sanitized_view(src, "a.ts")
+        assert "g(y)" in view
+        assert "inner" not in view
+
+    def test_escaped_backtick_does_not_close(self):
+        src = "const q = `a \\` still string /* `;\nrun(c);\n"
+        view = sanitized_view(src, "a.js")
+        assert "run(c);" in view
+        assert "still string" not in view
+
+    def test_string_inside_interpolation_blanked(self):
+        src = "run(`x ${f(\"prose popen( here\")} y`);\n"
+        view = sanitized_view(src, "a.js")
+        assert "popen" not in view
+        assert "f(" in view
+
+
+class TestPhp:
+    def test_hash_line_comment_blanked(self):
+        view = sanitized_view("$x = 1; # system( in prose\nrun($c);\n",
+                              "a.php")
+        assert "system" not in view
+        assert "run($c);" in view
+
+    def test_heredoc_body_blanked(self):
+        src = "$x = <<<EOT\nbody /* hidden system( \nEOT;\nsystem($c);\n"
+        view = sanitized_view(src, "a.php")
+        assert "hidden" not in view
+        assert "system($c);" in view
+
+    def test_nowdoc_body_blanked(self):
+        src = "$x = <<<'EOT'\nprose popen( here\nEOT;\nrun($c);\n"
+        view = sanitized_view(src, "a.php")
+        assert "popen" not in view
+        assert "run($c);" in view
+
+    def test_heredoc_terminator_may_be_indented(self):
+        src = "$x = <<<END\n  data\n  END;\nrun($c);\n"
+        view = sanitized_view(src, "a.php")
+        assert "data" not in view
+        assert "run($c);" in view
+
+    def test_shift_left_is_not_heredoc(self):
+        view = sanitized_view("$x = $a << 3; run($c);\n", "a.php")
+        assert "run($c);" in view
+
+
+class TestLua:
+    def test_line_comment_blanked(self):
+        view = sanitized_view("local x = 1 -- os.execute prose\nrun(c)\n",
+                              "a.lua")
+        assert "os.execute" not in view
+        assert "run(c)" in view
+
+    def test_long_comment_blanked_across_lines(self):
+        src = "--[[ comment\nos.execute prose\n]]\nrun(c)\n"
+        view = sanitized_view(src, "a.lua")
+        assert "os.execute" not in view
+        assert "run(c)" in view
+
+    def test_long_string_dashes_are_data(self):
+        # `--` inside a long string is data, not a comment opener —
+        # the old per-line strip cut the rest of the line (swallow).
+        src = "submit([[x -- y]], os.execute)\n"
+        view = sanitized_view(src, "a.lua")
+        assert "os.execute" in view
+        assert "x -- y" not in view
+
+    def test_leveled_long_string(self):
+        src = "local s = [=[ data ]] still ]=]\nrun(c)\n"
+        view = sanitized_view(src, "a.lua")
+        assert "data" not in view
+        assert "run(c)" in view
+
+    def test_integer_division_is_not_a_comment(self):
+        view = sanitized_view("local x = a // b; os.execute(c)\n",
+                              "a.lua")
+        assert "os.execute(c)" in view
+
+    def test_table_index_is_not_long_string(self):
+        view = sanitized_view("local v = t[i][j]; run(c)\n", "a.lua")
+        assert "t[i][j]" in view
+
+
+class TestKeepStrings:
+    """keep_strings=True: comments still blank, string literals stay
+    verbatim (the prefilter's judged view — over-inclusion direction),
+    and preprocessor-dead blanking is OFF (string data spelling
+    `#if 0` must not mint a fake dead region)."""
+
+    def test_strings_kept_comments_blanked(self):
+        src = 'helper(c, "keep /* me"); // gone\nsystem(c);\n'
+        view = sanitized_view(src, "a.c", keep_strings=True)
+        assert '"keep /* me"' in view
+        assert "gone" not in view
+        assert "system(c);" in view
+
+    def test_string_comment_marker_never_opens_comment_state(self):
+        src = 'log("scan /*");\nsystem(c);\n/* real */ done();\n'
+        view = sanitized_view(src, "a.c", keep_strings=True)
+        assert "system(c);" in view
+        assert "done();" in view
+        assert "real" not in view
+
+    def test_raw_string_kept_verbatim(self):
+        src = 'helper(c, R"(a " b /* )");\nsystem(c);\n'
+        view = sanitized_view(src, "a.cpp", keep_strings=True)
+        assert 'R"(a " b /* )"' in view
+        assert "system(c);" in view
+
+    def test_if0_not_judged_in_keep_mode(self):
+        # A kept multi-line string could spell `#if 0` on its own
+        # line; dead-region detection is only sound over the fully
+        # blanked view, so the keep-strings mode never applies it.
+        src = "#if 0\nint dead_decl;\n#endif\n"
+        view = sanitized_view(src, "x.c", keep_strings=True)
+        assert "dead_decl" in view
+
+    def test_python_like_keep_strings(self):
+        src = "x = 'lit # data'  # comment\n"
+        view = sanitized_view(src, "a.py", keep_strings=True)
+        assert "'lit # data'" in view
+        assert "comment" not in view
+
+    def test_lua_keep_strings(self):
+        src = "submit([[x -- y]], os.execute) -- note\n"
+        view = sanitized_view(src, "a.lua", keep_strings=True)
+        assert "[[x -- y]]" in view
+        assert "note" not in view
+
+
+class TestJsRegexLiterals:
+    """JS/TS regex literals are lexed in value position so their
+    interior can never mint comment state: `/\\//` read as
+    division-then-`//` blanked real code after the regex out of BOTH
+    views (the swallow direction). Division keeps working; the
+    ambiguity fallback is scan-as-code (over-inclusion)."""
+
+    def test_escaped_slash_regex_does_not_open_line_comment(self):
+        src = "const re = /\\//; fs.unlinkSync(c);\n"
+        for keep in (False, True):
+            view = sanitized_view(src, "a.js", keep_strings=keep)
+            assert "fs.unlinkSync(c);" in view, keep
+
+    def test_escaped_slash_star_does_not_open_block_comment(self):
+        src = "const re = /\\/*/ ; run(c);\nafter(c);\n"
+        for keep in (False, True):
+            view = sanitized_view(src, "a.js", keep_strings=keep)
+            assert "run(c);" in view, keep
+            assert "after(c);" in view, keep
+
+    def test_regex_content_blanked_in_ref_view_kept_in_kept_view(self):
+        src = "if (/sys.tem/.test(x)) run(x);\n"
+        assert "sys.tem" not in sanitized_view(src, "a.js")
+        assert "run(x);" in sanitized_view(src, "a.js")
+        kept = sanitized_view(src, "a.js", keep_strings=True)
+        assert "/sys.tem/" in kept
+
+    def test_division_not_treated_as_regex(self):
+        view = sanitized_view("a = b / c; run(x);\n", "a.js")
+        assert "run(x);" in view
+        view = sanitized_view("a = b / c / d; run(x);\n", "a.js")
+        assert "run(x);" in view
+
+    def test_line_comment_after_division_still_blanked(self):
+        view = sanitized_view("x = a / b // prose run()\n", "a.js")
+        assert "prose" not in view
+        assert "x = a / b" in view
+
+    def test_char_class_slash_does_not_close(self):
+        view = sanitized_view("const r = /[/]x/; run(c);\n", "a.js")
+        assert "run(c);" in view
+
+    def test_unterminated_candidate_falls_back_to_division(self):
+        view = sanitized_view("const y = a /b;\nrun(c);\n", "a.js")
+        assert "run(c);" in view
+        assert "a /b;" in view
+
+    def test_regex_after_keyword(self):
+        view = sanitized_view("return /x\\//; run(c);\n", "a.js")
+        assert "run(c);" in view
+
+
+class TestPerlSigilHash:
+    def test_dollar_hash_is_not_a_comment_opener(self):
+        view = sanitized_view(
+            "my $n = $#arr; dispatch($c, \\&system);\n",
+            language="perl")
+        assert "dispatch($c, \\&system);" in view
+
+    def test_real_perl_comment_still_blanked(self):
+        view = sanitized_view(
+            "my $n = 1; # prose system(\n", language="perl")
+        assert "system" not in view
+        assert "my $n = 1;" in view
+
+
+class TestCppRawDelimQuote:
+    def test_quote_never_joins_the_delimiter(self):
+        # `R"abc"` is R + an ordinary string literal (d-chars exclude
+        # `"` per the C++ grammar); admitting it false-opened a raw
+        # string that blanked to EOF in the ref view.
+        src = 'x = R"abc" + f(y);\nrun(c);\n'
+        view = sanitized_view(src, "a.cpp")
+        assert "f(y);" in view
+        assert "run(c);" in view
