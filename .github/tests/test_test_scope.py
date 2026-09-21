@@ -853,3 +853,108 @@ class TestOnRealRepo:
         sca_files = result["sca"]["files"]
         assert len(sca_files) > 0
         assert all(is_test_file(f) for f in sca_files)
+
+
+# ---------------------------------------------------------------------------
+# Pytest-lane closure: no orphan test directories
+# ---------------------------------------------------------------------------
+
+# Tracked test files that deliberately run OUTSIDE the repo's CI pytest
+# lanes. Every entry needs a rationale; an entry whose files stop
+# existing goes stale loudly (asserted below) so the table cannot
+# accrete tombstones. Directory entries end with "/".
+LANE_EXEMPT: dict[str, str] = {
+    ".claude/skills/": (
+        "skill-kit suites (crash-analysis, oss-forensics evidence kit) "
+        "ship with their skills and are developer-run beside them; the "
+        "kits bind to skill-local deps (BigQuery clients, rr, gdb) and "
+        "no CI lane installs those. A recorded residue, not a claim of "
+        "coverage."
+    ),
+    ".devcontainer/test_devcontainer.py": (
+        "devcontainer smoke check, exercised when the container is "
+        "built — not a CI pytest suite."
+    ),
+    ".github/scripts/test_scope.py": (
+        "dispatch SCRIPT that happens to be test_-named; its suite is "
+        ".github/tests/test_test_scope.py (ci_lint lane)."
+    ),
+    ".github/scripts/test_impact.py": (
+        "dispatch SCRIPT that happens to be test_-named; its suite is "
+        ".github/tests/test_test_impact.py (ci_lint lane)."
+    ),
+}
+
+
+def _lane_exempt(rel: str) -> bool:
+    return any(
+        rel == e or (e.endswith("/") and rel.startswith(e))
+        for e in LANE_EXEMPT
+    )
+
+
+class TestPytestLaneClosure:
+    """Every git-tracked test file is claimed by a pytest lane.
+
+    The structural oracle for the orphan-directory class: engine/'s 44
+    test files (semgrep ReDoS gate, per-rule coccinelle suites — a
+    63-module tree) ran in NO CI lane — outside SCAN_ROOTS, every tier's test_dirs, and the fast
+    tier's core|packages bound — and rotted silently on every merge,
+    including force_full and nightly; the repo-root entry modules were
+    an earlier member of the same class. Per-member fixes leave the
+    next orphan directory silent; this test derives the universe from
+    the git tree, so a NEW test-bearing directory outside every lane
+    fails CI until a tier claims it (or it earns a documented
+    LANE_EXEMPT row).
+
+    A lane claims a file when the fast tier's own predicate accepts it
+    or a TIERS entry matches it — the exact functions dispatch runs,
+    so the oracle cannot drift from the dispatcher.
+    """
+
+    @staticmethod
+    def _tracked_test_files() -> list[str]:
+        import subprocess
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(Path(__file__).resolve().parents[2]),
+                 "ls-files", "*.py"],
+                capture_output=True, text=True, check=True,
+            )
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pytest.skip("not a git checkout (or git unavailable)")
+        return [
+            rel for rel in out.stdout.splitlines()
+            if is_test_file(Path(rel))
+        ]
+
+    def test_every_tracked_test_file_is_claimed_by_a_lane(self):
+        orphans = [
+            rel for rel in self._tracked_test_files()
+            if not file_in_fast_tier(Path(rel))
+            and not any(
+                file_matches_tier(Path(rel), cfg)
+                for cfg in TIERS.values()
+            )
+            and not _lane_exempt(rel)
+        ]
+        assert not orphans, (
+            "test file(s) claimed by NO pytest lane — they run in no "
+            "CI tier and rot silently; add a tier (test_scope.TIERS), "
+            "widen the fast tier, or add a documented LANE_EXEMPT row: "
+            f"{orphans}"
+        )
+
+    def test_exempt_rows_are_live_and_reasoned(self):
+        tracked = self._tracked_test_files()
+        for entry, why in LANE_EXEMPT.items():
+            assert why.strip(), f"LANE_EXEMPT {entry}: empty rationale"
+            live = any(
+                rel == entry or (entry.endswith("/")
+                                 and rel.startswith(entry))
+                for rel in tracked
+            )
+            assert live, (
+                f"LANE_EXEMPT row {entry!r} matches no tracked test "
+                "file — remove the stale exemption"
+            )
