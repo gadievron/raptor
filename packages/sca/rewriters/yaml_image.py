@@ -111,8 +111,13 @@ def _apply_one_image(
     #   * Bare: ``    image: foo/bar:tag``
     #   * Quoted: ``    image: "foo/bar:tag"``
     #   * After list marker: ``    - image: foo/bar:tag``
+    # Leading indent is HORIZONTAL-only ([^\S\n]): under the
+    # MULTILINE ^ anchor a \s* matched at every line start inside a
+    # blank-line run and backtracked per character — quadratic on
+    # hostile YAML made of newlines (same class as the helm rewriter's
+    # fixed anchor; sibling of the same idiom).
     pattern = re.compile(
-        rf"^(\s*(?:-\s+)?image:\s*[\"']?(?:{image_alternates}):)"
+        rf"^([^\S\n]*(?:-\s+)?image:\s*[\"']?(?:{image_alternates}):)"
         rf"([^\s\"'#]+)"                  # tag (non-greedy, stops at qt/ws/#)
         rf"([\"'\s#]|$)",                  # boundary
         re.MULTILINE,

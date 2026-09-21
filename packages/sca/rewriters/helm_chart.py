@@ -75,22 +75,31 @@ def _apply_one_chart(
     # list (tags:/condition:) now declines with not_found — the
     # visible, refusal-direction trade.
     between = r"(?P<between>(?:(?![^\S\n]*(?:-|\n))[^\n]*\n)*?)"
-    # Shape A: name-then-version
+    # Shape A: name-then-version. Indent groups are HORIZONTAL-only
+    # ([^\S\n]): YAML indent never spans lines, and a \s+ under the
+    # MULTILINE ^ anchor matched at every line start inside a blank
+    # run then backtracked per character — quadratic on n blank
+    # lines (a 64KB hostile Chart.yaml of newlines took ~30s through
+    # rewrite_chart_yaml; the exponential filler-line class was fixed
+    # in `between`, this was the same input class one quantifier
+    # over). Horizontal-only also stops `indent` silently capturing
+    # ACROSS a blank line, which contradicted the hard-stop contract
+    # documented above.
     pat_name_first = re.compile(
-        rf"^(?P<indent>\s+)- name:\s*{locator}\s*(?P<namecomment>#[^\n]*)?\n"
+        rf"^(?P<indent>[^\S\n]+)- name:[^\S\n]*{locator}[^\S\n]*(?P<namecomment>#[^\n]*)?\n"
         rf"{between}"
-        rf"(?P<prefix>(?P=indent)\s+version:\s*[\"']?)"
+        rf"(?P<prefix>(?P=indent)[^\S\n]+version:[^\S\n]*[\"']?)"
         rf"(?P<ver>[^\s\"'#]+)"
-        rf"(?P<suffix>[\"']?\s*(?:#[^\n]*)?\n)",
+        rf"(?P<suffix>[\"']?[^\S\n]*(?:#[^\n]*)?\n)",
         re.MULTILINE,
     )
     # Shape B: version-then-name
     pat_version_first = re.compile(
-        rf"^(?P<indent>\s+)(?P<vprefix>- version:\s*[\"']?)"
+        rf"^(?P<indent>[^\S\n]+)(?P<vprefix>- version:[^\S\n]*[\"']?)"
         rf"(?P<ver>[^\s\"'#]+)"
-        rf"(?P<vsuffix>[\"']?\s*(?:#[^\n]*)?\n)"
+        rf"(?P<vsuffix>[\"']?[^\S\n]*(?:#[^\n]*)?\n)"
         rf"{between}"
-        rf"(?P<nline>(?P=indent)\s+name:\s*{locator}\s*(?:#[^\n]*)?\n)",
+        rf"(?P<nline>(?P=indent)[^\S\n]+name:[^\S\n]*{locator}[^\S\n]*(?:#[^\n]*)?\n)",
         re.MULTILINE,
     )
     # A Chart.yaml can declare the SAME chart several times (aliased

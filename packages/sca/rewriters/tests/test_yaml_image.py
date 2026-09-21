@@ -295,3 +295,27 @@ def test_mixed_old_and_new_occurrences_bumps_the_stragglers(
     text = f.read_text()
     assert text.count("image: postgres:16.4") == 2
     assert "16.1" not in text
+
+
+def test_blank_line_run_is_fast(tmp_path: Path) -> None:
+    """Sibling of the helm rewriter's blank-run quadratic: the
+    MULTILINE ``^\\s*`` indent idiom backtracked per character at
+    every line start inside a blank run. Horizontal-only indent is
+    linear; the image after the run still bumps."""
+    import time
+
+    f = tmp_path / "docker-compose.yml"
+    f.write_text(
+        "services:\n"
+        + "\n" * 65536
+        + "  db:\n"
+        "    image: postgres:16.1\n"
+    )
+    edits = [RewriteEdit(
+        locator="postgres", old_value="16.1", new_value="16.2",
+    )]
+    start = time.monotonic()
+    results = rewrite_yaml_image(f, edits)
+    assert time.monotonic() - start < 5.0
+    assert results[0].applied
+    assert "postgres:16.2" in f.read_text()

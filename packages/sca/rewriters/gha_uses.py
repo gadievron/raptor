@@ -76,8 +76,11 @@ def _apply_one_uses(
     # Allow YAML list marker (``- uses:``) and arbitrary
     # indentation. Three groups: prefix (everything up to + ``@``),
     # the ref value, and the trailing boundary char.
+    # Leading indent is HORIZONTAL-only ([^\S\n]) — the MULTILINE
+    # ^\s* idiom is quadratic on blank-line runs (see the helm
+    # rewriter's fixed anchor; same sibling idiom).
     pattern = re.compile(
-        rf"^(\s*(?:-\s+)?uses:\s*{locator}(?:/[\w./-]+)?@)"
+        rf"^([^\S\n]*(?:-\s+)?uses:\s*{locator}(?:/[\w./-]+)?@)"
         rf"([^\s#]+)"                    # ref (up to whitespace or comment)
         rf"(\s|$|#)",                    # boundary
         re.MULTILINE,
@@ -189,8 +192,9 @@ def _apply_sha_pinned(
     # whitespace, comment containing ``was <tag>``. We MATCH on
     # locator + 40-hex SHA, REWRITE both the SHA and the
     # ``was <tag>`` value.
+    # Horizontal-only indent — same rationale as the match pattern.
     pattern = re.compile(
-        rf"^(\s*(?:-\s+)?uses:\s*{locator}(?:/[\w./-]+)?@)"
+        rf"^([^\S\n]*(?:-\s+)?uses:\s*{locator}(?:/[\w./-]+)?@)"
         rf"([a-f0-9]{{40}})"             # current SHA
         rf"(\s+#\s*was\s+)"               # the "# was " prefix
         rf"([^\s#]+)"                     # current tag in the comment

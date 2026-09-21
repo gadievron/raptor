@@ -320,3 +320,51 @@ def test_nested_list_between_anchors_declines(tmp_path: Path) -> None:
     results = rewrite_chart_yaml(chart, edits)
     assert not results[0].applied
     assert results[0].reason == "not_found"
+
+
+def test_blank_line_run_is_fast(tmp_path: Path) -> None:
+    """Hostile Chart.yaml made of a blank-line RUN: under the
+    MULTILINE ``^`` anchor a ``\\s+`` indent group matched at every
+    line start inside the run and backtracked per character —
+    quadratic (a 64KB file of newlines took ~30s end-to-end while the
+    filler-line exponential class above stayed green). Horizontal-only
+    indent is linear. Both-direction bound: fast AND the dep after
+    the run still bumps."""
+    import time
+
+    chart = tmp_path / "Chart.yaml"
+    chart.write_text(
+        "dependencies:\n"
+        + "\n" * 65536
+        + "  - name: redis\n"
+        "    version: 1.0.0\n"
+    )
+    edits = [RewriteEdit(
+        locator="redis", old_value="1.0.0", new_value="2.0.0",
+    )]
+    start = time.monotonic()
+    results = rewrite_chart_yaml(chart, edits)
+    assert time.monotonic() - start < 5.0
+    assert results[0].applied
+    assert "version: 2.0.0" in chart.read_text()
+
+
+def test_indent_never_captures_across_blank_line(tmp_path: Path) -> None:
+    """The indent group is horizontal-only: a blank line between two
+    deps must hard-stop the window (the ``\\s+`` spelling silently
+    captured across it, contradicting the documented hard-stop
+    contract). The version separated from its name by a blank line
+    declines not_found instead of splicing."""
+    chart = tmp_path / "Chart.yaml"
+    chart.write_text(
+        "dependencies:\n"
+        "  - name: postgresql\n"
+        "\n"
+        "    version: 13.4.4\n"
+    )
+    edits = [RewriteEdit(
+        locator="postgresql", old_value="13.4.4", new_value="14.0.0",
+    )]
+    results = rewrite_chart_yaml(chart, edits)
+    assert not results[0].applied
+    assert results[0].reason == "not_found"

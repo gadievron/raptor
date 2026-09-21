@@ -487,3 +487,25 @@ def test_sha_pinned_mixed_first_already_bumped_still_applies(
     text = wf.read_text()
     assert old not in text
     assert text.count(f"@{new}") == 2
+
+
+def test_blank_line_run_is_fast(tmp_path: Path) -> None:
+    """Sibling of the helm rewriter's blank-run quadratic — the
+    ``^\\s*`` indent idiom; horizontal-only indent is linear and the
+    step after the run still bumps."""
+    import time
+
+    wf = tmp_path / "ci.yml"
+    wf.write_text(
+        "jobs:\n"
+        + "\n" * 65536
+        + "      - uses: actions/checkout@v3\n"
+    )
+    edits = [RewriteEdit(
+        locator="actions/checkout", old_value="v3", new_value="v4",
+    )]
+    start = time.monotonic()
+    results = rewrite_gha_uses(wf, edits)
+    assert time.monotonic() - start < 5.0
+    assert results[0].applied
+    assert "actions/checkout@v4" in wf.read_text()
