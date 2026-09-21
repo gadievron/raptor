@@ -46,6 +46,12 @@ Source universes (each opt-in):
    claimed exactly once via ``[p1: 1,4,7-9]``.
 5. ``--require-ref NAME`` — free-form references (e.g. ``HF:hotfixname``)
    that must appear in at least one ``[src: ...]`` token.
+6. ``trackA:<workstream>:<slug>`` source tokens are annotation-grade
+   deferral mirrors (workstream C, B1-B3, A1-A4, D, E, E2, F or G,
+   case-insensitive; slug ``[A-Za-z0-9-]+``). They claim no universe item
+   and need no flag, but the grammar is validated: a malformed spelling is
+   a hard error, so a typo'd mirror cannot pass as a disposition
+   annotation.
 
 Claims are read only from top-level ``- `` rows of the new KNOWN-OPEN file;
 prose and code blocks never claim. ``+`` joins several sources in one token:
@@ -88,6 +94,12 @@ SECTION_RE = re.compile(r"^## §?([A-Z])[.\s]")
 SRC_RE = re.compile(r"\[src:\s*([^\]]+)\]")
 AGG_RE = re.compile(r"\[agg:\s*([A-Za-z0-9_.\-]+):([A-Za-z0-9_-]+):([A-Z0-9,]+)\]")
 P1_RE = re.compile(r"\[p1:\s*([\d,\s-]+)\]")
+# Track A structural-program workstreams — the trackA:<ws>:<slug>
+# annotation vocabulary's closed workstream set.
+_TRACKA_WORKSTREAMS = frozenset({
+    "C", "B1", "B2", "B3", "A1", "A2", "A3", "A4",
+    "D", "E", "E2", "F", "G",
+})
 
 
 class Universe:
@@ -197,6 +209,14 @@ def parse_src_part(uni: Universe, claims: Claims, lineno: int, part: str) -> Non
         if key not in uni.notes_rows:
             claims.errors.append(f"L{lineno}: unknown NOTES row {series}:{num}")
         claims.notes[key].append(lineno)
+        return
+    if head == "trackA":
+        # Annotation-grade deferral mirror: claims no universe item,
+        # but the grammar is validated so a typo cannot masquerade as
+        # a mirror (workstream case-insensitive, slug hyphen-safe).
+        m = re.match(r"([A-Za-z0-9]+):([A-Za-z0-9-]+)$", body)
+        if not m or m.group(1).upper() not in _TRACKA_WORKSTREAMS:
+            claims.errors.append(f"L{lineno}: bad trackA src '{part}'")
         return
     if head in uni.prior_tags:
         row = body.strip()
@@ -411,8 +431,12 @@ def main(argv: list[str] | None = None) -> int:
         load_notes(uni, series, Path(path), notes_pattern)
     uni.p1_count = args.p1_count
     uni.require_refs = set(args.require_ref)
-    if "NOTES" in (uni.findings_tags | uni.prior_tags):
-        raise SystemExit("error: tag 'NOTES' is reserved for --notes claims")
+    reserved = {"NOTES", "trackA"} & (uni.findings_tags | uni.prior_tags)
+    if reserved:
+        raise SystemExit(
+            "error: tag(s) reserved for built-in claim grammars: "
+            + ", ".join(sorted(reserved))
+        )
 
     known_open = Path(args.known_open)
     if known_open.exists():

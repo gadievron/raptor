@@ -349,3 +349,24 @@ def test_zero_contribution_notes_warns(tmp_path):
     res = _run(paths)
     assert res.returncode == 0, res.stdout + res.stderr
     assert "warning: NOTES seriesx: contributed ZERO deferral rows" in res.stdout
+
+
+def test_tracka_annotation_rows_validate(tmp_path):
+    # trackA:<ws>:<slug> tokens are annotation-grade mirrors: valid
+    # spellings (workstream case-insensitive) claim nothing and pass;
+    # a malformed workstream is a hard error, never silently unparsed.
+    paths = _write_fixture(tmp_path)
+    paths["ko"].write_text(
+        CLEAN_KO
+        + "- [src: trackA:E:defer-1] mirrored residual — OPEN — lane x.\n"
+        + "- [src: trackA:b2:defer-tally] lower-case workstream — OPEN.\n"
+    )
+    res = _run(paths)
+    assert res.returncode == 0, res.stdout + res.stderr
+
+    paths["ko"].write_text(
+        CLEAN_KO + "- [src: trackA:Z9:defer-1] phantom workstream.\n"
+    )
+    res = _run(paths)
+    assert res.returncode == 1
+    assert "bad trackA src 'trackA:Z9:defer-1'" in res.stdout
