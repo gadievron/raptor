@@ -427,6 +427,24 @@ def joern_cleanup() -> None:
         pid = state.get("pid")
         if pid and not _pid_alive(pid):
             logger.info("joern lifecycle: cleanup — PID %d is dead", pid)
+            # A dead leader can leave the JVM MEMBER orphaned (TERM
+            # landed mid-stop: the leader/forwarder exited, the JVM
+            # wedged in its shutdown hook). Dropping the state file
+            # here used to discard the boot-time member anchor — the
+            # only identity that could still reap that JVM. Attempt
+            # the anchored reap first; it refuses safely on identity
+            # mismatch or an absent anchor (old state files), which
+            # keeps the pre-anchor behaviour.
+            if _kill_recorded_member(state):
+                logger.info(
+                    "joern lifecycle: cleanup reaped the orphaned JVM "
+                    "member before dropping state",
+                )
+            else:
+                logger.info(
+                    "joern lifecycle: cleanup — no verified member to "
+                    "reap (dead, absent anchor, or identity mismatch)",
+                )
             _remove_state(fd)
 
 

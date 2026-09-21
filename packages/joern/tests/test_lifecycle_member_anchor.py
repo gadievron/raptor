@@ -182,6 +182,69 @@ class TestDeadLeaderMemberKill:
             assert lifecycle._kill_server(state) is False
 
 
+class TestCleanupMemberReap:
+    """``joern_cleanup`` (crash-handler / idle-cleanup path) attempts
+    the anchored member reap BEFORE dropping dead-leader state — the
+    state file is the last carrier of the anchor that can still reap
+    the orphaned JVM."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp_state(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(lifecycle, "_STATE_DIR", tmp_path)
+        monkeypatch.setattr(lifecycle, "_STATE_FILE",
+                            tmp_path / "joern-server.json")
+        monkeypatch.setattr(lifecycle, "_LOCK_FILE",
+                            tmp_path / "joern-server.lock")
+
+    @staticmethod
+    def _write_state(state: dict) -> None:
+        import json
+        lifecycle._STATE_FILE.write_text(json.dumps(state))
+
+    def test_dead_leader_live_member_is_reaped(self):
+        member = _spawn_member()
+        try:
+            self._write_state(_anchored_state(member))
+            lifecycle.joern_cleanup()
+            member.wait(timeout=10)
+            assert member.returncode == -signal.SIGTERM
+            assert not lifecycle._STATE_FILE.exists()
+        finally:
+            _reap(member)
+
+    def test_dead_leader_absent_anchor_unchanged(self):
+        # Old state file: no anchor — state is dropped without any
+        # signal attempt, exactly the pre-anchor behaviour.
+        self._write_state({"pid": _INERT_DEAD_PID, "comm": "java"})
+        lifecycle.joern_cleanup()
+        assert not lifecycle._STATE_FILE.exists()
+
+    def test_dead_leader_mismatched_anchor_refuses_and_drops_state(self):
+        # Recycled member pid: identity gate refuses the kill, the
+        # stale state is still removed.
+        member = _spawn_member()
+        try:
+            state = _anchored_state(member)
+            state["member_starttime"] = state["member_starttime"] + 1
+            self._write_state(state)
+            lifecycle.joern_cleanup()
+            assert member.poll() is None
+            assert not lifecycle._STATE_FILE.exists()
+        finally:
+            _reap(member)
+
+    def test_live_leader_untouched(self):
+        member = _spawn_member()
+        try:
+            state = _anchored_state(member, pid=os.getpid())
+            self._write_state(state)
+            lifecycle.joern_cleanup()
+            assert member.poll() is None
+            assert lifecycle._STATE_FILE.exists()
+        finally:
+            _reap(member)
+
+
 class TestBootSideDerivation:
     def _leader_with_stub(self, tmp_path, count: int = 1):
         """A group leader holding *count* java-comm members.
