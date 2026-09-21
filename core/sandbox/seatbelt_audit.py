@@ -183,6 +183,22 @@ _LINEAGE_POLL_INTERVAL_S = 0.2
 _PENDING_BUFFER_CAP = 512
 _FOREIGN_CACHE_CAP = 4096
 
+# Admission cap for parse_ambiguous records. Ambiguous records are
+# in-scope-SUSPECT by contract (admitted + flagged, never
+# attributed-or-dropped) and any same-host sandboxed process can mint
+# the ambiguous line shape at will — so they are EXEMPT from the
+# shared audit budget (a flood must not displace later REAL denials
+# out of the JSONL) and bounded by this cap instead. Trade-off, both
+# directions: lower and a legitimately pathological process name that
+# flags many real denials ambiguous stops landing full records in the
+# JSONL early (the total count and the in-band cap marker keep the
+# flood visible; condemn-direction evidence is counted, not lost);
+# higher and a hostile local process gets that much more JSONL disk
+# amplification per run. 64 comfortably covers every observed
+# legitimate ambiguity burst while keeping the hostile write-through
+# under one pipe buffer of marker-context.
+_AMBIGUOUS_ADMIT_MAX = 64
+
 # ppid-chain walk bound in the scope filter — defends against a
 # cyclic/corrupt process-table probe ever looping the reader thread.
 _LINEAGE_WALK_MAX = 64
@@ -558,6 +574,13 @@ class LogStreamer:
         # pre-registration ambiguous record is later dropped), and
         # stop() reads it after joining the reader.
         self._ambiguous_records = 0
+        # Ambiguous-record admission accounting (_AMBIGUOUS_ADMIT_MAX):
+        # admitted/dropped counts and the one-shot in-band cap marker
+        # flag. Mutated under _append_lock alongside the appends they
+        # describe; read by stop() after the reader joins.
+        self._ambiguous_admitted = 0
+        self._ambiguous_dropped = 0
+        self._ambiguous_cap_marker_emitted = False
 
     def register_target_pid(self, pid: int) -> None:
         """Mark ``pid`` — and its process group and session, when
@@ -680,9 +703,12 @@ class LogStreamer:
         scoping them on the lazy arm's candidate PID would let a
         process name embedding a foreign "(pid) verdict token" shape
         route its own records into the silent foreign-drop path —
-        evading the nonce stamp, the budget, the JSONL append AND the
-        credential-path escalation. They are admitted (flagged, both
-        parses preserved) rather than attributed-or-dropped.
+        evading the nonce stamp, the admission accounting, the JSONL
+        append AND the credential-path escalation. They are admitted
+        (flagged, both parses preserved) rather than
+        attributed-or-dropped; admission is budget-exempt and bounded
+        by its own cap (_AMBIGUOUS_ADMIT_MAX) so the mintable shape
+        buys neither budget displacement nor unbounded disk.
         """
         if record.get("parse_ambiguous"):
             return True
@@ -1169,6 +1195,45 @@ class LogStreamer:
             self._maybe_escalate_credential_path(record)
 
             with self._append_lock:
+                if record.get("parse_ambiguous"):
+                    # Budget EXEMPTION plus a dedicated admission cap
+                    # (_AMBIGUOUS_ADMIT_MAX — rationale at the
+                    # constant). Ambiguous records are admitted as
+                    # in-scope-SUSPECT evidence, and any same-host
+                    # sandboxed process can mint the shape at will:
+                    # letting them ride the shared budget handed a
+                    # hostile local process displacement power over
+                    # later REAL denials (its flood consumed the
+                    # run's budget; genuine deny records then hit the
+                    # cap and dropped). Exempting them keeps the full
+                    # budget for real records; the cap keeps the
+                    # flood's disk amplification bounded. The
+                    # credential-path escalation above still ran for
+                    # every record (dedup-bounded, condemn-direction),
+                    # and every record is counted on the summary
+                    # whether appended or capped.
+                    if self._ambiguous_admitted < _AMBIGUOUS_ADMIT_MAX:
+                        self._ambiguous_admitted += 1
+                        self._append_record_locked(record)
+                    else:
+                        self._ambiguous_dropped += 1
+                        if not self._ambiguous_cap_marker_emitted:
+                            self._ambiguous_cap_marker_emitted = True
+                            self._append_record_locked({
+                                "ts": _now_iso(),
+                                "type": "parse_ambiguous_cap_exceeded",
+                                "audit": True,
+                                "cap": _AMBIGUOUS_ADMIT_MAX,
+                                "note": (
+                                    "parse-ambiguous admission cap "
+                                    f"({_AMBIGUOUS_ADMIT_MAX}) "
+                                    "reached; further flagged records "
+                                    "are counted on the summary "
+                                    "(parse_ambiguous_records / "
+                                    "parse_ambiguous_records_dropped) "
+                                    "but not appended."),
+                            })
+                    return
                 decision, marker = self._budget.evaluate(
                     record["syscall"], record["target_pid"],
                 )
@@ -1352,6 +1417,12 @@ class LogStreamer:
                 if self._ambiguous_records:
                     summary["parse_ambiguous_records"] = (
                         self._ambiguous_records)
+                    # Cap accounting (_AMBIGUOUS_ADMIT_MAX): dropped
+                    # records stay visible as a count even though
+                    # their bodies were not appended.
+                    if self._ambiguous_dropped:
+                        summary["parse_ambiguous_records_dropped"] = (
+                            self._ambiguous_dropped)
                 # Stamp nonce on the summary so an observe-mode
                 # parser attributes it to this run and rejects one
                 # spoofed by a target binary writing a fake summary

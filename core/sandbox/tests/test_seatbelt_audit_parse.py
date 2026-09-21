@@ -808,3 +808,99 @@ def test_ambiguous_record_appended_and_counted(tmp_path, monkeypatch):
     assert streamer._ambiguous_records == 1
     # Credential escalation fired on the alternate parse's path.
     assert any(".ssh/id_rsa" in path for path, _ in announced)
+
+
+def _read_jsonl(tmp_path) -> list[dict]:
+    jsonl = evidence_mod.resolve_read_path(
+        tmp_path, seatbelt_audit.DENIALS_FILE)
+    return [json.loads(x) for x in
+            jsonl.read_text().splitlines() if x.strip()]
+
+
+def test_ambiguous_flood_does_not_displace_real_denials(
+        tmp_path, monkeypatch):
+    """Budget EXEMPTION for parse_ambiguous records: any same-host
+    sandboxed process can mint the ambiguous line shape at will, so
+    letting flagged records ride the shared audit budget handed it
+    displacement power — a flood consumed the run's budget and later
+    REAL denial records were dropped. The flood must not cost the
+    real records anything."""
+    _no_pgid(monkeypatch)
+    from core.sandbox import audit_budget
+    budget = audit_budget.AuditBudget(
+        global_cap=8,
+        pid_cap=1000,
+        category_caps={"file-write": 100},
+        refill_rates={"file-write": 0.0},
+        sampling_rates={},
+    )
+    streamer = seatbelt_audit.LogStreamer(tmp_path, budget=budget)
+    streamer.register_target_pid(4242)
+    # Flood well past the global budget cap with mintable ambiguous
+    # records...
+    for _ in range(20):
+        rec = seatbelt_audit.parse_log_entry(
+            _kext_entry(msg=_SPOOF_NAME_MSG))
+        streamer._filter_and_append(rec)
+    # ...then deliver a genuine deny. It must still land.
+    real = seatbelt_audit.parse_log_entry(_kext_entry(
+        msg="Sandbox: sh(4242) deny file-write-data /tmp/real-denial"))
+    streamer._filter_and_append(real)
+    lines = _read_jsonl(tmp_path)
+    assert any(r.get("path") == "/tmp/real-denial" for r in lines), (
+        "ambiguous flood displaced a real denial out of the JSONL")
+    assert not any(r.get("type") == "global_budget_exceeded"
+                   for r in lines), (
+        "ambiguous records consumed the shared budget")
+
+
+def test_ambiguous_admission_cap_bounds_flood(tmp_path, monkeypatch):
+    """The dedicated cap (_AMBIGUOUS_ADMIT_MAX) bounds the flood's
+    disk amplification: past the cap, flagged records stop being
+    appended but stay counted — one in-band marker announces the
+    suppression and the summary carries total and dropped counts."""
+    _no_pgid(monkeypatch)
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    streamer.register_target_pid(4242)
+    cap = seatbelt_audit._AMBIGUOUS_ADMIT_MAX
+    total = cap + 10
+    for _ in range(total):
+        rec = seatbelt_audit.parse_log_entry(
+            _kext_entry(msg=_SPOOF_NAME_MSG))
+        streamer._filter_and_append(rec)
+    streamer.stop()
+    lines = _read_jsonl(tmp_path)
+    flagged = [r for r in lines if r.get("parse_ambiguous")]
+    assert len(flagged) == cap
+    markers = [r for r in lines
+               if r.get("type") == "parse_ambiguous_cap_exceeded"]
+    assert len(markers) == 1, "cap suppression must be marked exactly once"
+    assert markers[0]["cap"] == cap
+    summary = next(r for r in lines if r.get("type") == "audit_summary")
+    assert summary["parse_ambiguous_records"] == total
+    assert summary["parse_ambiguous_records_dropped"] == 10
+
+
+def test_ambiguous_below_cap_all_admitted_no_marker(
+        tmp_path, monkeypatch):
+    """Two-direction cap regression: below the cap every flagged
+    record is appended, no suppression marker appears, and the
+    summary carries no dropped count — a legitimate ambiguity burst
+    loses nothing."""
+    _no_pgid(monkeypatch)
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    streamer.register_target_pid(4242)
+    below = seatbelt_audit._AMBIGUOUS_ADMIT_MAX - 1
+    for _ in range(below):
+        rec = seatbelt_audit.parse_log_entry(
+            _kext_entry(msg=_SPOOF_NAME_MSG))
+        streamer._filter_and_append(rec)
+    streamer.stop()
+    lines = _read_jsonl(tmp_path)
+    flagged = [r for r in lines if r.get("parse_ambiguous")]
+    assert len(flagged) == below
+    assert not any(r.get("type") == "parse_ambiguous_cap_exceeded"
+                   for r in lines)
+    summary = next(r for r in lines if r.get("type") == "audit_summary")
+    assert summary["parse_ambiguous_records"] == below
+    assert "parse_ambiguous_records_dropped" not in summary
