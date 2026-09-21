@@ -302,6 +302,84 @@ def test_php_heredoc_nowdoc_html_blanked():
     assert out.count("\n") == src.count("\n")
 
 
+# ---------------------------------------------------------------------------
+# Edges mode: surviving bytes must form a BALANCED delimiter pair.
+# A prefixed literal (``b"x"``) keeps the span's raw first byte (the
+# prefix) instead of the opening quote unless the edge computation is
+# delimiter-aware; the surviving lone closing quote then pairs with a
+# LATER literal's opener in every downstream naive string-skip and
+# swallows real code — ranged ``lexical_dead`` / fabricated module
+# aborts over live functions (the false-suppression direction).
+# ---------------------------------------------------------------------------
+
+
+def _assert_delimiters_balanced(view: str) -> None:
+    for q in ('"', "'", "`"):
+        assert view.count(q) % 2 == 0, (
+            f"unbalanced {q!r} in blanked view: {view!r}"
+        )
+    for op, cl in (("{", "}"), ("[", "]"), ("(", ")")):
+        assert view.count(op) == view.count(cl), (
+            f"unbalanced {op}{cl} in blanked view: {view!r}"
+        )
+
+
+@pytest.mark.parametrize(("language", "src"), [
+    # Rust prefixed / raw / byte literals — span starts at the prefix.
+    ("rust", 'let a = b"x";'),
+    ("rust", 'let a = r"y";'),
+    ("rust", "let a = b'z';"),
+    ("rust", 'let a = br"w";'),
+    ("rust", 'let a = r#"if false { raw"#;'),
+    ("rust", "let a = b'\"';"),
+    # PHP prefixed binary strings (both quote kinds, both cases).
+    ("php", "<?php\n$a = b'x';\n"),
+    ("php", '<?php\n$a = B"x";\n'),
+    # Ruby: prefix-delimited symbols, char literals, %-arrays (brace
+    # AND bracket delimited — the closer is a BRACKET, so a surviving
+    # edge would desync brace counting, not quote skipping).
+    ("ruby", 'x = :"sym"'),
+    ("ruby", 'x = ?"'),
+    ("ruby", "x = %w{a b}"),
+    ("ruby", "x = %i[a b]"),
+    ("ruby", "x = %q(a)"),
+    # JS family: regex with flags (last byte is a flag char, and the
+    # pattern carries a quote), tagged templates.
+    ("javascript", 'let r = /a"b/gi;'),
+    ("javascript", 'let t = tag`a ${"x"} b`;'),
+    ("typescript", 'let r = /a"b/gi;'),
+    ("tsx", 'let r = /a"b/gi;'),
+])
+def test_edges_mode_survivors_balance(language, src):
+    _requires(language)
+    out = blank_noncode(language, src)
+    assert out is not None
+    assert len(out) == len(src)  # ASCII fixtures: byte-stable
+    _assert_delimiters_balanced(out)
+    # Literal content never survives.
+    for leaked in ("if false", "raw", "sym"):
+        if leaked in src:
+            assert leaked not in out
+
+
+@pytest.mark.parametrize(("language", "src", "expected"), [
+    # The opening quote survives IN PLACE of the prefix — the token
+    # stays in value position and the pair balances.
+    ("rust", 'let a = b"x";', 'let a =  " ";'),
+    ("rust", "let a = b'z';", "let a =  ' ';"),
+    ("php", "<?php $a = b'x';", "<?php $a =  ' ';"),
+    ("ruby", 'x = :"sym"', 'x =  "   "'),
+    # No balanced pair exists → the whole span blanks (never a lone
+    # delimiter).
+    ("ruby", 'x = ?"', "x =   "),
+    ("ruby", "x = %w{a b}", "x =        "),
+])
+def test_prefixed_literal_keeps_matching_opening_delimiter(
+        language, src, expected):
+    _requires(language)
+    assert blank_noncode(language, src) == expected
+
+
 def test_non_ascii_content_preserves_line_structure():
     _requires("javascript")
     src = 'let s = "héllo — ünïcode";\nif (false) { dead(); }\n'

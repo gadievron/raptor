@@ -44,10 +44,20 @@ preserved so line counts never shift. Two modes per node type:
 
 * ``all`` — the whole span becomes spaces (comments, heredoc bodies,
   HTML text: nothing in them is evidence).
-* ``edges`` — the first and last byte survive, the interior becomes
-  spaces (quoted strings / regexes / templates: the delimiters keep
-  the token in value position for downstream scanners — e.g. Ruby's
-  ``raise "boom"`` must still read as raise-with-argument).
+* ``edges`` — a BALANCED delimiter pair survives, everything else
+  becomes spaces (quoted strings / regexes / templates: the
+  delimiters keep the token in value position for downstream
+  scanners — e.g. Ruby's ``raise "boom"`` must still read as
+  raise-with-argument). The pair is the span's first and last byte
+  when they are equal; for prefixed literals (Rust/PHP ``b"…"`` /
+  ``r"…"`` / ``b'…'``) it is the closing quote plus the matching
+  opening quote scanned past the prefix — the prefix itself is
+  blanked. A span with no balanced pair (``?"`` char literals,
+  ``%w{…}`` arrays, ``/re/flags`` regexes) blanks entirely: keeping
+  the raw first/last bytes there leaves a lone unpaired quote or
+  bracket that desynchronises every downstream string/brace skip —
+  live code after the desync point reads as string interior, the
+  false-suppression vector this module exists to kill.
 
 A blanked node's children are never descended into: template / string
 interpolation code is blanked with its literal. Interpolations hold
@@ -282,13 +292,40 @@ def _blank_noncode_uncached(language: str, content: str) -> str | None:
     return data.decode("utf-8", errors="replace")
 
 
+# Quote delimiters an edges-mode span may keep when asymmetric: the
+# closing byte identifies the opening byte to scan for. Bracket-family
+# closers (``%w{…}`` / ``%w[…]``) are deliberately NOT included — their
+# opener differs from the closer, so no surviving pair can balance for
+# a naive scanner; those spans blank entirely.
+_EDGE_QUOTES = frozenset(b"\"'`")
+
+
 def _blank_span(data: bytearray, start: int, end: int, mode: str) -> None:
-    if end <= start:
-        return
-    lo, hi = start, end
+    keep_lo = keep_hi = -1
     if mode == _BLANK_EDGES and end - start >= 2:
-        lo, hi = start + 1, end - 1
-    for i in range(lo, hi):
+        close = data[end - 1]
+        if data[start] == close:
+            # Symmetric token (plain string / template / regex): the
+            # raw first/last bytes are already a balanced pair.
+            keep_lo = start
+        elif close in _EDGE_QUOTES:
+            # Prefixed literal (``b"x"`` / ``r"y"`` / ``b'z'``): the
+            # span starts at the prefix, so keeping the raw first byte
+            # leaves the CLOSING quote unpaired — downstream quote
+            # skips then pair it with a later literal's opener and
+            # swallow real code. Keep the matching opening quote
+            # instead (first occurrence of the closing byte; only
+            # prefix bytes precede it in any real token) and blank
+            # the prefix. No occurrence before end-1 (``?"`` char
+            # literals) → no balanced pair → blank the whole span.
+            pos = data.find(close, start, end - 1)
+            if pos != -1:
+                keep_lo = pos
+        if keep_lo != -1:
+            keep_hi = end - 1
+    for i in range(start, end):
+        if i == keep_lo or i == keep_hi:
+            continue
         if data[i] not in (0x0A, 0x0D):
             data[i] = 0x20
 

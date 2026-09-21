@@ -1115,3 +1115,36 @@ def test_rust_compile_error_in_bracket_macro_token_tree_no_fabricated_abort():
         "pub fn live() {}\n"
     )
     assert detect_module_load_abort("rust", src) is None
+
+
+def test_php_prefixed_literals_do_not_fabricate_abort():
+    # ``b'…'`` spans start at the prefix byte: an edges blanking that
+    # keeps the raw first byte leaves the closing quote unpaired, the
+    # depth walker's string skip swallows ``function f() {``'s brace,
+    # and the die() INSIDE the function reads as a depth-0
+    # statement-initial abort — a whole-file dead gate fabricated on
+    # a live file.
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\n"
+        "$a = b'x';\n"
+        "function f() {\n"
+        "    $b = b'y';\n"
+        '    die("nope");\n'
+        "}\n"
+    )
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_real_abort_after_prefixed_literal_still_detected():
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\n"
+        "$a = b'x';\n"
+        "die('real');\n"
+        "function f() { work(); }\n"
+    )
+    result = detect_module_load_abort("php", src)
+    assert result is not None
+    assert result.line == 3
+    assert result.summary == "die"

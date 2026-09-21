@@ -1100,3 +1100,64 @@ def test_php_grammar_absent_fails_closed(monkeypatch):
     monkeypatch.setattr(lexical_view, "_VALIDATED", {})
     src = "<?php\nif (false) {\n  dead();\n}\n"
     assert detect_dead_scopes("php", src) == []
+
+
+# ---------------------------------------------------------------------------
+# Prefixed literals must not desynchronise the blanked view's brace
+# matching. The token span of ``b"x"`` / ``r"y"`` / ``b'z'`` starts at
+# the PREFIX byte: an edges blanking that keeps the raw first byte
+# leaves the closing quote unpaired, so `_match_brace`'s string skip
+# pairs it with a LATER literal's opener, swallows real braces, and
+# ranges live functions as lexical_dead — enforce-eligible
+# hard-suppress evidence minted over live code.
+# ---------------------------------------------------------------------------
+
+
+def test_rust_prefixed_literals_do_not_desync_dead_range():
+    _requires_lexical_grammar("rust")
+    src = (
+        "fn setup() {\n"
+        '    if false { let a = b"x"; }\n'
+        "}\n"
+        "\n"
+        "fn live_vuln() {\n"
+        '    let b = b"y";\n'
+        "    dangerous();\n"
+        "}\n"
+    )
+    ranges = detect_dead_scopes("rust", src)
+    # The dead block is the one-line ``if false { … }`` only; the
+    # live fn (lines 5-8) must never fall inside a returned range.
+    assert ranges == [(2, 2)]
+
+
+def test_php_prefixed_literals_do_not_desync_dead_range():
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\n"
+        "if (false) {\n"
+        "    $a = b'x';\n"
+        "}\n"
+        "function live() {\n"
+        "    $b = b'y';\n"
+        "    danger();\n"
+        "}\n"
+    )
+    ranges = detect_dead_scopes("php", src)
+    # Dead range closes at the guard's own brace (line 4); the live
+    # function (lines 5-8) must never fall inside a returned range.
+    assert ranges == [(2, 4)]
+
+
+def test_rust_prefixed_literals_inside_one_block_still_range():
+    # Balance control: prefixed literals wholly inside the dead block
+    # pair with themselves — the range must still be found.
+    _requires_lexical_grammar("rust")
+    src = (
+        "if false {\n"
+        '    let a = b"x";\n'
+        "    let b = b'y';\n"
+        "}\n"
+        "fn live() {}\n"
+    )
+    assert detect_dead_scopes("rust", src) == [(1, 4)]
