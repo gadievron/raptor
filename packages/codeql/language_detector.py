@@ -687,13 +687,19 @@ def main() -> None:
         print(f"\n{'=' * 70}")
         print("DETECTED LANGUAGES (CodeQL-supported only)")
         print(f"{'=' * 70}")
+        from core.security.log_sanitisation import sanitise_for_terminal
         for lang, info in supported.items():
             print(f"\n{lang.upper()}:")
             print(f"  Confidence: {info.confidence:.2f}")
             print(f"  Files: {info.file_count}")
             print(f"  Extensions: {', '.join(info.extensions_found)}")
             if info.build_files_found:
-                print(f"  Build files: {', '.join(info.build_files_found)}")
+                # Build-file names come from the scanned repo (the
+                # same field the --json lane gets ensure_ascii for);
+                # suffix-match admission keeps the full hostile
+                # basename on .csproj/.sln/.gemspec hits.
+                print("  Build files: "
+                      f"{sanitise_for_terminal(', '.join(info.build_files_found), max_len=512)}")
 
 
 if __name__ == "__main__":

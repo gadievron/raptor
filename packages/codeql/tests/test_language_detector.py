@@ -626,3 +626,25 @@ class TestExtractorProbeCliResolution:
             assert det._extractor_available("rust") is False
         finally:
             self._reset_probe_cache()
+
+
+class TestHumanBranchScrub:
+    def test_human_branch_escapes_hostile_build_file_names(
+            self, tmp_path: Path, capsys, monkeypatch):
+        """The --json lane was given ensure_ascii for exactly these
+        scanned-repo names; the human branch prints the same
+        build_files_found field and must escape it too (suffix-match
+        admission keeps the full hostile basename on .csproj hits)."""
+        from packages.codeql.language_detector import main
+        _write(tmp_path, "evil\x1b]0;pwned\x07.csproj", "<Project/>\n")
+        _write(tmp_path, "a.cs", "class A {}\n")
+        _write(tmp_path, "b.cs", "class B {}\n")
+        _write(tmp_path, "c.cs", "class C {}\n")
+        monkeypatch.setattr(
+            "sys.argv",
+            ["language_detector", "--repo", str(tmp_path)])
+        main()
+        out = capsys.readouterr().out
+        assert "Build files:" in out
+        for raw in ("\x1b", "\x07"):
+            assert raw not in out
