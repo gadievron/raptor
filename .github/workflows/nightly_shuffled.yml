@@ -109,7 +109,7 @@ jobs:
           echo "seed=${seed}"
           RAPTOR_RANDOMISE_TESTS="$seed" \
           RAPTOR_MAX_SESSION_SECONDS=1800 \
-            python -m pytest core packages \
+            python -m pytest core packages engine \
             -n auto --dist loadfile \
             -q --durations=25 --tb=short \
             --junitxml="$RUNNER_TEMP/fast-iter-${{ matrix.iteration }}.xml"

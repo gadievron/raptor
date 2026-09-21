@@ -88,6 +88,23 @@ TIERS: dict[str, dict] = {
         "env": "source_intel",
         "env_reason": "needs coccinelle (spatch)",
     },
+    # The whole engine/ root: rule-precision suites (semgrep ReDoS
+    # gate, per-rule coccinelle tests, vocab/api-pack renderers) that
+    # previously ran in NO CI lane — engine/ was outside SCAN_ROOTS,
+    # every tier's test_dirs, and the fast tier's core|packages bound,
+    # so an engine-only PR dispatched zero tiers and a rule regression
+    # merged green forever. Claimed as a directory (like sca's
+    # packages/sca) so future engine/<subsystem>/tests dirs are
+    # covered without a registry edit. The spatch-driven rule tests
+    # run for real on the container path (the CI deps image bakes in
+    # coccinelle — the source_intel precedent); the runner fallback
+    # and toolless hosts skip them via their shutil.which guards.
+    "engine": {
+        "test_dirs": ["engine"],
+        "env": "engine",
+        "env_reason": "needs coccinelle (spatch) + semgrep for the "
+                      "rule-precision gates",
+    },
     "prompt_audit": {
         "test_files": ["core/security/tests/test_prompt_envelope_audit.py"],
         "trigger_files": [

@@ -95,7 +95,7 @@ jobs:
       - name: Run corpus-scale drivers
         run: |
           source $VENV_PATH/bin/activate
-          python -m pytest -m corpus core packages -q --durations=25 \
+          python -m pytest -m corpus core packages engine -q --durations=25 \
             --junitxml="$RUNNER_TEMP/corpus-results.xml"
 
       - name: Refuse an all-skipped measurement run

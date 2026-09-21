@@ -1,9 +1,9 @@
 """Compute the minimal Python file set for a CodeQL PR scan.
 
-Parses every .py file under core/ and packages/ with the stdlib ast
-module, builds a reverse import graph, then walks outward from the
-changed-file set to collect everything that transitively depends on
-a change.  Emits a dynamic CodeQL config with ``paths:`` restricted
+Parses every .py file under the SCAN_ROOTS code roots (core/,
+packages/, engine/) with the stdlib ast module, builds a reverse
+import graph, then walks outward from the changed-file set to collect
+everything that transitively depends on a change.  Emits a dynamic CodeQL config with ``paths:`` restricted
 to that closure.
 
 Falls back to full scan when:
@@ -38,7 +38,13 @@ from collections import defaultdict
 from pathlib import Path
 
 
-SCAN_ROOTS = ("core", "packages")
+# Top-level code roots the import graph covers. engine/ is a code
+# root like the other two — its rule engines carry their own
+# precision/regression suites (semgrep ReDoS gate, per-rule coccinelle
+# tests, vocab renderer) which import through ``engine.`` dotted
+# paths; leaving it out of the graph made every engine-only PR
+# dispatch zero test tiers.
+SCAN_ROOTS = ("core", "packages", "engine")
 
 FULL_SCAN_THRESHOLD = 0.60
 
@@ -188,8 +194,11 @@ def _extract_lazy_export_dicts(tree: ast.Module) -> list[str]:
     return modules
 
 
+# Derived from SCAN_ROOTS so a widened root set widens the
+# string-constant module extraction with it (the core|packages
+# hardcoding would silently drop e.g. mock.patch("engine.x.y") edges).
 _MODULE_PATH_RE = __import__("re").compile(
-    r"^(?:core|packages)\.[a-z_][a-z0-9_.]*[a-z0-9_]$"
+    r"^(?:" + "|".join(SCAN_ROOTS) + r")\.[a-z_][a-z0-9_.]*[a-z0-9_]$"
 )
 
 

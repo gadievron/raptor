@@ -142,7 +142,7 @@ jobs:
           # .github test dirs included for their slow-marked
           # whole-repo import-graph classes (excluded from ci-lint's
           # bounded PR job by the default addopts marker filter).
-          python -m pytest -m slow core packages .github/tests .github/scripts/tests -q --durations=25
+          python -m pytest -m slow core packages engine .github/tests .github/scripts/tests -q --durations=25
 
       - name: Run integration tests (retry once on external outage)
         env:
@@ -150,7 +150,7 @@ jobs:
         run: |
           source $VENV_PATH/bin/activate
           rc=0
-          python -m pytest -m integration core packages --durations=25 \
+          python -m pytest -m integration core packages engine --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-1.xml" \
             || rc=$?
           if [ "$rc" -eq 0 ]; then
@@ -160,7 +160,7 @@ jobs:
           echo "::warning::Integration tests failed (exit $rc) — retrying in 60s"
           echo ""
           sleep 60
-          python -m pytest -m integration core packages --durations=25 \
+          python -m pytest -m integration core packages engine --durations=25 \
             --tb=short --junitxml="$RUNNER_TEMP/integration-attempt-2.xml"
 
       # Backstop for the continue-on-error toolchain install above: the

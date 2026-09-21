@@ -165,6 +165,7 @@ jobs:
       orchestration: ${{ steps.scope.outputs.orchestration }}
       sca: ${{ steps.scope.outputs.sca }}
       source_intel: ${{ steps.scope.outputs.source_intel }}
+      engine: ${{ steps.scope.outputs.engine }}
       # Dynamic batch matrix for the fast tier (JSON for fromJSON()).
       python_matrix: ${{ steps.scope.outputs.python_matrix }}
       # Per-tier affected file lists (space-separated paths).
@@ -178,6 +179,7 @@ jobs:
       orchestration_files: ${{ steps.scope.outputs.orchestration_files }}
       sca_files: ${{ steps.scope.outputs.sca_files }}
       source_intel_files: ${{ steps.scope.outputs.source_intel_files }}
+      engine_files: ${{ steps.scope.outputs.engine_files }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -1103,6 +1105,33 @@ jobs:
       pytest_args: ""
       use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
 
+  # engine tier: the semgrep/coccinelle rule engines' own precision
+  # and regression suites (ReDoS gate, per-rule coccinelle tests,
+  # vocab/api-pack renderers). Same container story as source_intel:
+  # the CI deps image bakes in coccinelle so the spatch-driven rule
+  # tests execute for real on the image path; the runner fallback
+  # (fork PRs) skips them via their shutil.which guards while the
+  # hermetic renderer/pack suites still run.
+  python-unit-tests-engine:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      needs.changes.outputs.engine == 'true'
+    permissions:
+      contents: read
+      packages: read              # pull the private GHCR deps image (image path)
+    uses: ./.github/workflows/_tier.yml
+    with:
+      tier: engine
+      test_path: ${{ needs.changes.outputs.engine_files }}
+      # Serial pytest, deliberately (no -n): the rule tests are
+      # spatch/semgrep subprocess drivers whose wall-clock is the
+      # external tool, not collection — xdist worker startup would buy
+      # little and the source_intel precedent (same spatch profile)
+      # runs serial. Revisit only with a measured win.
+      pytest_args: ""
+      use_container: ${{ needs.pre_check.outputs.pkg_access == 'true' }}
+
   # Prompt-envelope audit: AST-based heuristic over the registered
   # prompt-construction files. The test only needs stdlib + pytest
   # (no project deps), so it skips the venv artefact entirely and
@@ -1311,6 +1340,7 @@ jobs:
       - python-unit-tests-llm-analysis
       - python-unit-tests-cve-diff
       - python-unit-tests-source-intel
+      - python-unit-tests-engine
       - python-unit-tests-fuzzing
       - python-unit-tests-sage
       - python-unit-tests-orchestration
