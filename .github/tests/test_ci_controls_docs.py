@@ -103,11 +103,18 @@ def test_project_samples_collector_total_failure_reddens() -> None:
 
 import re as _re
 
-# The workflow holds a write-capable default token: an explicit
-# contents:write grant (line-start or inline ``permissions: { ... }``)
-# or the write-all umbrella.
-_WRITE_PERMISSION_RE = _re.compile(
-    r"contents:\s*write|permissions:\s*write-all"
+# Write-capable default-token permission scopes (GitHub's
+# ``permissions:`` vocabulary). ANY ``<scope>: write`` grant — or the
+# ``write-all`` umbrella — puts the holding job in the gate's
+# universe. The original contents-only filter let ``packages: write``
+# workflows (push authority over the GHCR images every container-path
+# CI tier then executes — a supply-chain write into every subsequent
+# run) and ``pull-requests: write`` / ``issues: write`` workflows
+# escape the walk entirely.
+_WRITE_SCOPE_RE = _re.compile(
+    r"\b(actions|attestations|checks|contents|deployments|discussions"
+    r"|id-token|issues|packages|pages|pull-requests"
+    r"|repository-projects|security-events|statuses)\s*:\s*write\b"
 )
 # Grants are anchored on the token VALUE, any key name, any nesting
 # level (step/job/workflow ``env:``, ``with: token:``, ...): matching
@@ -116,26 +123,212 @@ _WRITE_PERMISSION_RE = _re.compile(
 _DEFAULT_TOKEN_RE = _re.compile(
     r"\$\{\{\s*(?:secrets\.GITHUB_TOKEN|github\.token)\s*\}\}"
 )
-# ``push --force`` covers release.yml's line-wrapped
-# ``git -c http...extraheader \ push --force`` invocation. Deliberately
-# NOT ``gh issue``: commenting on issues is not a publish operation
-# that needs the write token's contents scope.
-_PUBLISH_RE = _re.compile(r"git push|push --force|gh pr |gh release")
+# Publish/manage verbs PER SCOPE: a step is blessed only when its body
+# performs a publish operation of a scope its job actually holds — a
+# ``gh issue`` mention must not bless a step in a contents:write job
+# (commenting on issues is not a publish operation that needs the
+# contents scope), and vice versa. ``push --force`` covers
+# release.yml's line-wrapped ``git -c http...extraheader \ push
+# --force`` invocation. ``packages/container`` blesses the GHCR
+# package-management API steps (visibility check, version retention)
+# that legitimately carry the packages-scope token; like the heredoc
+# boundary below, a parse step would need that coincidental path text
+# to slip through. Scopes with NO row here (security-events, pages,
+# ...) are default-deny: every grant in a job holding only such
+# scopes is an offender until an adjudicated verb row is added.
+_SCOPE_PUBLISH_VERBS: dict[str, str] = {
+    "contents": r"git push|push --force|gh release",
+    "pull-requests": r"gh pr ",
+    "packages": r"docker login|docker push|packages/container",
+    "issues": r"gh issue ",
+}
+
+
+def _scopes_at(lines: list[str], i: int) -> set[str]:
+    """Write scopes granted by the ``permissions:`` key at ``lines[i]``
+    (inline map, ``write-all``, or the indented block that follows).
+    An explicit block granting nothing returns an empty set — a
+    job-level block REPLACES the workflow default entirely."""
+    ln = lines[i]
+    indent = len(ln) - len(ln.lstrip())
+    rest = ln.split("permissions:", 1)[1].split(" #", 1)[0].strip()
+    scopes: set[str] = set()
+    if rest:
+        if "write-all" in rest:
+            scopes.add("write-all")
+        scopes.update(m.group(1) for m in _WRITE_SCOPE_RE.finditer(rest))
+        return scopes
+    for nxt in lines[i + 1:]:
+        s = nxt.strip()
+        if not s:
+            continue
+        if len(nxt) - len(nxt.lstrip()) <= indent:
+            break
+        if s.startswith("#"):
+            continue
+        m = _WRITE_SCOPE_RE.search(nxt.split(" #", 1)[0])
+        if m:
+            scopes.add(m.group(1))
+        if "write-all" in nxt.split(" #", 1)[0]:
+            scopes.add("write-all")
+    return scopes
+
+
+def _job_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    """[start, end) line ranges of every job under the ``jobs:`` key.
+    Job ids are the mapping keys at the first child indent; anything
+    deeper is job body, a dedent to ``jobs:``'s level ends the block."""
+    ranges: list[tuple[int, int]] = []
+    jobs_indent: int | None = None
+    job_indent: int | None = None
+    open_start: int | None = None
+    for i, ln in enumerate(lines):
+        stripped = ln.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(ln) - len(ln.lstrip())
+        if jobs_indent is None:
+            if _re.match(r"^jobs:\s*(#.*)?$", ln):
+                jobs_indent = indent
+            continue
+        if indent <= jobs_indent:
+            if open_start is not None:
+                ranges.append((open_start, i))
+                open_start = None
+            jobs_indent = None
+            job_indent = None
+            continue
+        if job_indent is None:
+            job_indent = indent
+        if indent == job_indent and _re.match(r"^\s*[\w.-]+:\s*(#.*)?$", ln):
+            if open_start is not None:
+                ranges.append((open_start, i))
+            open_start = i
+    if open_start is not None:
+        ranges.append((open_start, len(lines)))
+    return ranges
+
+
+def _job_write_scopes(lines: list[str]) -> list[tuple[int, int, set[str]]]:
+    """(start, end, effective write scopes) per job.
+
+    Job-level ``permissions:`` blocks REPLACE the workflow-level block
+    (GitHub's model); a job with no block inherits the workflow's.
+    ``permissions:`` is only legal at workflow and job level, so any
+    ``permissions:`` key at a job's body indent is that job's block —
+    deeper spellings (step ``with:`` inputs, run-body text) are not.
+    Workflows with NO permissions block anywhere inherit the repo
+    default, which this repo keeps read-only (declared boundary)."""
+    workflow_scopes: set[str] = set()
+    ranges = _job_ranges(lines)
+    for i, ln in enumerate(lines):
+        if _re.match(r"^permissions:", ln) and not any(
+            r[0] <= i < r[1] for r in ranges
+        ):
+            workflow_scopes = _scopes_at(lines, i)
+            break
+    out: list[tuple[int, int, set[str]]] = []
+    for start, end in ranges:
+        job_key_indent = len(lines[start]) - len(lines[start].lstrip())
+        scopes = workflow_scopes
+        body_indent: int | None = None
+        for i in range(start + 1, end):
+            ln = lines[i]
+            s = ln.strip()
+            if not s or s.startswith("#"):
+                continue
+            indent = len(ln) - len(ln.lstrip())
+            if body_indent is None and indent > job_key_indent:
+                body_indent = indent
+            if (
+                body_indent is not None
+                and indent == body_indent
+                and _re.match(r"^\s*permissions:", ln)
+            ):
+                scopes = _scopes_at(lines, i)
+                break
+        out.append((start, end, scopes))
+    return out
+
+
+def _publish_verbs_re(scopes: set[str]) -> _re.Pattern[str] | None:
+    """Union publish-verb regex for the scopes a job holds (None =
+    no blessed verbs; every grant in the job is then an offender)."""
+    if "write-all" in scopes:
+        parts = sorted(set(_SCOPE_PUBLISH_VERBS.values()))
+    else:
+        parts = sorted(
+            {_SCOPE_PUBLISH_VERBS[s] for s in scopes
+             if s in _SCOPE_PUBLISH_VERBS}
+        )
+    return _re.compile("|".join(parts)) if parts else None
+
+
+def _step_ranges(lines: list[str]) -> list[tuple[int, int]]:
+    """Step segmentation: [start, end) line ranges of every step.
+    Anchored on the ``steps:`` key; list items are the dashes at
+    the FIRST item's exact indent (deeper dashes are run-body
+    content, shallower lines end the block — a block end also
+    closes the last step so it can never swallow the next job's
+    job-level ``env:``)."""
+    steps: list[tuple[int, int]] = []
+    steps_indent: int | None = None
+    item_indent: int | None = None
+    open_start: int | None = None
+    for i, ln in enumerate(lines):
+        stripped = ln.strip()
+        if not stripped:
+            continue
+        indent = len(ln) - len(ln.lstrip())
+        if steps_indent is not None:
+            if indent <= steps_indent:
+                if open_start is not None:
+                    steps.append((open_start, i))
+                    open_start = None
+                steps_indent = None
+                item_indent = None
+            else:
+                if stripped.startswith("- ") and (
+                    item_indent is None or indent == item_indent
+                ):
+                    if item_indent is None:
+                        item_indent = indent
+                    if open_start is not None:
+                        steps.append((open_start, i))
+                    open_start = i
+                continue
+        if _re.match(r"^\s*steps:\s*(#.*)?$", ln):
+            steps_indent = indent
+            item_indent = None
+    if open_start is not None:
+        steps.append((open_start, len(lines)))
+    return steps
 
 
 def _default_token_offenders(workflows_dir: Path) -> tuple[list[str], int]:
-    """(offender descriptions, grants checked) for every workflow in
-    *workflows_dir* that holds a write-capable default token.
+    """(offender descriptions, grants checked) for every JOB in
+    *workflows_dir* whose effective permissions hold a write-capable
+    default token.
 
-    Default-deny: ANY non-comment line carrying the default-token
-    value must lie inside a step whose body performs a publish
-    operation on a non-comment line. Everything else — job-level or
-    workflow-level ``env:`` (which hands the token to EVERY step),
-    grants in steps without a publish command, grants under renamed
-    keys or ``with:`` inputs — is an offender. Step boundaries are
-    anchored on the ``steps:`` key + list-dash indentation, not on
-    first-key names (``name``/``id`` are optional and keys are
-    order-free in GHA).
+    Job-aware: a job's effective permissions are its own
+    ``permissions:`` block when present, else the workflow-level one
+    (GitHub's replace-not-merge model) — so a read-only job beside a
+    write job (codeql.yml's scope jobs vs its upload job) is outside
+    the universe, and a job-level write grant in a read-default
+    workflow is inside it.
+
+    Default-deny within the universe: ANY non-comment line carrying
+    the default-token value must lie inside a step whose body performs
+    a publish operation OF A SCOPE THE JOB HOLDS on a non-comment
+    line. Everything else — job-level or workflow-level ``env:``
+    (which hands the token to EVERY step), grants in steps without a
+    publish command, grants under renamed keys or ``with:`` inputs,
+    verbs of scopes the job does not hold — is an offender. A grant
+    outside every job (workflow-level ``env:``) is an offender
+    whenever ANY job of the workflow is in the universe. Step
+    boundaries are anchored on the ``steps:`` key + list-dash
+    indentation, not on first-key names (``name``/``id`` are optional
+    and keys are order-free in GHA).
     """
     offenders: list[str] = []
     checked = 0
@@ -143,49 +336,14 @@ def _default_token_offenders(workflows_dir: Path) -> tuple[list[str], int]:
     # workflow must not escape the universe.
     for wf in sorted(workflows_dir.glob("*.y*ml")):
         lines = wf.read_text(encoding="utf-8").splitlines()
-        if not any(_WRITE_PERMISSION_RE.search(ln) for ln in lines
-                   if not ln.lstrip().startswith("#")):
+        jobs = _job_write_scopes(lines)
+        if not any(scopes for _, _, scopes in jobs):
             continue
+        steps = _step_ranges(lines)
 
-        # Step segmentation: [start, end) line ranges of every step.
-        # Anchored on the ``steps:`` key; list items are the dashes at
-        # the FIRST item's exact indent (deeper dashes are run-body
-        # content, shallower lines end the block — a block end also
-        # closes the last step so it can never swallow the next job's
-        # job-level ``env:``).
-        steps: list[tuple[int, int]] = []
-        steps_indent: int | None = None
-        item_indent: int | None = None
-        open_start: int | None = None
-        for i, ln in enumerate(lines):
-            stripped = ln.strip()
-            if not stripped:
-                continue
-            indent = len(ln) - len(ln.lstrip())
-            if steps_indent is not None:
-                if indent <= steps_indent:
-                    if open_start is not None:
-                        steps.append((open_start, i))
-                        open_start = None
-                    steps_indent = None
-                    item_indent = None
-                else:
-                    if stripped.startswith("- ") and (
-                        item_indent is None or indent == item_indent
-                    ):
-                        if item_indent is None:
-                            item_indent = indent
-                        if open_start is not None:
-                            steps.append((open_start, i))
-                        open_start = i
-                    continue
-            if _re.match(r"^\s*steps:\s*(#.*)?$", ln):
-                steps_indent = indent
-                item_indent = None
-        if open_start is not None:
-            steps.append((open_start, len(lines)))
-
-        def _step_publishes(rng: tuple[int, int]) -> bool:
+        def _step_publishes(
+            rng: tuple[int, int], verbs: _re.Pattern[str] | None
+        ) -> bool:
             # Comments never bless a step: full-line comments are
             # skipped and trailing ``  # ...`` tails are stripped
             # before the publish match. Declared boundary: publish
@@ -193,8 +351,10 @@ def _default_token_offenders(workflows_dir: Path) -> tuple[list[str], int]:
             # still matches (a token-granted parse step would need
             # that coincidental content to slip through — compound
             # accident, documented rather than parsed).
+            if verbs is None:
+                return False
             return any(
-                _PUBLISH_RE.search(body_ln.split(" #", 1)[0])
+                verbs.search(body_ln.split(" #", 1)[0])
                 for body_ln in lines[rng[0]:rng[1]]
                 if not body_ln.lstrip().startswith("#")
             )
@@ -204,41 +364,62 @@ def _default_token_offenders(workflows_dir: Path) -> tuple[list[str], int]:
                 continue
             if not _DEFAULT_TOKEN_RE.search(ln):
                 continue
+            job = next(
+                (j for j in jobs if j[0] <= i < j[1]), None
+            )
+            if job is not None and not job[2]:
+                continue  # read-only job — outside the universe
             checked += 1
+            if job is None:
+                offenders.append(
+                    f"{wf.name}:{i + 1}: default-token grant outside "
+                    f"any job (workflow scope, reaches the write "
+                    f"job(s)): {ln.strip()}"
+                )
+                continue
             rng = next(
-                (r for r in steps if r[0] <= i < r[1]), None
+                (r for r in steps if r[0] <= i < r[1]
+                 and job[0] <= r[0] < job[1]), None
             )
             if rng is None:
                 offenders.append(
                     f"{wf.name}:{i + 1}: default-token grant outside "
-                    f"any step (job/workflow scope): {ln.strip()}"
+                    f"any step (job scope, write-capable job): "
+                    f"{ln.strip()}"
                 )
-            elif not _step_publishes(rng):
+            elif not _step_publishes(rng, _publish_verbs_re(job[2])):
                 offenders.append(
                     f"{wf.name}:{i + 1}: default-token grant in a "
-                    f"non-publish step: {ln.strip()}"
+                    f"non-publish step of a write-capable job "
+                    f"(scopes: {', '.join(sorted(job[2]))}): {ln.strip()}"
                 )
     return offenders, checked
 
 
 def test_write_token_confined_to_publish_steps() -> None:
-    """In workflows holding a write-capable default token, only
-    publish steps may carry it.
+    """In jobs holding a write-capable default token — ANY
+    ``<scope>: write`` grant, not just contents — only publish steps
+    of the granted scope(s) may carry it.
 
     Permissions are job-wide by GitHub's model, so the confinement IS
     the handoff: a run step that fetches and parses untrusted
     registry/network data with the default token in reach hands a
-    credential that can push branches and open PRs to exactly the
-    code most likely to hit a parsing bug (the sca-self-bump
-    harden/bump phases carried one for rate limits alone).
+    credential that can push branches, open PRs, or push the GHCR
+    images every container-path CI tier executes, to exactly the code
+    most likely to hit a parsing bug (the sca-self-bump harden/bump
+    phases carried one for rate limits alone).
 
     Declared boundaries: reusable-workflow / composite-action
     indirection (``secrets: inherit``, ``uses:`` inputs resolved in
     another file) is not followed — none is used by the write-
     permission workflows today; workflows with NO permissions block
-    inherit the repo default, which this repo keeps read-only; and
-    publish text inside a heredoc or string literal can still bless a
-    step (see _step_publishes).
+    anywhere inherit the repo default, which this repo keeps
+    read-only; publish text inside a heredoc or string literal can
+    still bless a step (see _step_publishes), and so can a
+    ``packages/container`` API path literal in a packages-scope job
+    (same compound-accident class); write scopes with no
+    _SCOPE_PUBLISH_VERBS row are default-deny (no step can be blessed
+    in a job holding only those).
     """
     offenders, checked = _default_token_offenders(
         REPO / ".github/workflows"
@@ -373,6 +554,71 @@ jobs:
         run: |
           python parse_registry.py
 """,
+    # packages:write escaped the contents-only universe entirely — a
+    # token that can push the CI deps image is a supply-chain write
+    # into every subsequent run.
+    "packages_write_parse_grant": """\
+permissions:
+  contents: read
+  packages: write
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: parse untrusted registry data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -s https://registry.example/pkg.json | python3 parse.py
+""",
+    # pull-requests:write likewise.
+    "pull_requests_write_parse_grant": """\
+permissions:
+  pull-requests: write
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: parse untrusted PR manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python parse_manifest.py
+""",
+    # Job-level elevation in a read-default workflow: the write grant
+    # lives on the job, not the workflow — a workflow-granular walk
+    # misses it.
+    "job_level_write_grant": """\
+permissions:
+  contents: read
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: parse untrusted registry data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python parse_registry.py
+""",
+    # A publish verb of a scope the job does NOT hold must not bless
+    # the step (gh issue is issues-scope; the job holds contents).
+    "cross_scope_verb": """\
+permissions:
+  contents: write
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: parse then comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python parse_registry.py
+          gh issue comment 1 --body done
+""",
 }
 
 
@@ -437,4 +683,94 @@ jobs:
     )
     offenders, checked = _default_token_offenders(ro)
     assert checked == 0
+    assert offenders == []
+
+    # Scope-matched publish grants are legitimate: docker login in a
+    # packages:write job, gh issue in an issues:write job.
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "image.yml").write_text(
+        """\
+permissions:
+  contents: read
+  packages: write
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u x --password-stdin
+      - name: check visibility
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "users/o/packages/container/img" --jq .visibility
+""",
+        encoding="utf-8",
+    )
+    offenders, checked = _default_token_offenders(pkg)
+    assert checked == 2
+    assert offenders == []
+
+    iss = tmp_path / "iss"
+    iss.mkdir()
+    (iss / "reaudit.yml").write_text(
+        """\
+permissions:
+  contents: read
+  issues: write
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: open issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create --title x --body y
+""",
+        encoding="utf-8",
+    )
+    offenders, checked = _default_token_offenders(iss)
+    assert checked == 1
+    assert offenders == []
+
+    # Job-aware universe, accepts direction: a read-only job's grant
+    # beside a write job is OUTSIDE the universe (codeql.yml's scope
+    # jobs vs its upload job) — job-level permissions REPLACE the
+    # workflow default.
+    mixed = tmp_path / "mixed"
+    mixed.mkdir()
+    (mixed / "split.yml").write_text(
+        """\
+permissions:
+  contents: write
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: query prior runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/o/r/actions/runs
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push origin main
+""",
+        encoding="utf-8",
+    )
+    offenders, checked = _default_token_offenders(mixed)
+    assert checked == 1  # only the write job's grant is in-universe
     assert offenders == []
