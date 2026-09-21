@@ -746,7 +746,6 @@ def main() -> None:
             # Echo registry round-trip values defensively — the same
             # fields render from imported archives elsewhere, and the
             # print surface should not depend on create's validation.
-            from core.security.log_sanitisation import sanitise_for_terminal
             _pname = sanitise_for_terminal(p.name, max_len=120)
             print(f"Created project '{_pname}' → "
                   f"{sanitise_for_terminal(str(p.output_dir), max_len=256)}")
@@ -814,8 +813,10 @@ def main() -> None:
                     print(f"Project '{name}': no binaries declared.")
                 else:
                     print(f"Project '{name}' binaries ({len(p.binaries)}):")
+                    # Persisted paths arrive via project-import zips
+                    # too — same defang as the list view's fields.
                     for b in p.binaries:
-                        print(f"  {b}")
+                        print(f"  {sanitise_for_terminal(str(b), max_len=256)}")
             elif args.action == "add":
                 if not args.path:
                     print(_red("add requires a <path> argument"))
@@ -1031,9 +1032,6 @@ def main() -> None:
                 # description/target may arrive via a project-import
                 # zip — defang terminal escapes like every other
                 # untrusted-content print surface.
-                from core.security.log_sanitisation import (
-                    sanitise_for_terminal,
-                )
                 desc = sanitise_for_terminal(p.description or "", max_len=60)
                 desc = f"  {desc}" if desc else ""
                 tgt = sanitise_for_terminal(str(p.target or ""), max_len=120)
@@ -1231,7 +1229,11 @@ def main() -> None:
                       f"default; {_n} live session(s) keep their "
                       f"bindings — switch inside a session with "
                       f"/project use)")
-                print(f"Last-activated default: {p.name} ({p.target})")
+                # target/name may arrive via a project-import zip —
+                # the list lane sanitises the same fields (:1039).
+                print(f"Last-activated default: "
+                      f"{sanitise_for_terminal(p.name, max_len=120)} "
+                      f"({sanitise_for_terminal(str(p.target or ''), max_len=256)})")
             print(f"  Output dir: {p.output_dir}")
             # Session-awareness (advisory, never lock-based): project
             # switch is one of exactly two places this line surfaces —
@@ -1448,7 +1450,9 @@ def main() -> None:
                 for candidate in args.runs:
                     target = mgr.adopt_target_for(candidate)
                     if target:
-                        print(f"Target inferred from run metadata: {target}")
+                        # Inferred from run-dir metadata (child-writable).
+                        print(f"Target inferred from run metadata: "
+                              f"{sanitise_for_terminal(str(target), max_len=256)}")
                         break
                 if not target:
                     print("No project by that name, no --target, and no run "
@@ -2261,14 +2265,29 @@ def _print_status(project) -> None:
     runs = project.get_run_dirs(sweep=False)
     if runs:
         print(f"\nRuns: {len(runs)}")
-        name_col = max(max(len(d.name) for d in runs) + 2, 20)
+        # Column width from the ESCAPED names (what actually prints):
+        # escaping can lengthen a hostile name, and a raw-length column
+        # would misalign every row after it.
+        shown_names = {d: sanitise_for_terminal(d.name, max_len=120)
+                       for d in runs}
+        name_col = max(max(len(s) for s in shown_names.values()) + 2, 20)
         for d in runs:
             meta = load_run_metadata(d)
             if not isinstance(meta, dict):
                 meta = None
-            cmd = meta.get("command", "?") if meta else "?"
-            status = meta.get("status", "?") if meta else "?"
-            findings_str = _get_output_summary(d, meta)
+            # command/status/output_summary are child-writable run
+            # metadata restored verbatim: str()-coerce (a non-string
+            # cell would raise TypeError in the :12s format spec and
+            # wedge /project status on one junk marker) and escape
+            # before the terminal.
+            cmd = (sanitise_for_terminal(str(meta.get("command", "?")),
+                                         max_len=40)
+                   if meta else "?")
+            status = (sanitise_for_terminal(str(meta.get("status", "?")),
+                                            max_len=32)
+                      if meta else "?")
+            findings_str = sanitise_for_terminal(
+                str(_get_output_summary(d, meta)), max_len=64)
             if status == "completed":
                 status_str = _green(status)
             elif status == "failed":
@@ -2286,7 +2305,8 @@ def _print_status(project) -> None:
             tag = " ".join(
                 t for t in (format_sha_short(_manifest), format_repro_short(_manifest)) if t
             )
-            line = f"  {d.name:<{name_col}s}  {cmd:12s}  {findings_str:24s}  {status_str}"
+            line = (f"  {shown_names[d]:<{name_col}s}  {cmd:12s}  "
+                    f"{findings_str:24s}  {status_str}")
             print(f"{line}  {tag}" if tag else line)
         # Disk usage — use os.walk(followlinks=False) so we stay inside
         # the run dir even if a stray symlink points outside (or back into
@@ -2344,18 +2364,22 @@ def _print_run_provenance(project, run_query) -> None:
     if len(matches) > 1:
         print(f"Ambiguous '{run_query}' — matches {len(matches)} runs:")
         for d in matches:
-            print(f"  {d.name}")
+            print(f"  {sanitise_for_terminal(d.name, max_len=120)}")
         return
 
     d = matches[0]
     raw_meta = load_run_metadata(d)
     meta = raw_meta if isinstance(raw_meta, dict) else {}
-    print(f"Run: {d.name}")
-    print(f"  Command: {meta.get('command', '?')}")
-    ts = (meta.get("timestamp") or "")[:19]
+    print(f"Run: {sanitise_for_terminal(d.name, max_len=120)}")
+    # command/status are child-writable run metadata — coerce + escape
+    # like the status view's run rows.
+    print(f"  Command: "
+          f"{sanitise_for_terminal(str(meta.get('command', '?')), max_len=40)}")
+    ts = str(meta.get("timestamp") or "")[:19]
     if ts:
-        print(f"  When: {ts}")
-    print(f"  Status: {meta.get('status', '?')}")
+        print(f"  When: {sanitise_for_terminal(ts, max_len=32)}")
+    print(f"  Status: "
+          f"{sanitise_for_terminal(str(meta.get('status', '?')), max_len=32)}")
     block = format_manifest_block(meta.get("manifest"))
     print(block or "  (no provenance manifest)")
 
@@ -3067,7 +3091,11 @@ def _do_merge(project, merge_type, yes) -> None:
         rest, live = split_live_runs(dirs)
         for d in live:
             shown = sanitise_for_terminal(cmd_type, max_len=120)
-            print(f"  {shown}: skipped (still running): {d.name}")
+            # d.name can carry adopted/imported directory names —
+            # same keep-raw-bytes-off-the-terminal contract as the
+            # sibling merge prints.
+            print(f"  {shown}: skipped (still running): "
+                  f"{sanitise_for_terminal(d.name, max_len=120)}")
         filtered[cmd_type] = rest
     groups = filtered
 
@@ -3145,7 +3173,13 @@ def _do_merge(project, merge_type, yes) -> None:
             try:
                 shutil.rmtree(d)
             except Exception as e:  # noqa: BLE001 — continue past one failure
-                failed_deletes.append(f"{d.name}: {e}")
+                # rmtree exception text embeds child-writable file
+                # names from inside the run dir — escape at
+                # construction (the list-mediated print below relays
+                # it verbatim).
+                failed_deletes.append(
+                    f"{sanitise_for_terminal(d.name, max_len=120)}: "
+                    f"{sanitise_for_terminal(str(e), max_len=300)}")
         if failed_deletes:
             for msg in failed_deletes:
                 print(f"  {shown_type}: warning — failed to delete {msg}")

@@ -283,12 +283,6 @@
     "core/orchestration/skill_dispatch.py::run_skill_dispatch::unsanitised_llm_value::prompt": {
       "note": "prompt-construction lane, not an operator terminal/report lane \u2014 input-side envelope territory"
     },
-    "core/project/annotations_diff.py::format_diff::unsanitised_llm_value::file": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
-    },
-    "core/project/annotations_diff.py::format_diff::unsanitised_llm_value::function": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
-    },
     "core/recall/runner.py::run_pipeline::unsanitised_llm_value::stderr": {
       "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
     },

@@ -439,7 +439,13 @@ def format_sha_short(manifest: dict[str, Any] | None) -> str:
     sha = sc.get("base_sha")
     if not sha:
         return ""
-    return sha[:7] + ("*" if sc.get("dirty") else "")
+    # base_sha is restored VERBATIM from child-writable run metadata
+    # (format_manifest_block documents and escapes the same field):
+    # coerce so a junk cell cannot TypeError the caller's row render,
+    # and escape so even seven kept bytes cannot carry a CSI.
+    from core.security.log_sanitisation import sanitise_for_terminal
+    return (sanitise_for_terminal(str(sha)[:7], max_len=32)
+            + ("*" if sc.get("dirty") else ""))
 
 
 def format_manifest_block(manifest: dict[str, Any] | None,

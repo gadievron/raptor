@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.json import dumps_artifact, dumps_display, save_json
-from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
+from core.security.prompt_output_sanitise import (
+    sanitise_code,
+    sanitise_inline,
+    sanitise_string,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -444,24 +448,33 @@ def render_annotations_markdown(records: list[dict[str, Any]],
     lines.append(f"_{len(records)} unique annotation(s) "
                  f"(deduped, project-level wins)._")
     lines.append("")
+    # Bucket keys are the same agent-written fields as the headings
+    # below — sanitise for the same reason.
     lines.append("**By status:** " + ", ".join(
-        f"{k}={v}" for k, v in sorted(status_counts.items())
+        f"{sanitise_inline(k, max_chars=32)}={v}"
+        for k, v in sorted(status_counts.items())
     ))
     lines.append("")
     lines.append("**By source:** " + ", ".join(
-        f"{k}={v}" for k, v in sorted(source_counts.items())
+        f"{sanitise_inline(k, max_chars=32)}={v}"
+        for k, v in sorted(source_counts.items())
     ))
     lines.append("")
     lines.append("## Per-function entries")
     lines.append("")
     for r in records:
-        # Header line: file:function (status, source)
-        title = f"### `{r['file']}` :: `{r['function']}`"
+        # Header line: file:function (status, source). Annotation
+        # fields are agent-written (and import-restorable) — the
+        # backtick spans do not stop ANSI bytes or a backtick
+        # breakout, so the values are sanitised like the bodies
+        # below (sanitise_inline entity-escapes in-span backticks).
+        title = (f"### `{sanitise_inline(r['file'], max_chars=200)}` :: "
+                 f"`{sanitise_inline(r['function'], max_chars=120)}`")
         meta = []
         if r["status"]:
-            meta.append(f"status=`{r['status']}`")
+            meta.append(f"status=`{sanitise_inline(r['status'], max_chars=32)}`")
         if r["source"]:
-            meta.append(f"source=`{r['source']}`")
+            meta.append(f"source=`{sanitise_inline(r['source'], max_chars=32)}`")
         lines.append(title)
         if meta:
             lines.append(" · ".join(meta))
