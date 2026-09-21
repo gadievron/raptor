@@ -1,16 +1,30 @@
 """Seccomp-bpf syscall-level filter.
 
 Layered on top of Landlock to close escape vectors Landlock doesn't cover:
-AF_UNIX / AF_PACKET / AF_NETLINK socket() (docker.sock escape, raw packets),
-exotic families (AF_VSOCK reaches the per-VM transport through an empty
-netns; AF_ALG and friends are capability-free kernel attack surface),
+non-allowlisted socket() families (AF_UNIX → docker.sock escape, AF_PACKET
+raw packets, AF_VSOCK's per-VM transport reachable through an empty netns,
+AF_ALG and friends' capability-free kernel attack surface),
 ptrace (cross-process attacks on same-UID host processes when ptrace_scope=0),
 keyctl/bpf/user_faultfd/perf_event_open (weird-corner syscalls historically
 used in container escapes).
 
-Blocklist not allowlist: RAPTOR runs arbitrary target builds, so default-
-deny would require per-tool syscall profiles. Blocklist has near-zero
-breakage risk because we only block things gcc/make/python/etc. don't use.
+SYSCALL axis: blocklist not allowlist — RAPTOR runs arbitrary target
+builds, so default-deny would require per-tool syscall profiles.
+Blocklist has near-zero breakage risk because we only block things
+gcc/make/python/etc. don't use.
+
+SOCKET-FAMILY axis: allowlist, deny-by-default (the inverse). The
+kernel's AF_* table is a moving population of module-autoloadable
+attack surface, and a family denylist fails open one live member at a
+time — AF_SMC and then AF_RXRPC each shipped kernel-internal INET
+transports that rode past Landlock's TCP-only connect hook / the
+caller-created-DGRAM-only UDP block until someone enumerated them.
+socket(2) is denied unless the family is in the small allowlist the
+sandboxed tool population actually uses (see
+_SOCKET_FAMILY_ALLOWLIST_BASE), so an unknown or future family gets
+EPERM without anyone having to enumerate it. Unlike the syscall axis,
+this default-deny needs no per-tool profiles: the family population
+in real use is tiny and stable.
 
 Default action: ALLOW. Blocked syscalls return EPERM (not SIGSYS / kill)
 so processes fail gracefully — connect() returns -1, caller can handle it,
@@ -113,6 +127,7 @@ _OBSERVE_EXTRA_TRACE_SYSCALLS = (
 
 # libseccomp comparison ops (scmp_compare)
 _SCMP_CMP_EQ = 4         # equal to: arg == datum_a
+_SCMP_CMP_GE = 5         # greater or equal: arg >= datum_a (raw u64)
 
 # Namespace-creation clone flags (linux/sched.h). A sandboxed payload
 # that can create namespaces — a nested user namespace above all —
@@ -294,68 +309,101 @@ _AUDIT_HARD_DENY_SYSCALLS = frozenset({
     *_SECCOMP_BLOCK_ALWAYS,
 })
 
-# socket() family / type values we reject (via argument filter on arg 0 / 1).
-# AF_INET/AF_INET6 continue to be allowed — namespace --net removes the
-# interfaces anyway, so allowing AF_INET costs nothing and avoids breakage
-# for tools that create a socket and check if it works.
+# socket() family / type values used by the argument filters (arg 0 /
+# arg 1). AF_* values are arch-uniform on Linux
+# (include/linux/socket.h), so one value set covers every supported
+# arch. AF_INET/AF_INET6 are allowlisted — namespace --net removes
+# the interfaces anyway, so allowing AF_INET costs nothing and avoids
+# breakage for tools that create a socket and check if it works.
 _AF_UNIX = 1
-_AF_NETLINK = 16
-_AF_PACKET = 17
+_AF_INET = 2
+_AF_INET6 = 10
 _SOCK_RAW = 3
 _SOCK_DGRAM = 2
 
-# Exotic socket families denied by family, every profile. The netns
-# does NOT scope all of these the way it scopes AF_INET: AF_VSOCK's
-# transport is per-VM (a "network-blocked" child with an empty netns
-# still reaches a live vsock transport and any host-side vsock
-# services — enclave agents, guest daemons), and AF_ALG / AF_KEY /
-# AF_BLUETOOTH / AF_RDS / AF_TIPC are historically CVE-rich in-kernel
-# surfaces reachable with no capability from socket(2). AF_XDP needs
-# CAP_NET_RAW to bind but creation alone reaches its setsockopt
-# surface. Nothing in RAPTOR's sandboxed tool population (compilers,
-# scanners, interpreters, fuzzers, build systems) legitimately speaks
-# any of these, so the deny costs nothing on supported workloads —
-# same judgment as the SCTP/DCCP/MPTCP block below. AF_KEY was
-# previously denied only via its mandatory SOCK_RAW type; the
-# by-family rule makes the deny independent of the type-rule's mask
-# arithmetic. AF_SMC is the egress-shaped member of the set:
-# socket(AF_SMC, SOCK_STREAM, 0) autoloads via request_module
-# ("net-pf-43") on CONFIG_SMC=m kernels (Ubuntu ships it), takes
-# ordinary sockaddr_in connects, and without RDMA hardware falls
-# back to an internal kernel TCP clcsock — Landlock's connect hook
-# evaluates sk_is_tcp() sockets only, so neither the
-# allowed_tcp_ports pin nor the degraded TCP-connect deny ever sees
-# it on shared-netns lanes (fresh-netns lanes are unaffected: no
-# route). The seccomp protocol/type rules below don't match it
-# either (protocol 0, SOCK_STREAM), so the by-family deny is the
-# one layer that covers it. AF_* values are arch-uniform on Linux
-# (include/linux/socket.h), so one value set covers every supported
-# arch.
-_AF_KEY = 15
-_AF_RDS = 21
-_AF_TIPC = 30
-# AF_RXRPC is the datagram-model sibling of AF_SMC's stream-model
-# bypass: rxrpc transmits over a KERNEL-INTERNAL UDP socket, so the
-# block_udp rule — which matches caller-created (AF_INET[6],
-# SOCK_DGRAM) sockets only — never sees the egress. socket(AF_RXRPC,
-# SOCK_DGRAM, PF_INET) autoloads via net-pf-33 on CONFIG_AF_RXRPC=m
-# kernels (Ubuntu ships it) with no capability, connect() takes a
-# sockaddr_rxrpc naming an arbitrary IPv4/IPv6 target, and sendmsg
-# delivers attacker payload inside rx DATA packets (live-verified:
-# payload received by a UDP listener while UDP/UDPLITE/L2TP sockets
-# were EPERM under block_udp). No sandboxed tool population member
-# speaks rxrpc — same judgment as RDS/TIPC.
-_AF_RXRPC = 33
-_AF_BLUETOOTH = 31
-_AF_ALG = 38
-_AF_VSOCK = 40
-_AF_SMC = 43
-_AF_XDP = 44
+# Socket-family ALLOWLIST — socket(2) is deny-by-default on the
+# family axis (see the module docstring). Every family NOT
+# allowlisted gets EPERM in every profile. The previous per-family
+# denylist (AF_NETLINK / AF_PACKET / AF_VSOCK / AF_ALG / AF_KEY /
+# AF_BLUETOOTH / AF_RDS / AF_TIPC / AF_SMC / AF_RXRPC / AF_XDP) kept
+# failing open one live member at a time: AF_SMC shipped a
+# kernel-internal TCP clcsock that Landlock's sk_is_tcp()-only
+# connect hook never evaluates, then AF_RXRPC shipped the
+# datagram-model sibling — a kernel-internal UDP transport the
+# caller-created-DGRAM-only block_udp rule never sees (live-verified
+# delivering attacker payload while UDP/UDPLITE/L2TP sockets were
+# EPERM). Families still creatable after BOTH fixes (AF_KCM /
+# AF_PPPOX / AF_APPLETALK / AF_ATMPVC / AF_ATMSVC / AF_NFC /
+# AF_QIPCRTR / AF_MCTP) were each open module-autoloadable kernel
+# attack surface that only an inversion closes by construction —
+# along with every family the kernel grows in the future. The old
+# denylist's per-family judgments (vsock's per-VM transport
+# reachable from an empty netns, ALG/KEY/BLUETOOTH's CVE-rich
+# message surfaces, XDP's capability-free setsockopt surface) all
+# still hold; they are now consequences of the default instead of
+# rows in a table.
+#
+# The membership is EMPIRICAL, not guessed: the sandboxed tool
+# population (compilers, build systems, interpreters, git, scanners,
+# fuzzers, HTTP/DNS clients) was instrumented across the full
+# core/sandbox test suite plus calibration workloads (C builds,
+# Python multiprocessing forkserver, git, urllib over an allowed TCP
+# port, getaddrinfo) and created exactly three families: AF_UNIX,
+# AF_INET, AF_INET6. AF_UNIX stays PROFILE-CONDITIONAL exactly as
+# before (mount-ns and frida lanes allow it, the preexec-only lane
+# denies it — see the allow_unix_sockets docstring), so it joins
+# per-call rather than sitting in this base tuple. AF_NETLINK is
+# deliberately absent: route/interface enumeration attempts (glibc
+# getifaddrs) degrade gracefully on EPERM, the whole suite is green
+# with it denied, and netlink's message parsers are CVE-rich kernel
+# attack surface.
+#
+# Rule construction (_family_deny_rule_material): one MASKED_EQ
+# EPERM rule per non-allowlisted family BELOW the allowlist ceiling,
+# plus one GE rule at the ceiling denying everything at or above it.
+# The GE compare reads the RAW 64-bit register, so a high-bit-
+# garnished value (fam | 1<<32 — which the kernel truncates to fam)
+# is denied fail-closed even when its low 32 bits spell an
+# allowlisted family; no legitimate caller garnishes the family
+# argument.
+_SOCKET_FAMILY_ALLOWLIST_BASE = (_AF_INET, _AF_INET6)
 
-_EXOTIC_FAMILY_BLOCKS = (
-    _AF_KEY, _AF_RDS, _AF_TIPC, _AF_BLUETOOTH, _AF_ALG, _AF_VSOCK,
-    _AF_RXRPC, _AF_SMC, _AF_XDP,
-)
+# socketpair(2) family allowlist, same construction. The kernel
+# implements socketpair for more families than AF_UNIX (AF_TIPC has
+# ops->socketpair), and Linux permits sendto/sendmsg with an
+# EXPLICIT destination on a connected datagram-model socket — so a
+# non-UNIX socketpair half can recreate exactly the
+# destination-bearing primitive the socket(2) family denies exist to
+# remove, without any socket(2) reaching the filter. Only AF_UNIX
+# socketpair is a tool-population need (Rust std::process::Command,
+# Python multiprocessing — observed in the same instrumentation
+# corpus). Unconditional in every profile: unlike socket(AF_UNIX), a
+# UNIX socketpair names no external address, so no posture denies it
+# wholesale (the AF_UNIX+SOCK_DGRAM shape rule below stays
+# separately conditional).
+_SOCKETPAIR_FAMILY_ALLOWLIST = (_AF_UNIX,)
+
+
+def _family_deny_rule_material(
+        allowed: tuple[int, ...]) -> tuple[tuple[int, ...], int]:
+    """Deny-by-default rule material for a family allowlist.
+
+    Returns ``(deny_values, deny_floor)``: every family value below
+    ``deny_floor`` (= max(allowed) + 1) that is not allowlisted gets
+    its own MASKED_EQ EPERM rule, and one GE rule at ``deny_floor``
+    denies every raw 64-bit value at or above it — families newer
+    than any table plus high-bit-garnished spellings included. A
+    rule set built from this material permits EXACTLY the plain
+    allowlisted values and nothing else. (libseccomp accepts at most
+    one comparator per argument per rule, so "family in allowed set"
+    is not expressible as range compares — complement enumeration
+    below a ceiling plus the GE tail is the fail-closed equivalent.)
+    """
+    deny_floor = max(allowed) + 1
+    deny_values = tuple(
+        fam for fam in range(deny_floor) if fam not in allowed
+    )
+    return deny_values, deny_floor
 
 # Kernel-bypass stream transports (denied unconditionally, hard_deny).
 # Landlock's network rules cover IPPROTO_TCP only and the UDP block
@@ -396,12 +444,10 @@ _IPPROTO_SMC = 256
 _SOCK_SEQPACKET = 5
 _SOCK_DCCP = 6
 
-# AF_INET / AF_INET6 constants — used by the UDP block. Only filtered
+# The UDP block (AF_INET / AF_INET6 + SOCK_DGRAM) is only filtered
 # when the caller requests it (proxy mode); otherwise DNS via UDP/53
 # is needed for normal operation. Under proxy mode, the proxy resolves
 # on the child's behalf — DNS client-side is unnecessary.
-_AF_INET = 2
-_AF_INET6 = 10
 
 # ioctl command numbers we reject via argument filter on arg 1 (cmd).
 # Values are the asm-generic encodings used by x86_64, aarch64, riscv64,
@@ -590,8 +636,9 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     filesystem + network audit coverage. EXCEPTION: the escape-primitive
     subset (_AUDIT_HARD_DENY_SYSCALLS — ptrace/process_vm_* plus the
     whole _SECCOMP_BLOCK_ALWAYS set), the blocked tty ioctls, AND the
-    socket()-argument rules (blocked families, SOCK_RAW, the
-    SCTP/DCCP/MPTCP kernel-bypass transports, the UDP block)
+    socket()-argument rules (the family allowlist's deny rules,
+    SOCK_RAW, the SCTP/DCCP/MPTCP kernel-bypass transports, the UDP
+    block)
     keep the ERRNO action under audit too; converting THOSE denials
     into allow-and-log would grant an audited child the very
     capabilities the sandbox exists to deny (e.g. socket(AF_UNIX) →
@@ -602,8 +649,8 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     process. The caller (_spawn.py) is responsible for ensuring tracer
     is attached before any traced syscall fires.
 
-    `allow_unix_sockets=True` drops AF_UNIX from the socket-family
-    blocklist. Only pass this when BOTH isolation layers that make
+    `allow_unix_sockets=True` adds AF_UNIX to the socket-family
+    allowlist. Only pass this when BOTH isolation layers that make
     AF_UNIX harmless are engaged for this child: the mount namespace
     (fresh tmpfs over /run masks pathname sockets like docker.sock;
     pivot_root leaves the rest of the host read-only, and connect(2)
@@ -709,7 +756,7 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
         return None
     if not check_seccomp_available():
         # A profile was REQUESTED but the filter cannot engage — the
-        # child runs without the socket-family blocklist (AF_UNIX →
+        # child runs without the socket-family allowlist (AF_UNIX →
         # docker.sock on Landlock-only hosts), the io_uring/keyring/bpf
         # escape-primitive blocks, and the UDP/DNS-exfil block. This
         # must never be silent. Refuse-vs-warn is decided PER POSTURE
@@ -728,7 +775,7 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                 "Sandbox: seccomp profile %r was requested but "
                 "libseccomp is unavailable or non-functional — "
                 "children run WITHOUT the seccomp layer: the "
-                "socket-family blocklist (incl. AF_UNIX → "
+                "socket-family allowlist (incl. AF_UNIX → "
                 "docker.sock), the io_uring/keyring/bpf "
                 "escape-primitive blocks, the UDP block and the "
                 "fileless-exec deny (memfd_create + execveat "
@@ -836,8 +883,8 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
 
     # socketpair(AF_UNIX, SOCK_DGRAM) is denied exactly when the
     # matching socket(AF_UNIX, SOCK_DGRAM) is denied: either AF_UNIX
-    # is in the family blocklist (default posture) or connect scoping
-    # is engaged (AF_UNIX allowed but datagrams denied). A dgram
+    # is outside the family allowlist (default posture) or connect
+    # scoping is engaged (AF_UNIX allowed but datagrams denied). A dgram
     # socketpair half accepts sendto/sendmsg with an EXPLICIT
     # destination address, so leaving socketpair unfiltered recreates
     # the destination-bearing datagram primitive those denies exist
@@ -854,15 +901,14 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     # returns a negative value for unresolved names — RISC-V older cores
     # and some cross-compiled builds hit this for specific syscalls. We
     # name the missing ones so operators can decide if the gap is tolerable.
-    # (socketpair() is filtered only for the AF_UNIX+SOCK_DGRAM shape —
-    # see the rule-installation comment below — so it's reported as
-    # "missing" only when that rule was going to be installed.)
+    # (socketpair() now carries the family-allowlist deny rules in
+    # every posture, so an unresolved socketpair is always reported.)
     missing = [name for name, num in resolved_blocks if num < 0]
     if socket_num < 0:
         missing.append("socket")
     if ioctl_num < 0:
         missing.append("ioctl")
-    if deny_unix_dgram_socketpair and socketpair_num < 0:
+    if socketpair_num < 0:
         missing.append("socketpair")
     missing += [name for name, num, _arg in send_flag_syscalls
                 if num < 0]
@@ -870,19 +916,21 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
         logger.warning(
             "Sandbox: seccomp could not resolve syscall(s) %s on this architecture — those blocks are NOT installed. Likely harmless on x86_64/aarch64 (this should be empty); investigate on other architectures if any entries appear.", missing
         )
-    # Block AF_UNIX/NETLINK/PACKET via arg 0; block SOCK_RAW via arg 1.
-    # "frida" profile: allow AF_UNIX (frida-helper uses Unix sockets for
-    # its internal IPC with the target process) but keep NETLINK/PACKET
-    # and SOCK_RAW blocked.
-    # The exotic families (_EXOTIC_FAMILY_BLOCKS — vsock/alg/key/
-    # bluetooth/rds/tipc/rxrpc/smc/xdp) are denied in EVERY profile: no profile
-    # trades them for capability the way frida trades AF_UNIX.
+    # Socket-family allowlist (see _SOCKET_FAMILY_ALLOWLIST_BASE):
+    # deny-by-default on arg 0; SOCK_RAW blocked via arg 1. "frida"
+    # profile: AF_UNIX joins the allowlist (frida-helper uses Unix
+    # sockets for its internal IPC with the target process), exactly
+    # like the mount-ns lane's allow_unix_sockets — no profile widens
+    # the family set beyond that one trade.
     if profile == "frida" or allow_unix_sockets:
-        socket_family_blocks = [_AF_NETLINK, _AF_PACKET,
-                                *_EXOTIC_FAMILY_BLOCKS]
+        socket_allowed_families: tuple[int, ...] = (
+            _AF_UNIX, *_SOCKET_FAMILY_ALLOWLIST_BASE)
     else:
-        socket_family_blocks = [_AF_UNIX, _AF_NETLINK, _AF_PACKET,
-                                *_EXOTIC_FAMILY_BLOCKS]
+        socket_allowed_families = _SOCKET_FAMILY_ALLOWLIST_BASE
+    socket_family_denies, socket_family_deny_floor = (
+        _family_deny_rule_material(socket_allowed_families))
+    socketpair_family_denies, socketpair_family_deny_floor = (
+        _family_deny_rule_material(_SOCKETPAIR_FAMILY_ALLOWLIST))
     socket_type_block = _SOCK_RAW
 
     _os_write = os.write
@@ -1088,18 +1136,25 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                                      b"refusing to exec without filter\n")
                         os._exit(126)
 
-                # socket() with blocked family — one rule per family.
-                # MASKED_EQ on the low 32 bits, not EQ: the kernel
-                # truncates the family to int, so EQ misses
-                # `fam | 1<<32` while the kernel still sees `fam`.
+                # socket() family allowlist, deny-by-default — one
+                # MASKED_EQ rule per non-allowlisted family below the
+                # allowlist ceiling, then one GE rule at the ceiling
+                # (see _family_deny_rule_material). MASKED_EQ on the
+                # low 32 bits, not EQ: the kernel truncates the
+                # family to int, so EQ misses `fam | 1<<32` while the
+                # kernel still sees `fam`. The GE compare reads the
+                # raw 64-bit register, so every value at or above the
+                # ceiling — unknown future families and garnished
+                # spellings included — is denied without enumeration.
                 # hard_deny (not deny): the socket-argument rules are
                 # escape primitives (docker.sock via AF_UNIX on
                 # Landlock-only hosts, host-traffic sniffing via
-                # AF_PACKET/SOCK_RAW) and must NOT downgrade to
+                # AF_PACKET/SOCK_RAW, kernel-internal transports like
+                # AF_SMC/AF_RXRPC) and must NOT downgrade to
                 # allow-and-log under audit mode — see the
                 # _AUDIT_HARD_DENY_SYSCALLS rationale.
                 if socket_num >= 0:
-                    for fam in socket_family_blocks:
+                    for fam in socket_family_denies:
                         arg = _ScmpArgCmp(arg=0, op=_SCMP_CMP_MASKED_EQ,
                                           datum_a=_ARG32_MASK, datum_b=fam)
                         arg_arr = (_ScmpArgCmp * 1)(arg)
@@ -1110,6 +1165,17 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                             _os_write(2, b"sandbox: seccomp socket family rule failed"
                                          b" -- refusing to exec without filter\n")
                             os._exit(126)
+                    arg = _ScmpArgCmp(arg=0, op=_SCMP_CMP_GE,
+                                      datum_a=socket_family_deny_floor,
+                                      datum_b=0)
+                    arg_arr = (_ScmpArgCmp * 1)(arg)
+                    ret = lib.seccomp_rule_add_array(
+                        ctx, hard_deny, socket_num, 1, arg_arr,
+                    )
+                    if ret < 0:
+                        _os_write(2, b"sandbox: seccomp socket family rule failed"
+                                     b" -- refusing to exec without filter\n")
+                        os._exit(126)
 
                     # socket() with SOCK_RAW — argument 1 is type (with optional
                     # SOCK_NONBLOCK/CLOEXEC bits). Use MASKED_EQ with the
@@ -1232,13 +1298,12 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                 # comparators but they're AND'd, so we'd need one rule
                 # per (family, type) combination — which is exactly
                 # what we do). Rejects AF_INET/AF_INET6 + SOCK_DGRAM.
-                # Datagram sockets of other families rely on the
-                # family rules above (AF_UNIX/NETLINK/the exotic set
-                # are blocked regardless of type) — a family with a
-                # kernel-internal INET transport that is NOT in the
-                # family blocklist rides straight past this rule, so
-                # any such family (AF_RXRPC was the live member) MUST
-                # be in _EXOTIC_FAMILY_BLOCKS.
+                # Datagram sockets of other families are covered by
+                # the family allowlist above: only AF_UNIX (per
+                # profile) survives it, so a family with a
+                # kernel-internal INET transport (AF_RXRPC was the
+                # live member under the old denylist) is denied by
+                # construction rather than by enumeration.
                 if block_udp and socket_num < 0:
                     # Fail-closed: caller asked for proxy-mode UDP block
                     # but we can't install the rule (socket() syscall
@@ -1277,13 +1342,50 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                                          b" -- refusing to exec without filter\n")
                             os._exit(126)
 
-                # socketpair(): only the AF_UNIX + SOCK_DGRAM shape is
-                # filtered. SOCK_STREAM / SOCK_SEQPACKET socketpair is
-                # DELIBERATELY left alone: it returns two already-
-                # connected sockets with NO external address — the
-                # "peer" is the other half of the pair — and blocking
-                # it breaks Rust's std::process::Command (AF_UNIX
-                # socketpair for fork+exec error reporting) and Python
+                # socketpair() family allowlist — same deny-by-default
+                # construction as socket() above, AF_UNIX-only in
+                # every posture (see _SOCKETPAIR_FAMILY_ALLOWLIST:
+                # the kernel implements socketpair for non-UNIX
+                # families too — AF_TIPC — and a connected non-UNIX
+                # pair half takes destination-bearing sendto/sendmsg,
+                # recreating the primitive the socket() family denies
+                # remove without any socket(2) reaching the filter).
+                if socketpair_num >= 0:
+                    for fam in socketpair_family_denies:
+                        arg = _ScmpArgCmp(arg=0, op=_SCMP_CMP_MASKED_EQ,
+                                          datum_a=_ARG32_MASK,
+                                          datum_b=fam)
+                        arg_arr = (_ScmpArgCmp * 1)(arg)
+                        ret = lib.seccomp_rule_add_array(
+                            ctx, hard_deny, socketpair_num, 1, arg_arr,
+                        )
+                        if ret < 0:
+                            _os_write(2, b"sandbox: seccomp socketpair"
+                                         b" family rule failed -- refusing"
+                                         b" to exec without filter\n")
+                            os._exit(126)
+                    arg = _ScmpArgCmp(arg=0, op=_SCMP_CMP_GE,
+                                      datum_a=socketpair_family_deny_floor,
+                                      datum_b=0)
+                    arg_arr = (_ScmpArgCmp * 1)(arg)
+                    ret = lib.seccomp_rule_add_array(
+                        ctx, hard_deny, socketpair_num, 1, arg_arr,
+                    )
+                    if ret < 0:
+                        _os_write(2, b"sandbox: seccomp socketpair"
+                                     b" family rule failed -- refusing"
+                                     b" to exec without filter\n")
+                        os._exit(126)
+
+                # socketpair(AF_UNIX): only the SOCK_DGRAM shape is
+                # additionally filtered (conditionally — see
+                # deny_unix_dgram_socketpair). SOCK_STREAM /
+                # SOCK_SEQPACKET AF_UNIX socketpair is DELIBERATELY
+                # left alone: it returns two already-connected
+                # sockets with NO external address — the "peer" is
+                # the other half of the pair — and blocking it breaks
+                # Rust's std::process::Command (AF_UNIX socketpair
+                # for fork+exec error reporting) and Python
                 # multiprocessing. The DGRAM shape is different: Linux
                 # permits sendto/sendmsg with an EXPLICIT destination
                 # on a connected dgram socket, so a dgram socketpair
