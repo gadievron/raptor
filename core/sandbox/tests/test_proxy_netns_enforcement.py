@@ -475,8 +475,12 @@ class TestProxyNetnsContextWiring:
     """Verify context.py routes between the egress tiers on the
     production gates: netns bridge (Tier 1) needs the SPAWN backend
     (net capability AND the mount probe), any Landlock ABI; without
-    the backend the context takes the Landlock TCP pin (ABI >= 4) /
-    advisory (ABI < 4) tier — both reported as ``landlock_tcp``.
+    the backend the context takes the Landlock TCP pin (ABI >= 4,
+    stamped ``landlock_tcp``) / advisory (ABI < 4, stamped
+    ``advisory`` — the pin has no kernel TCP allowlist to ride, so
+    only the env vars steer traffic). An operator-disabled sandbox
+    sheds every enforcement layer, so it stamps ``advisory`` too,
+    whatever the host could have delivered.
 
     The probe inputs are pinned by mock so each test asserts the TIER
     DECISION for one explicit host shape; tests whose decision lands
@@ -565,10 +569,12 @@ class TestProxyNetnsContextWiring:
                 == "landlock_tcp")
 
     def test_advisory_tier_when_mount_probe_fails_on_low_abi(self):
-        """Same mount-gate routing on ABI < 4: the advisory tier
-        (env-vars only) is reported under the same non-netns label."""
+        """Same mount-gate routing on ABI < 4 — but stamped for what
+        it IS: Landlock has no TCP allowlist before ABI 4, so nothing
+        enforces the pin and the honest label is ``advisory``
+        (env-vars only), not the enforcing tier's name."""
         assert (self._enforcement_with(abi=3, net=True, mount=False)
-                == "landlock_tcp")
+                == "advisory")
 
     def _enter_egress(self, *, platform, net, mount, require, env=None, monkeypatch=None):
         """Enter sandbox() with the probe/platform surface pinned and exit
@@ -704,6 +710,52 @@ class TestProxyNetnsContextWiring:
         assert "any address on the proxy port" in evidence
 
     @pytest.mark.usefixtures("_fresh_tier2_latch")
+    def test_disabled_sandbox_stamps_advisory_not_landlock_tcp(
+            self, caplog):
+        """disabled=True + use_egress_proxy=True: NO port pin, NO
+        Landlock, NO seccomp engage — the run must not stamp
+        ``proxy_enforcement="landlock_tcp"`` (the truth-in-stamping
+        class: the stamp described enforcement that did not exist),
+        must not print the tier-2 "DNS/UDP exfil stays closed"
+        warning (the seccomp block never installs on a disabled run),
+        and must not burn the once-per-process warning latch a later
+        ENFORCING call still needs."""
+        import logging
+
+        from core.sandbox import sandbox, state
+
+        with mock.patch(
+            "core.sandbox.context._get_landlock_abi", return_value=4,
+        ), mock.patch(
+            "core.sandbox.context.check_landlock_available",
+            return_value=True,
+        ), mock.patch(
+            "core.sandbox.context.check_net_available",
+            return_value=False,
+        ), caplog.at_level(logging.WARNING, logger="core.sandbox.context"):
+            with sandbox(
+                target=self.out,
+                output=self.out,
+                disabled=True,
+                use_egress_proxy=True,
+                proxy_hosts=["example.com"],
+            ) as run:
+                result = run(
+                    ["echo", "disabled-proxy-test"],
+                    capture_output=True, text=True, timeout=15,
+                )
+        assert result.returncode == 0
+        assert result.sandbox_info.get("proxy_enforcement") == "advisory"
+        tier2_warnings = [
+            r for r in caplog.records
+            if "Landlock TCP port pin" in r.getMessage()
+        ]
+        assert not tier2_warnings, (
+            "a disabled run must not describe enforcement it sheds")
+        assert state._proxy_tier2_port_pin_warned is False, (
+            "disabled run burned the tier-2 warn-once latch")
+
+    @pytest.mark.usefixtures("_fresh_tier2_latch")
     def test_tier2_warning_is_once_per_process(self, caplog):
         """Two tier-2 contexts → exactly one WARNING (warn_once)."""
         import logging
@@ -788,7 +840,10 @@ class TestProxyNetnsContextWiring:
 
     @requires_landlock
     def test_fallback_on_unix_bind_failure(self):
-        """If bind_unix fails, falls back to TCP-only without crash."""
+        """If bind_unix fails, falls back to TCP-only without crash.
+        On this ABI 3 host shape the fallback pin is INERT (the
+        bind-failure warning says so itself), so the truthful stamp
+        is ``advisory`` — not the enforcing tier's label."""
         from core.sandbox import sandbox
 
         def _fail_bind(*a, **kw):
@@ -813,4 +868,4 @@ class TestProxyNetnsContextWiring:
                 capture_output=True, text=True, timeout=15,
             )
             assert result.returncode == 0
-            assert result.sandbox_info.get("proxy_enforcement") == "landlock_tcp"
+            assert result.sandbox_info.get("proxy_enforcement") == "advisory"

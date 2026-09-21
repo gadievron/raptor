@@ -1731,8 +1731,14 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # the hostname-allowlist gate. The ABI < 4 case is the
             # tier-3 advisory warning above; this one covers the
             # kernel that CAN pin (ABI >= 4) but only by port.
-            if _proxy_abi >= 4 and state.warn_once(
-                    "_proxy_tier2_port_pin_warned"):
+            # An operator-disabled sandbox never engages the pin (or
+            # the seccomp UDP block the message reasons about), so
+            # the warning would describe enforcement that does not
+            # exist — and it must not burn the once-per-process latch
+            # for a later enforcing call. The disabled check sits
+            # BEFORE warn_once for exactly that reason.
+            if (_proxy_abi >= 4 and not _effectively_disabled
+                    and state.warn_once("_proxy_tier2_port_pin_warned")):
                 # The UDP-exfil closure on this tier IS the seccomp
                 # block — on a libseccomp-less host the filter never
                 # engages, and a message claiming the channel is
@@ -7035,26 +7041,47 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 result.sandbox_info["landlock_truncate_unrestricted"] = True
         if _degraded_tcp_deny:
             result.sandbox_info["degraded_net_deny"] = True
-        if _use_proxy_netns:
+        if _use_proxy_netns and not effectively_disabled:
             result.sandbox_info["proxy_enforcement"] = "netns"
         elif use_egress_proxy:
-            result.sandbox_info["proxy_enforcement"] = "landlock_tcp"
-            # Record the tier-2 weakening in the per-run evidence so
-            # forensic readers of sandbox_info see the reduced
-            # guarantee alongside the enforcement label, not only in
-            # process logs: the Landlock pin is port-scoped, so any
-            # address on the pinned port is reachable without the
-            # proxy's hostname gate.
-            _t2_note = (
-                "egress tier: landlock_tcp port pin — Landlock scopes "
-                "TCP connect by port only; any address on the proxy "
-                "port is reachable without the hostname allowlist"
-            )
-            _t2_existing = result.sandbox_info.get("evidence", "")
-            result.sandbox_info["evidence"] = (
-                f"{_t2_existing} — {_t2_note}" if _t2_existing
-                else _t2_note
-            )
+            # Stamp what actually ENFORCES the chokepoint for THIS
+            # run, not what was requested. Pre-fix every non-netns
+            # proxy run stamped "landlock_tcp" — including runs where
+            # NOTHING enforces it: an operator-disabled sandbox sheds
+            # the port pin, Landlock and seccomp wholesale (the
+            # 0002 truth-in-stamping class, proxy edition), and an
+            # ABI < 4 kernel has no TCP allowlist for the pin to ride
+            # (the tier-3 advisory posture its own setup warning
+            # already names). In both, the proxy env vars are still
+            # staged, so routing is at the child's discretion — the
+            # honest label is "advisory". macOS enforces the pin
+            # through seatbelt SBPL, not Landlock; label it as such.
+            if effectively_disabled or (
+                    not use_seatbelt and _proxy_abi < 4):
+                result.sandbox_info["proxy_enforcement"] = "advisory"
+            else:
+                result.sandbox_info["proxy_enforcement"] = (
+                    "seatbelt_tcp" if use_seatbelt else "landlock_tcp")
+                # Record the tier-2 weakening in the per-run evidence
+                # so forensic readers of sandbox_info see the reduced
+                # guarantee alongside the enforcement label, not only
+                # in process logs: the pin is port-scoped, so any
+                # address on the pinned port is reachable without the
+                # proxy's hostname gate.
+                _t2_tier, _t2_layer = (
+                    ("seatbelt_tcp", "seatbelt SBPL") if use_seatbelt
+                    else ("landlock_tcp", "Landlock"))
+                _t2_note = (
+                    f"egress tier: {_t2_tier} port pin — {_t2_layer} "
+                    "scopes TCP connect by port only; any address on "
+                    "the proxy port is reachable without the hostname "
+                    "allowlist"
+                )
+                _t2_existing = result.sandbox_info.get("evidence", "")
+                result.sandbox_info["evidence"] = (
+                    f"{_t2_existing} — {_t2_note}" if _t2_existing
+                    else _t2_note
+                )
         # Observe nonce — only present when sandbox(observe=True)
         # actually engaged audit mode at spawn time; absent under
         # plain audit and absent when observe was requested but
