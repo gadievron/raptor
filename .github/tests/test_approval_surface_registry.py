@@ -18,12 +18,16 @@ IS the control — so every surface must be adjudicated:
   ANSI/CSI/OSC fixtures in its own suite) remain the primary revert
   oracle.
 * ``clean``      — adjudicated: the prompt renders no external content
-  (constants, charset-constrained names, anchored-regex extractions).
+  (constants, charset-constrained names, anchored-regex extractions),
+  or — instruction lane — the file instructs the CLAUDE.md
+  INTERACTIVE PROMPTS display-integrity rule (external content
+  rendered with non-printables escaped, long excerpts bounded) with
+  per-surface wording at each fill site.
 * ``doctrine-pending`` — instruction lane (agent-rendered
-  AskUserQuestion text). The mechanism fix is a CLAUDE.md
-  INTERACTIVE PROMPTS display-integrity rule plus per-surface wording,
-  delivered as an operator-gated proposal; until the operator lands
-  it, these rows are the open worklist, not a pass.
+  AskUserQuestion text) that does not yet carry the display-integrity
+  wording. Such rows are an open worklist, not a pass: a NEW
+  instruction surface enters the registry here until its per-surface
+  wording lands and the row is re-adjudicated ``clean``.
 
 The enumeration is mechanical, and bounded: Python ``input()`` /
 typer-click ``confirm()`` call sites as literal AST calls
@@ -218,39 +222,41 @@ REGISTRY: dict[str, Entry] = {
              "an anchored-alternation regex extraction "
              "(_BUDGET_REASON_RE), never free error text",
     ),
-    # ── instruction lane: members (doctrine-pending) ─────────────
+    # ── instruction lane: members (clean — each file instructs the
+    #    display-integrity rule at its fill site; the note names the
+    #    external content each surface renders) ────────────────────
     "CLAUDE.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M05-binary-oracle-provenance-consent",
                  "M06-volatile-target-gate"),
         note="provenance-drop consent quotes attacker-chosen binary "
              "paths; volatile-target gate quotes target paths",
     ),
     "core/sage/CLAUDE.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M04-sage-drift-review-ask",),
         note="drift-review approve/reject question filled with "
              "hostile-SAGE-server diff facts",
     ),
     ".claude/skills/exploitability-validation/stage-a-oneshot.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M03-stage-a-sandbox-consent",),
         note="sandbox-removal consent shown the PoC/target's own "
              "stderr — highest-authority instruction member",
     ),
     ".claude/commands/codeql.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M07-codeql-trust-consent",),
         note="trust consent quotes run-output hint text",
     ),
     "tiers/exploit-guidance.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M08-exploit-next-steps-fork",),
         note="next-steps fork quotes chain_breaks/constraints, which "
              "carry raw bytes from executing the hostile binary",
     ),
     ".claude/commands/exploit.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M08-exploit-next-steps-fork",),
         note="command file instructing the same next-steps fork as "
              "tiers/exploit-guidance.md — options built from "
@@ -258,7 +264,7 @@ REGISTRY: dict[str, Entry] = {
              "breaks) derived from the analysed hostile binary",
     ),
     ".claude/commands/create-skill.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M13-create-skill-persist-consent",),
         note="'Create this skill?' confirm authorizes writing a "
              "persistent .claude/skills/*/SKILL.md that auto-loads "
@@ -268,36 +274,36 @@ REGISTRY: dict[str, Entry] = {
              "target-derived text",
     ),
     ".claude/skills/code-understanding/map.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M09-map-trace-followup",),
         note="trace follow-up labels options with entry-point "
              "names/paths from the scanned target",
     ),
     ".claude/commands/agentic.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M10-completion-forks",),
         note="completion fork fills descriptions with finding "
              "ids/paths",
     ),
     ".claude/commands/validate.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M10-completion-forks",),
         note="completion fork fills descriptions with finding "
              "ids/paths",
     ),
     ".claude/skills/exploitability-validation/stage-1-outputs.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M10-completion-forks",),
         note="post-run fork fills descriptions with finding "
              "ids/files/statuses",
     ),
     ".claude/commands/project.md": Entry(
-        lane="instruction", status="doctrine-pending",
+        lane="instruction", status="clean",
         members=("M11-project-destructive-confirms",),
         note="clean/adopt confirms preview arbitrary directory "
              "listings",
     ),
-    # ── instruction lane: adjudicated clean ──────────────────────
+    # ── instruction lane: adjudicated clean (no external content) ─
     "tiers/recovery.md": Entry(
         lane="instruction", status="clean",
         note="remedy fork options are RAPTOR-authored constants "
