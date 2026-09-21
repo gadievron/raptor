@@ -276,8 +276,13 @@ class TestRunOrchestrator:
     def test_resume_skips_reviewed(self, tmp_path: Path):
         target, out = _setup_target(tmp_path)
 
-        log = out / ".audit-log.jsonl"
-        log.write_text('{"action":"record","key":"src/auth.c:check_pw"}\n')
+        # Stamped via the production writer: resume only suppresses
+        # rows whose run-bound integrity token verifies — a raw
+        # unstamped line re-reviews by design (see
+        # test_forged_unstamped_row_never_suppresses).
+        from core.audit.record import append_audit_log
+        append_audit_log(out, {"action": "record",
+                               "key": "src/auth.c:check_pw"})
 
         def review_fn(ctx, config):
             return ReviewOutcome(
