@@ -1516,3 +1516,109 @@ def test_lexical_multi_declarator_correct_target_sound(tmp_path: Path):
         language="javascript", complete=_fake_complete(reply),
     )
     assert r.status is t1.Tier0Status.SOUND
+
+
+# ---------------------------------------------------------------------------
+# Comment/string decoy binding (tier1b lanes)
+# ---------------------------------------------------------------------------
+
+def test_known_safe_call_comment_decoy_declines_js(tmp_path: Path):
+    """The only occurrence of the claimed safe call lives inside a
+    block comment while raw ``name`` flows to the sink. Pre-fix
+    ``_find_best_validator_line`` matched raw stripped text with no
+    code-view anchor and the lane certified SOUND off the prose —
+    a false barrier witness from a commented-out sanitizer line
+    (prime decoy material: CVE fix commits routinely carry old
+    sanitizer lines as ``+`` lines in comments/migration notes)."""
+    (tmp_path / "app.js").write_text(
+        "function serve(req, res) {\n"                           # 1
+        "    let name = req.query.name;\n"                        # 2
+        "    /*\n"                                                # 3
+        "    name = validator.escape(name);\n"                    # 4 — decoy
+        "    */\n"                                                # 5
+        "    res.send('<b>' + name + '</b>');\n"                  # 6 — sink
+        "}\n"
+    )
+    diff = "+    name = validator.escape(name);\n"
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "name = validator.escape(name);",
+        "variable_name": "name", "charset": "", "forbidden": "",
+        "library_call": "validator.escape",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=6, sink_class="xss",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "no occurrence" in r.reasoning
+
+
+def test_charset_comment_decoy_declines_js(tmp_path: Path):
+    """Charset lane through the full try_tier1b path: the guard exists
+    only inside a block comment, the claimed line is supplied as a
+    ``+`` diff line, mechanical re-extract agrees and Z3 is satisfied
+    — pre-fix the verdict was SOUND with the Z3 proof bound to the
+    comment line."""
+    (tmp_path / "app.js").write_text(
+        "function serve(req, res) {\n"                                # 1
+        "    let name = req.query.name;\n"                             # 2
+        "    /*\n"                                                     # 3
+        "    if (!/^[a-z]+$/.test(name)) { return; }\n"                # 4 — decoy
+        "    */\n"                                                     # 5
+        "    return fs.readFile('/data/' + name);\n"                   # 6 — sink
+        "}\n"
+    )
+    diff = "+    if (!/^[a-z]+$/.test(name)) { return; }\n"
+    reply = json.dumps({
+        "kind": "charset",
+        "validator_source_line":
+            "if (!/^[a-z]+$/.test(name)) { return; }",
+        "variable_name": "name",
+        "charset": "a-z", "forbidden": "", "library_call": "",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app.js", sink_line=6, sink_class="pathtrav",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "no occurrence" in r.reasoning
+
+
+def test_find_best_validator_line_skips_string_decoy_python(tmp_path: Path):
+    """A string-literal copy of the claimed line CLOSER to the sink
+    must not shadow the real code occurrence — pre-fix the
+    closest-before-sink rule picked the decoy (Python lanes were only
+    incidentally backstopped by the AST binding gates; a
+    validate-kind curated entry has no such backstop)."""
+    source = (
+        "def f(path):\n"                                # 1
+        "    abs_path = safe_join(BASE, path)\n"        # 2 — real
+        "    note = '''\n"                              # 3
+        "    abs_path = safe_join(BASE, path)\n"        # 4 — decoy
+        "    '''\n"                                     # 5
+        "    return open(abs_path)\n"                   # 6 — sink
+    )
+    line = t1._find_best_validator_line(
+        source, "abs_path = safe_join(BASE, path)", 6, "python",
+    )
+    assert line == 2
+
+
+def test_find_best_validator_line_all_decoys_returns_none(tmp_path: Path):
+    """When every occurrence is prose the binding must refuse, not
+    fall back to a comment line."""
+    source = (
+        "function serve(req, res) {\n"
+        "    /*\n"
+        "    name = validator.escape(name);\n"
+        "    */\n"
+        "    res.send(name);\n"
+        "}\n"
+    )
+    line = t1._find_best_validator_line(
+        source, "name = validator.escape(name);", 5, "javascript",
+    )
+    assert line is None

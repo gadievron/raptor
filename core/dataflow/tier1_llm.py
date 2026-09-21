@@ -53,6 +53,7 @@ from core.dataflow.smt_barrier import (
     ValidatorSpec,
     _crosses_function_boundary,
     _function_containing,
+    code_view_lines,
     _lexical_validator_in_branch,
     _python_chain_reaches_sink,
     _lexical_var_reaches_sink,
@@ -199,18 +200,38 @@ def _find_best_validator_line(
     occurrence (in the sink's function) is the actual sanitizer.
 
     Selection rule:
-      * For Python: among occurrences strictly before ``sink_line``,
-        prefer one in the SAME function as the sink; among those, pick
-        the closest one (largest line < sink_line).
-      * Non-Python (no AST): among occurrences before ``sink_line``,
-        pick the closest.
+      * Occurrences are anchored against the comment/string-blanked
+        view of the file (same rule as ``find_validator_line``): a
+        line whose text lives inside a block comment or a multi-line
+        string is prose — binding to it would hand the dominance and
+        chain gates a decoy location (CVE fix diffs routinely carry
+        commented-out old sanitizer lines as ``+`` lines, and the
+        cheap LLM is pointed at the diff). Unlike Tier 0's per-line
+        re-extraction this lane's needles (e.g. curated safe calls)
+        have no extractor, so the anchor is positional: the
+        candidate's first code character must survive in the view.
+        Fails CLOSED — a missing or short view line reads as prose.
+      * For Python: among code occurrences strictly before
+        ``sink_line``, prefer one in the SAME function as the sink;
+        among those, pick the closest one (largest line < sink_line).
+      * Non-Python (no AST): among code occurrences before
+        ``sink_line``, pick the closest.
       * Returns ``None`` if no usable occurrence exists.
     """
     needle = claimed_line_text.strip()
     if not needle:
         return None
-    candidates = [idx + 1 for idx, ln in enumerate(source_text.splitlines())
-                  if ln.strip() == needle and idx + 1 < sink_line]
+    view = code_view_lines(source_text, language)
+    candidates = []
+    for idx, ln in enumerate(source_text.splitlines()):
+        if ln.strip() != needle or idx + 1 >= sink_line:
+            continue
+        first = len(ln) - len(ln.lstrip())
+        view_ln = view[idx] if idx < len(view) else None
+        if (view_ln is None or first >= len(view_ln)
+                or view_ln[first] == " "):
+            continue
+        candidates.append(idx + 1)
     if not candidates:
         return None
     if language == "python":
