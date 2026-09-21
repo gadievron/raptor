@@ -782,7 +782,7 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
             "",
             "## Fuzz Strategy",
             "",
-            f"- Strategy: `{suitability.get('strategy')}`",
+            f"- Strategy: `{_md_escape(suitability.get('strategy'))}`",
             f"- Direct whole-target campaign recommended: {'yes' if suitability.get('direct_campaign_recommended') else 'no'}",
             f"- Runtime collection: "
             f"`{_md_escape(suitability.get('runtime_strategy', 'direct_process'))}`",
@@ -806,7 +806,7 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
             "| Priority | Action | Command | Why |",
             "|---:|---|---|---|",
         ])
-        lines.extend(f"| {item['priority']} | `{item['kind']}` | `{_md_escape(item['command'])}` | "
+        lines.extend(f"| {_md_escape(item['priority'])} | `{_md_escape(item['kind'])}` | `{_md_escape(item['command'])}` | "
                 f"{_md_escape(item['why'])} |" for item in investigation["priority_queue"])
     else:
         lines.append("- No follow-on actions queued.")

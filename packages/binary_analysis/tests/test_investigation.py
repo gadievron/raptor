@@ -156,3 +156,41 @@ def test_hostile_binary_strings_scrubbed_from_reports(tmp_path: Path) -> None:
         text = (out / name).read_text(encoding="utf-8")
         assert "\x1b" not in text, f"raw ESC survived into {name}"
         assert "\x07" not in text, f"raw BEL survived into {name}"
+
+
+def test_fuzz_strategy_and_priority_kind_escaped() -> None:
+    """The landed escape boundary wrapped four fuzz_suitability
+    fields but left `strategy` (same dict, one line above) and the
+    priority-queue `kind` cell raw — same run-dir-JSON derivation,
+    same _md_escape chokepoint."""
+    from packages.binary_analysis.investigation import (
+        render_investigation_report,
+    )
+    summary = {k: 0 for k in (
+        "entry_point_candidates", "input_channel_candidates",
+        "sink_candidates", "candidate_flows", "runtime_input_flows",
+        "fuzz_witnesses", "discovered_artifacts", "ranked_ingress",
+        "parser_boundary_candidates")}
+    investigation = {
+        "summary": summary, "target_path": "/x",
+        "binary_sha256": "0" * 64, "status": "complete",
+        "can_promote_findings": False,
+        "ranked_ingress": [], "ranked_parser_boundaries": [],
+        "ranked_surfaces": [], "facts": [],
+        "structural_inferences": [], "ranked_classes": [],
+        "discovered_artifacts": [], "automatic_graph_queries": [],
+        "hypotheses": [], "active_phases": [],
+        "fuzz_suitability": {
+            "strategy": "evil\x1b[2Jstrategy\x07",
+            "runtime_strategy": "direct_process",
+            "runtime_reason": "r", "reason": "x", "next_step": "n",
+            "harness_candidates": [],
+        },
+        "priority_queue": [{"priority": "9\x1b[31m",
+                            "kind": "k\x1b[9A\x07",
+                            "command": "c", "why": "w"}],
+        "non_claims": ["nc"],
+    }
+    md = render_investigation_report(investigation)
+    assert "\x1b" not in md and "\x07" not in md
+    assert "strategy" in md.lower()

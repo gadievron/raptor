@@ -920,3 +920,36 @@ def test_fuzz_replay_join_keeps_legacy_absolute_path_keys(tmp_path: Path) -> Non
 
     assert bundle is not None
     assert bundle.crashes[0].replay_evidence_ids
+
+
+def test_analysis_scope_lanes_escaped(tmp_path: Path) -> None:
+    """The landed header fix _esc'd format/arch with a comment naming
+    the derivation hostile; the Analysis Scope section 25 lines below
+    rendered the SAME values raw (Manifest.from_dict accepts
+    unbounded strings from run-dir JSON)."""
+    from packages.binary_analysis.manifest import BinaryManifest
+    from packages.binary_analysis.pipeline import (
+        BinaryAnalysisResult,
+        _write_report,
+    )
+    hostile = "arm64\x1b]0;pwned\x07\x9b2J"
+    manifest = BinaryManifest(
+        schema_version=1, binary_path="/x", binary_sha256="0" * 64,
+        size_bytes=1, executable=True, target_kind="binary",
+        arch=hostile, bits=64, binary_format="elf")
+    result = BinaryAnalysisResult(
+        manifest=manifest,
+        context_map={"analysis_scope": {
+            "selected_arch": hostile,
+            "deep_analysis_arch": hostile,
+            "analysis_depth": "full\x1b[2J",
+            "slice_count": "2\x1b[31m",
+        }},
+        evidence=[], input_channels=[], graph_path=Path("/g"),
+        decompilations={"coverage": {"decompiler": "r2\x1b[9A"}})
+    _write_report(result, tmp_path)
+    text = (tmp_path / "binary-analysis-report.md").read_text(
+        encoding="utf-8")
+    assert "Analysis Scope" in text
+    for raw in ("\x1b", "\x07", "\x9b"):
+        assert raw not in text

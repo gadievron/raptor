@@ -1149,12 +1149,16 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
         "",
         "## Analysis Scope",
         "",
-        f"- Selected architecture: {scope.get('selected_arch', result.manifest.arch)}",
-        f"- Analysis depth: {scope.get('analysis_depth', result.manifest.analysis_depth)}",
-        f"- Deep-analysis architecture: {scope.get('deep_analysis_arch') or 'not run'}",
-        f"- Mach-O slices inventoried: {scope.get('slice_count', 0)}",
+        # Same derivation as the escaped header lanes: arch/depth/
+        # decompiler strings come from parsing the hostile binary (or
+        # from run-dir JSON via Manifest.from_dict) — same _esc
+        # chokepoint.
+        f"- Selected architecture: {_esc(scope.get('selected_arch', result.manifest.arch))}",
+        f"- Analysis depth: {_esc(scope.get('analysis_depth', result.manifest.analysis_depth))}",
+        f"- Deep-analysis architecture: {_esc(scope.get('deep_analysis_arch') or 'not run')}",
+        f"- Mach-O slices inventoried: {_esc(scope.get('slice_count', 0))}",
         f"- All slices deeply analysed: {'yes' if scope.get('all_slices_analysed') else 'no'}",
-        f"- Decompiler: {coverage.get('decompiler') or 'none'}",
+        f"- Decompiler: {_esc(coverage.get('decompiler') or 'none')}",
     ]
     if result.manifest.app_bundle:
         bundle = result.manifest.app_bundle
