@@ -38,6 +38,13 @@ logger = logging.getLogger(__name__)
 
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point. Returns the process exit code."""
+    # Escaping-console chokepoint: this subcommand runs as its own
+    # libexec-dispatched process; with no logging config,
+    # logging.lastResort would relay WARNING+ foreign text (OCI
+    # registry fetch exception text) to the TTY with a plain
+    # formatter.
+    from .cli import _configure_logging  # local import: avoid cycle
+    _configure_logging(0)
     args = _parse_args(list(argv) if argv is not None else None)
     target = args.target
 

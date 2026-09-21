@@ -250,6 +250,13 @@ def _redact_url(url: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # Escaping-console chokepoint: this subcommand runs as its own
+    # libexec-dispatched process; with no logging config,
+    # logging.lastResort would relay WARNING+ foreign text
+    # (Dependency-Track server HTTP error bodies) to the TTY with a
+    # plain formatter.
+    from .cli import _configure_logging  # local import: avoid cycle
+    _configure_logging(0)
     parser = argparse.ArgumentParser(
         prog="raptor-sca dt-push",
         description=(

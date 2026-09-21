@@ -172,6 +172,12 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 
 def main(argv: Sequence[str]) -> int:
+    # Escaping-console chokepoint: this subcommand runs as its own
+    # libexec-dispatched process; with no logging config,
+    # logging.lastResort would relay WARNING+ foreign text
+    # (advisory/git-derived text) to the TTY with a plain formatter.
+    from .cli import _configure_logging  # local import: avoid cycle
+    _configure_logging(0)
     args = _parse_args(argv)
 
     cves: list[str] = []

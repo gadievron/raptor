@@ -21,6 +21,12 @@ if TYPE_CHECKING:
 
 
 def main(argv: Sequence[str]) -> int:
+    # Escaping-console chokepoint: this subcommand runs as its own
+    # libexec-dispatched process; with no logging config,
+    # logging.lastResort would relay WARNING+ foreign text
+    # (resolver/registry text) to the TTY with a plain formatter.
+    from .cli import _configure_logging  # local import: avoid cycle
+    _configure_logging(0)
     args = _parse_args(argv)
     eco_canonical = canonicalise(args.ecosystem)
     if eco_canonical is None:

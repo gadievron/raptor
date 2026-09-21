@@ -210,6 +210,15 @@ def _compose_proxy_hosts(target: Path) -> list:
 # ---------------------------------------------------------------------------
 
 def main(argv=None) -> int:
+    # Escaping-console chokepoint: this is the sandboxed subprocess
+    # entry (its own process). Wired via core.logging directly — the
+    # cli._configure_logging helper the dispatch-table subcommands use
+    # would pull the whole CLI module into the sandboxed child for no
+    # gain. Without it, logging.lastResort would relay WARNING+
+    # foreign text (resolver stderr, registry doc content) to the
+    # parent-visible stderr with a plain formatter.
+    from core.logging import configure_cli_logging
+    configure_cli_logging(logging.WARNING)
     from core.sandbox import PROFILES as _SANDBOX_PROFILES
     from packages.sca.api import analyse
     ap = argparse.ArgumentParser(description="RAPTOR SCA agent")
