@@ -92,19 +92,29 @@ def _normalize_url_target(target: str) -> str:
 #             the repo's config as operator-reviewed.
 #   build   — traced-build C/C++ CodeQL extraction (``--traced-build``):
 #             the repo's build system may execute during DB creation.
+#             ALSO build-flags finding suppression: the source-intel
+#             lane treats fortify-source / stack-protector evidence
+#             from repo-declared build config as suppression-grade
+#             only under this marker, and only when the run's analysed
+#             root matches this project's target (the one-target rule;
+#             see packages/source_intel/adapter.py
+#             ``_build_flags_trusted``). No per-run flag pair exists
+#             for that consumer — the marker is the only control.
 #   dynamic — dynamic validation (Frida auto-launch / target execution):
 #             ``config.dynamic_validation`` defaults on for this project.
 #
 # ``build`` deliberately does NOT imply ``config`` — a traced run
 # hitting unsafe CodeQL pack config must still refuse (see
 # packages/codeql/tests/test_buildless_mode.py::
-# TestTracedBuildTrustIndependence). A marker may only loosen gates the
-# corresponding per-run flag can already loosen; per-run flags always win.
+# TestTracedBuildTrustIndependence). Where a per-run flag pair exists,
+# flags always win over the marker, in both directions.
 VALID_TRUST_MARKERS = ("config", "build", "dynamic")
 
 _TRUST_MARKER_HELP = {
     "config": "--trust-repo umbrella (cc_trust + codeql_trust overrides)",
-    "build": "traced-build C/C++ CodeQL extraction (--traced-build)",
+    "build": "traced-build C/C++ CodeQL extraction (--traced-build) "
+             "+ build-flags finding suppression (one-target rule; "
+             "no flag pair — marker is the only control)",
     "dynamic": "dynamic validation (Frida / target execution opt-in)",
 }
 

@@ -930,25 +930,44 @@ directory conventions.
 **Trust markers.** `trust` / `untrust` persist operator trust
 assertions on the project (schema v4), stored as marker → timestamp in
 the project JSON under `~/.raptor/projects/` — never inside the
-scanned repo, and never set automatically. Each marker only loosens a
-gate its per-run flag already loosens:
+scanned repo, and never set automatically. Most marker consumers pair
+with a per-run flag the marker merely defaults on; the exceptions —
+consumers where the marker is the only control — are called out below:
 
 | Marker | Equivalent per-run flag | Effect |
 |--------|------------------------|--------|
 | `config` | `--trust-repo` | Lifts the Claude Code config check (`cc_trust`) and the CodeQL pack-config check (`codeql_trust`); also arms the audit pipeline's trust-gated refutation witnesses |
-| `build` | `--traced-build` | Traced-build C/C++ CodeQL extraction (executes the repo's build system) |
+| `build` | `--traced-build` | Traced-build C/C++ CodeQL extraction (executes the repo's build system); also makes build-flags evidence suppression-grade in source-intel's verdict policy (corpus Validator lane; no flag pair, one-target rule — see below) |
 | `dynamic` | `--dynamic` (audit) | Dynamic validation: Frida observation / target execution defaults on |
 
 Markers are consumed where `/agentic` and `/codeql` load the project's
-persisted binaries, and where the audit pipeline builds
+persisted binaries, where the audit pipeline builds
 `dynamic_validation` and `repo_trusted` (the `config` marker arms
 audit's trust-gated refutation witnesses; that consumption has no
 per-run flag pair — the marker is the only control, see
-[audit.md](audit.md)). Per-run flags always win, in both directions:
+[audit.md](audit.md)), and where source-intel's verdict policy decides
+build-flags suppression — the corpus-runner Validator lane
+(`core/dataflow/scripts/corpus-run --validator
+packages.source_intel.adapter:SourceIntelValidator`), the one place
+source-intel renders verdicts: fortify-source / stack-protector
+evidence parsed from the repo's declared build config (`.config` /
+Makefile / `compile_commands.json` text) can mark write-class findings
+Not Exploitable only under the `build` marker, and only when the
+analysed root matches the marker's project target (the one-target rule
+— a project's marker never relaxes vetting for a different tree;
+fail-closed on unknown roots). On `/agentic`/`/analyze` the same
+build-flags facts are injected as hint-tier evidence only — the marker
+changes no verdict there. Like the audit `config` consumption, this
+has no per-run flag pair — the marker is the only control; when the
+evidence matches without it on the verdict lane, suppression is
+withheld and a warning line names the remedy (`/project trust build`).
+Per-run flags always win, in both directions:
 explicit negative flag (`--no-trust-repo`, `--no-traced-build`,
 `--no-dynamic`) > explicit positive flag > project marker > default
 (off). Whenever a marker affects a run, one banner line prints at
-start: `[*] project trust: build, dynamic (per-run flags override)`.
+start: `[*] project trust: build, dynamic (per-run flags override)` —
+except the corpus-runner build-flags consumer, which is silent on
+grant and warns only when suppression is withheld.
 `build` deliberately does NOT imply `config` — a traced run that hits
 unsafe CodeQL pack config still refuses (see
 [docs/codeql.md](codeql.md)).
