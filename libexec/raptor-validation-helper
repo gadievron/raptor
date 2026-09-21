@@ -41,12 +41,18 @@ from core.artifacts.provenance import sanitise_free_text, stamp_provenance  # no
 from core.inventory.lookup import normalise_path  # noqa: E402
 from core.json import load_json, save_json  # noqa: E402
 from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
-from core.schema_constants import MEMORY_CORRUPTION_TYPES, normalise_vuln_type  # noqa: E402
+from core.schema_constants import (  # noqa: E402
+    CWE_TO_VULN_TYPE,
+    MEMORY_CORRUPTION_TYPES,
+    VULN_TYPES,
+    normalise_vuln_type,
+)
 from packages.exploitability_validation.schemas import (  # noqa: E402
     ATTACK_PATH_SCHEMA,
     ATTACK_SURFACE_SCHEMA,
     ATTACK_TREE_SCHEMA,
     DISPROVEN_SCHEMA,
+    FINDING_SCHEMA,
     FINDINGS_SCHEMA,
     HYPOTHESIS_SCHEMA,
     create_empty_findings,
@@ -262,6 +268,141 @@ def _normalise_finding_ids(container):
     return renamed
 
 
+# Finding fields other pipelines mark their exports with — presence of
+# any means "audit-shaped" (mirrors is_audit_format in
+# core.orchestration.audit_bridge, applied per finding).
+_AUDIT_SHAPE_FIELDS = ("evidence_tool", "hypothesis", "provenance_refs")
+
+_FINDING_STATUS_VALUES = frozenset(
+    FINDING_SCHEMA["properties"]["status"]["enum"])
+
+_CWE_SHAPE_RE = re.compile(r"^CWE-[0-9]+$", re.IGNORECASE)
+
+
+def _mechanical_vuln_type(finding: dict) -> str | None:
+    """Schema-canonical vuln_type derivable WITHOUT guessing, or None.
+
+    Sources, in order: the finding's own ``vuln_type`` (alias- and
+    case-normalised; audit exports stamp the CWE id or ``novel``
+    there), then the ``cwe`` / ``cwe_id`` fields. CWE ids map through
+    the shared CWE_TO_VULN_TYPE table (unambiguous by construction);
+    ``novel`` is audit's explicit no-known-class marker and maps to
+    the schema's catch-all ``other``. Anything else returns None —
+    a schema warning is acceptable, a guessed value is not.
+    """
+    own = finding.get("vuln_type")
+    if isinstance(own, str) and own.strip():
+        norm = normalise_vuln_type(own.strip())
+        if norm in VULN_TYPES:
+            return norm
+        if _CWE_SHAPE_RE.match(norm):
+            return CWE_TO_VULN_TYPE.get(norm.upper())
+        if norm.lower() == "novel":
+            return "other"
+        return None
+    for key in ("cwe", "cwe_id"):
+        cwe = finding.get(key)
+        if isinstance(cwe, str) and _CWE_SHAPE_RE.match(cwe.strip()):
+            mapped = CWE_TO_VULN_TYPE.get(cwe.strip().upper())
+            if mapped:
+                return mapped
+    return None
+
+
+def _evidence_tool_confidence(evidence_tool: object) -> "str | None":
+    """Confidence graded from an audit ``evidence_tool`` stamp, or None.
+
+    Uses the audit bridge's own tool→confidence table so the two
+    import paths cannot drift. Only tools the table knows grade a
+    confidence — an unknown tool returns None (never guess), and the
+    seeded stage_a_summary simply omits the field.
+    """
+    if not isinstance(evidence_tool, str) or not evidence_tool:
+        return None
+    from core.orchestration.audit_bridge import EVIDENCE_TOOL_CONFIDENCE
+    return EVIDENCE_TOOL_CONFIDENCE.get(evidence_tool.split(":")[0])
+
+
+def _map_imported_finding_fields(container: dict | None) -> dict[str, int]:
+    """Mechanically fill the schema fields a ``--findings`` import can
+    carry from another pipeline's vocabulary.
+
+    Audit exports carry ``evidence_tool`` / ``tree_class`` /
+    ``hypothesis`` / receipts but no /validate ``status``, an
+    out-of-enum ``origin``, and a CWE-shaped (or absent) ``vuln_type``
+    — every stage prep then re-printed schema warnings until the LLM
+    stages back-filled the fields. The mapping is derivation, never
+    invention:
+
+    * ``status`` — missing or out-of-enum values become the imported-
+      shape entry state ``not_disproven`` (the same default the
+      variants import applies); the original is preserved as
+      ``source_status`` for provenance.
+    * ``vuln_type`` — see :func:`_mechanical_vuln_type`; unmappable
+      values are left untouched (fail-soft).
+    * ``origin`` — a bare ``audit`` provenance stamp (or an absent one
+      on an audit-shaped finding) becomes the schema's established
+      ``audit_import``; non-audit shapes stay absent rather than
+      guessed.
+    * ``stage_a_summary`` — for audit-shaped findings only, seeded
+      from the finding's own hypothesis / description / title first
+      line so Stage B has upstream context; an existing summary is
+      never overwritten, and canonical (native) findings pass through
+      unchanged.
+
+    Returns per-field fill counts (zeros omitted) for the import log.
+    """
+    counts = {"status": 0, "vuln_type": 0, "origin": 0,
+              "stage_a_summary": 0}
+    for f in (container or {}).get("findings", []):
+        if not isinstance(f, dict):
+            continue
+
+        status = f.get("status")
+        # isinstance FIRST: a list/dict-typed status is unhashable and
+        # the set probe alone would TypeError — the chokepoint is
+        # fail-soft by contract, so wrong-typed values map like any
+        # other out-of-enum value instead of aborting the import.
+        if not isinstance(status, str) or status not in _FINDING_STATUS_VALUES:
+            if isinstance(status, str) and status:
+                f.setdefault("source_status", status)
+            f["status"] = "not_disproven"
+            counts["status"] += 1
+
+        vt = f.get("vuln_type")
+        mapped_vt = _mechanical_vuln_type(f)
+        if mapped_vt is not None and mapped_vt != vt:
+            f["vuln_type"] = mapped_vt
+            counts["vuln_type"] += 1
+
+        origin = f.get("origin")
+        audit_shaped = any(f.get(k) for k in _AUDIT_SHAPE_FIELDS)
+        if origin == "audit" or (origin is None and audit_shaped):
+            f["origin"] = "audit_import"
+            counts["origin"] += 1
+
+        if "stage_a_summary" not in f and audit_shaped:
+            reasoning = next(
+                (v for v in (f.get("hypothesis"), f.get("description"),
+                             f.get("title"))
+                 if isinstance(v, str) and v.strip()), None)
+            if reasoning:
+                summary = {
+                    "status": f.get("status"),
+                    "candidate_reasoning":
+                        reasoning.strip().splitlines()[0][:500],
+                }
+                confidence = f.get("confidence")
+                if not (isinstance(confidence, str) and confidence):
+                    confidence = _evidence_tool_confidence(
+                        f.get("evidence_tool"))
+                if isinstance(confidence, str) and confidence:
+                    summary["confidence"] = confidence
+                f["stage_a_summary"] = summary
+                counts["stage_a_summary"] += 1
+    return {k: v for k, v in counts.items() if v}
+
+
 def _coerce_findings_container(
     data: object, target_path: str | None = None,
 ) -> tuple[dict | None, str | None]:
@@ -373,6 +514,10 @@ def _import_findings_file(
         print(f"  Normalised {renamed} foreign finding "
               f"id(s) to FIND-<n> (originals kept as "
               f"source_id)")
+    mapped = _map_imported_finding_fields(container)
+    if mapped:
+        summary = ", ".join(f"{k}: {v}" for k, v in sorted(mapped.items()))
+        print(f"  Mapped import fields — {summary}")
     _save_artifact(dest, container)
     _write_import_marker(len(container["findings"]))
     print(f"Pre-existing findings: {len(container['findings'])} "
