@@ -533,13 +533,25 @@ class PomInheritanceResolver:
         bom_entries = root.findall(
             "./dependencyManagement/dependencies/dependency"
         )
+        # The import's <version> is routinely spelled ``${property}``
+        # with the property defined in THIS pom's own <properties>
+        # (the centralised-version corporate/Spring layout). ``view``
+        # holds only ANCESTOR state — empty exactly on the parent-less
+        # child this phase exists to serve — so resolve against an
+        # overlay of the root's own properties (own values win, per
+        # Maven precedence: child properties override inherited ones).
+        resolve_view = InheritanceView()
+        resolve_view.properties.update(_own_properties(root))
+        for k, v in view.properties.items():
+            resolve_view.properties.setdefault(k, v)
         for entry in bom_entries:
             scope = _text(entry, "scope")
             if scope != "import":
                 continue
             group = _text(entry, "groupId")
             artifact = _text(entry, "artifactId")
-            version = _resolve_property(_text(entry, "version"), view)
+            version = _resolve_property(
+                _text(entry, "version"), resolve_view)
             if not (group and artifact and version):
                 continue
             coord_key = (group, artifact, version)
@@ -620,12 +632,11 @@ class PomInheritanceResolver:
 # ---------------------------------------------------------------------------
 
 
-def _absorb_self(root: Any, view: InheritanceView) -> None:
-    """Add the POM's OWN top-level ``<properties>`` and
-    ``<dependencyManagement>`` (excluding BOM imports) to ``view``.
-    Called once per ancestor after its parent chain has been merged
-    so the ancestor's own values override its grandparents'."""
-    # Properties
+def _own_properties(root: Any) -> dict[str, str]:
+    """The POM's OWN top-level ``<properties>`` as a dict (non-empty
+    text values only). Shared by :func:`_absorb_self` and the BOM
+    walker's resolution overlay."""
+    out: dict[str, str] = {}
     props_el = root.find("./properties")
     if props_el is not None:
         for child in props_el:
@@ -633,7 +644,17 @@ def _absorb_self(root: Any, view: InheritanceView) -> None:
                 continue
             text = (child.text or "").strip()
             if text:
-                view.properties[child.tag] = text
+                out[child.tag] = text
+    return out
+
+
+def _absorb_self(root: Any, view: InheritanceView) -> None:
+    """Add the POM's OWN top-level ``<properties>`` and
+    ``<dependencyManagement>`` (excluding BOM imports) to ``view``.
+    Called once per ancestor after its parent chain has been merged
+    so the ancestor's own values override its grandparents'."""
+    # Properties
+    view.properties.update(_own_properties(root))
 
     # depMgmt — skip BOM imports (those are handled separately)
     for entry in root.findall(

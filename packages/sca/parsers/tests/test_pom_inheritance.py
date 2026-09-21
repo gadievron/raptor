@@ -1162,3 +1162,143 @@ def test_phase3_child_direct_bom_import_without_parent(tmp_path: Path):
     )
     assert jdb is not None
     assert jdb.version == "2.16.0"
+
+
+def test_phase3_child_own_bom_version_from_same_pom_property(
+    tmp_path: Path,
+):
+    """The routine corporate/Spring spelling of the parent-less BOM
+    import: the version centralised in the SAME pom's <properties>
+    (``<version>${boot.version}</version>``). The ancestor view is
+    empty on a parent-less child, so resolution must overlay the
+    child's own properties — pre-fix the coord failed _valid_coord
+    with the unresolved ``${...}`` and the whole managed set was lost
+    silently (managed == {} with zero fetches)."""
+    boot_deps_xml = '''\
+<project>
+  <groupId>org.springframework.boot</groupId>
+  <artifactId>spring-boot-dependencies</artifactId>
+  <version>3.2.0</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>2.16.0</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+'''
+    client = _StubMavenClient({
+        "org.springframework.boot:spring-boot-dependencies:3.2.0":
+            boot_deps_xml,
+    })
+    app = _write(tmp_path, "pom.xml", '''\
+<project>
+  <artifactId>myapp</artifactId>
+  <properties>
+    <boot.version>3.2.0</boot.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-dependencies</artifactId>
+        <version>${boot.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+''')
+    deps = _parse_with_resolver(app, client=client)
+    jdb = next(
+        (d for d in deps
+         if d.name == "com.fasterxml.jackson.core:jackson-databind"),
+        None,
+    )
+    assert jdb is not None
+    assert jdb.version == "2.16.0"
+    assert client.fetch_calls == [
+        "org.springframework.boot:spring-boot-dependencies:3.2.0",
+    ]
+
+
+def test_phase3_child_own_property_beats_inherited(tmp_path: Path):
+    """Precedence on the overlay: when the child and its parent both
+    define the property, the child's value wins (Maven precedence) —
+    the BOM fetched is the child-pinned version."""
+    boot_new = '''\
+<project>
+  <groupId>org.example</groupId>
+  <artifactId>corp-bom</artifactId>
+  <version>2.0</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>2.17.0</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+'''
+    client = _StubMavenClient({"org.example:corp-bom:2.0": boot_new})
+    _write(tmp_path, "parent/pom.xml", '''\
+<project>
+  <groupId>org.example</groupId>
+  <artifactId>parent</artifactId>
+  <version>1</version>
+  <properties>
+    <bom.version>1.0</bom.version>
+  </properties>
+</project>
+''')
+    app = _write(tmp_path, "app/pom.xml", '''\
+<project>
+  <artifactId>myapp</artifactId>
+  <parent>
+    <groupId>org.example</groupId>
+    <artifactId>parent</artifactId>
+    <version>1</version>
+    <relativePath>../parent/pom.xml</relativePath>
+  </parent>
+  <properties>
+    <bom.version>2.0</bom.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.example</groupId>
+        <artifactId>corp-bom</artifactId>
+        <version>${bom.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+''')
+    deps = _parse_with_resolver(app, client=client)
+    jdb = next(
+        (d for d in deps
+         if d.name == "com.fasterxml.jackson.core:jackson-databind"),
+        None,
+    )
+    assert jdb is not None
+    assert jdb.version == "2.17.0"
