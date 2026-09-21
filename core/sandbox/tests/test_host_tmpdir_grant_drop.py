@@ -76,8 +76,20 @@ class TestMountNsChildStderrClean(unittest.TestCase):
 
     def setUp(self):
         from core.sandbox._spawn import mount_ns_available
+        from core.sandbox.landlock import check_landlock_available
         if not mount_ns_available():
             self.skipTest("mount-ns backend unavailable on this host")
+        if not check_landlock_available():
+            # The subject is the Landlock grant-open leak — vacuous
+            # without Landlock. And on hosts where mount(2) is ALSO
+            # refused at runtime (feature-matrix no-landlock/no-both
+            # lanes probe mount_in_userns=fail), the spawn's Landlock-
+            # only fallback hits the designed fail-closed refusal
+            # (target/output confinement with no layer to enforce it),
+            # which is the sandbox working as intended, not a grant
+            # regression. Same gate as the sibling classes below.
+            self.skipTest("Landlock unavailable — grant semantics "
+                          "unobservable")
         self._saved_tempdir = tempfile.tempdir
         # A real host dir so gettempdir() resolves; it will not exist
         # inside the child's fresh /tmp tmpfs.

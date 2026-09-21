@@ -289,6 +289,13 @@ class TestSandboxContextBlockEventCapture(unittest.TestCase):
         )
 
 
+# Same gate as TestSandboxContextBlockEventCapture above: the dedup is
+# driven through a real ``ctx.sandbox`` engagement, whose target/output
+# confinement needs a Landlock layer when the host refuses mount(2) at
+# runtime — on the feature-matrix no-landlock/no-both lanes that shape
+# hits the sandbox's designed fail-closed SandboxSetupError, which is
+# the refusal contract working, not a dedup regression.
+@requires_landlock
 class TestBlockDrainDedupIdentity(unittest.TestCase):
     """The de-dup key is event IDENTITY (the proxy-stamped
     ``proxy_seq``), not the (t, host, port) coincidence key: two
