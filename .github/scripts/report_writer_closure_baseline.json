@@ -712,7 +712,7 @@
       "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
     },
     "bin/raptor": {
-      "note": "manual audit: launcher \u2014 echo lanes carry $0, PATH-entry hygiene warnings (operator env), install paths, and argv; PATH entries are pre-scrubbed before any external command runs"
+      "note": "manual audit: launcher \u2014 echo lanes carry $0, PATH-entry hygiene warnings, install paths, and argv; PATH entries are attacker-influenceable by the script's own threat model (hostile direnv/.envrc) and the hygiene warnings strip non-printables at echo (builtins, _fsince idiom; pinned by .github/tests/test_launcher_path_scrub.py); PATH entries are pre-scrubbed before any external command runs"
     },
     "bin/raptor-sca": {
       "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"
@@ -736,7 +736,7 @@
       "note": "manual audit: docker-exec dispatch shim \u2014 echo lanes carry $0/paths; server JSON-RPC traffic flows through the mcp-guard python filter, never through echo"
     },
     "libexec/raptor-sage-setup": {
-      "note": "manual audit: the boot-payload approval displays route server-derived text through _render_payload_display (escape + bound, fail-closed on sanitiser failure) on every lane incl. the corrupt-header --reauthorize replace; covered by test_sage_setup_reauthorize display-integrity tests and the approval-surface registry wire-token check"
+      "note": "manual audit: the boot-payload approval displays route server-derived text through _render_payload_display (escape + bound, fail-closed on sanitiser failure) on every lane incl. the corrupt-header --reauthorize replace; covered by test_sage_setup_reauthorize display-integrity tests and the approval-surface registry wire-token check. status/verify_embeddings lanes echo container env (SAGE_EMBEDDING_*, OLLAMA_*) resolved through core/sage/docker-compose.yml \u2014 some values are host-env-defaulted (e.g. SAGE_EMBED_MODEL), and the lanes strip only whitespace, so they are safe only while those resolutions stay host-controlled, not by the audited script"
     },
     "libexec/raptor-threat-model": {
       "note": "manual audit: launcher/dispatch shim \u2014 echo lanes carry $0, install paths, and operator argv only (no target/LLM-derived content reaches echo)"

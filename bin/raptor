@@ -26,7 +26,13 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
             *)   _entry="$_rest"; _last=1 ;;
         esac
         _drop_reason=""
-        _shown="$_entry"
+        # PATH entries are attacker-influenceable by this script's own
+        # threat model (a hostile direnv/.envrc poisons PATH) — strip
+        # non-printables and bound length (builtins only, like the
+        # session-entry _fsince lane) before any echo below renders
+        # the very entry we classified hostile.
+        _shown="${_entry//[![:print:]]/}"
+        _shown="${_shown:0:200}"
         if [ -z "$_entry" ]; then
             _drop_reason="empty entry (resolves as cwd)"
             _shown="(empty)"
@@ -134,11 +140,15 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
             fi
         fi
         if [ -n "$_drop_reason" ]; then
+            # Same strip-before-echo as the pre-pass: never render the
+            # entry we just classified hostile with its raw bytes.
+            _shown="${_entry//[![:print:]]/}"
+            _shown="${_shown:0:200}"
             if [ -n "${RAPTOR_ALLOW_UNSAFE_PATH:-}" ]; then
-                echo "raptor: WARNING: keeping unsafe PATH entry ($_drop_reason; RAPTOR_ALLOW_UNSAFE_PATH set): $_entry" >&2
+                echo "raptor: WARNING: keeping unsafe PATH entry ($_drop_reason; RAPTOR_ALLOW_UNSAFE_PATH set): $_shown" >&2
                 _scrubbed="$_scrubbed$_entry:"
             else
-                echo "raptor: dropped unsafe PATH entry ($_drop_reason): $_entry" >&2
+                echo "raptor: dropped unsafe PATH entry ($_drop_reason): $_shown" >&2
             fi
         else
             _scrubbed="$_scrubbed$_entry:"
@@ -146,7 +156,7 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
     done
     PATH="${_scrubbed%:}"
     export PATH
-    unset _scrubbed _rest _last _entry _drop_reason _perm
+    unset _scrubbed _rest _last _entry _shown _drop_reason _perm
 
     # Warn (don't drop) when claude resolves under a world-writable
     # ANCESTOR — the per-entry check above can't see parents.
@@ -159,7 +169,13 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
                      || _rp stat -Lf '%Lp' "$_dir" 2>/dev/null \
                      || echo '')"
             if [ -n "$_perm" ] && [ "$(( 0$_perm & 2 ))" -ne 0 ]; then
-                echo "raptor: WARNING: claude resolves under a world-writable tree: $_claude_path (writable ancestor: $_dir)" >&2
+                # claude resolved through the scrubbed PATH but may
+                # still live in an attacker-writable tree — strip
+                # before echoing, same discipline as the entry lanes.
+                _shown_cp="${_claude_path//[![:print:]]/}"
+                _shown_dir="${_dir//[![:print:]]/}"
+                echo "raptor: WARNING: claude resolves under a world-writable tree: ${_shown_cp:0:200} (writable ancestor: ${_shown_dir:0:200})" >&2
+                unset _shown_cp _shown_dir
                 break
             fi
             # Parameter expansion, not dirname(1) — no external
@@ -199,7 +215,12 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
                     # Depth bound: refuse suspiciously deep trees
                     # (planted junk). find is -P: no symlink follow.
                     if [ -n "$(_rp find "$_d" -mindepth 24 -print -quit 2>/dev/null)" ]; then
-                        echo "raptor: skipping suspiciously deep stale session dir: $_d" >&2
+                        # $_d inherits the RAPTOR_WORK_DIR/TMPDIR-derived
+                        # base prefix (attacker-influenceable env, same
+                        # class as PATH) — strip before echoing.
+                        _shown_d="${_d//[![:print:]]/}"
+                        echo "raptor: skipping suspiciously deep stale session dir: ${_shown_d:0:200}" >&2
+                        unset _shown_d
                         continue
                     fi
                     _rp rm -rf -- "$_d"
@@ -210,7 +231,9 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
         # Advisory only — live sessions' scratch counts too.
         _kb="$(_rp du -sk "$_tmp_base" 2>/dev/null | _rp cut -f1)"
         if [ -n "$_kb" ] && [ "$_kb" -gt 5242880 ] 2>/dev/null; then
-            echo "raptor: note: $_tmp_base holds >5G of session scratch — stale dirs sweep on each launch; live ones may need manual cleanup" >&2
+            _shown_tb="${_tmp_base//[![:print:]]/}"
+            echo "raptor: note: ${_shown_tb:0:200} holds >5G of session scratch — stale dirs sweep on each launch; live ones may need manual cleanup" >&2
+            unset _shown_tb
         fi
         unset _kb
         # $$ survives the exec, so the name tracks the session.
@@ -225,7 +248,11 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
         done
         unset _try _sess
     else
-        echo "raptor: warning: $_tmp_base is not a directory owned by this user — session TMPDIR disabled for this launch" >&2
+        # RAPTOR_WORK_DIR/TMPDIR are attacker-influenceable env (the
+        # PATH-scrub threat model) — strip before echoing.
+        _shown_tb="${_tmp_base//[![:print:]]/}"
+        echo "raptor: warning: ${_shown_tb:0:200} is not a directory owned by this user — session TMPDIR disabled for this launch" >&2
+        unset _shown_tb
     fi
     unset _tmp_base
 fi
