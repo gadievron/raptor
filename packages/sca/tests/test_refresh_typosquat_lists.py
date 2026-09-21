@@ -9,8 +9,12 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import random
 import re
+import subprocess
+import sys
+import textwrap
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -509,3 +513,68 @@ def test_packagist_grammar_linear_on_adversarial_rows() -> None:
         start = time.perf_counter()
         assert new.fullmatch(row) is None
         assert time.perf_counter() - start < 1.0
+
+
+# ---------------------------------------------------------------------------
+# Import chain without PyYAML
+# ---------------------------------------------------------------------------
+#
+# The data-refresh workflow runs this module in a minimal environment
+# (urllib3 only — the feeds are all JSON). PyYAML is an optional
+# dependency of the sca package: every yaml-format lane guards its own
+# use-site import and degrades without it, so nothing on the refresh
+# CLI's import chain may require it at IMPORT time. A fresh interpreter
+# per test: the block must apply before anything cached ``yaml``.
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+_YAML_BLOCK_PRELUDE = textwrap.dedent("""\
+    import sys
+
+    class _BlockYaml:
+        # Raising from find_spec ends the module search exactly like a
+        # genuinely absent distribution does.
+        def find_spec(self, name, path=None, target=None):
+            if name == "yaml" or name.startswith("yaml."):
+                raise ModuleNotFoundError(f"No module named {name!r}")
+
+    sys.meta_path.insert(0, _BlockYaml())
+""")
+
+
+def _run_without_yaml(code: str) -> subprocess.CompletedProcess:
+    env = dict(os.environ)
+    env["PYTHONPATH"] = (
+        str(_REPO_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
+    )
+    return subprocess.run(
+        [sys.executable, "-c", _YAML_BLOCK_PRELUDE + code],
+        capture_output=True, text=True, cwd=str(_REPO_ROOT), env=env,
+        timeout=120,
+    )
+
+
+def test_refresh_import_chain_needs_no_pyyaml() -> None:
+    r = _run_without_yaml(
+        "import packages.sca.refresh_typosquat_lists\nprint('chain-ok')"
+    )
+    assert r.returncode == 0, r.stderr
+    assert "chain-ok" in r.stdout
+
+
+def test_yaml_fast_defers_the_dependency_to_use_time() -> None:
+    r = _run_without_yaml(textwrap.dedent("""\
+        from packages.sca._yaml_fast import safe_load, safe_load_all
+        for fn, doc in ((safe_load, "a: 1"), (safe_load_all, "a: 1")):
+            try:
+                # safe_load_all is lazy — consume it to force the call.
+                out = fn(doc)
+                list(out) if fn is safe_load_all else out
+            except ModuleNotFoundError as e:
+                assert "pyyaml" in str(e).lower(), e
+            else:
+                raise AssertionError(f"{fn.__name__} did not raise")
+        print("use-time-raise-ok")
+    """))
+    assert r.returncode == 0, r.stderr
+    assert "use-time-raise-ok" in r.stdout
