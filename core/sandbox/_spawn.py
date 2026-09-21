@@ -1234,6 +1234,15 @@ _CAPTURE_CAP = 64 * 1024 * 1024
 #: latency while keeping the sibling coupling human-imperceptible.
 _POST_EXIT_DRAIN_SECONDS = 0.5
 
+#: Deadline for the parent's step-4 wait on the child's 'R' ready
+#: byte. A healthy child writes it within milliseconds of unshare(2),
+#: so the deadline never fires on the good path; it bounds only the
+#: EOF-on-death signal, which a sibling spawn's transiently-inherited
+#: p_ready_w copy can withhold for that sibling's full lifetime (the
+#: same cross-spawn pin class as _POST_EXIT_DRAIN_SECONDS and the
+#: t_ready_r/pid_r waits — 15s matches those waits' deadline).
+_P_READY_DEADLINE_S = 15.0
+
 
 def run_sandboxed(
     cmd: Sequence[str],
@@ -3410,8 +3419,51 @@ def run_sandboxed(
             _parent_fds.discard(err_w)
 
         # Step 4: wait for child to signal "unshare done, ready for newuidmap".
+        # Non-blocking + bounded deadline, same idiom as the tracer-
+        # ready (t_ready_r) and exec-pid (pid_r) waits below: a
+        # sibling spawn forked inside the pipe-creation → parent-
+        # close(p_ready_w) window inherits a p_ready_w copy, and the
+        # sibling's SETUP child closes only its OWN fds (its
+        # grandchild's pre-exec sweep never runs in the intermediate,
+        # which doesn't exec), so it retains that copy for its entire
+        # life. A blocking read here therefore pinned this run to the
+        # SIBLING's schedule whenever OUR child died before writing
+        # 'R' (unshare EPERM on a userns-restricted host, stdio
+        # failure, transient EAGAIN): the EOF could not arrive until
+        # the sibling target finished, and the run timeout only arms
+        # later. A healthy child writes 'R' within milliseconds of
+        # unshare, so the deadline never fires on the good path; only
+        # the EOF-on-death signal can be withheld, which the deadline
+        # bounds.
         try:
-            if os.read(p_ready_r, 1) != b"R":
+            _ready = b""
+            _ready_timed_out = False
+            os.set_blocking(p_ready_r, False)
+            import select as _pr_sel
+            _pr_deadline = time.monotonic() + _P_READY_DEADLINE_S
+            while True:
+                _pr_remaining = _pr_deadline - time.monotonic()
+                if _pr_remaining <= 0:
+                    _ready_timed_out = True
+                    break
+                _pr_readable, _, _ = _pr_sel.select(
+                    [p_ready_r], [], [], _pr_remaining)
+                if not _pr_readable:
+                    continue  # loop re-checks the deadline
+                try:
+                    _ready = os.read(p_ready_r, 1)
+                except BlockingIOError:
+                    continue  # spurious wakeup — keep waiting
+                break  # 1 byte (ready) or b"" (EOF — child died)
+            if _ready_timed_out:
+                # One final non-blocking read: an 'R' that landed in
+                # the same instant the last select timed out must not
+                # get its (ready!) child killed as wedged.
+                with contextlib.suppress(BlockingIOError, OSError):
+                    _ready = os.read(p_ready_r, 1)
+                if _ready == b"R":
+                    _ready_timed_out = False
+            if _ready != b"R":
                 _kill_and_reap(child_pid)
                 # The child died before "R" — almost always because its
                 # unshare(USER|NS|IPC|[NET]) was refused (userns-
@@ -3430,21 +3482,46 @@ def run_sandboxed(
                 from .probes import ENGAGE_FAIL_INSTRUCTIONS
                 _detail = (f" ({_status[0]}: {_status[1]})"
                            if _status else "")
-                # '!' (died without reporting — EOF, no byte at all)
-                # is per-invocation (external SIGKILL / OOM landed on
-                # the child pre-'R'), not an engagement failure: the
+                if _ready_timed_out and _status is not None \
+                        and _status[0] == "!":
+                    # The synthetic '!' text blames an external kill;
+                    # on the deadline path WE killed the wedged child
+                    # — drop the contradictory prose, keep the
+                    # category for the typed field.
+                    _detail = ""
+                # '!' (no reported category — the status parser
+                # maps an empty pipe to the synthetic '!' entry) is
+                # per-invocation, not an engagement failure: the
                 # engagement instructions' "a retry cannot help"
-                # doctrine would misguide the operator there.
-                _instr = (
-                    "the child was terminated during namespace setup "
-                    "before it could report (external SIGKILL, OOM "
-                    "kill). Retry the run; if it recurs, check for "
-                    "OOM kills (dmesg) or an external process sweeper."
-                    if _status is not None and _status[0] == "!"
-                    else ENGAGE_FAIL_INSTRUCTIONS)
+                # doctrine would misguide the operator there. On the
+                # deadline path the '!' shape means the child was
+                # WEDGED and killed by us just above (a real
+                # engagement refusal writes its category before
+                # exiting and is seen by the drain) — name that
+                # honestly instead of blaming an external kill.
+                _no_category = _status is None or _status[0] == "!"
+                if _ready_timed_out and _no_category:
+                    _instr = (
+                        "the child neither signalled ready nor "
+                        "reported a setup failure within "
+                        f"{_P_READY_DEADLINE_S:g}s — it was killed "
+                        "as wedged. Retry the run; if it recurs, "
+                        "check host load and dmesg.")
+                elif _status is not None and _status[0] == "!":
+                    _instr = (
+                        "the child was terminated during namespace "
+                        "setup before it could report (external "
+                        "SIGKILL, OOM kill). Retry the run; if it "
+                        "recurs, check for OOM kills (dmesg) or an "
+                        "external process sweeper.")
+                else:
+                    _instr = ENGAGE_FAIL_INSTRUCTIONS
                 raise SandboxSetupError(
                     "sandbox namespace child did not signal ready — "
-                    f"setup failed in the spawn child{_detail}",
+                    + ("timed out waiting for the spawn child"
+                       if _ready_timed_out else
+                       "setup failed in the spawn child")
+                    + _detail,
                     _instr,
                     setup_category=_status[0] if _status else None,
                 )
