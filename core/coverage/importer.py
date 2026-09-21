@@ -30,7 +30,7 @@ from core.run.provenance import (
     run_timestamp,
 )
 
-from .record import load_records
+from .record import RUN_ARTIFACT_MAX_BYTES, load_records
 from .registry import category_of
 from .schema import _opt_int, iter_file_entries, iter_item_entries
 from .summary import _inventory_name_index, _match_to_inventory
@@ -368,7 +368,11 @@ _FINDINGS_LOCATIONS = ("findings.json", "validation/findings.json")
 
 
 def _load_findings_file(path: Path) -> list[dict[str, Any]]:
-    data = load_json(path)
+    # Byte-budgeted: findings.json sits in the sandbox-writable run
+    # dir, so its size is as attacker-controlled as its shapes (an
+    # oversize file warns and loads as nothing — same class as the
+    # journal's 256 MiB gate).
+    data = load_json(path, max_bytes=RUN_ARTIFACT_MAX_BYTES)
     if isinstance(data, dict):
         data = data.get("findings", data.get("results", []))
     return data if isinstance(data, list) else []
@@ -485,12 +489,16 @@ def import_annotations(
 # registry). _UNDERSTAND_SECTIONS mirrors the bridge's _LOCATION_BEARING_SECTIONS.
 _UNDERSTAND_SECTIONS = ("entry_points", "sink_details", "boundary_details")
 
+#: Cap on the flow-trace glob — see _understand_points.
+_MAX_FLOW_TRACE_FILES = 512
+
 
 def _understand_points(run_dir: Path):
     """Yield (file, line) pairs from a run's /understand outputs: context-map
     entry points / sinks / trust boundaries, and every flow-trace step."""
     run = Path(run_dir)
-    cm = load_json(run / "context-map.json")
+    cm = load_json(run / "context-map.json",
+                   max_bytes=RUN_ARTIFACT_MAX_BYTES)
     if isinstance(cm, dict):
         for section in _UNDERSTAND_SECTIONS:
             for entry in cm.get(section) or []:
@@ -502,8 +510,17 @@ def _understand_points(run_dir: Path):
                     ln = entry.get("line_start")
                 if isinstance(f, str) and f and isinstance(ln, int):
                     yield f, ln
-    for tf in sorted(run.glob("flow-trace-*.json")):
-        trace = load_json(tf)
+    # Both the per-file SIZE and the file COUNT are run-dir-writable;
+    # cap both (an unbounded glob of tiny traces is the same memory
+    # lever as one huge trace).
+    traces = sorted(run.glob("flow-trace-*.json"))
+    if len(traces) > _MAX_FLOW_TRACE_FILES:
+        logger.warning(
+            "coverage import: %d flow-trace files in %s; reading the "
+            "first %d", len(traces), run, _MAX_FLOW_TRACE_FILES)
+        traces = traces[:_MAX_FLOW_TRACE_FILES]
+    for tf in traces:
+        trace = load_json(tf, max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if not isinstance(trace, dict):
             continue
         for step in trace.get("steps") or []:

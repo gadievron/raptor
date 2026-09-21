@@ -1393,17 +1393,33 @@ def _find_domain_model_file(out_dir: Path) -> Path | None:
 
 
 def compute_domain_model_hash(out_dir: Path) -> str | None:
-    """Compute SHA-256 prefix of domain-model.json for staleness comparison."""
+    """Compute SHA-256 prefix of domain-model.json for staleness comparison.
+
+    Byte-budgeted (``_MAX_DOMAIN_MODEL_BYTES``, matching
+    :func:`load_domain_model`): the file sits in run/project dirs
+    another principal can write, and this was the one domain-model
+    reader with NO size gate — a sparse multi-GiB plant OOM'd the
+    hashing process. An over-budget file reads as "no model"
+    (truncated bytes must not mint a hash that would then compare
+    stale/fresh against nothing).
+    """
     import hashlib
+
+    from core.source import read_bytes_capped
 
     path = _find_domain_model_file(out_dir)
     if path is None:
         return None
-    try:
-        content = path.read_bytes()
-        return hashlib.sha256(content).hexdigest()[:8]
-    except OSError:
+    read = read_bytes_capped(path, _MAX_DOMAIN_MODEL_BYTES)
+    if read is None:
         return None
+    content, truncated = read
+    if truncated:
+        logger.warning(
+            "domain-model at %s exceeds %d bytes; ignoring for "
+            "staleness hashing", path, _MAX_DOMAIN_MODEL_BYTES)
+        return None
+    return hashlib.sha256(content).hexdigest()[:8]
 
 
 def load_domain_model(
@@ -1456,11 +1472,23 @@ def domain_model_context(out_dir: Path) -> dict[str, Any] | None:
         candidates.append((parent / "concepts" / "domain-model.json", True))
         candidates.append((parent / "domain-model.json", True))
     candidates.append((out_dir / "domain-model.json", False))
+    from core.source import read_bytes_capped
     for path, canonical in candidates:
         if not path.is_file():
             continue
+        # Byte-budgeted like every other domain-model reader: the
+        # candidates live in writable run/project dirs; an oversize
+        # plant means "no comparison basis", never an OOM.
+        read = read_bytes_capped(path, _MAX_DOMAIN_MODEL_BYTES)
+        if read is None:
+            return None
+        content, truncated = read
+        if truncated:
+            logger.warning(
+                "domain-model at %s exceeds %d bytes; no staleness "
+                "comparison basis", path, _MAX_DOMAIN_MODEL_BYTES)
+            return None
         try:
-            content = path.read_bytes()
             # Parse the same bytes the staleness hash below covers;
             # core.json.loads accepts bytes directly.
             raw = loads(content)

@@ -13,6 +13,16 @@ from typing import Any
 from core.json import load_json, save_json
 
 COVERAGE_RECORD_FILE = "coverage-record.json"  # legacy single-file name
+
+#: Read budget for run-dir JSON artifacts (coverage records, findings,
+#: /understand outputs). Run dirs sit inside the sandbox write grant,
+#: so artifact SIZE is attacker-writable like every other property —
+#: a sparse multi-GiB plant costs no disk and OOM-killed the importer
+#: /render/backfill process the containment boundary keeps alive.
+#: Same 256 MiB class as the journal and coverage-store budgets; the
+#: shared enforcement is ``load_json(max_bytes=...)`` (stat-gated, no
+#: read on refusal).
+RUN_ARTIFACT_MAX_BYTES = 256 * 1024 * 1024
 READS_MANIFEST = ".reads-manifest"
 
 # Ceiling on how much of the reads manifest a single reader ingests.
@@ -613,7 +623,7 @@ def load_records(run_dir: Path) -> list[dict[str, Any] | list[Any]]:
     for p in candidates:
         if p.name == COVERAGE_RECORD_FILE:
             continue
-        data = load_json(p)
+        data = load_json(p, max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if isinstance(data, dict) and "tool" in data:
             tool = data.get("tool")
             if not isinstance(tool, str):
@@ -632,7 +642,8 @@ def load_records(run_dir: Path) -> list[dict[str, Any] | list[Any]]:
     # — any other JSON shape is refused rather than handed to
     # consumers that expect a mapping.
     if not records:
-        legacy = load_json(run_dir / COVERAGE_RECORD_FILE)
+        legacy = load_json(run_dir / COVERAGE_RECORD_FILE,
+                           max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if legacy and isinstance(legacy, (dict, list)):
             records.append(legacy)
     return records

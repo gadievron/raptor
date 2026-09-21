@@ -50,6 +50,14 @@ logger = logging.getLogger(__name__)
 # capture_output shape buffered the whole report before checking).
 _MAX_GCOV_STDOUT = 64 * 1024 * 1024
 
+# Read budget for binary coverage artifacts (drcov / sancov dumps).
+# They arrive from instrumented target runs — attacker-influenced by
+# definition — and were read wholesale (a 4 GiB sancov materialises
+# ~30 GiB of Python ints). Same 64 MiB ceiling class as the gcov
+# stdout cap above; an over-budget artifact refuses (truncated PC
+# tables would silently misattribute coverage).
+_MAX_BINARY_COV_BYTES = 64 * 1024 * 1024
+
 
 def _sandboxed_run(argv: list[str], *, target: str | None,
                    env: dict[str, str],
@@ -262,6 +270,22 @@ def import_addresses(
     return mark_runtime(store, collect_addr2line(binary, addresses), checklist, tool)
 
 
+def _read_binary_cov(path) -> bytes | None:
+    """Byte-budgeted read of a coverage artifact; None on refusal."""
+    from core.source import read_bytes_capped
+    read = read_bytes_capped(path, _MAX_BINARY_COV_BYTES)
+    if read is None:
+        return None
+    raw, truncated = read
+    if truncated:
+        logger.warning(
+            "coverage artifact %s exceeds %d bytes; refusing rather "
+            "than importing a truncated PC table", path,
+            _MAX_BINARY_COV_BYTES)
+        return None
+    return raw
+
+
 def parse_drcov(path) -> dict[str, dict[str, Any]]:
     """Parse a drcov coverage file (DynamoRIO / Frida / AFL-QEMU / Lighthouse).
 
@@ -269,9 +293,8 @@ def parse_drcov(path) -> dict[str, dict[str, Any]]:
     addresses, not source (resolved later by :func:`collect_drcov`). drcov is a
     text header (module table) followed by a packed-binary BB table of
     ``<IHH>`` records (module-relative start u32, size u16, module_id u16)."""
-    try:
-        raw = Path(path).read_bytes()
-    except OSError:
+    raw = _read_binary_cov(path)
+    if raw is None:
         return {}
     marker = b"BB Table:"
     idx = raw.find(marker)
@@ -370,11 +393,8 @@ def parse_sancov(path) -> set[int]:
     """Parse an LLVM ``.sancov`` file (``-fsanitize-coverage=trace-pc-guard``
     dump) into its set of covered PCs. 8-byte magic selects 64/32-bit PC width;
     the remainder is a flat little-endian PC array."""
-    try:
-        raw = Path(path).read_bytes()
-    except OSError:
-        return set()
-    if len(raw) < 8:
+    raw = _read_binary_cov(path)
+    if raw is None or len(raw) < 8:
         return set()
     magic = struct.unpack_from("<Q", raw, 0)[0]
     if magic == _SANCOV_MAGIC64:

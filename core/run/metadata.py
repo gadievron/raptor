@@ -25,6 +25,12 @@ logger = logging.getLogger(__name__)
 
 RUN_METADATA_FILE = ".raptor-run.json"
 
+#: Read budget for the run metadata file. It lives in the
+#: sandbox-writable run dir, so its size is attacker-writable; a
+#: legitimate stamp is a few KB. Single-homed so the ownership probe
+#: and the loader stay on one spelling.
+RUN_METADATA_MAX_BYTES = 1024 * 1024
+
 
 class RunOwnershipError(ValueError):
     """A lifecycle finaliser declared a command that does not match the
@@ -694,7 +700,7 @@ def start_run(output_dir: Path, command: str,
         # contention identity. resume_run is the sanctioned re-owning
         # path (it refreshes the full stamp).
         _prior_meta = load_json(output_dir / RUN_METADATA_FILE,
-                                max_bytes=1024 * 1024)
+                                max_bytes=RUN_METADATA_MAX_BYTES)
         if (isinstance(_prior_meta, dict)
                 and _prior_meta.get("status") == STATUS_RUNNING
                 and _prior_meta.get("session_pid") is not None
@@ -1997,8 +2003,15 @@ def tracked_run(output_dir: Path, command: str,
 
 
 def load_run_metadata(run_dir: Path) -> dict[str, Any] | None:
-    """Load .raptor-run.json from a run directory. Returns None if missing."""
-    return load_json(run_dir / RUN_METADATA_FILE)
+    """Load .raptor-run.json from a run directory. Returns None if missing.
+
+    Byte-budgeted (same 1 MiB the start_run ownership probe applies to
+    this exact file): the run dir is sandbox-writable mid-run, so an
+    oversize plant loads as None instead of buffering unbounded — the
+    bash hook's read of the same file is capped for the same reason.
+    """
+    return load_json(run_dir / RUN_METADATA_FILE,
+                     max_bytes=RUN_METADATA_MAX_BYTES)
 
 
 def corroborate_target_path(run_dir: Path, candidate) -> str | None:
