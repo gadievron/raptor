@@ -417,3 +417,60 @@ class TestPatternBindingsVisibleToCfg:
         assert cfg is not None
         defs = set().union(*(n.defs for n in cfg.nodes()))
         assert {"a", "b"} <= defs
+
+
+class TestQualifiedSpellingDiscipline:
+    """The same-file occurrence discipline must treat a QUALIFIED
+    spelling (``T.allowed`` / ``this.allowed``) exactly like the bare
+    name — both reach the same static collection. A blanket
+    field_access exemption let ``T.allowed.set(0, evil)`` pass while
+    the bare ``allowed.set(0, evil)`` refused; the accepted shape is
+    the one the cross-file immutability scan accepts (field position,
+    receiver of contains())."""
+
+    _TEMPLATE = (
+        "public class T {\n"
+        "    static final java.util.List<String> allowed = "
+        'java.util.Arrays.asList("safe");\n'
+        "    void poison(String evil) { MUTATOR }\n"
+        "    public void handle(String x, java.io.PrintWriter out) {\n"
+        "        if (!allowed.contains(x)) { return; }\n"
+        "        out.println(x);\n"
+        "    }\n"
+        "}\n"
+    )
+
+    def _reason(self, mutator: str):
+        src = self._TEMPLATE.replace("MUTATOR", mutator)
+        return collection_guard_reason(src, 6, "x", "CWE-79")
+
+    def test_class_qualified_mutator_refuses(self):
+        # Arrays.asList supports set() (write-through) — this mutation
+        # is legal and rebinds the "allowlist" element at runtime.
+        assert self._reason("T.allowed.set(0, evil);") is None
+
+    def test_this_qualified_mutator_refuses(self):
+        assert self._reason("this.allowed.set(0, evil);") is None
+
+    def test_bare_mutator_refuses_control(self):
+        assert self._reason("allowed.set(0, evil);") is None
+
+    def test_qualified_contains_only_still_binds(self):
+        # The one accepted qualified shape: the access is the receiver
+        # of a contains() invocation — same rule as the cross-file
+        # scan.
+        assert self._reason(
+            "boolean b = T.allowed.contains(evil);") is not None
+
+    def test_qualified_non_contains_read_refuses(self):
+        # A qualified read beyond contains() can alias the collection
+        # (``subList``/iterator escape); the discipline refuses it
+        # like the bare spelling would.
+        assert self._reason(
+            "java.util.List<String> a = T.allowed.subList(0, 1);"
+        ) is None
+
+    def test_no_mutator_still_binds_control(self):
+        src = self._TEMPLATE.replace(
+            "    void poison(String evil) { MUTATOR }\n", "")
+        assert collection_guard_reason(src, 5, "x", "CWE-79") is not None

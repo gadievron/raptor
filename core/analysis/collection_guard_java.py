@@ -327,10 +327,25 @@ def _occurrences_contains_only(scope, name: str, *,
                 and p.child_by_field_name("object") == n \
                 and _text(p.child_by_field_name("name")) == "contains":
             continue
-        # the name inside a field_access chain (Utils.NAME) is handled
-        # by the chain resolver, not here
+        # A qualified spelling (``Vuln.NAME`` / ``this.NAME``) reaches
+        # the SAME collection as the bare name — exempting it
+        # wholesale let ``Vuln.allowed.set(0, evil)`` pass while the
+        # bare ``allowed.set(0, evil)`` refused. Accept exactly the
+        # shape the cross-file immutability scan accepts: the
+        # identifier is the accessed FIELD and the access is the
+        # receiver of a contains() invocation. Every other qualified
+        # occurrence — a mutator/alias/argument through the chain, or
+        # the name in OBJECT position (a field read off the
+        # collection) — refuses, matching the bare-spelling rule.
         if p is not None and p.type == "field_access":
-            continue
+            if p.child_by_field_name("field") == n:
+                gp = p.parent
+                if gp is not None and gp.type == "method_invocation" \
+                        and gp.child_by_field_name("object") == p \
+                        and _text(gp.child_by_field_name("name")) \
+                        == "contains":
+                    continue
+            return False
         return False
     return True
 
