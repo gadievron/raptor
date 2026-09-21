@@ -288,6 +288,30 @@ def test_with_header_dominates_body():
     assert tree.dominates(with_node, body_node)
 
 
+def test_with_context_expression_payload_on_header():
+    """Statement-position expression closure pin: the context-manager
+    expression evaluates before the body, and its payload (calls, a
+    walrus rebind) belongs to the header node — a dropped subtree here
+    would be the Java-synchronized-lock class (an invisible definer
+    the value gate's exclusivity proof never sees)."""
+    src = (
+        "def f(x):\n"
+        "    y = clean(x)\n"
+        "    with open(y := x) as fh:\n"
+        "        sink(y)\n"
+    )
+    cfg = _cfg(src)
+    header = next(
+        n for n in cfg.nodes()
+        if n.kind == "stmt" and n.label.startswith("With")
+    )
+    assert "open" in header.calls
+    assert "y" in header.defs, (
+        "walrus in the context expression must surface as a def"
+    )
+    assert "fh" in header.defs
+
+
 # ---------------------------------------------------------------------------
 # Call extraction
 # ---------------------------------------------------------------------------

@@ -1004,9 +1004,7 @@ class _JavaCFGBuilder:
             # refused for soundness (see module docstring).
             raise _RefusedConstruct(_LABELED)
         if t == _SYNCHRONIZED:
-            body = stmt.child_by_field_name("body")
-            return self._build_stmts(body, incoming) \
-                if body is not None else incoming
+            return self._build_synchronized(stmt, incoming)
         if t == _BLOCK:
             return self._build_stmts(stmt, incoming)
         node = self._straight_node(stmt)
@@ -1057,6 +1055,40 @@ class _JavaCFGBuilder:
             calls=calls, defs=defs, uses=uses, call_sites=css,
             may_escape=self._escapes(cond),
         )
+
+    def _build_synchronized(self, stmt: Node, incoming):
+        """The lock expression evaluates BEFORE the body runs, so it
+        is a payload-bearing node like any condition: an embedded
+        store in it (``synchronized (clean = taint(x)) {…}``) is a
+        definer reaching-defs must see — invisible, it lets the value
+        gate's exclusivity proof hold falsely over a live re-taint —
+        and a refused construct in it (``synchronized
+        (locks.computeIfAbsent(k, key -> …))``) must refuse the build
+        like every other expression payload."""
+        body = stmt.child_by_field_name("body")
+        lock = next(
+            (c for c in stmt.children
+             if c.is_named and c.type == _PARENS),
+            None,
+        )
+        if lock is None:
+            # Malformed / lock-less parse shape: nothing to payload.
+            return self._build_stmts(body, incoming) \
+                if body is not None else incoming
+        if _subtree_has_refused(lock):
+            msg = "synchronized lock expression"
+            raise _RefusedConstruct(msg)
+        calls, defs, uses, css = _payload_from_subtree(lock, self.resolver)
+        node = self._make_node(
+            lineno=stmt.start_point[0] + 1,
+            label=f"synchronized {self._short_label(lock)}",
+            calls=calls, defs=defs, uses=uses, call_sites=css,
+            may_escape=self._escapes(lock),
+        )
+        self._link_many(incoming, node)
+        self._ambient_catch_link(node)
+        return self._build_stmts(body, [node]) if body is not None \
+            else [node]
 
     def _build_if(self, stmt: Node, incoming):
         cond_node = self._cond_node(stmt, "if")

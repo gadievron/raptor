@@ -398,3 +398,95 @@ class TestEmbeddedStoreDefsExpressionContexts:
             n for n in cfg.nodes() if n.label.startswith("for ")
         )
         assert "y" in header.defs and "arr" in header.defs
+
+
+class TestSynchronizedLockExpression:
+    """The lock expression evaluates before the body — dropping its
+    subtree leaves embedded re-taint stores invisible to reaching-defs
+    and lets refused constructs inside the lock build a wrong graph
+    instead of refusing."""
+
+    def test_lock_expression_store_is_visible_definer(self):
+        cfg, _ = _cfg(
+            "        String y = Encode.forHtml(x);\n"
+            "        synchronized (y = x) {\n"
+            "            out.println(y);\n"
+            "        }\n",
+        )
+        assert cfg is not None
+        lock = next(
+            n for n in cfg.nodes() if n.label.startswith("synchronized")
+        )
+        assert "y" in lock.defs
+        assert "x" in lock.uses
+        from core.analysis.dataflow import reaching_defs
+        rd = reaching_defs(cfg)
+        sink = next(n for n in cfg.nodes() if "println" in n.label)
+        assert lock in rd.at(sink, "y"), (
+            "lock-expression re-taint does not reach the sink — the "
+            "value gate's exclusivity proof would hold falsely"
+        )
+        # E2E: the gate must refuse to suppress over the live re-taint.
+        from core.analysis.sanitizer_cut import (
+            VERDICT_SUPPRESS,
+            evaluate_finding,
+        )
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink, cwe="CWE-79", language="java",
+            source_symbols=frozenset(cfg.params), sink_arg="y",
+        )
+        assert result.verdict != VERDICT_SUPPRESS
+
+    def test_lock_expression_call_earns_no_assigned_names(self):
+        # Refusal direction: a store embedded in the lock breaks
+        # exclusivity but never grants sanitizer-output identity.
+        cfg, _ = _cfg(
+            "        String y = x;\n"
+            "        synchronized (y = Encode.forHtml(x)) {\n"
+            "            out.println(y);\n"
+            "        }\n",
+        )
+        assert cfg is not None
+        lock = next(
+            n for n in cfg.nodes() if n.label.startswith("synchronized")
+        )
+        assert "y" in lock.defs
+        assert "org.owasp.encoder.Encode.forHtml" in lock.calls
+        assert all(not cs.assigned_names for cs in lock.call_sites)
+
+    def test_lambda_in_lock_expression_refuses(self):
+        cfg, _ = _cfg(
+            "        synchronized (locks.computeIfAbsent(x, "
+            "key -> new Object())) {\n"
+            "            out.println(x);\n"
+            "        }\n",
+            params="String x, java.util.Map<String,Object> locks, "
+                   "java.io.PrintWriter out",
+        )
+        assert cfg is None, (
+            "lambda inside the lock expression must refuse the build "
+            "(docstring refusal contract)"
+        )
+
+    def test_method_reference_in_lock_expression_refuses(self):
+        cfg, _ = _cfg(
+            "        synchronized (pick(String::length)) {\n"
+            "            out.println(x);\n"
+            "        }\n",
+        )
+        assert cfg is None
+
+    def test_plain_lock_wires_body_through_lock_node(self):
+        cfg, _ = _cfg(
+            "        synchronized (this) {\n"
+            "            out.println(x);\n"
+            "        }\n",
+        )
+        assert cfg is not None
+        lock = next(
+            n for n in cfg.nodes() if n.label.startswith("synchronized")
+        )
+        succ = list(cfg.successors(lock))
+        assert any("println" in s.label for s in succ), (
+            "body must be wired through the lock node"
+        )
