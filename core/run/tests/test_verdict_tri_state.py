@@ -27,12 +27,27 @@ explicitly, with the unknown/absent arm preserved.
 Scope boundary (deliberate, keep this docstring honest): the scan
 flags the enumerated idiom families applied DIRECTLY to a raw read —
 including through a walrus wrapper (``if (v := r.get(k)):``), which
-is still a direct read. Outside its vocabulary: variable-mediated
-consumption via a separate-statement binding (``v = r.get(k)`` …
-``if v:``); raw values forwarded into ``tally_verdict_votes`` (which
-applies its own documented counting contract); ``any()`` / ``all()``
-/ ``filter(None, …)`` consuming reads yielded from comprehensions;
-and positive graded equality with a fabricating ``else`` arm
+is still a direct read — AND, for the bool keys, applied to a
+NAME-BOUND read: a name assigned exactly once in its scope, by a
+plain single-target assignment whose value is a raw read of a bool
+verdict key (``v = r.get(k)`` … ``if v:`` — the separate-statement
+escape idiom CrossFamilyCheckTask's junk==junk agreement mint hid
+in). Name tracking is per-scope (module / function, nested scopes
+excluded), refuses any name with a second binding of any kind
+(parameter, loop target, import, del, global/nonlocal, match
+capture — reassignment may launder the value), and treats an
+``isinstance(name, …)`` call anywhere in the scope as laundering
+(shape-checked ladders are semantically equal to ``read_verdict``;
+the scan cannot judge branch placement, so the audited class stays
+legal). Two tracked names compared with ``==``/``!=`` are also
+flagged: junk == junk is how agreement gets minted from two
+non-verdicts. Still outside the vocabulary: walrus/AugAssign
+bindings and attribute/subscript homes for the tracked value; raw
+values forwarded into ``tally_verdict_votes`` (which applies its own
+documented counting contract); ``any()`` / ``all()`` /
+``filter(None, …)`` consuming reads yielded from comprehensions;
+graded keys under a name binding (that IS the blessed spelling); and
+positive graded equality with a fabricating ``else`` arm
 (``== 'high' … else <verdict>`` — an AST lint cannot see the else's
 semantics; only the negative-equality split is mechanically a
 misread).
@@ -120,6 +135,11 @@ _ALLOWLIST: frozenset[tuple[str, int]] = frozenset({
     # that share the module's "?" placeholder convention; no verdict
     # semantics are consumed and "?" reads as absent, not as a level.
     ("core/audit/synthesis_seeds.py", 257),
+    # Presence check, not verdict consumption: the verdict was
+    # already taken from read_verdict two lines up (abstained arm);
+    # the raw read only distinguishes present-but-junk (normalised to
+    # an explicit None) from absent/already-None (left untouched).
+    ("core/witness/provenance.py", 743),
 })
 
 
@@ -158,6 +178,102 @@ def _is_graded_read(node: ast.AST) -> bool:
 
 def _is_any_verdict_read(node: ast.AST) -> bool:
     return _is_verdict_read(node) or _is_graded_read(node)
+
+
+#: Scope-opening nodes for the name-bound tracking pass. Class bodies
+#: are their own namespace and lambdas cannot contain statements —
+#: none of them inherit the enclosing scope's single-binding
+#: determination, so the walk never descends into them.
+_SCOPE_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                ast.ClassDef)
+
+
+def _scope_own_nodes(scope: ast.AST) -> list[ast.AST]:
+    """Nodes belonging to *scope*: descendants reached without
+    crossing a nested scope boundary. The nested def/class node
+    itself IS yielded (its name binds in this scope); its body is
+    not."""
+    out: list[ast.AST] = []
+
+    def rec(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            out.append(child)
+            if not isinstance(child, _SCOPE_NODES):
+                rec(child)
+
+    rec(scope)
+    return out
+
+
+def _scope_binding_counts(scope: ast.AST, own: list[ast.AST]):
+    """How many times each name is (re)bound in *scope* — every
+    binding construct disqualifies single-assignment tracking, the
+    conservative direction (an unmodelled rebind could launder a
+    tracked value, so anything that binds counts)."""
+    from collections import Counter
+    counts: Counter[str] = Counter()
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef,
+                          ast.Lambda)):
+        a = scope.args
+        for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs,
+                    *([a.vararg] if a.vararg else []),
+                    *([a.kwarg] if a.kwarg else [])):
+            counts[arg.arg] += 1
+    for n in own:
+        if isinstance(n, ast.Name) and isinstance(n.ctx,
+                                                  (ast.Store, ast.Del)):
+            counts[n.id] += 1
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for alias in n.names:
+                counts[(alias.asname or alias.name).split(".")[0]] += 1
+        elif isinstance(n, (ast.Global, ast.Nonlocal)):
+            for name in n.names:
+                counts[name] += 2  # externally bound — never track
+        elif isinstance(n, ast.ExceptHandler) and n.name:
+            counts[n.name] += 1
+        elif isinstance(n, _SCOPE_NODES) and hasattr(n, "name"):
+            counts[n.name] += 1
+        elif isinstance(n, (ast.MatchAs, ast.MatchStar)) and n.name:
+            counts[n.name] += 1
+        elif isinstance(n, ast.MatchMapping) and n.rest:
+            counts[n.rest] += 1
+    return counts
+
+
+def _tracked_verdict_names(scope: ast.AST,
+                           own: list[ast.AST]) -> dict[str, str]:
+    """Names bound EXACTLY ONCE in *scope*, by a plain single-target
+    assignment whose value is a raw read of a bool verdict key —
+    the separate-statement spelling of a direct raw read. A name
+    that ever feeds ``isinstance(name, …)`` in the scope is dropped:
+    shape-checked ladders are the audited legal alternative to
+    ``read_verdict`` and the scan cannot adjudicate branch
+    placement."""
+    counts = _scope_binding_counts(scope, own)
+    tracked: dict[str, str] = {}
+    for n in own:
+        target = None
+        value = None
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)):
+            target, value = n.targets[0], n.value
+        elif (isinstance(n, ast.AnnAssign) and n.value is not None
+                and isinstance(n.target, ast.Name)):
+            target, value = n.target, n.value
+        if target is None or counts[target.id] != 1:
+            continue
+        key = _read_key(value, VERDICT_KEYS)
+        if key is not None:
+            tracked[target.id] = key
+    if tracked:
+        for n in own:
+            if (isinstance(n, ast.Call)
+                    and isinstance(n.func, ast.Name)
+                    and n.func.id == "isinstance"
+                    and n.args
+                    and isinstance(n.args[0], ast.Name)):
+                tracked.pop(n.args[0].id, None)
+    return tracked
 
 
 def _mentions_verdict_key(source: str) -> bool:
@@ -263,6 +379,12 @@ def _violations_in(path: Path) -> list[str]:
                             for s in sides)):
                 bad(node, "==/!= bool/None compare on a raw verdict "
                           "read")
+            # Two raw reads compared with each other (directly or
+            # walrus-wrapped): junk == junk mints agreement — the
+            # direct-read spelling of the name-bound pair rule below.
+            if sum(1 for s in sides if _is_verdict_read(s)) >= 2:
+                bad(node, "==/!= between two raw verdict reads "
+                          "(junk == junk mints agreement)")
         # Graded-key negative-equality split: `.get('exploitability')
         # != 'low'` sends "unknown"/absent down the truthy side — the
         # membership misread in negative spelling. Positive
@@ -317,6 +439,64 @@ def _violations_in(path: Path) -> list[str]:
                 and any(kw.arg is None for kw in node.value.keywords)):
             bad(node, "verdict attribute read on a splat-constructed "
                       "object")
+
+    # Name-bound pass (bool keys only): the separate-statement
+    # spelling of the idiom families above — ``v = r.get(k)`` then
+    # ``if v:`` / ``v is None`` / ``v == True`` / ``v in […]`` /
+    # ``not v``, and ``v == w`` between two tracked raw reads (the
+    # junk==junk agreement mint). See the module docstring for the
+    # tracking and laundering rules.
+    scopes: list[ast.AST] = [tree]
+    scopes += [n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    for scope in scopes:
+        own = _scope_own_nodes(scope)
+        tracked = _tracked_verdict_names(scope, own)
+        if not tracked:
+            continue
+
+        def is_tracked(x: ast.AST) -> bool:
+            return (isinstance(x, ast.Name)
+                    and isinstance(x.ctx, ast.Load)
+                    and x.id in tracked)
+
+        for node in own:
+            for t in truth_tested(node):
+                if is_tracked(t):
+                    bad(t, f"truthiness on a name-bound raw verdict "
+                           f"read ({tracked[t.id]!r})")
+            if (isinstance(node, ast.UnaryOp)
+                    and isinstance(node.op, ast.Not)
+                    and is_tracked(node.operand)):
+                bad(node, "`not` on a name-bound raw verdict read")
+            if not isinstance(node, ast.Compare):
+                continue
+            sides = [node.left, *node.comparators]
+            if all(isinstance(op, (ast.Eq, ast.NotEq))
+                   for op in node.ops):
+                if (any(is_tracked(s) for s in sides)
+                        and any(isinstance(s, ast.Constant)
+                                and (isinstance(s.value, bool)
+                                     or s.value is None)
+                                for s in sides)):
+                    bad(node, "==/!= bool/None compare on a "
+                              "name-bound raw verdict read")
+                if sum(1 for s in sides if is_tracked(s)) >= 2:
+                    bad(node, "==/!= between two name-bound raw "
+                              "verdict reads (junk == junk mints "
+                              "agreement)")
+            if all(isinstance(op, (ast.Is, ast.IsNot))
+                   for op in node.ops):
+                if (any(is_tracked(s) for s in sides)
+                        and any(isinstance(s, ast.Constant)
+                                and s.value is None for s in sides)):
+                    bad(node, "is/is-not None identity check on a "
+                              "name-bound raw verdict read")
+            if any(isinstance(op, (ast.In, ast.NotIn))
+                   for op in node.ops):
+                if is_tracked(node.left):
+                    bad(node, "membership test on a name-bound raw "
+                              "verdict read")
     return out
 
 
@@ -395,6 +575,74 @@ class TestVerdictIdiomClosure:
             "r['is_exploitable'] = True\n"
         )
         tmp = tmp_path / "clean_shape.py"
+        tmp.write_text(clean, encoding="utf-8")
+        assert _violations_in(tmp) == []
+
+    def test_scanner_catches_name_bound_idioms(self, tmp_path: Path):
+        # The separate-statement spelling of each flagged family:
+        # a single-assignment name bound to a raw verdict read is the
+        # raw read, one statement later (CrossFamilyCheckTask minted
+        # cross_family_agreed from junk == junk through exactly this
+        # shape).
+        family_shapes = [
+            ("v = r.get('is_exploitable')\nif v:\n    pass\n", 1),
+            ("v = r.get('is_exploitable')\nx = not v\n", 1),
+            ("v = r['is_true_positive']\nok = v == True\n", 1),  # noqa: E712
+            ("v = r.get('is_exploitable')\nif v is None:\n    pass\n", 1),
+            ("v = r.get('is_exploitable')\ny = v in (True, None)\n", 1),
+            ("v = r.get('is_exploitable')\nz = 'x' if v else 'y'\n", 1),
+            ("v = r.get('is_exploitable')\nb = bool(v)\n", 1),
+            # Two tracked names compared: junk == junk mints
+            # agreement (the CrossFamilyCheckTask shape).
+            ("a = p.get('is_exploitable')\n"
+             "b = c.get('is_exploitable')\n"
+             "if a != b:\n    pass\n", 1),
+            # Direct spelling of the pair rule, incl. walrus-wrapped.
+            ("ok = p.get('is_exploitable') == r.get('is_exploitable')\n",
+             1),
+            ("if (a := p.get('is_exploitable')) == "
+             "(b := r.get('is_exploitable')):\n    pass\n", 1),
+            # Function-scope tracking.
+            ("def f(r):\n"
+             "    v = r.get('is_exploitable')\n"
+             "    return bool(v)\n", 1),
+        ]
+        for i, (shape, expected) in enumerate(family_shapes):
+            tmp = tmp_path / f"namebound_{i}.py"
+            tmp.write_text(shape, encoding="utf-8")
+            found = _violations_in(tmp)
+            assert len(found) == expected, (shape, found)
+
+    def test_name_bound_tracking_launder_rules(self, tmp_path: Path):
+        clean = (
+            # read_verdict binding: is-None / truthiness on it are the
+            # blessed spellings.
+            "v = read_verdict(r, 'is_exploitable')\n"
+            "if v is None:\n    pass\n"
+            "if v:\n    pass\n"
+            # isinstance-guarded ladder: semantically equal to
+            # read_verdict; the scan cannot judge branch placement,
+            # so the shape-check launders the name.
+            "w = r.get('is_exploitable')\n"
+            "if isinstance(w, bool) and w:\n    pass\n"
+            # Reassigned name: a second binding may launder the value
+            # — never tracked.
+            "def f(r):\n"
+            "    x = r.get('is_exploitable')\n"
+            "    x = coerce(x)\n"
+            "    return bool(x)\n"
+            # Parameter shadow in a NESTED scope does not inherit the
+            # outer tracking.
+            "def g(r):\n"
+            "    y = r.get('is_exploitable')\n"
+            "    def h(y):\n"
+            "        return bool(y)\n"
+            "    return {'is_exploitable': y}\n"
+            # Pass-through forwarding stays legal.
+            "raw = r.get('is_true_positive')\n"
+            "rec = {'is_true_positive': raw}\n"
+        )
+        tmp = tmp_path / "namebound_clean.py"
         tmp.write_text(clean, encoding="utf-8")
         assert _violations_in(tmp) == []
 

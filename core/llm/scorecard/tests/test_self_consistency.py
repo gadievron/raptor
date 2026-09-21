@@ -108,6 +108,20 @@ class TestRecordSelfConsistencyOutcomes:
             sc, results_by_id=results, verdicts_pre_retry={"F-001": True},
         ) == 0
 
+    def test_skips_junk_post_verdict(self, tmp_path: Path):
+        # A junk shape that bypassed response validation is a
+        # non-verdict: grading it would score the model on a vote it
+        # never cast (the raw read coerced "yes" into a truthy
+        # "held" outcome).
+        sc = ModelScorecard(path=tmp_path / "sc.json")
+        for junk in ("yes", "true", 1, [], {}):
+            results = {"F-001": _make_result(
+                "F-001", is_exploitable=junk, retried=True)}
+            assert record_self_consistency_outcomes(
+                sc, results_by_id=results,
+                verdicts_pre_retry={"F-001": True},
+            ) == 0
+
     def test_skips_empty_model(self, tmp_path: Path):
         sc = ModelScorecard(path=tmp_path / "sc.json")
         r = _make_result("F-001", retried=True, model="")

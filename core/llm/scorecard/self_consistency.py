@@ -21,6 +21,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from core.run.finding_status import read_verdict
+
 from . import _MAX_REASONING_CHARS
 from ._batch import record_event_batch
 from .scorecard import EventType, ModelScorecard
@@ -57,11 +59,15 @@ def record_self_consistency_outcomes(
         if pre_verdict is None:
             continue
 
-        post_verdict = result.get("is_exploitable")
+        # Tri-state read: a junk shape ("yes", 1) that bypassed
+        # response validation is a non-verdict — grading it (the raw
+        # `is None` guard + bool() coercion) would score the model on
+        # a vote it never cast.
+        post_verdict = read_verdict(result, "is_exploitable")
         if post_verdict is None:
             continue
 
-        held = bool(pre_verdict) == bool(post_verdict)
+        held = bool(pre_verdict) == post_verdict
         outcome = "correct" if held else "incorrect"
 
         rule_id = str(result.get("rule_id") or "unknown")
