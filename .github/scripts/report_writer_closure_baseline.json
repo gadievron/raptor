@@ -382,6 +382,9 @@
     "libexec/raptor-ghidra::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
+    "libexec/raptor-graph-ingest::main::unsanitised_llm_value::graph_path": {
+      "note": "graph-ingest CLI: graph.db output path derived from --out argument (operator-supplied, not LLM text)"
+    },
     "libexec/raptor-graph-query::main::unsanitised_llm_value::id": {
       "note": "graph-query CLI: node id from SQLite query result (operator diagnostic tool)"
     },
