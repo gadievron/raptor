@@ -1355,6 +1355,34 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # is set: fake_home needs a writable location to materialise.
         fake_home = bool(_profile_defaults.get("restrict_reads", False)
                          and output)
+    if (_profile_defaults
+            and not _profile_defaults.get("use_landlock", True)
+            and fake_home):
+        # Landlock-off profiles (none / network-only) shed per-call
+        # Landlock policy wholesale. The authoritative profile block
+        # below nulls the FS/net policy kwargs, but fake_home is
+        # consumed by the materialisation immediately below, so its
+        # shed must happen here: without it, fake_home=True under
+        # `--sandbox none` materialised `.home` and staged HOME/XDG
+        # overrides for a run whose contract is "rlimits only, no
+        # isolation". Warning suppression mirrors the authoritative
+        # block's discard warning exactly: an explicit operator
+        # disable expects the shed (production callers pass
+        # fake_home=True unconditionally — a --sandbox none bisect
+        # session must not get one warning per call), a non-disabled
+        # Landlock-off profile gets told.
+        _defaults_effectively_disabled = (
+            state._cli_sandbox_profile == "none"
+            if state._cli_sandbox_profile is not None
+            else (disabled or state._cli_sandbox_disabled))
+        if not _defaults_effectively_disabled:
+            logger.warning(
+                "Sandbox: profile %r ignores fake_home=True — the "
+                "fake HOME is part of the per-call policy surface "
+                "this profile sheds (its isolation value rides "
+                "Landlock's read/write scoping).",
+                _profile_for_defaults)
+        fake_home = False
 
     # Fake-HOME setup — create an empty home dir under `output` and
     # stage env overrides for the run() closure. Deferred to run-time
@@ -1842,17 +1870,38 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # Truthy check — `target=""` and `allowed_tcp_ports=[]` are
             # treated as "not set" everywhere else in this module; using
             # `is not None` here would spuriously warn about empty values.
-            discarded = [name for name, val in (("target", target),
-                                                 ("output", output),
-                                                 ("allowed_tcp_ports", allowed_tcp_ports))
-                         if val]
+            # readable_paths is the one exception: an empty list is the
+            # MOST restrictive setting and engages Landlock (see the
+            # preexec engagement gate), so it is discard-worthy whenever
+            # it is not None.
+            discarded = [name for name, val in (
+                ("target", target),
+                ("output", output),
+                ("allowed_tcp_ports", allowed_tcp_ports),
+                ("writable_paths", writable_paths),
+                ("restrict_reads", restrict_reads),
+            ) if val]
+            if readable_paths is not None:
+                discarded.append("readable_paths")
             if discarded and not effectively_disabled:
                 logger.warning(
                     "Sandbox: profile=%r ignores %s — Landlock is disabled under this profile.", profile, discarded
                 )
+            # Shed EVERY Landlock-engaging kwarg, not just the
+            # canonical target/output pair: a surviving
+            # writable_paths= / restrict_reads= / readable_paths=
+            # re-engaged Landlock further down with target and output
+            # already nulled — the operator's escape hatch delivered a
+            # write-nowhere-except-/tmp policy (output unwritable, the
+            # read allowlist missing the target) while the run stamped
+            # BARE. "none" must mean none: no Landlock policy, and a
+            # truthful stamp.
             target = None
             output = None
             allowed_tcp_ports = None
+            writable_paths = None
+            readable_paths = None
+            restrict_reads = False
         if rootfs is not None and not p["use_landlock"]:
             # Rootfs fail-closed gate #0: 'none' and 'network-only'
             # are no-mount-ns-by-contract profiles. target/output are
