@@ -198,7 +198,8 @@ findings. What next?" — options:
    `libexec/raptor-review findings`.
 
 Fill descriptions with THIS run's facts: finding counts, top finding id/file, the
-actual `cost_usd` totals.
+actual `cost_usd` totals. Finding ids, file paths, and titles quoted into options
+are target/LLM-derived: render them with non-printables escaped.
 
 **Non-interactive fallback:** current behavior — add the summary paragraph, present
 the report, stop (option 3).

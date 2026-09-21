@@ -67,13 +67,13 @@ libexec/raptor-project-manager <subcommand> [args]
 **`clean`** — first run the same command with `--dry-run` (never deletes; prints the per-type breakdown, MB to free, and any coverage-loss warnings) and `/project status` (the full run list with names and dates). The deletion set is every run beyond the latest `--keep <n>` per command type. Then ask — "Delete these runs?" — options:
 
 1. **Cancel (Recommended)** — delete nothing.
-2. **Delete the listed runs** — build this option's preview from the `/project status` + `--dry-run` output: the exact run directories that will be deleted, one per line, plus the MB freed and any found-then-lost coverage warnings. On selection, re-run the command with `--yes`.
+2. **Delete the listed runs** — build this option's preview from the `/project status` + `--dry-run` output: the exact run directories that will be deleted, one per line, plus the MB freed and any found-then-lost coverage warnings. Directory listings quoted into previews are external content: render entries with non-printables escaped and cap the listing length explicitly. On selection, re-run the command with `--yes`.
 3. **Keep more runs** — re-run `--dry-run` with a higher `--keep <n>` and ask again.
 
 **`create` over an existing directory** — before creating, check whether the output directory (`--output-dir`, or the default `out/projects/<name>`) already exists and is non-empty. If it does, ask — options:
 
 1. **Choose a different name/dir (Recommended)** — pick a fresh directory; nothing is adopted.
-2. **Adopt the existing directory** — proceed; `create` reuses the directory, and existing run dirs inside it join the project's views (`status`, `findings`, `report`). Preview: list the directory's existing contents. Note: this only works for a directory no project owns — `create` refuses an output dir already registered to another project (two projects must never share one; clean/purge on one would delete the other's runs).
+2. **Adopt the existing directory** — proceed; `create` reuses the directory, and existing run dirs inside it join the project's views (`status`, `findings`, `report`). Preview: list the directory's existing contents — external content: render entries with non-printables escaped and cap the listing length explicitly. Note: this only works for a directory no project owns — `create` refuses an output dir already registered to another project (two projects must never share one; clean/purge on one would delete the other's runs).
 3. **Cancel** — do not create the project.
 
 **`merge` / `delete --purge`** — same pattern: show exactly what will be merged or removed (from `/project status`), ask with a Cancel-first option, and pass `--yes` only after an explicit selection.

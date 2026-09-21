@@ -64,6 +64,8 @@ Session impact: +___ tokens when auto-loaded
 
 ### Step 5: Create Skill File
 
+**Confirm before writing.** Show the skill preview and take the operator's confirmation (`Create this skill? [Y/n/Customize]`, as in the example below). The preview is LLM-authored from session content — in a scan session that carries target-derived text — so render it with non-printables escaped and bound long excerpts with an explicit elision marker (CLAUDE.md § INTERACTIVE PROMPTS display integrity).
+
 Save to: `.claude/skills/[skill_name]/SKILL.md` (the
 canonical Claude Code skills directory). For
 single-file skills, `.claude/skills/[skill_name].md`

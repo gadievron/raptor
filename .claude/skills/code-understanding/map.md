@@ -529,6 +529,7 @@ After the summary, offer trace follow-up as a structured choice (see CLAUDE.md �
 - One option per entry point, highest-risk first (start with those appearing in `unchecked_flows`); cap the list at the risk-ordered top handful so the choice stays readable, and put the first option's "(Recommended)" tag on the highest-risk one.
 - Label: the entry point id plus its `path`/`name` (`EP-001 POST /api/v2/query`).
 - Description: its `file`:`line`, `type`, `auth_required`, and why it's risky — which sink it reaches without passing a trust boundary, from `unchecked_flows`.
+- Entry-point ids, names, and paths come from the scanned target: render them with non-printables escaped (CLAUDE.md § INTERACTIVE PROMPTS display integrity).
 
 For each selected entry point, run the `--trace` workflow (`trace.md`) in this same run directory, producing a `flow-trace-<id>.json` per trace, then re-run `libexec/raptor-render-diagrams "$WORKDIR"`.
 

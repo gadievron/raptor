@@ -174,6 +174,9 @@ M confirmed. What next?" — options:
    (`python3 raptor.py agentic --repo <path> --no-exploits`, see `.claude/commands/patch.md`).
 4. **Stop here** — the validation report stands; finish.
 
+Finding ids, file paths, and titles quoted into options are target/LLM-derived:
+render them with non-printables escaped.
+
 **Non-interactive fallback:** current behavior — display the verbatim summary and
 stop (option 4).
 

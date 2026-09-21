@@ -58,7 +58,8 @@ unblocks better results. After the run completes (never mid-pipeline), offer the
 decision as a structured choice (see CLAUDE.md § INTERACTIVE PROMPTS). Run
 `libexec/raptor-may-ask` first; only if it prints `interactive` AND the
 AskUserQuestion tool is available, ask. Quote the actual hint text from the run
-output in the question.
+output in the question — with non-printables escaped (the hint may embed
+target-derived file names).
 
 **Trigger A — buildless extraction hit unresolved includes** (output contains
 "build-generated headers are invisible without a traced build (opt in via
