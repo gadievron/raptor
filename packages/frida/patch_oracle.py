@@ -43,7 +43,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
-from core.logging import get_logger
+from core.logging import configure_cli_logging, get_logger
 from core.security.log_sanitisation import sanitise_for_terminal as _sft
 
 log = get_logger("frida.patch_oracle")
@@ -287,6 +287,13 @@ def _parse_location(value: str) -> tuple[str, int]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Escaping-formatter chokepoint for this libexec dispatch target.
+    # The module-level get_logger() bootstrap already wires it in a
+    # fresh process; this keeps the guarantee independent of that
+    # import-time side effect (basicConfig no-ops when handlers
+    # already exist, so nothing is clobbered).
+    import logging as _logging
+    configure_cli_logging(_logging.WARNING)
     parser = argparse.ArgumentParser(
         prog="raptor frida-patch-verify",
         description=("Verify a candidate patch dynamically: run the "

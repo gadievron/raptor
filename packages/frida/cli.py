@@ -9,10 +9,12 @@ treats it as a required input rather than constructing one itself.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 from pathlib import Path
 
+from core.logging import configure_cli_logging
 from core.security.log_sanitisation import sanitise_for_terminal as _sft
 
 from .runner import (
@@ -80,6 +82,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # This process is a libexec dispatch target and previously
+    # configured no logging at all, so WARNING+ records (e.g.
+    # sink_watch's dropped-step-name warning, which interpolates
+    # attack-paths.json content) reached the TTY through logging's
+    # raw lastResort handler. Wire the escaping-formatter chokepoint
+    # before any work.
+    configure_cli_logging(logging.WARNING)
     parser = _build_parser()
     # --list-templates is a query mode; skip the required flags by
     # short-circuiting before parse_args's required-arg check.

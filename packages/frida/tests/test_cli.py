@@ -171,3 +171,46 @@ def test_cli_frida_unavailable_exit_3(tmp_path: Path, monkeypatch):
         "--duration", "0.05",
     ])
     assert rc == 3
+
+
+class TestConsoleChokepointWired:
+    """The frida CLI process previously configured NO logging, so
+    WARNING+ records from hostile-derived lanes (sink_watch's
+    dropped-step-name warning interpolates attack-paths.json content)
+    reached the TTY through logging's raw lastResort handler, outside
+    EscapingConsoleFormatter. Both libexec-dispatched entry mains must
+    wire the chokepoint before doing any work."""
+
+    def _with_fresh_root(self, call):
+        import logging as _logging
+        root = _logging.getLogger()
+        saved = root.handlers[:]
+        root.handlers = []
+        try:
+            call()
+            from core.logging import EscapingConsoleFormatter
+            console = [
+                h for h in root.handlers
+                if isinstance(h, _logging.StreamHandler)
+                and not isinstance(h, _logging.FileHandler)
+            ]
+            assert console, (
+                "main() must configure a console handler — with none, "
+                "logging.lastResort relays hostile-derived warnings raw"
+            )
+            for h in console:
+                assert isinstance(h.formatter, EscapingConsoleFormatter)
+        finally:
+            root.handlers = saved
+
+    def test_cli_main_wires_escaping_formatter(self, capsys):
+        self._with_fresh_root(lambda: cli.main(["--list-templates"]))
+
+    def test_patch_oracle_main_wires_escaping_formatter(self, capsys):
+        from packages.frida import patch_oracle
+
+        def call():
+            with pytest.raises(SystemExit):
+                patch_oracle.main([])  # argparse rejects missing args
+
+        self._with_fresh_root(call)
