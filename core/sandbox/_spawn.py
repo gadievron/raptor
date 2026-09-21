@@ -3233,14 +3233,30 @@ def run_sandboxed(
             # parent can degrade (mount) or fail loud (Landlock/seccomp/
             # unshare) deterministically — unspoofably, regardless of exit
             # code or stderr. Then the last-chance stderr diagnostic.
-            _tb = traceback.format_exc().strip()
+            # Setup-failure exception text embeds target-influenced
+            # strings (bind paths under the scanned tree, mount
+            # arguments) and this write lands on the operator's
+            # inherited stderr — escape control bytes, keeping the
+            # traceback's line structure. Best-effort: if the
+            # sanitiser import itself fails at this point, keep the
+            # step signal and skip the stderr diagnostic rather than
+            # relay raw bytes.
+            try:
+                from core.security.log_sanitisation import (
+                    escape_nonprintable as _enp,
+                )
+                _tb = _enp(traceback.format_exc(),
+                           preserve_newlines=True).strip()
+            except BaseException:  # noqa: BLE001 — last-chance path
+                _tb = ""
             _write_setup_status(
                 status_w, _status_step,
                 _tb.splitlines()[-1] if _tb else "",
             )
             # os.write to a possibly-closed/broken stderr → OSError.
-            with contextlib.suppress(OSError):
-                os.write(2, f"sandbox child failure:\n{traceback.format_exc()}\n".encode())
+            if _tb:
+                with contextlib.suppress(OSError):
+                    os.write(2, f"sandbox child failure:\n{_tb}\n".encode())
             os._exit(126)
 
     # ================ PARENT ================

@@ -41,19 +41,32 @@ Mechanism — deliberately explicit and low-maintenance:
   function whose ``return`` carries foreign values marks its callers
   (``sys.stdout.write(render_json(report))``). Cross-MODULE dataflow
   and argument→return flow through helpers remain out of scope
-  (documented limitation, same as the envelope audit).
+  (documented limitation, same as the envelope audit). The taint tier
+  is also FLOW-INSENSITIVE: a clean re-assignment clears taint
+  regardless of branch structure, so the
+  ``try: x = <tainted>`` / ``except: x = ""`` fallback shape reads
+  its sink clean — the except-arm re-bind is indistinguishable from a
+  sanitising re-assignment. A site relying on that shape must carry
+  its own test pin (e.g. the sandbox child-failure diagnostic's
+  source + behavioural pins in
+  core/sandbox/tests/test_setup_status_integrity.py).
 * **Raw-serialiser arm**: ``print(dumps_display(payload))``-shape
   whole-payload dumps at terminal-capable sinks are flagged directly
   (they read no key at all); ``json.dumps(..., ensure_ascii=True)``
   is the blessed terminal-JSON shape.
 * **Exception-relay arm**: ``except Exception as e: print(f"{e}")``
   in a BROAD handler is flagged (shallow, handler-body sinks only —
-  scope trade-offs recorded at ``_exception_relay_scan``). LOGGING
+  scope trade-offs recorded at ``_exception_relay_scan``). Rendered
+  exception text that reaches a sink through a PRODUCING call instead
+  of a bound name (``print(traceback.format_exc())``) is caught by the
+  foreign-call vocabulary (:data:`_FOREIGN_TEXT_CALLS`). LOGGING
   sinks (``log.error(f"{e}")`` and every ``logger.*`` relay) are
   deliberately outside this arm: they are covered structurally at the
   console chokepoint (``core.logging.EscapingConsoleFormatter``);
   standalone CLIs wire it via ``core.logging.configure_cli_logging``,
-  enforced by the bare-``basicConfig`` closure test.
+  enforced by the console-config closure test (basicConfig,
+  same-line addHandler(StreamHandler), dictConfig/fileConfig
+  spellings).
 * **Sanitiser name-shadow arm**: a local definition of a
   recognised-sanitiser name must build on a canonical sanitiser
   (``_sanitiser_shadow_scan``).
@@ -303,6 +316,11 @@ _REPORT_WRITER_FILES = (
     "core/llm/multi_model/replay.py",
     "core/progress/__init__.py",
     "core/project/cli.py",
+    # /project annotations diff — renders agent-written annotation
+    # fields (file/function/status/source) to the operator terminal
+    # via cli.py's print(format_diff(...)). Terminal writer,
+    # sanitise_for_terminal grade at construction.
+    "core/project/annotations_diff.py",
     "core/reporting/renderer.py",
     "core/run/provenance.py",
     # SAGE boot-payload review: the compare display prints
@@ -441,7 +459,12 @@ class AllowlistEntry:
     """A pre-approved sink interpolation. Each entry MUST carry an
     ``audit_note`` explaining why this specific call site is safe.
     Content-keyed (file, func_name, kind, detail) — survives unrelated
-    line churn, re-fires when the call site itself changes.
+    line churn. Granularity is per-function per-key: a REWRITTEN call
+    site, or a brand-new unsanitised read of the same key added
+    anywhere in the same function, still matches the old entry and
+    stays silenced — only a key or function rename re-fires. Keep
+    entries narrow and re-review them whenever the owning function
+    changes.
     """
     file: str
     func_name: str
@@ -1346,7 +1369,7 @@ def _exception_relay_scan(tree: ast.AST, rel: str,
     HERE and covered at a different layer: the console-handler
     chokepoint (``EscapingConsoleFormatter``; standalone CLIs wire it
     via ``core.logging.configure_cli_logging``, enforced by the
-    bare-``basicConfig`` closure test) escapes every logger-routed
+    console-config closure test) escapes every logger-routed
     line, so a per-site arm would double-cover with heavy noise.
     """
     out: list[Violation] = []
@@ -1460,6 +1483,19 @@ _TAINT_NEUTRAL_CALLS = frozenset({
 })
 
 
+# Foreign-text-PRODUCING calls: their return value is rendered
+# exception text — the same content class the exception-relay arm
+# exists for — while reading no bound name and no vocabulary key, so
+# without this vocabulary they are invisible to every arm. Matched by
+# short call name (``traceback.format_exc()`` and a bare imported
+# ``format_exc()`` both count).
+_FOREIGN_TEXT_CALLS = frozenset({
+    "format_exc",
+    "format_exception",
+    "format_exception_only",
+})
+
+
 def _naked_keys(
     node: ast.AST,
     tainted: frozenset,
@@ -1496,6 +1532,12 @@ def _naked_keys(
         if (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                 and n.func.id in _TAINT_NEUTRAL_CALLS):
             return  # content-destroying builtin — nothing flows through
+        if isinstance(n, ast.Call) and _call_name(n) in _FOREIGN_TEXT_CALLS:
+            # traceback.format_exc() / format_exception(...): the call
+            # RESULT is exception text — flag the read itself; the
+            # arguments (an exception object, limits) add nothing.
+            out.append((getattr(n, "lineno", 0), _call_name(n)))
+            return
         if isinstance(n, ast.Call) and _is_ascii_json_dumps(n):
             # json.dumps(..., ensure_ascii=True): C0 escaped by JSON,
             # C1 escaped by ensure_ascii — the blessed terminal-JSON
@@ -1728,6 +1770,9 @@ class _Scanner(ast.NodeVisitor):
             # `body = _prose(body)` makes later uses of `body` safe.
             # Container stores never clear: one clean store into a dict
             # does not clean the tainted values already inside it.
+            # FLOW-INSENSITIVE (documented residual, module docstring):
+            # an except-arm fallback re-bind (`except: x = ""`) also
+            # clears — such sites need their own test pin.
             for target in node.targets:
                 if _container_base(target) is not None:
                     continue
@@ -1754,6 +1799,23 @@ class _Scanner(ast.NodeVisitor):
             if _container_base(node.target) is None:
                 for name in _target_names(node.target):
                     self._tainted.discard(name)
+        self.generic_visit(node)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        # Walrus (``if (t := e["title"]): print(t)``) is an
+        # Assign-class binding in expression position — skipping it
+        # left walrus-spelled writers invisible, the same gap class as
+        # the fixed AnnAssign blindness. Mirrors plain-Assign
+        # semantics: a foreign value taints the target, a sanitised /
+        # unrelated re-bind clears it (the target is always a plain
+        # Name, so there is no container-store side).
+        if _naked_keys(node.value, frozenset(self._tainted),
+                       self._tainted_calls):
+            for name in _target_names(node.target):
+                self._tainted.add(name)
+        else:
+            for name in _target_names(node.target):
+                self._tainted.discard(name)
         self.generic_visit(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:

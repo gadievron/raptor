@@ -452,6 +452,67 @@ def test_augassign_never_clears_taint():
     assert any(v.detail == "x" for v in audit_source(src))
 
 
+def test_rule_catches_walrus_taint():
+    """``if (t := e['title']): print(t)`` — NamedExpr is an
+    Assign-class binding in expression position; skipping it made
+    walrus-spelled writers invisible (same gap class as the fixed
+    AnnAssign blindness)."""
+    src = (
+        "def render(e):\n"
+        "    if (t := e['title']):\n"
+        "        print(t)\n"
+    )
+    assert any(v.detail == "t" for v in audit_source(src))
+
+
+def test_walrus_sanitised_value_reads_clean():
+    """``(t := sanitise_string(...))`` is a sanitising re-bind — no
+    taint, mirroring plain-Assign clearing semantics."""
+    src = (
+        "def render(e):\n"
+        "    t = e['title']\n"
+        "    if (t := sanitise_string(e['title'])):\n"
+        "        print(t)\n"
+    )
+    assert not audit_source(src)
+
+
+def test_rule_catches_format_exc_at_sink():
+    """``print(f'...{traceback.format_exc()}')`` relays the same
+    exception text the exception-relay arm exists for, while reading
+    no bound name and no vocabulary key — foreign-call vocabulary."""
+    src = (
+        "import traceback\n"
+        "def render():\n"
+        "    try:\n"
+        "        work()\n"
+        "    except Exception:\n"
+        "        print(f'failed: {traceback.format_exc()}')\n"
+    )
+    assert any(v.detail == "format_exc" for v in audit_source(src))
+
+
+def test_rule_catches_format_exc_through_assignment():
+    """``tb = traceback.format_exc(); print(tb)`` — the foreign call
+    drives the taint engine like any vocabulary read."""
+    src = (
+        "import traceback\n"
+        "def render():\n"
+        "    tb = traceback.format_exc()\n"
+        "    print(tb)\n"
+    )
+    assert any(v.detail == "tb" for v in audit_source(src))
+
+
+def test_format_exc_sanitised_reads_clean():
+    src = (
+        "import traceback\n"
+        "def render():\n"
+        "    print(sanitise_string(traceback.format_exc()))\n"
+    )
+    assert not audit_source(src)
+
+
 def test_rule_catches_container_round_trip():
     """The raptor-audit cmd_critique shape: dict-store, tuple-in-list,
     loop-unpack print — no foreign key name visible at the sink."""

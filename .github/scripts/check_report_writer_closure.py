@@ -94,7 +94,11 @@ def _audit_one(rel: str) -> list:
     assert _WORKER_ROOT is not None
     try:
         source = (_WORKER_ROOT / rel).read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
+        # Skip-on-undecodable is the sibling-scan convention (the
+        # basicConfig and tri-state scans do the same); pre-fix one
+        # non-UTF-8 tracked candidate raised through the pool and
+        # killed the whole gate with a traceback instead of a report.
         return []
     return rwa.filter_allowlisted(rwa.audit_source(source, rel))
 

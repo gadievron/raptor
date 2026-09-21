@@ -439,3 +439,71 @@ def test_callback_kill_before_exec_is_a_result_not_a_refusal(
     assert r.returncode == -_signal.SIGKILL, (
         f"expected the caller-visible rc=-9 contract, got "
         f"rc={r.returncode}")
+
+
+def test_child_failure_diagnostic_escapes_at_site():
+    """Source pin: the child-failure stderr diagnostic must escape the
+    traceback at the site (escape_nonprintable, preserve_newlines).
+    The writer gate CANNOT hold this site: the fix's own
+    `except BaseException: _tb = ""` fallback re-binds the name, and
+    the audit's flow-insensitive Assign semantics clear the taint —
+    so a semantic revert (dropping only the _enp() wrap while keeping
+    the try/except shape) reads clean to the gate. This pin (and the
+    behavioural twin below) is the member's oracle."""
+    spawn_src = (_REPO_ROOT / "core/sandbox/_spawn.py").read_text(
+        encoding="utf-8")
+    at = spawn_src.index("sandbox child failure:")
+    region = spawn_src[at - 1600:at]
+    assert "_tb = _enp(traceback.format_exc()" in region, (
+        "the child-failure diagnostic no longer escapes the traceback "
+        "at construction — raw target-influenced bytes would reach "
+        "the operator's inherited stderr, and the writer gate is "
+        "structurally blind to this site (except-rebind taint clear)"
+    )
+    assert "escape_nonprintable as _enp" in region
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(sys.platform != "linux", reason="namespace sandbox")
+def test_child_failure_diagnostic_escapes_hostile_bytes(
+        tmp_path, monkeypatch, capfd):
+    """Live: hostile bytes in the setup-failure exception text must
+    reach the operator's inherited stderr ESCAPED. Injected via a
+    fork-inherited resource.setrlimit wrapper whose message carries
+    ESC/BEL (setup-failure text embeds target-influenced strings —
+    bind paths, mount args — by the same derivation)."""
+    from core.sandbox import _spawn as _spawn_mod
+    from core.sandbox import context as _ctx
+
+    hostile = "pwned-\x1b]0;title\x07-\x1b[2J-end"
+
+    def raising(limits, status_fd=None):
+        # Generic (not specially-categorised) setup failure — flows to
+        # the child's `except BaseException` diagnostic, the lane under
+        # test. Fork-inherited monkeypatch, same seam family as the
+        # RLIMIT_CORE / SIGKILL siblings above.
+        raise ValueError(f"injected setup failure {hostile}")
+
+    monkeypatch.setattr(_spawn_mod, "_set_rlimits", raising)
+    try:
+        _ctx.run(["/bin/true"], target=str(tmp_path),
+                 output=str(tmp_path), timeout=60)
+    except SandboxSetupError:
+        pass  # fail-loud parent outcome — diagnostic already on fd 2
+    except (pytest.skip.Exception, pytest.fail.Exception):
+        raise
+    except Exception as e:  # noqa: BLE001 — host can't reach the lane
+        pytest.skip(f"spawn lane unavailable: {e}")
+    # Whether the parent failed loud or degraded to a non-ns lane,
+    # the child wrote its last-chance diagnostic to the inherited
+    # stderr BEFORE the parent decided — the escape contract is on
+    # that write itself.
+    err = capfd.readouterr().err
+    if "sandbox child failure" not in err:
+        pytest.skip("spawn child-failure lane not exercised on this "
+                    "host (no diagnostic on stderr)")
+    assert "\x1b" not in err and "\x07" not in err, (
+        "raw control bytes from setup-failure exception text reached "
+        "the inherited stderr"
+    )
+    assert "pwned-" in err  # escaped, content preserved
