@@ -86,12 +86,17 @@ def evaluate(
             continue
         if fr.suppressed and not cfg.include_suppressed:
             continue
-        sev = fr.severity
-        rank = severity_rank(sev)
+        rank = severity_rank(fr.severity)
         # The description embeds OSV advisory free text (attacker-
         # writable markdown) — escape control bytes and bound length
         # at construction so every fail line print_result later emits
-        # to the CI/operator terminal is already terminal-safe.
+        # to the CI/operator terminal is already terminal-safe. The
+        # severity slot beside it is just as attacker-writable on
+        # hand-edited / third-party findings.json (FindingRow accepts
+        # any string, and unknown severities rank 0 — passing the
+        # info/none floors): rank on the raw value, print the escaped
+        # one.
+        sev = _sft(str(fr.severity), max_len=32)
         desc = _sft(fr.description or fr.id or "(no description)")
         if fr.is_vulnerable_dependency:
             if sev_floor is not None and rank >= sev_floor:
