@@ -22,6 +22,7 @@ import pytest
 from core.dataflow.finding import Finding, Step
 from packages.source_intel.adapter import (
     _downstream_check_suppresses_finding,
+    _fortified_dest_is_variable_size,
     _function_is_static,
     _has_interprocedural_check,
     _line_uses_privileged_cap,
@@ -300,3 +301,47 @@ class TestPreprocessorDeadDecoys:
         assert _downstream_check_suppresses_finding(
             _finding_at(path, 2, self.RULE),
         ) is False
+
+
+class TestFortifiedDestDecoy:
+    """_fortified_dest_is_variable_size scans backwards for
+    `dest = <allocator>(` — over raw lines a planted comment forged
+    True, withholding the fortify NOT_EXPLOITABLE suppression from
+    prose (the False direction was never forgeable: a comment cannot
+    erase real code)."""
+
+    def test_comment_alloc_does_not_forge_heap_dest(self, tmp_path):
+        path = _write(tmp_path, (
+            "void f(const char *src) {\n"                  # 1
+            "    char buf[64];\n"                           # 2
+            "    /* buf = malloc(64) legacy */\n"           # 3 decoy
+            "    strcpy(buf, src);\n"                       # 4 sink
+            "}\n"
+        ))
+        finding = _finding_at(path, 4, "cpp/fortified",
+                              snippet="strcpy(buf, src);")
+        assert _fortified_dest_is_variable_size(finding) is False
+
+    def test_string_alloc_does_not_forge_heap_dest(self, tmp_path):
+        path = _write(tmp_path, (
+            "void f(const char *src) {\n"
+            "    char buf[64];\n"
+            '    log("buf = malloc(64)");\n'
+            "    strcpy(buf, src);\n"
+            "}\n"
+        ))
+        finding = _finding_at(path, 4, "cpp/fortified",
+                              snippet="strcpy(buf, src);")
+        assert _fortified_dest_is_variable_size(finding) is False
+
+    def test_real_alloc_control(self, tmp_path):
+        path = _write(tmp_path, (
+            "void f(const char *src) {\n"
+            "    char *buf;\n"
+            "    buf = malloc(64);\n"
+            "    strcpy(buf, src);\n"
+            "}\n"
+        ))
+        finding = _finding_at(path, 4, "cpp/fortified",
+                              snippet="strcpy(buf, src);")
+        assert _fortified_dest_is_variable_size(finding) is True

@@ -1292,10 +1292,13 @@ def _fortified_dest_is_variable_size(
             ((repo_root or _DEFAULT_REPO_ROOT) / sink_path).resolve()
         )
 
-    try:
-        with open(sink_path_abs, encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
+    # Comment/string-blanked view (shared _sanitized_lines
+    # chokepoint): a planted `/* buf = malloc(64) legacy */` comment
+    # forged True over raw lines, withholding the fortify
+    # NOT_EXPLOITABLE suppression from prose (a comment cannot erase
+    # real code, so the False direction was never forgeable).
+    lines = _sanitized_lines(sink_path_abs)
+    if lines is None:
         return False
 
     # Scope: scan up to 200 lines before the sink (typical function
@@ -1895,10 +1898,16 @@ def _wur_annotation_trustworthy(file_path: str, function_name: str) -> bool:
     # the inventory's tree-sitter parser.
     body_lines = _function_body_via_inventory(file_path, function_name)
     if body_lines is None:
-        try:
-            with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-        except OSError:
+        # Comment/string-blanked view (shared _sanitized_lines
+        # chokepoint): both defense layers below are per-line lexical
+        # passes, and over raw text a WUR-annotated no-op could carry
+        # its "body" inside one multi-line block comment — the
+        # interior lines have no comment markers, so they counted as
+        # statements (defeating the triviality check) and their
+        # `return r;` read as a varying return (defeating constancy).
+        # The blanked view is what the code actually says.
+        lines = _sanitized_lines(file_path)
+        if lines is None:
             return True
 
         fn_open_line = _find_function_definition_open(
@@ -2008,10 +2017,13 @@ def _function_body_via_inventory(
             continue
         if not isinstance(line_end, int) or line_end < line_start:
             continue
-        try:
-            with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-                lines = f.readlines()
-        except OSError:
+        # Comment/string-blanked view: the inventory anchors only the
+        # BODY BOUNDS — the triviality / return-constancy counting
+        # over the slice is the same per-line lexical pass as the
+        # regex path, so raw lines made the "preferred" path equally
+        # forgeable by a block-comment body.
+        lines = _sanitized_lines(file_path)
+        if lines is None:
             return None
         # Convert inventory 1-indexed inclusive range → 0-indexed slice.
         if line_end > len(lines):

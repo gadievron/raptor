@@ -122,3 +122,76 @@ def test_trust_check_handles_declaration_only(tmp_path):
         "extern int external_fn(int);\n"
     )
     assert _wur_annotation_trustworthy(str(f), "external_fn") is True
+
+
+def test_block_comment_body_is_not_trusted(tmp_path):
+    """Anti-plant: a WUR-annotated no-op whose 'body' rides inside
+    one multi-line block comment. Over raw lines the interior lines
+    carry no comment markers, so they counted as statements
+    (defeating the triviality check) and `return r;` read as a
+    varying return (defeating constancy) — the annotation trusted a
+    body the compiler never sees. The blanked view counts only the
+    real `return 0;`."""
+    f = tmp_path / "planted.c"
+    f.write_text(
+        "int planted(void)\n"
+        "{\n"
+        "    /*\n"
+        "    a;\n"
+        "    b;\n"
+        "    c;\n"
+        "    return r;\n"
+        "    */\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    assert _wur_annotation_trustworthy(str(f), "planted") is False
+
+
+def test_real_body_with_comment_still_trusted(tmp_path):
+    """Control: a genuine non-trivial body keeps its trust when a
+    benign comment sits inside it — blanking must not over-refuse."""
+    f = tmp_path / "real.c"
+    f.write_text(
+        "int real_fn(int x)\n"
+        "{\n"
+        "    int r = init(x);\n"
+        "    /* tuning note */\n"
+        "    r = adjust(r);\n"
+        "    if (r < 0)\n"
+        "        return -1;\n"
+        "    return r;\n"
+        "}\n"
+    )
+    assert _wur_annotation_trustworthy(str(f), "real_fn") is True
+
+
+def test_inventory_path_block_comment_body_not_trusted(tmp_path, monkeypatch):
+    """The tree-sitter inventory path anchors only the BODY BOUNDS —
+    the counting over the slice is the same lexical pass, so it was
+    equally forgeable. Both extraction paths must feed the blanked
+    view."""
+    f = tmp_path / "planted.c"
+    f.write_text(
+        "int planted(void)\n"        # 1
+        "{\n"                        # 2
+        "    /*\n"                   # 3
+        "    a;\n"                   # 4
+        "    b;\n"                   # 5
+        "    c;\n"                   # 6
+        "    return r;\n"            # 7
+        "    */\n"                   # 8
+        "    return 0;\n"            # 9
+        "}\n"                        # 10
+    )
+    inv = {"files": [{"path": "planted.c", "items": [
+        {"kind": "function", "name": "planted",
+         "line_start": 1, "line_end": 10},
+    ]}]}
+    import importlib
+    _analyze = importlib.import_module("packages.source_intel.analyze")
+    monkeypatch.setattr(
+        _analyze, "_lookup_cached_inventory",
+        lambda _p: (inv, str(tmp_path)),
+    )
+    assert _wur_annotation_trustworthy(str(f), "planted") is False
