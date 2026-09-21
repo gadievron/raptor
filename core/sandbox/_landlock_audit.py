@@ -421,6 +421,8 @@ def run_landlock_audit(
     capture_output: bool = True,
     text: bool = True,
     stdin=None,
+    stdout=None,
+    stderr=None,
     start_new_session: bool = True,
 ) -> subprocess.CompletedProcess:
     """Spawn ``cmd`` under Landlock + seccomp + ptrace tracer, no
@@ -574,6 +576,44 @@ def run_landlock_audit(
                     finally:
                         _close_safely(out_w)
                         _close_safely(err_w)
+                else:
+                    # stdout=/stderr= redirects (int fd, file-like,
+                    # DEVNULL, STDOUT for stderr). Same shape as
+                    # _spawn's mount-ns child: pre-fix these kwargs
+                    # were silently DROPPED on this lane — the child
+                    # inherited the parent's fd 1/2 regardless, which
+                    # also defeated run_untrusted's write-only tty
+                    # reopen (the child kept the O_RDWR pty slave and
+                    # could read() the operator's keystrokes through
+                    # its own stdout). PIPE is unsupported here, same
+                    # as stdin: fail closed to /dev/null with a
+                    # stderr note.
+                    for _redir, _fdnum, _label in ((stdout, 1,
+                                                    b"stdout"),
+                                                   (stderr, 2,
+                                                    b"stderr")):
+                        if _redir is None:
+                            continue
+                        if _redir == subprocess.PIPE:
+                            with contextlib.suppress(OSError):
+                                os.write(2, b"sandbox: %s=subprocess."
+                                            b"PIPE not supported via "
+                                            b"the Landlock-audit path;"
+                                            b" falling back to "
+                                            b"/dev/null.\n" % _label)
+                            _redir = subprocess.DEVNULL
+                        if _redir == subprocess.DEVNULL:
+                            _dn = os.open("/dev/null", os.O_WRONLY)
+                            os.dup2(_dn, _fdnum)
+                            os.close(_dn)
+                            continue
+                        if _fdnum == 2 and _redir == subprocess.STDOUT:
+                            os.dup2(1, 2)
+                            continue
+                        _rfd = (_redir if isinstance(_redir, int)
+                                else _redir.fileno())
+                        if _rfd != _fdnum:
+                            os.dup2(_rfd, _fdnum)
                 # stdin: caller-supplied or /dev/null. Same shape as
                 # _spawn for parity (no PIPE on this path; that's a
                 # caller-side construct that wouldn't survive exec).

@@ -4975,6 +4975,16 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     capture_output=kwargs.get("capture_output", False),
                     text=kwargs.get("text", False),
                     stdin=kwargs.get("stdin"),
+                    # stdout=/stderr= forwarded like the Linux spawn
+                    # dispatch: pre-fix they were silently dropped
+                    # here, so every non-capturing run_untrusted() on
+                    # macOS handed the child the parent's original
+                    # O_RDWR pty slave on fd 1/2 — the exact keystroke
+                    # channel the write-only tty reopen exists to
+                    # revoke — while the reopened fds sat unused (and
+                    # seatbelt-lane callers lost their redirects).
+                    stdout=kwargs.get("stdout"),
+                    stderr=kwargs.get("stderr"),
                     # Plumbed natively by the subprocess-backed macOS
                     # spawn (see the spawn_eligible gate) — these two
                     # kwargs must never silently cost the seatbelt.
@@ -6490,6 +6500,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                         "capture_output", False),
                                     text=kwargs.get("text", False),
                                     stdin=kwargs.get("stdin"),
+                                    # Forwarded like the Linux spawn
+                                    # dispatch — dropping them here
+                                    # defeated run_untrusted's
+                                    # write-only tty reopen on the
+                                    # Landlock-only audit lane.
+                                    stdout=kwargs.get("stdout"),
+                                    stderr=kwargs.get("stderr"),
                                     start_new_session=_start_new_session,
                                 ))
                                 _audit_landlock_engaged = True
