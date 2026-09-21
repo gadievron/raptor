@@ -342,3 +342,217 @@ def test_empty_function_name_ignored(tmp_path):
         pypi_symbol_map={deps[0].key(): [""]},
     )
     assert out[deps[0].key()].verdict == "imported"
+
+
+# ---------------------------------------------------------------------------
+# Dotted advisory entries — the qualification join
+# ---------------------------------------------------------------------------
+# Advisory flat lists ship three entry shapes and each must produce a
+# resolver-bindable query (the closure oracle for the qualification
+# policy is this shape-parametrised block — bare, module-head-
+# qualified, partially-qualified; anything else is out of the claimed
+# scope):
+#   * bare        ("get")                        → "<mod>.get"
+#   * module-head ("yaml.full_load")             → verbatim (the
+#     dominant GHSA/PYSEC spelling; "<mod>.yaml.full_load" is a
+#     garbage query that pairs as NOT_CALLED and manufactured a
+#     false high-confidence not_function_reachable)
+#   * partial     ("utils.extract_zipped_paths") → "<mod>.utils...."
+
+
+def test_module_head_qualified_entry_called_is_not_suppressed(tmp_path):
+    """The reviewer shape: dist pyyaml → module yaml; the advisory
+    entry is module-head-qualified ("yaml.full_load") and the project
+    CALLS it — the tier must see CALLED, never mint a false
+    high-confidence downgrade from the garbage doubled spelling."""
+    target = _project(
+        tmp_path,
+        "import yaml\nyaml.full_load('x')\n",
+    )
+    deps = [_dep("pyyaml")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={deps[0].key(): ["yaml.full_load"]},
+    )
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_module_head_qualified_entry_uncalled_still_downgrades(tmp_path):
+    """Two-direction guard: the verbatim spelling still earns the
+    legitimate downgrade when the function truly is not called."""
+    target = _project(
+        tmp_path,
+        "import yaml\nyaml.safe_load('x')\n",
+    )
+    deps = [_dep("pyyaml")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={deps[0].key(): ["yaml.full_load"]},
+    )
+    assert out[deps[0].key()].verdict == "not_function_reachable"
+
+
+def test_deep_module_head_qualified_entry_called(tmp_path):
+    """django-style deep qualification under the dist's own module."""
+    target = _project(
+        tmp_path,
+        "import requests\nrequests.utils.extract_zipped_paths('/')\n",
+    )
+    deps = [_dep("requests")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={
+            deps[0].key(): ["requests.utils.extract_zipped_paths"],
+        },
+    )
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_partially_qualified_entry_still_composes(tmp_path):
+    """A partial entry whose head is NOT a candidate module keeps the
+    compose spelling — and must NOT be tried verbatim (a top-level
+    local module named ``utils`` would otherwise fake a CALLED)."""
+    target = _project(
+        tmp_path,
+        "import requests\nrequests.utils.extract_zipped_paths('/')\n",
+    )
+    deps = [_dep("requests")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={
+            deps[0].key(): ["utils.extract_zipped_paths"],
+        },
+    )
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_partial_entry_never_binds_unrelated_local_module(tmp_path):
+    """The verbatim spelling is reserved for module-head entries: a
+    project-local ``utils`` module calling an unrelated function of
+    the same name must not upgrade the dep."""
+    target = _project(
+        tmp_path,
+        "import requests\n"
+        "import utils\n"
+        "utils.extract_zipped_paths('/')\n",
+    )
+    (tmp_path / "utils.py").write_text(
+        "def extract_zipped_paths(p):\n    return p\n",
+    )
+    deps = [_dep("requests")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={
+            deps[0].key(): ["utils.extract_zipped_paths"],
+        },
+    )
+    # requests.utils.extract_zipped_paths is never called: downgrade
+    # (the local utils call must not read as the dep's function).
+    assert out[deps[0].key()].verdict == "not_function_reachable"
+
+
+def test_dotted_curated_module_head_entry_called(tmp_path):
+    """Dotted candidate modules (curated map: protobuf →
+    google.protobuf) have MULTI-SEGMENT heads — the module-head
+    spelling must still bind verbatim (a first-segment head check
+    misclassified these as partial and composed garbage like
+    "google.protobuf.google.protobuf.text_format.Parse")."""
+    target = _project(
+        tmp_path,
+        "import google.protobuf.text_format\n"
+        "google.protobuf.text_format.Parse('x')\n",
+    )
+    deps = [_dep("protobuf")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={
+            deps[0].key(): ["google.protobuf.text_format.Parse"],
+        },
+    )
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_dotted_curated_module_head_entry_uncalled_downgrades(tmp_path):
+    """Two-direction guard for the dotted-module verbatim path."""
+    target = _project(
+        tmp_path,
+        "import google.protobuf.json_format\n"
+        "google.protobuf.json_format.Parse('x')\n",
+    )
+    deps = [_dep("protobuf")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={
+            deps[0].key(): ["google.protobuf.text_format.Parse"],
+        },
+    )
+    assert out[deps[0].key()].verdict == "not_function_reachable"
+
+
+def test_dotted_selfnamed_module_head_entry_called(tmp_path):
+    """A dist whose name IS its dotted module (ruamel.yaml)."""
+    target = _project(
+        tmp_path,
+        "import ruamel.yaml\nruamel.yaml.main.load('x')\n",
+    )
+    deps = [_dep("ruamel.yaml")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={deps[0].key(): ["ruamel.yaml.main.load"]},
+    )
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_dotted_heuristic_module_head_entry_called(tmp_path):
+    """The norm_dot heuristic (hyphenated unmapped dist foo-bar →
+    candidate module foo.bar) also yields multi-segment heads."""
+    target = _project(
+        tmp_path,
+        "import foo.bar\nfoo.bar.danger('x')\n",
+    )
+    deps = [_dep("foo-bar")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={deps[0].key(): ["foo.bar.danger"]},
+    )
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_entry_equal_to_module_name_abstains_safely(tmp_path):
+    """fn == candidate module exactly: the verbatim query is the bare
+    module (dot-less after the equality) — function_called refuses
+    dotted-only… the query IS dotted here (ruamel.yaml), so it
+    resolves as module-head chain; the entry names no function, so it
+    must not upgrade. Guard: no crash, no false CALLED."""
+    target = _project(
+        tmp_path,
+        "import ruamel.yaml\nruamel.yaml.main.load('x')\n",
+    )
+    deps = [_dep("ruamel.yaml")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_pypi_verdicts(
+        deps, out,
+        target=target,
+        pypi_symbol_map={deps[0].key(): ["ruamel.yaml"]},
+    )
+    assert out[deps[0].key()].verdict in (
+        "imported", "not_function_reachable",
+    )

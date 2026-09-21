@@ -177,10 +177,45 @@ def refine_pypi_verdicts(
         for fn in funcs:
             if not fn:
                 continue
+            # Advisory flat lists ship three entry shapes, and each
+            # needs a resolver-bindable query spelling (the
+            # shape-parametrised tests in
+            # test_python_function_level.py are the closure oracle
+            # for this policy — shapes outside it are not claimed):
+            #   * bare ("get") → "<mod>.get" per candidate module;
+            #   * module-head-qualified ("yaml.full_load" — the
+            #     dominant GHSA/PYSEC spelling) → VERBATIM. Blindly
+            #     prefixing minted "yaml.yaml.full_load", a garbage
+            #     query the resolver answers as a well-formed
+            #     NOT_CALLED — every pair went not-called and the
+            #     tier manufactured a false high-confidence
+            #     not_function_reachable on a dep whose vulnerable
+            #     function IS called. "Module-head" means the FULL
+            #     candidate-module prefix, not the first dot
+            #     segment: candidate modules are themselves dotted
+            #     for curated-map dists (protobuf →
+            #     google.protobuf, ruamel.yaml, azure.identity, …)
+            #     and for every hyphenated unmapped dist via the
+            #     norm_dot heuristic — a first-segment check
+            #     misclassified all of those as partial and
+            #     re-minted the same garbage compose;
+            #   * partially-qualified ("utils.extract_zipped_paths")
+            #     → "<mod>.utils...." compose, and NEVER verbatim —
+            #     a project-local module named ``utils`` would
+            #     otherwise fake a CALLED (prefer-stronger combining
+            #     makes a false CALLED win outright). An entry equal
+            #     to a candidate module names no function: its
+            #     verbatim query resolves to nothing callable and
+            #     the compose arm is skipped, so it can never mint a
+            #     false CALLED.
+            if any(fn == m or fn.startswith(m + ".") for m in modules):
+                queries = [fn]
+            else:
+                queries = [f"{mod}.{fn}" for mod in modules]
             best: ReachabilityResult | None = None
-            for mod in modules:
+            for query in queries:
                 try:
-                    r = function_called(inventory, f"{mod}.{fn}")
+                    r = function_called(inventory, query)
                 except ValueError:
                     continue
                 if best is None or strength[r.verdict] > strength[best.verdict]:
