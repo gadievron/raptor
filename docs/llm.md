@@ -538,16 +538,31 @@ fall back to JSON-in-prompt synthesis.
 
 ### Quality Tradeoffs
 
-| Capability | Frontier Models | Ollama (Local) |
+Reliability tracks model scale and quantization, not the Ollama transport itself.
+A frontier-scale open-weight model (100B+ parameters, Q8/FP8 or better, full
+context) is a different proposition than a small, heavily-quantized, or
+safety-ablated ("abliterated") fine-tune — the table below is a starting
+expectation, not a fixed rule for "local" as a category:
+
+| Capability | Frontier closed models | Local (Ollama) |
 |-----------|-----------------|----------------|
-| Vulnerability analysis | Excellent | Good |
-| Exploitability triage | Excellent | Good |
-| Exploit code generation | Compilable, working C | Often broken — invalid assembly, non-existent libc calls |
-| Dataflow validation | Accurate | Prone to hallucination |
+| Vulnerability analysis | Excellent | Good to excellent — scales with model size |
+| Exploitability triage | Excellent | Good to excellent — scales with model size |
+| Exploit code generation | Compilable, working C | Varies widely — large models at high precision can be competitive; small, quantized, or ablated models often produce invalid assembly or non-existent libc calls |
+| Dataflow validation | Accurate | Good for large models; smaller ones are more prone to hallucination |
 | Cost | ~$0.01/finding | Free |
 
-Use Ollama for offline triage and analysis. Use a frontier model for exploit generation
-and high-confidence validation.
+Exploit-dev precision (exact offsets, gadget addresses, byte-accurate
+shellcode) is a narrow domain most training data underrepresents, open or
+closed — expect a real gap there even from strong open models, and treat
+generated PoCs as a draft to verify rather than ground truth, regardless of
+provider.
+
+Don't take this table's word for it, either: RAPTOR's model scorecard
+(`/scorecard`, or `libexec/raptor-llm-scorecard list`) tracks real per-model
+pass/fail data — including a `_structured` decision class for schema
+validity — so after a few runs you can check what your specific model is
+actually achieving instead of relying on defaults.
 
 ## Gemini
 

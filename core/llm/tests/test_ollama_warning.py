@@ -107,13 +107,16 @@ class TestOllamaWarning:
             assert ("exploit" in warning or "poc" in warning), \
                 "Warning should mention exploit or PoC limitations"
 
-            # Should suggest using cloud models
+            # Should point at the scorecard for a measured, per-model answer
+            # rather than assuming reliability from provider name alone —
+            # capability tracks model scale/quantization, not the Ollama
+            # transport itself.
             has_suggestion = any(
                 keyword in warning
-                for keyword in ["cloud", "api", "anthropic", "openai", "remote"]
+                for keyword in ["scorecard", "measured"]
             )
             assert has_suggestion, \
-                "Warning should suggest using cloud/API models"
+                "Warning should point to /scorecard for measured reliability data"
 
             print(f"\n✅ Warning content validated: {warning}")
 
