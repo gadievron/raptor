@@ -6390,8 +6390,19 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             # per-call demoted): the whole point of
                             # the scratch swap is to withhold the
                             # host-shared /tmp, and the audit branch
-                            # must not silently re-open it.
-                            if (not exclude_tmp_baseline
+                            # must not silently re-open it. And only
+                            # when _wp is already non-empty: an
+                            # audit_run_dir-only call (the documented
+                            # "audit signal without a writable-path
+                            # restriction" shape — no target/output/
+                            # ports/writable_paths, so the plain lane
+                            # builds no policy at all) must not have
+                            # this branch invent a write-nowhere-
+                            # except-/tmp policy that breaks the
+                            # workload on exactly the userns-
+                            # restricted hosts this lane serves.
+                            if (_wp
+                                    and not exclude_tmp_baseline
                                     and "/tmp" not in _wp
                                     and _private_scratch_dir is None
                                     and _demoted_call_writable is None):
@@ -6404,28 +6415,44 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 for _tp in (tool_paths or []):
                                     if _tp and _tp not in _la_readable:
                                         _la_readable.append(_tp)
-                            _ll_preexec = _la_make_landlock(
-                                _wp,
-                                list(allowed_tcp_ports)
+                            # Mirror the plain lane's engagement
+                            # predicate (preexec._make_preexec_fn):
+                            # no writable paths, no ports, no read
+                            # allowlist, no degraded/demoted net
+                            # deny -> no Landlock ruleset. The audit
+                            # tracer still engages — that is the
+                            # audit_run_dir contract.
+                            _la_engages = bool(
+                                _wp or allowed_tcp_ports
+                                or _la_readable is not None
+                                or _degraded_tcp_deny
+                                or _demoted_net_deny)
+                            _ll_preexec = None
+                            if _la_engages:
+                                _ll_preexec = _la_make_landlock(
+                                    _wp,
+                                    list(allowed_tcp_ports)
                                     if allowed_tcp_ports else None,
-                                readable_paths=_la_readable,
-                                # Degraded-host TCP deny must survive
-                                # the audit branch: the plain preexec
-                                # carries it, and dropping it here
-                                # silently restored outbound network
-                                # exactly when block_network had
-                                # downgraded to Landlock-only. The
-                                # PER-CALL demoted deny rides along
-                                # for the same reason — the audit
-                                # branch builds its own preexecs, so
-                                # omitting it here let an audit-mode
-                                # demoted block_network call connect
-                                # freely while the demotion warning
-                                # claimed EACCES.
-                                deny_all_tcp_connect=(
-                                    _degraded_tcp_deny
-                                    or _demoted_net_deny),
-                            )
+                                        readable_paths=_la_readable,
+                                    # Degraded-host TCP deny must
+                                    # survive the audit branch: the
+                                    # plain preexec carries it, and
+                                    # dropping it here silently
+                                    # restored outbound network
+                                    # exactly when block_network had
+                                    # downgraded to Landlock-only.
+                                    # The PER-CALL demoted deny rides
+                                    # along for the same reason — the
+                                    # audit branch builds its own
+                                    # preexecs, so omitting it here
+                                    # let an audit-mode demoted
+                                    # block_network call connect
+                                    # freely while the demotion
+                                    # warning claimed EACCES.
+                                    deny_all_tcp_connect=(
+                                        _degraded_tcp_deny
+                                        or _demoted_net_deny),
+                                )
                             _sc_preexec = _la_make_seccomp(
                                 seccomp_profile,
                                 block_udp=seccomp_block_udp,
