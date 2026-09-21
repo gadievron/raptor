@@ -57,3 +57,35 @@ def test_summary_line_escapes_hostile_failure_tags():
     for raw in RAW:
         assert raw not in out
     assert "FAILURES" in out and "1/2" in out
+
+
+def test_progress_line_escapes_hostile_tag():
+    """The download / running-E2E loop lines print the same
+    releases-API tag the fixed row/pin/summary lines escape — the
+    hostile value the existing oracles inject must not survive these
+    lanes either."""
+    mod = _load()
+    out = mod._progress_line(HOSTILE_TAG, "downloading...")
+    for raw in RAW:
+        assert raw not in out
+    assert "downloading..." in out
+
+
+def test_unpinned_warning_escapes_hostile_tag_and_asset():
+    mod = _load()
+    out = mod._unpinned_warning(
+        HOSTILE_TAG, "asset\x1b[2J\x9b.zip", "ab" * 32)
+    for raw in RAW:
+        assert raw not in out
+    assert "WARNING" in out and "sha256-pinned" in out
+    assert "ab" * 32 in out
+
+
+def test_loop_print_sites_route_through_escaping_helpers():
+    """The three loop lanes previously interpolated tag/asset_name
+    directly; pin the print sites to the helpers so a future lane
+    reverting to an f-string re-fires."""
+    src = _SCRIPT.read_text(encoding="utf-8")
+    assert 'print(f"[{tag}]' not in src
+    assert "_progress_line(tag" in src
+    assert "_unpinned_warning(tag, asset_name, digest)" in src

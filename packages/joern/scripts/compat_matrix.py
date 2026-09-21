@@ -376,6 +376,24 @@ def _run_e2e_subprocess(joern_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
+def _progress_line(tag: str, msg: str) -> str:
+    """Loop progress line ([tag] downloading... / running E2E...);
+    the tag derives from the GitHub releases API — escaped here so
+    every loop print site is safe by construction, like the row/pin/
+    summary lines."""
+    return f"[{_sft(tag, max_len=32)}] {msg}"
+
+
+def _unpinned_warning(tag: str, asset_name: str, digest: str) -> str:
+    """Unpinned-asset WARNING; tag/asset derive from the releases
+    API + download — same escape discipline as _pin_line (digest is
+    our own hex)."""
+    return (f"[{_sft(tag, max_len=32)}] WARNING: "
+            f"{_sft(asset_name, max_len=120)} is not sha256-pinned — "
+            f"downloaded digest {digest}. Re-run with --update-pins "
+            f"to record it, or add it to {_PINS_FILE.name}.")
+
+
 def _pin_line(tag: str, asset_name: str, digest: str) -> str:
     """Pin-confirmation line; tag/asset derive from the GitHub
     releases API — escaped here so the print site is safe by
@@ -465,7 +483,7 @@ def main() -> int:
                 }))
                 print(_format_row(tag, rows[-1][1]), flush=True)
                 continue
-            print(f"[{tag}] downloading...", flush=True)
+            print(_progress_line(tag, "downloading..."), flush=True)
             asset_name, digest = _download(tag, archive)
             pinned = _verify_pin(pins, tag, asset_name, digest)
             if args.require_pinned and not pinned:
@@ -483,15 +501,10 @@ def main() -> int:
                     print(_pin_line(tag, asset_name, digest),
                           flush=True)
                 else:
-                    print(
-                        f"[{tag}] WARNING: {asset_name} is not sha256-"
-                        f"pinned — downloaded digest {digest}. Re-run "
-                        f"with --update-pins to record it, or add it "
-                        f"to {_PINS_FILE.name}.",
-                        flush=True,
-                    )
+                    print(_unpinned_warning(tag, asset_name, digest),
+                          flush=True)
             joern_dir = _extract(archive, tree)
-            print(f"[{tag}] running E2E...", flush=True)
+            print(_progress_line(tag, "running E2E..."), flush=True)
             result = _run_e2e_subprocess(joern_dir)
         except Exception as e:  # noqa: BLE001 — one bad tag shouldn't stop the matrix
             result = {"pass": False,
