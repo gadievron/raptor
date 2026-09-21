@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import load_json, save_json
+from core.analysis.taint_approx import function_key
 from core.orchestration.llm_json import list_at
 
 logger = logging.getLogger(__name__)
@@ -138,9 +139,9 @@ def enrich_attack_paths(
             if not func:
                 continue
 
-            matched = constraint_index.get(f"{file_path}:{func}", [])
+            matched = constraint_index.get(function_key(file_path, func), [])
             if not matched:
-                matched = constraint_index.get(f":{func}", [])
+                matched = constraint_index.get(function_key("", func), [])
             if matched:
                 step["parameter_constraints"] = matched
                 enriched += 1
@@ -184,9 +185,9 @@ def _build_constraint_index(
             "violation": c.get("violation", ""),
         }
 
-        key = f"{file_path}:{func}"
+        key = function_key(file_path, func)
         index.setdefault(key, []).append(entry)
-        bare_key = f":{func}"
+        bare_key = function_key("", func)
         index.setdefault(bare_key, []).append(entry)
 
     return index
@@ -523,7 +524,7 @@ def enrich_with_summaries(
             if not func:
                 continue
 
-            key = f"{file_path}:{func}"
+            key = function_key(file_path, func)
             summary = summaries.get(key)
             if not summary:
                 continue

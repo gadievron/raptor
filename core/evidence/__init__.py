@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from core.analysis.taint_approx import function_key
 from core.json.utils import dumps_canonical
 
 # ---------------------------------------------------------------------------
@@ -797,7 +798,7 @@ def build_evidence_index(
             func_name = item.get("name", "")
             if not func_name:
                 continue
-            key = f"{file_path}:{func_name}"
+            key = function_key(file_path, func_name)
             ls = item.get("line_start", 0)
             le = item.get("line_end", 0)
             index[key] = EvidenceRecord(
@@ -810,13 +811,13 @@ def build_evidence_index(
         _reachable = set()
         if hasattr(sink_results, "transitive_reach"):
             for t in sink_results.transitive_reach:
-                _reachable.add(f"{t.file}:{t.function}")
+                _reachable.add(function_key(t.file, t.function))
         if hasattr(sink_results, "direct_sinks"):
             for s in sink_results.direct_sinks:
-                _reachable.add(f"{s.file}:{s.function}")
+                _reachable.add(function_key(s.file, s.function))
             direct_sink_index: dict[str, list[str]] = {}
             for s in sink_results.direct_sinks:
-                key = f"{s.file}:{s.function}"
+                key = function_key(s.file, s.function)
                 direct_sink_index.setdefault(key, []).append(s.target)
             for key, targets in direct_sink_index.items():
                 if key in index:
@@ -925,7 +926,7 @@ def _attach_context_map_sinks(
         if not sink_file or not sink_func:
             continue
 
-        key = f"{sink_file}:{sink_func}"
+        key = function_key(sink_file, sink_func)
         rec = index.get(key)
         if rec is None:
             continue
