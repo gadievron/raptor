@@ -29,11 +29,28 @@ Key
     unstamped tier (fold-credit behind the hash gate, no reuse) and
     new appends re-key lazily.
 
-No run binding: journal rows deliberately travel across runs — the
-project index aggregates them and cross-run verdict reuse is the
-feature. A replayed validly-stamped row is genuine history for the
-exact source hash it names; staleness is bounded by the fold's hash
-compare, not the MAC.
+The ``.audit-log.jsonl`` event log in the same directory carries one
+row class with the same authority (resume review-suppression via
+``get_reviewed_set``) and gets the same treatment through its own
+domain prefix (:func:`mint_audit_log_row` /
+:func:`verify_audit_log_row`): writers stamp every appended event,
+and the resume reader lets a row suppress ONLY when its token
+verifies — everything else in the log stays telemetry-tier and
+tolerant. UNLIKE journal rows, audit-log tokens ARE run-bound: the
+MAC covers the run dir's resolved-path identity
+(:func:`audit_log_run_binding`), supplied implicitly by whichever
+directory the verifier reads — a row copied verbatim from a sibling
+run's log fails verification, because the audit-log lane has no
+source-hash gate or fold to bound a replay the way the journal does
+(a replayed clean row is NOT genuine history for another run's
+resume set). Moving a run dir demotes its rows to unstamped —
+re-review, the safe direction, same posture as cross-install.
+
+No run binding for JOURNAL rows: they deliberately travel across
+runs — the project index aggregates them and cross-run verdict reuse
+is the feature. A replayed validly-stamped row is genuine history
+for the exact source hash it names; staleness is bounded by the
+fold's hash compare, not the MAC.
 
 Forward compatibility: verification round-trips the row through this
 reader's dataclass, so a row written by a NEWER schema (additive
@@ -145,17 +162,22 @@ def row_sha256(row: dict) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _mac_message(sha256_hex: str) -> bytes:
-    # Domain separation: a token minted for another artifact class
-    # can never verify here even if a key were ever shared by mistake.
-    return b"review-journal-row\x00" + sha256_hex.encode("ascii")
+# Domain separation: a token minted for another artifact class can
+# never verify here even if a key were ever shared by mistake. The
+# audit event log shares the journal's key (same trust domain —
+# review-suppression authority in target-writable run dirs; deleting
+# the key demotes both artifact classes together) but its own domain
+# prefix, so journal tokens never authenticate audit-log rows or vice
+# versa.
+_JOURNAL_DOMAIN = b"review-journal-row\x00"
+_AUDIT_LOG_DOMAIN = b"audit-log-row\x00"
 
 
-def mint_row(row: dict) -> str | None:
-    """Hex HMAC-SHA256 token over the row's canonical payload, or
-    None when no usable key is available. Writers treat None as
-    "persist unstamped" — the fold then applies unstamped-tier
-    semantics."""
+def _mac_message(sha256_hex: str, domain: bytes = _JOURNAL_DOMAIN) -> bytes:
+    return domain + sha256_hex.encode("ascii")
+
+
+def _mint(row: dict, domain: bytes) -> str | None:
     try:
         key = _load_or_create_key()
     except OSError:
@@ -163,23 +185,78 @@ def mint_row(row: dict) -> str | None:
     if not key:
         return None
     return hmac.new(
-        key, _mac_message(row_sha256(row)), hashlib.sha256,
+        key, _mac_message(row_sha256(row), domain), hashlib.sha256,
     ).hexdigest()
+
+
+def _verify(row: dict, token: str | None, domain: bytes) -> bool:
+    if not token:
+        return False
+    try:
+        expected = _mint(row, domain)
+        if expected is None:
+            return False
+        return hmac.compare_digest(expected, str(token).strip().lower())
+    except Exception:  # noqa: BLE001 — verification failure is the demote path, never an error
+        return False
+
+
+def mint_row(row: dict) -> str | None:
+    """Hex HMAC-SHA256 token over the row's canonical payload, or
+    None when no usable key is available. Writers treat None as
+    "persist unstamped" — the fold then applies unstamped-tier
+    semantics."""
+    return _mint(row, _JOURNAL_DOMAIN)
 
 
 def verify_row(row: dict, token: str | None) -> bool:
     """Whether *token* is a valid MAC over *row*'s canonical payload
     under this install's key. Constant-time; never raises — any
     failure is the caller's demote path."""
-    if not token:
-        return False
+    return _verify(row, token, _JOURNAL_DOMAIN)
+
+
+def audit_log_run_binding(out_dir: Path | str) -> str:
+    """The run identity bound into audit-log tokens: the run dir's
+    resolved path. Derived — never stored in the row or read from a
+    run-dir artifact (an attacker holding the run-dir write grant
+    could plant any STORED identity alongside a copied log; the
+    consumer's own directory cannot be forged from inside it). One
+    derivation for writers and the reader."""
     try:
-        expected = mint_row(row)
-        if expected is None:
-            return False
-        return hmac.compare_digest(expected, str(token).strip().lower())
-    except Exception:  # noqa: BLE001 — verification failure is the demote path, never an error
-        return False
+        return str(Path(out_dir).resolve())
+    except OSError:
+        return str(out_dir)
+
+
+def _audit_domain(run_binding: str) -> bytes:
+    return (_AUDIT_LOG_DOMAIN
+            + run_binding.encode("utf-8", "surrogatepass") + b"\x00")
+
+
+def mint_audit_log_row(row: dict, run_binding: str) -> str | None:
+    """Token for a ``.audit-log.jsonl`` row (the journal's sibling
+    suppression lane): the resume path grants ``action=record`` /
+    ``orchestrator_review`` rows review-SUPPRESSION authority, and the
+    log lives in the same target-writable run dir whose forged-clean-
+    row problem motivated the journal MAC. Same canonical form and
+    key, own domain, RUN-BOUND via *run_binding*
+    (:func:`audit_log_run_binding` — a row replayed from a sibling
+    run's log must not verify). ``None`` = persist unstamped (the row
+    keeps its telemetry value; it just never suppresses)."""
+    return _mint(row, _audit_domain(run_binding))
+
+
+def verify_audit_log_row(
+    row: dict, token: str | None, run_binding: str,
+) -> bool:
+    """Audit-log twin of :func:`verify_row`, against the VERIFIER'S
+    own run binding. Consumers that grant a row suppression authority
+    MUST fail toward NOT suppressing when this returns False
+    (unstamped legacy, tampered, and cross-run-replayed rows all
+    re-review — the same tolerant-reader compromise as the journal's
+    unstamped tier, which grants no verdict authority either)."""
+    return _verify(row, token, _audit_domain(run_binding))
 
 
 def entry_provenance(entry) -> str:
@@ -208,9 +285,12 @@ __all__ = [
     "ROW_UNSTAMPED",
     "ROW_VERIFIED",
     "TOKEN_KEY",
+    "audit_log_run_binding",
     "entry_provenance",
     "key_usable",
+    "mint_audit_log_row",
     "mint_row",
     "row_sha256",
+    "verify_audit_log_row",
     "verify_row",
 ]

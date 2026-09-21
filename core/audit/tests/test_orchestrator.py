@@ -79,46 +79,50 @@ def _setup_target(tmp_path: Path):
 
 
 class TestGetReviewedSet:
+    """Rows are appended through the legitimate writer
+    (``append_audit_log``), which stamps the per-purpose integrity
+    token — suppression authority requires it (see the forged/
+    tampered cases at the end)."""
+
     def test_empty_log(self, tmp_path: Path):
         result = get_reviewed_set(tmp_path)
         assert result == set()
 
     def test_reads_record_actions(self, tmp_path: Path):
-        log = tmp_path / ".audit-log.jsonl"
-        log.write_text(
-            '{"action":"record","key":"src/auth.c:check_pw"}\n'
-            '{"action":"context","key":"src/auth.c:validate"}\n'
-            '{"action":"record","key":"src/util.c:helper"}\n'
-        )
+        from core.audit.record import append_audit_log
+        append_audit_log(tmp_path, {"action": "record",
+                                    "key": "src/auth.c:check_pw"})
+        append_audit_log(tmp_path, {"action": "context",
+                                    "key": "src/auth.c:validate"})
+        append_audit_log(tmp_path, {"action": "record",
+                                    "key": "src/util.c:helper"})
         result = get_reviewed_set(tmp_path)
         assert "src/auth.c:check_pw" in result
         assert "src/util.c:helper" in result
         assert "src/auth.c:validate" not in result
 
     def test_reads_orchestrator_review_actions(self, tmp_path: Path):
-        log = tmp_path / ".audit-log.jsonl"
-        log.write_text(
-            '{"action":"orchestrator_review","key":"src/auth.c:check_pw"}\n'
-            '{"action":"context","key":"src/auth.c:validate"}\n'
-        )
+        from core.audit.record import append_audit_log
+        append_audit_log(tmp_path, {"action": "orchestrator_review",
+                                    "key": "src/auth.c:check_pw"})
+        append_audit_log(tmp_path, {"action": "context",
+                                    "key": "src/auth.c:validate"})
         result = get_reviewed_set(tmp_path)
         assert "src/auth.c:check_pw" in result
         assert "src/auth.c:validate" not in result
 
     def test_lined_key_produces_bare_fallback(self, tmp_path: Path):
-        log = tmp_path / ".audit-log.jsonl"
-        log.write_text(
-            '{"action":"orchestrator_review","key":"sql.go:Scan:3232"}\n'
-        )
+        from core.audit.record import append_audit_log
+        append_audit_log(tmp_path, {"action": "orchestrator_review",
+                                    "key": "sql.go:Scan:3232"})
         result = get_reviewed_set(tmp_path)
         assert "sql.go:Scan:3232" in result
         assert "sql.go:Scan" in result
 
     def test_bare_key_no_spurious_strip(self, tmp_path: Path):
-        log = tmp_path / ".audit-log.jsonl"
-        log.write_text(
-            '{"action":"orchestrator_review","key":"src/auth.c:check_pw"}\n'
-        )
+        from core.audit.record import append_audit_log
+        append_audit_log(tmp_path, {"action": "orchestrator_review",
+                                    "key": "src/auth.c:check_pw"})
         result = get_reviewed_set(tmp_path)
         assert "src/auth.c:check_pw" in result
         assert "src/auth.c" not in result
@@ -130,29 +134,104 @@ class TestGetReviewedSet:
         the caller function. Without the edge_callee screen the caller
         was treated as reviewed and its function review silently
         dropped from the workqueue (observed live on pinned targets)."""
-        log = tmp_path / ".audit-log.jsonl"
-        log.write_text(
-            '{"action":"orchestrator_review","key":"src/a.c:recv:66",'
-            '"status":"clean","edge_callee":"src/b.c:pull"}\n'
-            '{"action":"orchestrator_review","key":"src/a.c:send:20",'
-            '"status":"clean"}\n'
-        )
+        from core.audit.record import append_audit_log
+        append_audit_log(tmp_path, {
+            "action": "orchestrator_review", "key": "src/a.c:recv:66",
+            "status": "clean", "edge_callee": "src/b.c:pull"})
+        append_audit_log(tmp_path, {
+            "action": "orchestrator_review", "key": "src/a.c:send:20",
+            "status": "clean"})
         result = get_reviewed_set(tmp_path)
         assert "src/a.c:recv" not in result
         assert "src/a.c:recv:66" not in result
         assert "src/a.c:send" in result
 
     def test_error_status_excluded(self, tmp_path: Path):
-        log = tmp_path / ".audit-log.jsonl"
-        log.write_text(
-            '{"action":"orchestrator_review","key":"src/a.c:ok","status":"clean"}\n'
-            '{"action":"orchestrator_review","key":"src/b.c:fail","status":"error"}\n'
-            '{"action":"record","key":"src/c.c:also_fail","status":"error"}\n'
-        )
+        from core.audit.record import append_audit_log
+        append_audit_log(tmp_path, {"action": "orchestrator_review",
+                                    "key": "src/a.c:ok",
+                                    "status": "clean"})
+        append_audit_log(tmp_path, {"action": "orchestrator_review",
+                                    "key": "src/b.c:fail",
+                                    "status": "error"})
+        append_audit_log(tmp_path, {"action": "record",
+                                    "key": "src/c.c:also_fail",
+                                    "status": "error"})
         result = get_reviewed_set(tmp_path)
         assert "src/a.c:ok" in result
         assert "src/b.c:fail" not in result
         assert "src/c.c:also_fail" not in result
+
+    def test_forged_unstamped_row_never_suppresses(self, tmp_path: Path):
+        """The log is target-writable mid-run and its rows are
+        declared telemetry; a hand-planted clean row (the journal's
+        forged-clean-row lever, one file over) must not silently drop
+        the function from the workqueue."""
+        log = tmp_path / ".audit-log.jsonl"
+        log.write_text(
+            '{"action":"record","status":"clean","key":"src/x.c:f"}\n'
+            '{"action":"orchestrator_review","status":"clean",'
+            '"key":"src/y.c:g"}\n'
+        )
+        assert get_reviewed_set(tmp_path) == set()
+
+    def test_tampered_row_never_suppresses(self, tmp_path: Path):
+        from core.audit.record import append_audit_log, load_audit_log
+        append_audit_log(tmp_path, {"action": "record",
+                                    "key": "src/a.c:real",
+                                    "status": "clean"})
+        rows = load_audit_log(tmp_path)
+        rows[0]["key"] = "src/b.c:forged"      # edit under a valid token
+        import json as _json
+        (tmp_path / ".audit-log.jsonl").write_text(
+            "\n".join(_json.dumps(r) for r in rows) + "\n")
+        assert get_reviewed_set(tmp_path) == set()
+
+    def test_cross_run_replay_never_suppresses(self, tmp_path: Path):
+        """A row legitimately stamped in run A, copied verbatim into
+        run B's log, must NOT suppress in run B: the audit-log lane
+        has no source-hash gate or fold to bound a replay, and a
+        sibling run's log carries exactly the file:function keys the
+        current workqueue would use. The MAC is run-bound."""
+        from core.audit.record import append_audit_log
+        run_a = tmp_path / "run-a"
+        run_b = tmp_path / "run-b"
+        run_a.mkdir()
+        run_b.mkdir()
+        append_audit_log(run_a, {"action": "record",
+                                 "key": "src/x.c:f",
+                                 "status": "clean"})
+        (run_b / ".audit-log.jsonl").write_bytes(
+            (run_a / ".audit-log.jsonl").read_bytes())
+        assert "src/x.c:f" in get_reviewed_set(run_a)
+        assert get_reviewed_set(run_b) == set()
+
+    def test_oversize_log_never_suppresses(self, tmp_path: Path):
+        """The log is suppression-authority input from the
+        sandbox-writable run dir — an over-budget trail loads as
+        nothing (over-review direction), same intake rule as the
+        journal's cap."""
+        from core.audit.record import append_audit_log
+        append_audit_log(tmp_path, {"action": "record",
+                                    "key": "src/x.c:f",
+                                    "status": "clean"})
+        log = tmp_path / ".audit-log.jsonl"
+        with log.open("ab") as f:
+            f.truncate(65 * 1024 * 1024)
+        assert get_reviewed_set(tmp_path) == set()
+
+    def test_collector_flush_rows_suppress(self, tmp_path: Path):
+        """The Collector's batched flush is the production writer of
+        orchestrator_review rows — its rows must carry the token and
+        keep their resume-suppression authority."""
+        from core.audit.collector import Collector
+        collector = Collector(
+            out_dir=tmp_path, target_path=tmp_path, run_id="r1")
+        collector._log_entries.append({
+            "action": "orchestrator_review",
+            "key": "src/a.c:reviewed", "status": "clean"})
+        collector._flush_audit_log()
+        assert "src/a.c:reviewed" in get_reviewed_set(tmp_path)
 
 
 @pytest.mark.slow

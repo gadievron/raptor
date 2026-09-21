@@ -226,16 +226,32 @@ class TestCallSiteHardeningConsistency:
             append_audit_log(tmp_path, {"action": "x"})
         assert victim.read_text() == ""
 
-    def test_audit_log_round_trip_unchanged(self, tmp_path: Path):
+    def test_audit_log_round_trip_modulo_stamp(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # Row contract: the writer stamps every appended row with the
+        # per-purpose, run-bound `integrity` token, and loaded rows
+        # carry it verbatim — consumers treat it like any additive
+        # key. Everything else round-trips unchanged.
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
         from core.audit.record import append_audit_log, load_audit_log
+        from core.coverage import journal_mac
         append_audit_log(tmp_path, {"action": "context", "n": 1})
         append_audit_log(tmp_path, {"action": "batch_flush"})
         recs = load_audit_log(tmp_path)
-        assert recs == [{"action": "context", "n": 1},
-                        {"action": "batch_flush"}]
+        stripped = [
+            {k: v for k, v in r.items() if k != journal_mac.TOKEN_KEY}
+            for r in recs
+        ]
+        assert stripped == [{"action": "context", "n": 1},
+                            {"action": "batch_flush"}]
+        binding = journal_mac.audit_log_run_binding(tmp_path)
+        for r in recs:
+            assert journal_mac.verify_audit_log_row(
+                r, r.get(journal_mac.TOKEN_KEY), binding)
         # compact separators preserved (telemetry-size parity)
         first = (tmp_path / ".audit-log.jsonl").read_text().splitlines()[0]
-        assert first == '{"action":"context","n":1}'
+        assert first.startswith('{"action":"context","n":1')
 
     def test_suppression_record_shape_unchanged(self, tmp_path: Path):
         from core.analysis.reach_chokepoint import record_suppression

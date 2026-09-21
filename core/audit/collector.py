@@ -614,11 +614,20 @@ class Collector:
         dir is refused instead of followed (the bare ``open(..., "a")``
         this replaces bypassed that hardening). Each written row is
         popped immediately so a mid-batch failure retains only the
-        unwritten tail.
+        unwritten tail. Rows are stamped at the write boundary with
+        the audit-log integrity token (the buffered
+        ``orchestrator_review`` rows are exactly the class the resume
+        reader grants suppression authority — see
+        ``core.audit.record.stamp_audit_log_row``).
         """
         from core.json import append_jsonl
 
+        from .record import stamp_audit_log_row
+
         log_path = self.out_dir / ".audit-log.jsonl"
         while self._log_entries:
-            append_jsonl(log_path, self._log_entries[0], compact=True)
+            append_jsonl(
+                log_path,
+                stamp_audit_log_row(self._log_entries[0], self.out_dir),
+                compact=True)
             self._log_entries.pop(0)

@@ -34,6 +34,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Read budgets for the audit event log (see load_audit_log). A
+#: legitimate log is a few MB on the largest runs; the reads-manifest
+#: uses the same 64 MiB ceiling class.
+_AUDIT_LOG_MAX_BYTES = 64 * 1024 * 1024
+_AUDIT_LOG_MAX_LINE_BYTES = 1024 * 1024
+
 
 def _resolve_annotations_dir(out_dir: Path) -> Path:
     """Resolve annotations directory to project level when possible.
@@ -79,10 +85,49 @@ def load_audit_log(out_dir: Path) -> list[dict[str, Any]]:
     telemetry record per review (written by Collector, consumed by
     strategy_stats). Authoritative review VERDICTS live in
     ``review-journal.jsonl`` in the same directory (since 2026-07-28).
+
+    Row contract: rows written by this install carry the per-purpose,
+    run-bound ``integrity`` stamp (see :func:`stamp_audit_log_row`)
+    and are returned WITH it — consumers read fields and must
+    tolerate the stamp like any additive key; only the resume
+    suppression reader gives it meaning.
     """
     log_path = out_dir / ".audit-log.jsonl"
     from core.json import load_jsonl
-    return load_jsonl(log_path)
+    # Byte-budgeted: the log is sandbox-writable run-dir input that
+    # now carries suppression authority — same intake rule as the
+    # journal's cap; an over-budget trail loads as [] (nothing
+    # suppresses, telemetry consumers degrade — over-review).
+    return load_jsonl(
+        log_path,
+        max_total_bytes=_AUDIT_LOG_MAX_BYTES,
+        max_line_bytes=_AUDIT_LOG_MAX_LINE_BYTES,
+    )
+
+
+def stamp_audit_log_row(
+    entry: dict[str, Any], out_dir: Path,
+) -> dict[str, Any]:
+    """The entry with its integrity token minted (a copy).
+
+    The log lives in the target-writable run dir, and one row class
+    (``action=record`` / ``orchestrator_review``) grants resume
+    review-SUPPRESSION authority — the same forged-clean-row lever
+    the journal MAC closed, so the same per-purpose key mechanism
+    stamps this lane (``core.coverage.journal_mac``, audit-log
+    domain), run-bound to *out_dir* so a row copied from a sibling
+    run's log never verifies here. No usable key = persist unstamped:
+    the row keeps its telemetry value and simply never suppresses.
+    """
+    from core.coverage import journal_mac
+    stamped = {
+        k: v for k, v in entry.items() if k != journal_mac.TOKEN_KEY
+    }
+    token = journal_mac.mint_audit_log_row(
+        stamped, journal_mac.audit_log_run_binding(out_dir))
+    if token:
+        stamped[journal_mac.TOKEN_KEY] = token
+    return stamped
 
 
 def append_audit_log(out_dir: Path, entry: dict[str, Any]) -> None:
@@ -90,11 +135,15 @@ def append_audit_log(out_dir: Path, entry: dict[str, Any]) -> None:
 
     Routed through ``core.json.append_jsonl`` so the trail gets the
     same O_APPEND line-atomicity and O_NOFOLLOW symlink refusal as
-    every other JSONL trail writer.
+    every other JSONL trail writer, and stamped with the audit-log
+    integrity token (see :func:`stamp_audit_log_row`) — the row
+    lands on disk with the ``integrity`` key appended and otherwise
+    byte-identical to *entry* (compact separators).
     """
     log_path = out_dir / ".audit-log.jsonl"
     from core.json import append_jsonl
-    append_jsonl(log_path, entry, compact=True)
+    append_jsonl(log_path, stamp_audit_log_row(entry, out_dir),
+                 compact=True)
 
 
 def _compute_hash(

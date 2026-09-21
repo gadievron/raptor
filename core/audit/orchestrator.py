@@ -1495,9 +1495,28 @@ def get_reviewed_set(out_dir: Path) -> set:
     Error statuses are excluded — they represent transient failures
     (budget exceeded, API error, truncation) and must be retried on
     the next run, not suppressed as "already reviewed".
+
+    Suppression requires row integrity: the log lives in the
+    target-writable run dir and record.py declares its rows telemetry,
+    yet this set silently drops functions from the workqueue — the
+    exact forged-clean-row lever the journal MAC closed, one file
+    over. A row joins the set only when its per-purpose HMAC token
+    verifies (``journal_mac.verify_audit_log_row`` — same key
+    mechanism as the journal's row MAC, audit-log domain, RUN-BOUND
+    to THIS directory's identity so a row replayed from a sibling
+    run's log never suppresses here). Unstamped (pre-MAC legacy or
+    forged), tampered, and cross-run-replayed rows all fail toward
+    NOT-suppressing: the function re-reviews, mirroring the journal
+    fold's unstamped tier, which grants no verdict authority either.
     """
+    from core.coverage import journal_mac
+
+    binding = journal_mac.audit_log_run_binding(out_dir)
     reviewed = set()
+    unverified = 0
     for entry in load_audit_log(out_dir):
+        if not isinstance(entry, dict):
+            continue
         if entry.get("action") in ("record", "orchestrator_review"):
             if entry.get("status") == "error":
                 continue
@@ -1507,11 +1526,23 @@ def get_reviewed_set(out_dir: Path) -> set:
                 # caller's own function review.
                 continue
             key = entry.get("key", "")
-            if key:
-                reviewed.add(key)
-                head, _, tail = key.rpartition(":")
-                if head and tail.isdigit():
-                    reviewed.add(head)
+            if not key:
+                continue
+            if not journal_mac.verify_audit_log_row(
+                entry, entry.get(journal_mac.TOKEN_KEY), binding,
+            ):
+                unverified += 1
+                continue
+            reviewed.add(key)
+            head, _, tail = key.rpartition(":")
+            if head and tail.isdigit():
+                reviewed.add(head)
+    if unverified:
+        logger.warning(
+            "resume: %d audit-log review row(s) without a verifying "
+            "integrity token — not suppressing those functions "
+            "(they re-review)", unverified,
+        )
     return reviewed
 
 
