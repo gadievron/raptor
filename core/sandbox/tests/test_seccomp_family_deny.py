@@ -50,7 +50,8 @@ pytestmark = [
 _CHILD = textwrap.dedent("""
     import errno, socket, sys
     AF_KEY, AF_RDS, AF_TIPC, AF_BLUETOOTH = 15, 21, 30, 31
-    AF_ALG, AF_VSOCK, AF_XDP = 38, 40, 44
+    AF_RXRPC = 33
+    AF_ALG, AF_VSOCK, AF_SMC, AF_XDP = 38, 40, 43, 44
     probes = [
         ("vsock-stream", AF_VSOCK, socket.SOCK_STREAM, 0),
         ("vsock-dgram", AF_VSOCK, socket.SOCK_DGRAM, 0),
@@ -58,7 +59,23 @@ _CHILD = textwrap.dedent("""
         ("key-raw", AF_KEY, socket.SOCK_RAW, 2),
         ("rds-seqpacket", AF_RDS, socket.SOCK_SEQPACKET, 0),
         ("tipc-stream", AF_TIPC, socket.SOCK_STREAM, 0),
+        # AF_RXRPC rides a kernel-internal UDP transport past the
+        # block_udp rule (which matches caller-created INET DGRAM
+        # sockets only) — both transport-family protos.
+        ("rxrpc-dgram-inet", AF_RXRPC, socket.SOCK_DGRAM, 2),
+        ("rxrpc-dgram-inet6", AF_RXRPC, socket.SOCK_DGRAM, 10),
         ("bluetooth-stream", AF_BLUETOOTH, socket.SOCK_STREAM, 1),
+        # AF_SMC: kernel TCP-fallback stream egress that Landlock's
+        # TCP-only connect hook never evaluates (SMCPROTO_SMC=0 /
+        # SMCPROTO_SMC6=1) — reachable unprivileged via net-pf-43
+        # module autoload on CONFIG_SMC=m kernels.
+        ("smc-stream", AF_SMC, socket.SOCK_STREAM, 0),
+        ("smc6-stream", AF_SMC, socket.SOCK_STREAM, 1),
+        # The IPPROTO_SMC (256, kernel >= 6.4) spelling creates the
+        # same SMC socket through the INET families — must be denied
+        # by the protocol rule, not the family rule.
+        ("inet-ipproto-smc", socket.AF_INET, socket.SOCK_STREAM, 256),
+        ("inet6-ipproto-smc", socket.AF_INET6, socket.SOCK_STREAM, 256),
         ("xdp-raw", AF_XDP, socket.SOCK_RAW, 0),
     ]
     failed = []

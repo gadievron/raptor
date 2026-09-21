@@ -318,20 +318,43 @@ _SOCK_DGRAM = 2
 # same judgment as the SCTP/DCCP/MPTCP block below. AF_KEY was
 # previously denied only via its mandatory SOCK_RAW type; the
 # by-family rule makes the deny independent of the type-rule's mask
-# arithmetic. AF_* values are arch-uniform on Linux
+# arithmetic. AF_SMC is the egress-shaped member of the set:
+# socket(AF_SMC, SOCK_STREAM, 0) autoloads via request_module
+# ("net-pf-43") on CONFIG_SMC=m kernels (Ubuntu ships it), takes
+# ordinary sockaddr_in connects, and without RDMA hardware falls
+# back to an internal kernel TCP clcsock — Landlock's connect hook
+# evaluates sk_is_tcp() sockets only, so neither the
+# allowed_tcp_ports pin nor the degraded TCP-connect deny ever sees
+# it on shared-netns lanes (fresh-netns lanes are unaffected: no
+# route). The seccomp protocol/type rules below don't match it
+# either (protocol 0, SOCK_STREAM), so the by-family deny is the
+# one layer that covers it. AF_* values are arch-uniform on Linux
 # (include/linux/socket.h), so one value set covers every supported
 # arch.
 _AF_KEY = 15
 _AF_RDS = 21
 _AF_TIPC = 30
+# AF_RXRPC is the datagram-model sibling of AF_SMC's stream-model
+# bypass: rxrpc transmits over a KERNEL-INTERNAL UDP socket, so the
+# block_udp rule — which matches caller-created (AF_INET[6],
+# SOCK_DGRAM) sockets only — never sees the egress. socket(AF_RXRPC,
+# SOCK_DGRAM, PF_INET) autoloads via net-pf-33 on CONFIG_AF_RXRPC=m
+# kernels (Ubuntu ships it) with no capability, connect() takes a
+# sockaddr_rxrpc naming an arbitrary IPv4/IPv6 target, and sendmsg
+# delivers attacker payload inside rx DATA packets (live-verified:
+# payload received by a UDP listener while UDP/UDPLITE/L2TP sockets
+# were EPERM under block_udp). No sandboxed tool population member
+# speaks rxrpc — same judgment as RDS/TIPC.
+_AF_RXRPC = 33
 _AF_BLUETOOTH = 31
 _AF_ALG = 38
 _AF_VSOCK = 40
+_AF_SMC = 43
 _AF_XDP = 44
 
 _EXOTIC_FAMILY_BLOCKS = (
     _AF_KEY, _AF_RDS, _AF_TIPC, _AF_BLUETOOTH, _AF_ALG, _AF_VSOCK,
-    _AF_XDP,
+    _AF_RXRPC, _AF_SMC, _AF_XDP,
 )
 
 # Kernel-bypass stream transports (denied unconditionally, hard_deny).
@@ -362,6 +385,14 @@ _EXOTIC_FAMILY_BLOCKS = (
 _IPPROTO_SCTP = 132
 _IPPROTO_DCCP = 33
 _IPPROTO_MPTCP = 262
+# IPPROTO_SMC (kernel >= 6.4): socket(AF_INET[6], SOCK_STREAM,
+# IPPROTO_SMC) creates the SAME SMC socket the AF_SMC family
+# spelling does — family rule passes (INET), type rule passes
+# (STREAM), so without this protocol row the TCP-clcsock
+# fallback rides straight past Landlock's TCP-only connect hook
+# (live-verified: plain TCP connect EACCES under the degraded
+# deny while the IPPROTO_SMC connect succeeded).
+_IPPROTO_SMC = 256
 _SOCK_SEQPACKET = 5
 _SOCK_DCCP = 6
 
@@ -844,7 +875,7 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     # its internal IPC with the target process) but keep NETLINK/PACKET
     # and SOCK_RAW blocked.
     # The exotic families (_EXOTIC_FAMILY_BLOCKS — vsock/alg/key/
-    # bluetooth/rds/tipc/xdp) are denied in EVERY profile: no profile
+    # bluetooth/rds/tipc/rxrpc/smc/xdp) are denied in EVERY profile: no profile
     # trades them for capability the way frida trades AF_UNIX.
     if profile == "frida" or allow_unix_sockets:
         socket_family_blocks = [_AF_NETLINK, _AF_PACKET,
@@ -1114,7 +1145,7 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                     # MASKED_EQ low-32 on arg 2 for the same
                     # high-bit-set reason as the family rules.
                     for proto in (_IPPROTO_SCTP, _IPPROTO_DCCP,
-                                  _IPPROTO_MPTCP):
+                                  _IPPROTO_MPTCP, _IPPROTO_SMC):
                         arg = _ScmpArgCmp(arg=2, op=_SCMP_CMP_MASKED_EQ,
                                           datum_a=_ARG32_MASK,
                                           datum_b=proto)
@@ -1201,8 +1232,13 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                 # comparators but they're AND'd, so we'd need one rule
                 # per (family, type) combination — which is exactly
                 # what we do). Rejects AF_INET/AF_INET6 + SOCK_DGRAM.
-                # Allows UDP for other families (AF_UNIX/NETLINK etc.
-                # are already blocked above regardless of type).
+                # Datagram sockets of other families rely on the
+                # family rules above (AF_UNIX/NETLINK/the exotic set
+                # are blocked regardless of type) — a family with a
+                # kernel-internal INET transport that is NOT in the
+                # family blocklist rides straight past this rule, so
+                # any such family (AF_RXRPC was the live member) MUST
+                # be in _EXOTIC_FAMILY_BLOCKS.
                 if block_udp and socket_num < 0:
                     # Fail-closed: caller asked for proxy-mode UDP block
                     # but we can't install the rule (socket() syscall
