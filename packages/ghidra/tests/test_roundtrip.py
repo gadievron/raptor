@@ -91,13 +91,21 @@ class TestCollectAgentic:
     def test_junk_verdict_shapes_excluded(self):
         # analysed_results.json is operator-supplied JSON: a non-bool
         # verdict shape is a non-verdict, not an exploitable claim —
-        # pre-fix a truthy "yes" exported the record. The legacy
-        # ``exploitable`` alias keeps its truthy contract.
+        # pre-fix a truthy "yes" exported the record.
         rec = _record(is_true_positive="yes", exploitable=False,
                       is_exploitable=False)
         assert collect_agentic_findings([rec]) == []
         rec = _record(is_exploitable="yes", exploitable=False)
         assert collect_agentic_findings([rec]) == []
+
+    def test_junk_alias_shapes_excluded(self):
+        # The legacy ``exploitable`` alias follows the same
+        # genuine-bool rule (agentic_passes precedent) — pre-fix the
+        # alias kept a truthy contract and the junk string "no"
+        # exported the record as exploitable.
+        for junk in ("no", "yes", 1, [1], {"x": 1}):
+            rec = _record(is_exploitable=False, exploitable=junk)
+            assert collect_agentic_findings([rec]) == [], junk
 
     def test_analysis_verdict_fallback_on_junk_result_field(self):
         # A junk result-level is_true_positive falls back to the

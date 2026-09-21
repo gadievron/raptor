@@ -37,6 +37,29 @@ class TestVerdictFromAnalysis:
     def test_not_analyzed(self):
         assert _verdict_from_analysis({}) == "not_analyzed"
 
+    def test_junk_alias_is_not_exploitable(self):
+        # Genuine-bool rule on the legacy alias: a junk shape ("no",
+        # 1) is a non-verdict — pre-fix the truthy read displayed it
+        # as the exploitable verdict. Today's producers are bool-typed
+        # so junk cannot reach this lane; the rule keeps the display
+        # honest if that ever changes.
+        for junk in ("no", "yes", 1, [1]):
+            f = {"exploitable": junk,
+                 "analysis": {"is_true_positive": False}}
+            assert _verdict_from_analysis(f) == "ruled_out", junk
+
+    def test_junk_alias_props_stay_consistent(self):
+        # Props-level repro: pre-fix this record exported
+        # verdict="exploitable" while is_exploitable was (correctly)
+        # omitted from props — an internally inconsistent SARIF whose
+        # headline verdict was junk-derived.
+        from core.sarif.enriched_writer import _build_raptor_properties
+        verdict, props = _build_raptor_properties(
+            {"exploitable": "yes", "analysis": {"is_exploitable": "yes"}},
+        )
+        assert verdict == "not_analyzed"
+        assert "is_exploitable" not in props
+
     def test_suppressed_beats_exploitable(self):
         f = {
             "exploitable": True,

@@ -28,7 +28,10 @@ def _verdict_from_analysis(finding: dict[str, Any]) -> str:
     analysis = finding.get("analysis") or {}
     if analysis.get("reachability_suppression"):
         return "suppressed"
-    if finding.get("exploitable"):
+    # Legacy alias, genuine-bool rule (agentic_passes precedent): a
+    # truthy read would display junk shapes — and today's upstream
+    # producers are bool-typed, so `is True` costs nothing.
+    if finding.get("exploitable") is True:
         return "exploitable"
     tp = analysis.get("is_true_positive")
     if tp is True:

@@ -216,11 +216,14 @@ def collect_agentic_findings(
         # junk shape in this operator-supplied JSON is a non-verdict,
         # not an exploitable claim. The result-level field wins over
         # the nested analysis copy when both carry a real verdict.
+        # The legacy ``exploitable`` alias follows the same
+        # genuine-bool rule (agentic_passes precedent): a truthy read
+        # exported junk strings like "no" as exploitable.
         tp = read_verdict(r, "is_true_positive")
         if tp is None:
             tp = read_verdict(analysis, "is_true_positive")
         if tp is True and (read_verdict(r, "is_exploitable") is True
-                           or r.get("exploitable")):
+                           or r.get("exploitable") is True):
             exploitable.append(r)
 
     findings = []

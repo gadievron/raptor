@@ -119,6 +119,28 @@ _SCAN_ROOTS = ("core", "packages", "plugins")
 _GRADED_VERDICT_KEYS: frozenset[str] = frozenset({"exploitability"})
 _GRADED_ABSTENTION_DEFAULTS = (None, "unknown")
 
+#: Legacy bool ALIAS keys (sequential-mode records carry
+#: ``exploitable`` where orchestrated records carry
+#: ``is_exploitable``). Same tri-state discipline, but the blessed
+#: spelling is the genuine-bool read (``.get("exploitable") is
+#: True`` / an isinstance-gated ladder — the agentic_passes
+#: precedent) since the alias sits outside ``read_verdict``'s
+#: VERDICT_KEYS. The same spelling also names STATS COUNTERS
+#: (``counts["exploitable"] += 1``, ``stats.get("exploitable", 0)``)
+#: — int buckets keyed by a status value, not verdict record reads —
+#: so the alias scan is scoped to the verdict-shaped forms only:
+#: ``.get`` calls (record readers use ``.get``; the subscript
+#: spelling is the tally idiom) whose default, if any, is None or a
+#: bool constant (an int/str/expr default marks the counter idiom or
+#: an ambiguous read and stays out of scope — the conservative
+#: direction for a dual-use key). NOTE the subscript scope-out is a
+#: spelling boundary, not a semantic guarantee: the orchestrator's
+#: ``r["exploitable"]`` truthiness reads are safe because the SAME
+#: function writes the parsed bool a few lines up (read-own-write),
+#: not because they are counters — a new subscript reader of a
+#: record it did not just write gets no protection from this scan.
+_BOOL_ALIAS_GET_KEYS: frozenset[str] = frozenset({"exploitable"})
+
 #: (repo-relative path, lineno) pairs reviewed and deliberately
 #: exempted, each with its rationale. Keep entries rare — an entry
 #: must explain why the flagged idiom does NOT consume the verdict.
@@ -166,9 +188,35 @@ def _read_key(node: ast.AST, keys) -> str | None:
     return None
 
 
+def _alias_get_key(node: ast.AST) -> str | None:
+    """The alias key when ``node`` is a VERDICT-SHAPED alias read:
+    ``X.get("<alias>")`` with no default, or a None / bool-constant
+    default (see ``_BOOL_ALIAS_GET_KEYS`` for the counter-idiom
+    scope-out); a walrus wrapper is unwrapped like ``_read_key``."""
+    while isinstance(node, ast.NamedExpr):
+        node = node.value
+    if not (isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and node.args[0].value in _BOOL_ALIAS_GET_KEYS):
+        return None
+    if len(node.args) >= 2:
+        default = node.args[1]
+        if not (isinstance(default, ast.Constant)
+                and (default.value is None
+                     or isinstance(default.value, bool))):
+            return None
+    return node.args[0].value
+
+
 def _is_verdict_read(node: ast.AST) -> bool:
-    """True for a raw read (``.get``/subscript) of a bool verdict key."""
-    return _read_key(node, VERDICT_KEYS) is not None
+    """True for a raw read of a bool verdict key — ``.get``/subscript
+    for the VERDICT_KEYS members, ``.get`` only for the legacy alias
+    keys."""
+    return (_read_key(node, VERDICT_KEYS) is not None
+            or _alias_get_key(node) is not None)
 
 
 def _is_graded_read(node: ast.AST) -> bool:
@@ -262,7 +310,7 @@ def _tracked_verdict_names(scope: ast.AST,
             target, value = n.target, n.value
         if target is None or counts[target.id] != 1:
             continue
-        key = _read_key(value, VERDICT_KEYS)
+        key = _read_key(value, VERDICT_KEYS) or _alias_get_key(value)
         if key is not None:
             tracked[target.id] = key
     if tracked:
@@ -286,11 +334,12 @@ def _mentions_verdict_key(source: str) -> bool:
     ``"is_exploitabl\\x65"``), so a file can carry a scannable verdict
     read whose source text never contains the key; only the full parse
     in the nightly-tier scan catches those. Built on the scanned key
-    sets (bool + graded) so a new verdict field widens the smoke
-    subset automatically.
+    sets (bool + graded + alias) so a new verdict field widens the
+    smoke subset automatically.
     """
     return any(key in source
-               for key in (*VERDICT_KEYS, *_GRADED_VERDICT_KEYS))
+               for key in (*VERDICT_KEYS, *_GRADED_VERDICT_KEYS,
+                           *_BOOL_ALIAS_GET_KEYS))
 
 
 def _violations_in(path: Path) -> list[str]:
@@ -352,6 +401,15 @@ def _violations_in(path: Path) -> list[str]:
             if key in VERDICT_KEYS and not (
                     isinstance(default, ast.Constant)
                     and default.value is None):
+                bad(node, f"verdict-fabricating default on "
+                          f".get({key!r}, ...)")
+            elif (key in _BOOL_ALIAS_GET_KEYS
+                    and isinstance(default, ast.Constant)
+                    and isinstance(default.value, bool)):
+                # Alias keys: only a bool-constant default is
+                # mechanically a fabricated verdict — int/str/expr
+                # defaults mark the stats-counter idiom (see
+                # _BOOL_ALIAS_GET_KEYS) and stay out of scope.
                 bad(node, f"verdict-fabricating default on "
                           f".get({key!r}, ...)")
             elif key in _GRADED_VERDICT_KEYS and not (
@@ -683,6 +741,43 @@ class TestVerdictIdiomClosure:
         tmp.write_text(clean, encoding="utf-8")
         assert _violations_in(tmp) == []
 
+    def test_scanner_catches_alias_key_idioms(self, tmp_path: Path):
+        # The legacy `exploitable` alias in its verdict-shaped .get
+        # forms: same idiom families as the VERDICT_KEYS members.
+        hostile_shapes = [
+            ("if r.get('exploitable'):\n    pass\n", 1),      # truthiness
+            ("x = a or r.get('exploitable')\n", 1),           # or-operand
+            ("y = not r.get('exploitable')\n", 1),            # negation
+            ("z = r.get('exploitable') == True\n", 1),        # noqa: E712
+            ("d = r.get('exploitable', False)\n", 1),         # bool default
+            ("n = r.get('exploitable') is None\n", 1),        # is-None
+            ("v = r.get('exploitable')\nif v:\n    pass\n", 1),  # name-bound
+        ]
+        for i, (shape, expected) in enumerate(hostile_shapes):
+            tmp = tmp_path / f"alias_hostile_{i}.py"
+            tmp.write_text(shape, encoding="utf-8")
+            found = _violations_in(tmp)
+            assert len(found) == expected, (shape, found)
+        clean = (
+            # Blessed genuine-bool spellings (agentic_passes /
+            # roundtrip precedent).
+            "ok = r.get('exploitable') is True\n"
+            "legacy = f.get('exploitable')\n"
+            "if isinstance(legacy, bool):\n"
+            "    f['is_exploitable'] = legacy\n"
+            # Stats-counter idiom: int default and subscript tallies
+            # are status-value buckets, not verdict record reads.
+            "count = stats.get('exploitable', 0)\n"
+            "if stats.get('exploitable', 0):\n    pass\n"
+            "counts['exploitable'] += 1\n"
+            "if counts['exploitable']:\n    pass\n"
+            # Pass-through forwarding.
+            "rec = {'exploitable': r.get('exploitable')}\n"
+        )
+        tmp = tmp_path / "alias_clean.py"
+        tmp.write_text(clean, encoding="utf-8")
+        assert _violations_in(tmp) == []
+
     def test_scanner_catches_parser_folded_keys(self, tmp_path: Path):
         # Contract against any future text prescreen: the parser folds
         # adjacent string literals and escape sequences into a plain
@@ -705,11 +800,16 @@ class TestVerdictIdiomClosure:
         # so the docstring stays true — it does NOT see parser-folded
         # key literals: those are exactly why the nightly full scan
         # exists and must never be re-labelled "covered" by the smoke.
-        for key in (*VERDICT_KEYS, *_GRADED_VERDICT_KEYS):
+        for key in (*VERDICT_KEYS, *_GRADED_VERDICT_KEYS,
+                    *_BOOL_ALIAS_GET_KEYS):
             assert _mentions_verdict_key(f"v = r.get('{key}', False)\n")
         assert not _mentions_verdict_key("v = r.get('status', False)\n")
+        # (The 'is_' 'exploitable' fold is no longer a valid example
+        # here: the alias key 'exploitable' is a substring of its
+        # second fragment, so the selector NOW sees that source. The
+        # is_true_positive fold keeps the pinned blind spot honest.)
         assert not _mentions_verdict_key(
-            "v = r.get('is_' 'exploitable', False)\n"
+            "v = r.get('is_' 'true_positive', False)\n"
         )
 
     def test_smoke_no_misreads_in_key_mentioning_runtime_code(self):
