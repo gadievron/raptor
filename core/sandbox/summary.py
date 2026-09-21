@@ -557,6 +557,12 @@ _floor_refusals: dict[str, list] = {}
 # threshold shared with record_denial.
 _REFUSAL_FIELD_MAX = 1024
 
+# Cap on unverified (disk-only) floor-refusal records embedded in the
+# summary — the fields are attacker-authorable on the Landlock-only
+# tier, so the embedded list is sanitised AND bounded; the count field
+# carries the true total.
+_UNVERIFIED_REFUSALS_MAX = 8
+
 
 def record_floor_refusal(run_dir: Path, *, floor: str, achievable: str,
                          reason: str, remedies: str = "") -> None:
@@ -1018,22 +1024,38 @@ def _assemble_and_write_summary(
     a list means the caller already resolved them."""
     # Containment-floor refusals ride the same evidence stream but
     # are NOT denials (the target never executed) — split them out
-    # before any denial accounting. Parent memory re-asserts records
-    # a target deleted from the on-disk stream (same trust model as
-    # the audit-degraded marker): whichever view carries more
-    # refusals wins.
+    # before any denial accounting. Parent memory is the AUTHORITY
+    # (same trust model as the audit-degraded marker): it re-asserts
+    # records a target deleted from the on-disk stream, and on-disk
+    # refusal records absent from it are tamper evidence, never
+    # merged. A refusal record EXCUSES the target ("never executed"),
+    # so the one-way doctrine (_proxy_persist_state: disk may
+    # condemn, never excuse) forbids trusting the disk view — on the
+    # Landlock-only tier the run dir is a writable grant and a child
+    # can APPEND a forged floor_refusal that the old
+    # whichever-view-carries-more merge folded in under a fresh
+    # valid MAC. Disk-only records are surfaced (count + records +
+    # loud warning) as unverified, not counted: a cross-process
+    # sweep of a crashed run's leftover JSONL therefore reports its
+    # refusals as unverified rather than vouching for records this
+    # process never witnessed.
+    unverified_refusals: list = []
+    _mem_had_refusals = False
     if refusals is None:
-        refusals = [r for r in records
-                    if r.get("type") == FLOOR_REFUSAL_TYPE]
+        disk_refusals = [r for r in records
+                         if r.get("type") == FLOOR_REFUSAL_TYPE]
         with _lock:
             _mem_refusals = list(_floor_refusals.get(
                 str(run_dir.resolve()), []))
-        if len(_mem_refusals) > len(refusals):
-            refusals = _mem_refusals
+        _mem_had_refusals = bool(_mem_refusals)
+        refusals = _mem_refusals
+        unverified_refusals = [r for r in disk_refusals
+                               if r not in _mem_refusals]
     records = [r for r in records
                if r.get("type") != FLOOR_REFUSAL_TYPE]
 
-    if (not records and not refusals and not corrupt_lines
+    if (not records and not refusals and not unverified_refusals
+            and not corrupt_lines
             and not inode_mismatch and not planted_object):
         return None
 
@@ -1104,6 +1126,73 @@ def _assemble_and_write_summary(
             f"{_first.get('achievable', '?')} achievable) — "
             f"remedies: {_ref_remedies}"
         )
+    if unverified_refusals:
+        # Floor-refusal records found on disk that parent memory
+        # never recorded. Two shapes, discriminated by whether THIS
+        # process holds any memory for the run dir:
+        #   * memory non-empty + disk extras — the forgery signature
+        #     on the Landlock-only tier (a child-appended "target
+        #     never executed" for a target that ran): TAMPER warning.
+        #   * memory entirely empty — a process that never recorded a
+        #     refusal is summarising (the run-lifecycle stubs
+        #     finalise in a FRESH process, and sweeps read crashed
+        #     runs' leftovers): honest unverifiability, reported
+        #     without a tamper accusation.
+        # Either way: surfaced (sanitised + capped — these fields are
+        # attacker-authorable bytes; the legit write path caps and
+        # escapes at record time, and this surface must not become
+        # the unsanitised copy of it), never counted as refusals.
+        from core.security.prompt_output_sanitise import (
+            escape_nonprintable,
+        )
+
+        def _sanitised(rec: dict) -> dict:
+            # EVERY field is attacker-authorable bytes (the record is
+            # a child-appended JSONL line) — the short fields are NOT
+            # the code-controlled enums the legit write path emits,
+            # so all six get the escape treatment; 64 chars is ample
+            # for an OSC/CSI terminal-injection sequence.
+            def _short(key: str) -> str:
+                return escape_nonprintable(redact_secrets(
+                    str(rec.get(key, ""))))[:64]
+
+            def _long(key: str) -> str:
+                return escape_nonprintable(redact_secrets(
+                    str(rec.get(key, ""))))[:_REFUSAL_FIELD_MAX]
+
+            return {
+                "ts": _short("ts"),
+                "type": FLOOR_REFUSAL_TYPE,
+                "status": _short("status"),
+                "floor": _short("floor"),
+                "achievable": _short("achievable"),
+                "reason": _long("reason"),
+                "remedies": _long("remedies"),
+            }
+
+        summary["floor_refusal_records_unverified"] = len(
+            unverified_refusals)
+        summary["unverified_floor_refusals"] = [
+            _sanitised(r) for r in
+            unverified_refusals[:_UNVERIFIED_REFUSALS_MAX]]
+        if _mem_had_refusals:
+            logger.warning(
+                "SANDBOX EVIDENCE TAMPER SUSPECTED in %s: %d on-disk "
+                "floor-refusal record(s) absent from parent memory "
+                "beside records it holds — surfaced as unverified, "
+                "not merged (a child write can forge \"target never "
+                "executed\" on the Landlock-only tier).",
+                run_dir, len(unverified_refusals),
+            )
+        else:
+            logger.warning(
+                "sandbox summary: %d floor-refusal record(s) in %s "
+                "were recorded by another process (lifecycle-stub "
+                "finalisation / sweep) — surfaced as unverified, not "
+                "counted; this process cannot vouch for records it "
+                "never witnessed.",
+                len(unverified_refusals), run_dir,
+            )
     if corrupt_lines or inode_mismatch or planted_object:
         # Tamper flags. Corrupt lines mean someone rewrote evidence in
         # place (the inode check cannot see that on the Landlock-only
@@ -1116,10 +1205,15 @@ def _assemble_and_write_summary(
         # aggregated records stay in the file for operator forensics
         # only.
         #
-        # Residual: an in-place rewrite that substitutes byte-
-        # identical-length VALID JSON is invisible to this layer (and
-        # to the inode check). Closing that fully needs per-record
-        # MACs threaded through the tracer's inherited-fd writer.
+        # Residual: on the Landlock-only tier ANY child write through
+        # the same inode is invisible to the inode check — a plain
+        # append is strictly easier than the in-place byte-identical-
+        # length VALID-JSON rewrite and equally invisible here (the
+        # floor-refusal append is defused above by the parent-memory
+        # authority; appended fake DENIALS remain, bounded to noise-
+        # injection: they condemn, never excuse). Closing the class
+        # fully needs per-record MACs threaded through the tracer's
+        # inherited-fd writer.
         if corrupt_lines:
             summary["corrupt_lines"] = corrupt_lines
         if inode_mismatch:

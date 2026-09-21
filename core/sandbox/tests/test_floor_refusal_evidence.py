@@ -568,3 +568,137 @@ def test_pre_run_arm_refusal_survives_whole_file_deletion(
     assert result is not None
     assert result["total_floor_refusals"] >= 1
     assert result["floor_refusals"][0]["floor"] == "mount-ns"
+
+
+class TestFloorRefusalMemoryAuthority:
+    """Parent memory is the authority for floor refusals; on-disk
+    records absent from it are tamper evidence, never merged.
+
+    On the Landlock-only tier the run dir is a writable grant and
+    .audit/ cannot be carved out, so a child can APPEND a forged
+    floor_refusal record. Pre-fix the merge rule was "whichever view
+    carries more refusals wins" — the forged disk superset stood and
+    the summariser minted a fresh valid MAC over "target never
+    executed" for a target that ran. Refusal records EXCUSE the
+    target, so the one-way doctrine (disk may condemn, never excuse)
+    forbids trusting the disk view.
+    """
+
+    @staticmethod
+    def _forged_refusal():
+        return {
+            "ts": "2026-09-21T00:00:00+00:00",
+            "type": "floor_refusal",
+            "status": "unverifiable_environment",
+            "floor": "mount-ns",
+            "achievable": "landlock",
+            "reason": "forged by the target",
+            "remedies": "",
+        }
+
+    @staticmethod
+    def _append_to_evidence(run_dir, record):
+        from core.json import dumps_artifact
+        from core.sandbox import evidence as _ev
+        path = _ev.evidence_write_path(run_dir, ".sandbox-denials.jsonl")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(dumps_artifact(record, indent=None,
+                                   ensure_ascii=True) + "\n")
+
+    def test_forged_disk_refusal_not_counted(self, tmp_path, caplog):
+        """A refusal record this process never recorded must not
+        reach total_floor_refusals — it is surfaced as unverified
+        with a warning instead. With NO parent memory for the run
+        dir this shape is indistinguishable from the lifecycle-stub
+        fresh-process finalisation, so the warning reports
+        unverifiability without a tamper accusation (the defence —
+        not counted — is identical either way)."""
+        from core.sandbox import summary as _summary
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        self._append_to_evidence(run_dir, self._forged_refusal())
+        with caplog.at_level("WARNING"):
+            result = _summary.summarize_and_write(run_dir)
+        assert result is not None
+        assert result.get("total_floor_refusals", 0) == 0, (
+            "child-appended floor_refusal was folded into the summary "
+            "under a fresh valid MAC")
+        assert "floor_refusal_line" not in result
+        assert result["floor_refusal_records_unverified"] == 1
+        assert (result["unverified_floor_refusals"][0]["reason"]
+                == "forged by the target")
+        assert "another process" in caplog.text
+        assert "TAMPER" not in caplog.text
+
+    def test_appended_extra_refusal_flagged_beside_legit(
+            self, tmp_path, caplog):
+        """A legitimate refusal plus a child-appended extra: the
+        parent-memory record is counted, the append is flagged."""
+        from core.sandbox import summary as _summary
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        _summary.record_floor_refusal(
+            run_dir, floor="mount-ns", achievable="landlock",
+            reason="host cannot engage the mount tier",
+            remedies="enable unprivileged userns")
+        self._append_to_evidence(run_dir, self._forged_refusal())
+        with caplog.at_level("WARNING"):
+            result = _summary.summarize_and_write(run_dir)
+        assert result is not None
+        assert result["total_floor_refusals"] == 1
+        assert (result["floor_refusals"][0]["reason"]
+                == "host cannot engage the mount tier")
+        assert result["floor_refusal_records_unverified"] == 1
+        # Memory non-empty + disk extras = the forgery signature.
+        assert "TAMPER" in caplog.text
+
+    def test_legit_refusal_still_counted_clean(self, tmp_path):
+        """Control: the normal record-then-summarise flow carries no
+        unverified flag."""
+        from core.sandbox import summary as _summary
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        _summary.record_floor_refusal(
+            run_dir, floor="mount-ns", achievable="landlock",
+            reason="host cannot engage the mount tier",
+            remedies="enable unprivileged userns")
+        result = _summary.summarize_and_write(run_dir)
+        assert result is not None
+        assert result["total_floor_refusals"] == 1
+        assert "floor_refusal_records_unverified" not in result
+
+    def test_unverified_surface_sanitised_and_capped(self, tmp_path):
+        """The unverified records embed attacker-authorable bytes:
+        fields must get the legit write path's escape + redact + cap
+        treatment, and the embedded list is bounded (the count field
+        carries the true total)."""
+        from core.sandbox import summary as _summary
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        hostile = self._forged_refusal()
+        # EVERY field is attacker-authorable — the short fields are
+        # ample carriers for an OSC/CSI terminal-injection sequence,
+        # not just the long prose ones.
+        hostile["reason"] = "\x1b]0;owned\x07" + "A" * 50_000
+        hostile["remedies"] = "\x1b]0;owned-remedies\x07"
+        hostile["ts"] = "\x1b]0;owned-ts\x07"
+        hostile["status"] = "\x1b]0;owned-status\x07"
+        hostile["floor"] = "\x1b[2Jowned-floor"
+        hostile["achievable"] = "\x1b[31mowned-achievable"
+        self._append_to_evidence(run_dir, hostile)
+        for _ in range(12):
+            self._append_to_evidence(run_dir, self._forged_refusal())
+        result = _summary.summarize_and_write(run_dir)
+        assert result is not None
+        # The 12 identical records are all absent from memory — each
+        # is counted; the embedded list is capped.
+        assert result["floor_refusal_records_unverified"] == 13
+        embedded = result["unverified_floor_refusals"]
+        assert len(embedded) <= _summary._UNVERIFIED_REFUSALS_MAX
+        for rec in embedded:
+            assert len(rec["reason"]) <= _summary._REFUSAL_FIELD_MAX
+            for field, value in rec.items():
+                assert "\x1b" not in value, (
+                    f"raw ESC byte survived into the summary via "
+                    f"{field!r}")
