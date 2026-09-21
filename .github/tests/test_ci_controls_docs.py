@@ -433,6 +433,190 @@ def test_write_token_confined_to_publish_steps() -> None:
     )
 
 
+_CHECKOUT_USES_RE = _re.compile(r"^\s*(?:-\s+)?uses:\s*\S*actions/checkout")
+_PERSIST_FALSE_RE = _re.compile(r"^\s*persist-credentials:\s*false\s*(#.*)?$")
+
+
+def _checkout_persistence_offenders(
+    workflows_dir: Path,
+) -> tuple[list[str], int]:
+    """(offender descriptions, checkout steps checked) — every
+    ``actions/checkout`` step in a write-capable job must carry
+    ``persist-credentials: false``.
+
+    ``actions/checkout`` persists the default token into
+    ``.git/config`` by DEFAULT (``persist-credentials: true``) — no
+    token text appears anywhere in the workflow — handing every
+    subsequent step of the job a push-capable credential. That is an
+    ungated re-grant channel the token-VALUE gate above cannot see:
+    one hoisted or new checkout without the opt-out re-hands the token
+    to the untrusted-parsing phases with CI green. Before this arm the
+    live write-permission workflows defended the channel only by hand
+    (each carried the opt-out with a comment naming exactly this
+    risk); nothing mechanical enforced it. Same job-aware universe as
+    ``_default_token_offenders``: a checkout in a read-only job beside
+    a write job persists only that job's read token and stays outside
+    the gate's rationale.
+    """
+    offenders: list[str] = []
+    checked = 0
+    for wf in sorted(workflows_dir.glob("*.y*ml")):
+        lines = wf.read_text(encoding="utf-8").splitlines()
+        jobs = _job_write_scopes(lines)
+        if not any(scopes for _, _, scopes in jobs):
+            continue
+        steps = _step_ranges(lines)
+        for start, end in steps:
+            job = next((j for j in jobs if j[0] <= start < j[1]), None)
+            if job is None or not job[2]:
+                continue
+            uses_line = next(
+                (
+                    i for i in range(start, end)
+                    if not lines[i].lstrip().startswith("#")
+                    and _CHECKOUT_USES_RE.match(lines[i].split(" #", 1)[0])
+                ),
+                None,
+            )
+            if uses_line is None:
+                continue
+            checked += 1
+            opted_out = any(
+                _PERSIST_FALSE_RE.match(lines[i])
+                for i in range(start, end)
+                if not lines[i].lstrip().startswith("#")
+            )
+            if not opted_out:
+                offenders.append(
+                    f"{wf.name}:{uses_line + 1}: actions/checkout in a "
+                    f"write-capable job (scopes: "
+                    f"{', '.join(sorted(job[2]))}) without "
+                    f"persist-credentials: false — the default persists "
+                    f"the write token into .git/config for every "
+                    f"subsequent step"
+                )
+    return offenders, checked
+
+
+def test_checkout_persists_no_credentials_in_write_jobs() -> None:
+    """Every ``actions/checkout`` step in a write-capable job carries
+    ``persist-credentials: false`` — the credential-persistence
+    default is an ungated re-grant channel the token-value gate cannot
+    see (see _checkout_persistence_offenders)."""
+    offenders, checked = _checkout_persistence_offenders(
+        REPO / ".github/workflows"
+    )
+    assert checked >= 2, "checkout enumeration broke (none found)"
+    assert not offenders, (
+        "checkout credential persistence in write-capable job(s):\n"
+        + "\n".join(offenders)
+        + "\n— add `persist-credentials: false` to the checkout's "
+        "`with:` block (see release.yml / sca-self-bump.yml for the "
+        "explicit-token publish pattern that replaces it)"
+    )
+
+
+def test_checkout_persistence_gate_flags_hostile_shapes(tmp_path) -> None:
+    """Both hostile spellings — persist-credentials unset (the
+    actions/checkout DEFAULT) and an explicit true — must be
+    offenders; the opted-out spelling and read-only-job checkouts must
+    not."""
+    default_checkout = """\
+permissions:
+  contents: write
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: parse untrusted registry data
+        run: |
+          python parse_registry.py
+"""
+    explicit_true = """\
+permissions:
+  packages: write
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: true
+      - name: build image
+        run: |
+          docker build -t img .
+"""
+    for name, content in (
+        ("default_checkout", default_checkout),
+        ("explicit_true", explicit_true),
+    ):
+        wf_dir = tmp_path / name
+        wf_dir.mkdir()
+        (wf_dir / "hostile.yml").write_text(content, encoding="utf-8")
+        offenders, checked = _checkout_persistence_offenders(wf_dir)
+        assert checked == 1, f"{name}: checkout not even counted"
+        assert offenders, f"{name}: persisting checkout passed the gate"
+
+    opted_out = tmp_path / "opted_out"
+    opted_out.mkdir()
+    (opted_out / "ok.yml").write_text(
+        """\
+permissions:
+  contents: write
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push origin main
+""",
+        encoding="utf-8",
+    )
+    offenders, checked = _checkout_persistence_offenders(opted_out)
+    assert checked == 1
+    assert offenders == []
+
+    read_job = tmp_path / "read_job"
+    read_job.mkdir()
+    (read_job / "split.yml").write_text(
+        """\
+permissions:
+  contents: write
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push origin main
+""",
+        encoding="utf-8",
+    )
+    offenders, checked = _checkout_persistence_offenders(read_job)
+    assert checked == 1  # only the write job's checkout is in-universe
+    assert offenders == []
+
+
 _HOSTILE_GRANT_WORKFLOWS = {
     # Job-level env: the token reaches EVERY step, including the
     # parse step — hoisting an env block during YAML cleanup is the
