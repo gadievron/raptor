@@ -101,6 +101,30 @@ def test_project_samples_collector_total_failure_reddens() -> None:
     assert "\n          true\n" not in step
 
 
+def test_nightly_toolchain_installs_carry_refuse_backstops() -> None:
+    """Both nightly workflows install external toolchains with
+    continue-on-error (a transient mirror outage must not discard the
+    tool-independent signal), and their tool-dependent test families
+    skip-with-reason when the binaries are absent — so a persistently
+    broken install reads as a green nightly with those families never
+    executing. Each such workflow must carry the post-run
+    refuse-backstop that verifies the tools actually landed
+    (nightly.yml's pattern; nightly-self-test.yml lacked it)."""
+    for wf in (
+        ".github/workflows/nightly.yml",
+        ".github/workflows/nightly-self-test.yml",
+    ):
+        text = _read(wf)
+        assert "continue-on-error: true" in text, wf
+        assert "Refuse a toolchain-less" in text, (
+            f"{wf}: continue-on-error toolchain install without a "
+            "refuse-backstop step — a broken install becomes "
+            "permanent green skips"
+        )
+        assert "command -v r2" in text, wf
+        assert "if: ${{ !cancelled() }}" in text, wf
+
+
 import re as _re
 
 # Write-capable default-token permission scopes (GitHub's

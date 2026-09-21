@@ -77,6 +77,32 @@ jobs:
             --json "$RUNNER_TEMP/self-test-results.json" \
             --timeout 600
 
+      # Backstop for the continue-on-error tool install above: the
+      # self-test's gcc/r2-dependent cases raise Skip when their
+      # binaries are absent and the suite's exit contract counts skips
+      # as pass, so a persistently broken install would read as a
+      # green self-test nightly with the binary-boundary families
+      # never executing (same rationale as nightly.yml's refuse step).
+      # Runs AFTER the self-test (and even when it failed) so the
+      # tool-independent signal is still collected either way; a
+      # broken mirror day costs the binary families only, never the
+      # whole run's diagnosis.
+      - name: Refuse a toolchain-less self-test nightly
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          missing=""
+          command -v r2 >/dev/null 2>&1 || missing="$missing radare2"
+          command -v gcc >/dev/null 2>&1 || missing="$missing gcc"
+          if [ -n "$missing" ]; then
+            echo "::error::self-test toolchain missing:${missing} —" \
+              "the gcc/r2 self-test cases above can only skip, so this" \
+              "nightly produced no binary-boundary signal. Check the" \
+              "external-tools install step's log."
+            exit 1
+          fi
+          echo "Toolchain present: r2 + gcc."
+
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
