@@ -340,6 +340,12 @@
     "core/threat_model/__init__.py::save_report::unsanitised_llm_value::render_report": {
       "note": "helper-return of the same renderer whose summary/title rows are triaged above; save_report writes the md artifact"
     },
+    "core/understand_graph/queries.py::threat_model_graph_context::unsanitised_llm_value::entry": {
+      "note": "graph-store threat-model context: entry label from SQLite (operator-seeded graph data, not raw LLM output)"
+    },
+    "core/understand_graph/queries.py::threat_model_graph_context::unsanitised_llm_value::sink": {
+      "note": "graph-store threat-model context: sink label from SQLite (operator-seeded graph data, not raw LLM output)"
+    },
     "libexec/raptor-bq-query::_run_sandboxed::unsanitised_llm_value::stderr": {
       "note": "verbatim tool/child-output capture into a run artifact or structured data file \u2014 raw by design; rendering to the operator happens in registered writers that sanitise"
     },
@@ -375,6 +381,18 @@
     },
     "libexec/raptor-ghidra::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "libexec/raptor-graph-ingest::main::unsanitised_llm_value::graph_path": {
+      "note": "graph-ingest CLI: graph.db output path derived from --out argument (operator-supplied, not LLM text)"
+    },
+    "libexec/raptor-graph-query::main::unsanitised_llm_value::id": {
+      "note": "graph-query CLI: node id from SQLite query result (operator diagnostic tool)"
+    },
+    "libexec/raptor-graph-query::main::unsanitised_llm_value::path": {
+      "note": "graph-query CLI: source-sink path from SQLite (operator diagnostic tool)"
+    },
+    "libexec/raptor-graph-query::main::unsanitised_llm_value::target_path": {
+      "note": "graph-query CLI: target path from graph metadata (operator-set value)"
     },
     "libexec/raptor-pick-strategies::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
