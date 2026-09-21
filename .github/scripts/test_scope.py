@@ -176,6 +176,10 @@ TIERS: dict[str, dict] = {
             "pyproject.toml",
             "libexec",
             "bin",
+            # Content-pinned by the ci-controls doc-coverage gate:
+            # every workflow must keep its row in this doc, so editing
+            # the doc must re-fire the tier that asserts it.
+            "docs/ci-controls.md",
         ],
         "outside_graph": True,
     },

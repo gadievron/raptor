@@ -63,6 +63,11 @@ def test_documented_control_paths_exist() -> None:
         ".github/workflows/refit-sca-calibration.yml",
         ".github/workflows/refresh-sca-data.yml",
         ".github/workflows/typosquat-reaudit.yml",
+        ".github/workflows/weekly_corpus.yml",
+        ".github/workflows/sandbox-matrix.yml",
+        ".github/workflows/sandbox-matrix-image.yml",
+        ".github/workflows/nightly-self-test.yml",
+        ".github/workflows/ubuntu26-canary.yml",
         ".github/scripts/check_command_metadata.py",
         ".github/scripts/check_miswiring.py",
         ".github/scripts/check_env_docs.py",
@@ -85,6 +90,38 @@ def test_documented_control_paths_exist() -> None:
 
     missing = [path for path in required if not (REPO / path).exists()]
     assert not missing, f"CI controls docs point at missing paths: {missing}"
+
+
+# Workflows that are legitimately absent from docs/ci-controls.md: they
+# build or ship artifacts rather than verify the tree, so they are not
+# CI *controls*. Everything else under .github/workflows/ must be
+# referenced in the doc — the required-paths list above only checks
+# docs -> disk, so without this inverse gate a workflow (or its doc row)
+# can silently drop out of the controls doc.
+_WORKFLOWS_EXEMPT_FROM_CONTROLS_DOC = {
+    # Reusable callee only — the tests.yml tiers that call it are the
+    # documented control; it has no trigger of its own.
+    "_tier.yml",
+    # Publish/infrastructure surfaces, not verification controls.
+    "ci-deps-image.yml",
+    "dockerhub-publish.yml",
+    "release.yml",
+}
+
+
+def test_every_workflow_is_referenced_in_ci_controls_doc() -> None:
+    doc = _read("docs/ci-controls.md")
+    missing = sorted(
+        wf.name
+        for wf in (REPO / ".github/workflows").glob("*.yml")
+        if wf.name not in _WORKFLOWS_EXEMPT_FROM_CONTROLS_DOC
+        and wf.name not in doc
+    )
+    assert not missing, (
+        "workflows missing from docs/ci-controls.md (document them or, "
+        "for publish/infra surfaces only, add them to "
+        f"_WORKFLOWS_EXEMPT_FROM_CONTROLS_DOC): {missing}"
+    )
 
 
 def test_project_samples_collector_total_failure_reddens() -> None:
