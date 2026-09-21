@@ -244,6 +244,13 @@ def _session_stamp(pid: int) -> dict[str, str]:
     ns = _sessions.pidns_id()
     if ns is not None:
         stamp["session_pidns"] = ns
+    machine = _sessions.machine_id()
+    if machine is not None:
+        # Per-install identity (hashed — never the raw machine-id, and
+        # never logged): lets the liveness verifiers tell "prior boot
+        # of THIS machine" (provably dead) from "another machine
+        # sharing the filesystem" (unverifiable — fail open).
+        stamp["session_machine_id"] = machine
     return stamp
 
 
@@ -256,8 +263,11 @@ def _session_alive_for_meta(meta: dict) -> bool:
     stamps (other boot / machine / pid namespace) are unverifiable here
     and read as ALIVE — the fail-open direction: sweeps skip rather
     than fail a run they cannot judge, and the gate preserves
-    contention. Unstamped (pre-series) metadata keeps the legacy
-    comm-checked ``_pid_alive`` — also fail-open.
+    contention. Exception: a stamp from a PRIOR BOOT of this same
+    machine (``session_machine_id`` matches, boot_id differs) is
+    provably dead — see ``_prior_boot_entry``. Unstamped (pre-series)
+    metadata keeps the legacy comm-checked ``_pid_alive`` — also
+    fail-open.
     """
     pid = meta.get("session_pid")
     if isinstance(pid, str) and pid.isascii() and pid.isdigit():
@@ -272,7 +282,19 @@ def _session_alive_for_meta(meta: dict) -> bool:
         pidns = meta.get("session_pidns")
         if pidns:
             fields["pidns"] = str(pidns)
+        machine = meta.get("session_machine_id")
+        if machine:
+            fields["machine_id"] = str(machine)
         if _sessions._foreign_entry(fields):
+            # One foreign shape IS decidable: a stamp carrying THIS
+            # machine's identity but another boot_id was written
+            # during a prior boot of this machine — its process
+            # cannot be alive anywhere. Without this, every crashed
+            # run's meta read foreign→alive forever after a reboot:
+            # permanent status=running zombies that also held the
+            # project run-contention gate.
+            if _sessions._prior_boot_entry(fields):
+                return False  # prior boot of this machine — dead
             return True  # unverifiable — fail open
         return _sessions._identity_matches(pid, fields)
     return _pid_alive(pid)
@@ -707,7 +729,8 @@ def start_run(output_dir: Path, command: str,
                 and _prior_meta.get("session_pid") is not None
                 and _session_alive_for_meta(_prior_meta)):
             for _k in ("session_pid", "tool_pid", "session_start",
-                       "session_boot_id", "session_pidns"):
+                       "session_boot_id", "session_pidns",
+                       "session_machine_id"):
                 if _k in _prior_meta:
                     metadata[_k] = _prior_meta[_k]
                 else:
@@ -1829,7 +1852,7 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
             # session's stamp (the verifiers would judge the live
             # resumed run abandoned: stamp != live process at new pid).
             for key in ("session_start", "session_boot_id",
-                        "session_pidns"):
+                        "session_pidns", "session_machine_id"):
                 metadata.pop(key, None)
             metadata.update(_session_stamp(session_pid))
         save_json(path, metadata)

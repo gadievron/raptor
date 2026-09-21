@@ -1367,6 +1367,119 @@ class TestSessionIdentityStamp(unittest.TestCase):
         with mock.patch.object(sessions, "boot_id", lambda: "b"):
             self.assertTrue(_session_alive_for_meta(meta))
 
+    def test_prior_boot_of_same_machine_reads_dead(self):
+        """A stamp carrying THIS machine's identity but another boot_id
+        was written during a prior boot — provably dead: sweeps may
+        reap it and it releases run contention (no permanent
+        status=running zombies after a reboot)."""
+        from unittest import mock
+
+        from core.project import sessions
+        from core.run.metadata import _session_alive_for_meta
+        meta = self._stamped_meta(1, boot="prior-boot")
+        meta["session_machine_id"] = "same-machine-hash"
+        with mock.patch.object(sessions, "boot_id", lambda: "b"), \
+                mock.patch.object(sessions, "machine_id",
+                                  lambda: "same-machine-hash"):
+            self.assertFalse(_session_alive_for_meta(meta))
+
+    def test_other_machine_stamp_reads_alive(self):
+        """A doctored/foreign machine identity with a foreign boot is
+        NOT provably dead — could be a live run on another machine
+        sharing the filesystem: fail open."""
+        from unittest import mock
+
+        from core.project import sessions
+        from core.run.metadata import _session_alive_for_meta
+        meta = self._stamped_meta(1, boot="prior-boot")
+        meta["session_machine_id"] = "some-other-machine-hash"
+        with mock.patch.object(sessions, "boot_id", lambda: "b"), \
+                mock.patch.object(sessions, "machine_id",
+                                  lambda: "same-machine-hash"):
+            self.assertTrue(_session_alive_for_meta(meta))
+
+    def test_absent_machine_id_keeps_fail_open(self):
+        """Legacy stamp (no machine identity) with a foreign boot keeps
+        today's fail-open alive verdict."""
+        from unittest import mock
+
+        from core.project import sessions
+        from core.run.metadata import _session_alive_for_meta
+        meta = self._stamped_meta(1, boot="prior-boot")
+        with mock.patch.object(sessions, "boot_id", lambda: "b"), \
+                mock.patch.object(sessions, "machine_id",
+                                  lambda: "same-machine-hash"):
+            self.assertTrue(_session_alive_for_meta(meta))
+
+    def test_local_machine_id_unreadable_keeps_fail_open(self):
+        """No local machine identity to compare against — the stamp is
+        unverifiable: fail open."""
+        from unittest import mock
+
+        from core.project import sessions
+        from core.run.metadata import _session_alive_for_meta
+        meta = self._stamped_meta(1, boot="prior-boot")
+        meta["session_machine_id"] = "same-machine-hash"
+        with mock.patch.object(sessions, "boot_id", lambda: "b"), \
+                mock.patch.object(sessions, "machine_id", lambda: None):
+            self.assertTrue(_session_alive_for_meta(meta))
+
+    def test_start_run_records_machine_id(self):
+        import os
+        from unittest import mock
+
+        from core.project import sessions
+        from core.run.metadata import RUN_METADATA_FILE, start_run
+        with TemporaryDirectory() as d, \
+                mock.patch(
+                    "core.run.metadata._get_session_pid",
+                    return_value=os.getpid()), \
+                mock.patch.object(sessions, "proc_starttime",
+                                  lambda pid: "1234"), \
+                mock.patch.object(sessions, "boot_id", lambda: "boot-x"), \
+                mock.patch.object(sessions, "pidns_id", lambda: "42"), \
+                mock.patch.object(sessions, "machine_id",
+                                  lambda: "machine-hash-x"):
+            out = Path(d) / "run"
+            start_run(out, "scan")
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["session_machine_id"], "machine-hash-x")
+
+    def test_cleanup_abandoned_sweeps_prior_boot_zombie(self):
+        """End-to-end: the dead-session sweep branch reaps a run whose
+        stamp is from a prior boot of this machine — the exact
+        post-reboot zombie shape."""
+        from unittest import mock
+
+        from core.project import sessions
+        from core.run import metadata as md
+        from core.run.metadata import RUN_METADATA_FILE, start_run
+        with TemporaryDirectory() as d:
+            out = Path(d) / "old-run"
+            with mock.patch("core.run.metadata._get_session_pid",
+                            return_value=33333), \
+                    mock.patch.object(sessions, "proc_starttime",
+                                      lambda pid: "7"), \
+                    mock.patch.object(sessions, "boot_id",
+                                      lambda: "prior-boot"), \
+                    mock.patch.object(sessions, "pidns_id", lambda: "1"), \
+                    mock.patch.object(sessions, "machine_id",
+                                      lambda: "same-machine-hash"):
+                start_run(out, "scan")
+            # Age it past the freshness gate.
+            meta = load_json(out / RUN_METADATA_FILE)
+            meta["timestamp"] = "2020-01-01T00:00:00+00:00"
+            from core.json import save_json
+            save_json(out / RUN_METADATA_FILE, meta)
+            # Rebooted: same machine, new boot id.
+            with mock.patch.object(sessions, "boot_id", lambda: "b"), \
+                    mock.patch.object(sessions, "pidns_id", lambda: "1"), \
+                    mock.patch.object(sessions, "machine_id",
+                                      lambda: "same-machine-hash"):
+                md._cleanup_abandoned(Path(d), "scan", 44444)
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "failed")
+
     def test_unstamped_uses_legacy_comm_check(self):
         import os
         from unittest import mock

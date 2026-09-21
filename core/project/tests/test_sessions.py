@@ -272,6 +272,78 @@ class SessionsRegistryTest(_RegistryCase):
         ])
 
 
+class PriorBootEntryTest(unittest.TestCase):
+    """``_prior_boot_entry``: the one foreignness shape that is
+    decidably dead — this machine's identity, another boot."""
+
+    def _fields(self, **overrides):
+        fields = {"starttime": "7", "boot_id": "prior-boot",
+                  "machine_id": "local-hash"}
+        fields.update(overrides)
+        return fields
+
+    def _patched(self, local_machine="local-hash", live_boot="live-boot"):
+        return (
+            patch.object(sessions, "machine_id", lambda: local_machine),
+            patch.object(sessions, "boot_id", lambda: live_boot),
+        )
+
+    def test_same_machine_other_boot_is_prior_boot(self):
+        p1, p2 = self._patched()
+        with p1, p2:
+            self.assertTrue(sessions._prior_boot_entry(self._fields()))
+
+    def test_same_machine_same_boot_is_not(self):
+        p1, p2 = self._patched(live_boot="prior-boot")
+        with p1, p2:
+            self.assertFalse(sessions._prior_boot_entry(self._fields()))
+
+    def test_other_machine_is_not(self):
+        p1, p2 = self._patched(local_machine="other-hash")
+        with p1, p2:
+            self.assertFalse(sessions._prior_boot_entry(self._fields()))
+
+    def test_absent_machine_field_is_not(self):
+        p1, p2 = self._patched()
+        with p1, p2:
+            self.assertFalse(sessions._prior_boot_entry(
+                self._fields(machine_id="")))
+
+    def test_unreadable_local_machine_id_is_not(self):
+        p1, p2 = self._patched(local_machine=None)
+        with p1, p2:
+            self.assertFalse(sessions._prior_boot_entry(self._fields()))
+
+    def test_sentinel_stamp_is_not(self):
+        # Off-Linux sentinel boot ids carry no boot identity at all.
+        p1, p2 = self._patched()
+        with p1, p2:
+            self.assertFalse(sessions._prior_boot_entry(self._fields(
+                starttime=sessions._STARTTIME_SENTINEL,
+                boot_id="none-darwin")))
+
+    def test_machine_id_is_a_hash_never_the_raw_value(self):
+        # Hygiene contract: the recorded identity is a digest — the
+        # raw /etc/machine-id must never appear in metadata.
+        sessions.machine_id.cache_clear()
+        try:
+            mid = sessions.machine_id()
+            if mid is None:
+                self.skipTest("no readable /etc/machine-id on this host")
+            self.assertRegex(mid, r"^[0-9a-f]{64}$")
+            raw = Path("/etc/machine-id").read_text(
+                encoding="utf-8").strip()
+            if raw:
+                self.assertNotIn(raw, mid)
+                # Domain-separated: not the bare digest another
+                # application would compute from the same file.
+                import hashlib
+                self.assertNotEqual(
+                    mid, hashlib.sha256(raw.encode()).hexdigest())
+        finally:
+            sessions.machine_id.cache_clear()
+
+
 class SessionBindingTest(_RegistryCase):
     """The authoritative binding state machine."""
 

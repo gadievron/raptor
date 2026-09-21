@@ -228,6 +228,59 @@ def pidns_id() -> str | None:
     return str(st.st_ino)
 
 
+@functools.lru_cache(maxsize=1)
+def machine_id() -> str | None:
+    """Hash of ``/etc/machine-id`` — a per-INSTALL identity that, unlike
+    ``boot_id``, survives reboots. None when unreadable (off-Linux, or
+    a container image without one).
+
+    Hashed at the read so the raw machine-id never lands in run
+    metadata or session entries (it is a stable host identifier);
+    consumers compare hashes only and must never log the value.
+    Domain-separated (purpose-prefixed) so the recorded digest is not
+    the bare sha256 of the machine-id — run metas must not carry a
+    value linkable to other applications' machine-id hashes.
+    """
+    import hashlib
+    try:
+        raw = Path("/etc/machine-id").read_bytes().strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    return hashlib.sha256(b"raptor-run-machine-id:" + raw).hexdigest()
+
+
+def _prior_boot_entry(fields: dict[str, str]) -> bool:
+    """Foreign entry PROVABLY written during a prior boot of THIS
+    machine — the one foreignness shape that is decidably DEAD.
+
+    ``_foreign_entry`` fails open (alive) because a foreign stamp could
+    be a live run on another machine sharing the filesystem. The
+    deliberate cost was that after a REBOOT of the same machine every
+    crashed run's stamp read foreign→alive forever. A stamp whose
+    machine identity MATCHES the local machine but whose boot_id
+    differs cannot be a live process anywhere: its boot no longer
+    exists here, and no other machine can carry this machine's
+    identity. Absent machine identity (legacy stamps) or a mismatch
+    keeps the fail-open path; a same-boot different-pidns entry stays
+    fail-open too (the boot is still live — the process may be).
+    """
+    stamp_machine = fields.get("machine_id", "")
+    if not stamp_machine:
+        return False  # legacy stamp — unverifiable, keep fail-open
+    local = machine_id()
+    if local is None or stamp_machine != local:
+        return False  # other machine (or unverifiable here) — fail open
+    stamp_boot = fields.get("boot_id", "")
+    if not stamp_boot or _sentinel_stamp(fields):
+        return False
+    live_boot = boot_id()
+    if live_boot is None:
+        return False
+    return stamp_boot != live_boot
+
+
 def _platform_boot_sentinel() -> str:
     return f"none-{sys.platform}"
 
