@@ -73,6 +73,7 @@ overview:
 | [Frida](frida.md) | Dynamic instrumentation |
 | [ZKPoX](zkpox.md) | Proof of exploit: witness eligibility, bundles, sandboxed reproduction |
 | [Sandbox](sandbox.md) | Process isolation and sandboxing |
+| [Agent Security](agent-security.md) | Agent capabilities, tool boundaries, network controls and human approval |
 | [LLM Providers](llm.md) | Provider configuration, Bedrock, multi-model workflows, cost management |
 | [SAGE](sage.md) | Persistent memory: setup, HMAC key, CPU/GPU, use cases, upgrades |
 | [Security](security.md) | RAPTOR's own security model |

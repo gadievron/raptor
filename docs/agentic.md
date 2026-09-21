@@ -12,6 +12,7 @@ is written to the run's output directory.
 [commands](commands.md) |
 [validation](validation.md) |
 [LLM providers](llm.md) |
+[agent security](agent-security.md) |
 [binary analysis](binary-analysis.md) |
 [static analysis](static-analysis.md) |
 [CodeQL](codeql.md)

@@ -187,6 +187,9 @@ targets as able to assert their own trust.
 
 ## Agent Capabilities and the Rule of Two
 
+See [Agent security](agent-security.md) for the capability inventory and
+operator-facing guide.
+
 Every RAPTOR agent is audited against three axes: **(A)** reads
 untrusted input, **(B)** has state-changing tools (Write, Edit, Bash,
 WebFetch), **(C)** communicates with external services. Following
