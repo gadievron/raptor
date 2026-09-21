@@ -1021,6 +1021,60 @@ class TestAbandonSweepRecovery(unittest.TestCase):
             meta = load_json(out / RUN_METADATA_FILE)
             self.assertEqual(meta["status"], "completed")
 
+    def test_sweep_after_real_failure_is_noop(self):
+        # Race ordering: the run's REAL failure lands first; a sweep
+        # that read status=running moments earlier then delivers its
+        # marker-carrying failed write. The failed→failed merge used
+        # to overwrite the real error with the sweep's message and
+        # plant the marker — a later stray complete_run then took the
+        # recovery branch and laundered the genuine failure green.
+        # The sweep lost the race: its write must be a no-op.
+        with TemporaryDirectory() as d:
+            out = Path(d) / "scan-001"
+            start_run(out, "scan")
+            fail_run(out, "tool crashed with OOM")  # REAL failure first
+            fail_run(out, "session ended without explicit completion",
+                     extra={"abandon_sweep": True}, record_timing=False)
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "failed")
+            self.assertNotIn("abandon_sweep", meta["extra"])
+            self.assertEqual(meta["extra"]["error"], "tool crashed with OOM")
+            complete_run(out)  # stray finaliser must find no marker
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "failed")
+            self.assertEqual(meta["extra"]["error"], "tool crashed with OOM")
+
+    def test_sweep_onto_completed_is_noop(self):
+        # Same guard, other terminal state: a marker-carrying failed
+        # write onto completed changes nothing (exercised via
+        # _update_status directly — fail_run's own pre-check already
+        # refuses non-failed terminal states before any side effect).
+        from core.run.metadata import _update_status
+        with TemporaryDirectory() as d:
+            out = Path(d) / "scan-001"
+            start_run(out, "scan")
+            complete_run(out)
+            _update_status(out, "failed",
+                           extra={"abandon_sweep": True,
+                                  "error": "session ended"},
+                           record_timing=False)
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "completed")
+            self.assertNotIn("abandon_sweep", meta.get("extra") or {})
+
+    def test_genuine_refail_without_marker_still_restamps(self):
+        # Idempotent re-stamp: a second REAL failed write (no marker)
+        # keeps merging — only sweep-stamped writes are dropped.
+        with TemporaryDirectory() as d:
+            out = Path(d) / "scan-001"
+            start_run(out, "scan")
+            fail_run(out, "tool crashed")
+            fail_run(out, "tool crashed (retry also failed)")
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "failed")
+            self.assertEqual(meta["extra"]["error"],
+                             "tool crashed (retry also failed)")
+
     def test_real_failure_still_refuses_completion(self):
         # Two-direction guard: only sweep-stamped abandons may be
         # overridden — a real failure stays terminal.

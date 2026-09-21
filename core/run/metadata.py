@@ -2237,6 +2237,26 @@ def _update_status(output_dir: Path, status: str,
             msg = f"Malformed {RUN_METADATA_FILE} in {output_dir} — expected JSON object"
             raise ValueError(msg)  # noqa: TRY004
         current = metadata.get("status")
+        if (current in _TERMINAL_STATUSES and status == STATUS_FAILED
+                and (extra or {}).get("abandon_sweep")):
+            # A sweep-stamped FAILED write onto an ALREADY-TERMINAL
+            # status is a no-op: the sweep judged the run from a stale
+            # status=running read and lost the race — the earlier
+            # terminal state is the truth. Merging instead (the
+            # pre-fix behaviour for failed→failed, which skips the
+            # terminal guard below) overwrote a REAL failure's error
+            # with the sweep's message and planted the marker, so a
+            # later stray complete_run laundered the genuine failure
+            # to completed via the recovery clause. Sweep-first
+            # orderings are unaffected: their write lands on
+            # status=running, and the consume/recovery clauses below
+            # still let the real finaliser supersede it.
+            logger.info(
+                "Ignoring sweep-stamped failed write onto terminal "
+                "status %r in %s (the sweep lost the race)",
+                current, output_dir,
+            )
+            return
         if current in _TERMINAL_STATUSES and current != status:
             # Recovery clause: a ``failed`` stamped by an abandon sweep
             # (``extra.abandon_sweep``) is a heuristic verdict, not a
