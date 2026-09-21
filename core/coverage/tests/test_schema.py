@@ -138,3 +138,57 @@ def test_store_roundtrip_after_validation(tmp_path):
     reloaded = CoverageStore(p)
     assert reloaded.file_coverage("a.c") == 50.0
     assert reloaded.who_checked("a.c", 5) == ["semgrep"]
+
+
+class TestProvenanceNormalisation:
+    """The provenance subtree is validated one level down — a planted
+    store payload must not crash provenance_summary/tool_provenance
+    (reached on every rendered summary), and genuine slots survive."""
+
+    def test_non_dict_slot_dropped(self):
+        out = normalise_loaded_files(
+            {"a.c": {"provenance": {"semgrep": 5}}})
+        assert out["a.c"]["provenance"] == {}
+
+    def test_non_string_tool_key_dropped(self):
+        out = normalise_loaded_files(
+            {"a.c": {"provenance": {7: {"version": "v"}}}})
+        assert out["a.c"]["provenance"] == {}
+
+    def test_typed_fields_gated_others_pass_through(self):
+        out = normalise_loaded_files({"a.c": {"provenance": {"t": {
+            "version": {}, "timestamp": 7, "models": [{}, "m1"],
+            "run": "r1", "framework_sha": "abc",
+        }}}})
+        slot = out["a.c"]["provenance"]["t"]
+        assert "version" not in slot and "timestamp" not in slot
+        assert slot["models"] == ["m1"]
+        assert slot["run"] == "r1" and slot["framework_sha"] == "abc"
+
+    def test_non_list_models_becomes_empty(self):
+        out = normalise_loaded_files(
+            {"a.c": {"provenance": {"t": {"models": "m1"}}}})
+        assert out["a.c"]["provenance"]["t"]["models"] == []
+
+    def test_good_slot_survives_beside_hostile(self):
+        out = normalise_loaded_files({"a.c": {"provenance": {
+            "bad": [1, 2],
+            "good": {"version": "v1", "timestamp": "t",
+                     "models": ["m"]},
+        }}})
+        assert out["a.c"]["provenance"] == {
+            "good": {"version": "v1", "timestamp": "t",
+                     "models": ["m"]}}
+
+    def test_store_queries_survive_planted_payload(self, tmp_path):
+        import json
+
+        from core.coverage.store import CoverageStore
+        sp = tmp_path / "coverage.json"
+        sp.write_text(json.dumps({"schema_version": 1, "files": {
+            "a.c": {"provenance": {"semgrep": 5, "t": {
+                "version": {}, "models": [{}], "timestamp": 7}}},
+        }}))
+        store = CoverageStore(sp)
+        assert store.provenance_summary()["models"] == []
+        assert store.tool_provenance("a.c", "semgrep") == {}

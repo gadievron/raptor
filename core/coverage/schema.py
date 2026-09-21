@@ -131,19 +131,59 @@ def _normalise_findings(findings: Any, path: str, source: str) -> list[dict[str,
     return out
 
 
+def _normalise_provenance(
+    prov: Any, path: str, source: str,
+) -> dict[str, dict[str, Any]]:
+    """Per-tool provenance slots, one level down.
+
+    The top-level dict check alone left the SLOTS unvalidated — a
+    planted ``coverage.json`` with ``{"provenance": {"semgrep": 5}}``
+    crashed ``provenance_summary`` (reached on every rendered
+    summary) and ``tool_provenance``, and unhashable ``version`` /
+    ``models`` members or a non-string ``timestamp`` crashed the
+    aggregate's set-adds and newest-compare. Slots must be dicts;
+    the three aggregated fields are type-gated (str version/timestamp,
+    str-list models); other stamp fields pass through untouched
+    (consumers only dict-copy them)."""
+    if not isinstance(prov, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for tool, slot in prov.items():
+        if not isinstance(tool, str) or not isinstance(slot, dict):
+            logger.warning(
+                "coverage store %s: file %r has malformed provenance "
+                "slot %r; dropping", source, path, tool)
+            continue
+        clean = dict(slot)
+        for key in ("version", "timestamp"):
+            if key in clean and not isinstance(clean[key], str):
+                logger.warning(
+                    "coverage store %s: file %r tool %r dropping "
+                    "non-string provenance %s", source, path, tool, key)
+                del clean[key]
+        if "models" in clean:
+            models = clean["models"]
+            clean["models"] = (
+                [m for m in models if isinstance(m, str)]
+                if isinstance(models, list) else []
+            )
+        out[tool] = clean
+    return out
+
+
 def _normalise_entry(path: str, entry: Any, source: str) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
         logger.warning(
             "coverage store %s: file %r entry is not an object; dropping",
             source, path)
         return None
-    prov = entry.get("provenance")
     return {
         "total_lines": _opt_int(entry.get("total_lines")),
         "sloc": _opt_int(entry.get("sloc")),
         "tools": _normalise_tools(entry.get("tools", {}), path, source),
         "findings": _normalise_findings(entry.get("findings", []), path, source),
-        "provenance": prov if isinstance(prov, dict) else {},
+        "provenance": _normalise_provenance(
+            entry.get("provenance"), path, source),
     }
 
 

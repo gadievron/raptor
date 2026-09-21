@@ -198,7 +198,33 @@ def _drive_coverage_consumers(run_dir: Path, project_dir: Path,
              "checked_by": ["audit"]},
         ]},
     ]}
+    # Hostile PERSISTED store payload (a planted coverage.json — the
+    # /project import threat): container shapes AND the one-level-down
+    # provenance subtree are attacker-writable; every query the render
+    # path reaches must survive, and the genuine slot keeps flowing.
     store_path = project_dir / "coverage.json"
+    store_path.write_text(json.dumps({
+        "schema_version": 1,
+        "files": {
+            "hostile.c": {
+                "provenance": _rand_json_value(rng),
+                "tools": _rand_json_value(rng),
+                "findings": _rand_json_value(rng),
+                "total_lines": _rand_json_value(rng),
+            },
+            "planted.c": {"provenance": {
+                "semgrep": _rand_json_value(rng),
+                "goodtool": {"version": "v1", "models": ["m"],
+                             "timestamp": "2026-01-01T00:00:00Z"},
+            }},
+        },
+    }))
+    probe = CoverageStore(store_path)
+    summary = probe.provenance_summary()
+    assert "v1" in summary["tools"].get("goodtool", [])
+    probe.tool_provenance("planted.c", "semgrep")
+    probe.tool_provenance("hostile.c", "anything")
+
     report = render_coverage([run_dir], checklist, store_path)
     assert report is not None
     # The genuine rows keep flowing through the hostile neighbourhood:
