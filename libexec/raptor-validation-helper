@@ -2379,6 +2379,11 @@ def prepare_E(workdir, target=None, dynamic=None, build=None,
               mitigation_matrix=False):
     _apply_stage_file(workdir, "D")
 
+    # D/E boundary: the attack paths Stage B materialised (and C/D
+    # settled) exist now — re-run the audit bridge's path enrichment
+    # so Stage E sees the constraints the Stage-0 pass loaded before
+    # any paths existed. Idempotent; quiet no-op without audit output.
+    _reenrich_attack_paths(Path(workdir), target)
 
     data = _findings(workdir)
     if not data:
@@ -2881,6 +2886,62 @@ def _bridge_audit_output(out_dir, target=None):
         print(f"  Audit bridge: enriched {enriched_steps} attack-path steps with callee contracts")
 
 
+def _reenrich_attack_paths(out_dir: "str | Path",
+                           target: "str | None" = None) -> None:
+    """Re-run the audit bridge's attack-path enrichment once paths exist.
+
+    Stage 0 runs the bridge before Stage B has materialised
+    attack-paths.json, so on a run without imported flow traces the
+    constraints/summaries loaded fine but enriched ZERO steps (the
+    file was not there yet). Stage B (and the C/D evidence passes)
+    create and settle the path set; re-running the enrichment at the
+    D/E boundary annotates the real steps so Stage E's feasibility and
+    SMT work see the audit's parameter preconditions and callee
+    contracts. Both enrichers ASSIGN per-step fields
+    (parameter_constraints / callee_contract), so a second invocation
+    is idempotent — steps the Stage-0 pass already annotated are
+    rewritten with the same values, never duplicated. Fail-soft like
+    the Stage-0 bridge: no audit run, no constraints, or no paths file
+    is a quiet no-op.
+    """
+    try:
+        from core.orchestration.audit_bridge import (
+            enrich_attack_paths,
+            enrich_with_summaries,
+            find_audit_output,
+            load_audit_constraints,
+            load_summaries,
+        )
+    except ImportError:
+        return
+
+    out_dir = Path(out_dir)
+    bridge_cfg = load_json(out_dir / "bridge-config.json")
+    if isinstance(bridge_cfg, dict) and bridge_cfg.get("no_bridge"):
+        return  # stage 0 ran with --no-bridge — the opt-out is durable
+
+    attack_paths_file = out_dir / "attack-paths.json"
+    if not attack_paths_file.exists():
+        return
+
+    audit_dir = find_audit_output(out_dir, target_path=target)
+    if not audit_dir:
+        return
+
+    constraints = load_audit_constraints(audit_dir)
+    if constraints:
+        enriched = enrich_attack_paths(attack_paths_file, constraints)
+        print(f"  Audit bridge: re-enriched {enriched} attack-path "
+              f"steps with {len(constraints)} constraints "
+              f"from {audit_dir.name}")
+
+    summaries = load_summaries(audit_dir)
+    if summaries:
+        enriched_steps = enrich_with_summaries(attack_paths_file, summaries)
+        print(f"  Audit bridge: re-enriched {enriched_steps} attack-path "
+              f"steps with callee contracts")
+
+
 _PRIORITY_TARGET_QUERY = (
     "Rank these unchecked source-to-sink flows by how likely "
     "exploitability validation will confirm a real, reachable "
@@ -3072,6 +3133,19 @@ def prepare_0(workdir_unused, target=None, explicit_out=None, no_bridge=False,
             _import_findings_file(findings_path, out_dir / "findings.json",
                                   target=target)
 
+        # Durable bridge opt-out marker, rewritten to THIS
+        # invocation's truth BOTH ways: later stage boundaries re-run
+        # bridge enrichment (see _reenrich_attack_paths) and must
+        # honour the operator's --no-bridge — but a stale opt-out left
+        # by a previous stage-0 run on the same out dir must not keep
+        # a fresh bridged run opted out forever. Local import: the
+        # SAGE recall block above imports save_json inside its
+        # suppress guard, which makes the name function-local for all
+        # of prepare_0 — reaching for it here when that import never
+        # ran is an UnboundLocalError.
+        from core.json import save_json as _save_json
+        _save_json(out_dir / "bridge-config.json",
+                   {"no_bridge": bool(no_bridge)})
         if not no_bridge:
             _bridge_understand_output(out_dir, checklist, target,
                                       pre_rebuild_checklist=pre_rebuild_checklist)

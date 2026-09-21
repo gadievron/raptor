@@ -32,7 +32,7 @@ def _load_helper():
     return mod
 
 
-def _run_stage0(tmp_path: Path, *extra: str):
+def _run_stage0(tmp_path: Path, *extra: str, no_bridge: bool = True):
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     target = tmp_path / "target"
@@ -43,11 +43,12 @@ def _run_stage0(tmp_path: Path, *extra: str):
     env["HOME"] = str(home)
     env["_RAPTOR_TRUSTED"] = "1"
     env.pop("RAPTOR_CALLER_DIR", None)
-    result = subprocess.run(
-        [sys.executable, HELPER, "0", "--target", str(target),
-         "--out", str(out), "--no-bridge", *extra],
-        capture_output=True, text=True, env=env,
-    )
+    args = [sys.executable, HELPER, "0", "--target", str(target),
+            "--out", str(out)]
+    if no_bridge:
+        args.append("--no-bridge")
+    args.extend(extra)
+    result = subprocess.run(args, capture_output=True, text=True, env=env)
     return result, out
 
 
@@ -69,6 +70,22 @@ class TestStage0Stranding:
         # Stage 0 leaves the run in-flight for stages A-F/1.
         meta = load_json(out / RUN_METADATA_FILE)
         assert meta["status"] == "running"
+
+
+class TestBridgeConfigMarker:
+
+    def test_no_bridge_marker_rewritten_both_ways(self, tmp_path):
+        # --no-bridge persists its opt-out for the D/E boundary
+        # re-enrichment ...
+        result, out = _run_stage0(tmp_path)
+        assert result.returncode == 0, result.stderr
+        assert load_json(out / "bridge-config.json") == {"no_bridge": True}
+        # ... and a later stage-0 run WITHOUT the flag on the same out
+        # dir must clear the stale opt-out — the marker is rewritten
+        # to each invocation's truth, never left sticky.
+        result, out = _run_stage0(tmp_path, no_bridge=False)
+        assert result.returncode == 0, result.stderr
+        assert load_json(out / "bridge-config.json") == {"no_bridge": False}
 
 
 class TestWitnessExecutionGate:
