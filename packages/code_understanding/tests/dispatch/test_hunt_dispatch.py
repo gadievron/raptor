@@ -761,3 +761,15 @@ class TestVerboseCallbackScrub:
         )])
         assert lines, "tool call should log"
         assert all("\x1b" not in ln and "\x07" not in ln for ln in lines)
+
+    def test_tool_name_escaped(self) -> None:
+        """Tool NAMES are model-minted (the fix's own derivation) —
+        previously both fixtures used a benign name, so reverting the
+        name-lane escape survived the suite."""
+        from core.llm.tool_use import ToolCall
+        lines = self._emit([ToolCall(
+            id="t1", name="Grep\x1b[2J\x9bhidden", input={},
+        )])
+        assert lines, "tool call should log"
+        assert all("\x1b" not in ln and "\x9b" not in ln for ln in lines)
+        assert any("Grep" in ln for ln in lines)
