@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.audit.source_view import sanitized_view
+
 logger = logging.getLogger(__name__)
 
 # Universal libc/POSIX surface plus a marked kernel SEED core
@@ -582,6 +584,21 @@ _DANGEROUS_MACROS = frozenset({
 # bare-word capture could never match the dotted _DANGEROUS_PY_APIS
 # entries, so dangerous one-line delegates skipped as trivial.
 _WRAPPER_CALL_RE = re.compile(r'\b((?:\w+\.)*\w+)\s*\(')
+
+#: The js/ts slash context the lexer heuristic cannot decide (regex
+#: vs division after `)` / `]`) — the wrapper skip refuses instead
+#: of judging it; see the refusal site in _is_trivial_wrapper.
+_JS_AMBIGUOUS_SLASH_RE = re.compile(r"[)\]]\s*/")
+
+#: A backslash ANYWHERE after a division-read `/` on the same
+#: ref-view line has no valid-JS reading (a backslash in code
+#: position is a syntax error outside Unicode-escaped identifiers,
+#: an obfuscation-tier spelling refused by policy) — but a would-be
+#: regex body reads it fine, so its presence marks the reading the
+#: lexer got wrong. Partial hardening, not a closure: a regex body
+#: can hide a comment-opener with NO backslash (`a /[//]x/` — the
+#: char-class spelling), see the refusal-site comment.
+_JS_INVALID_SLASH_RE = re.compile(r"[)\]\"'`\w]\s*/[^\n\\]*\\")
 _WRAPPER_RETURN_CALL_RE = re.compile(r'return\s+(\w+)\s*\(')
 _WRAPPER_PTR_ARITH_RE = re.compile(
     r'(?<!\w->)\w+\s*\+\s*\w|\w+\s*\[\s*[^]]+\]|'
@@ -648,30 +665,6 @@ _WRAPPER_PARTIAL_ARG_RE = re.compile(
 _WRAPPER_REF_TOKEN_RE = re.compile(
     r"(?<![\w.])((?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*)",
 )
-
-_WRAPPER_STRING_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
-_WRAPPER_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/")
-
-
-def _wrapper_ref_strip_noise(line: str, lang: str) -> str:
-    """String/comment strip for the reference view ONLY.
-
-    Prose in a string or trailing comment (`# runs the query`) must
-    not flip a benign wrapper; the strip is per-language because the
-    comment spellings collide with live operators elsewhere (`//` is
-    Python floor-division and Perl defined-or, `--` is a C/Python
-    operator spelling) — stripping those would hide a sink reference
-    sitting after the operator, the suppression direction.
-    """
-    line = _WRAPPER_STRING_RE.sub(" ", line)
-    line = _WRAPPER_BLOCK_COMMENT_RE.sub(" ", line)
-    if lang == "lua":
-        line = line.split("--", 1)[0]
-    elif lang in ("python", "perl", "php"):
-        line = line.split("#", 1)[0]
-    if lang not in ("python", "perl", "lua"):
-        line = line.split("//", 1)[0]
-    return line
 
 #: Object-protocol executor attributes: calling `x.__call__(...)`
 #: (or the bound-method / decorator unwrap chains `.__func__` /
@@ -1185,7 +1178,7 @@ def _c_find_assign(stmt: str) -> tuple[int, int, bool] | None:
 
 
 def _text_wrapper_escape(
-    code_lines: list[str], lang: str,
+    ref_lines: list[str],
 ) -> tuple[dict[str, _WrapperValue], list[_WrapperValue]] | None:
     """Whole-value binding/escape scan for the languages without an
     AST leg. Statement-level grammar: declarations with initializers
@@ -1196,10 +1189,12 @@ def _text_wrapper_escape(
     comes from the caller's body-view truncation and tail gates, not
     from value judgment here. An assignment whose target cannot be
     named refuses the analysis (None — the caller refuses the
-    skip)."""
-    text = "\n".join(
-        _wrapper_ref_strip_noise(ln, lang) for ln in code_lines
-    )
+    skip).
+
+    ``ref_lines`` are REFERENCE-view lines: strings and comments
+    already blanked by the caller (the shared ``sanitized_view``
+    chokepoint) so prose can never bind or escape a value."""
+    text = "\n".join(ref_lines)
     text = text.replace("->", ".")
     bindings: dict[str, _WrapperValue] = {}
     judged: list[_WrapperValue] = []
@@ -1326,65 +1321,6 @@ def _wrapper_ref_hits_exclusion(
     return bool(project_sinks and prefixes & project_sinks)
 
 
-def _wrapper_comment_view(ln: str, in_comment: bool) -> tuple[str, bool]:
-    """Remove `/* ... */` regions from one line, carrying open-comment
-    state across lines, with the markers recognised LEXICALLY:
-
-    - a marker inside a string literal is data (`log("scan /*")` must
-      not open comment state and swallow the following code lines out
-      of the judged view — the suppression direction);
-    - a `/*` after a `//` line comment is prose, not an opener (the
-      rest of the line stays in the view as text — over-inclusion
-      only costs a review — but marker scanning stops);
-    - inside an open block comment quotes are prose, so a `*/` there
-      always closes (real lexing: strings do not exist in comments).
-
-    String state is per line (single-line literals; `'`, `"`, and the
-    Go/JS backtick). A multi-line string or template literal spelling
-    a marker on a later line remains a blind spot of the line view —
-    an unterminated quote keeps the rest of its own line verbatim, so
-    the miss direction is over-inclusion (review), never a swallow.
-    """
-    out: list[str] = []
-    quote = ""
-    i = 0
-    n = len(ln)
-    while i < n:
-        ch = ln[i]
-        if in_comment:
-            if ch == "*" and ln.startswith("*/", i):
-                in_comment = False
-                i += 2
-            else:
-                i += 1
-            continue
-        if quote:
-            out.append(ch)
-            if ch == "\\" and i + 1 < n:
-                out.append(ln[i + 1])
-                i += 2
-                continue
-            if ch == quote:
-                quote = ""
-            i += 1
-            continue
-        if ch in "\"'`":
-            quote = ch
-            out.append(ch)
-            i += 1
-            continue
-        if ch == "/" and ln.startswith("/*", i):
-            in_comment = True
-            i += 2
-            continue
-        if ch == "/" and ln.startswith("//", i):
-            out.append(ln[i:])
-            break
-        out.append(ch)
-        i += 1
-    return "".join(out), in_comment
-
-
 def _is_trivial_wrapper(
     source: str,
     lang: str,
@@ -1417,45 +1353,117 @@ def _is_trivial_wrapper(
         if project_sinks and cname in project_sinks:
             return False, ""
 
-    # Comment-line filter. For the `/* ... */` languages the filter
-    # carries BLOCK-COMMENT STATE: a leading `*` is a continuation
-    # line only inside an open block comment — unconditionally
-    # dropping every `*`-leading line hid pointer stores
-    # (`*slot = system;`) from all downstream checks. Code before an
-    # opener / after a closer on the same line is kept, and the
-    # markers are located LEXICALLY (_wrapper_comment_view): a `/*`
-    # inside a string literal or after a `//` line comment must not
-    # open comment state and swallow following code lines out of the
-    # judged view — the suppression direction. Languages where `/*`
-    # is NOT a comment (a Python string may spell it) keep the plain
-    # filter — tracking state there would let a string swallow code
-    # lines out of the view, the same suppression direction.
+    # Judged views, both cut by the shared sanitized_view chokepoint
+    # (escape-aware, multi-line-aware, per-language string grammar —
+    # raw strings, template literals, backticks, text blocks,
+    # heredocs; see core/audit/source_view.py):
+    #
+    # - code_lines (comments-only view, strings KEPT): comment
+    #   markers are recognised lexically in code position only, and
+    #   every MODELED string form (single-line escapes, raw/template/
+    #   backtick/text-block/heredoc/long-string, value-position regex
+    #   literals) carries state across lines, so its data can never
+    #   open or close comment state and swallow a sink line out of
+    #   the judged view; constructs the scanner does not model keep
+    #   their text in the view (over-inclusion, costs a review). The
+    #   grammar hole the scanner cannot decide from tokens — a js/ts
+    #   `/` read as division whose regex reading would hide a
+    #   comment-opener — is PARTIALLY refused at the wrapper tier
+    #   below (ambiguous `)`/`]` contexts; backslash-bearing
+    #   division tails); the backslash-free char-class spelling
+    #   remains a DECLARED OPEN residual there.
+    # - ref_lines (strings AND comments blanked): the reference view
+    #   the escape analysis and the argument-position scan judge, so
+    #   prose can never flip a benign wrapper. Blanking is confined
+    #   to lexically closed literals; a mis-opened literal can only
+    #   weaken these AUXILIARY refusal layers, never hide a call
+    #   from the code_lines gates above, which see the same bytes
+    #   with strings kept.
+    #
+    # For python the plain line filter stays: `/*` is not a comment
+    # there and the AST escape leg supplies the reference judgment.
     code_lines: list[str] = []
+    ref_lines: list[str] = []
     if lang in ("python", "perl", "lua"):
-        code_lines = [
-            ln.strip() for ln in source.strip().splitlines()
-            if ln.strip()
-            and not ln.strip().startswith("//")
-            and not ln.strip().startswith("/*")
-            and not ln.strip().startswith("*")
-            and not ln.strip().startswith("#")
-            and ln.strip() not in ("{", "}")
+        raw_lines = [ln.strip() for ln in source.strip().splitlines()]
+        kept = [
+            idx for idx, ln in enumerate(raw_lines)
+            if ln
+            and not ln.startswith("//")
+            and not ln.startswith("/*")
+            and not ln.startswith("*")
+            and not ln.startswith("#")
+            and ln not in ("{", "}")
         ]
+        code_lines = [raw_lines[i] for i in kept]
+        if lang != "python":
+            sview = sanitized_view(
+                source.strip(), language=lang,
+            ).splitlines()
+            ref_lines = [
+                sview[i].strip() if i < len(sview) else ""
+                for i in kept
+            ]
     else:
-        in_block_comment = False
-        for raw in source.strip().splitlines():
-            ln, in_block_comment = _wrapper_comment_view(
-                raw.strip(), in_block_comment,
-            )
-            ln = ln.strip()
-            if (
-                not ln
-                or ln.startswith("//")
-                or ln.startswith("#")
-                or ln in ("{", "}")
-            ):
+        # Exotic line terminators normalised first so the two views
+        # split onto the SAME indices: a lone \r or U+2028/9 survives
+        # as string data in the comments-only view but blanks to a
+        # space in the ref view, desynchronising splitlines() and
+        # pairing ref lines with the wrong source line.
+        src = source.strip()
+        for _term in ("\r\n", "\r", "\u2028", "\u2029"):
+            src = src.replace(_term, "\n")
+        cview = sanitized_view(src, language=lang, keep_strings=True)
+        rlines = sanitized_view(src, language=lang).splitlines()
+        for idx, raw in enumerate(cview.splitlines()):
+            ln = raw.strip()
+            rl = rlines[idx].strip() if idx < len(rlines) else ""
+            if not ln or ln in ("{", "}"):
+                continue
+            # Drop-eligibility is judged on the BLANKED twin, never
+            # on the strings-kept text: in the comments-only view
+            # string data is present BY DESIGN, so a prefix-textual
+            # filter there re-swallowed whole lines when a multi-line
+            # literal's continuation started with `//` or `#` and its
+            # closing line carried live code — the same suppression
+            # class the lexer adoption closed, reintroduced one line
+            # below it. In the blanked view comments and string data
+            # are spaces, so `#` can only open a real preprocessor
+            # directive there, and `//` cannot start a line at all
+            # (that arm served only the hostile case; removed).
+            if rl.startswith("#"):
                 continue
             code_lines.append(ln)
+            ref_lines.append(rl)
+
+    # Ambiguous-slash refusal (js/ts): a `/` right after `)` or `]`
+    # is the one spelling the scanner's division-vs-regex heuristic
+    # cannot decide from tokens alone (`if (x) /re/` vs `(a+b) / c`)
+    # — and a mis-call there lets a regex interior mint comment state
+    # in code position, the full one-planted-line suppression
+    # primitive. The wrapper tier refuses the skip outright instead
+    # of judging it: cost is one LLM review for division-bearing
+    # delegates (refusal direction), and unambiguous division (after
+    # an identifier/number) keeps its skip. Scanned on the REF view,
+    # where string/comment/modeled-regex content is already spaces —
+    # only real code can spell the trigger.
+    # Beside it, the no-valid-reading spelling: a backslash after a
+    # division-read `/` on the same line is not JS (only a would-be
+    # regex body reads it), so refusing costs nothing on legitimate
+    # code. The two gates are PARTIAL HARDENING, not a closure of
+    # the division-vs-regex mint class: a regex body can hide a
+    # comment-opener with no backslash at all (`a /[//]x/` — the
+    # `//` sits in a char class, the division reading dies on the
+    # unterminated `[` only on a LATER line, and everything after
+    # the `//` blanks out of both views). That residual is a
+    # declared open bound (suppression direction, js/ts wrapper
+    # delegates only, pinned in the battery); closing it needs
+    # parser-grade JS lexing, not another spelling rule.
+    if lang in ("javascript", "typescript"):
+        for rl in ref_lines:
+            if (_JS_AMBIGUOUS_SLASH_RE.search(rl)
+                    or _JS_INVALID_SLASH_RE.search(rl)):
+                return False, ""
 
     if len(code_lines) > 5:
         return False, ""
@@ -1487,18 +1495,37 @@ def _is_trivial_wrapper(
     if _WRAPPER_PTR_ARITH_RE.search(body_no_sig):
         return False, ""
 
-    calls = _WRAPPER_CALL_RE.findall(body_no_sig)
-    real_calls = [
-        c for c in calls
-        if c not in ("if", "while", "for", "switch", "sizeof", "typeof",
-                      "return", "else", "case", "offsetof", "container_of")
-        and c not in _DANGEROUS_MACROS
+    call_matches = [
+        m for m in _WRAPPER_CALL_RE.finditer(body_no_sig)
+        if m.group(1) not in (
+            "if", "while", "for", "switch", "sizeof", "typeof",
+            "return", "else", "case", "offsetof", "container_of")
+        and m.group(1) not in _DANGEROUS_MACROS
     ]
 
-    if len(real_calls) != 1:
+    if len(call_matches) != 1:
         return False, ""
 
-    callee_name = real_calls[0]
+    callee_name = call_matches[0].group(1)
+
+    # Self-capture guard: for the languages whose signature is not
+    # stripped from the body view (everything but c/cpp/python), the
+    # signature's own name matches the call regex (`func Wrap(`,
+    # `fn wrap(`, `public String wrap(`). When the ONE captured call
+    # is that self-capture — the shape a desynced view degrades to —
+    # the delegate is signature-only and never mechanically clean;
+    # the healthy reason string must also never name the wrapper
+    # itself as its own delegate.
+    if lang not in ("c", "cpp", "python"):
+        start = call_matches[0].start(1)
+        brace = body_no_sig.find("{")
+        if brace >= 0 and start < brace:
+            return False, ""
+        if re.search(
+            r"\b(?:func(?:tion)?|fn|sub)\s+(?:\([^)]*\)\s*)?$",
+            body_no_sig[:start],
+        ):
+            return False, ""
 
     # Indirection: `getattr(subprocess, "run")(...)`, `vars(m)["run"]
     # (...)`, `functools.partial(sp.run)(...)`, `dlsym(h, "system")` —
@@ -1540,7 +1567,7 @@ def _is_trivial_wrapper(
             return False, ""
         wrapper_bindings, judged_values, wrapper_params = escape
     else:
-        escape = _text_wrapper_escape(code_lines, lang)
+        escape = _text_wrapper_escape(ref_lines)
         if escape is None:
             return False, ""
         wrapper_bindings, judged_values = escape
@@ -1689,9 +1716,7 @@ def _is_trivial_wrapper(
     # one review; the miss journals a dangerous delegate mechanically
     # clean.
     if lang != "python":
-        ref_body = " ".join(
-            _wrapper_ref_strip_noise(ln, lang) for ln in code_lines
-        )
+        ref_body = " ".join(ref_lines)
         if lang in ("c", "cpp"):
             cut = ref_body.find("{")
             if cut >= 0:
@@ -1898,6 +1923,22 @@ def _is_simple_accessor(source: str, lang: str) -> bool:
             return True
         if re.search(r"return\s+\d+$", body):
             return True
+    elif lang == "lua":
+        # Field / constant return only (`return self.value` … `end`).
+        # Pre-fix these skipped by ACCIDENT: the signature's own
+        # `function get_value(` was the wrapper gate's "one call"
+        # (the self-capture the wrapper path now refuses), so the
+        # honest accessor arm takes over the legitimate shape — with
+        # the returned NAME gated against the dangerous sets:
+        # `return os.execute` hands the sink back as a VALUE, which
+        # the wrapper path's escape analysis exists to refuse, and an
+        # accessor arm must not bypass it.
+        m = re.search(r"return\s+(\w+\.\w+|\d+)\s*(?:end\s*)?$", body)
+        if m and not _wrapper_ref_hits_exclusion(
+            m.group(1), _WRAPPER_DANGEROUS_CALLEES,
+            _WRAPPER_DANGEROUS_TAILS, None,
+        ):
+            return True
     elif lang == "rust":
         if re.search(r"\bself\.\w+\s*$", body):
             return True
@@ -1931,11 +1972,6 @@ def _is_simple_accessor(source: str, lang: str) -> bool:
         if re.search(r"return\s+this\._\w+\s*;?$", body):
             return True
         if re.search(r"return\s+\d+\s*;?$", body):
-            return True
-    elif lang == "lua":
-        if re.search(r"return\s+self\.\w+\s*$", body):
-            return True
-        if re.search(r"return\s+\d+\s*$", body):
             return True
     elif lang == "perl":
         if re.search(r"return\s+\$self->\{\s*\w+\s*\}\s*;$", body):

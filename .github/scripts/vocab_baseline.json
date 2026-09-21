@@ -781,9 +781,10 @@
     "count": 10,
     "kind": "alternation"
   },
-  "core/audit/prefilter.py::real_calls": {
+  "core/audit/prefilter.py::call_matches": {
     "count": 11,
-    "kind": "literal"
+    "kind": "literal",
+    "note": "keyword screen on the wrapper single-call capture (if/while/sizeof/... spellings the call regex matches but which are not calls) \u2014 renamed from real_calls when the capture switched to finditer for the self-capture guard; language keywords, not a learned name vocabulary"
   },
   "core/audit/preprocessor_view.py::_C_KEYWORDS": {
     "count": 50,
