@@ -844,10 +844,12 @@ def run_sandboxed(cmd: list[str], *,
     if env is not None:
         child_env = dict(env)
         if strict_env:
+            # is_dangerous_env_name = DANGEROUS_ENV_VARS plus the
+            # credential-env name patterns (unenumerable spellings).
             from core.config import RaptorConfig
             child_env = {
                 k: v for k, v in child_env.items()
-                if (k not in RaptorConfig.DANGEROUS_ENV_VARS
+                if (not RaptorConfig.is_dangerous_env_name(k)
                     or RaptorConfig.GIT_ENV_VARS.get(k) == v)
             }
     else:

@@ -3795,16 +3795,19 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 # those safe values makes git fall back to an unreadable real
                 # HOME and abort under Landlock instead of treating config as
                 # absent.
+                # is_dangerous_env_name = DANGEROUS_ENV_VARS plus the
+                # credential-env name patterns (CARGO_TARGET_<triple>_
+                # RUNNER-shaped members have no enumerable spelling).
                 _safe_git = RaptorConfig.GIT_ENV_VARS
                 _stripped = [
                     k for k, v in kwargs["env"].items()
-                    if k in RaptorConfig.DANGEROUS_ENV_VARS
+                    if RaptorConfig.is_dangerous_env_name(k)
                     and _safe_git.get(k) != v
                 ]
                 if _stripped:
                     kwargs["env"] = {
                         k: v for k, v in kwargs["env"].items()
-                        if (k not in RaptorConfig.DANGEROUS_ENV_VARS
+                        if (not RaptorConfig.is_dangerous_env_name(k)
                             or _safe_git.get(k) == v)
                     }
                     logger.info(

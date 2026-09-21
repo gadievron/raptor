@@ -363,3 +363,38 @@ class TestHarnessContainment:
         assert prelude in seen["code"].splitlines()[1]
         assert "PYTHONPATH" not in (seen["kwargs"].get("env") or {})
         assert seen["kwargs"]["target"] == str(tmp_path)
+
+
+class TestGetSafeEnvDegradedFallback:
+    """The broken-install fallback hands the child a full-environ copy
+    minus the credential-env vocabulary. Pattern members have no
+    enumerable spelling, so the fallback must sweep by predicate, not
+    only by exact-name pops."""
+
+    def _degraded_env(self, monkeypatch):
+        import sys
+        import types
+
+        # Force the ImportError arm: a stub core.config with no
+        # RaptorConfig makes `from core.config import RaptorConfig`
+        # fail exactly like a broken install.
+        monkeypatch.setitem(
+            sys.modules, "core.config", types.ModuleType("core.config"),
+        )
+        from core.audit.dynamic_sweep import _get_safe_env
+        return _get_safe_env()
+
+    def test_fallback_drops_family_and_pattern_members(self, monkeypatch):
+        monkeypatch.setenv("GIT_ASKPASS", "/tmp/steal.sh")
+        monkeypatch.setenv(
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", "/tmp/evil",
+        )
+        monkeypatch.setenv("BUNDLE_BUILD__NOKOGIRI", "-fplugin=/tmp/e.so")
+        monkeypatch.setenv("MY_LEGITIMATE_VAR", "kept")
+        env = self._degraded_env(monkeypatch)
+        assert "GIT_ASKPASS" not in env
+        assert "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER" not in env
+        assert "BUNDLE_BUILD__NOKOGIRI" not in env
+        assert env.get("MY_LEGITIMATE_VAR") == "kept"
+        # The fallback's own sanitizer knobs still land.
+        assert "ASAN_OPTIONS" in env

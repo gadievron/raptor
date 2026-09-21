@@ -782,12 +782,20 @@ def _get_safe_env() -> dict[str, str]:
         # even where core.config cannot; guard anyway — this fallback
         # exists precisely for broken-install conditions).
         try:
-            from core.security.credential_env import CREDENTIAL_ENV_FAMILY
+            from core.security.credential_env import (
+                CREDENTIAL_ENV_FAMILY,
+                is_credential_env_pattern_member,
+            )
         except ImportError:
             pass
         else:
             for key in CREDENTIAL_ENV_FAMILY:
                 env.pop(key, None)
+            # Pattern members (CARGO_TARGET_<triple>_RUNNER-shaped
+            # names) have no enumerable spelling — exact-name pops
+            # cannot reach them, so sweep the survivors by predicate.
+            for key in [k for k in env if is_credential_env_pattern_member(k)]:
+                env.pop(key)
     env["ASAN_OPTIONS"] = "detect_leaks=1:abort_on_error=1:handle_segv=0"
     # abort_on_error=1 is load-bearing for the signal-grade sanitizer
     # classification: halt_on_error alone makes UBSan STOP (exit 1,

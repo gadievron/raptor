@@ -3002,12 +3002,13 @@ def run_sandboxed(
                     # protect direct callers of this function that
                     # bypass the run() wrapper (tests, future helpers).
                     if strict_env:
+                        # is_dangerous_env_name = DANGEROUS_ENV_VARS
+                        # plus the credential-env name patterns.
                         from core.config import RaptorConfig
-                        _dangerous = set(RaptorConfig.DANGEROUS_ENV_VARS)
                         _safe_git = RaptorConfig.GIT_ENV_VARS
                         exec_env = {
                             k: v for k, v in exec_env.items()
-                            if (k not in _dangerous
+                            if (not RaptorConfig.is_dangerous_env_name(k)
                                 or _safe_git.get(k) == v)
                         }
                 else:

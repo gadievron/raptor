@@ -18,6 +18,7 @@ from typing import ClassVar
 from core.security.credential_env import (
     CREDENTIAL_BEARING_ENV_VARS,
     CREDENTIAL_GENERAL_BLOCKLIST_VARS,
+    is_credential_env_pattern_member,
 )
 from core.security.env_sanitisation import normalise_proxy_url, strip_env_vars
 from core.security.rule_of_two import is_ci
@@ -890,6 +891,23 @@ class RaptorConfig:
         # env filtering) must union the FULL CREDENTIAL_ENV_FAMILY on
         # top of this list.
     ]) | CREDENTIAL_GENERAL_BLOCKLIST_VARS
+
+    @staticmethod
+    def is_dangerous_env_name(name: str) -> bool:
+        """True when *name* is general-blocklist material.
+
+        Exact ``DANGEROUS_ENV_VARS`` membership, plus the
+        credential-env NAME-PATTERN members
+        (``CARGO_TARGET_<triple>_RUNNER``-shaped names). Pattern
+        members cannot live in the exact-name set — the middle
+        segment varies — so every sweep that filters caller-supplied
+        env by ``DANGEROUS_ENV_VARS`` must apply this predicate
+        beside (or instead of) bare set membership, or a pattern
+        member rides through on its unenumerable spelling.
+        """
+        if name in RaptorConfig.DANGEROUS_ENV_VARS:
+            return True
+        return is_credential_env_pattern_member(name)
 
     # Git Configuration
     #

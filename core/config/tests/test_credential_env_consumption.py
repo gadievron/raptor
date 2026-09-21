@@ -116,3 +116,38 @@ class TestStripLlmEnvVars:
         env = {"CLAUDE_CODE_OAUTH_TOKEN": "sk-ant-oat01-LIVE"}
         RaptorConfig.strip_llm_env_vars(env)
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+
+
+class TestDangerousEnvNamePredicate:
+    """is_dangerous_env_name is the sweep-facing membership check:
+    the exact blocklist plus the credential-env NAME PATTERNS, which
+    have no enumerable spelling and therefore cannot live in the
+    exact-name set the strict_env sweeps otherwise consume."""
+
+    def test_exact_blocklist_members_match(self):
+        assert RaptorConfig.is_dangerous_env_name("LD_PRELOAD")
+        assert RaptorConfig.is_dangerous_env_name("GIT_ASKPASS")
+        assert RaptorConfig.is_dangerous_env_name("RUSTC_WRAPPER")
+
+    def test_pattern_members_match(self):
+        for name in (
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER",
+            "CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER",
+            "CARGO_TARGET_WASM32_WASI_RUSTFLAGS",
+            "BUNDLE_BUILD__NOKOGIRI",
+        ):
+            assert RaptorConfig.is_dangerous_env_name(name), name
+
+    def test_benign_names_do_not_match(self):
+        for name in (
+            "PATH", "HOME", "LANG",
+            "CARGO_TARGET_DIR",      # cache/output-dir class, kept
+            "CARGO_TARGET__RUNNER",  # empty middle: not a member
+        ):
+            assert not RaptorConfig.is_dangerous_env_name(name), name
+
+    def test_exempt_members_do_not_match(self):
+        # GOFLAGS is a documented general-blocklist exemption (the go
+        # autobuild lane carries it through a strict_env sweep) — the
+        # predicate must not re-block what the exemption re-admits.
+        assert not RaptorConfig.is_dangerous_env_name("GOFLAGS")
