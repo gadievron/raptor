@@ -15,11 +15,18 @@ claims a strip. These pins spawn through each site:
   * ``_spawn.run_sandboxed(strict_env=True)`` — the direct-caller
     re-strip (defense-in-depth for callers bypassing run()).
   * ``_macos_spawn.run_sandboxed(strict_env=True)`` — the Darwin
-    backend twin (skips off-platform; the closure suite's
+    backend twin (native darwin only; the closure suite's
     comment-stripped code lock covers it on Linux CI).
-"""
 
-import sys
+Every pin spawns a real child, so each carries the matching native
+marker (pytest.ini) instead of an ad hoc skipif: the Linux-lane pins
+are ``linux_native`` (run()'s platform dispatch and the namespace
+backend bind to the real kernel), the Darwin twin is ``darwin_native``
+(only a real seatbelt child can prove the strip — the emulation gate's
+sys.platform patch cannot conjure sandbox-exec, so an emulated pass
+would be vacuous). The darwin-emulation gate deselects all three;
+native hosts outside a pin's platform skip it honestly.
+"""
 
 import pytest
 
@@ -55,11 +62,14 @@ def _assert_swept(stdout: str):
         assert f"{name}=" not in stdout, name
 
 
+@pytest.mark.linux_native
 @requires_userns
 def test_context_run_strict_env_strips_pattern_members(tmp_path):
     """The run() lane: a real child's environment proves the rebuild
     filter (not just the detection/log list) consults the
-    pattern-aware predicate."""
+    pattern-aware predicate. linux_native: run() dispatches backends
+    off sys.platform, so under darwin emulation this pin would steer
+    into the seatbelt backend against the real Linux kernel."""
     from core.sandbox import run as sandbox_run
     out = tmp_path / "out"
     out.mkdir()
@@ -73,13 +83,14 @@ def test_context_run_strict_env_strips_pattern_members(tmp_path):
     _assert_swept(r.stdout)
 
 
+@pytest.mark.linux_native
 @requires_userns
 def test_spawn_run_sandboxed_direct_strict_env_strips_pattern_members(
     tmp_path,
 ):
     """The _spawn.run_sandboxed direct-caller lane: the re-strip that
     protects callers bypassing run() must prove the same sweep on a
-    real child."""
+    real child (linux_native: a live namespace-backend spawn)."""
     from core.sandbox._spawn import run_sandboxed
     out = tmp_path / "out"
     out.mkdir()
@@ -98,9 +109,14 @@ def test_spawn_run_sandboxed_direct_strict_env_strips_pattern_members(
     _assert_swept(r.stdout)
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin backend")
+@pytest.mark.darwin_native
 def test_macos_run_sandboxed_strict_env_strips_pattern_members(tmp_path):
-    """The Darwin backend twin of the direct-caller pin."""
+    """The Darwin backend twin of the direct-caller pin. darwin_native,
+    NOT a sys.platform skipif: the pin's proof is a real seatbelt
+    child's environment, which only a native darwin kernel can spawn —
+    under the emulation gate sys.platform reads "darwin" but
+    sandbox-exec does not exist, so the spawn fails (and even a
+    contrived pass would prove nothing about a real seatbelt strip)."""
     from core.sandbox._macos_spawn import run_sandboxed
     out = tmp_path / "out"
     out.mkdir()
