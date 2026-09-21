@@ -79,17 +79,35 @@ class TestConsoleHandlersUseEscapingFormatter:
         assert checked >= 1
 
 
-_BASICCONFIG_CALL_RE = None  # compiled lazily below
+def _bare_console_config_offences(text: str) -> list[int]:
+    """Line numbers of console-handler acquisition outside the
+    chokepoint in ``text``.
 
-
-def _bare_basicconfig_offences(text: str) -> list[int]:
-    """Line numbers of bare-basicConfig usage in ``text``.
-
-    Two spellings: an attribute call on any module alias
+    basicConfig spellings: an attribute call on any module alias
     (``logging.basicConfig(`` / ``_logging.basicConfig(``) and the
     imported-name form (``from logging import basicConfig [as x]`` —
     the import itself is the marker; importing it has no purpose but
     calling it, and flagging at the import keeps the scan alias-proof).
+
+    Beyond-basicConfig spellings (a plain-formatter console handler
+    needs none of the basicConfig vocabulary): same-line
+    ``.addHandler(...StreamHandler(...)`` and the
+    ``logging.config`` loaders (``dictConfig`` / ``fileConfig`` as
+    attribute calls or imports — a config-dict console handler gets
+    whatever formatter the dict names, never the escaping one).
+
+    Documented residuals (all evasions of a LINE regex, adversarially
+    probed): a VARIABLE-mediated StreamHandler
+    (``h = StreamHandler(); root.addHandler(h)``) — deliberately,
+    because the FileHandler variant of that idiom is the legitimate
+    audit-file pattern (e.g. sca's debug.log handler); the same call
+    SPLIT across lines (``root.addHandler(\\n    StreamHandler())``);
+    a StreamHandler SUBCLASS; a getattr-mediated loader call; and
+    ``logging.config.listen()``. Folding those needs the AST tier,
+    not a line regex — the chokepoint doctrine (all console config
+    through configure_cli_logging) plus review remain the control for
+    deliberate evasion, same as the writer audit's aliased-sink
+    residual.
     """
     import re
     offences = []
@@ -97,6 +115,18 @@ def _bare_basicconfig_offences(text: str) -> list[int]:
         offences.append(text.count("\n", 0, m.start()) + 1)
     for m in re.finditer(
             r"^\s*from\s+logging\s+import\s+[^\n]*\bbasicConfig\b",
+            text, re.M):
+        offences.append(text.count("\n", 0, m.start()) + 1)
+    for m in re.finditer(
+            r"^[^\n#]*?\.addHandler\([^\n]*\bStreamHandler\(",
+            text, re.M):
+        offences.append(text.count("\n", 0, m.start()) + 1)
+    for m in re.finditer(
+            r"^[^\n#]*?\b(?:dictConfig|fileConfig)\(", text, re.M):
+        offences.append(text.count("\n", 0, m.start()) + 1)
+    for m in re.finditer(
+            r"^\s*from\s+logging\.config\s+import\s+[^\n]*"
+            r"\b(?:dictConfig|fileConfig)\b",
             text, re.M):
         offences.append(text.count("\n", 0, m.start()) + 1)
     return sorted(set(offences))
@@ -161,13 +191,14 @@ class TestConfigureCliLogging:
         finally:
             root.handlers = saved
 
-    def test_runtime_sources_never_call_bare_basicconfig(self):
+    def test_runtime_sources_never_configure_console_outside_chokepoint(self):
         """Closure oracle for the logging-sink exclusion of the
         exception-relay arm: the exclusion is sound only while every
         runtime console config routes through configure_cli_logging
         (or the run-logging setup in core/logging itself). Enumerate
-        the real ``logging.basicConfig`` call sites mechanically —
-        a bare one in runtime source fails here.
+        console-handler acquisition sites mechanically — bare
+        basicConfig, same-line addHandler(StreamHandler()), and the
+        logging.config loaders in runtime source all fail here.
 
         Exempt: test files, subsystem scripts/ dirs (outside the
         launcher), core/logging itself (the chokepoint's home), and
@@ -208,27 +239,53 @@ class TestConfigureCliLogging:
                 text = (repo / rel).read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
-            for line in _bare_basicconfig_offences(text):
+            for line in _bare_console_config_offences(text):
                 offenders.append(f"{rel}:{line}")
         assert not offenders, (
-            "bare logging.basicConfig in runtime source — use "
-            f"core.logging.configure_cli_logging: {offenders}"
+            "console-handler configuration outside the chokepoint in "
+            "runtime source — use core.logging.configure_cli_logging: "
+            f"{offenders}"
         )
 
 
-def test_bare_basicconfig_predicate_catches_both_spellings():
+def test_console_config_predicate_catches_every_spelling():
     """The closure scan's predicate must see the attribute form on any
     module alias AND the imported-name spelling (empirically evaded
-    the first module-attribute-only regex)."""
+    the first module-attribute-only regex) — and the
+    beyond-basicConfig console acquisitions that empirically evaded
+    the basicConfig-only vocabulary: same-line
+    addHandler(StreamHandler()) and the logging.config loaders."""
     attr = "import logging\nlogging.basicConfig(level=10)\n"
     aliased_mod = "import logging as _log\n_log.basicConfig(level=10)\n"
     imported = "from logging import basicConfig\nbasicConfig(level=10)\n"
     imported_as = "from logging import basicConfig as bc\nbc(level=10)\n"
-    for planted in (attr, aliased_mod, imported, imported_as):
-        assert _bare_basicconfig_offences(planted), planted
+    add_handler = (
+        "import logging as _l\n"
+        "_l.getLogger().addHandler(_l.StreamHandler())\n"
+    )
+    add_handler_bare = (
+        "from logging import StreamHandler, getLogger\n"
+        "getLogger().addHandler(StreamHandler())\n"
+    )
+    dict_config = (
+        "import logging.config\n"
+        "logging.config.dictConfig({'version': 1})\n"
+    )
+    file_config = (
+        "from logging.config import fileConfig\n"
+        "fileConfig('log.ini')\n"
+    )
+    for planted in (attr, aliased_mod, imported, imported_as,
+                    add_handler, add_handler_bare, dict_config,
+                    file_config):
+        assert _bare_console_config_offences(planted), planted
     safe = (
         "from core.logging import configure_cli_logging\n"
         "configure_cli_logging(10)\n"
         "# logging.basicConfig( in a comment does not count\n"
+        "# the audit-file idiom stays legal (variable-mediated\n"
+        "# FileHandler — the documented residual's safe twin):\n"
+        "fh = logging.FileHandler('debug.log')\n"
+        "root.addHandler(fh)\n"
     )
-    assert _bare_basicconfig_offences(safe) == []
+    assert _bare_console_config_offences(safe) == []
