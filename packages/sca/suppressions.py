@@ -109,7 +109,12 @@ class SuppressionEntry:
         (hygiene / supply-chain / license) match on the id alone as
         before.
         """
-        sca = row.get("sca") or {}
+        sca = row.get("sca")
+        if not isinstance(sca, dict):
+            # A truthy non-dict ``sca`` (hand-edited / third-party
+            # rows) reads as no-sca-block instead of crashing the
+            # first ``sca.get`` below.
+            sca = {}
         if self.finding_id:
             if row.get("finding_id") != self.finding_id and \
                     row.get("id") != self.finding_id:

@@ -335,3 +335,49 @@ def test_check_orphan_lines_escape_hostile_bytes(
     assert "\x1b" not in out
     assert "\x0c" not in out
     assert "GHSA-orphan" in out
+
+
+def test_check_tolerates_stray_non_dict_rows(tmp_path: Path, capsys) -> None:
+    """Hand-edited findings.json may contain stray non-dict elements
+    and wrong-typed fields — the sibling thresholds gate soft-skips
+    exactly these shapes (FindingRow.from_row); check must not turn a
+    policy signal into an AttributeError traceback."""
+    _write_yaml(tmp_path / ".raptor-sca-suppress.yml", [
+        {"advisory_id": "GHSA-active", "reason": "still relevant"},
+    ])
+    findings = tmp_path / "findings.json"
+    findings.write_text(
+        json.dumps([
+            "stray-string",
+            42,
+            None,
+            _vuln_row(advisory_id="GHSA-active"),
+        ]),
+        encoding="utf-8",
+    )
+    rc = suppress_cli.main(["check",
+                              "--target", str(tmp_path),
+                              "--findings", str(findings)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 active" in out
+    assert "0 orphan" in out
+
+
+def test_check_tolerates_non_dict_sca_field(tmp_path: Path, capsys) -> None:
+    """A truthy non-dict ``sca`` value must read as no-sca-block, not
+    crash SuppressionEntry.matches one line after the row.get."""
+    _write_yaml(tmp_path / ".raptor-sca-suppress.yml", [
+        {"advisory_id": "GHSA-active", "reason": "still relevant"},
+    ])
+    row = _vuln_row(advisory_id="GHSA-active")
+    junk = dict(row)
+    junk["sca"] = "not-a-dict"
+    findings = tmp_path / "findings.json"
+    findings.write_text(json.dumps([junk, row]), encoding="utf-8")
+    rc = suppress_cli.main(["check",
+                              "--target", str(tmp_path),
+                              "--findings", str(findings)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "1 active" in out

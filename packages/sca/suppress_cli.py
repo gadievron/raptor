@@ -171,6 +171,12 @@ def _cmd_check(*, target: Path, findings_path: Path) -> int:
         print("raptor-sca suppress: findings.json top-level is not a "
               "list", file=sys.stderr)
         return 2
+    # Hand-edited / third-party findings.json may contain stray
+    # non-dict elements — soft-skip like the thresholds gate
+    # (FindingRow.from_row) two lines over in the same CLI, rather
+    # than crash the CI-gate helper with an AttributeError inside
+    # SuppressionEntry.matches.
+    rows = [r for r in rows if isinstance(r, dict)]
 
     today = date.today()
     expired: list[SuppressionEntry] = []
