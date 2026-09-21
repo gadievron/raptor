@@ -850,6 +850,18 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
     # Sockets: filter by argument (family). Same syscall number, multiple rules.
     socket_num = _resolve("socket")
     socketpair_num = _resolve("socketpair")
+    # socketcall(2): the legacy multiplexer routes EVERY socket-API
+    # call through one syscall whose real arguments live in a
+    # user-memory array seccomp cannot dereference — on architectures
+    # that retain it (s390x among the supported set) an un-filtered
+    # socketcall would bypass every socket-argument rule below
+    # (family allowlist, SOCK_RAW, protocol/type denies, the UDP
+    # block, MSG_FASTOPEN). Resolves negative on arches without it
+    # (x86_64/aarch64 never had the multiplexer wired for 64-bit
+    # userspace); the install loop skips negative numbers, so the
+    # rule below is a no-op there and load-bearing exactly where the
+    # bypass exists.
+    socketcall_num = _resolve("socketcall")
     connect_num = (_resolve("connect")
                    if unix_scope_export_sock is not None else -1)
     # ioctl — filter only specific cmd numbers (TIOCSTI for tty injection).
@@ -1134,6 +1146,38 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                         _os_write(2, b"sandbox: seccomp execveat "
                                      b"AT_EMPTY_PATH rule failed -- "
                                      b"refusing to exec without filter\n")
+                        os._exit(126)
+
+                # socketcall(2) — deny the legacy multiplexer with
+                # ENOSYS wherever the arch defines it (see the
+                # resolution comment in the parent). Its call number
+                # is arg 0 but the real socket()/connect()/sendto()
+                # arguments sit in a user-memory array no BPF filter
+                # can dereference, so argument-scoped filtering is
+                # impossible by construction — the only sound options
+                # are deny or blanket-allow, and blanket-allow would
+                # let a multiplexed socket() bypass every rule below.
+                # ENOSYS rather than EPERM, same treatment as clone3:
+                # libcs built for modern kernels use the direct
+                # socket syscalls (wired on s390 since kernel 4.3),
+                # and a caller that probes socketcall first treats
+                # ENOSYS as "multiplexer absent" and falls back to
+                # the direct, filterable spellings where every rule
+                # below applies. Unconditional across profiles and
+                # hard (never TRACE) under audit mode: a multiplexed
+                # socket call must never be more permissive than the
+                # direct one it wraps.
+                if socketcall_num >= 0:
+                    _errno_enosys_sc = 38
+                    null_args = ctypes.POINTER(_ScmpArgCmp)()
+                    ret = lib.seccomp_rule_add_array(
+                        ctx, _SCMP_ACT_ERRNO(_errno_enosys_sc),
+                        socketcall_num, 0, null_args,
+                    )
+                    if ret < 0:
+                        _os_write(2, b"sandbox: seccomp socketcall rule"
+                                     b" failed -- refusing to exec"
+                                     b" without filter\n")
                         os._exit(126)
 
                 # socket() family allowlist, deny-by-default — one
