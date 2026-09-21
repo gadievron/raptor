@@ -291,6 +291,66 @@ class TestCrossFamilyCheckTaskAdjudication:
         assert check["verdict"] == "skipped — primary returned no verdict"
         assert check["checker_exploitable"] is False
 
+    def test_junk_on_both_sides_mints_no_agreement(self):
+        """Identical junk shapes compared equal pre-fix ("yes" ==
+        "yes") and minted ``cross_family_agreed`` from two non-verdicts
+        — which then EXCLUDED the finding from both the consensus and
+        judge panels (their select_items skip agreed findings). Junk is
+        a non-verdict: record the check, don't adjudicate."""
+        primary = _result("F-001", quality=0.5)
+        primary["is_exploitable"] = "yes"
+        prior = {"F-001": primary}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": "yes",
+             "analysed_by": "claude-haiku-4-5-20251001"},
+        ]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"].get("cross_family_agreed") is None
+        assert prior["F-001"].get("cross_family_disputed") is None
+        assert "skipped" in prior["F-001"]["cross_family_check"]["verdict"]
+        # The panels must still see this finding.
+        from packages.llm_analysis.tasks import ConsensusTask, JudgeTask
+        findings = [_finding("F-001")]
+        assert ConsensusTask().select_items(findings, prior) == findings
+        assert JudgeTask(results_by_id=prior).select_items(
+            findings, prior) == findings
+
+    def test_junk_checker_does_not_flip_genuine_primary(self):
+        """Junk checker shape vs a genuine False primary read as a
+        "dispute" pre-fix and the conservative override flipped the
+        primary to exploitable — noise minted from a non-verdict."""
+        prior = {"F-001": _result("F-001", exploitable=False, quality=0.5)}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": "yes",
+             "analysed_by": "claude-haiku-4-5-20251001"},
+        ]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"]["is_exploitable"] is False
+        assert prior["F-001"].get("cross_family_disputed") is None
+        assert prior["F-001"].get("cross_family_agreed") is None
+        check = prior["F-001"]["cross_family_check"]
+        assert check["verdict"] == "skipped — checker returned no verdict"
+
+    def test_int_bool_cross_shape_is_not_agreement(self):
+        """``1 == True`` in Python: an int-shaped checker verdict
+        compared equal to a genuine bool primary pre-fix and minted
+        agreement across shapes. Only genuine bools vote."""
+        prior = {"F-001": _result("F-001", exploitable=True, quality=0.5)}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": 1,
+             "analysed_by": "claude-haiku-4-5-20251001"},
+        ]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"].get("cross_family_agreed") is None
+        assert prior["F-001"].get("cross_family_disputed") is None
+        assert "skipped" in prior["F-001"]["cross_family_check"]["verdict"]
+
     def test_reasoning_distance_attached_for_long_reasonings(self):
         """When primary and checker reasonings are both substantial,
         the cross-family check captures their pairwise Jaccard
