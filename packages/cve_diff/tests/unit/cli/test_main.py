@@ -347,3 +347,92 @@ def test_echo_flow_md_escapes_hostile_body(tmp_path, capsys):
     assert "second line" in out
     for raw in ("\x1b]", "\x07", "\x9b", "‮"):
         assert raw not in out
+
+
+# ---------- typed-handler relays escape hostile exception text ----------
+# The typed except handlers relay str(exc) to the TTY; the exception
+# text carries the same content classes the progress_cb chokepoint
+# escapes (remote git stderr banners in AcquisitionError layer detail,
+# agent-authored rationale in DiscoveryError detail) — every lane must
+# apply the same sanitise_for_terminal idiom.
+
+_HOSTILE_EXC = "tag \x1b]0;pwned\x07 refs \x9b2J‮evil"
+
+
+def _patch_pipeline_raises(monkeypatch, exc) -> None:
+    def stub_run(self, cve_id, work_dir):
+        raise exc
+    monkeypatch.setattr(Pipeline, "run", stub_run)
+
+
+def test_identical_commits_relay_escapes_hostile_bytes(tmp_path, monkeypatch):
+    _patch_pipeline_raises(
+        monkeypatch, IdenticalCommitsError(f"CVE-2024-99010: {_HOSTILE_EXC}"))
+    result = CliRunner().invoke(app, [
+        "run", "CVE-2024-99010",
+        "--output-dir", str(tmp_path / "out"),
+        "--disk-limit", "99.9",
+        "--quiet",
+    ])
+    assert result.exit_code == 7
+    assert "identical commits:" in result.output
+    for raw in ("\x1b", "\x07", "\x9b"):
+        assert raw not in result.output
+    assert "pwned" in result.output  # escaped, content preserved
+
+
+def test_discovery_relay_escapes_hostile_bytes(tmp_path, monkeypatch):
+    from cve_diff.core.exceptions import DiscoveryError
+    _patch_pipeline_raises(
+        monkeypatch,
+        DiscoveryError(f"CVE-2024-99011: agent surrendered "
+                       f"(no_evidence): {_HOSTILE_EXC}"))
+    result = CliRunner().invoke(app, [
+        "run", "CVE-2024-99011",
+        "--output-dir", str(tmp_path / "out"),
+        "--disk-limit", "99.9",
+        "--quiet",
+    ])
+    assert result.exit_code == 5
+    assert "discovery failed:" in result.output
+    for raw in ("\x1b", "\x07", "\x9b"):
+        assert raw not in result.output
+
+
+def test_root_cause_success_line_escapes_hostile_vuln_type(
+        tmp_path, monkeypatch):
+    """vulnerability_type is unconstrained model-JSON text; the SUCCESS
+    line must apply the same chokepoint as the failure relays (cwe_id
+    is regex-normalised by the analyzer and stays as-is)."""
+    from cve_diff.analysis.analyzer import RootCause, RootCauseAnalyzer
+
+    origin, fix_sha = _make_origin(tmp_path)
+    out = tmp_path / "out"
+    _patch_agent_loop(monkeypatch, AgentOutput(
+        value=PatchTuple(
+            repository_url=f"file://{origin}",
+            fix_commit=CommitSha(fix_sha),
+            introduced=None,
+        ),
+        rationale="stub",
+    ))
+    monkeypatch.setattr(
+        RootCauseAnalyzer, "analyze",
+        lambda self, bundle: RootCause(
+            cwe_id="CWE-787",
+            vulnerability_type=f"overflow {_HOSTILE_EXC}",
+            summary="s", why_chain=(), affected_functions=(),
+            confidence=0.9, model_id="m",
+            input_tokens=1, output_tokens=1,
+        ))
+    result = CliRunner().invoke(app, [
+        "run", "CVE-2024-99012",
+        "--output-dir", str(out),
+        "--disk-limit", "99.9",
+        "--with-root-cause",
+        "--quiet",
+    ])
+    assert result.exit_code == 0, result.output
+    assert "root cause: CWE-787" in result.output
+    for raw in ("\x1b", "\x07", "\x9b"):
+        assert raw not in result.output

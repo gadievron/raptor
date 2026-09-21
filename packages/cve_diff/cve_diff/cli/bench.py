@@ -714,7 +714,9 @@ def bench(
         with Path(sample).open(encoding="utf-8") as _sf:
             _sample_text = _sf.read(_MAX_SAMPLE_BYTES + 1)
     except OSError as e:
-        typer.echo(f"bench: cannot read sample {sample}: {e}", err=True)
+        typer.echo("bench: cannot read sample "
+                   f"{sanitise_for_terminal(str(sample), max_len=200)}: "
+                   f"{sanitise_for_terminal(str(e), max_len=300)}", err=True)
         raise typer.Exit(code=1) from e
     if len(_sample_text) > _MAX_SAMPLE_BYTES:
         typer.echo(
@@ -726,7 +728,10 @@ def bench(
     try:
         payload = json.loads(_sample_text)
     except json.JSONDecodeError as exc:
-        typer.echo(f"bench: sample {sample} is not valid JSON: {exc}", err=True)
+        typer.echo("bench: sample "
+                   f"{sanitise_for_terminal(str(sample), max_len=200)} is "
+                   f"not valid JSON: {sanitise_for_terminal(str(exc), max_len=300)}",
+                   err=True)
         raise typer.Exit(code=1) from exc
     # Pre-fix `payload["cves"]` and `c["cve_id"]` raised KeyError
     # / TypeError on malformed sample files — the operator saw an

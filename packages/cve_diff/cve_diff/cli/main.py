@@ -428,7 +428,8 @@ def run(
         def progress_cb(stage: str, status: str, info: dict) -> None:
             # info values carry exception text (which embeds remote
             # git stderr banners) and repo-derived slugs — escape the
-            # kv string like the file's other terminal relays.
+            # kv string; the typed-handler relays below apply the same
+            # chokepoint to the same content classes.
             kv = sanitise_for_terminal(
                 " ".join(f"{k}={v}" for k, v in info.items()),
                 max_len=300,
@@ -486,7 +487,9 @@ def run(
                             continue
                     raise
         except UnsupportedSource as exc:
-            typer.echo(f"unsupported source: {exc}", err=True)
+            typer.echo("unsupported source: "
+                       f"{sanitise_for_terminal(str(exc), max_len=300)}",
+                       err=True)
             typer.echo(
                 "hint: this CVE points at a closed-source vendor; cve-diff only handles OSS.",
                 err=True,
@@ -499,7 +502,9 @@ def run(
             _echo_flow_md(output_dir, cve_id, quiet)
             raise typer.Exit(code=4) from exc
         except DiscoveryError as exc:
-            typer.echo(f"discovery failed: {exc}", err=True)
+            typer.echo("discovery failed: "
+                       f"{sanitise_for_terminal(str(exc), max_len=300)}",
+                       err=True)
             typer.echo(
                 "hint: verify the CVE id, check OSV at https://api.osv.dev/v1/vulns/"
                 f"{cve_id}, or set GITHUB_TOKEN if rate-limited.",
@@ -515,7 +520,9 @@ def run(
             _echo_flow_md(output_dir, cve_id, quiet)
             raise typer.Exit(code=5) from exc
         except AcquisitionError as exc:
-            typer.echo(f"acquisition failed: {exc}", err=True)
+            typer.echo("acquisition failed: "
+                       f"{sanitise_for_terminal(str(exc), max_len=300)}",
+                       err=True)
             typer.echo(
                 "hint: check network / proxy; the discovered repo may have been renamed "
                 "or made private since the OSV record was published.",
@@ -529,7 +536,9 @@ def run(
             _echo_flow_md(output_dir, cve_id, quiet)
             raise typer.Exit(code=6) from exc
         except IdenticalCommitsError as exc:
-            typer.echo(f"identical commits: {exc}", err=True)
+            typer.echo("identical commits: "
+                       f"{sanitise_for_terminal(str(exc), max_len=300)}",
+                       err=True)
             typer.echo(
                 "hint: OSV record's fix sha and its parent resolved to the same commit; "
                 "the record likely names a tag rather than the fix commit.",
@@ -543,7 +552,9 @@ def run(
             _echo_flow_md(output_dir, cve_id, quiet)
             raise typer.Exit(code=7) from exc
         except AnalysisError as exc:
-            typer.echo(f"analysis rejected: {exc}", err=True)
+            typer.echo("analysis rejected: "
+                       f"{sanitise_for_terminal(str(exc), max_len=300)}",
+                       err=True)
             typer.echo(
                 "hint: the diff shape is notes_only — the agent picked a downstream "
                 "mirror rather than the upstream fix. Re-run with verbose tracing to "
@@ -562,12 +573,19 @@ def run(
         if with_root_cause:
             try:
                 rc = RootCauseAnalyzer(model_id=model_id).analyze(result.bundle)
+                # vulnerability_type is unconstrained model-JSON text
+                # (cwe_id is regex-normalised by the analyzer) — same
+                # chokepoint as the failure relays below.
                 typer.echo(
-                    f"root cause: {rc.cwe_id} ({rc.vulnerability_type}) "
+                    "root cause: "
+                    f"{rc.cwe_id} "
+                    f"({sanitise_for_terminal(str(rc.vulnerability_type), max_len=80)}) "
                     f"conf={rc.confidence:.2f} tokens={rc.input_tokens}+{rc.output_tokens}"
                 )
             except (RootCauseAnalysisError, LLMCallFailed) as exc:
-                typer.echo(f"root-cause analysis failed: {exc}", err=True)
+                typer.echo("root-cause analysis failed: "
+                           f"{sanitise_for_terminal(str(exc), max_len=300)}",
+                           err=True)
                 raise typer.Exit(code=9) from exc
 
         # Consensus-confirmed discovery → run-local verified outcome

@@ -523,3 +523,21 @@ def test_echo_result_pass_lane_unchanged(capsys) -> None:
                    shape="source", error_class="PASS")
     _echo_result(2, 3, r)
     assert "[2/3] PASS CVE-2024-0002 (2.0s)" in capsys.readouterr().out
+
+
+def test_bench_unreadable_sample_error_escapes_hostile_path_bytes(
+    tmp_path: _Path,
+) -> None:
+    """The cannot-read-sample lane relays OSError text (which embeds
+    the failing path) to the TTY — same sanitise_for_terminal idiom
+    as the run command's typed-handler relays."""
+    hostile_dir = tmp_path / "s\x1b]0;pwned\x07.json"
+    hostile_dir.mkdir()  # open() on a directory raises IsADirectoryError
+    result = CliRunner().invoke(app, [
+        "bench", "--sample", str(hostile_dir),
+        "--output-dir", str(tmp_path / "out"),
+    ])
+    assert result.exit_code == 1
+    assert "cannot read sample" in result.output
+    for raw in ("\x1b", "\x07"):
+        assert raw not in result.output
