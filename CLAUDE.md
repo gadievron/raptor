@@ -209,6 +209,7 @@ Some commands and skills define decision points where an interactive session pre
 - The first option carries the "(Recommended)" tag.
 - Fill option labels and descriptions with the run's actual facts (paths, warning text, findings, `cost_usd` values from the report) — never invent flags, artifacts, or estimates.
 - Never ask the operator to confirm or adjust an evidence-driven verdict — tool output is the verdict.
+- Display integrity: any external, target-, server-, tool-, or LLM-derived text placed in AskUserQuestion question/option text (error excerpts, diff lines, finding titles, paths, hint text) must be rendered inert first — escape non-printable/control characters (the `core.security.log_sanitisation` contract: ESC/CSI/OSC, C1, bidi overrides become `\xHH`/`\uHHHH` escapes) and bound long excerpts with an explicit elision marker. Quote the escaped form; never paste raw bytes from a scanned repo, executed binary, or remote server into a consent prompt. Operator-authored constants and charset-validated names need no escaping.
 
 ---
 
