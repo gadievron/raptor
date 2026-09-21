@@ -179,9 +179,12 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # arbitrary code at JVM startup. _JAVA_OPTIONS is the older
     # variant. CLASSPATH adds attacker .jar to load path.
     "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "CLASSPATH",
-    "MAVEN_OPTS", "GRADLE_OPTS",
-    # Cargo / Ruby / Node module-resolution overrides.
-    "CARGO_HOME", "GEM_HOME", "GEM_PATH", "BUNDLE_GEMFILE",
+    # Build-tool names (MAVEN_OPTS, GRADLE_OPTS, CARGO_HOME, GEM_HOME,
+    # GEM_PATH, BUNDLE_GEMFILE and their per-ecosystem siblings) come
+    # from the ecosystem surfaces in core/security/credential_env.py
+    # via the CREDENTIAL_ENV_FAMILY union below — credential_env is
+    # stdlib-only and imports even where core.config cannot, so the
+    # standalone fallback keeps them without a private copy.
     "PYTHONUSERBASE", "PYTHONBREAKPOINT",
     # Git config redirection — an env-set GIT_CONFIG_GLOBAL points
     # git at an attacker config file with `alias = !sh`,

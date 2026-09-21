@@ -835,19 +835,13 @@ class RaptorConfig:
         "CLASSPATH",           # Java: adds attacker .jar to classpath →
                                # arbitrary class loaded at JVM startup via
                                # Class-Path manifest or explicit-main invocation.
-        "MAVEN_OPTS",          # Maven-invoked JVM flags. Same -javaagent
-                               # / -Djava.security.policy injection as
-                               # JAVA_TOOL_OPTIONS but via a different env var.
-        "GRADLE_OPTS",         # Same for gradle.
-        "CARGO_HOME",          # Rust: points cargo at an attacker config dir
-                               # (config.toml can set linker wrapper, build.rs
-                               # can execute arbitrary code).
-        "GEM_HOME",            # Ruby: search path for gems. A malicious gem
-                               # dir loaded on `require` runs at require time.
-        "GEM_PATH",            # Ruby: additional gem search paths.
-        "BUNDLE_GEMFILE",      # Bundler: pointer to Gemfile. Attacker Gemfile
-                               # + Gemfile.lock can run code via post-install
-                               # hooks.
+        # Build-tool names (MAVEN_OPTS, GRADLE_OPTS, CARGO_HOME,
+        # GEM_HOME, GEM_PATH, BUNDLE_GEMFILE and their per-ecosystem
+        # siblings) are NOT listed here: they live on the ecosystem
+        # surfaces in core/security/credential_env.py and join this
+        # list through the CREDENTIAL_GENERAL_BLOCKLIST_VARS union
+        # below — one home per member, derived from the tool's own
+        # documented env surface.
         "PHPRC",               # PHP: alternative php.ini. php.ini `extension=`
                                # loads arbitrary .so files at PHP startup.
         "PHP_INI_SCAN_DIR",    # PHP: additional ini scan dir — same vector.
