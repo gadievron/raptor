@@ -279,6 +279,44 @@ class TestEnvInjection:
         ("PIP_CONFIG_FILE", "pip.evil.conf"),
         ("NPM_CONFIG_USERCONFIG", ".npmrc-evil"),
         ("GRADLE_USER_HOME", ".gradle-evil"),
+        # Ecosystem-surface members: exact-power siblings of the rows
+        # above, one representative per surface (the vocabulary unit
+        # tests pin every member; this is the settings-scan lane).
+        ("NPM_CONFIG_GLOBALCONFIG", ".npmrc-global-evil"),
+        ("NPM_CONFIG_SCRIPT_SHELL", "./evil-shell"),
+        ("RUSTC_WORKSPACE_WRAPPER", "./evil-rustc"),
+        ("CARGO_BUILD_RUSTC", "./evil-rustc"),
+        ("GOENV", ".go-env-evil"),
+        ("GOFLAGS", "-toolexec=./evil"),
+        ("COMPOSER_HOME", ".composer-evil"),
+        ("MVNW_REPOURL", "https://evil.example/dist"),
+        ("MAVEN_ARGS", "-s ./evil-settings.xml"),
+        ("ANT_ARGS", "-lib ./evil-jars"),
+        ("DOTNET_STARTUP_HOOKS", "./evil.dll"),
+        ("NUGET_PLUGIN_PATHS", "./evil-plugin"),
+        # Case-folded scan: MSBuild documents the mixed-case name.
+        ("MSBuildSDKsPath", "./evil-sdks"),
+        ("msbuildsdkspath", "./evil-sdks"),
+        ("BUNDLE_APP_CONFIG", ".bundle-evil"),
+        ("CMAKE_TOOLCHAIN_FILE", "./evil.cmake"),
+        ("CC", "./evil-cc"),
+        # Pattern members: no enumerable spelling — the redirect
+        # shape rule is the match.
+        ("CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER", "./evil-runner"),
+        ("BUNDLE_BUILD__NOKOGIRI", "--with-cflags=-fplugin=./evil.so"),
+        ("CMAKE_C_COMPILER_LAUNCHER", "./evil-launcher"),
+        # Executed-program names from the tool docs' own catalogs
+        # (representatives; the vocabulary unit tests pin every one).
+        ("PKG_CONFIG", "./evil-pkg-config"),
+        ("AR", "./evil-ar"),
+        ("OBJC", "./evil-objc"),
+        ("LD", "./evil-ld"),
+        ("MAKEFILES", "./evil.mk"),
+        ("CMAKE_PREFIX_PATH", "./evil-prefix"),
+        ("RUBYGEMS_GEMDEPS", "./evil.deps.rb"),
+        ("NPM_CONFIG_NODE_GYP", "./evil-gyp.js"),
+        ("YARN_YARN_PATH", "./evil-yarn.cjs"),
+        ("DOTNET_HOST_PATH", "./evil-dotnet"),
         # Credential substitution — the session authenticates as the
         # attacker's account; prompts and target code flow to
         # attacker-visible history (same rationale as

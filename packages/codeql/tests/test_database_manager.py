@@ -235,6 +235,56 @@ class TestBuildEnvFilter:
         assert result is not None
         assert not any("TypeError" in e for e in (result.errors or []))
 
+    def test_create_path_actually_filters_declared_env(self, db_manager,
+                                                       tmp_path):
+        """Call-site consumption pin: the spawned build env must show
+        the FILTER'S effect, not just the helper's. Dropping the
+        _filter_build_env_vars call (env.update(build_system.env_vars)
+        raw) puts the hostile members below into the captured env;
+        dropping the update entirely loses the benign knob — either
+        mutation fails here."""
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            if "database" in cmd and "create" in cmd:
+                captured["env"] = dict(kwargs.get("env") or {})
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "2.16.0\n"
+            r.stderr = "Finalizing database.\n"
+            return r
+
+        bs = BuildSystem(type="npm", command="npm run build",
+                         working_dir=tmp_path,
+                         env_vars={"LD_PRELOAD": "/tmp/evil.so",
+                                   "GIT_ASKPASS": "./steal-creds.sh",
+                                   "GOFLAGS": "-toolexec=./evil",
+                                   "CGO_ENABLED": "0"},
+                         confidence=1.0, detected_files=[])
+        with patch('core.sandbox.run', side_effect=fake_run), \
+             patch.object(db_manager, '_count_database_files',
+                          return_value=0), \
+             patch.object(db_manager, 'save_metadata'), \
+             patch.object(db_manager, 'get_cached_database',
+                          return_value=None), \
+             patch.object(db_manager, 'compute_repo_hash',
+                          return_value='abc'), \
+             patch.object(db_manager, 'get_database_dir',
+                          return_value=tmp_path / "db"):
+            db_manager.create_database(tmp_path, "javascript", bs,
+                                       traced_build=True)
+
+        env = captured["env"]
+        # Refused members never override the safe baseline: LD_PRELOAD
+        # and GOFLAGS are absent from get_safe_env's output entirely;
+        # GIT_ASKPASS stays at its inert pin, never the repo's script.
+        assert env.get("LD_PRELOAD") != "/tmp/evil.so"
+        assert "LD_PRELOAD" not in env
+        assert env.get("GOFLAGS") != "-toolexec=./evil"
+        assert env.get("GIT_ASKPASS") != "./steal-creds.sh"
+        # ...while the benign declared knob flows through the filter.
+        assert env.get("CGO_ENABLED") == "0"
+
 
 class TestFilterBuildEnvVars:
     """Direct tests for the hostile-input gate on repo-declared build
@@ -256,6 +306,48 @@ class TestFilterBuildEnvVars:
             "RUSTC_WRAPPER": "./evil-rustc",
         })
         assert admitted == {}
+
+    def test_refuses_ecosystem_surface_members(self):
+        """Build metadata is repo-authored: the per-ecosystem exec/
+        config-redirect members must never override the safe
+        baseline (one representative per surface; the vocabulary
+        unit tests pin every member)."""
+        admitted = self._filter({
+            "NPM_CONFIG_GLOBALCONFIG": ".npmrc-global",
+            "NPM_CONFIG_SCRIPT_SHELL": "./evil-shell",
+            "CARGO_BUILD_RUSTC": "./evil-rustc",
+            "RUSTFLAGS": "-C linker=./evil-linker",
+            "GOENV": ".go-env",
+            "GOFLAGS": "-toolexec=./evil",
+            "COMPOSER_HOME": ".composer",
+            "MAVEN_ARGS": "-s ./evil-settings.xml",
+            "ANT_OPTS": "-javaagent:./evil.jar",
+            "DOTNET_STARTUP_HOOKS": "./evil.dll",
+            "NUGET_PLUGIN_PATHS": "./evil-plugin",
+            "MSBuildSDKsPath": "./evil-sdks",
+            "msbuildsdkspath": "./evil-sdks",  # case-folded membership
+            "OBJC": "./evil-objc",
+            "M2FLAGS": "-x ./evil-dir",
+            "BUNDLE_APP_CONFIG": ".bundle",
+            "CMAKE_TOOLCHAIN_FILE": "./evil.cmake",
+            "CC": "./evil-cc",
+            # Pattern members ride the redirect shape rule.
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": "./evil",
+            "BUNDLE_BUILD__NOKOGIRI": "--with-cflags=-fplugin=./e.so",
+        })
+        assert admitted == {}
+
+    def test_admits_detector_benign_knobs(self):
+        # The detector's own benign build knobs keep flowing (the
+        # refusal above must not widen into these).
+        admitted = self._filter({
+            "CGO_ENABLED": "0",
+            "NODE_ENV": "development",
+        })
+        assert admitted == {
+            "CGO_ENABLED": "0",
+            "NODE_ENV": "development",
+        }
 
     def test_refuses_credential_shaped_names(self):
         admitted = self._filter({

@@ -112,16 +112,23 @@ class TestGeneralBlocklistLane:
         )
 
     def test_strict_env_lanes_consume_dangerous_vocabulary(self):
-        # The three strict_env sweep sites filter by
-        # RaptorConfig.DANGEROUS_ENV_VARS — with the family unioned in
-        # there, they inherit it. Lock the consumption edge.
+        # The three strict_env sweep sites filter through
+        # RaptorConfig.is_dangerous_env_name (DANGEROUS_ENV_VARS plus
+        # the credential-env name patterns) — with the family unioned
+        # into the blocklist, they inherit it. Lock the consumption
+        # edge on the CODE (comments stripped — prose containing the
+        # token must never satisfy this), as the CALL expression. The
+        # load-bearing oracles are the behavioral capture-spawn pins
+        # in core/sandbox/tests/test_strict_env_pattern_pins.py; this
+        # source lock is the belt for platforms the pins skip on.
         for rel in (
             "core/sandbox/context.py",
             "core/sandbox/_spawn.py",
             "core/sandbox/_macos_spawn.py",
         ):
             src = (_RAPTOR_ROOT / rel).read_text(encoding="utf-8")
-            assert "DANGEROUS_ENV_VARS" in src, rel
+            code_only = _COMMENT_RE.sub("", src)
+            assert "RaptorConfig.is_dangerous_env_name(" in code_only, rel
 
 
 # --- 6-8: documented re-admit lanes ---------------------------------
@@ -286,7 +293,11 @@ class TestTargetStripLane:
 _CONSUMER_MODULES = (
     # Every module that filters/blocks by credential-family names must
     # import the vocabulary — a local list reappearing here is the
-    # multi-homing regression this program removed.
+    # multi-homing regression this program removed. Known bound: these
+    # locks catch behavior-FLIPPING copies (an exempt member re-added
+    # to a blocklist) and the pinned sentinel spelling below; a behavior-
+    # IDENTICAL redundant hand-copy of a non-exempt member in a
+    # consumer survives them — reviews, not this suite, catch that.
     "core/config/__init__.py",
     "core/security/cc_trust.py",
     "core/llm/cc_adapter.py",
@@ -336,3 +347,146 @@ class TestSingleHoming:
             if "CLAUDE_CODE_OAUTH_TOKEN" in code_only:
                 offenders.append(str(path.relative_to(_RAPTOR_ROOT)))
         assert offenders == ["core/security/credential_env.py"], offenders
+
+
+# --- Ecosystem census + pattern-member lanes -------------------------
+
+class TestEcosystemCensus:
+    def test_every_build_system_has_an_adjudicated_surface(self):
+        """Census closure: every build system the detector inventory
+        can emit maps to an ecosystem surface that adjudicated its
+        env family. Adding a build system without adjudicating its
+        env surface fails HERE — ecosystem coverage is structural,
+        not a per-name chase across sibling blocklists."""
+        from core.build.build_detector import BuildDetector
+        from core.security.credential_env import (
+            BUILD_ECOSYSTEM_ENV_SURFACES,
+            BUILD_SYSTEM_ECOSYSTEM_MAP,
+        )
+        declared = {s.ecosystem for s in BUILD_ECOSYSTEM_ENV_SURFACES}
+        for language, systems in BuildDetector.BUILD_SYSTEMS.items():
+            for build_system in systems:
+                assert build_system in BUILD_SYSTEM_ECOSYSTEM_MAP, (
+                    f"{language}/{build_system}: no env-family "
+                    "adjudication — add the build system to "
+                    "BUILD_SYSTEM_ECOSYSTEM_MAP and (if new) declare "
+                    "its BuildEcosystemEnvSurface"
+                )
+                assert (
+                    BUILD_SYSTEM_ECOSYSTEM_MAP[build_system] in declared
+                ), build_system
+
+    def test_census_map_has_no_stale_rows(self):
+        """Both directions: every inventory build system is mapped
+        (the test above) AND every map row names a live inventory
+        build system — a build-system removal must take its
+        adjudication row with it, or the census silently carries dead
+        adjudications. Extras are ∅ today by design; a documented
+        extra would join an explicit allowlist here, not slip by."""
+        from core.build.build_detector import BuildDetector
+        from core.security.credential_env import (
+            BUILD_SYSTEM_ECOSYSTEM_MAP,
+        )
+        inventory = {
+            build_system
+            for systems in BuildDetector.BUILD_SYSTEMS.values()
+            for build_system in systems
+        }
+        stale = set(BUILD_SYSTEM_ECOSYSTEM_MAP) - inventory
+        assert stale == set(), stale
+
+    def test_zero_member_surfaces_are_explicit(self):
+        """A surface with no members in any tier must SAY so — the
+        completeness prose is the adjudication record, and an
+        accidental all-empty surface must not read like a decision.
+        (No such surface exists today; this is the structural rail
+        for the first one.)"""
+        from core.security.credential_env import (
+            BUILD_ECOSYSTEM_ENV_SURFACES,
+        )
+        for surface in BUILD_ECOSYSTEM_ENV_SURFACES:
+            populated = (
+                surface.credential_bearing
+                or surface.config_redirect
+                or surface.tool_override
+                or surface.flags_injection
+                or surface.tool_override_patterns
+            )
+            if not populated:
+                assert "zero-member" in surface.completeness, (
+                    surface.ecosystem
+                )
+
+    def test_env_detect_passthroughs_stay_out_of_the_family(self):
+        """The traced-build lane deliberately auto-detects and
+        CARRIES the toolchain-home names each build system declares
+        (env_detect: JAVA_HOME / GOROOT / DOTNET_ROOT). Family
+        membership would make the vocabulary strip the lane's own
+        passthrough — the two mechanisms must stay disjoint."""
+        from core.build.build_detector import BuildDetector
+        for systems in BuildDetector.BUILD_SYSTEMS.values():
+            for config in systems.values():
+                for name in config.get("env_detect", ()):
+                    assert name not in CREDENTIAL_ENV_FAMILY, name
+
+
+class TestPatternMemberLanes:
+    """Pattern members (CARGO_TARGET_<triple>_RUNNER-shaped names)
+    cannot live in any exact-name set — every lane must match them
+    through the vocabulary predicates."""
+
+    def _examples(self):
+        from core.security.credential_env import (
+            CREDENTIAL_ENV_NAME_PATTERNS,
+        )
+        assert CREDENTIAL_ENV_NAME_PATTERNS  # patterns exist at all
+        return [p.example for p in CREDENTIAL_ENV_NAME_PATTERNS]
+
+    def test_get_safe_env_strips_pattern_members(self, monkeypatch):
+        for name in self._examples():
+            monkeypatch.setenv(name, "hostile")
+        env = RaptorConfig.get_safe_env()
+        for name in self._examples():
+            assert name not in env, name
+
+    def test_codeql_build_env_gate_refuses_pattern_members(self):
+        from packages.codeql.database_manager import _filter_build_env_vars
+        hostile = dict.fromkeys(self._examples(), "x")
+        assert _filter_build_env_vars(hostile) == {}
+
+    def test_dangerous_name_predicate_covers_pattern_members(self):
+        for name in self._examples():
+            assert RaptorConfig.is_dangerous_env_name(name), name
+
+    def test_strict_env_sweeps_filter_through_the_predicate_in_code(self):
+        # Every FILTER comprehension at the three sweep sites must
+        # consult the pattern-aware predicate: comments are stripped
+        # before matching, and the match is the negated call shape the
+        # rebuild filters use — a site whose detection list consults
+        # the predicate while its rebuild filter regressed to bare set
+        # membership no longer satisfies this. Behavioral proof lives
+        # in core/sandbox/tests/test_strict_env_pattern_pins.py (a
+        # real child per site); this is the mechanical belt.
+        for rel in (
+            "core/sandbox/context.py",
+            "core/sandbox/_spawn.py",
+            "core/sandbox/_macos_spawn.py",
+        ):
+            src = (_RAPTOR_ROOT / rel).read_text(encoding="utf-8")
+            code_only = _COMMENT_RE.sub("", src)
+            assert "not RaptorConfig.is_dangerous_env_name(" in code_only, rel
+            # No sweep site may fall back to bare set membership for
+            # its filter: the raw idiom must not reappear in code.
+            assert "k not in RaptorConfig.DANGEROUS_ENV_VARS" not in (
+                code_only
+            ), rel
+
+    def test_hostile_input_shape_rule_covers_pattern_members(self):
+        # Both hostile-input belts (cc_trust settings scan, codeql
+        # build-metadata gate) apply is_credential_redirect_shaped —
+        # the pattern fold-in reaches them with no consumer change.
+        from core.security.credential_env import (
+            is_credential_redirect_shaped,
+        )
+        for name in self._examples():
+            assert is_credential_redirect_shaped(name), name
