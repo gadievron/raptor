@@ -257,3 +257,34 @@ def test_missing_known_open_without_stub_mode_is_usage_error(tmp_path):
     res = _run(paths)
     assert res.returncode != 0
     assert "does not exist" in res.stderr
+
+
+def test_zero_space_heading_joins_universe(tmp_path):
+    # Leak shape: a zero-whitespace ###[P1] heading — one char
+    # outside the whitespace-drift coverage above — must join the
+    # universe; undisposed, it must DROP instead of silently leaving
+    # the carry.
+    paths = _write_fixture(tmp_path)
+    (paths["findings"] / "U04.md").write_text(
+        "###[P1][CONFIRMED] zero-space heading with P1 content\n"
+    )
+    res = _run(paths)
+    assert res.returncode == 1
+    assert "DROP: finding prev:U04:1 [P1]" in res.stdout
+
+
+def test_heading_like_lines_emit_counted_advisory(tmp_path):
+    # The NEXT drift spelling (wrong hash count, stray chars before
+    # the bracket) is not enforced but must surface as a counted
+    # warning, never vanish; well-formed headings must not inflate it.
+    paths = _write_fixture(tmp_path)
+    (paths["findings"] / "U05.md").write_text(
+        "## [P1] two-hash heading\n"
+        "#### [P2] four-hash sub-heading\n"
+        "###x[P3] stray char\n"
+        "### [P4][CONFIRMED] well-formed, enforced\n"
+    )
+    res = _run(paths, "--emit-stubs")
+    assert "warning: findings prev:U05: 3 heading-like line(s)" in res.stdout
+    # the well-formed one is enforced (undisposed => reported), not advisory
+    assert "DROP: finding prev:U05:4 [P4]" in res.stdout

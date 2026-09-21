@@ -14,11 +14,14 @@ Source universes (each opt-in):
 
 1. ``--findings TAG=DIR`` — prior findings directory. Every ``### [SEV]``
    heading in ``DIR/*.md`` (keyed UNIT:line, UNIT = filename stem; the
-   whitespace between ``###`` and ``[`` is matched Unicode-aware, so a
-   double-space or NBSP-drifted heading still joins the universe) must be
-   claimed via ``[src: TAG:UNIT:l1,l2]`` or covered by exactly one
+   whitespace between ``###`` and ``[`` is matched Unicode-aware AND may be
+   absent entirely, so double-space, NBSP-drifted and zero-space ``###[P1]``
+   headings all join the universe) must be claimed via
+   ``[src: TAG:UNIT:l1,l2]`` or covered by exactly one
    ``[agg: TAG:UNIT:SEV1,SEV2]`` severity aggregate. An explicit claim takes
-   a heading out of its unit's aggregate remainder.
+   a heading out of its unit's aggregate remainder. Heading-LIKE lines that
+   still fail the grammar (``## [P1]``, ``#### x [P2]``) surface as a
+   counted per-file warning so the next drift spelling is loud, not silent.
 2. ``--prior-known-open TAG=PATH`` — the previous KNOWN-OPEN file. Every
    ``- `` row under a ``## X.`` / ``## §X.`` section (keyed ``X<ordinal>``,
    e.g. ``A3``) must be claimed via ``[src: TAG:A3]``. Rows already
@@ -63,9 +66,17 @@ import re
 import sys
 from pathlib import Path
 
-# \s+ is Unicode-aware in str patterns: NBSP, double spaces, and tabs between
-# the marker and the severity bracket keep a drifted heading in the universe.
-HEADING_RE = re.compile(r"^###\s+\[([A-Z0-9]+)\]\s*(.*)")
+# \s* is Unicode-aware in str patterns: NBSP, double spaces, tabs — and NO
+# whitespace at all — between the marker and the severity bracket keep a
+# drifted heading in the universe (the zero-space ``###[P1]`` spelling is an
+# equally plausible authoring slip and silently dropped under ``\s+``). The
+# ``[`` anchor keeps ``####`` sub-headings out: after three ``#`` the next
+# non-space char must open the severity bracket.
+HEADING_RE = re.compile(r"^###\s*\[([A-Z0-9]+)\]\s*(.*)")
+# Heading-LIKE lines that fail HEADING_RE (two/four hashes, stray chars
+# before the bracket) are the NEXT drift spelling: not enforced, but they
+# must surface as a counted advisory instead of vanishing silently.
+HEADING_LIKE_RE = re.compile(r"^#{2,4}.{0,3}\[[A-Z0-9]{1,10}\]")
 SECTION_RE = re.compile(r"^## §?([A-Z])[.\s]")
 SRC_RE = re.compile(r"\[src:\s*([^\]]+)\]")
 AGG_RE = re.compile(r"\[agg:\s*([A-Za-z0-9_.\-]+):([A-Za-z0-9_-]+):([A-Z0-9,]+)\]")
@@ -87,6 +98,8 @@ class Universe:
         self.require_refs: set[str] = set()
         # series -> count of pattern matches outside top-level '- ' rows
         self.notes_advisory: collections.Counter[str] = collections.Counter()
+        # "tag:unit" -> count of heading-LIKE lines outside HEADING_RE
+        self.findings_advisory: collections.Counter[str] = collections.Counter()
         self.findings_tags: set[str] = set()
         self.prior_tags: set[str] = set()
         self.notes_series: set[str] = set()
@@ -101,6 +114,8 @@ def load_findings(uni: Universe, tag: str, directory: Path) -> None:
             m = HEADING_RE.match(line)
             if m:
                 uni.findings[(tag, unit, lineno)] = (m.group(1), m.group(2).strip())
+            elif HEADING_LIKE_RE.match(line):
+                uni.findings_advisory[f"{tag}:{unit}"] += 1
 
 
 def load_prior_known_open(uni: Universe, tag: str, path: Path) -> None:
@@ -385,6 +400,13 @@ def main(argv: list[str] | None = None) -> int:
         f"{len(uni.require_refs)} required refs"
     )
     print(f"dispositions: {dict(sorted(tally.items()))}")
+    for unit, count in sorted(uni.findings_advisory.items()):
+        print(
+            f"warning: findings {unit}: {count} heading-like line(s) "
+            "outside HEADING_RE — not in the universe; fix the heading "
+            "spelling (### [SEV]) or these findings are invisible to "
+            "the carry"
+        )
     for series, count in sorted(uni.notes_advisory.items()):
         print(
             f"warning: NOTES {series}: --notes-pattern matched {count} "
