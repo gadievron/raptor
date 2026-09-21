@@ -1400,10 +1400,10 @@ class LLMClient:
         if self.config.primary_model and self.config.primary_model.provider.lower() == "ollama":
             logger.warning(
                 "Using local Ollama model for security analysis. "
-                "Local models may generate unreliable exploit PoCs. "
-                "For production security research, consider using cloud models "
-                "(Anthropic Claude, OpenAI GPT, Google Gemini) which have better "
-                "code generation and security analysis capabilities."
+                "Reliability for precision tasks (exploit PoCs, exact offsets/gadgets) "
+                "tracks model scale and quantization, not the Ollama transport itself — "
+                "check `/scorecard` (or `libexec/raptor-llm-scorecard list`) for this "
+                "model's measured pass rate rather than assuming it from provider alone."
             )
 
     def _get_provider(self, model_config: ModelConfig) -> LLMProvider:
@@ -2607,7 +2607,7 @@ class LLMClient:
                 else:
                     logger.warning("Falling back to: %s/%s", model.provider, model.model_name)
                 if model.provider.lower() == "ollama":
-                    logger.warning("Local model — exploit PoCs may be unreliable")
+                    logger.warning("Local model — exploit-PoC reliability varies by model size/quantization; see /scorecard")
 
                 logger.debug("Trying model: %s/%s", model.provider, model.model_name)
 
@@ -3135,7 +3135,7 @@ class LLMClient:
                 else:
                     logger.warning("Falling back to: %s/%s (structured)", model.provider, model.model_name)
                 if model.provider.lower() == "ollama":
-                    logger.warning("Local model — exploit PoCs may be unreliable")
+                    logger.warning("Local model — exploit-PoC reliability varies by model size/quantization; see /scorecard")
 
                 timeout_failures = 0
                 last_safe_e = ""

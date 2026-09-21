@@ -187,34 +187,12 @@ targets as able to assert their own trust.
 
 ## Agent Capabilities and the Rule of Two
 
-Every RAPTOR agent is audited against three axes: **(A)** reads
-untrusted input, **(B)** has state-changing tools (Write, Edit, Bash,
-WebFetch), **(C)** communicates with external services. Following
-Meta's agent security framework, an agent session may combine at most
-two of the three; an agent needing all three requires human approval
-before execution.
-
-In practice:
-
-- Pipeline agents declare explicit tool lists scoped to their job;
-  network-reaching agents (forensics investigators, the crash-report
-  fetcher) have their WebFetch pinned to specific domains by
-  per-agent hooks, and the BigQuery agent's Bash is restricted to a
-  typed read-only query wrapper.
-- The crash-analysis pipeline isolates all bug-tracker fetching in a
-  dedicated fetch-only agent whose single output is schema-gated
-  before anything downstream consumes it (see
-  [crash-analysis](crash-analysis.md)).
-- `offsec-specialist` inherently spans all three axes and is
-  classified **needs-HITL**: the requirement is mechanically enforced
-  (headless dispatch is refused; an effective sandbox does not
-  substitute for the human), and an inventory test fails on any
-  programmatic dispatch reference.
-
-Prompt-side injection exposure is lint-enforced: every prompt-
-construction file is registered, and every interpolation must either
-be envelope-constructed or carry an audited allowlist entry with a
-written justification — the audit cannot silently regress.
+Agent boundaries, tool inventories, dispatch gates and the Rule of Two
+capability constraint are documented in [Agent Security](agent-security.md).
+This section covers the repository-facing threat model and process-level
+controls; the agent guide covers per-agent capability declarations, network
+hooks, credential isolation, SAGE trust boundaries, and the full residual-risk
+inventory.
 
 ---
 

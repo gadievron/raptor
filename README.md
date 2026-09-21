@@ -58,11 +58,11 @@ the code.
 
 ## Prerequisites
 
-- **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key. This is the orchestration layer -- RAPTOR runs inside a Claude Code session.
+- **Claude Code** with an active subscription (Max, Pro, Team, or Enterprise) or an Anthropic API key. This is the orchestration layer for the interactive `raptor` shell -- optional if you only need the standalone CLIs, see [Running fully standalone](#running-fully-standalone-no-claude-code) below.
 - **Python 3.10+** and **Node.js 18+**.
 - **Semgrep** (`pip install semgrep`) for static analysis. CodeQL is optional but recommended.
 
-For the analysis dispatch layer (the LLM that analyses individual findings), Claude Code itself handles everything by default -- no extra API keys needed. If you want multi-model analysis (e.g. Claude + GPT + Gemini), you will need API keys for each provider. See [Using a different LLM](#using-a-different-llm) below.
+For the analysis dispatch layer (the LLM that analyses individual findings), Claude Code itself handles everything by default -- no extra API keys needed. If you want multi-model analysis (e.g. Claude + GPT + Gemini) or a fully local setup, you will need to configure the other provider(s). See [Using a different LLM](#using-a-different-llm) below.
 
 ## Quick Start
 
@@ -386,7 +386,7 @@ Not currently enforced: `mypy` is installed in `requirements-dev.txt` but does n
 
 RAPTOR has two separate model layers, and it is worth knowing how both work before you change anything.
 
-The **orchestration layer** is always Claude Code. The CLAUDE.md, skills, and commands all run as Claude Code instructions. To change which Claude model orchestrates RAPTOR, use Claude Code's `--model` flag or the `/model` command inside a session.
+The **orchestration layer** is Claude Code -- but only for the interactive `raptor` shell (this conversational, slash-command layer). The CLAUDE.md, skills, and commands all run as Claude Code instructions there. To change which Claude model orchestrates that layer, use Claude Code's `--model` flag or the `/model` command inside a session. If you don't want this layer at all, see [Running fully standalone](#running-fully-standalone-no-claude-code) below.
 
 The **analysis dispatch layer** is the LLM that analyses individual vulnerability findings. This is separate from the orchestration layer and can be any supported provider. Configure it in `~/.config/raptor/models.json`:
 
@@ -454,7 +454,32 @@ Budget control:
 python3 raptor.py agentic --repo /code --max-cost-usd 5.00
 ```
 
-Ollama works for analysis but produces unreliable exploit and patch code. For code generation tasks, use a frontier model.
+Ollama works well for analysis; reliability for exploit/patch code generation tracks model scale and quantization rather than being a fixed property of local models — see [Quality Tradeoffs](llm.md#quality-tradeoffs) in the LLM guide, and check `/scorecard` for what your specific model is actually measuring.
+
+### Running fully standalone (no Claude Code)
+
+`bin/raptor` -- the interactive shell with the banner and slash commands, i.e. this conversational layer -- execs straight into the Claude Code CLI and always needs its own login. The actual mechanics underneath it don't: `python3 raptor.py <mode>` is a plain Python CLI with no Claude Code dependency at all.
+
+```bash
+# No `claude` process involved at any point
+python3 raptor.py doctor                        # status check -- explicitly "no claude needed"
+python3 raptor.py agentic --repo /path/to/code   # scan -> dedup -> analysis
+python3 raptor.py scan --repo /path/to/code
+```
+
+`libexec/raptor-*` scripts (including `raptor-project-manager` -- `raptor.py` has no `project` mode, project management lives there exclusively) are also plain Python, but they refuse to run unless `CLAUDECODE` is set (true automatically inside a Claude Code session) or `_RAPTOR_TRUSTED=1` is set explicitly -- a guard against being invoked outside the launcher's environment sanitisation. Set it once for standalone use:
+
+```bash
+export _RAPTOR_TRUSTED=1
+
+libexec/raptor-project-manager create myapp --target /path/to/code
+libexec/raptor-project-manager use myapp
+python3 raptor.py agentic --repo /path/to/code   # picks up the active project automatically
+libexec/raptor-project-manager status
+libexec/raptor-project-manager findings
+```
+
+Point `models.json` / `OLLAMA_HOST` at a local Ollama instance (see above) and this whole path never talks to Anthropic -- useful for airgapped boxes or local-only hardware. You lose the conversational slash-command layer (this chat); the scan/analysis/exploit pipeline itself is unaffected.
 
 ### Fast-tier short-circuit + the model scorecard
 
@@ -546,6 +571,8 @@ See `docs/README.md` for the full index. Key guides:
 | `docs/architecture.md` | Codebase structure and directory tree |
 | `docs/llm.md` | LLM provider configuration, Bedrock, multi-model workflows |
 | `docs/sandbox.md` | Process isolation: profiles, Landlock, namespaces |
+| `docs/troubleshooting.md` | Self-test, sandbox setup errors (mount-ns/uidmap on Ubuntu 24.04+), EDR interaction |
+| `docs/agent-security.md` | Agent capabilities, tool boundaries, network controls, human approval |
 | `docs/audit.md` | Systematic code review: hypotheses, tools, strategies, gates |
 | `docs/validation.md` | Exploitability validation pipeline (stages 0--1) |
 | `docs/static-analysis.md` | Semgrep and Coccinelle rules |
