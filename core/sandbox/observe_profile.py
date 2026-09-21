@@ -636,8 +636,20 @@ def parse_observe_log(run_dir, *,
     darwin_connect_parsed = 0
     darwin_connect_unparsed = 0
 
+    ambiguous_skipped = 0
     for rec in _iter_records(log_path):
         if not isinstance(rec, dict):
+            continue
+        if rec.get("parse_ambiguous"):
+            # Tamper-suspect records (unanchorable PID field — see
+            # seatbelt_audit._LOG_LINE_RE) are admitted to the JSONL
+            # as EVIDENCE and get the run nonce stamped, so the nonce
+            # gate below would accept them — but they must never be
+            # POLICY INPUT: an observe-derived allowlist must not
+            # learn paths or hosts from a record whose origin could
+            # not be attributed (any same-host sandboxed process can
+            # mint the ambiguous shape).
+            ambiguous_skipped += 1
             continue
         # Provenance: when an expected nonce is set, drop records
         # without a matching value. Records the tracer wrote carry
@@ -731,5 +743,12 @@ def parse_observe_log(run_dir, *,
     # egress evidence with no failure mode visible. Never again.
     if darwin_connect_unparsed and not darwin_connect_parsed:
         _warn_darwin_connect_gap(run_dir, darwin_connect_unparsed)
+
+    if ambiguous_skipped:
+        logger.warning(
+            "parse_observe_log: %d tamper-suspect (parse_ambiguous) "
+            "record(s) in %s excluded from profile derivation",
+            ambiguous_skipped, run_dir,
+        )
 
     return profile

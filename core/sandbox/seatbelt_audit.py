@@ -128,12 +128,30 @@ _SANDBOX_EXEC_FALLBACK = "/usr/bin/sandbox-exec"
 #     optional (?:\(\d+\)) group;
 #   * process names containing spaces or parentheses ("Google Chrome
 #     Helper (Renderer)") — the name is a non-greedy (.+?) anchored by
-#     the "(<PID>) <verdict>" tail, so the LAST "(digits)" before the
-#     verdict is always the PID.
+#     the "(<PID>) <verdict>" tail.
 # Pre-fix, both shapes silently failed the match and their records
 # were dropped from the audit trail.
+#
+# The format is AMBIGUOUS by construction: both the process name (the
+# kext embeds the target's p_comm — the basename the target chose for
+# its own image, ≤16 chars) and the path are attacker-influenced free
+# text, and either can embed the "(<digits>) <verdict> <token> " shape
+# itself. A lazy name arm locks onto the FIRST such shape (a name like
+# "a(1) deny b" steals the PID slot); a greedy arm locks onto the LAST
+# (a path like ".../x(1) deny y z" steals it). Neither arm alone is
+# trustworthy, so parsing runs BOTH: when they disagree on any field
+# the record is flagged ``parse_ambiguous`` (in-band tamper marker,
+# both candidate parses preserved, conservative deny verdict) and is
+# treated as in-scope-suspect by the scope gate — never silently
+# attributed to either candidate PID, and never silently dropped as
+# foreign. See parse_log_entry.
 _LOG_LINE_RE = re.compile(
     r"Sandbox:\s+(.+?)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
+)
+# Greedy-name twin of _LOG_LINE_RE — identical structure, but (.+)
+# anchors the name to the LAST "(digits) <verdict>" occurrence.
+_LOG_LINE_RE_GREEDY = re.compile(
+    r"Sandbox:\s+(.+)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
 )
 
 # Parse-ratio diagnostic thresholds (see LogStreamer.stop). When at
@@ -275,6 +293,34 @@ def _action_to_type(action: str) -> str:
     return "seccomp"  # closest analogue in the Linux taxonomy
 
 
+def _parse_kext_message(
+    msg: str,
+) -> tuple[tuple[str, ...], tuple[str, ...] | None] | None:
+    """Match ``msg`` with both name arms of the kext-line grammar.
+
+    Returns ``None`` when the lazy arm doesn't match (not a
+    recognisable Sandbox.kext line — the greedy arm cannot match
+    where the lazy one didn't, they differ only in name greed).
+    Otherwise returns ``(lazy_groups, greedy_groups_if_different)``:
+    the second element is ``None`` when both arms agree (the
+    unambiguous common case) and the greedy arm's groups when they
+    disagree — the caller must then treat the line as ambiguous,
+    because name and path are both attacker-influenced and there is
+    no way to tell which arm anchored on the real PID field.
+    """
+    lazy_m = _LOG_LINE_RE.search(msg)
+    if not lazy_m:
+        return None
+    lazy_groups = lazy_m.groups()
+    greedy_m = _LOG_LINE_RE_GREEDY.search(msg)
+    if greedy_m is None:
+        return lazy_groups, None
+    greedy_groups = greedy_m.groups()
+    if greedy_groups == lazy_groups:
+        return lazy_groups, None
+    return lazy_groups, greedy_groups
+
+
 def parse_log_entry(entry: dict, *,
                     observe_mode: bool = False,
                     nonce: str | None = None) -> dict | None:
@@ -300,10 +346,10 @@ def parse_log_entry(entry: dict, *,
     if entry.get("senderImagePath") != SANDBOX_KEXT_SENDER:
         return None
     msg = entry.get("eventMessage", "")
-    m = _LOG_LINE_RE.search(msg)
-    if not m:
+    parsed = _parse_kext_message(msg)
+    if parsed is None:
         return None
-    process_name, pid, verdict, action, path = m.groups()
+    (process_name, pid, verdict, action, path), greedy = parsed
     record = {
         "ts": entry.get("timestamp") or _now_iso(),
         "cmd": f"<sandbox audit: {action} {path}>",
@@ -315,6 +361,27 @@ def parse_log_entry(entry: dict, *,
         "target_pid": int(pid),
         "process_name": process_name,
     }
+    if greedy is not None:
+        # The two name arms disagree — the line embeds the
+        # "(digits) <verdict> <token>" shape more than once, so the
+        # PID field cannot be anchored (see the _LOG_LINE_RE comment:
+        # name and path are both attacker-influenced). Never silently
+        # attribute: flag the record as tamper-suspect, preserve BOTH
+        # candidate parses, and pick the condemn-direction verdict —
+        # if either arm read "deny", a deny happened somewhere in the
+        # line and the record must count as one, not be laundered
+        # into an allow-report by a name that embeds "allow".
+        g_name, g_pid, g_verdict, g_action, g_path = greedy
+        record["parse_ambiguous"] = True
+        record["alt_parse"] = {
+            "process_name": g_name,
+            "target_pid": int(g_pid),
+            "verdict": g_verdict,
+            "syscall": g_action,
+            "path": g_path,
+        }
+        if "deny" in (verdict, g_verdict):
+            record["verdict"] = "deny"
     record["observe" if observe_mode else "audit"] = True
     if nonce is not None:
         record["nonce"] = nonce
@@ -482,6 +549,15 @@ class LogStreamer:
         # reader join, so no lock needed.
         self._kext_lines_seen = 0
         self._kext_lines_parsed = 0
+        # Ambiguous-parse tamper counter (see _LOG_LINE_RE): records
+        # whose PID field could not be anchored because the line
+        # embeds the "(digits) <verdict> <token>" shape more than
+        # once. Single-writer discipline, no lock: only the reader
+        # thread increments (before the scope/budget gates, so the
+        # count can exceed the JSONL's flagged-record count when a
+        # pre-registration ambiguous record is later dropped), and
+        # stop() reads it after joining the reader.
+        self._ambiguous_records = 0
 
     def register_target_pid(self, pid: int) -> None:
         """Mark ``pid`` — and its process group and session, when
@@ -598,7 +674,18 @@ class LogStreamer:
         PID that cannot be attributed by any layer is out of scope —
         reject rather than attribute an unverifiable event to this
         run.
+
+        ``parse_ambiguous`` records are in-scope-SUSPECT by contract
+        (see _LOG_LINE_RE): their PID field could not be anchored, so
+        scoping them on the lazy arm's candidate PID would let a
+        process name embedding a foreign "(pid) verdict token" shape
+        route its own records into the silent foreign-drop path —
+        evading the nonce stamp, the budget, the JSONL append AND the
+        credential-path escalation. They are admitted (flagged, both
+        parses preserved) rather than attributed-or-dropped.
         """
+        if record.get("parse_ambiguous"):
+            return True
         with self._scope_lock:
             if not self._scope_pids and not self._scope_pgids:
                 # Under require_scope nothing may be attributed until
@@ -896,13 +983,21 @@ class LogStreamer:
                 except json.JSONDecodeError:
                     continue
                 msg = entry.get("eventMessage", "")
-                m = _LOG_LINE_RE.search(msg)
-                if not m:
+                parsed = _parse_kext_message(msg)
+                if parsed is None:
                     continue
-                # Group 2 is the PID per `_LOG_LINE_RE`.
-                pid_str = m.group(2)
+                # Index 1 of each arm's groups is its PID candidate.
+                # The warm-up workload's name is ours (sandbox-exec,
+                # fixed SBPL), so ambiguity is not expected here —
+                # but "did an event with our PID arrive" is answered
+                # honestly by accepting a match from either arm.
+                lazy_groups, greedy_groups = parsed
+                pid_candidates = [lazy_groups[1]]
+                if greedy_groups is not None:
+                    pid_candidates.append(greedy_groups[1])
                 try:
-                    if int(pid_str) == target_pid:
+                    if any(int(p) == target_pid
+                           for p in pid_candidates):
                         seen = True
                         break
                 except ValueError:
@@ -943,17 +1038,28 @@ class LogStreamer:
         Pulled out of `_read_loop` as its own method purely so tests
         can exercise it directly against a synthetic `record` dict
         without needing a real `log stream` subprocess."""
-        path = record.get("path")
-        if (path
-                and record.get("type") in ("read", "write")
-                and path not in self._escalated_paths
-                and not _audit_budget.live_escalation_disabled()
-                and is_credential_path(path)):
-            self._escalated_paths.add(path)
-            # .get: the never-raise-out-of-the-hot-path contract must
-            # not hinge on every record shape carrying target_pid.
-            _announce_credential_path_touch(
-                path, record.get("target_pid", -1))
+        # Ambiguous parses carry two candidate (path, action) reads —
+        # escalate when EITHER names a credential path (checking only
+        # the lazy arm would let the ambiguity itself suppress the
+        # escalation; see _LOG_LINE_RE).
+        alt = record.get("alt_parse") or {}
+        candidates = [
+            (record.get("path"), record.get("type")),
+            (alt.get("path"), _action_to_type(alt["syscall"])
+             if alt.get("syscall") else None),
+        ]
+        for path, rec_type in candidates:
+            if (path
+                    and rec_type in ("read", "write")
+                    and path not in self._escalated_paths
+                    and not _audit_budget.live_escalation_disabled()
+                    and is_credential_path(path)):
+                self._escalated_paths.add(path)
+                # .get: the never-raise-out-of-the-hot-path contract
+                # must not hinge on every record shape carrying
+                # target_pid.
+                _announce_credential_path_touch(
+                    path, record.get("target_pid", -1))
 
     def _read_loop(self) -> None:
         """Read ndjson lines from `log stream`, parse, and append
@@ -1005,6 +1111,22 @@ class LogStreamer:
 
     def _filter_and_append(self, record: dict) -> None:
         """Scope gate + budget + JSONL append for one parsed record."""
+        if record.get("parse_ambiguous"):
+            # One-shot loud escalation (the in-band flag on every
+            # such record carries the per-record detail; a hostile
+            # target can mint these at will, so the logger is not
+            # given a per-record amplification channel).
+            first = self._ambiguous_records == 0
+            self._ambiguous_records += 1
+            if first:
+                logger.warning(
+                    "seatbelt audit: kext log line with an "
+                    "unanchorable PID field (process name or path "
+                    "embeds the '(pid) verdict action' shape — "
+                    "possible audit-attribution spoofing attempt). "
+                    "Record kept, flagged parse_ambiguous, both "
+                    "candidate parses preserved; see the audit JSONL.",
+                )
         if self._require_scope:
             with self._scope_lock:
                 if not self._scope_pids and not self._scope_pgids:
@@ -1225,6 +1347,11 @@ class LogStreamer:
                 # Scope-gate diagnostic: how many records were
                 # rejected as outside the workload's process scope.
                 summary["foreign_records_dropped"] = foreign_dropped
+                # Tamper diagnostic: kext lines whose PID field could
+                # not be anchored (kept, flagged parse_ambiguous).
+                if self._ambiguous_records:
+                    summary["parse_ambiguous_records"] = (
+                        self._ambiguous_records)
                 # Stamp nonce on the summary so an observe-mode
                 # parser attributes it to this run and rejects one
                 # spoofed by a target binary writing a fake summary

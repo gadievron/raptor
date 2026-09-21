@@ -894,3 +894,46 @@ class TestSeccompTraceSetExtension:
                 f"observe extra-trace set must include {sc!r} so "
                 f"profile-extraction sees stat-family hits"
             )
+
+
+class TestAmbiguousRecordsAreNotPolicyInput:
+    """parse_ambiguous records (unanchorable PID field — see
+    seatbelt_audit._LOG_LINE_RE) are admitted to the JSONL as tamper
+    EVIDENCE and carry the run nonce, so the nonce gate accepts them —
+    but an observe-derived allowlist must never learn paths or hosts
+    from a record whose origin could not be attributed (any same-host
+    sandboxed process can mint the ambiguous shape)."""
+
+    def test_ambiguous_record_excluded_from_profile(
+            self, tmp_path, caplog):
+        ambiguous = {
+            "ts": "2026-05-04T00:00:00Z",
+            "cmd": "<sandbox audit: file-read-data /Users/x/.aws>",
+            "returncode": 0,
+            "type": "read",
+            "observe": True,
+            "verdict": "deny",
+            "syscall": "file-read-data",
+            "path": "/attacker/steered/allowlist/path",
+            "target_pid": 1,
+            "process_name": "a(1) deny b",
+            "parse_ambiguous": True,
+            "alt_parse": {"process_name": "a", "target_pid": 4242,
+                          "verdict": "deny",
+                          "syscall": "file-read-data",
+                          "path": "/other"},
+        }
+        d = tmp_path / ".audit"
+        d.mkdir(mode=0o700, exist_ok=True)
+        _write_jsonl(d / OBSERVE_FILENAME,
+                     [_open_record("/etc/hosts"), ambiguous])
+        with caplog.at_level(logging.WARNING,
+                             logger="core.sandbox.observe_profile"):
+            profile = parse_observe_log(tmp_path)
+        joined = " ".join(
+            profile.paths_read + profile.paths_written)
+        assert "/attacker/steered/allowlist/path" not in joined, (
+            "tamper-suspect record steered the observe profile")
+        assert "/etc/hosts" in profile.paths_read
+        assert any("parse_ambiguous" in r.message
+                   for r in caplog.records)
