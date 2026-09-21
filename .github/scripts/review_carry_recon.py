@@ -27,14 +27,21 @@ Source universes (each opt-in):
    e.g. ``A3``) must be claimed via ``[src: TAG:A3]``. Rows already
    adjudicated out of the carry are skipped with ``--prior-exempt TAG:A3``.
 3. ``--notes SERIES=PATH`` — a fix-series NOTES file. Every top-level ``- ``
-   row matching ``--notes-pattern`` (default ``(?i)\\bdefer``, case-insensitive
-   so ``Deferred:`` spellings cannot escape) must be claimed via
-   ``[src: NOTES:SERIES:lineno]``. This is the deferral mirror: a NOTES row
-   alone is not routing. Blind spot, made loud: deferral-shaped text OUTSIDE
-   top-level ``- `` rows (markdown tables, prose, indented sub-bullets) does
-   NOT join the universe — the reconciler prints a counted warning per NOTES
-   file when the pattern matches such lines, so table-styled dispositions
-   surface instead of vanishing.
+   row matching ``--notes-pattern`` must be claimed via
+   ``[src: NOTES:SERIES:lineno]``. The default pattern is the OBSERVED
+   deferral vocabulary of this program's series NOTES (defer / residual /
+   wontfix / "not fixed" / "needs its own fix" / "left byte-identical" /
+   "follow-up candidate" / "out of this series|charter|scope",
+   case-insensitive), not just ``defer`` — the majority spelling is a
+   ``## Residual risks`` section whose rows carry no deferral word at all,
+   so rows under any section heading matching defer/residual join the
+   universe regardless of row text. This is the deferral mirror: a NOTES
+   row alone is not routing. Blind spots, made loud: deferral-shaped text
+   OUTSIDE top-level ``- `` rows (markdown tables, prose, indented
+   sub-bullets) does NOT join the universe — a counted warning per NOTES
+   file surfaces it — and a NOTES file contributing ZERO rows warns too,
+   so a spelling outside the vocabulary is a visible gap instead of a
+   silent one.
 4. ``--p1-count N`` — priority findings of record, ids 1..N. Each must be
    claimed exactly once via ``[p1: 1,4,7-9]``.
 5. ``--require-ref NAME`` — free-form references (e.g. ``HF:hotfixname``)
@@ -131,13 +138,31 @@ def load_prior_known_open(uni: Universe, tag: str, path: Path) -> None:
             uni.prior_rows[(tag, f"{section}{ordinal}")] = line[2:].strip()
 
 
+# Section headings whose rows are deferrals BY PLACEMENT: the program's
+# majority deferral spelling is a "## Residual risks" section whose rows
+# carry no deferral word at all — pattern-matching row text alone cannot
+# see them, so every top-level row under such a section joins the universe.
+NOTES_DEFER_SECTION_RE = re.compile(r"(?i)\b(defer|residual)")
+
+
 def load_notes(uni: Universe, series: str, path: Path, pattern: re.Pattern[str]) -> None:
+    in_defer_section = False
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-        if not pattern.search(line):
+        if line.startswith("#"):
+            # Only ``## `` headings open/close a section; deeper
+            # sub-headings stay inside it. Headings never count toward
+            # the non-bullet advisory (their rows are what the section
+            # mechanism enforces).
+            if line.startswith("## "):
+                in_defer_section = bool(
+                    NOTES_DEFER_SECTION_RE.search(line)
+                )
             continue
+        row_matches = pattern.search(line) is not None
         if line.startswith("- "):
-            uni.notes_rows[(series, lineno)] = line[2:].strip()
-        else:
+            if row_matches or in_defer_section:
+                uni.notes_rows[(series, lineno)] = line[2:].strip()
+        elif row_matches:
             uni.notes_advisory[series] += 1
 
 
@@ -337,9 +362,16 @@ def main(argv: list[str] | None = None) -> int:
         help="series NOTES file; deferral rows claimed as [src: NOTES:SERIES:lineno]",
     )
     parser.add_argument(
-        "--notes-pattern", default=r"(?i)\bdefer",
+        "--notes-pattern",
+        default=(r"(?i)\b(defer|residual|wontfix|not fixed"
+                 r"|needs its own fix|left byte-identical"
+                 r"|follow-?up candidate"
+                 r"|out of (this series|charter|scope))"),
         help="regex selecting NOTES rows that demand a mirror "
-             "(default: %(default)s — case-insensitive)",
+             "(default: %(default)s — the observed deferral vocabulary, "
+             "case-insensitive; rows under a '## ...defer/residual...' "
+             "section join regardless of row text, and a NOTES file "
+             "contributing zero rows warns)",
     )
     parser.add_argument(
         "--p1-count", type=int, default=0,
@@ -407,6 +439,14 @@ def main(argv: list[str] | None = None) -> int:
             "spelling (### [SEV]) or these findings are invisible to "
             "the carry"
         )
+    for series in sorted(uni.notes_series):
+        if not any(s == series for s, _ in uni.notes_rows):
+            print(
+                f"warning: NOTES {series}: contributed ZERO deferral rows "
+                "— if this series records residuals/deferrals in another "
+                "spelling, widen --notes-pattern (its default is the "
+                "observed vocabulary, a declared bound)"
+            )
     for series, count in sorted(uni.notes_advisory.items()):
         print(
             f"warning: NOTES {series}: --notes-pattern matched {count} "

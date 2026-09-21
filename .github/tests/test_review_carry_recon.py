@@ -52,7 +52,8 @@ NOTES = """# series NOTES
 # Line numbers of the universe items above (1-based, in-file):
 #   findings: U01:3 [P1], U01:5 [P3], U02:3 [P2]
 #   prior rows: A1, A2, G1 (exempt)
-#   NOTES deferral: line 4
+#   NOTES deferrals: line 4 (DEFERRED) and line 5 ("residual" spelling —
+#   in the default vocabulary)
 CLEAN_KO = """# KNOWN-OPEN (new cycle)
 
 ## A. Carries
@@ -60,6 +61,7 @@ CLEAN_KO = """# KNOWN-OPEN (new cycle)
 - [src: prev:U01:3] parser drops rows — OPEN — owner U-next.
 - [src: KO:A1+KO:A2] both landed sets — regression-check. [p1: 1]
 - [src: NOTES:seriesx:4] bespoke lexer kept — OPEN — owner backlog. [p1: 2-3]
+- [src: NOTES:seriesx:5] residual risks recorded as none — no carry.
 - [src: HF:hotfixa] hotfix landed — regression-check.
 - [agg: prev:U01:P3] [agg: prev:U02:P2] remaining headings — OPEN.
 """
@@ -288,3 +290,62 @@ def test_heading_like_lines_emit_counted_advisory(tmp_path):
     assert "warning: findings prev:U05: 3 heading-like line(s)" in res.stdout
     # the well-formed one is enforced (undisposed => reported), not advisory
     assert "DROP: finding prev:U05:4 [P4]" in res.stdout
+
+
+def test_residual_risks_section_rows_join_universe(tmp_path):
+    # The program's majority deferral spelling: a "## Residual risks"
+    # section whose rows carry NO deferral word. By-placement rows
+    # must join the universe — unmirrored, they must DROP — and a
+    # later non-residual section must end the by-placement scope.
+    paths = _write_fixture(tmp_path)
+    paths["notes"].write_text(
+        NOTES
+        + "\n## Residual risks\n\n"
+        + "- extract_imports' string-constant arm stays bespoke.\n"
+        + "\n### per-lane\n\n"
+        + "- the fnmatch '*' crosses '/' in map globs.\n"
+        + "\n## Validation\n\n"
+        + "- suite green on the composed tree.\n"
+    )
+    res = _run(paths)
+    assert res.returncode == 1
+    assert "DROP: NOTES deferral seriesx:9 is unmirrored" in res.stdout
+    assert "DROP: NOTES deferral seriesx:13 is unmirrored" in res.stdout
+    # the row under "## Validation" is outside the by-placement scope
+    assert "seriesx:17" not in res.stdout
+
+
+def test_observed_deferral_spellings_join_universe(tmp_path):
+    # Real spellings from this program's series NOTES that carry no
+    # "defer" token: each must join the default vocabulary.
+    paths = _write_fixture(tmp_path)
+    paths["notes"].write_text(
+        NOTES
+        + "- Recorded, not fixed: the Rust token-tree residual.\n"
+        + "- Left byte-identical; needs its own fix series.\n"
+        + "- Follow-up candidate: the C/Go stripper migration.\n"
+        + "- Out of this series' charter: sanitiser unification.\n"
+    )
+    res = _run(paths)
+    assert res.returncode == 1
+    for lineno in (6, 7, 8, 9):
+        assert f"DROP: NOTES deferral seriesx:{lineno} is unmirrored" in res.stdout, (
+            lineno, res.stdout)
+
+
+def test_zero_contribution_notes_warns(tmp_path):
+    # A NOTES file yielding no universe rows is a visible vocabulary
+    # gap, not a silent pass.
+    paths = _write_fixture(tmp_path)
+    paths["notes"].write_text("# series NOTES\n\n- FIXED: everything.\n")
+    paths["ko"].write_text(
+        CLEAN_KO
+        .replace("- [src: NOTES:seriesx:4] bespoke lexer kept — OPEN — "
+                 "owner backlog. [p1: 2-3]\n",
+                 "- direct ownership rows kept. [p1: 2-3]\n")
+        .replace("- [src: NOTES:seriesx:5] residual risks recorded as "
+                 "none — no carry.\n", "")
+    )
+    res = _run(paths)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "warning: NOTES seriesx: contributed ZERO deferral rows" in res.stdout
