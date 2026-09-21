@@ -97,8 +97,14 @@ def _gate_landlock_probe(monkeypatch, parties: int) -> None:
     def gated() -> bool:
         if not getattr(local, "seen", False):
             local.seen = True
+            # Generous bound: a loaded CI host can stagger the two
+            # threads' arrival by tens of seconds, and a broken
+            # barrier silently forfeits the deterministic sibling-
+            # inheritance window the test's detection power rests on.
+            # The timeout exists only so a partially-skipped run
+            # cannot wedge the suite.
             with contextlib.suppress(threading.BrokenBarrierError):
-                barrier.wait(timeout=20)
+                barrier.wait(timeout=60)
         return real()
 
     monkeypatch.setattr(_ll, "check_landlock_available", gated)
@@ -270,15 +276,33 @@ def test_concurrent_intermediates_hold_no_death_w(
 
     _gate_landlock_probe(monkeypatch, 2)
 
-    pids: list[int] = []
-    errors: list[BaseException] = []
+    pids: list[int | None] = [None, None]
+    errors: list[BaseException | None] = [None, None]
+    fifos: list[Path] = []
+
+    # Deterministic rendezvous: each target blocks reading a FIFO in
+    # its own bind-mounted out dir (visible post-pivot at the same
+    # path) until the TEST releases it, so neither target can leave
+    # "in flight" while its sibling is still registering — the
+    # 2-concurrent property no longer races spawn-setup latency
+    # against a wall-clock window. The pre-fork overlap window itself
+    # is still pinned by the landlock-probe barrier above.
+    for i in range(2):
+        out = tmp_path / f"out{i}"
+        out.mkdir()
+        fifo = out / "hold.fifo"
+        os.mkfifo(fifo)
+        fifos.append(fifo)
 
     def _one(i: int) -> None:
         out = tmp_path / f"out{i}"
-        out.mkdir()
+
+        def _register(pid: int, i: int = i) -> None:
+            pids[i] = pid
+
         try:
             _spawn.run_sandboxed(
-                ["sleep", "60"],
+                ["sh", "-c", f"exec cat {fifos[i]}"],
                 target=str(out), output=str(out),
                 block_network=True,
                 nproc_limit=1024,
@@ -288,45 +312,116 @@ def test_concurrent_intermediates_hold_no_death_w(
                 readable_paths=None,
                 allowed_tcp_ports=None,
                 seccomp_profile=None, seccomp_block_udp=False,
-                env=None, cwd=None, timeout=30,
+                env=None, cwd=None, timeout=150,
                 capture_output=True, text=True,
-                exec_pid_callback=pids.append,
+                exec_pid_callback=_register,
             )
         except BaseException as e:  # surfaced after teardown
-            errors.append(e)
+            errors[i] = e
+
+    def _release_fifos() -> None:
+        # A writer opening (then closing) the FIFO EOFs the blocked
+        # reader. O_NONBLOCK: ENXIO when the reader never arrived
+        # (spawn failed) — nothing to release then.
+        for fifo in fifos:
+            with contextlib.suppress(OSError):
+                os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
 
     threads = [threading.Thread(target=_one, args=(i,)) for i in range(2)]
     for t in threads:
         t.start()
     try:
-        deadline = time.monotonic() + 20.0
-        while len(pids) < 2 and time.monotonic() < deadline:
+        # Registration is load-bound (uid-map handshake, newuidmap
+        # exec), not time-bound: keep waiting while a spawn is
+        # genuinely still in flight instead of racing a fixed short
+        # window against host load. FIFO-held targets mean no spawn
+        # thread can finish while the cohort is staged, so the loop
+        # exits on facts: both pids arrived; a spawn surfaced an
+        # error; a thread finished (with held targets, itself an
+        # anomaly to classify); or the staging deadline fired.
+        # ORDERING INVARIANT: the staging deadline MUST undercut the
+        # spawns' own 150s run timeout (by enough for release + join +
+        # inspection). Classification below reads each spawn's NATURAL
+        # outcome after the FIFOs are released; if the run timeouts
+        # fired first, every one-sided anomaly — including a lost
+        # exec-pid delivery, a product bug — converges to
+        # TimeoutExpired on both spawns and would be misread as an
+        # environmental wedge. Raising the deadline above the run
+        # timeout trades detection for stability; lowering it far
+        # below re-opens the load flake this rewrite removed.
+        deadline = time.monotonic() + 120.0
+        while (None in pids
+                and not any(e is not None for e in errors)
+                and all(t.is_alive() for t in threads)
+                and time.monotonic() < deadline):
             time.sleep(0.05)
-        if (len(pids) < 2 and errors
-                and all(isinstance(e, subprocess.TimeoutExpired)
-                        for e in errors)):
-            # The userns uid-map handshake has a bounded internal
-            # timeout that a heavily loaded host can overrun. That is
-            # environment, not the defect under test (sibling fd
-            # pinning happens strictly after a successful exec), so
-            # report it honestly rather than as a failure.
-            _pytest.skip(
-                "spawn setup handshake timed out under host load — "
-                f"inconclusive ({errors[0]!r})"
+        if None in pids:
+            # Staging did not complete. Release the held target(s)
+            # FIRST so every spawn thread completes with its natural
+            # outcome — a spawn whose exec-pid delivery was lost
+            # returns cleanly once its released target EOFs, while a
+            # genuinely wedged spawn keeps its TimeoutExpired — then
+            # bounded-join and classify on those facts. Order matters:
+            # the product-bug check precedes any environmental skip,
+            # so a lost delivery can never hide behind a sibling's
+            # (or its own) timeout convergence.
+            _release_fifos()
+            for t in threads:
+                t.join(timeout=30)
+            missing = [i for i in range(2) if pids[i] is None]
+            lost = [i for i in missing
+                    if not threads[i].is_alive() and errors[i] is None]
+            assert not lost, (
+                f"spawn(s) {lost} completed without delivering an exec "
+                f"pid and without raising — exec-pid delivery lost, a "
+                f"product bug, not host load (spawn errors: {errors})"
             )
-        assert len(pids) == 2, (
-            f"expected 2 sandboxed targets in flight, got {len(pids)} "
-            f"(spawn errors: {errors})"
-        )
+            if all(isinstance(errors[i], subprocess.TimeoutExpired)
+                   or threads[i].is_alive() for i in missing):
+                # A true wedge on every unstaged spawn: its setup
+                # timed out (the userns uid-map handshake has a
+                # bounded internal timeout a loaded host can overrun)
+                # or is still grinding past every bound. Environment,
+                # not the defect under test (sibling fd pinning
+                # happens strictly after a successful exec), so
+                # report it honestly rather than as a failure.
+                _pytest.skip(
+                    "spawn setup did not stage the cohort under host "
+                    f"load — inconclusive (spawn errors: {errors})"
+                )
+            _pytest.fail(
+                f"expected 2 sandboxed targets in flight, got "
+                f"{2 - len(missing)} (spawn errors: {errors})"
+            )
         # The intermediate is the grandchild's parent (host pid view).
         intermediates = []
-        for gpid in pids:
+        for i, gpid in enumerate(pids):
             ppid = None
-            with open(f"/proc/{gpid}/status", "rb") as f:
-                for line in f.read(4096).splitlines():
-                    if line.startswith(b"PPid:"):
-                        ppid = int(line.split()[1])
-                        break
+            try:
+                with open(f"/proc/{gpid}/status", "rb") as f:
+                    for line in f.read(4096).splitlines():
+                        if line.startswith(b"PPid:"):
+                            ppid = int(line.split()[1])
+                            break
+            except OSError:
+                # The target registered and then vanished before the
+                # inspection. The only benign shape is THIS spawn's
+                # own timeout kill racing its registration (pid
+                # delivered at the deadline, target reaped an instant
+                # later) — the TimeoutExpired surfaces in that spawn's
+                # thread moments after the kill, so give it a beat and
+                # require the attribution: this spawn's own timeout →
+                # inconclusive; any other disappearance → real signal.
+                grace = time.monotonic() + 10.0
+                while errors[i] is None and time.monotonic() < grace:
+                    time.sleep(0.05)
+                if isinstance(errors[i], subprocess.TimeoutExpired):
+                    _pytest.skip(
+                        f"target {gpid} reaped by its own spawn's "
+                        f"timeout before inspection — inconclusive "
+                        f"({errors[i]!r})"
+                    )
+                raise
             assert ppid, f"no PPid for sandboxed target {gpid}"
             intermediates.append(ppid)
         # Inode set of every registered (live, parent-held) death-pipe
@@ -357,9 +452,11 @@ def test_concurrent_intermediates_hold_no_death_w(
                 "teardown signal is disconnected"
             )
     finally:
-        for gpid in pids:
-            with contextlib.suppress(OSError):
-                os.kill(gpid, signal.SIGKILL)
+        _release_fifos()
+        for gpid in pids:  # backstop for a target that missed the EOF
+            if gpid is not None:
+                with contextlib.suppress(OSError):
+                    os.kill(gpid, signal.SIGKILL)
         for t in threads:
             t.join(timeout=30)
 
