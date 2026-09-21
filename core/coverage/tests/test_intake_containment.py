@@ -216,6 +216,18 @@ def _drive_coverage_consumers(run_dir: Path, project_dir: Path,
         _hostile_line(rng) for _ in range(4)) + b"\n")
     format_progress_trend(store_path)
 
+    # `/project clean` consumers walk the same hostile run dir
+    # (records + findings) and the hostile checklist — classify,
+    # dedup, and the confirmed-deletion snapshot must all survive.
+    from core.coverage.clean import (
+        apply_removal,
+        classify_removal,
+        dedup_runs,
+    )
+    consequence = classify_removal(run_dir, [run_dir])
+    dedup_runs([run_dir, run_dir.parent / "no-such-run", run_dir])
+    apply_removal(store, run_dir, checklist, consequence)
+
 
 def test_intake_containment_generative(tmp_path: Path):
     """THE closure oracle: arbitrary bytes / JSON shapes per row across

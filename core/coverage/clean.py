@@ -26,12 +26,31 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from core.logging import get_logger
+
 from .importer import import_findings, import_run_dir, load_run_findings
 from .record import load_records
+from .schema import iter_file_entries
 
 if TYPE_CHECKING:
     from .store import CoverageStore
     from collections.abc import Iterable
+
+logger = get_logger(__name__)
+
+
+def _hashable(v: Any) -> Any:
+    """A set-safe stand-in for a finding-key component.
+
+    Findings are run-dir JSON — every field shape is attacker-
+    writable, and an unhashable component (list line, dict rule id)
+    detonated the survivor-set updates that gate ``/project clean``.
+    Scalars pass through; containers collapse to their repr, which
+    keeps distinct hostile values distinct enough for identity while
+    never crashing the classification."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    return repr(v)
 
 
 def _finding_key(f: dict[str, Any]) -> tuple[Any, Any, Any]:
@@ -44,7 +63,8 @@ def _finding_key(f: dict[str, Any]) -> tuple[Any, Any, Any]:
     other, so a real finding could be silently discarded with no
     ``found_then_lost`` re-review flag. Preferring rule/CWE over id makes the
     key stable across runs (the same issue re-found at the same line matches
-    even if its per-run id differs)."""
+    even if its per-run id differs). Components are coerced set-safe
+    (:func:`_hashable`) — the rows come straight from run-dir JSON."""
     file = f.get("file") or f.get("file_path") or f.get("path")
     line = next(
         (v for k in ("line", "line_start", "start_line")
@@ -53,14 +73,37 @@ def _finding_key(f: dict[str, Any]) -> tuple[Any, Any, Any]:
     )
     issue = (f.get("rule_id") or f.get("cwe_id") or f.get("vuln_type")
              or f.get("rule") or f.get("id") or f.get("finding_id"))
-    loc = ("L", line) if line is not None else ("I", f.get("id") or f.get("finding_id"))
-    return (file, loc, issue)
+    loc = (
+        ("L", _hashable(line)) if line is not None
+        else ("I", _hashable(f.get("id") or f.get("finding_id")))
+    )
+    return (_hashable(file), loc, _hashable(issue))
 
 
 def _files_examined(run_dir: Path) -> set[str]:
+    """String members of every record's ``files_examined`` list.
+
+    Records are run-dir JSON: the sibling consumers (importer,
+    store_summary, summary) all guard the record and member shapes,
+    and this walk must too — a legacy list-shaped record crashed the
+    ``.get``, a non-list ``files_examined`` (one hostile string
+    silently unioned its CHARACTERS into the survivor file set,
+    mis-classing victim runs) and non-string members crashed or
+    corrupted the set the whole ``/project clean`` lane keys on."""
     out: set[str] = set()
     for rec in load_records(run_dir):
-        out.update(rec.get("files_examined", []) or [])
+        if not isinstance(rec, dict):
+            logger.warning(
+                "clean: skipping non-object coverage record (%s) in %s",
+                type(rec).__name__, run_dir)
+            continue
+        fe = rec.get("files_examined") or []
+        if not isinstance(fe, list):
+            logger.warning(
+                "clean: record in %s has non-list files_examined (%s); "
+                "ignoring", run_dir, type(fe).__name__)
+            continue
+        out.update(x for x in fe if isinstance(x, str))
     return out
 
 
@@ -70,7 +113,7 @@ class CleanConsequence:
 
     run: str
     duplicate: bool                              # adds nothing the survivors lack
-    findings_lost: list[tuple[Any, Any]] = field(default_factory=list)
+    findings_lost: list[tuple[Any, Any, Any]] = field(default_factory=list)
     coverage_files: list[str] = field(default_factory=list)
 
     @property
@@ -190,7 +233,13 @@ def apply_removal(
     victim's records/findings). Caller saves."""
     victim = Path(victim_run_dir)
     import_run_dir(store, victim, checklist)          # coverage persists
-    inv_paths = {fe.get("path") for fe in checklist.get("files", []) if fe.get("path")}
+    # iter_file_entries tolerates hostile checklist container shapes —
+    # a raw walk crashed BETWEEN the operator's deletion confirmation
+    # and the snapshot, the worst possible interleaving.
+    inv_paths = {
+        fe.get("path") for fe in iter_file_entries(checklist)
+        if isinstance(fe.get("path"), str)
+    }
     lost = set(consequence.findings_lost)
     for f in load_run_findings(victim):
         if isinstance(f, dict):
