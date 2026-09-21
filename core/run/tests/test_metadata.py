@@ -1445,6 +1445,66 @@ class TestSessionIdentityStamp(unittest.TestCase):
             meta = load_json(out / RUN_METADATA_FILE)
             self.assertEqual(meta["session_machine_id"], "machine-hash-x")
 
+    def test_start_run_records_harness_session_id(self):
+        import os
+        from unittest import mock
+
+        from core.run.metadata import RUN_METADATA_FILE, start_run
+        sid = "aaaaaaaa-1111-2222-3333-444444444444"
+        with TemporaryDirectory() as d, \
+                mock.patch("core.run.metadata._get_session_pid",
+                           return_value=os.getpid()), \
+                mock.patch.dict(os.environ,
+                                {"CLAUDE_CODE_SESSION_ID": sid}):
+            out = Path(d) / "run"
+            start_run(out, "scan")
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["session_id"], sid)
+
+    def test_start_run_ignores_malformed_session_id(self):
+        import os
+        from unittest import mock
+
+        from core.run.metadata import RUN_METADATA_FILE, start_run
+        with TemporaryDirectory() as d, \
+                mock.patch("core.run.metadata._get_session_pid",
+                           return_value=os.getpid()), \
+                mock.patch.dict(os.environ,
+                                {"CLAUDE_CODE_SESSION_ID": "no spaces;$(",
+                                 "CLAUDE_SESSION_ID": ""}):
+            out = Path(d) / "run"
+            start_run(out, "scan")
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertNotIn("session_id", meta)
+
+    def test_resume_refreshes_session_id(self):
+        import os
+        from unittest import mock
+
+        from core.run.metadata import (
+            RUN_METADATA_FILE,
+            fail_run,
+            resume_run,
+            start_run,
+        )
+        first = "aaaaaaaa-1111-2222-3333-444444444444"
+        second = "bbbbbbbb-5555-6666-7777-888888888888"
+        with TemporaryDirectory() as d:
+            out = Path(d) / "run"
+            with mock.patch("core.run.metadata._get_session_pid",
+                            return_value=11111), \
+                    mock.patch.dict(os.environ,
+                                    {"CLAUDE_CODE_SESSION_ID": first}):
+                start_run(out, "scan")
+            fail_run(out, "interrupted for test", record_timing=False)
+            with mock.patch("core.run.metadata._get_session_pid",
+                            return_value=22222), \
+                    mock.patch.dict(os.environ,
+                                    {"CLAUDE_CODE_SESSION_ID": second}):
+                resume_run(out)
+            meta = load_json(out / RUN_METADATA_FILE)
+            self.assertEqual(meta["session_id"], second)
+
     def test_cleanup_abandoned_sweeps_prior_boot_zombie(self):
         """End-to-end: the dead-session sweep branch reaps a run whose
         stamp is from a prior boot of this machine — the exact

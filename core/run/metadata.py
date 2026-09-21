@@ -254,6 +254,29 @@ def _session_stamp(pid: int) -> dict[str, str]:
     return stamp
 
 
+# Claude Code session ids are uuid-shaped; the hook payload and the
+# env credential are both harness-authored, but the meta value crosses
+# an on-disk file others can write — validate the shape on both sides.
+_SESSION_ID_RE = re.compile(r"[0-9a-fA-F][0-9a-fA-F-]{7,63}")
+
+
+def _harness_session_id() -> str | None:
+    """The harness session id Claude Code injects into tool-call
+    subprocess environments — the SAME id its SessionEnd hook payload
+    carries for the owning session (subagent tool calls inherit the
+    top-level session's id; a nested ``claude -p`` process's own hooks
+    carry ITS id, which never matches a run this session stamped).
+    Recording it at run start lets the SessionEnd hook prove "the
+    ending session IS this run's owner" and finalize immediately.
+    None outside a harness session or on a non-uuid-shaped value.
+    """
+    for var in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_SESSION_ID"):
+        value = os.environ.get(var, "")
+        if value and _SESSION_ID_RE.fullmatch(value):
+            return value
+    return None
+
+
 def _session_alive_for_meta(meta: dict) -> bool:
     """Is the session that owns this run metadata still alive?
 
@@ -713,6 +736,13 @@ def start_run(output_dir: Path, command: str,
             metadata["session_pid"] = session_pid
             metadata["tool_pid"] = os.getppid()
             metadata.update(_session_stamp(session_pid))
+            sid = _harness_session_id()
+            if sid:
+                # Owner-end proof for the SessionEnd hook: a SessionEnd
+                # payload whose session_id matches this stamp is the
+                # owner's OWN graceful end — the run is then genuinely
+                # unowned and may be finalized immediately.
+                metadata["session_id"] = sid
         if target:
             metadata["target_path"] = str(target)
 
@@ -730,7 +760,7 @@ def start_run(output_dir: Path, command: str,
                 and _session_alive_for_meta(_prior_meta)):
             for _k in ("session_pid", "tool_pid", "session_start",
                        "session_boot_id", "session_pidns",
-                       "session_machine_id"):
+                       "session_machine_id", "session_id"):
                 if _k in _prior_meta:
                     metadata[_k] = _prior_meta[_k]
                 else:
@@ -1852,9 +1882,13 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
             # session's stamp (the verifiers would judge the live
             # resumed run abandoned: stamp != live process at new pid).
             for key in ("session_start", "session_boot_id",
-                        "session_pidns", "session_machine_id"):
+                        "session_pidns", "session_machine_id",
+                        "session_id"):
                 metadata.pop(key, None)
             metadata.update(_session_stamp(session_pid))
+            resumed_sid = _harness_session_id()
+            if resumed_sid:
+                metadata["session_id"] = resumed_sid
         save_json(path, metadata)
     # Re-mark as the active run so sandbox summaries and coverage
     # tracking attach to the resumed segment.

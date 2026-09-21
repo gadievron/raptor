@@ -112,6 +112,51 @@ def _tool_failure_command(stream) -> str | None:
     return None
 
 
+# SessionEnd ``reason`` values after which the OWNER PROCESS SURVIVES
+# the event: /clear and resume-away retire the *session id* while the
+# claude process — and any background orchestrator it hosts — keeps
+# running and may still finalize its in-flight runs. Only these
+# provably-survives reasons skip the owner-end finalization; an
+# unknown or absent reason finalizes (the reason enum may grow, and a
+# missed skip is recoverable via the abandon-sweep marker, while a
+# standing skip re-opens the never-reaped orphan this path closes).
+_SESSION_SURVIVES_REASONS = ("clear", "resume")
+
+
+def _session_end_payload(stream) -> "tuple[str | None, str | None]":
+    """``(session_id, reason)`` from the SessionEnd hook payload.
+
+    Claude Code hook payloads (stdin JSON) always carry the FIRING
+    session's own ``session_id``; run metadata records the owning
+    session's id at start_run (from the env the harness injects into
+    tool calls). A match therefore proves the ending session IS the
+    run's owner. A nested subagent's SessionEnd carries the subagent's
+    own id, which never matches a run the parent session stamped.
+    ``reason`` (this CLI's enum: clear / resume / logout /
+    prompt_input_exit / other) qualifies the match — see
+    ``_SESSION_SURVIVES_REASONS``.
+
+    Fail direction: unreadable, malformed, or non-uuid-shaped payload
+    → ``(None, None)``, which keeps the liveness-gated (skip)
+    behaviour — a missed match merely defers the reap to the next
+    start_run sweep, while a spurious match would fail a live run.
+    """
+    import json
+    try:
+        payload = json.load(stream)
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(payload, dict):
+        return None, None
+    raw_reason = payload.get("reason")
+    reason = raw_reason if isinstance(raw_reason, str) else None
+    sid = payload.get("session_id")
+    from core.run.metadata import _SESSION_ID_RE
+    if isinstance(sid, str) and _SESSION_ID_RE.fullmatch(sid):
+        return sid, reason
+    return None, reason
+
+
 def _pick_failure_run(matching: list, command: str) -> "Path | None":
     """Attribute a tool failure to ONE running run.
 
@@ -149,6 +194,11 @@ def main():
         failing_command = _tool_failure_command(sys.stdin)
         if failing_command is None:
             return
+
+    end_session_id = None
+    end_reason = None
+    if event == "session-end":
+        end_session_id, end_reason = _session_end_payload(sys.stdin)
 
     from core.json import load_json
     from core.run.metadata import (
@@ -318,16 +368,36 @@ def main():
                 # dead owner, and still reaps). A session alive by
                 # that proof covers BOTH a subagent/child exit AND the
                 # owner's own graceful end (this hook runs as a child
-                # of the still-alive owner process), so for stamped
-                # metas the immediate session-end reap is effectively
-                # retired: orphans are reaped by _cleanup_abandoned at
-                # the next start_run (hard-killed sessions never fired
-                # SessionEnd anyway). Possible future tightening:
-                # match the SessionEnd payload's session_id against a
-                # stamp recorded at start_run to reap the owner's own
-                # end immediately again. Unstamped legacy metas offer
-                # no proof either way and keep the unconditional reap.
-                if (meta.get("session_start")
+                # of the still-alive owner process) — which retired
+                # the immediate reap for stamped metas entirely.
+                #
+                # OWNER-END PROOF restores it: when the SessionEnd
+                # payload's session_id matches the id start_run
+                # recorded (``session_id``, from the env the harness
+                # injects into tool calls), the ending session IS the
+                # run's owner — its own graceful end leaves the run
+                # genuinely unowned, so finalize now even though the
+                # owner process still breathes during hook execution.
+                # A nested subagent's SessionEnd carries the
+                # subagent's OWN id and never matches; a mismatching
+                # or absent payload/stamp keeps the liveness-gated
+                # skip (orphans then wait for the next start_run
+                # sweep — hard-killed sessions never fired SessionEnd
+                # anyway). Unstamped legacy metas offer no proof
+                # either way and keep the unconditional reap.
+                recorded_sid = meta.get("session_id")
+                owner_end = (
+                    end_session_id is not None
+                    and isinstance(recorded_sid, str)
+                    and recorded_sid == end_session_id
+                    # /clear and resume-away retire the session id but
+                    # the owner PROCESS survives (a background
+                    # orchestrator may still finalize) — those two
+                    # reasons keep the liveness-gated skip.
+                    and end_reason not in _SESSION_SURVIVES_REASONS
+                )
+                if (not owner_end
+                        and meta.get("session_start")
                         and meta.get("session_boot_id")
                         and _session_alive_for_meta(meta)):
                     print(

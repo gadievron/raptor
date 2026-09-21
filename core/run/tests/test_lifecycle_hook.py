@@ -698,9 +698,10 @@ class TestSessionEndLivenessProof(unittest.TestCase):
                   return_value=tmp / "out"),
         )
 
-    def _run_session_end(self, tmp: Path, session_pid: int) -> None:
+    def _run_session_end(self, tmp: Path, session_pid: int,
+                         payload: str = "") -> None:
         p1, p2, p3, p4 = self._isolated(tmp, session_pid)
-        with p1, p2, p3, p4:
+        with p1, p2, p3, p4, _stdin(payload):
             sys.argv = ["hook", "session-end"]
             _hook_mod.main()
 
@@ -810,6 +811,161 @@ class TestSessionEndLivenessProof(unittest.TestCase):
             self.assertEqual(_status(run), STATUS_FAILED)
             meta = load_json(run / RUN_METADATA_FILE)
             self.assertIs(meta["extra"]["abandon_sweep"], True)
+
+    def test_matching_session_id_finalizes_despite_live_owner(self):
+        # Owner-end proof: the SessionEnd payload's session_id equals
+        # the id start_run recorded — the ending session IS the owner,
+        # so the run is finalized immediately even though the owner
+        # process still breathes while its own hook executes.
+        if sys.platform != "linux":
+            self.skipTest("identity proof is procfs-based")
+        from core.run.metadata import _session_stamp
+        sid = "aaaaaaaa-1111-2222-3333-444444444444"
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            stub = self._spawn_claude_shaped_stub(tmp)
+            try:
+                run = _make_running_run(tmp / "out", "validate-001",
+                                        "validate", session_pid=stub.pid)
+                stamp = _session_stamp(stub.pid)
+                self.assertIn("session_start", stamp)
+                self._stamp_meta(run, session_id=sid, **stamp)
+                # No ``reason`` in the payload: absent reads as a real
+                # end (the enum may grow) — finalize.
+                self._run_session_end(
+                    tmp, stub.pid,
+                    payload=json.dumps({"session_id": sid,
+                                        "hook_event_name": "SessionEnd"}))
+                self.assertEqual(_status(run), STATUS_FAILED)
+                meta = load_json(run / RUN_METADATA_FILE)
+                self.assertIs(meta["extra"]["abandon_sweep"], True)
+                self.assertIsNone(stub.poll())  # owner never signalled
+            finally:
+                self._reap_stub(stub)
+
+    def _matching_id_session_end(self, reason: str) -> str:
+        """Run session-end with a matching recorded/payload session_id
+        and the given payload ``reason``; returns the run's status."""
+        from core.run.metadata import _session_stamp
+        sid = "aaaaaaaa-1111-2222-3333-444444444444"
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            stub = self._spawn_claude_shaped_stub(tmp)
+            try:
+                run = _make_running_run(tmp / "out", "validate-001",
+                                        "validate", session_pid=stub.pid)
+                stamp = _session_stamp(stub.pid)
+                self.assertIn("session_start", stamp)
+                self._stamp_meta(run, session_id=sid, **stamp)
+                self._run_session_end(
+                    tmp, stub.pid,
+                    payload=json.dumps({"session_id": sid,
+                                        "reason": reason,
+                                        "hook_event_name": "SessionEnd"}))
+                self.assertIsNone(stub.poll())
+                return _status(run)
+            finally:
+                self._reap_stub(stub)
+
+    @unittest.skipUnless(sys.platform == "linux",
+                         "identity proof is procfs-based")
+    def test_reason_clear_keeps_liveness_skip(self):
+        # /clear retires the session id but the owner PROCESS survives
+        # (a background orchestrator may still finalize its run) — the
+        # matching id must NOT finalize; the liveness gate applies.
+        self.assertEqual(self._matching_id_session_end("clear"),
+                         STATUS_RUNNING)
+
+    @unittest.skipUnless(sys.platform == "linux",
+                         "identity proof is procfs-based")
+    def test_reason_resume_keeps_liveness_skip(self):
+        self.assertEqual(self._matching_id_session_end("resume"),
+                         STATUS_RUNNING)
+
+    @unittest.skipUnless(sys.platform == "linux",
+                         "identity proof is procfs-based")
+    def test_reason_logout_finalizes(self):
+        # A real end reason (and any future unknown one) finalizes.
+        self.assertEqual(self._matching_id_session_end("logout"),
+                         STATUS_FAILED)
+
+    def test_mismatched_session_id_keeps_liveness_skip(self):
+        # A different session's end (e.g. a nested subagent's own
+        # SessionEnd, which carries ITS id) must not reap the live
+        # owner's run.
+        if sys.platform != "linux":
+            self.skipTest("identity proof is procfs-based")
+        from core.run.metadata import _session_stamp
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            stub = self._spawn_claude_shaped_stub(tmp)
+            try:
+                run = _make_running_run(tmp / "out", "validate-001",
+                                        "validate", session_pid=stub.pid)
+                stamp = _session_stamp(stub.pid)
+                self.assertIn("session_start", stamp)
+                self._stamp_meta(
+                    run,
+                    session_id="aaaaaaaa-1111-2222-3333-444444444444",
+                    **stamp)
+                self._run_session_end(
+                    tmp, stub.pid,
+                    payload=json.dumps({
+                        "session_id":
+                            "bbbbbbbb-5555-6666-7777-888888888888",
+                        "hook_event_name": "SessionEnd"}))
+                self.assertEqual(_status(run), STATUS_RUNNING)
+            finally:
+                self._reap_stub(stub)
+
+    def test_absent_payload_session_id_keeps_liveness_skip(self):
+        # No payload id (or unreadable stdin) proves nothing — the
+        # liveness-gated behaviour applies unchanged.
+        if sys.platform != "linux":
+            self.skipTest("identity proof is procfs-based")
+        from core.run.metadata import _session_stamp
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            stub = self._spawn_claude_shaped_stub(tmp)
+            try:
+                run = _make_running_run(tmp / "out", "validate-001",
+                                        "validate", session_pid=stub.pid)
+                stamp = _session_stamp(stub.pid)
+                self.assertIn("session_start", stamp)
+                self._stamp_meta(
+                    run,
+                    session_id="aaaaaaaa-1111-2222-3333-444444444444",
+                    **stamp)
+                self._run_session_end(tmp, stub.pid, payload="")
+                self.assertEqual(_status(run), STATUS_RUNNING)
+            finally:
+                self._reap_stub(stub)
+
+    def test_meta_without_recorded_id_keeps_liveness_skip(self):
+        # A stamped meta that predates session_id recording offers no
+        # owner-end proof: a payload id matches nothing, the live
+        # owner keeps its run.
+        if sys.platform != "linux":
+            self.skipTest("identity proof is procfs-based")
+        from core.run.metadata import _session_stamp
+        with TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            stub = self._spawn_claude_shaped_stub(tmp)
+            try:
+                run = _make_running_run(tmp / "out", "validate-001",
+                                        "validate", session_pid=stub.pid)
+                stamp = _session_stamp(stub.pid)
+                self.assertIn("session_start", stamp)
+                self._stamp_meta(run, **stamp)
+                self._run_session_end(
+                    tmp, stub.pid,
+                    payload=json.dumps({
+                        "session_id":
+                            "aaaaaaaa-1111-2222-3333-444444444444",
+                        "hook_event_name": "SessionEnd"}))
+                self.assertEqual(_status(run), STATUS_RUNNING)
+            finally:
+                self._reap_stub(stub)
 
     def test_reaped_run_recovers_through_real_finaliser(self):
         # End-to-end self-heal: a hook-reaped run's real finaliser
