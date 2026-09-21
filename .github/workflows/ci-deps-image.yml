@@ -50,7 +50,12 @@ env:
 jobs:
   build-push:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 40 rather than the previous 20: the image now compiles coccinelle
+    # from source in a build stage (see ci-deps.Dockerfile) and the
+    # workflow builds uncached, so the OCaml build lands on the
+    # runner's 4 vCPUs every time. Generous headroom over the expected
+    # total — a hung build should still fail well before the 6h default.
+    timeout-minutes: 40
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
