@@ -776,21 +776,37 @@ def dashboard_summary(db_path: Path) -> dict[str, Any]:
         for key in ("entries", "sinks", "unchecked", "validated", "scan_findings", "codeql_results", "hypotheses"):
             totals[key] = sum(s[key] for s in snapshots)
 
-        total_sinks = conn.execute(
-            "SELECT COUNT(DISTINCT id) AS c FROM nodes WHERE kind='sink' AND stale=0"
+        # validation_coverage = validated findings / known findings.
+        # VALIDATES edges only ever point at finding-shaped nodes
+        # (scan_finding / codeql_result / unchecked_flow), so both
+        # sides of the ratio count the same population — dividing the
+        # validated-findings count by the SINK count produced a
+        # incoherent metric that could exceed 1.
+        total_findings = conn.execute(
+            """
+            SELECT COUNT(DISTINCT id) AS c FROM nodes
+            WHERE kind IN ('scan_finding', 'codeql_result', 'unchecked_flow')
+              AND stale=0
+            """
         ).fetchone()["c"]
-        validated_sinks = conn.execute(
+        validated_findings = conn.execute(
             """
             SELECT COUNT(DISTINCT e.dst_id) AS c
             FROM edges e
             JOIN nodes n ON n.id = e.src_id AND n.kind = 'verified_outcome'
+            JOIN nodes d ON d.id = e.dst_id
+                        AND d.kind IN ('scan_finding', 'codeql_result',
+                                       'unchecked_flow')
+                        AND d.stale = 0
             WHERE e.kind = 'VALIDATES' AND e.stale = 0
             """
         ).fetchone()["c"]
         return {
             "snapshots": snapshots,
             "totals": totals,
-            "validation_coverage": validated_sinks / total_sinks if total_sinks else 0.0,
+            "validation_coverage": (
+                validated_findings / total_findings if total_findings else 0.0
+            ),
             "snapshot_count": len(snapshots),
         }
 

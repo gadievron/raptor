@@ -736,3 +736,22 @@ def test_seeds_and_fuzz_targets_survive_newer_scan_snapshot(tmp_path):
 
     assert hypothesis_seeds(graph_path, str(target)) == seeds_before
     assert fuzz_targets(graph_path, str(target)) == fuzz_before
+
+
+def test_validation_coverage_is_a_findings_ratio(tmp_path):
+    """validation_coverage divides validated findings by known
+    findings — one population on both sides, never > 1."""
+    target = tmp_path / "target"
+    run_dir = tmp_path / "run"
+    graph_path = _write_understand_run(run_dir, target)
+    _write_scan_findings(run_dir)
+    ingest_scan_findings(run_dir, str(target))
+    _write_validation_outcomes(run_dir)
+    ingest_validation_outcomes(run_dir, str(target))
+
+    dash = dashboard_summary(graph_path)
+    cov = dash["validation_coverage"]
+    assert 0.0 <= cov <= 1.0
+    # 2 scan findings + 2 unchecked flows known; FLOW-1 and the
+    # command-injection finding validated.
+    assert cov == 0.5
