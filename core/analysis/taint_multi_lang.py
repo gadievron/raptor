@@ -4,7 +4,7 @@ Per-language extractors that identify function signatures, parameter
 flows to dangerous sinks, and basic precondition patterns.  Each
 produces FunctionSummary objects consumed by the audit orchestrator.
 
-Supported languages: Java, JavaScript/TypeScript, Go, Rust.
+Supported languages: Java, JavaScript/TypeScript, Go, Rust, PHP.
 (C/C++ covered by taint_approx.py + Joern; Python by taint_summaries.py)
 """
 
@@ -88,6 +88,36 @@ _RUST_SINKS: set[str] = {
     "String::from_utf8_unchecked",
 }
 
+_PHP_SINKS: set[str] = {
+    "eval", "assert",
+    "system", "exec", "passthru", "popen", "proc_open", "shell_exec",
+    "include", "include_once", "require", "require_once",
+    "unserialize", "header",
+    "fopen", "file_get_contents", "file_put_contents", "unlink",
+    "mysql_query", "mysqli_query", "query", "print",
+    "call_user_func", "call_user_func_array",
+}
+
+# Request superglobals plus the stream/env source shapes the sink
+# scan looks for inside sink arguments. These are not function
+# parameters — matching taint rules carry source_index -1 (the
+# LLM-summary convention for "no positional parameter"), which the
+# upward propagation already skips.
+_PHP_SUPERGLOBALS = ("$_GET", "$_POST", "$_REQUEST", "$_COOKIE", "$_SERVER")
+_PHP_GETENV_RE = re.compile(r"\bgetenv\s*\(")
+
+# echo / print / include / require take no parentheses — the shared
+# call-shaped sink scan never sees them.
+_PHP_KEYWORD_SINK_RE = re.compile(
+    r"\b(echo|print|include_once|include|require_once|require)"
+    r"\s+([^;]{1,400});"
+)
+
+# The backtick operator executes its contents via the shell —
+# semantically shell_exec (labelled as such in the taint rule).
+_PHP_BACKTICK_RE = re.compile(r"`([^`\n]{1,400})`")
+
+
 # -- Precondition patterns per language --
 
 _JAVA_NULL_CHECK = re.compile(r"if\s*\(\s*(\w+)\s*(?:==\s*null|!=\s*null)")
@@ -102,6 +132,17 @@ _JS_TYPE_CHECK = re.compile(r"typeof\s+(\w+)\s*(?:===?|!==?)")
 
 _GO_NIL_CHECK = re.compile(r"if\s+(\w+)\s*(?:==\s*nil|!=\s*nil)")
 _GO_ERR_CHECK = re.compile(r"if\s+(?:err|(\w+))\s*!=\s*nil")
+
+_PHP_ISSET_CHECK = re.compile(r"\b(?:isset|empty|is_null)\s*\(\s*\$(\w+)")
+_PHP_NULL_CMP = re.compile(r"\$(\w+)\s*(?:===?|!==?)\s*null", re.IGNORECASE)
+# Sanitizer application is the PHP-idiomatic guard shape; recorded as
+# a precondition (same evidence granularity as the null/type checks
+# above), never as flow suppression — the reviewer adjudicates.
+_PHP_SANITIZER_CALL = re.compile(
+    r"\b(htmlspecialchars|htmlentities|intval|escapeshellarg"
+    r"|escapeshellcmd|preg_quote|basename)\s*\(\s*\$(\w+)"
+)
+_PHP_INT_CAST = re.compile(r"\(\s*int(?:eger)?\s*\)\s*\$(\w+)")
 
 
 # -- Function extraction patterns --
@@ -123,6 +164,14 @@ _RUST_FUNC = re.compile(
     r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)"
 )
 
+# No modifier prefix: visibility keywords before ``function`` don't
+# need consuming — the captures and the body-search anchor both start
+# at the keyword, so a prefix adds nothing while a repeated-keyword
+# alternation is quadratic on hostile keyword floods.
+_PHP_FUNC = re.compile(
+    r"\bfunction\s+&?(\w+)\s*\(([^)]*)\)"
+)
+
 
 def _extract_summaries_generic(
     content: str,
@@ -131,8 +180,16 @@ def _extract_summaries_generic(
     sinks: set[str],
     extract_preconditions: Callable,
     extract_callees: Callable,
+    extract_extra_flows: Callable | None = None,
 ) -> dict[str, Any]:
-    """Shared extraction logic for all language extractors."""
+    """Shared extraction logic for all language extractors.
+
+    ``extract_extra_flows(params, body)`` covers flow shapes the
+    shared param→call-sink scan cannot express — named non-parameter
+    sources (PHP superglobals) and keyword-shaped sinks. It returns
+    ``(source_name, source_index, sink_call, arg_index)`` tuples;
+    ``source_index`` is -1 for non-parameter sources.
+    """
     from core.analysis.summaries import FunctionSummary, TaintRule, Precondition
 
     results: dict[str, FunctionSummary] = {}
@@ -140,10 +197,16 @@ def _extract_summaries_generic(
     for func_name, params, body_start, body_end in extract_functions(content):
         body = content[body_start:body_end]
         taint_rules = _find_flows_to_sinks(params, body, sinks)
+        extra_flows = (
+            extract_extra_flows(params, body) if extract_extra_flows else []
+        )
         preconditions = extract_preconditions(params, body)
         callees = extract_callees(body)
 
-        if not taint_rules and not preconditions and not callees:
+        if (
+            not taint_rules and not extra_flows
+            and not preconditions and not callees
+        ):
             continue
 
         summary = FunctionSummary(
@@ -158,6 +221,15 @@ def _extract_summaries_generic(
                     evidence_tier=EvidenceTier.HEURISTIC,
                 )
                 for pi, sink, ai in taint_rules
+            ] + [
+                TaintRule(
+                    source_param=source_name,
+                    source_index=source_index,
+                    sink_call=sink,
+                    sink_arg_index=ai,
+                    evidence_tier=EvidenceTier.HEURISTIC,
+                )
+                for source_name, source_index, sink, ai in extra_flows
             ],
             preconditions=[
                 Precondition(
@@ -207,6 +279,15 @@ def extract_rust_summaries(content: str, file_path: str) -> dict[str, Any]:
     return _extract_summaries_generic(
         content, file_path, _extract_rust_functions, _RUST_SINKS,
         _extract_rust_preconditions, _extract_callees_rust,
+    )
+
+
+def extract_php_summaries(content: str, file_path: str) -> dict[str, Any]:
+    """Extract taint summaries from PHP source."""
+    return _extract_summaries_generic(
+        content, file_path, _extract_php_functions, _PHP_SINKS,
+        _extract_php_preconditions, _extract_callees_php,
+        extract_extra_flows=_extract_php_extra_flows,
     )
 
 
@@ -572,6 +653,152 @@ def _extract_callees_rust(body: str) -> list[str]:
     return callees[:_MAX_CALLEES]
 
 
+# -- PHP helpers --
+
+
+def _extract_php_functions(
+    content: str,
+) -> list[tuple[str, list[str], int, int]]:
+    """Extract PHP function/method definitions with bodies."""
+    results = []
+    for match in _PHP_FUNC.finditer(content):
+        name = match.group(1)
+        params = _parse_php_params(match.group(2))
+        # Opening brace after the signature (skips a return type).
+        rest = content[match.end():]
+        brace_offset = rest.find("{")
+        if brace_offset < 0:
+            continue
+        # Body-less declarations (interface/abstract methods) end in
+        # ';' before any brace — the next '{' belongs to a later
+        # definition and must not be claimed as this one's body.
+        semi_offset = rest.find(";")
+        if 0 <= semi_offset < brace_offset:
+            continue
+        body_start = match.end() + brace_offset + 1
+        body_end = _find_brace_end(
+            content, match.end() + brace_offset, hash_comments=True,
+        )
+        if body_end > body_start:
+            results.append((name, params, body_start, body_end))
+    return results
+
+
+def _parse_php_params(params_str: str) -> list[str]:
+    """Parse a PHP parameter list into names (without the ``$``).
+
+    The sigil is dropped so the shared body matchers' ``\\b<name>\\b``
+    searches work (``\\b`` never matches before ``$``); defaults are
+    constant expressions, so the first ``$name`` in a part is always
+    the parameter itself.
+    """
+    params = []
+    for part in params_str.split(","):
+        m = re.search(r"\$(\w+)", part)
+        if m:
+            params.append(m.group(1))
+    return params
+
+
+def _extract_php_preconditions(
+    params: list[str],
+    body: str,
+) -> list[tuple[str, str]]:
+    """Extract precondition patterns from a PHP function body."""
+    preconditions = []
+    for match in _PHP_ISSET_CHECK.finditer(body):
+        var = match.group(1)
+        if var in params:
+            preconditions.append((var, "isset/empty checked"))
+    for match in _PHP_NULL_CMP.finditer(body):
+        var = match.group(1)
+        if var in params:
+            preconditions.append((var, "null check"))
+    for match in _PHP_SANITIZER_CALL.finditer(body):
+        fn, var = match.group(1), match.group(2)
+        if var in params:
+            preconditions.append((var, f"sanitized: {fn}"))
+    for match in _PHP_INT_CAST.finditer(body):
+        var = match.group(1)
+        if var in params:
+            preconditions.append((var, "cast to int"))
+    return preconditions
+
+
+def _extract_callees_php(body: str) -> list[str]:
+    """Extract function/method calls from a PHP body."""
+    pattern = re.compile(r"((?:\w+::)?\w+)\s*\(")
+    callees: list[str] = []
+    seen: set[str] = set()
+    for match in pattern.finditer(body):
+        callee = match.group(1)
+        if callee in ("if", "for", "foreach", "while", "switch",
+                      "catch", "return", "function", "fn", "match",
+                      "array", "list", "isset", "unset", "empty",
+                      "use", "exit", "die", "echo", "print"):
+            continue
+        if callee not in seen:
+            seen.add(callee)
+            callees.append(callee)
+    return callees[:_MAX_CALLEES]
+
+
+def _php_sources_in(text: str) -> list[str]:
+    """Non-parameter taint sources named inside an expression."""
+    out = [sg for sg in _PHP_SUPERGLOBALS if sg in text]
+    if "php://input" in text:
+        out.append("php://input")
+    if _PHP_GETENV_RE.search(text):
+        out.append("getenv")
+    return out
+
+
+def _extract_php_extra_flows(
+    params: list[str],
+    body: str,
+) -> list[tuple[str, int, str, int]]:
+    """PHP flow shapes outside the shared param→call-sink scan.
+
+    Three shapes: superglobal/stream/env sources into call-shaped
+    sinks, keyword-shaped sinks (echo/print/include/require take no
+    parentheses), and the backtick operator (labelled ``shell_exec``,
+    which the manual defines it as identical to). Non-parameter
+    sources carry index -1.
+    """
+    flows: list[tuple[str, int, str, int]] = []
+    seen: set[tuple[str, str, int]] = set()
+
+    def _add(name: str, idx: int, sink: str, ai: int) -> None:
+        key = (name, sink, ai)
+        if key not in seen:
+            seen.add(key)
+            flows.append((name, idx, sink, ai))
+
+    for sink in _PHP_SINKS:
+        # Bounded argument class (mirrors _PHP_KEYWORD_SINK_RE's cap):
+        # an unbounded class is quadratic on unclosed-paren floods.
+        pattern = re.compile(rf"\b{re.escape(sink)}\s*\(([^){{}}]{{0,400}})\)")
+        for match in pattern.finditer(body):
+            args = [a.strip() for a in match.group(1).split(",")]
+            for ai, arg in enumerate(args):
+                for src in _php_sources_in(arg):
+                    _add(src, -1, sink, ai)
+
+    def _expr_flows(expr: str, sink: str) -> None:
+        for src in _php_sources_in(expr):
+            _add(src, -1, sink, 0)
+        for pi, param in enumerate(params):
+            if re.search(rf"\${re.escape(param)}\b", expr):
+                _add(param, pi, sink, 0)
+
+    for match in _PHP_KEYWORD_SINK_RE.finditer(body):
+        _expr_flows(match.group(2), match.group(1))
+    for match in _PHP_BACKTICK_RE.finditer(body):
+        _expr_flows(match.group(1), "shell_exec")
+
+    return flows[:30]
+
+
 # -- Shared utilities --
 
 
@@ -586,6 +813,7 @@ _RUST_CHAR_LITERAL = re.compile(
 
 def _find_brace_end(
     content: str, open_pos: int, *, rust_lifetimes: bool = False,
+    hash_comments: bool = False,
 ) -> int:
     """Find the matching close brace for an open brace at open_pos.
 
@@ -595,6 +823,11 @@ def _find_brace_end(
     label. Treating every apostrophe as a string opener made
     ``&'static str`` swallow all following braces up to the next
     stray apostrophe, corrupting the extracted body extents.
+
+    ``hash_comments=True`` (the PHP extractor) treats ``#`` as a
+    line comment opener, so a brace or quote in a ``#`` comment
+    cannot corrupt the extents. PHP's backtick operator is masked by
+    the shared string handling.
     """
     if open_pos >= len(content) or content[open_pos] != "{":
         return open_pos
@@ -624,6 +857,13 @@ def _find_brace_end(
         elif ch in ('"', "'", "`"):
             in_string = True
             string_char = ch
+        elif hash_comments and ch == "#":
+            pos = content.find("\n", pos + 1)
+            if pos < 0:
+                # Unterminated line comment at EOF — same treatment
+                # as the // branch below.
+                pos = length
+                break
         elif ch == "/" and pos + 1 < length:
             nxt = content[pos + 1]
             if nxt == "/":
@@ -656,6 +896,7 @@ _LANG_EXTENSIONS: dict[str, str] = {
     ".mjs": "javascript",
     ".go": "go",
     ".rs": "rust",
+    ".php": "php",
 }
 
 
@@ -675,5 +916,7 @@ def extract_summaries_for_file(
         return extract_go_summaries(content, file_path)
     if lang == "rust":
         return extract_rust_summaries(content, file_path)
+    if lang == "php":
+        return extract_php_summaries(content, file_path)
 
     return {}

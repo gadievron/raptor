@@ -6,14 +6,18 @@ from core.analysis.taint_multi_lang import (
     extract_java_summaries,
     extract_js_summaries,
     extract_go_summaries,
+    extract_php_summaries,
     extract_rust_summaries,
     extract_summaries_for_file,
     _extract_callees_java,
+    _extract_php_extra_flows,
     _find_brace_end,
     _JAVA_FUNC,
+    _PHP_FUNC,
     _MAX_CALLEES,
     _parse_java_params,
     _parse_go_params,
+    _parse_php_params,
     _parse_rust_params,
 )
 
@@ -223,6 +227,178 @@ pub fn convert(data: *const u8, size: usize) -> Vec<u8> {
         assert _parse_rust_params("mut data: Vec<u8>") == ["data"]
 
 
+class TestPhpExtraction:
+    def test_basic_function(self):
+        src = """\
+<?php
+function run_command($cmd) {
+    system($cmd);
+}"""
+        results = extract_php_summaries(src, "run.php")
+        assert "run_command" in results
+        s = results["run_command"]
+        assert any(
+            r.source_param == "cmd" and r.sink_call == "system"
+            for r in s.taint_rules
+        )
+
+    def test_method_with_modifiers(self):
+        src = """\
+<?php
+class Loader {
+    public static function loadPage(string $page): void {
+        require_once($page);
+    }
+}"""
+        results = extract_php_summaries(src, "Loader.php")
+        assert "loadPage" in results
+        assert any(
+            r.source_param == "page" and "require" in r.sink_call
+            for r in results["loadPage"].taint_rules
+        )
+
+    def test_superglobal_source_has_no_param_index(self):
+        # Superglobals are not positional parameters: index -1, the
+        # convention upward propagation already skips.
+        src = """\
+<?php
+function handle() {
+    eval($_GET['code']);
+    header("Location: " . $_POST['next']);
+}"""
+        results = extract_php_summaries(src, "handle.php")
+        rules = results["handle"].taint_rules
+        get_rule = next(r for r in rules if r.source_param == "$_GET")
+        assert get_rule.sink_call == "eval"
+        assert get_rule.source_index == -1
+        assert any(
+            r.source_param == "$_POST" and r.sink_call == "header"
+            for r in rules
+        )
+
+    def test_keyword_sinks_without_parentheses(self):
+        src = """\
+<?php
+function render($name) {
+    echo "Hello " . $name;
+    include $_REQUEST['page'];
+}"""
+        results = extract_php_summaries(src, "render.php")
+        rules = results["render"].taint_rules
+        assert any(
+            r.source_param == "name" and r.sink_call == "echo"
+            for r in rules
+        )
+        assert any(
+            r.source_param == "$_REQUEST" and r.sink_call == "include"
+            for r in rules
+        )
+
+    def test_backtick_operator_is_shell_exec(self):
+        src = """\
+<?php
+function list_dir($dir) {
+    return `ls $dir`;
+}"""
+        results = extract_php_summaries(src, "sh.php")
+        assert any(
+            r.source_param == "dir" and r.sink_call == "shell_exec"
+            for r in results["list_dir"].taint_rules
+        )
+
+    def test_stream_and_env_sources(self):
+        src = """\
+<?php
+function ingest() {
+    $raw = unserialize(file_get_contents('php://input'));
+    system(getenv('CMD_OVERRIDE'));
+}"""
+        results = extract_php_summaries(src, "ingest.php")
+        rules = results["ingest"].taint_rules
+        assert any(r.source_param == "php://input" for r in rules)
+        assert any(
+            r.source_param == "getenv" and r.sink_call == "system"
+            for r in rules
+        )
+
+    def test_sanitizer_and_cast_preconditions(self):
+        # Sanitizer application rides the precondition channel, never
+        # flow suppression: the echo flow is still recorded.
+        src = """\
+<?php
+function show($name, $id) {
+    echo htmlspecialchars($name);
+    $n = (int) $id;
+    $safe = escapeshellarg($name);
+}"""
+        results = extract_php_summaries(src, "show.php")
+        s = results["show"]
+        pre = {(p.param, p.conditions[0]) for p in s.preconditions}
+        assert ("name", "sanitized: htmlspecialchars") in pre
+        assert ("name", "sanitized: escapeshellarg") in pre
+        assert ("id", "cast to int") in pre
+        assert any(
+            r.source_param == "name" and r.sink_call == "echo"
+            for r in s.taint_rules
+        )
+
+    def test_isset_and_null_preconditions(self):
+        src = """\
+<?php
+function guard($a, $b) {
+    if (!isset($a)) { return; }
+    if ($b === null) { return; }
+    echo $a . $b;
+}"""
+        results = extract_php_summaries(src, "guard.php")
+        pre = {(p.param, p.conditions[0])
+               for p in results["guard"].preconditions}
+        assert ("a", "isset/empty checked") in pre
+        assert ("b", "null check") in pre
+
+    def test_bodyless_declaration_not_claimed(self):
+        # An interface method ends in ';' — the next definition's
+        # brace must not be swallowed as its body.
+        src = """\
+<?php
+interface Store {
+    public function find(int $id): array;
+}
+function lookup($key) {
+    system($key);
+}"""
+        results = extract_php_summaries(src, "store.php")
+        assert "find" not in results
+        assert any(
+            r.sink_call == "system"
+            for r in results["lookup"].taint_rules
+        )
+
+    def test_language_constructs_not_callees(self):
+        src = """\
+<?php
+function walk($items) {
+    foreach ($items as $i) {
+        if (isset($i)) {
+            process($i);
+        }
+    }
+}"""
+        results = extract_php_summaries(src, "walk.php")
+        callees = results["walk"].callees
+        assert "process" in callees
+        assert "foreach" not in callees
+        assert "isset" not in callees
+
+    def test_parse_php_params(self):
+        assert _parse_php_params("string $s, ?int $id = 0") == ["s", "id"]
+        assert _parse_php_params("&$ref, Type ...$rest") == ["ref", "rest"]
+        assert _parse_php_params("") == []
+
+    def test_no_functions_yields_empty(self):
+        assert extract_php_summaries("<?php echo 'static';", "s.php") == {}
+
+
 class TestDispatch:
     def test_java_dispatch(self):
         src = "public class X { public void f(String s) { exec(s); } }"
@@ -247,6 +423,11 @@ class TestDispatch:
     def test_rust_dispatch(self):
         src = 'fn f(cmd: &str) { Command::new(cmd); }'
         results = extract_summaries_for_file(src, "main.rs")
+        assert "f" in results
+
+    def test_php_dispatch(self):
+        src = '<?php function f($x) { system($x); }'
+        results = extract_summaries_for_file(src, "index.php")
         assert "f" in results
 
     def test_unknown_extension(self):
@@ -331,6 +512,74 @@ class TestRustMutPrefix:
         # removeprefix("mut") turned "mutation" into "ation".
         assert _parse_rust_params("mutation: u32") == ["mutation"]
         assert _parse_rust_params("mutex: &Mutex<()>") == ["mutex"]
+
+
+class TestPhpKeywordFloodPerformance:
+    """Keyword floods, not whitespace, are the quadratic fodder for
+    the PHP shapes: a modifier-repetition prefix on _PHP_FUNC and an
+    unbounded sink-argument class each took seconds at 64KB. The
+    fixed patterns run in milliseconds; the budgets are generous for
+    slow machines yet an order of magnitude below the quadratic
+    variants at this input size."""
+
+    def test_php_func_on_modifier_keyword_flood(self):
+        flood = "public " * 18724  # ~128KB
+        start = time.monotonic()
+        assert _PHP_FUNC.findall(flood) == []
+        assert time.monotonic() - start < 2.0
+
+    def test_php_func_still_matches_modifier_signatures(self):
+        # Direction check for the modifier-less pattern: captures are
+        # anchored at the ``function`` keyword, so signatures with and
+        # without modifiers yield identical tuples.
+        sig = "  public static function &foo($a, &$b, ...$c) {}"
+        assert _PHP_FUNC.findall(sig) == [("foo", "$a, &$b, ...$c")]
+        assert _PHP_FUNC.findall("function foo($a) {}") == [("foo", "$a")]
+
+    def test_extra_flows_on_unclosed_paren_flood(self):
+        flood = "eval(" * 26000  # ~130KB, no closing paren
+        start = time.monotonic()
+        assert _extract_php_extra_flows(["p"], flood) == []
+        assert time.monotonic() - start < 2.0
+
+    def test_extra_flows_capped_arg_still_sees_sources(self):
+        flows = _extract_php_extra_flows([], "eval($_GET['c']);")
+        assert ("$_GET", -1, "eval", 0) in flows
+
+
+class TestHashComments:
+    def test_hash_comment_brace_masked(self):
+        # A brace in a PHP '#' comment must not shift the extents.
+        src = "{ x(); # closing } in a comment\n y(); }"
+        assert _find_brace_end(src, 0, hash_comments=True) == len(src)
+
+    def test_hash_comment_quote_masked(self):
+        src = "{ x(); # don't\n y(); }"
+        assert _find_brace_end(src, 0, hash_comments=True) == len(src)
+
+    def test_default_mode_unchanged(self):
+        # Direction check: without the flag '#' is ordinary content
+        # and the commented brace still counts (Java/JS/Go/Rust
+        # behaviour preserved).
+        src = "{ x(); # }\n}"
+        assert _find_brace_end(src, 0) == len("{ x(); # }")
+
+    def test_body_with_hash_comment_still_extracted(self):
+        src = """\
+<?php
+function first($a) {
+    # legacy note with a stray }
+    system($a);
+}
+function second($b) {
+    passthru($b);
+}"""
+        results = extract_php_summaries(src, "h.php")
+        assert "first" in results and "second" in results
+        assert any(
+            r.sink_call == "passthru"
+            for r in results["second"].taint_rules
+        )
 
 
 class TestJsExtractorKeywordGuard:

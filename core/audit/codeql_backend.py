@@ -409,7 +409,7 @@ def build_taint_summary(
         if multi_lang_count:
             logger.info(
                 "taint_summary: %d multi-language functions analysed "
-                "(Java/JS/Go/Rust)",
+                "(Java/JS/Go/Rust/PHP)",
                 multi_lang_count,
             )
     except ImportError:

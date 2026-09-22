@@ -143,6 +143,11 @@
     "count": 30,
     "kind": "literal"
   },
+  "core/analysis/taint_multi_lang.py::_PHP_SINKS": {
+    "count": 24,
+    "kind": "literal",
+    "note": "PHP builtin dangerous-call vocabulary for the mechanical taint arm (language ecosystem names like the sibling _JAVA/_JS/_GO/_RUST_SINKS, not project APIs; project wrappers come from IRIS/sink discovery)"
+  },
   "core/analysis/taint_multi_lang.py::_RUST_SINKS": {
     "count": 22,
     "kind": "literal"
@@ -150,6 +155,11 @@
   "core/analysis/taint_multi_lang.py::_extract_callees_go": {
     "count": 17,
     "kind": "literal"
+  },
+  "core/analysis/taint_multi_lang.py::_extract_callees_php": {
+    "count": 20,
+    "kind": "literal",
+    "note": "PHP language-construct stoplist for the callee scan (keywords and paren-taking constructs, mirrors the Go/Rust callee stoplists)"
   },
   "core/analysis/taint_multi_lang.py::_extract_callees_rust": {
     "count": 17,
