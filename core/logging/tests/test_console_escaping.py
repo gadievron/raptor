@@ -11,6 +11,15 @@ import pytest
 
 from core.logging import EscapingConsoleFormatter, RaptorLogger
 
+# The closure detector lives in core.logging.console_audit so the
+# per-PR lint gate (.github/scripts/check_console_chokepoint.py) and
+# this test tier run the SAME predicate and walk — the tests here pin
+# the predicate's spellings and the sweep's verdict.
+from core.logging.console_audit import (
+    bare_console_config_offences,
+    runtime_console_offences,
+)
+
 HOSTILE = "\x1b]0;pwned\x07\x9b2J‮evil"
 RAW = ("\x1b", "\x07", "\x9b", "‮")
 
@@ -79,57 +88,6 @@ class TestConsoleHandlersUseEscapingFormatter:
         assert checked >= 1
 
 
-def _bare_console_config_offences(text: str) -> list[int]:
-    """Line numbers of console-handler acquisition outside the
-    chokepoint in ``text``.
-
-    basicConfig spellings: an attribute call on any module alias
-    (``logging.basicConfig(`` / ``_logging.basicConfig(``) and the
-    imported-name form (``from logging import basicConfig [as x]`` —
-    the import itself is the marker; importing it has no purpose but
-    calling it, and flagging at the import keeps the scan alias-proof).
-
-    Beyond-basicConfig spellings (a plain-formatter console handler
-    needs none of the basicConfig vocabulary): same-line
-    ``.addHandler(...StreamHandler(...)`` and the
-    ``logging.config`` loaders (``dictConfig`` / ``fileConfig`` as
-    attribute calls or imports — a config-dict console handler gets
-    whatever formatter the dict names, never the escaping one).
-
-    Documented residuals (all evasions of a LINE regex, adversarially
-    probed): a VARIABLE-mediated StreamHandler
-    (``h = StreamHandler(); root.addHandler(h)``) — deliberately,
-    because the FileHandler variant of that idiom is the legitimate
-    audit-file pattern (e.g. sca's debug.log handler); the same call
-    SPLIT across lines (``root.addHandler(\\n    StreamHandler())``);
-    a StreamHandler SUBCLASS; a getattr-mediated loader call; and
-    ``logging.config.listen()``. Folding those needs the AST tier,
-    not a line regex — the chokepoint doctrine (all console config
-    through configure_cli_logging) plus review remain the control for
-    deliberate evasion, same as the writer audit's aliased-sink
-    residual.
-    """
-    import re
-    offences = []
-    for m in re.finditer(r"^[^\n#]*?\b\w+\.basicConfig\(", text, re.M):
-        offences.append(text.count("\n", 0, m.start()) + 1)
-    for m in re.finditer(
-            r"^\s*from\s+logging\s+import\s+[^\n]*\bbasicConfig\b",
-            text, re.M):
-        offences.append(text.count("\n", 0, m.start()) + 1)
-    for m in re.finditer(
-            r"^[^\n#]*?\.addHandler\([^\n]*\bStreamHandler\(",
-            text, re.M):
-        offences.append(text.count("\n", 0, m.start()) + 1)
-    for m in re.finditer(
-            r"^[^\n#]*?\b(?:dictConfig|fileConfig)\(", text, re.M):
-        offences.append(text.count("\n", 0, m.start()) + 1)
-    for m in re.finditer(
-            r"^\s*from\s+logging\.config\s+import\s+[^\n]*"
-            r"\b(?:dictConfig|fileConfig)\b",
-            text, re.M):
-        offences.append(text.count("\n", 0, m.start()) + 1)
-    return sorted(set(offences))
 
 
 class TestConfigureCliLogging:
@@ -203,47 +161,19 @@ class TestConfigureCliLogging:
         basicConfig, same-line addHandler(StreamHandler()), and the
         logging.config loaders in runtime source all fail here.
 
-        Exempt: test files, subsystem scripts/ dirs (outside the
-        launcher), core/logging itself (the chokepoint's home), and
-        buffer-capture harness strings (raptor-self-test's child
-        harness logs into an in-memory buffer, never a TTY).
+        Exemptions and walk live with the detector in
+        core.logging.console_audit (shared with the per-PR lint gate).
         """
         import subprocess
         from pathlib import Path
 
         repo = Path(__file__).resolve().parents[3]
         try:
-            proc = subprocess.run(
-                ["git", "-C", str(repo), "ls-files",
-                 "core", "packages", "libexec", "raptor*.py"],
-                capture_output=True, text=True, check=True,
-            )
+            offenders = runtime_console_offences(repo)
         except (OSError, subprocess.CalledProcessError):
             pytest.skip("git ls-files unavailable (no git / not a "
                         "checkout) — closure scan needs the tracked "
                         "file list")
-        rels = proc.stdout.splitlines()
-        offenders = []
-        for rel in rels:
-            parts = rel.split("/")
-            if ("tests" in parts or "scripts" in parts
-                    or parts[-1].startswith("test_")
-                    or parts[-1] == "conftest.py"):
-                continue
-            if rel.startswith("core/logging/"):
-                continue
-            if rel == "libexec/raptor-self-test":
-                # basicConfig(stream=<StringIO buffer>) inside a child
-                # harness heredoc — captured, never a TTY.
-                continue
-            if not (rel.endswith(".py") or rel.startswith("libexec/")):
-                continue
-            try:
-                text = (repo / rel).read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            for line in _bare_console_config_offences(text):
-                offenders.append(f"{rel}:{line}")
         assert not offenders, (
             "console-handler configuration outside the chokepoint in "
             "runtime source — use core.logging.configure_cli_logging: "
@@ -281,7 +211,7 @@ def test_console_config_predicate_catches_every_spelling():
     for planted in (attr, aliased_mod, imported, imported_as,
                     add_handler, add_handler_bare, dict_config,
                     file_config):
-        assert _bare_console_config_offences(planted), planted
+        assert bare_console_config_offences(planted), planted
     safe = (
         "from core.logging import configure_cli_logging\n"
         "configure_cli_logging(10)\n"
@@ -291,4 +221,4 @@ def test_console_config_predicate_catches_every_spelling():
         "fh = logging.FileHandler('debug.log')\n"
         "root.addHandler(fh)\n"
     )
-    assert _bare_console_config_offences(safe) == []
+    assert bare_console_config_offences(safe) == []

@@ -260,7 +260,7 @@ jobs:
   # direct push to main cannot smuggle a finding either.
   #
   # Pure stdlib Python; no setup beyond checkout + interpreter.
-  # Wall-clock budget: ~1 min total for all six; check_miswiring's
+  # Wall-clock budget: ~1 min total for all seven; check_miswiring's
   # single-pass parallel AST index is ~5-10 s on 4-vCPU runners; the
   # others are ~5-20 s each. timeout-minutes: 10 leaves generous
   # headroom.
@@ -300,3 +300,6 @@ jobs:
 
       - name: Run report-writer closure gate against baseline
         run: python3 .github/scripts/check_report_writer_closure.py
+
+      - name: Run console-chokepoint closure gate
+        run: python3 .github/scripts/check_console_chokepoint.py
