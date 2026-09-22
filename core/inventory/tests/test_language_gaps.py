@@ -404,3 +404,101 @@ def test_no_limitation_note_when_grammar_present(tmp_path):
                           parallel=False)
     assert not any(
         note.startswith("ruby:") for note in inv.get("limitations", []))
+
+
+# ---------------------------------------------------------------------------
+# Content probe: PHP under foreign extensions (plugin module files)
+# ---------------------------------------------------------------------------
+
+
+def test_content_probe_routes_php_open_tag(tmp_path):
+    from core.inventory.languages import detect_language_from_content
+
+    mod = tmp_path / "check_me.mod"
+    mod.write_text("<?php\nfunction sqspell_check($text) {\n  return $text;\n}\n")
+    assert detect_language_from_content(str(mod)) == "php"
+    # Short-echo tag counts too.
+    tpl = tmp_path / "row.mod"
+    tpl.write_text("<?= $value ?>\n")
+    assert detect_language_from_content(str(tpl)) == "php"
+
+
+def test_content_probe_shebang_still_wins(tmp_path):
+    from core.inventory.languages import detect_language_from_content
+
+    script = tmp_path / "deploy.mod"
+    script.write_text("#!/usr/bin/env python3\nprint('<?php not php')\n")
+    assert detect_language_from_content(str(script)) == "python"
+
+
+def test_content_probe_rejects_tagless_and_deep_tags(tmp_path):
+    from core.inventory.languages import (
+        _CONTENT_PROBE_BYTES,
+        detect_language_from_content,
+    )
+
+    plain = tmp_path / "notes.mod"
+    plain.write_text("just some text\n")
+    assert detect_language_from_content(str(plain)) is None
+    # A tag past the probe window is a document quoting PHP, not
+    # PHP source — the head-bounded probe must not route it.
+    deep = tmp_path / "manual.mod"
+    deep.write_text("x" * (_CONTENT_PROBE_BYTES + 10) + "\n<?php\n")
+    assert detect_language_from_content(str(deep)) is None
+
+
+def test_content_probe_ignores_fifos(tmp_path):
+    """Same FIFO discipline as the shebang probe: the walk calls this
+    on every unknown-extension entry in the main process."""
+    import os
+
+    from core.inventory.languages import detect_language_from_content
+
+    fifo = tmp_path / "apipe.mod"
+    os.mkfifo(fifo)
+    assert detect_language_from_content(str(fifo)) is None
+
+
+def test_php_module_files_reach_the_inventory(tmp_path):
+    """End to end: a PHP file under a foreign extension is walked,
+    language-routed, and its functions extracted — previously the
+    extension gate left whole plugin module files invisible to every
+    downstream consumer."""
+    pytest.importorskip("tree_sitter_php")
+    mod = tmp_path / "sqspell.mod"
+    mod.write_text(
+        "<?php\nfunction sqspell_makePage($title) {\n"
+        "  echo $title;\n}\n")
+    out = tmp_path / "out"
+    inv = build_inventory(str(tmp_path), output_dir=str(out),
+                          parallel=False)
+    assert "sqspell_makePage" in _items(inv, "sqspell.mod")
+
+
+def test_content_probe_requires_leading_tag(tmp_path):
+    """A tag mid-head is a document QUOTING PHP — a fenced example in
+    a README minted real checklist items when routed."""
+    from core.inventory.languages import detect_language_from_content
+
+    readme = tmp_path / "README.md"
+    readme.write_text(
+        "# Plugin guide\n\nExample:\n\n```php\n<?php\n"
+        "function doc_example() {}\n```\n")
+    assert detect_language_from_content(str(readme)) is None
+    # Leading whitespace and a UTF-8 BOM are tolerated.
+    padded = tmp_path / "padded.mod"
+    padded.write_text("\n  <?php\nfunction f() {}\n")
+    assert detect_language_from_content(str(padded)) == "php"
+    bom = tmp_path / "bom.mod"
+    bom.write_bytes(b"\xef\xbb\xbf<?php\nfunction g() {}\n")
+    assert detect_language_from_content(str(bom)) == "php"
+
+
+def test_content_probe_rejects_binary_polyglots(tmp_path):
+    """A NUL in the head is a binary — a polyglot image must not carry
+    attacker bytes into parser and review prompts as source."""
+    from core.inventory.languages import detect_language_from_content
+
+    png = tmp_path / "logo.mod"
+    png.write_bytes(b"\x89PNG\x0d\x0a\x1a\x0a\x00\x00<?php evil();")
+    assert detect_language_from_content(str(png)) is None

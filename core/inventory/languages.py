@@ -90,21 +90,16 @@ _SHEBANG_INTERPRETERS = {
 _SHEBANG_PROBE_BYTES = 160
 
 
-def detect_language_from_shebang(filepath: str) -> str | None:
-    """Detect language from a ``#!`` interpreter line.
+def _read_probe_head(filepath: str, nbytes: int) -> bytes | None:
+    """Bounded head read shared by the content probes.
 
-    Only consulted for files without a recognised extension. Reads a
-    bounded prefix; anything unreadable, non-``#!``, or naming an
-    interpreter outside the known set returns None (the file stays
-    uninventoried exactly as before). Version-suffixed interpreters
-    (``python3.12``) resolve by stripping trailing ``.``/digit runs.
+    O_NONBLOCK: a plain ``open()`` of a reader-less FIFO blocks
+    FOREVER, and these probes run on directory entries in the main
+    process — one stray pipe/device node in the target tree wedged
+    the whole inventory build. Non-blocking open + fstat lets us
+    reject anything that isn't a regular file before reading.
+    O_NOFOLLOW mirrors the walk's no-symlink policy.
     """
-    # O_NONBLOCK: a plain ``open()`` of a reader-less FIFO blocks
-    # FOREVER, and this probe runs on every extensionless directory
-    # entry in the main process — one stray pipe/device node in the
-    # target tree wedged the whole inventory build. Non-blocking open
-    # + fstat lets us reject anything that isn't a regular file before
-    # reading. O_NOFOLLOW mirrors the walk's no-symlink policy.
     try:
         fd = os.open(filepath, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
     except OSError:
@@ -112,11 +107,15 @@ def detect_language_from_shebang(filepath: str) -> str | None:
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             return None
-        head = os.read(fd, _SHEBANG_PROBE_BYTES)
+        return os.read(fd, nbytes)
     except OSError:
         return None
     finally:
         os.close(fd)
+
+
+def _parse_shebang(head: bytes) -> str | None:
+    """Map a ``#!`` head to an inventory language, or None."""
     if not head.startswith(b'#!'):
         return None
     line = head[2:].split(b'\n', 1)[0].decode('latin-1').strip()
@@ -135,6 +134,60 @@ def detect_language_from_shebang(filepath: str) -> str | None:
     if base is not None and base not in LANGUAGE_MAP.values():
         return None
     return base
+
+
+def detect_language_from_shebang(filepath: str) -> str | None:
+    """Detect language from a ``#!`` interpreter line.
+
+    Reads a bounded prefix; anything unreadable, non-``#!``, or naming
+    an interpreter outside the known set returns None (the file stays
+    uninventoried exactly as before). Version-suffixed interpreters
+    (``python3.12``) resolve by stripping trailing ``.``/digit runs.
+    """
+    head = _read_probe_head(filepath, _SHEBANG_PROBE_BYTES)
+    if head is None:
+        return None
+    return _parse_shebang(head)
+
+
+# PHP is probed by open tag rather than shebang: PHP ecosystems
+# routinely ship source under foreign extensions (plugin "module"
+# files and the like), and PHP source LEADS with its open tag. The
+# tag must be the head's first non-whitespace content (BOM tolerated)
+# — a tag anywhere deeper is a document QUOTING PHP (a fenced example
+# in a README mints real checklist items if routed), and a NUL in the
+# head is a binary (a polyglot image must not carry attacker bytes
+# into parser and review prompts as "source").
+_CONTENT_PROBE_BYTES = 1024
+_UTF8_BOM = b'\xef\xbb\xbf'
+
+
+def _php_leads(head: bytes) -> bool:
+    if b'\x00' in head:
+        return False
+    if head.startswith(_UTF8_BOM):
+        head = head[len(_UTF8_BOM):]
+    stripped = head.lstrip()
+    return stripped.startswith(b'<?php') or stripped.startswith(b'<?=')
+
+
+def detect_language_from_content(filepath: str) -> str | None:
+    """Detect language for a file whose extension says nothing.
+
+    Consulted when the extension is absent or unrecognised: a ``#!``
+    interpreter line first (same vocabulary as
+    :func:`detect_language_from_shebang`), then a leading PHP open
+    tag. Anything unreadable or unrecognisable returns None — the
+    file stays uninventoried exactly as before.
+    """
+    head = _read_probe_head(filepath, _CONTENT_PROBE_BYTES)
+    if not head:
+        return None
+    if head.startswith(b'#!'):
+        return _parse_shebang(head)
+    if _php_leads(head):
+        return 'php'
+    return None
 
 
 # ---------------------------------------------------------------------

@@ -64,7 +64,7 @@ from .languages import (
     LANGUAGE_MAP,
     RECORD_ONLY_EXTENSIONS,
     detect_language,
-    detect_language_from_shebang,
+    detect_language_from_content,
     refine_language,
 )
 from .module_load_abort import detect_module_load_abort
@@ -699,12 +699,11 @@ def build_inventory(
         raise FileNotFoundError(msg)
 
     if (target.is_file() and detect_language(str(target)) is None
-            and (target.suffix
-                 or detect_language_from_shebang(str(target)) is None)):
-        # Directory mode admits extensionless shebang scripts; the
-        # single-file gate must accept the same files (the shebang
-        # probe only runs when there is no extension, mirroring the
-        # walk).
+            and detect_language_from_content(str(target)) is None):
+        # Directory mode admits content-probed files (extensionless
+        # shebang scripts, PHP under foreign extensions); the
+        # single-file gate must accept the same files, mirroring the
+        # walk.
         msg = f"Target file has no recognized source extension: {target_path}"
         raise ValueError(msg)
 
@@ -1401,11 +1400,13 @@ def _collect_source_files(
             # instead of leaving them silently invisible.
             if ext in extensions or ext in RECORD_ONLY_EXTENSIONS:
                 file_list.append(filepath)
-            elif not ext and detect_language_from_shebang(str(filepath)):
-                # Extensionless interpreter scripts (launcher / dispatch
-                # surfaces) carry their language in the shebang line; the
-                # extension gate alone left them invisible to every
-                # downstream scanner.
+            elif detect_language_from_content(str(filepath)):
+                # Files whose name says nothing carry their language in
+                # the content: extensionless interpreter scripts
+                # (launcher / dispatch surfaces) in the shebang line,
+                # PHP shipped under foreign extensions (plugin module
+                # files) in the open tag. The extension gate alone left
+                # both invisible to every downstream scanner.
                 file_list.append(filepath)
 
     return file_list, pruned_dirs
@@ -1546,10 +1547,11 @@ def _process_single_file(
     if excluded:
         return {"path": rel_path, "_excluded": True, "_reason": reason, "_pattern": pattern}
 
-    # Detect language
+    # Detect language — extension first, then the content probe
+    # (shebang line, PHP open tag) for names that say nothing.
     language = detect_language(str(filepath))
-    if not language and not filepath.suffix:
-        language = detect_language_from_shebang(str(filepath))
+    if not language:
+        language = detect_language_from_content(str(filepath))
     if not language:
         # Source-like files we still don't parse (parser grammars,
         # inline-include fragments, Solidity) were previously dropped
