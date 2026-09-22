@@ -37,6 +37,19 @@ CONSTRAINT_KINDS = frozenset({
     "ordering",
 })
 
+# Review-model vocabulary aliases, applied at extraction. The review
+# schema accepts "invariant" — models recurrently emit it, and a strict
+# enum turned each such review into a schema-validation failure — but
+# the stored vocabulary stays the five canonical kinds: an invariant is
+# a condition on program state that must always hold, which is exactly
+# the "state" kind (its mechanical resolvers — lock imbalance, use
+# after unlock, double fetch — are state-invariant checks). Downstream
+# consumers (propagation resolvers, taint expressibility, display)
+# therefore never see an aliased kind.
+KIND_ALIASES = {
+    "invariant": "state",
+}
+
 CONSTRAINT_STATUSES = frozenset({
     "open",
     "verified",
@@ -235,6 +248,7 @@ def extract_constraints_from_review(
         if not isinstance(item, dict):
             continue
         kind = item.get("kind", "")
+        kind = KIND_ALIASES.get(kind, kind)
         if kind not in CONSTRAINT_KINDS:
             continue
         target = item.get("target", "")

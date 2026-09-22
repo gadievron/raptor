@@ -376,8 +376,20 @@ REVIEW_SCHEMA = {
                         "type": "string",
                         "enum": [
                             "parameter", "precondition", "postcondition",
-                            "state", "ordering",
+                            "state", "ordering", "invariant",
                         ],
+                        "description": (
+                            "parameter: bound on a parameter value. "
+                            "precondition: must hold before the call. "
+                            "postcondition: holds after the call / the "
+                            "return must be checked. state: a program-"
+                            "state condition (lock held, initialised) "
+                            "that must hold while the function runs. "
+                            "ordering: calls must happen in a given "
+                            "order. invariant is accepted as an alias "
+                            "of state — a state condition that must "
+                            "always hold — and is stored as state."
+                        ),
                     },
                     "target": {"type": "string"},
                     "rule": {"type": "string"},

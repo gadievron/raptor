@@ -309,3 +309,41 @@ class TestExtractConstraints:
         }
         result = extract_constraints_from_review(review, "a.c", "f")
         assert len(result) == 2
+
+    def test_invariant_kind_coerced_to_state(self) -> None:
+        # Review models recurrently emit kind="invariant"; the stored
+        # vocabulary stays canonical — it lands as "state".
+        review = {
+            "constraints": [
+                {
+                    "kind": "invariant",
+                    "target": "buf",
+                    "rule": "len(buf) <= capacity at all times",
+                },
+            ],
+        }
+        result = extract_constraints_from_review(review, "a.c", "f")
+        assert len(result) == 1
+        assert result[0].kind == "state"
+
+    def test_kind_aliases_map_onto_canonical_kinds(self) -> None:
+        from core.audit.constraints import CONSTRAINT_KINDS, KIND_ALIASES
+
+        for alias, canonical in KIND_ALIASES.items():
+            assert alias not in CONSTRAINT_KINDS
+            assert canonical in CONSTRAINT_KINDS
+
+    def test_schema_kind_enum_covered_by_extraction(self) -> None:
+        # Drift guard: every kind the review schema lets the model emit
+        # must survive extraction (canonical or aliased) — a value that
+        # passes schema validation but is silently dropped here would
+        # reopen the reject-at-validation defect one layer down.
+        from core.audit.constraints import CONSTRAINT_KINDS, KIND_ALIASES
+        from core.audit.llm_review import REVIEW_SCHEMA
+
+        enum = (
+            REVIEW_SCHEMA["properties"]["constraints"]["items"]
+            ["properties"]["kind"]["enum"]
+        )
+        for kind in enum:
+            assert KIND_ALIASES.get(kind, kind) in CONSTRAINT_KINDS
