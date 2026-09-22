@@ -4,14 +4,20 @@ rules:
   # CR/LF neutralization lets the attacker terminate the current
   # protocol command and append their own.
   #
-  # Known FP modes:
+  # Known FP/FN modes:
   #   - Any str_replace/preg_replace call on the tainted path counts
-  #     as a sanitizer even when its arguments do not touch CR/LF —
-  #     the precision-preserving direction (missed finding, never a
-  #     false confirmation of clean code).
-  #   - A socket handle received as a function parameter (not opened
-  #     via fsockopen/stream_socket_client in the same function) is
-  #     not recognised, so those writes are missed (FN, not FP).
+  #     as a sanitizer even when its arguments do not touch CR/LF, so
+  #     a no-op replace silences a real finding. That is a missed
+  #     finding and never a false confirmation of the code — and it
+  #     stays harmless only while CWE-93 is absent from the
+  #     gate-resolution coverage map (core/audit/tool_coverage.py):
+  #     silence classifies the claim dark there, never clean.
+  #   - A socket handle received as a function parameter or stored on
+  #     $this between methods (the mailer-class shape) is not
+  #     recognised, so those writes are missed (FN, not FP).
+  #   - header()/mail() response/header splitting is out of scope by
+  #     design — reviews tag it CWE-93 too, which is exactly why the
+  #     class must not claim coverage from this rule.
   - id: raptor.php.crlf-injection.socket-write
     mode: taint
     languages: [php]

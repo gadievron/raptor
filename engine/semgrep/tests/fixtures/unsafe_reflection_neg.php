@@ -23,3 +23,16 @@ function map_lookup_safe() {
     $fn = $handlers[$key];
     $fn("payload");
 }
+function blocklist_polarity_launder() {
+    // Documented FN: the rule cannot see branch polarity — this
+    // membership check ABORTS ON MATCH (a blocklist), so passthru
+    // and friends still get through, yet the in_array clears taint.
+    // Kept executable because gate resolution keeps CWE-470
+    // dark-when-silent (core/audit/tool_coverage.py), so the silence
+    // cannot resolve the claim clean.
+    $fn = $_GET['action'];
+    if (in_array($fn, ['system', 'exec'], true)) {
+        die("blocked");
+    }
+    $fn("payload");
+}
