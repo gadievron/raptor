@@ -23,6 +23,15 @@ COVERAGE_RECORD_FILE = "coverage-record.json"  # legacy single-file name
 #: shared enforcement is ``load_json(max_bytes=...)`` (stat-gated, no
 #: read on refusal).
 RUN_ARTIFACT_MAX_BYTES = 256 * 1024 * 1024
+
+#: Cap on how many flow-trace-*.json files one reader globs from a
+#: run dir. Both the per-file SIZE and the file COUNT are run-dir-
+#: writable; an unbounded glob of tiny traces is the same memory
+#: lever as one huge trace. Single-homed here (beside the byte
+#: budget) for BOTH consumers of the glob — the importer's
+#: understand-points walk and the edges module's touched-edge
+#: capture. Deterministic prefix: alphabetical order.
+MAX_FLOW_TRACE_FILES = 512
 READS_MANIFEST = ".reads-manifest"
 
 # Ceiling on how much of the reads manifest a single reader ingests.
@@ -194,7 +203,10 @@ def build_from_semgrep(_run_dir: Path, semgrep_json_path: Path,
     is reported only in that pack's JSON. Merging every pack's errors
     keeps files_failed from silently under-reporting coverage loss.
     """
-    data = load_json(semgrep_json_path)
+    # Tool-written, but the run dir is sandbox-writable — every
+    # run-dir read pays the shared artifact budget (closure test
+    # derives the reader set).
+    data = load_json(semgrep_json_path, max_bytes=RUN_ARTIFACT_MAX_BYTES)
     if not data or not isinstance(data, dict):
         return None
 
@@ -207,7 +219,7 @@ def build_from_semgrep(_run_dir: Path, semgrep_json_path: Path,
     for extra in (extra_error_json_paths or []):
         if Path(extra) == Path(semgrep_json_path):
             continue
-        extra_data = load_json(extra)
+        extra_data = load_json(extra, max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if isinstance(extra_data, dict):
             errors.extend(extra_data.get("errors", []))
     version = data.get("version", "")
@@ -317,7 +329,7 @@ def build_from_codeql(sarif_path: Path) -> dict[str, Any] | None:
     Extracts: files from artifacts, packs from tool.extensions,
     rules from tool.driver.rules, failures from invocations.
     """
-    data = load_json(sarif_path)
+    data = load_json(sarif_path, max_bytes=RUN_ARTIFACT_MAX_BYTES)
     if not data or not isinstance(data, dict):
         return None
 
@@ -386,7 +398,11 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path | None = 
     - files_examined: files the LLM opened (from reads manifest)
     - functions_analysed: functions the LLM produced findings/rulings for
     """
-    findings_data = load_json(findings_path)
+    # LLM-written AND sandbox-writable: the importer's read of the
+    # same file is budgeted (_load_findings_file); the builder's
+    # read pays the identical bound.
+    findings_data = load_json(findings_path,
+                              max_bytes=RUN_ARTIFACT_MAX_BYTES)
     if not findings_data or not isinstance(findings_data, dict):
         return None
 
@@ -651,4 +667,5 @@ def load_records(run_dir: Path) -> list[dict[str, Any] | list[Any]]:
 
 def load_record(run_dir: Path) -> dict[str, Any] | None:
     """Load a coverage record from a run directory. Legacy single-file API."""
-    return load_json(Path(run_dir) / COVERAGE_RECORD_FILE)
+    return load_json(Path(run_dir) / COVERAGE_RECORD_FILE,
+                     max_bytes=RUN_ARTIFACT_MAX_BYTES)

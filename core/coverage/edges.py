@@ -159,8 +159,19 @@ def collect_touched_edges(
             "call_line": call_line, "source": source,
         })
 
-    for tf in sorted(Path(run_dir).glob("flow-trace-*.json")):
-        trace = load_json(tf)
+    # Same intake bounds as the importer's walk of the SAME artifacts:
+    # per-file byte budget plus a glob-count cap (both size and count
+    # are run-dir-writable; an unbounded glob of tiny traces is the
+    # same memory lever as one huge trace).
+    from .record import MAX_FLOW_TRACE_FILES, RUN_ARTIFACT_MAX_BYTES
+    traces = sorted(Path(run_dir).glob("flow-trace-*.json"))
+    if len(traces) > MAX_FLOW_TRACE_FILES:
+        logger.warning(
+            "edge capture: %d flow-trace files in %s; reading the "
+            "first %d", len(traces), run_dir, MAX_FLOW_TRACE_FILES)
+        traces = traces[:MAX_FLOW_TRACE_FILES]
+    for tf in traces:
+        trace = load_json(tf, max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if not isinstance(trace, dict):
             continue
         for step in trace.get("steps") or []:
@@ -214,8 +225,12 @@ def write_touched(run_dir: Path, edges: list[dict[str, Any]]) -> None:
 
 
 def load_touched(run_dir: Path) -> list[dict[str, Any]]:
-    """Read a run's touched edges; ``[]`` when absent/malformed."""
-    raw = load_json(Path(run_dir) / EDGES_TOUCHED_FILENAME)
+    """Read a run's touched edges; ``[]`` when absent/malformed
+    (over-budget included — the file is run-dir-writable, so its
+    size is attacker-writable like every other property)."""
+    from .record import RUN_ARTIFACT_MAX_BYTES
+    raw = load_json(Path(run_dir) / EDGES_TOUCHED_FILENAME,
+                    max_bytes=RUN_ARTIFACT_MAX_BYTES)
     if not isinstance(raw, dict):
         return []
     return [e for e in raw.get("edges") or [] if isinstance(e, dict)]

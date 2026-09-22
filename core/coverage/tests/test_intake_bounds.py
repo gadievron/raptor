@@ -198,3 +198,143 @@ class TestOversizedArtifactMemory:
             f"an over-budget findings.json — the byte budget is not "
             f"bounding reader memory"
         )
+
+
+class TestEdgesBudget:
+    """The touched-edge capture reads the SAME run-dir artifacts the
+    importer's budgeted walk reads — identical bounds (byte budget
+    per trace, glob-count cap, edges-touched.json budget)."""
+
+    def test_oversize_flow_trace_refused_valid_flows(self, tmp_path):
+        from core.coverage.edges import collect_touched_edges
+        checklist = {"files": [{"path": "a.c", "items": [
+            {"name": "f", "line_start": 1, "line_end": 9},
+            {"name": "g", "line_start": 10, "line_end": 19},
+        ]}]}
+        _sparse(tmp_path / "flow-trace-big.json",
+                RUN_ARTIFACT_MAX_BYTES + 1)
+        (tmp_path / "flow-trace-ok.json").write_text(json.dumps({
+            "steps": [{"type": "call", "call_site": "a.c:2",
+                       "definition": "a.c:10"}]}))
+        edges = collect_touched_edges(tmp_path, checklist)
+        assert [(e["caller"], e["callee"]) for e in edges] == [("f", "g")]
+
+    def test_flow_trace_glob_count_capped(self, tmp_path, monkeypatch):
+        import core.coverage.edges as edges_mod
+        from core.coverage import record as record_mod
+        monkeypatch.setattr(record_mod, "MAX_FLOW_TRACE_FILES", 2)
+        checklist = {"files": [{"path": "a.c", "items": [
+            {"name": "f", "line_start": 1, "line_end": 9},
+            {"name": "g", "line_start": 10, "line_end": 19},
+        ]}]}
+        for i in range(5):
+            (tmp_path / f"flow-trace-{i}.json").write_text(json.dumps({
+                "steps": [{"type": "call", "call_site": f"a.c:{2 + i}",
+                           "definition": "a.c:10"}]}))
+        edges = edges_mod.collect_touched_edges(tmp_path, checklist)
+        # Distinct call lines keep the edges apart: only the capped
+        # prefix contributes.
+        assert len(edges) == 2
+
+    def test_oversize_touched_refused(self, tmp_path):
+        from core.coverage.edges import load_touched
+        _sparse(tmp_path / "edges-touched.json",
+                RUN_ARTIFACT_MAX_BYTES + 1)
+        assert load_touched(tmp_path) == []
+
+
+class TestBuilderBudget:
+    """The record BUILDERS pay the same budget as the loaders — the
+    builder's read of findings.json was the byte-identical twin of
+    the importer lane the intake series capped."""
+
+    def test_oversize_findings_refused(self, tmp_path):
+        from core.coverage.record import build_from_findings
+        p = tmp_path / "findings.json"
+        _sparse(p, RUN_ARTIFACT_MAX_BYTES + 1)
+        assert build_from_findings(p, tool="llm") is None
+
+    def test_oversize_semgrep_refused(self, tmp_path):
+        from core.coverage.record import build_from_semgrep
+        p = tmp_path / "semgrep.json"
+        _sparse(p, RUN_ARTIFACT_MAX_BYTES + 1)
+        assert build_from_semgrep(tmp_path, p) is None
+
+    def test_oversize_sarif_refused(self, tmp_path):
+        from core.coverage.record import build_from_codeql
+        p = tmp_path / "codeql.sarif"
+        _sparse(p, RUN_ARTIFACT_MAX_BYTES + 1)
+        assert build_from_codeql(p) is None
+
+    def test_oversize_legacy_record_refused(self, tmp_path):
+        from core.coverage.record import load_record
+        _sparse(tmp_path / "coverage-record.json",
+                RUN_ARTIFACT_MAX_BYTES + 1)
+        assert load_record(tmp_path) is None
+
+
+class TestRunDirReadBudgetClosure:
+    """Closure oracle over the whole intake surface: the landed
+    budgets were hand-enumerated lanes, and every wave found
+    uncapped siblings of already-capped calls (edges.py's trace read
+    was the byte-identical twin of the importer's). Derive the
+    reader set mechanically instead: every ``load_json`` call in
+    core/coverage + core/run runtime code must pass ``max_bytes`` or
+    carry an allowlist entry with a rationale. A new uncapped reader
+    fails here until classified."""
+
+    #: (relpath, enclosing function) → why an unbounded read is OK.
+    ALLOWLIST: dict = {
+        # (currently empty: every reader pays a budget)
+    }
+
+    def test_every_load_json_is_budgeted(self):
+        import ast
+        repo = Path(__file__).resolve().parents[3]
+        offenders = []
+        for root in ("core/coverage", "core/run"):
+            for p in (repo / root).rglob("*.py"):
+                if "tests" in p.parts or "scripts" in p.parts:
+                    continue
+                src = p.read_text()
+                if "load_json" not in src:
+                    continue
+                tree = ast.parse(src)
+                funcs = [
+                    n for n in ast.walk(tree)
+                    if isinstance(n, (ast.FunctionDef,
+                                      ast.AsyncFunctionDef))
+                ]
+
+                def _enclosing(lineno: int) -> str:
+                    best, span = "<module>", None
+                    for f in funcs:
+                        if f.lineno <= lineno <= (f.end_lineno
+                                                  or f.lineno):
+                            s = (f.end_lineno or f.lineno) - f.lineno
+                            if span is None or s < span:
+                                best, span = f.name, s
+                    return best
+
+                rel = str(p.relative_to(repo))
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    name = ""
+                    if isinstance(node.func, ast.Name):
+                        name = node.func.id
+                    elif isinstance(node.func, ast.Attribute):
+                        name = node.func.attr
+                    if name != "load_json":
+                        continue
+                    if any(k.arg == "max_bytes" for k in node.keywords):
+                        continue
+                    site = (rel, _enclosing(node.lineno))
+                    if site in self.ALLOWLIST:
+                        continue
+                    offenders.append(f"{rel}:{node.lineno}")
+        assert not offenders, (
+            "uncapped load_json in run-dir-reading packages — pass "
+            "max_bytes (RUN_ARTIFACT_MAX_BYTES class) or allowlist "
+            f"with rationale: {offenders}"
+        )

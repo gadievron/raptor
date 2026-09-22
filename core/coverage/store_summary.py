@@ -396,9 +396,16 @@ def render_run_coverage(run_dir) -> str | None:
     /agentic and standalone /scan end-of-run printing). Read-only."""
     from core.json import load_json
 
+    from .record import RUN_ARTIFACT_MAX_BYTES
+
     run = Path(run_dir)
     return render_coverage(
-        [run], load_json(run / "checklist.json"), run / "coverage.json",
+        [run],
+        # Run-dir artifact — shared intake budget like every other
+        # run-dir read (closure test derives the reader set).
+        load_json(run / "checklist.json",
+                  max_bytes=RUN_ARTIFACT_MAX_BYTES),
+        run / "coverage.json",
         annotations_base=run / "annotations",
     )
 

@@ -30,7 +30,13 @@ from core.run.provenance import (
     run_timestamp,
 )
 
-from .record import RUN_ARTIFACT_MAX_BYTES, load_records
+from .record import (
+    MAX_FLOW_TRACE_FILES as _MAX_FLOW_TRACE_FILES,
+)
+from .record import (
+    RUN_ARTIFACT_MAX_BYTES,
+    load_records,
+)
 from .registry import category_of
 from .schema import _opt_int, iter_file_entries, iter_item_entries
 from .summary import _inventory_name_index, _match_to_inventory
@@ -488,9 +494,6 @@ def import_annotations(
 # evidence. Mapped to the `understand` tool label (llm category via the
 # registry). _UNDERSTAND_SECTIONS mirrors the bridge's _LOCATION_BEARING_SECTIONS.
 _UNDERSTAND_SECTIONS = ("entry_points", "sink_details", "boundary_details")
-
-#: Cap on the flow-trace glob — see _understand_points.
-_MAX_FLOW_TRACE_FILES = 512
 
 
 def _understand_points(run_dir: Path):
