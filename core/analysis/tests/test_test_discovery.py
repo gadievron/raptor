@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 
+import pytest
+
 from core.analysis.test_discovery import _find_test_files, discover_tests
 
 
@@ -525,15 +527,167 @@ class TestHostileTreeRobustness:
                        for v in visited if "node_modules" in v.split(_os.sep)[1:])
 
 
+# One direction pair per language family discovery reads: the same
+# test body placed loose (src/) and under tests/ must both be admitted
+# (the file is still code under review) with opposite location
+# provenance. File names follow each family's loose-file convention so
+# the _TEST_FILE_PATTERNS admission path is the one exercised.
+_FAMILY_FIXTURES = [
+    ("test_target.py",
+     "def test_target():\n    assert target() == 1\n"),
+    ("test_target.js",
+     "function test_target() {\n  expect(target()).toBe(1)\n}\n"),
+    ("test_target.ts",
+     "function test_target() {\n  expect(target()).toBe(1)\n}\n"),
+    ("target_test.go",
+     "func test_target(t *testing.T) {\n"
+     "\tassert.Equal(t, 1, target())\n}\n"),
+    ("target_test.rs",
+     "fn test_target() {\n    assert!(target() == 1);\n}\n"),
+    ("test_target.rb",
+     "def test_target\n  assert_equal 1, target()\nend\n"),
+    ("test_target.java",
+     "static void test_target() {\n    assertEquals(1, target());\n}\n"),
+    ("target_test.c",
+     "static void test_target(void) {\n\tassert(target() == 1);\n}\n"),
+    ("PayloadTest.php",
+     "<?php\n"
+     "class PayloadTest extends TestCase {\n"
+     "    public function testTarget(): void {\n"
+     "        $this->assertSame(1, target());\n"
+     "    }\n"
+     "}\n"),
+]
+
+
+class TestLocationProvenance:
+    """A hostile repo can plant a loose test_* / *_test file next to
+    production code; the defining file's location is the only
+    mechanical provenance signal, so every discovered case carries
+    ``in_test_tree``. Discovery admission itself is unchanged — the
+    demotion happens downstream in spec inference."""
+
+    @pytest.mark.parametrize("fname,body", _FAMILY_FIXTURES)
+    def test_loose_vs_intree_direction_pair(self, tmp_path, fname, body):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / fname).write_text(body)
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / fname).write_text(body)
+
+        result = discover_tests(tmp_path)
+        assert "target" in result
+        by_location = {tc.test_file: tc.in_test_tree
+                       for tc in result["target"]}
+        assert by_location[f"src/{fname}"] is False
+        assert by_location[f"tests/{fname}"] is True
+
+    def test_provenance_survives_the_prep_cache(self, tmp_path, monkeypatch):
+        import core.analysis.test_discovery as td
+
+        target = tmp_path / "target"
+        (target / "tests").mkdir(parents=True)
+        (target / "tests" / "test_mod.py").write_text(
+            "def test_alpha():\n    assert alpha(1) == 2\n",
+        )
+        (target / "src").mkdir()
+        (target / "src" / "test_loose.py").write_text(
+            "def test_beta():\n    assert beta(0) == 1\n",
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        first = td.discover_tests_cached(target, out)
+        assert first["alpha"][0].in_test_tree is True
+        assert first["beta"][0].in_test_tree is False
+
+        monkeypatch.setattr(
+            td, "discover_tests",
+            lambda *a, **kw: pytest.fail("cache hit must skip the scan"),
+        )
+        second = td.discover_tests_cached(target, out)
+        assert second["alpha"][0].in_test_tree is True
+        assert second["beta"][0].in_test_tree is False
+
+    def test_t_dir_is_a_recognized_test_tree(self, tmp_path):
+        # Perl / git convention: the suite lives under t/. Without the
+        # exact-name pattern, those ecosystems' entire curated suites
+        # would carry loose-file provenance.
+        t = tmp_path / "t"
+        t.mkdir()
+        (t / "0001-basic.py").write_text(
+            "def test_target():\n    assert target() == 1\n",
+        )
+        result = discover_tests(tmp_path)
+        assert result["target"][0].in_test_tree is True
+
+    def test_symlink_escaping_the_root_loses_intree_provenance(
+        self, tmp_path,
+    ):
+        # A tests/-dir symlink whose target resolves outside the repo
+        # root serves content the repo's test tree does not contain:
+        # discovery still reads it, but it must not inherit in-tree
+        # trust from the symlink's location.
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "real_test.py").write_text(
+            "def test_alpha():\n    assert alpha(1) == 2\n",
+        )
+        repo = tmp_path / "repo"
+        tests = repo / "tests"
+        tests.mkdir(parents=True)
+        (tests / "test_link.py").symlink_to(outside / "real_test.py")
+        (tests / "test_real.py").write_text(
+            "def test_beta():\n    assert beta(0) == 1\n",
+        )
+
+        result = discover_tests(repo)
+        assert result["alpha"][0].in_test_tree is False
+        assert result["beta"][0].in_test_tree is True
+
+    def test_pre_provenance_cache_rescans_not_guesses(self, tmp_path):
+        import json as _json
+
+        import core.analysis.test_discovery as td
+
+        target = tmp_path / "target"
+        (target / "tests").mkdir(parents=True)
+        (target / "tests" / "test_mod.py").write_text(
+            "def test_alpha():\n    assert alpha(1) == 2\n",
+        )
+        out = tmp_path / "out"
+        (out / "prep-cache").mkdir(parents=True)
+        fp = td._test_tree_fingerprint(target.resolve())
+        # Fingerprint-matching cache written before the provenance
+        # field existed: no location trust grade to reload, so the
+        # mapping must be recomputed from disk — never guessed.
+        (out / "prep-cache" / "test-discovery-cache.json").write_text(
+            _json.dumps({
+                "fingerprint": fp,
+                "payload": {"alpha": [{
+                    "test_file": "tests/test_mod.py",
+                    "test_function": "test_alpha",
+                    "target_function": "alpha",
+                    "assertions": ["assert alpha(1) == 2"],
+                }]},
+            }),
+        )
+        result = td.discover_tests_cached(target, out)
+        assert result["alpha"][0].in_test_tree is True
+
+
 class TestDirPatternBoundaries:
     def test_lookalike_dirs_are_not_test_trees(self):
         from core.analysis.test_discovery import _dir_matches_test_pattern
+        # `t` matches by exact name only — its separator variants
+        # would claim far too much.
         for part in ("special", "testimonials", "spectrum",
-                     "testament"):
+                     "testament", "tt", "t2", "t_shirt", "t-mobile"):
             assert not _dir_matches_test_pattern(part), part
 
     def test_real_test_dirs_still_match(self):
         from core.analysis.test_discovery import _dir_matches_test_pattern
         for part in ("tests", "test", "testing", "test_unit",
-                     "tests-integration", "spec", "specs", "regress"):
+                     "tests-integration", "spec", "specs", "regress",
+                     "t"):
             assert _dir_matches_test_pattern(part), part

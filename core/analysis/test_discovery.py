@@ -22,6 +22,11 @@ logger = logging.getLogger(__name__)
 _TEST_DIR_PATTERNS = ("test_", "tests", "test", "testing", "spec",
                       "specs", "regress")
 
+# Exact-name-only test dirs, no separator variants: ``t`` is the
+# Perl / git convention — giving it the ``t_*`` / ``t-*`` semantics of
+# the patterns above would claim far too many unrelated directories.
+_EXACT_TEST_DIR_NAMES = ("t",)
+
 
 def _dir_matches_test_pattern(part: str) -> bool:
     """Exact or separator-delimited match against the dir patterns.
@@ -33,6 +38,8 @@ def _dir_matches_test_pattern(part: str) -> bool:
     with a ``_``/``-`` separator (``tests-unit``). ``testing`` joined
     the list explicitly since it no longer rides the ``test`` prefix.
     """
+    if part in _EXACT_TEST_DIR_NAMES:
+        return True
     for pat in _TEST_DIR_PATTERNS:
         if part == pat:
             return True
@@ -42,6 +49,35 @@ def _dir_matches_test_pattern(part: str) -> bool:
         elif part.startswith((pat + "_", pat + "-")):
             return True
     return False
+
+
+def _in_recognized_test_tree(dir_parts: tuple[str, ...]) -> bool:
+    """True when any enclosing directory is a recognized test dir.
+
+    Single provenance predicate for both the discovery walk and the
+    per-case ``in_test_tree`` stamp — the two must never diverge, or a
+    file could be admitted under one rule and trust-graded under
+    another.
+    """
+    return any(_dir_matches_test_pattern(part) for part in dir_parts)
+
+
+def _resolves_within(path: Path, root: Path) -> bool:
+    """Whether *path* resolves inside *root* (which must be resolved).
+
+    A tests/-dir entry that is a symlink to a file OUTSIDE the repo
+    root carries content the repo's test tree does not actually
+    contain — it must not inherit in-tree provenance from the
+    symlink's location. Directory symlinks are not the concern here:
+    the discovery walk does not follow them.
+    """
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return False
+    return resolved.is_relative_to(root)
+
+
 # ``\w+Test.php`` is the PHPUnit file convention (class-per-file,
 # suffix mandatory for the default phpunit.xml discovery); the
 # prefix/suffix ``test`` shapes cover the rest of the ecosystems.
@@ -118,6 +154,14 @@ class TestCase:
     test_function: str
     target_function: str
     assertions: List[str] = field(default_factory=list)
+    #: Whether the defining file sits under a recognized test dir
+    #: (tests/, regress/, ...). Loose test_* / *_test files elsewhere
+    #: in the tree are still discovered — they must be reviewed as
+    #: code — but their location is the only mechanical provenance
+    #: signal, so spec inference demotes their assertions instead of
+    #: granting executable-spec trust. Defaults False: a case whose
+    #: provenance is unknown must never be promoted.
+    in_test_tree: bool = False
 
 
 def discover_tests(
@@ -149,7 +193,12 @@ def discover_tests(
     result: Dict[str, List[TestCase]] = {}
 
     for test_file in test_files:
-        rel_path = str(test_file.relative_to(target))
+        rel = test_file.relative_to(target)
+        rel_path = str(rel)
+        in_tree = (
+            _in_recognized_test_tree(rel.parent.parts)
+            and _resolves_within(test_file, target)
+        )
         try:
             source = test_file.read_text(errors="replace")
         except OSError:
@@ -169,6 +218,7 @@ def discover_tests(
                     test_function=test_func_name,
                     target_function=target_fn,
                     assertions=assertions[:10],
+                    in_test_tree=in_tree,
                 )
                 result.setdefault(target_fn, []).append(tc)
 
@@ -256,6 +306,12 @@ def discover_tests_cached(
                         test_function=tc.get("test_function", ""),
                         target_function=tc.get("target_function", fn),
                         assertions=list(tc.get("assertions") or []),
+                        # Deliberately strict: a cache written before
+                        # provenance existed carries no location trust
+                        # grade — the KeyError degrades to the re-scan
+                        # below, which recomputes it from disk rather
+                        # than guessing either direction.
+                        in_test_tree=bool(tc["in_test_tree"]),
                     )
                     for tc in cases
                     if isinstance(tc, dict)
@@ -289,6 +345,7 @@ def discover_tests_cached(
                     "test_function": tc.test_function,
                     "target_function": tc.target_function,
                     "assertions": tc.assertions,
+                    "in_test_tree": tc.in_test_tree,
                 }
                 for tc in cases
             ]
@@ -352,9 +409,7 @@ def _find_test_files(target: Path) -> tuple[List[Path], int]:
         if "node_modules" in parts or "vendor" in parts:
             continue
 
-        is_test_dir = any(
-            _dir_matches_test_pattern(part) for part in parts
-        )
+        is_test_dir = _in_recognized_test_tree(parts)
 
         for fname in files:
             if not fname.endswith(_SUPPORTED_EXTENSIONS):
