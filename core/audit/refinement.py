@@ -185,12 +185,24 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
                 | set(getattr(refined, attr, None) or set())
             )
         merged["tools_skipped"] -= merged["tools_dispatched"]
-        for attr, value in merged.items():
-            if value:
+        for attr in ("tools_dispatched", "tools_errored"):
+            if merged[attr]:
                 try:
-                    setattr(winner, attr, value)
+                    setattr(winner, attr, merged[attr])
                 except AttributeError:
                     pass  # duck-typed outcome without the field
+        # tools_skipped is corrected in BOTH directions: a channel the
+        # union shows dispatched must also leave the WINNER'S own
+        # stale skip set (a channel left in both sets reads as looked
+        # AND did-not-look in the journal), so the subtracted set is
+        # written whenever either side disagrees — an empty result
+        # clears to None, keeping the no-records shape.
+        skipped = merged["tools_skipped"]
+        if skipped or getattr(winner, "tools_skipped", None):
+            try:
+                winner.tools_skipped = skipped or None
+            except AttributeError:
+                pass  # duck-typed outcome without the field
         return winner
 
     if is_tool_evidence(refined_tool):

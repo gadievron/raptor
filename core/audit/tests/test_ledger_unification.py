@@ -178,3 +178,16 @@ class TestRefinementDispatchRecordCarry:
         merged = merge_outcomes(original, refined)
         assert merged.tools_dispatched is None
         assert merged.tools_skipped is None
+
+    def test_winner_stale_skip_cleared_when_union_dispatched(self):
+        # A channel the merged record shows dispatched must leave the
+        # WINNER'S own skip set too — left in both, the journal reads
+        # it as looked and did-not-look simultaneously.
+        original = _outcome(status="suspicious")
+        original.tools_dispatched = {"coccinelle"}
+        refined = _outcome(status="suspicious")
+        refined.tools_skipped = {"coccinelle"}
+        merged = merge_outcomes(original, refined)
+        assert merged is refined
+        assert merged.tools_dispatched == {"coccinelle"}
+        assert not merged.tools_skipped
