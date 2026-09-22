@@ -2362,6 +2362,51 @@ Examples:
     return parser
 
 
+def _openant_coverage_paths(
+    pipeline_output: dict,
+    original_repo_path: Path,
+) -> list[str]:
+    """Resolve OpenAnt-reported finding paths for the reads-manifest.
+
+    ``location.file`` values are derived from the scanned (untrusted)
+    repo: an absolute or ``..``-bearing entry would otherwise register
+    out-of-repo paths as this run's read coverage. Containment: only
+    resolved paths inside the resolved repo root are kept; everything
+    else is dropped with a debug note. Tolerance is per-entry — one
+    malformed entry (non-dict shapes, a null-byte path the OS refuses
+    to resolve) is skipped without voiding the rest of the batch.
+    """
+    oa_files: set[str] = set()
+    for entry in pipeline_output.get("findings") or []:
+        if not isinstance(entry, dict):
+            continue
+        loc = entry.get("location")
+        rel = loc.get("file") if isinstance(loc, dict) else None
+        if isinstance(rel, str) and rel:
+            oa_files.add(rel)
+    repo_root = original_repo_path.resolve()
+    resolved: list[str] = []
+    for rel in sorted(oa_files):
+        try:
+            fp = (original_repo_path / rel).resolve()
+            contained = fp.is_relative_to(repo_root)
+            keep = contained and fp.is_file()
+        except (OSError, ValueError):
+            logger.debug(
+                "Coverage: dropped malformed OpenAnt-reported path: %r", rel,
+            )
+            continue
+        if not contained:
+            logger.debug(
+                "Coverage: dropped OpenAnt-reported path outside the "
+                "repo root: %r", rel,
+            )
+            continue
+        if keep:
+            resolved.append(str(fp))
+    return resolved
+
+
 def main() -> int:
     from core.dataflow import sanitizer_cut_config
     from core.sandbox import apply_cli_args
@@ -3661,27 +3706,18 @@ def main() -> int:
                 # so extract file paths from pipeline_output findings
                 # and append to the run's .reads-manifest.
                 try:
-                    po = oa_result.get("pipeline_output") or {}
-                    oa_files: set[str] = set()
-                    for entry in po.get("findings") or []:
-                        loc = entry.get("location") or {}
-                        rel = loc.get("file") or ""
-                        if rel:
-                            oa_files.add(rel)
-                    if oa_files:
+                    resolved = _openant_coverage_paths(
+                        oa_result.get("pipeline_output") or {},
+                        original_repo_path,
+                    )
+                    if resolved:
                         manifest = out_dir / ".reads-manifest"
-                        resolved = []
-                        for rel in sorted(oa_files):
-                            fp = (original_repo_path / rel).resolve()
-                            if fp.is_file():
-                                resolved.append(str(fp))
-                        if resolved:
-                            with open(manifest, "a", encoding="utf-8") as mf:
-                                mf.write("\n".join(resolved) + "\n")
-                            logger.debug(
-                                "Coverage: registered %d OpenAnt-analysed files",
-                                len(resolved),
-                            )
+                        with open(manifest, "a", encoding="utf-8") as mf:
+                            mf.write("\n".join(resolved) + "\n")
+                        logger.debug(
+                            "Coverage: registered %d OpenAnt-analysed files",
+                            len(resolved),
+                        )
                 except Exception:
                     logger.debug("Coverage tracking for OpenAnt failed", exc_info=True)
         except RuntimeError as e:

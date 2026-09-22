@@ -256,6 +256,83 @@ class TestCoverageTrackingIntegration(unittest.TestCase):
         self.assertIn("original_repo_path / rel", self.src)
 
 
+class TestCoverageManifestContainment(unittest.TestCase):
+    """OpenAnt ``location.file`` values are hostile-repo-derived: an
+    absolute or ``..``-bearing entry must never register out-of-repo
+    paths in the run's reads-manifest."""
+
+    @staticmethod
+    def _paths(findings, repo):
+        import raptor_agentic
+        return raptor_agentic._openant_coverage_paths(
+            {"findings": findings}, repo)
+
+    @staticmethod
+    def _finding(path):
+        return {"location": {"file": path}}
+
+    def test_in_repo_path_registers(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            (repo / "src").mkdir(parents=True)
+            (repo / "src" / "a.py").write_text("x = 1\n")
+            out = self._paths([self._finding("src/a.py")], repo)
+            self.assertEqual(out, [str((repo / "src" / "a.py").resolve())])
+
+    def test_dotdot_escape_dropped(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            repo = base / "repo"
+            repo.mkdir()
+            (base / "escape").write_text("secret\n")
+            out = self._paths([self._finding("../escape")], repo)
+            self.assertEqual(out, [])
+
+    def test_absolute_path_dropped(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            repo = base / "repo"
+            repo.mkdir()
+            outside = base / "outside.py"
+            outside.write_text("x = 1\n")
+            out = self._paths([self._finding(str(outside))], repo)
+            self.assertEqual(out, [])
+
+    def test_mixed_entries_keep_only_contained(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            repo = base / "repo"
+            repo.mkdir()
+            (repo / "ok.py").write_text("x = 1\n")
+            (base / "evil.py").write_text("x = 1\n")
+            out = self._paths(
+                [self._finding("ok.py"),
+                 self._finding("../evil.py"),
+                 self._finding(str(base / "evil.py")),
+                 self._finding("/etc/hostname")],
+                repo,
+            )
+            self.assertEqual(out, [str((repo / "ok.py").resolve())])
+
+    def test_malformed_entries_do_not_void_the_batch(self):
+        """Tolerance is per-entry: one hostile null-byte path or
+        shape-broken finding must not raise and cost the whole batch
+        its coverage registration."""
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            (repo / "ok.py").write_text("x = 1\n")
+            out = self._paths(
+                [self._finding("bad\x00null.py"),
+                 {"location": "not-a-dict"},
+                 "not-a-dict-entry",
+                 {"location": {"file": 7}},
+                 self._finding("ok.py")],
+                repo,
+            )
+            self.assertEqual(out, [str((repo / "ok.py").resolve())])
+
+
 class TestSageHandlesFunctionLevelFindings(unittest.TestCase):
     """SAGE verdict storage must work for line=0 (function-level) findings."""
 
