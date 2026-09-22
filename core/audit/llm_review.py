@@ -103,7 +103,11 @@ _STATUS_FULL = {
         "exploitable in the current calling context. You must name "
         "the bug — if you cannot, use clean. "
         "finding = real vulnerability worth investigating. "
-        "dormant = latent issue that needs specific conditions to trigger."
+        "dormant = real bug in code that is currently unreachable "
+        "(dead code, no callers); it becomes a finding when "
+        "reachability changes. A reachable bug that only triggers "
+        "under specific conditions is suspicious or finding, never "
+        "dormant."
     ),
 }
 
@@ -133,7 +137,11 @@ _STATUS_QUALITY = {
         "suspicious = possible defect, unconfirmed. You must name "
         "the specific concern — if you cannot, use clean. "
         "finding = confirmed defect worth investigating. "
-        "dormant = latent issue that needs specific conditions to trigger."
+        "dormant = real defect in code that is currently unreachable "
+        "(dead code, no callers); it becomes a finding when "
+        "reachability changes. A reachable defect that only triggers "
+        "under specific conditions is suspicious or finding, never "
+        "dormant."
     ),
 }
 
