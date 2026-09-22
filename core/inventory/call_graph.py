@@ -2537,10 +2537,11 @@ def extract_call_graph_rust(
     Returns an empty graph when ``tree_sitter_rust`` isn't installed
     or the file is unparseable.
 
-    Rust shapes:
+    Rust shapes (import-map VALUES are dot-joined — the walker
+    normalises ``::`` paths so OSV symbol matching stays uniform):
 
-      * ``use foo::bar::Baz;`` -> ``imports["Baz"] = "foo::bar::Baz"``
-      * ``use foo::bar as alias;`` -> ``imports["alias"] = "foo::bar"``
+      * ``use foo::bar::Baz;`` -> ``imports["Baz"] = "foo.bar.Baz"``
+      * ``use foo::bar as alias;`` -> ``imports["alias"] = "foo.bar"``
       * ``use foo::{Bar, Baz as B};`` -> binds both
       * ``use foo::*;`` -> ``INDIRECTION_WILDCARD_IMPORT``
       * ``Baz::new()`` (scoped path call) -> chain ``["Baz", "new"]``

@@ -71,11 +71,16 @@ def extract_qualified_symbols(
 ) -> list[str]:
     """Pull qualified affected-symbol names out of an OSV advisory.
 
-    Handles the two shapes seen in real OSV records:
+    Handles the three shapes seen in real OSV records:
 
       * ``imports[].symbols`` (mirrors the Go convention) — each
         symbol is qualified with the import's ``path``; when the
         record omits it the flat-list policy below applies.
+      * ``affects.functions`` — the RustSec convention (the dominant
+        Rust advisory producer): fully-qualified
+        ``crate::Type::method`` strings (live OSV export shape, e.g.
+        RUSTSEC-2021-0003). Same emit policy as the flat lists after
+        separator normalisation.
       * Flat ``affected_symbols`` / ``affected_functions`` lists —
         emitted so that every name the resolver receives is BINDABLE:
         an already-qualified symbol is emitted verbatim (normalised),
@@ -162,6 +167,14 @@ def extract_qualified_symbols(
         for key in ("affected_symbols", "affected_functions"):
             v = source.get(key)
             if isinstance(v, list) and dep_name:
+                for s in v:
+                    if isinstance(s, str) and s:
+                        _emit(s, out)
+        # RustSec convention: ``affects.functions``.
+        affects = source.get("affects")
+        if isinstance(affects, dict) and dep_name:
+            v = affects.get("functions")
+            if isinstance(v, list):
                 for s in v:
                     if isinstance(s, str) and s:
                         _emit(s, out)

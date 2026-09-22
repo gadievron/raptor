@@ -148,6 +148,36 @@ class TestExtractQualifiedSymbols:
         # a dep_name to qualify with.
         assert extract_qualified_symbols(adv, "") == ["p.s"]
 
+    def test_rustsec_affects_functions_shape(self):
+        # The RustSec convention — the dominant Rust advisory
+        # producer. Live OSV export shape (RUSTSEC-2021-0003):
+        # ecosystem_specific = {"affected_functions": null,
+        #   "affects": {"functions": ["smallvec::SmallVec::
+        #   insert_many"], "arch": [], "os": []}}.
+        # Fully-qualified crate paths normalise to dotted form.
+        adv = _adv(es={
+            "affected_functions": None,
+            "affects": {
+                "functions": ["smallvec::SmallVec::insert_many"],
+                "arch": [], "os": [],
+            },
+        })
+        assert extract_qualified_symbols(adv, "smallvec") == [
+            "smallvec.SmallVec.insert_many",
+        ]
+
+    def test_rustsec_affects_junk_tolerated(self):
+        adv = _adv(es={"affects": {
+            "functions": ["ok::f", 3, None, ""],
+        }})
+        assert extract_qualified_symbols(adv, "ok") == ["ok.f"]
+        assert extract_qualified_symbols(
+            _adv(es={"affects": "not-a-dict"}), "ok",
+        ) == []
+        assert extract_qualified_symbols(
+            _adv(es={"affects": {"functions": "not-a-list"}}), "ok",
+        ) == []
+
     def test_non_string_path_marks_symbols_unresolved(self):
         # Junk path: never dep-qualify junk, but the string symbol
         # still names an advisory function the tier can't evaluate —

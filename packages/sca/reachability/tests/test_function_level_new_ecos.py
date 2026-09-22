@@ -80,6 +80,71 @@ def test_cargo_symbol_map_filters_by_prefix():
     assert out["Cargo:serde@1.0.0"] == ["serde.from_str"]
 
 
+_RUSTSEC_ADV = _Adv(ecosystem_specific={
+    # Real RustSec OSV export shape (RUSTSEC-2021-0003): per-function
+    # data lives under ``affects.functions`` as fully-qualified
+    # ``crate::Type::method`` strings; the flat key is present but
+    # null.
+    "affected_functions": None,
+    "affects": {
+        "functions": ["smallvec::SmallVec::insert_many"],
+        "arch": [], "os": [],
+    },
+})
+
+
+def test_cargo_rustsec_affects_called_not_downgraded(tmp_path: Path):
+    """A RustSec-convention advisory whose affected function the
+    project genuinely calls must land on ``likely_called`` through
+    the REAL producer (build → refine). Pre-fix the tier read only
+    ``imports[]`` / flat lists, so the dominant Rust producer's
+    shape extracted nothing and the tier silently no-oped."""
+    from packages.sca.reachability.cargo_function_level import (
+        build_cargo_symbol_map,
+        refine_cargo_verdicts,
+    )
+    smap = build_cargo_symbol_map([
+        _OsvResult(dep_key="Cargo:smallvec@1.6.0",
+                   advisories=[_RUSTSEC_ADV]),
+    ])
+    assert smap == {
+        "Cargo:smallvec@1.6.0": ["smallvec.SmallVec.insert_many"],
+    }
+    (tmp_path / "main.rs").write_text(
+        "use smallvec::SmallVec;\n"
+        "fn main() { SmallVec::insert_many(v); }\n"
+    )
+    deps = [_dep("smallvec", "1.6.0", "Cargo")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_cargo_verdicts(
+        deps, out, target=tmp_path, cargo_symbol_map=smap,
+    )
+    assert out[deps[0].key()].verdict == "likely_called"
+
+
+def test_cargo_rustsec_affects_uncalled_downgrades(tmp_path: Path):
+    """Counter-direction: the RustSec shape must feed the suppression
+    arm too — an uncalled affected function still downgrades."""
+    from packages.sca.reachability.cargo_function_level import (
+        build_cargo_symbol_map,
+        refine_cargo_verdicts,
+    )
+    smap = build_cargo_symbol_map([
+        _OsvResult(dep_key="Cargo:smallvec@1.6.0",
+                   advisories=[_RUSTSEC_ADV]),
+    ])
+    (tmp_path / "main.rs").write_text(
+        "use smallvec::SmallVec;\n"
+        "fn main() { SmallVec::with_capacity(4); }\n"
+    )
+    deps = [_dep("smallvec", "1.6.0", "Cargo")]
+    out: Dict[str, Reachability] = {deps[0].key(): _imported()}
+    refine_cargo_verdicts(
+        deps, out, target=tmp_path, cargo_symbol_map=smap,
+    )
+    assert out[deps[0].key()].verdict == "not_function_reachable"
+
+
 def test_cargo_refine_likely_called(tmp_path: Path):
     from packages.sca.reachability.cargo_function_level import (
         refine_cargo_verdicts,

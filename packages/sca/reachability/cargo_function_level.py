@@ -2,8 +2,7 @@
 
 Sibling of the PyPI / npm / Go / Java tiers. Consumes Rust call-
 graph data emitted by ``core.inventory.call_graph.extract_call_graph_rust``
-and runs the cross-language resolver against OSV ``ecosystem_specific
-.imports[].symbols`` data.
+and runs the cross-language resolver against OSV symbol data.
 
 ## Verdict transitions
 
@@ -15,11 +14,16 @@ and runs the cross-language resolver against OSV ``ecosystem_specific
 
 ## Qualified-name shape
 
-Rust OSV records (RustSec advisories) ship symbols paired with
-the affected crate path. We construct ``<crate>::<symbol>`` and
-let the resolver match against project chains. The Rust extractor
-binds ``use foo::Bar`` -> ``imports["Bar"] = "foo::Bar"`` so chains
-like ``["Bar", "method"]`` resolve to ``foo::Bar.method``.
+RustSec advisories — the dominant Rust producer — ship per-function
+data as ``ecosystem_specific.affects.functions``: fully-qualified
+``crate::Type::method`` strings (live OSV export shape, e.g.
+RUSTSEC-2021-0003). The shared extractor also reads the Go-style
+``imports[].symbols`` and flat ``affected_symbols`` /
+``affected_functions`` shapes; ``::`` separators are normalised to
+dots. The Rust extractor's import map stores DOT-JOINED values
+(``use foo::Bar`` -> ``imports["Bar"] = "foo.Bar"`` — it keeps OSV
+symbol matching uniform), so chains like ``["Bar", "method"]``
+resolve to ``foo.Bar.method``.
 
 Limitation: instance-method calls where the variable name doesn't
 match the type (``let x = Bar::new(); x.method()``) won't bind —
