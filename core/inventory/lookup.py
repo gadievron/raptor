@@ -127,8 +127,11 @@ def lookup_file_language(checklist: dict[str, Any], file_path: str,
     norm_path = normalise_path(file_path, repo_root)
     for file_entry in _file_index(checklist, repo_root).get(norm_path, ()):
         lang = file_entry.get("language")
-        if lang:
-            return str(lang)
+        # Strings only: a malformed row's non-string value stringified
+        # would leak a repr where consumers expect a language tag —
+        # a clean None keeps the hint contract honest.
+        if isinstance(lang, str) and lang:
+            return lang
     return None
 
 

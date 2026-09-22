@@ -285,6 +285,7 @@ class TestLookupFileLanguage(unittest.TestCase):
             {"path": "src/table.inc", "language": "c", "items": []},
             {"path": "web/header.inc", "language": "php", "items": []},
             {"path": "src/untagged.x", "items": []},
+            {"path": "src/mangled.y", "language": {"x": 1}, "items": []},
         ],
     }
 
@@ -303,6 +304,13 @@ class TestLookupFileLanguage(unittest.TestCase):
             lookup_file_language(self.CHECKLIST, "src/missing.inc", "/repo"))
         self.assertIsNone(
             lookup_file_language(self.CHECKLIST, "src/untagged.x", "/repo"))
+
+    def test_non_string_language_value_is_none_not_repr(self):
+        # A malformed row must yield a clean None, never a stringified
+        # repr masquerading as a language tag.
+        from core.inventory.lookup import lookup_file_language
+        self.assertIsNone(
+            lookup_file_language(self.CHECKLIST, "src/mangled.y", "/repo"))
 
     def test_absolute_path_without_root_is_none_not_error(self):
         # Best-effort contract: consumers use this as a hint, so an
