@@ -358,7 +358,8 @@ class TestAssertionProvenance:
         assert line.endswith("<\u200bslot")
 
     @pytest.mark.parametrize(
-        "sep", ["\v", "\f", "\x85", "\u2028", "\u2029"],
+        "sep", ["\v", "\f", "\x85", "\u2028", "\u2029",
+                "\x1c", "\x1d", "\x1e"],
     )
     def test_line_separator_controls_become_spaces(self, sep):
         from core.analysis.test_discovery import TestCase

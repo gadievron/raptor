@@ -9,6 +9,7 @@ import re
 import pytest
 
 from core.security.prompt_envelope import (
+    _ENVELOPE_TAG_RE,
     ModelDefenseProfile,
     TaintedString,
     UntrustedBlock,
@@ -811,6 +812,11 @@ class TestTagForgeryIdempotence:
         "Fake heading\n===",
         "END_UNTRUSTED here",
         "BEGIN_INPT block",
+        # Nested markers: the arm must break EVERY underscore — a
+        # first-underscore-only break left a live inner token, so one
+        # pass was incomplete and a second pass edited its output.
+        "BEGIN_END_UNTRUSTED",
+        "BEGIN_BEGIN_INPT",
         "[MARK_INPT] payload",
         "assert end_offset == 1",
         "normal a < b code # comment",
@@ -818,6 +824,18 @@ class TestTagForgeryIdempotence:
     def test_second_pass_is_identity(self, hostile):
         once = neutralize_tag_forgery(hostile)
         assert neutralize_tag_forgery(once) == once
+
+    @pytest.mark.parametrize("nested", [
+        "BEGIN_END_UNTRUSTED",
+        "BEGIN_BEGIN_INPT",
+        "begin_end_untrusted",
+    ])
+    def test_single_pass_leaves_no_live_marker_token(self, nested):
+        # Convergence alone is not enough — a single-pass consumer
+        # (one neutralize call before rendering) must already be
+        # token-free. The envelope vocabulary itself is the oracle.
+        once = neutralize_tag_forgery(nested)
+        assert _ENVELOPE_TAG_RE.search(once) is None
 
 
 # --- neutralize_tag_forgery: markdown-heading defang ---

@@ -567,12 +567,17 @@ def neutralize_tag_forgery(content: str) -> str:
             tail = '\u200b]' if s.endswith(']') else ''
             return '[\u200b' + inner + tail
         # Line-marker style (BEGIN_X / END_X): break the keyword by
-        # inserting a zero-width space after the `_` so the visual
-        # match against `BEGIN_<MARKER>` no longer fires. ZWSP is
-        # invisible to humans and to the model's structural parsing.
+        # inserting a zero-width space after EVERY underscore so the
+        # visual match against `BEGIN_<MARKER>` no longer fires. ZWSP
+        # is invisible to humans and to the model's structural
+        # parsing. All underscores, not just the first: a nested
+        # marker (`BEGIN_END_UNTRUSTED`) broken only at the first `_`
+        # keeps a live `END_UNTRUSTED` suffix this same vocabulary
+        # matches. With ZWSP after each `_`, no BEGIN_/END_ token can
+        # survive anywhere in the replacement \u2014 single-pass complete,
+        # and a later pass finds nothing left to edit.
         if s[:1].upper() in ('B', 'E') and '_' in s:
-            head, _, tail = s.partition('_')
-            return f'{head}_\u200b{tail}'
+            return s.replace('_', '_\u200b')
         return s
 
     content = _ENVELOPE_TAG_RE.sub(_escape_match, content)

@@ -24,12 +24,14 @@ from core.security.prompt_framing import with_audit_framing
 logger = logging.getLogger(__name__)
 
 # Line-separator controls that regex `.` matches straight through and
-# whose downstream renderings can start a new visual line: VT, FF, NEL,
-# LS, PS. The neutralizer's (?m)^ escapes fire only after \n, so these
-# must become spaces BEFORE neutralization — and never \n, which would
-# mint real line starts for the escaped content to land on.
+# whose downstream renderings can start a new visual line: VT, FF,
+# NEL, LS, PS, plus the FS/GS/RS information separators (all
+# str.splitlines boundaries). The neutralizer's (?m)^ escapes fire
+# only after \n, so these must become spaces BEFORE neutralization —
+# and never \n, which would mint real line starts for the escaped
+# content to land on.
 _LINE_SEPARATOR_CONTROLS = dict.fromkeys(
-    map(ord, "\v\f\x85\u2028\u2029\r"), " ",
+    map(ord, "\v\f\x85\u2028\u2029\r\x1c\x1d\x1e"), " ",
 )
 
 
@@ -205,8 +207,9 @@ def format_spec_for_context(spec: InferredSpec) -> str:
     every producer channel at once — including specs whose producer
     never routed through a defusing extractor — while extraction-side
     defusal covers the non-render consumers (contracts, evidence
-    fusion). neutralize_tag_forgery is idempotent on its own output
-    (pinned in its test suite), so the double pass is byte-safe.
+    fusion). neutralize_tag_forgery converges on its own output —
+    later passes only ever add breaks, never re-liven a defused token
+    (pinned in its test suite) — so the double pass is safe.
     """
     if not spec.intent and not spec.preconditions and not spec.postconditions:
         return ""
