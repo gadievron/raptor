@@ -5,7 +5,10 @@ Where the envelope audit stops attacker text from reaching LLM prompts
 raw, this audit stops LLM-returned text from reaching rendered report /
 terminal surfaces raw. The canonical defence is
 :mod:`core.security.prompt_output_sanitise` (``sanitise_string`` /
-``sanitise_code``) plus the per-module single-line helpers built on it
+``sanitise_code``), its markdown-writer projection
+:mod:`core.security.markdown_render` (``md_fence`` / ``md_inline`` /
+``md_prose`` — the discipline home NEW markdown writers adopt), plus
+the per-module single-line helpers built on the pipeline
 (``_line`` / ``_cell`` / ``_prose`` / ``_md_heading`` /
 ``_md_escape_inline`` / ``_md_table_cell`` / ``_fence``).
 
@@ -279,6 +282,13 @@ _SANITISERS = frozenset({
     "inline_code",
     "code_cell",
     "md_cell",
+    # core.security.markdown_render — the one-home markdown-writer
+    # discipline (fence / inline / prose projections of the
+    # prompt_output_sanitise pipeline). New markdown writers adopt
+    # these instead of minting per-module helper N+1.
+    "md_fence",
+    "md_inline",
+    "md_prose",
 })
 
 
