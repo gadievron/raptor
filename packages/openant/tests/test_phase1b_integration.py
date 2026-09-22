@@ -273,3 +273,48 @@ class TestSageHandlesFunctionLevelFindings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
+    """--openant-only must count as an enabled scanner: the
+    "no scanners enabled" guard used to exit 2 before the OpenAnt
+    phase was ever reached (the flag only worked combined with
+    --sarif)."""
+
+    def test_guard_exempts_openant_only(self):
+        src = (Path(__file__).parents[3] / "raptor_agentic.py").read_text()
+        self.assertIn(
+            "if not skip_scan and not _openant_only "
+            "and not (run_semgrep or run_codeql):",
+            src,
+            "the no-scanners guard must exempt --openant-only",
+        )
+
+    def test_openant_only_invocation_reaches_openant_phase(self):
+        """Real invocation shape: --repo <dir> --openant-only must get
+        past the guard and print the OpenAnt phase banner (the fake
+        core then fails the subprocess, which is fine — the guard bug
+        exited 2 before the phase banner)."""
+        import os
+        import subprocess
+        repo_root = Path(__file__).parents[3]
+        with tempfile.TemporaryDirectory() as td:
+            src_dir = Path(td) / "src"
+            src_dir.mkdir()
+            (src_dir / "app.py").write_text("import os\n")
+            fake_core = Path(td) / "openant-core" / "core"
+            fake_core.mkdir(parents=True)
+            (fake_core / "scanner.py").touch()
+            out_dir = Path(td) / "out"
+            proc = subprocess.run(
+                [sys.executable, str(repo_root / "raptor_agentic.py"),
+                 "--repo", str(src_dir), "--openant-only",
+                 "--openant-core", str(fake_core.parent),
+                 "--out", str(out_dir)],
+                capture_output=True, text=True, timeout=300,
+                cwd=str(repo_root),
+                env={**os.environ, "_RAPTOR_TRUSTED": "1"},
+            )
+            combined = proc.stdout + proc.stderr
+            self.assertNotIn("nothing to scan", combined)
+            self.assertIn("OPENANT SEMANTIC SCAN", combined)

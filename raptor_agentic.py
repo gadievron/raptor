@@ -3070,7 +3070,11 @@ def main() -> int:
     run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql and not skip_scan and not _openant_only
 
     # Defensive guard for the "no scanners enabled" case.
-    if not skip_scan and not (run_semgrep or run_codeql):
+    # --openant-only IS an enabled scanner (the Phase 1b semantic
+    # scan): pre-fix the guard exited 2 before the OpenAnt phase was
+    # ever reached, so the flag only worked when --sarif also skipped
+    # the scan step.
+    if not skip_scan and not _openant_only and not (run_semgrep or run_codeql):
         print(
             "\n✗ Both Semgrep and CodeQL are disabled — nothing to scan.\n"
             "  Re-run without --codeql-only / --no-codeql, or pass only one "

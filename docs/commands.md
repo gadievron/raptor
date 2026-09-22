@@ -109,7 +109,7 @@ patches.
 | `--compiler-scan-max-tus <n>` | Cap on translation units for `--compiler-scan` (default 2000) |
 | `--expanded-semgrep` | Re-run rules over preprocessor-expanded views of macro-heavy C/C++ TUs |
 | `--openant` | Run the [OpenAnt](#openant) LLM semantic scan in addition to Semgrep/CodeQL |
-| `--openant-only` | Disable Semgrep/CodeQL so only OpenAnt runs (currently exits at the no-scanners guard unless combined with `--sarif`; use `/openant` for a standalone scan) |
+| `--openant-only` | Replace Semgrep/CodeQL entirely: only the OpenAnt semantic scan runs |
 | `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`) |
 | `--openant-model <name>` | OpenAnt LLM model: `sonnet` (default) or `opus` |
 | `--openant-level <depth>` | OpenAnt analysis depth: `all`, `reachable` (default), `codeql`, `exploitable` |
@@ -462,8 +462,7 @@ Output files: `openant_findings.json` (findings in Raptor schema),
 `openant-report.md` (human-readable report), `raptor_openant_report.json`
 (machine-readable run summary), and `openant_scan/pipeline_output.json`
 (raw OpenAnt output).  OpenAnt also runs inside [/agentic](#agentic) via
-`--openant`; `--openant-only` currently exits at /agentic's no-scanners
-guard unless combined with `--sarif`.
+`--openant`, or as the sole scanner via `--openant-only`.
 
 ---
 
