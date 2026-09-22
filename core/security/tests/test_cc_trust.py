@@ -12,7 +12,8 @@ Coverage:
   - log-injection defence (control chars, bidi, line separators, in values
     AND in dict keys AND in the target path itself)
   - oversized / malformed / non-regular files (including FIFO DoS defence)
-  - empty repo_path guard, nonexistent path, pathological inputs
+  - empty repo_path guard; unexaminable supplied targets refuse
+    (nonexistent / vanished / pathological paths — fail-closed)
   - trust_override: explicit arg, set_trust_override(), default None
   - lru_cache dedupe across callers
   - RAPTOR self-scan short-circuit
@@ -71,18 +72,58 @@ class TestNoConfig:
         monkeypatch.chdir(tmp_path)
         assert _check("") is False
 
-    def test_nonexistent_path_does_not_crash(self, tmp_path):
+
+class TestUnexaminableTarget:
+    """A SUPPLIED target the checker cannot resolve or stat is refused
+    (fail-closed) — a "clean" verdict over an unexamined path waved the
+    gate open for vanished (TOCTOU), mistyped, and pathological paths.
+    The trust override downgrades to warn-and-proceed like any real
+    finding. None of these may crash."""
+
+    def test_nonexistent_path_refuses(self, tmp_path, capsys):
+        assert _check(str(tmp_path / "does-not-exist")) is True
+        out = capsys.readouterr().out
+        assert "cannot examine" in out
+        assert "treating as dangerous" in out
+
+    def test_nonexistent_path_trust_override_proceeds(self, tmp_path, capsys):
+        set_trust_override(True)
         assert _check(str(tmp_path / "does-not-exist")) is False
+        out = capsys.readouterr().out
+        assert "cannot examine" in out
+        assert "trust override active" in out
 
-    def test_null_byte_in_path_does_not_crash(self):
-        # The check shouldn't reach the filesystem layer; the null byte
-        # triggers the path-validation early-return. Any path-shaped
-        # string containing \x00 exercises this.
-        assert _check("./weird\x00path") is False
+    def test_vanished_target_refuses(self, tmp_path):
+        """The TOCTOU shape: the dir existed when the caller resolved
+        it, and is gone by the time the gate examines it."""
+        gone = tmp_path / "was-here"
+        gone.mkdir()
+        gone.rmdir()
+        assert _check(str(gone)) is True
 
-    def test_very_long_path_does_not_crash(self):
-        # past PATH_MAX (4096) on Linux
-        assert _check("/" + "a" * 10_000) is False
+    def test_null_byte_in_path_refuses(self):
+        # The null byte fails path resolution before any filesystem
+        # access; an unresolvable supplied path is refused, not skipped.
+        assert _check("./weird\x00path") is True
+
+    def test_very_long_path_refuses(self):
+        # past PATH_MAX (4096) on Linux — stat fails, refused
+        assert _check("/" + "a" * 10_000) is True
+
+    def test_message_bounds_and_escapes_the_path(self, tmp_path, capsys):
+        hostile = str(tmp_path / ("evil\x1b]0;pwned\x07" + "x" * 400))
+        assert _check(hostile) is True
+        out = capsys.readouterr().out
+        assert "\x1b" not in out and "\x07" not in out
+
+    def test_file_target_still_scans_clean(self, tmp_path, capsys):
+        """A stat-able non-directory target keeps its historical verdict:
+        the config candidates resolve to nothing and the scan is silent —
+        this change refuses only targets the checker cannot stat."""
+        f = tmp_path / "just-a-file"
+        f.write_text("x")
+        assert _check(str(f)) is False
+        assert capsys.readouterr().out == ""
 
 
 class TestInnocuousSettings:

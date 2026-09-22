@@ -78,6 +78,19 @@ class TestExitCodes:
         assert rc == 2, f"stderr: {err}"
         assert "apiKeyHelper" in out
 
+    def test_unexaminable_target_returns_two(self, tmp_path):
+        """A supplied target the checker cannot stat is refused, not
+        waved through — the fail-open half of the vetting seam."""
+        rc, out, err = _run(str(tmp_path / "does-not-exist"))
+        assert rc == 2, f"stderr: {err}"
+        assert "cannot examine" in out
+
+    def test_unexaminable_target_trust_flag_proceeds(self, tmp_path):
+        rc, out, _ = _run("--trust", str(tmp_path / "does-not-exist"))
+        assert rc == 0
+        # Warning still printed so the user sees what they're trusting
+        assert "cannot examine" in out
+
 
 class TestTrustFlag:
 

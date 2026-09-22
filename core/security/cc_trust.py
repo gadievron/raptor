@@ -633,12 +633,31 @@ def check_repo_claude_trust(repo_path: str, trust_override: bool | None = None) 
     """
     if not repo_path:
         return False
-    try:
-        resolved = str(Path(repo_path).resolve())
-    except (ValueError, OSError):
-        return False
     if trust_override is None:
         trust_override = _trust_override_set
+    # A SUPPLIED target the checker cannot resolve or stat is refused,
+    # not waved through: these lanes previously returned "clean", but
+    # that verdict had examined nothing — a vanished (TOCTOU),
+    # mistyped, or pathological path skipped the gate entirely while
+    # the caller went on to use the same spelling. The trust override
+    # downgrades to warn-and-proceed exactly like a real finding, so
+    # the launcher's "Override: --trust-repo" hint stays truthful.
+    try:
+        resolved = str(Path(repo_path).resolve())
+        os.stat(resolved)
+    except (ValueError, OSError) as e:
+        reason = getattr(e, "strerror", None) or type(e).__name__
+        shown = _truncate(_safe(repo_path), limit=200)
+        if trust_override:
+            print(f"raptor: cannot examine {shown} for Claude Code "
+                  f"config ({_safe(str(reason))}) — proceeding "
+                  f"(trust override active)")
+            return False
+        # Caller-neutral phrasing: some call sites use the return only
+        # as an early warning and enforce at later re-check sites.
+        print(f"raptor: cannot examine {shown} for Claude Code "
+              f"config ({_safe(str(reason))}) — treating as dangerous")
+        return True
     scans, any_blocking = _scan_cached(resolved,
                                        _read_config_state(Path(resolved)))
     # Print side-effects live OUTSIDE the cache. Pre-fix the print() calls

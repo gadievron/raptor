@@ -20,7 +20,9 @@
 #
 # Exit codes:
 #   0  no target, target safe, --trust, or --dry-run
-#   2  target has dangerous CC config (caller should not launch)
+#   2  target has dangerous CC config, OR the supplied target cannot
+#      be resolved/stat'd — a verdict over an unexamined path would be
+#      fail-open (caller should not launch)
 #   3  internal error (missing python, module import failure)
 #
 # Security note: the target repo may contain a hostile `core/` directory or
