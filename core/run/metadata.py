@@ -1672,7 +1672,11 @@ def _snapshot_run_coverage(output_dir: Path,
             import_run_dir,
             import_run_findings,
         )
-        from core.coverage.store import CoverageStore, coverage_store_lock
+        from core.coverage.store import (
+            CoverageStore,
+            StoreWriteOverBudget,
+            coverage_store_lock,
+        )
         from core.json import load_json
 
         from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
@@ -1696,7 +1700,15 @@ def _snapshot_run_coverage(output_dir: Path,
             # intervals so ``store.who_checked_function`` keeps
             # returning ``audit`` / ``agentic`` labels unchanged.
             import_journal(store, proj, checklist)
-            store.save()
+            try:
+                store.save()
+            except StoreWriteOverBudget as e:
+                # Loud refusal, never a silent debug swallow: the
+                # snapshot is skipped but the on-disk store stays
+                # readable (writing past the cap destroyed the whole
+                # durable union on the next load).
+                log.warning("coverage store snapshot refused: %s", e)
+                return
             _append_coverage_progress(proj, run_dir, store, checklist)
     except Exception:
         log.debug("_snapshot_run_coverage failed for %s", output_dir, exc_info=True)

@@ -401,3 +401,51 @@ def test_inventory_walk_normalises_hostile_checklist(tmp_path):
     assert iter_inventory_functions({"files": "junk"}) is not None
     assert list(iter_inventory_functions({"files": {"a": 1}})) == []
     assert list(iter_inventory_functions([])) == []
+
+
+class TestStoreWriteBudget:
+    """save() refuses to write a store its own reader must degrade to
+    empty (the journal index's IndexWriteOverBudget twin): an inflated
+    store persisted past _MAX_STORE_BYTES silently destroyed the
+    durable coverage union — including found_then_lost re-review
+    flags — on the next load ("unreadable ... starting empty")."""
+
+    def test_over_budget_save_refuses_and_disk_stays_readable(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.coverage.store as store_mod
+        from core.coverage.store import CoverageStore, StoreWriteOverBudget
+
+        s = _store(tmp_path)
+        s.mark("a.c", 1, 5, "semgrep")
+        s.save()
+        before = s.path.read_bytes()
+
+        s.mark("b.c", 1, 500, "semgrep")
+        monkeypatch.setattr(store_mod, "_MAX_STORE_BYTES", len(before))
+        import pytest
+        with pytest.raises(StoreWriteOverBudget):
+            s.save()
+        # File untouched: the prior, readable store survives.
+        assert s.path.read_bytes() == before
+        assert CoverageStore(s.path).covered_lines("a.c") == [[1, 5]]
+
+    def test_under_budget_save_unchanged(self, tmp_path):
+        # Byte-shape parity with the previous save_json writer is
+        # pinned by test_save_load_roundtrip; this pins the budget
+        # not firing on a legitimate store.
+        s = _store(tmp_path)
+        s.mark("a.c", 1, 5, "semgrep")
+        p = s.save()
+        assert p.exists()
+
+    def test_snapshot_caller_warns_not_swallows(self):
+        # The run-completion snapshot handles the refusal explicitly
+        # (warning + skip) instead of letting the generic debug-level
+        # catch-all hide it from the operator.
+        import inspect
+
+        from core.run import metadata as md
+        src = inspect.getsource(md._snapshot_run_coverage)
+        assert "StoreWriteOverBudget" in src
+        assert "log.warning" in src

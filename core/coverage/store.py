@@ -37,7 +37,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
-from core.json import save_json
+from core.atomic_fs import write_text_atomically
+from core.json import dumps_artifact
 from core.logging import get_logger as _get_logger
 
 from .registry import category_of
@@ -180,6 +181,19 @@ _BITMAP_MAX_LINES = 1_000_000
 # stores are tens of MiB; 256 MiB is generous headroom while keeping
 # a hostile store (e.g. from an imported project archive) unread.
 _MAX_STORE_BYTES = 256 * 1024 * 1024
+
+
+class StoreWriteOverBudget(RuntimeError):
+    """The serialized store would exceed the read budget — the write
+    refuses so the ON-DISK store always stays readable. Writing past
+    the cap silently destroyed the durable coverage union: the next
+    construction warned "unreadable ... starting empty" and the layer
+    that survives /project clean — including ``found_then_lost``
+    re-review flags whose holding runs were already cleaned — was
+    gone. Same shape and rationale as the journal index's
+    ``IndexWriteOverBudget``; the byte bound must sit at the write
+    because per-run intake caps bound row COUNT, not the merged
+    store's serialized size."""
 
 
 def _set_to_intervals(lines: set) -> list[Interval]:
@@ -726,13 +740,34 @@ class CoverageStore:
         }
 
     def save(self) -> Path:
-        """Atomically write ``coverage.json``.
+        """Atomically write ``coverage.json``, bounded by the read
+        budget.
 
         Atomic write: coverage.json is a merged per-run artefact that
         downstream tools (gap analysis, diff between runs, project
         report) load as canonical. A torn write on interrupt would
         leave malformed JSON that fails to parse and blocks every
         subsequent read.
+
+        Write budget (the journal index's IndexWriteOverBudget twin):
+        the constructor degrades an over-``_MAX_STORE_BYTES`` store to
+        EMPTY, so writing past the cap silently destroyed the durable
+        coverage union — the layer that survives /project clean,
+        including found_then_lost re-review flags — on the next load.
+        Hostile run-dir findings/records can inflate the in-memory
+        store (link_finding grows one entry per distinct id) until one
+        oversized save erases everything; refusing the write keeps the
+        on-disk store readable and the loss visible instead of silent.
         """
-        save_json(self.path, self.to_dict(), sort_keys=True)
+        content = dumps_artifact(self.to_dict(), sort_keys=True) + "\n"
+        size = len(content.encode("utf-8"))
+        if size > _MAX_STORE_BYTES:
+            raise StoreWriteOverBudget(
+                f"coverage store at {self.path} would serialize to "
+                f"{size} bytes (over the {_MAX_STORE_BYTES} byte read "
+                "budget) — refusing to write a store its own reader "
+                "must degrade to empty"
+            )
+        write_text_atomically(self.path, content,
+                              tmp_prefix=".~savejson-")
         return self.path
