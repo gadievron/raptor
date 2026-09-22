@@ -2174,8 +2174,22 @@ Examples:
                         help="Run OpenAnt LLM semantic scan in addition to Semgrep/CodeQL")
     parser.add_argument("--openant-only", action="store_true",
                         help="Run OpenAnt only (skip Semgrep/CodeQL)")
-    parser.add_argument("--openant-core", default=os.environ.get("OPENANT_CORE"),
-                        help="Path to openant-core directory (default: $OPENANT_CORE)")
+    # default=None, NOT the env value: the flag is the consent-gated
+    # surface (pre-approved argv), the env var is the operator-owned
+    # default. main() back-fills $OPENANT_CORE after the gate has seen
+    # whether the flag was explicit.
+    parser.add_argument("--openant-core", default=None,
+                        help="Path to openant-core directory (default: $OPENANT_CORE). "
+                             "A core that is not a clean checkout of the pinned "
+                             "commit refuses at startup unless consented (see "
+                             "--openant-core-unpinned)")
+    parser.add_argument("--openant-core-unpinned", action="store_true",
+                        help="Consent to run a --openant-core checkout that is not a "
+                             "clean checkout of the pinned commit — wrong commit, "
+                             "modified/untracked files at the pin, or unverifiable "
+                             "provenance (unverified external code executes with "
+                             "network access); the project 'config' trust marker "
+                             "grants the same standing consent")
     from packages.openant.config import env_choice
     parser.add_argument("--openant-model",
                         default=env_choice("OPENANT_MODEL",
@@ -2369,6 +2383,30 @@ def main() -> int:
         args.threat_model = True
     if args.threat_model:
         args.understand = True
+
+    # ------------------------------------------------------------------
+    # --openant-core consent gate (flag surface only): refuse a
+    # non-pinned core named on argv unless consented, BEFORE any phase
+    # or lifecycle starts. The env / auto-detect default keeps
+    # warn-not-refuse.
+    # ------------------------------------------------------------------
+    _openant_core_explicit = args.openant_core is not None
+    if args.openant_core is None:
+        args.openant_core = os.environ.get("OPENANT_CORE") or None
+    if _openant_core_explicit and (args.openant or args.openant_only):
+        from packages.openant.scanner import (
+            OpenAntCoreConsentError,
+            enforce_core_consent,
+        )
+        try:
+            enforce_core_consent(
+                Path(args.openant_core),
+                consented=args.openant_core_unpinned,
+                target_path=str(args.repo) if args.repo else None,
+            )
+        except OpenAntCoreConsentError as e:
+            print(f"\n✗ {e}", file=sys.stderr)
+            return 2
 
     # --gap-audit budget reserve: carve the audit share out of
     # --max-cost-usd UP FRONT so an analysis-phase overrun can't starve

@@ -79,8 +79,25 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--openant-core",
-        default=os.environ.get("OPENANT_CORE"),
-        help="Path to openant-core directory (default: $OPENANT_CORE)",
+        # default=None, NOT the env value: the flag is the consent-
+        # gated surface (pre-approved argv), the env var is the
+        # operator-owned default. main() back-fills $OPENANT_CORE
+        # after the gate has seen whether the flag was explicit.
+        default=None,
+        help="Path to openant-core directory (default: $OPENANT_CORE). "
+             "A core that is not a clean checkout of the pinned "
+             "commit refuses at startup unless consented (see "
+             "--openant-core-unpinned)",
+    )
+    parser.add_argument(
+        "--openant-core-unpinned",
+        action="store_true",
+        help="Consent to run a --openant-core checkout that is not a "
+             "clean checkout of the pinned commit — wrong commit, "
+             "modified/untracked files at the pin, or unverifiable "
+             "provenance (unverified external code executes with "
+             "network access); the project 'config' trust marker "
+             "grants the same standing consent",
     )
     parser.add_argument(
         "--max-findings",
@@ -107,6 +124,30 @@ def main() -> int:
     repo_path = Path(args.repo).resolve()
     if not repo_path.exists():
         parser.error(f"--repo path does not exist: {repo_path}")
+
+    # ------------------------------------------------------------------
+    # --openant-core consent gate (flag surface only): refuse a
+    # non-pinned core named on argv unless consented. Runs BEFORE the
+    # output dir / lifecycle exist — a refused run leaves nothing
+    # behind. The env / auto-detect default keeps warn-not-refuse.
+    # ------------------------------------------------------------------
+    openant_core_explicit = args.openant_core is not None
+    if args.openant_core is None:
+        args.openant_core = os.environ.get("OPENANT_CORE") or None
+    if openant_core_explicit:
+        from packages.openant.scanner import (
+            OpenAntCoreConsentError,
+            enforce_core_consent,
+        )
+        try:
+            enforce_core_consent(
+                Path(args.openant_core),
+                consented=args.openant_core_unpinned,
+                target_path=str(repo_path),
+            )
+        except OpenAntCoreConsentError as e:
+            print(f"\n✗ {e}", file=sys.stderr)
+            return 2
 
     # ------------------------------------------------------------------
     # Output directory: injected by raptor.py lifecycle; fall back to our

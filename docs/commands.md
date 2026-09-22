@@ -110,7 +110,8 @@ patches.
 | `--expanded-semgrep` | Re-run rules over preprocessor-expanded views of macro-heavy C/C++ TUs |
 | `--openant` | Run the [OpenAnt](#openant) LLM semantic scan in addition to Semgrep/CodeQL |
 | `--openant-only` | Replace Semgrep/CodeQL entirely: only the OpenAnt semantic scan runs |
-| `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`) |
+| `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`). The flag surface is consent-gated: a core that is not a clean checkout of the pinned commit (wrong commit, modified/untracked files at the pin, unverifiable provenance) refuses at startup |
+| `--openant-core-unpinned` | Consent to run a `--openant-core` checkout that is not a clean pinned checkout this run (the project `config` trust marker grants the same, standing) |
 | `--openant-model <name>` | OpenAnt LLM model: `sonnet` (default) or `opus` |
 | `--openant-level <depth>` | OpenAnt analysis depth: `all`, `reachable` (default), `codeql`, `exploitable` |
 
@@ -455,7 +456,7 @@ pass `--openant-core` (auto-detection probes
 | `--verify` | Enable the OpenAnt stage-2 verification pass |
 | `--workers <n>` | Parallel analysis workers (default 4) |
 | `--max-findings <n>` | Maximum findings to include in the report (default 50) |
-| `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`) |
+| `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`). The flag surface is consent-gated: a core that is not a clean checkout of the pinned commit refuses at startup unless `--openant-core-unpinned` or the project `config` trust marker consents |
 | `--out <dir>` | Output directory override |
 
 Output files: `openant_findings.json` (findings in Raptor schema),
@@ -976,7 +977,7 @@ consumers where the marker is the only control — are called out below:
 
 | Marker | Equivalent per-run flag | Effect |
 |--------|------------------------|--------|
-| `config` | `--trust-repo` | Lifts the Claude Code config check (`cc_trust`) and the CodeQL pack-config check (`codeql_trust`); also arms the audit pipeline's trust-gated refutation witnesses |
+| `config` | `--trust-repo` | Lifts the Claude Code config check (`cc_trust`) and the CodeQL pack-config check (`codeql_trust`); also arms the audit pipeline's trust-gated refutation witnesses and grants standing consent for a non-pinned `--openant-core` (the flag-surface gate) |
 | `build` | `--traced-build` | Traced-build C/C++ CodeQL extraction (executes the repo's build system); also makes build-flags evidence suppression-grade in source-intel's verdict policy (corpus Validator lane; no flag pair, one-target rule — see below) |
 | `dynamic` | `--dynamic` (audit) | Dynamic validation: Frida observation / target execution defaults on |
 

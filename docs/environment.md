@@ -472,7 +472,7 @@ stale configuration and each reader's schema guard says so.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `OPENANT_CORE` | auto-detected | Path to the `openant-core` directory (the OpenAnt repository's `libs/openant-core`, checked out at the pinned commit in `packages/openant/config.py:OPENANT_PINNED_COMMIT`). Auto-detection probes exactly one path: `<parent-of-RAPTOR_DIR>/libs/openant-core`. Override when OpenAnt is installed elsewhere. Also settable via `--openant-core`. A non-pinned checkout runs with a loud provenance warning. |
+| `OPENANT_CORE` | auto-detected | Path to the `openant-core` directory (the OpenAnt repository's `libs/openant-core`, checked out at the pinned commit in `packages/openant/config.py:OPENANT_PINNED_COMMIT`). Auto-detection probes exactly one path: `<parent-of-RAPTOR_DIR>/libs/openant-core`. Override when OpenAnt is installed elsewhere. Also settable via `--openant-core` — the flag surface is consent-gated (a core that is not a clean checkout of the pinned commit — wrong commit, modified/untracked files at the pin, unverifiable provenance — refuses at startup unless `--openant-core-unpinned` or the project `config` trust marker consents); via env / auto-detection a non-pinned checkout runs with a loud provenance warning. |
 | `OPENANT_MODEL` | `sonnet` | LLM model for OpenAnt analysis (`sonnet` or `opus`). Explicit flags win: `--model` on `/openant`, `--openant-model` on `/agentic`. |
 | `OPENANT_LEVEL` | `reachable` | Analysis depth (`all`, `reachable`, `codeql`, `exploitable`). Explicit flags win: `--level` on `/openant`, `--openant-level` on `/agentic`. |
 

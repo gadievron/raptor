@@ -294,7 +294,9 @@ class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
         """Real invocation shape: --repo <dir> --openant-only must get
         past the guard and print the OpenAnt phase banner (the fake
         core then fails the subprocess, which is fine — the guard bug
-        exited 2 before the phase banner)."""
+        exited 2 before the phase banner). The fake core is not the
+        pinned checkout, so the flag surface needs the explicit
+        --openant-core-unpinned consent."""
         import os
         import subprocess
         repo_root = Path(__file__).parents[3]
@@ -310,6 +312,7 @@ class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
                 [sys.executable, str(repo_root / "raptor_agentic.py"),
                  "--repo", str(src_dir), "--openant-only",
                  "--openant-core", str(fake_core.parent),
+                 "--openant-core-unpinned",
                  "--out", str(out_dir)],
                 capture_output=True, text=True, timeout=300,
                 cwd=str(repo_root),
@@ -318,3 +321,245 @@ class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
             combined = proc.stdout + proc.stderr
             self.assertNotIn("nothing to scan", combined)
             self.assertIn("OPENANT SEMANTIC SCAN", combined)
+
+
+class TestOpenantCoreConsentGate(unittest.TestCase):
+    """--openant-core is pre-approved launcher argv — without a gate
+    it is prompt-free arbitrary code execution (the named directory's
+    Python runs with network access and the API key). A non-pinned
+    core passed by FLAG must refuse at startup unless consented; the
+    env / auto-detect default keeps warn-not-refuse."""
+
+    @staticmethod
+    def _fake_core(td: Path) -> Path:
+        fake_core = td / "openant-core" / "core"
+        fake_core.mkdir(parents=True)
+        (fake_core / "scanner.py").touch()
+        return fake_core.parent
+
+    def test_unconsented_unpinned_core_flag_refuses(self):
+        import os
+        import subprocess
+        repo_root = Path(__file__).parents[3]
+        with tempfile.TemporaryDirectory() as td:
+            src_dir = Path(td) / "src"
+            src_dir.mkdir()
+            (src_dir / "app.py").write_text("import os\n")
+            core = self._fake_core(Path(td))
+            proc = subprocess.run(
+                [sys.executable, str(repo_root / "raptor_agentic.py"),
+                 "--repo", str(src_dir), "--openant-only",
+                 "--openant-core", str(core),
+                 "--out", str(Path(td) / "out")],
+                capture_output=True, text=True, timeout=300,
+                cwd=str(repo_root),
+                env={**os.environ, "_RAPTOR_TRUSTED": "1"},
+            )
+            combined = proc.stdout + proc.stderr
+            self.assertEqual(proc.returncode, 2, combined)
+            self.assertNotIn("OPENANT SEMANTIC SCAN", combined)
+            # The refusal names the risk and every escape hatch.
+            self.assertIn("refusing --openant-core", combined)
+            self.assertIn("--openant-core-unpinned", combined)
+            self.assertIn("/project trust config", combined)
+            # Refused at startup: no run directory left behind.
+            self.assertFalse((Path(td) / "out").exists())
+
+    def test_standalone_surface_refuses_too(self):
+        import os
+        import subprocess
+        repo_root = Path(__file__).parents[3]
+        with tempfile.TemporaryDirectory() as td:
+            src_dir = Path(td) / "src"
+            src_dir.mkdir()
+            (src_dir / "app.py").write_text("import os\n")
+            core = self._fake_core(Path(td))
+            proc = subprocess.run(
+                [sys.executable, str(repo_root / "raptor_openant.py"),
+                 "--repo", str(src_dir),
+                 "--openant-core", str(core),
+                 "--out", str(Path(td) / "out")],
+                capture_output=True, text=True, timeout=300,
+                cwd=str(repo_root),
+                env={**os.environ, "_RAPTOR_TRUSTED": "1"},
+            )
+            self.assertEqual(proc.returncode, 2,
+                             proc.stdout + proc.stderr)
+            self.assertIn("refusing --openant-core",
+                          proc.stdout + proc.stderr)
+
+    def test_env_core_is_not_gated(self):
+        """The env-var default keeps warn-not-refuse: only the argv
+        flag is the consent-gated surface."""
+        from packages.openant import scanner
+        src = (Path(__file__).parents[3] / "raptor_openant.py").read_text()
+        self.assertIn("openant_core_explicit", src)
+        # Gate helper refuses without consent, passes with it.
+        with tempfile.TemporaryDirectory() as td:
+            core = self._fake_core(Path(td))
+            with self.assertRaises(scanner.OpenAntCoreConsentError):
+                with self.assertLogs("raptor", level="WARNING"):
+                    scanner.enforce_core_consent(
+                        core, consented=False, target_path=td)
+            with self.assertLogs("raptor", level="WARNING"):
+                prov = scanner.enforce_core_consent(
+                    core, consented=True, target_path=td)
+            self.assertIsNone(prov["matches"])
+
+    def test_config_trust_marker_grants_standing_consent(self):
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            core = self._fake_core(Path(td))
+            with mock.patch("core.project.trust.resolve_repo_trust",
+                            return_value=True):
+                with self.assertLogs("raptor", level="WARNING"):
+                    prov = scanner.enforce_core_consent(
+                        core, consented=False, target_path=td)
+            self.assertIsNone(prov["matches"])
+
+    # -- content truth: HEAD == pin alone is not consent -------------
+
+    @staticmethod
+    def _pinned_repo(td: Path) -> tuple[Path, Path, str]:
+        """A real clone shape at the documented layout: returns
+        (repo, core_path, head). Callers patch the pin to head."""
+        import os
+        import subprocess
+        repo = td / "OpenAnt"
+        core = repo / "libs" / "openant-core"
+        (core / "core").mkdir(parents=True)
+        (core / "core" / "scanner.py").write_text("legit = True\n")
+        env = {**os.environ,
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "commit", "-q", "-m", "x"]):
+            subprocess.run(cmd, cwd=repo, env=env, check=True,
+                           capture_output=True)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+            capture_output=True, text=True).stdout.strip().lower()
+        return repo, core, head
+
+    def test_tampered_tracked_file_at_pinned_head_refuses(self):
+        """A vendored clone AT the pinned HEAD with a tampered tracked
+        file must refuse unconsented (a matching HEAD is content-blind
+        to on-disk edits) and run consented WITH the deviation
+        warning."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            (core / "core" / "scanner.py").write_text("tampered = True\n")
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+                with self.assertLogs("raptor", level="WARNING") as cm:
+                    prov = scanner.enforce_core_consent(
+                        core, consented=True, target_path=td)
+            self.assertIs(prov["matches"], True)
+            self.assertEqual(prov["worktree_deviations"],
+                             {"modified": 1, "untracked": 0})
+            self.assertTrue(any("DEVIATES" in m for m in cm.output))
+
+    def test_untracked_shadow_at_pinned_head_refuses(self):
+        """An untracked stdlib-shadow module in a pinned-HEAD clone
+        must refuse unconsented — even when a hostile .gitignore hides
+        it from default status listings (ignored files count)."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            (core / "core" / "json.py").write_text("shadow = True\n")
+            (repo / ".gitignore").write_text("json.py\n.gitignore\n")
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+                with self.assertLogs("raptor", level="WARNING") as cm:
+                    prov = scanner.enforce_core_consent(
+                        core, consented=True, target_path=td)
+            self.assertIs(prov["matches"], True)
+            self.assertEqual(prov["worktree_deviations"],
+                             {"modified": 0, "untracked": 2})
+            self.assertTrue(any("DEVIATES" in m for m in cm.output))
+
+    def test_staged_shadow_at_pinned_head_refuses(self):
+        """A hostile archive can ship .git/index with the shadow
+        module pre-staged (`git add -f`): staged files are invisible
+        to HEAD's tree AND to index-derived untracked listings, so an
+        index-trusting survey reports 0/0. The index is not in the
+        trust base — anything on disk that is not in HEAD's tree
+        counts as untracked regardless of index state."""
+        import subprocess
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            (core / "core" / "json.py").write_text("shadow = True\n")
+            subprocess.run(
+                ["git", "add", "-f", "libs/openant-core/core/json.py"],
+                cwd=repo, check=True, capture_output=True)
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+                with self.assertLogs("raptor", level="WARNING") as cm:
+                    prov = scanner.enforce_core_consent(
+                        core, consented=True, target_path=td)
+            self.assertIs(prov["matches"], True)
+            self.assertEqual(prov["worktree_deviations"],
+                             {"modified": 0, "untracked": 1})
+            self.assertTrue(any("DEVIATES" in m for m in cm.output))
+
+    def test_clean_pinned_clone_is_quiet_and_runs(self):
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                with self.assertNoLogs("raptor", level="WARNING"):
+                    prov = scanner.enforce_core_consent(
+                        core, consented=False, target_path=td)
+            self.assertIs(prov["matches"], True)
+            self.assertIs(prov["worktree_clean"], True)
+
+    def test_gate_never_executes_hostile_clone_config(self):
+        """The dirty survey must not run content through git's
+        status/diff machinery: on an attacker-written clone,
+        filter.<name>.clean (armed via in-tree .gitattributes) and
+        similar config-named commands would execute BEFORE the consent
+        decision. The survey is listing plumbing + Python-side
+        hashing, so the probe command must never run."""
+        import subprocess
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            probe = Path(td) / "probe-executed"
+            for k, v in (
+                ("filter.hostile.clean", f"touch {probe}"),
+                ("filter.hostile.required", "true"),
+                ("core.fsmonitor", f"touch {probe}"),
+            ):
+                subprocess.run(["git", "config", k, v], cwd=repo,
+                               check=True, capture_output=True)
+            (repo / ".gitattributes").write_text("*.py filter=hostile\n")
+            # .gitattributes is untracked -> the tree is dirty; both
+            # gate outcomes must leave the probe untouched.
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+                with self.assertLogs("raptor", level="WARNING"):
+                    scanner.enforce_core_consent(
+                        core, consented=True, target_path=td)
+            self.assertFalse(probe.exists(),
+                             "the gate executed a config-named command "
+                             "from the hostile clone")

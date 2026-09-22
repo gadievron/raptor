@@ -153,7 +153,7 @@ class Entry:
     wire_tokens: tuple[str, ...] = field(default=())
 
 
-# The 13 approval surfaces adjudicated as rendering external
+# The 14 approval surfaces adjudicated as rendering external
 # content. Every id must appear on at least one registry entry's
 # ``members`` (M10 spans three instruction files, M08 two, and each
 # appears on every file carrying it).
@@ -171,6 +171,7 @@ MEMBER_IDS = (
     "M11-project-destructive-confirms",
     "M12-startup-check-mismatch-menu",
     "M13-create-skill-persist-consent",
+    "M14-openant-core-consent",
 )
 
 
@@ -262,6 +263,15 @@ REGISTRY: dict[str, Entry] = {
              "tiers/exploit-guidance.md — options built from "
              "mitigation-analysis output (alternative_targets, chain "
              "breaks) derived from the analysed hostile binary",
+    ),
+    ".claude/commands/openant.md": Entry(
+        lane="instruction", status="clean",
+        members=("M14-openant-core-consent",),
+        note="--openant-core consent-gate refusal offered as a "
+             "run-boundary trust choice; the quoted refusal text "
+             "carries the unconstrained argv core path, and the "
+             "instruction requires non-printables escaped at the "
+             "fill site",
     ),
     ".claude/commands/create-skill.md": Entry(
         lane="instruction", status="clean",

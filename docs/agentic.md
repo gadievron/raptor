@@ -60,6 +60,12 @@ scan  →  dedup  →  prep  →  analyse (per finding)
    as a further channel alongside the pattern scanners.  `--openant-only`
    replaces Semgrep/CodeQL entirely with OpenAnt.  Configure it with
    `--openant-core`, `--openant-model`, and `--openant-level`.
+   `--openant-core` is consent-gated: a core that is not a clean
+   checkout of the pinned commit (wrong commit, modified/untracked
+   files at the pin, unverifiable provenance) refuses at startup
+   unless `--openant-core-unpinned` or the project `config` trust
+   marker consents (the `$OPENANT_CORE` env / auto-detect default
+   keeps warn-not-refuse).
 2. **Dedup** -- collapse duplicate and overlapping findings so the same bug is
    not analysed twice.  Skip with `--skip-dedup`.
 3. **Prep** -- read the code around each finding, pull surrounding context, and

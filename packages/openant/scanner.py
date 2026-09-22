@@ -127,6 +127,271 @@ def checkout_provenance(core_path: Path) -> dict[str, Any]:
     return _warn_unpinned_provenance(result, core_path)
 
 
+class OpenAntCoreConsentError(RuntimeError):
+    """An explicit ``--openant-core`` path is not a clean checkout of
+    the pinned commit and nothing authorizes running it."""
+
+
+def _pinned_tree_deviations(core_path: Path) -> dict[str, int] | None:
+    """Content-true worktree-vs-HEAD deviation counts for a checkout
+    whose HEAD already matched the pin.
+
+    Returns ``{"modified": n, "untracked": m}`` (``{"modified": 0,
+    "untracked": 0}`` when clean), or ``None`` when the survey itself
+    fails — the gate treats ``None`` as unverifiable (fail-closed).
+    ``modified`` counts tracked entries whose on-disk content, type,
+    or executable bit deviates from HEAD (missing files and
+    unverifiable gitlink entries included); ``untracked`` counts every
+    on-disk file that is not in HEAD's tree — IGNORED and INDEX-STAGED
+    FILES INCLUDED: the attacker controls ``.gitignore`` and the
+    shipped index alike, and an ignored or pre-staged stdlib-shadow
+    module (or a poisoned ``__pycache__`` bytecode file) executes all
+    the same.
+
+    Deliberately NOT ``git status``/``git diff``: on an
+    attacker-written clone the status machinery re-hashes worktree
+    content through ``filter.<name>.clean`` commands (configured in
+    the hostile ``.git/config`` + in-tree ``.gitattributes``), which
+    the safe-git overrides document as un-neutralisable — the gate
+    would execute hostile code BEFORE the consent decision it exists
+    to enforce. And the INDEX is not in the trust base at all: the
+    attacker ships ``.git/index`` too, so an index-derived untracked
+    listing (``ls-files --others``) is blind to a shadow module the
+    archive pre-staged with ``git add -f`` (in the index, not in
+    HEAD). The survey therefore compares DISK against HEAD only:
+    ``ls-tree`` supplies the pinned tree, a Python filesystem walk of
+    the clone toplevel (minus ``.git``) supplies what is actually on
+    disk, and tracked content is hashed in Python against HEAD's blob
+    ids — which also defeats fabricated index stat data that fools
+    stat-based diffs. Tracked blobs larger than the hashing cap fail
+    closed as modified rather than being read.
+    """
+    import hashlib
+    import stat as stat_mod
+
+    # Cap on bytes hashed per tracked blob. HEAD is the genuine pinned
+    # commit here (the id matched the pin), so legit blob sizes are
+    # upstream-bounded; anything claiming to be larger fails closed
+    # without a read (a multi-GB on-disk file already fails the size
+    # precheck before any read either way).
+    max_hash_bytes = 64 * 1024 * 1024
+    try:
+        from core.git import get_safe_git_env, safe_git_readonly_command
+
+        def _git(cwd: Path, *args: str) -> "subprocess.CompletedProcess[bytes]":
+            return subprocess.run(
+                safe_git_readonly_command("-C", str(cwd), *args),
+                capture_output=True, timeout=120, check=False,
+                env=get_safe_git_env(),
+            )
+
+        fmt = _git(core_path, "rev-parse", "--show-object-format")
+        algo = fmt.stdout.decode("ascii", "replace").strip() or "sha1"
+        if fmt.returncode != 0 or algo not in ("sha1", "sha256"):
+            return None
+        toplevel_proc = _git(core_path, "rev-parse", "--show-toplevel")
+        toplevel = toplevel_proc.stdout.decode("utf-8", "replace").strip()
+        if toplevel_proc.returncode != 0 or not toplevel:
+            return None
+        top = Path(toplevel)
+        # The WHOLE clone is surveyed, not just the openant-core
+        # subtree. `-l` adds the blob size for the read precheck.
+        tree = _git(top, "ls-tree", "--full-tree", "-r", "-l", "-z", "HEAD")
+        if tree.returncode != 0:
+            return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    modified = 0
+    tracked: set[str] = set()
+    for entry in tree.stdout.split(b"\x00"):
+        if not entry:
+            continue
+        meta, _, rel = entry.partition(b"\t")
+        parts = meta.split()
+        if len(parts) != 4:
+            return None
+        mode, otype, oid, size_s = (p.decode("ascii", "replace") for p in parts)
+        rel_str = os.fsdecode(rel)
+        tracked.add(rel_str)
+        path = top / rel_str
+        if otype != "blob":
+            # gitlink (submodule) or other non-blob: content cannot be
+            # verified against the pin from here — fail closed.
+            modified += 1
+            continue
+        try:
+            size = int(size_s)
+        except ValueError:
+            return None
+        try:
+            st = os.lstat(path)
+        except OSError:
+            modified += 1  # tracked file missing / unreadable
+            continue
+        if mode == "120000":
+            if not stat_mod.S_ISLNK(st.st_mode):
+                modified += 1
+                continue
+            data = os.fsencode(os.readlink(path))
+            if len(data) != size:
+                modified += 1
+                continue
+        else:
+            if not stat_mod.S_ISREG(st.st_mode):
+                modified += 1
+                continue
+            want_exec = mode == "100755"
+            if bool(st.st_mode & 0o100) != want_exec:
+                modified += 1
+                continue
+            # Size precheck BEFORE any read: a mismatched size is a
+            # deviation without touching content, and an over-cap blob
+            # fails closed instead of being slurped.
+            if st.st_size != size or size > max_hash_bytes:
+                modified += 1
+                continue
+            try:
+                data = path.read_bytes()
+            except OSError:
+                modified += 1
+                continue
+        hasher = hashlib.sha1 if algo == "sha1" else hashlib.sha256
+        h = hasher(b"blob %d\x00" % len(data))
+        h.update(data)
+        if h.hexdigest() != oid:
+            modified += 1
+
+    # Untracked = ON DISK but not in HEAD's tree, derived WITHOUT the
+    # index: a filesystem walk (minus the toplevel .git) set-differenced
+    # against the tree paths. Ignored and index-staged files count the
+    # same as any other file the pinned commit does not contain.
+    untracked = 0
+    try:
+        for root, dirs, files in os.walk(top, followlinks=False):
+            rel_root = os.path.relpath(root, top)
+            if rel_root == ".":
+                dirs[:] = [d for d in dirs if d != ".git"]
+            # Symlinks to directories are tree ENTRIES (link blobs) but
+            # os.walk reports them in `dirs` and never descends: count
+            # each one not in HEAD's tree instead of losing it.
+            for d in list(dirs):
+                dpath = os.path.join(root, d)
+                if os.path.islink(dpath):
+                    dirs.remove(d)
+                    drel = d if rel_root == "." else os.path.join(rel_root, d)
+                    if drel not in tracked:
+                        untracked += 1
+            for name in files:
+                rel_file = name if rel_root == "." else os.path.join(rel_root, name)
+                if rel_file not in tracked:
+                    untracked += 1
+    except OSError:
+        return None
+    return {"modified": modified, "untracked": untracked}
+
+
+def enforce_core_consent(
+    core_path: Path,
+    *,
+    consented: bool,
+    target_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Consent gate for the ``--openant-core`` FLAG surface.
+
+    The flag lives on pre-approved launcher argv, so without a gate it
+    is prompt-free arbitrary code execution: the named directory's
+    Python runs in a network-allowed subprocess with the Anthropic API
+    key. A non-pinned core passed by flag therefore REFUSES at startup
+    unless the operator consents — the per-run
+    ``--openant-core-unpinned`` acknowledgement, or the project's
+    standing ``config`` trust marker (the ``--trust-repo`` umbrella,
+    same one-target rule as every marker consumer).
+
+    Deliberately NOT applied to the ``$OPENANT_CORE`` env / auto-detect
+    default: environment and project state are operator-owned surfaces
+    (an env-prefixed command string breaks the pre-approved grant), and
+    those paths keep the existing warn-not-refuse posture.
+
+    A matching HEAD alone is CONTENT-BLIND — a hostile archive can
+    vendor a nested clone at the pinned HEAD with tampered tracked
+    files (or an untracked stdlib-shadow module; the child runs with
+    the core on its import path) — so a pinned HEAD additionally
+    requires a clean working tree (:func:`_pinned_tree_deviations`,
+    untracked and ignored files included). A deviating or unverifiable
+    tree refuses-unless-consented exactly like a wrong commit, with a
+    loud warning that summarises deviation COUNTS only (never echoing
+    attacker-controlled filenames).
+
+    Returns the provenance record (already loudly warned when not a
+    clean pinned checkout) when the run may proceed; raises
+    :class:`OpenAntCoreConsentError` naming the risk and the escape
+    hatches otherwise.
+    """
+    provenance = checkout_provenance(core_path)
+    dirty: dict[str, int] | None = None
+    if provenance["matches"] is True:
+        dirty = _pinned_tree_deviations(core_path)
+        if dirty is not None and not (dirty["modified"] or dirty["untracked"]):
+            provenance["worktree_clean"] = True
+            return provenance
+        provenance["worktree_clean"] = False
+        provenance["worktree_deviations"] = dirty
+        if dirty is None:
+            logger.warning(
+                "OpenAnt checkout is at the pinned commit but its working "
+                "tree could NOT be verified against the pinned content — "
+                "treating it like a tampered checkout",
+            )
+        else:
+            logger.warning(
+                "OpenAnt checkout is at the pinned commit but its working "
+                "tree DEVIATES from the pinned content — %d tracked "
+                "file(s) modified/missing, %d untracked file(s) (ignored "
+                "files included); a matching HEAD does not cover on-disk "
+                "edits",
+                dirty["modified"], dirty["untracked"],
+            )
+    if consented:
+        return provenance
+    from core.project.trust import resolve_repo_trust
+    if resolve_repo_trust(None, target_path=target_path):
+        return provenance
+    from core.security.log_sanitisation import sanitise_for_terminal
+    if provenance["matches"] is True and dirty is None:
+        detail = (
+            "it is at the pinned commit but its working tree could not "
+            "be verified against the pinned content"
+        )
+    elif provenance["matches"] is True:
+        detail = (
+            f"it is at the pinned commit but its working tree deviates "
+            f"from the pinned content ({dirty['modified']} tracked "
+            f"file(s) modified/missing, {dirty['untracked']} untracked "
+            f"file(s), ignored files included)"
+        )
+    elif provenance["matches"] is False:
+        detail = (
+            f"it is checked out at {str(provenance['head'])[:12]}, not the "
+            f"pinned commit {OPENANT_PINNED_COMMIT[:12]}"
+        )
+    else:
+        detail = (
+            "its provenance is unverifiable — not a git checkout at the "
+            "documented libs/openant-core layout"
+        )
+    raise OpenAntCoreConsentError(
+        f"refusing --openant-core "
+        f"{sanitise_for_terminal(str(core_path), max_len=200)}: {detail}. "
+        f"An unverified core executes as arbitrary Python with network "
+        f"access and the Anthropic API key. To run it anyway, consent "
+        f"deliberately: re-run with --openant-core-unpinned, or set the "
+        f"project's standing trust marker (/project trust config) — or "
+        f"check the core out at the pin "
+        f"({OPENANT_UPSTREAM_URL}@{OPENANT_PINNED_COMMIT[:12]})."
+    )
+
+
 def run_openant_scan(
     repo_path: str | Path,
     out_dir: str | Path,
