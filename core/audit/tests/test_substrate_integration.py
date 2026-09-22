@@ -160,13 +160,31 @@ class TestPhpTreeWithStrayCFile:
                 language="", sloc=10,
             ),
         )
+        # One function (render_page) gets a SKIPS-ONLY dispatch
+        # record: every channel that would otherwise dispatch for it
+        # returns skipped (the substrate seam already skips its
+        # coccinelle/codeql/joern legs), so the no-tool-backed-tier
+        # assertion below is exercised by a record that actually
+        # exists. The other functions keep dispatching channels.
+        def _keyed(tool: str):
+            def _stub(**kw) -> SweepResult:
+                outcome = (
+                    "skipped" if kw["function_name"] == _PHP_FN2
+                    else "inconclusive"
+                )
+                return SweepResult(
+                    tool=tool, file_path=kw["file_path"],
+                    function_name=kw["function_name"],
+                    outcome=outcome,
+                )
+            return _stub
+
+        monkeypatch.setattr(orch, "run_semgrep_sweep", _keyed("semgrep"))
+        monkeypatch.setattr(orch, "run_smt_verb_direct", _keyed("smt"))
+        import core.audit.compiler_sweep as compiler_mod
         monkeypatch.setattr(
-            orch, "run_semgrep_sweep",
-            lambda **kw: SweepResult(
-                tool="semgrep", file_path=kw["file_path"],
-                function_name=kw["function_name"],
-                outcome="inconclusive",
-            ),
+            compiler_mod, "run_compiler_analyzer_sweep",
+            _keyed("compiler"),
         )
 
         checklist = json.loads((out / "checklist.json").read_text())
@@ -206,11 +224,16 @@ class TestPhpTreeWithStrayCFile:
 
     def test_no_tool_backed_tier_on_skips_only_record(self, run):
         result, _out, _spatch = run
-        for o in result.outcomes:
-            dispatched = o.tools_dispatched or set()
-            skipped = o.tools_skipped or set()
-            if not dispatched and skipped:
-                assert o.verification_tier != "tool_backed"
+        skips_only = [
+            o for o in result.outcomes
+            if not (o.tools_dispatched or set())
+            and (o.tools_skipped or set())
+        ]
+        # Non-vacuous by construction: render_page's every channel
+        # skips (see the fixture), so a skips-only record exists.
+        assert _PHP_FN2 in {o.function for o in skips_only}
+        for o in skips_only:
+            assert o.verification_tier != "tool_backed"
 
     def test_substrate_skip_journal_rows(self, run):
         _result, out, _spatch = run
