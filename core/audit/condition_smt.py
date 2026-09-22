@@ -1769,8 +1769,14 @@ def _auth_patterns(
 # Horizontal-only indent in the three return-line patterns — the
 # MULTILINE ^\s* idiom is quadratic on blank-line runs in scanned
 # source (identical match set per line for the per-line users).
+# The statement tail folds its trailing whitespace INTO the optional
+# group (``(?:;\s*)?$``, equivalent match set): the naive
+# ``\s*;?\s*$`` puts two unbounded whitespace spans around the
+# optional semicolon, and a return value followed by a long
+# whitespace run with no line end makes the engine try every split
+# of the run between them — quadratic on a single return token.
 _SUCCESS_RETURN_RE = re.compile(
-    r"^[^\S\n]*return\s+(0|nil|None|True|true|EXIT_SUCCESS)\s*;?\s*$",
+    r"^[^\S\n]*return\s+(0|nil|None|True|true|EXIT_SUCCESS)\s*(?:;\s*)?$",
     re.MULTILINE,
 )
 

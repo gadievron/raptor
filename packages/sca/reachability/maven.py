@@ -75,8 +75,15 @@ _DEFAULT_MAX_DEPTH = 12
 # ``^\s*`` spelling re-scans a run of blank lines from every line
 # start inside it — quadratic on attacker-supplied source files
 # (the import sweep walks every file of the ecosystem).
+# The wildcard tail folds its trailing whitespace INTO the optional
+# group (``(?:\.\*\s*)?;``, equivalent match set): the naive
+# ``\s*(?:\.\*)?\s*;`` puts two unbounded whitespace spans around an
+# optional atom, and an ``import x`` followed by a long whitespace
+# run with no ``;`` makes the engine try every split of the run
+# between them — quadratic on a single import token.
 _IMPORT_RE = re.compile(
-    r"^[^\S\n]*import\s+(?:static\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*(?:\.\*)?\s*;",
+    r"^[^\S\n]*import\s+(?:static\s+)?([A-Za-z_][A-Za-z0-9_.]*)"
+    r"\s*(?:\.\*\s*)?;",
     re.MULTILINE,
 )
 

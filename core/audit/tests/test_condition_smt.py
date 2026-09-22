@@ -1822,3 +1822,47 @@ class TestConsumerWidthIndex:
         assert build_consumer_width_index(
             {"files": [{"items": [{"name": "f"}]}]},
         ) == {}
+
+
+class TestSuccessReturnWhitespaceRun:
+    def test_return_whitespace_run_is_fast(self):
+        """Hostile line where a ``return 0`` token is followed by a
+        long whitespace RUN and no line end: with the tail spelled
+        ``\\s*;?\\s*$`` two unbounded whitespace spans border the
+        optional semicolon and the engine tries every split of the run
+        between them — quadratic on a single return token. Folding the
+        trailing span into the ``;``-gated group is linear.
+        Both-direction bound: fast AND the real early success return
+        (with and without ``;``) is still detected."""
+        import time
+
+        from core.audit.condition_smt import (
+            _SUCCESS_RETURN_RE,
+            check_auth_bypass,
+        )
+
+        hostile = "    return 0" + " " * (1 << 18) + "x\n"
+        source = (
+            "static int foo_setattr(struct inode *inode)\n"
+            "{\n"
+            "    if (fast_path)\n"
+            "        return 0;\n"
+            + hostile
+            + "    if (!capable(CAP_SYS_ADMIN))\n"
+            "        return -EPERM;\n"
+            "    return do_setattr(inode);\n"
+            "}\n"
+        )
+        start = time.monotonic()
+        result = check_auth_bypass(source)
+        assert time.monotonic() - start < 5.0
+        # The real early success return is still detected past the
+        # hostile line.
+        assert result.bypass_found
+        # Tail semantics unchanged: optional semicolon, trailing
+        # whitespace, plain-newline forms all still match; the
+        # hostile non-terminated line does not.
+        assert _SUCCESS_RETURN_RE.match("    return 0;")
+        assert _SUCCESS_RETURN_RE.match("return EXIT_SUCCESS  ;  ")
+        assert _SUCCESS_RETURN_RE.match("  return nil")
+        assert not _SUCCESS_RETURN_RE.match("    return 0   x")
