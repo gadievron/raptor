@@ -7999,7 +7999,7 @@ def _run_audit_body(
 
     # --- Start incremental study consumer (Thread B) ---
     # The study loop resolves assumptions in C/C++ (via the study-prep
-    # corpus) and in Python/Go/Java/JS-TS/Rust (via in-process
+    # corpus) and in Python/Go/Java/JS-TS/Rust/PHP (via in-process
     # lang_resolve dispatch); reviews of any of those languages may
     # emit reading_list items.
     from core.concepts.lang_resolve import is_study_supported_path
@@ -13522,7 +13522,7 @@ def _partition_study_batch(
 
     Returns ``(c_reqs, ml_reqs, unsupported)``: C/C++ questions resolve
     against the study-prep corpus, ``ml_reqs`` (Python/Go/Java/JS-TS/
-    Rust) resolve in-process, and ``unsupported`` languages have no
+    Rust/PHP) resolve in-process, and ``unsupported`` languages have no
     resolver — those items are marked unresolvable, never guessed.
     Requests without a source file stay on the C path (legacy shape).
     """
@@ -14907,7 +14907,7 @@ def _study_consumer_loop(
             continue
 
         # Language dispatch: C/C++ questions resolve against the
-        # study-prep corpus; Python/Go/Java/JS-TS/Rust resolve
+        # study-prep corpus; Python/Go/Java/JS-TS/Rust/PHP resolve
         # in-process per batch; languages with no resolver are marked
         # unresolvable up front — never studied, never resolved-clean.
         c_reqs, ml_reqs, unsupported = _partition_study_batch(fresh)

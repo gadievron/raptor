@@ -5,6 +5,7 @@ Fixture trees are built under tmp_path; no LLM, no subprocess.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import pytest
@@ -27,11 +28,13 @@ from core.testing import requires_ts
 
 class TestLanguageSupport:
     def test_first_class_languages_supported(self) -> None:
-        for lang in ("python", "go", "java", "javascript", "typescript", "rust"):
+        for lang in ("python", "go", "java", "javascript", "typescript",
+                     "rust", "php"):
             assert lang in STUDY_LANGUAGES
 
     def test_suffixes_cover_first_class_languages(self) -> None:
-        for suffix in (".py", ".go", ".java", ".js", ".ts", ".tsx", ".rs"):
+        for suffix in (".py", ".go", ".java", ".js", ".ts", ".tsx", ".rs",
+                       ".php"):
             assert suffix in STUDY_SUFFIXES
 
     def test_c_is_not_routed_here(self) -> None:
@@ -52,6 +55,7 @@ class TestLanguageSupport:
     def test_identifier_tail(self) -> None:
         assert identifier_tail("json.loads") == "loads"
         assert identifier_tail("Vec::new") == "new"
+        assert identifier_tail("$obj->method") == "method"
         assert identifier_tail("plain") == "plain"
 
 
@@ -91,6 +95,21 @@ class TestExtractQuestionIdentifiers:
             "Is the retry bounded?", "verdict depends on MAX_RETRIES",
         )
         assert "MAX_RETRIES" in out
+
+    def test_php_arrow_yields_member_tail(self) -> None:
+        # The receiver of ``$obj->method`` is a runtime value — only
+        # the member name is a resolvable identifier.
+        out = extract_question_identifiers(
+            "Does `$repo->findUser` validate its id argument?",
+        )
+        assert "findUser" in out
+        assert not any(n.startswith("$") for n in out)
+
+    def test_php_static_call_keeps_qualifier(self) -> None:
+        out = extract_question_identifiers(
+            "Does UserStore::findUser check access?",
+        )
+        assert "UserStore::findUser" in out
 
 
 # ------------------------------------------------------------------
@@ -425,6 +444,196 @@ pub fn decode_frame(buf: &[u8]) -> Result<Frame, Error> {
     def test_const(self, tree: Path) -> None:
         res = resolve_identifiers(tree, ["MAX_FRAME"])
         assert "MAX_FRAME: usize = 4096" in res.items[0].definition
+
+
+# ------------------------------------------------------------------
+# PHP
+# ------------------------------------------------------------------
+
+class TestPhpResolution:
+    @pytest.fixture()
+    def tree(self, tmp_path: Path) -> Path:
+        _write(tmp_path, "src/Sanitizer.php", '''\
+<?php
+/**
+ * Escapes HTML entities in user input.
+ */
+function sanitize_html(string $s): string {
+    return htmlspecialchars($s, ENT_QUOTES);
+}
+
+const MAX_UPLOAD = 4096;
+define('APP_MODE', 'prod');
+
+/** Persists users. */
+class UserStore {
+    /** Looks up a user by id. */
+    public function findUser(int $id): ?array {
+        return $this->db->fetch($id);
+    }
+}
+
+/** Hashing contract. */
+interface Hasher {
+    public function digest(string $s): string;
+}
+''')
+        return tmp_path
+
+    def test_function_with_phpdoc(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["sanitize_html"])
+        assert len(res.items) == 1
+        it = res.items[0]
+        assert it.kind == "function"
+        assert it.file == "src/Sanitizer.php"
+        assert "Escapes HTML entities" in it.doc_comment
+        assert not res.unresolved
+
+    @requires_ts("php")
+    def test_function_calls_extracted(self, tree: Path) -> None:
+        # Same contract as the Go/Rust twins: the definition body (and
+        # so callee extraction) needs the php grammar; the regex
+        # fallback still yields the item, name, and doc comment.
+        res = resolve_identifiers(tree, ["sanitize_html"])
+        assert "function sanitize_html" in res.items[0].definition
+        assert "htmlspecialchars" in res.items[0].calls
+
+    @requires_ts("php")
+    def test_method_via_double_colon(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["UserStore::findUser"])
+        assert [it.name for it in res.items] == ["findUser"]
+        assert res.items[0].doc_comment == "Looks up a user by id."
+        assert res.items[0].related_items == ["UserStore"]
+
+    @requires_ts("php")
+    def test_qualified_mismatch_not_guessed(self, tree: Path) -> None:
+        # OtherStore::findUser does not exist — the UserStore method
+        # must NOT be offered as its definition.
+        res = resolve_identifiers(tree, ["OtherStore::findUser"])
+        assert res.items == []
+        assert len(res.unresolved) == 1
+
+    def test_arrow_question_resolves_method(self, tree: Path) -> None:
+        # ``$repo->findUser`` questions reduce to the member tail at
+        # extraction time; the tail resolves to the method item.
+        idents = extract_question_identifiers(
+            "Does `$repo->findUser` check access?",
+        )
+        res = resolve_identifiers(tree, [n for n in idents
+                                         if n == "findUser"])
+        assert [it.name for it in res.items] == ["findUser"]
+
+    def test_class_resolution(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["UserStore"])
+        assert len(res.items) == 1
+        assert res.items[0].kind == "struct"
+        assert "Persists users" in res.items[0].doc_comment
+
+    def test_interface_resolution(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["Hasher"])
+        assert res.items[0].kind == "struct"
+        assert "Hashing contract" in res.items[0].doc_comment
+
+    def test_const(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["MAX_UPLOAD"])
+        assert len(res.items) == 1
+        assert "MAX_UPLOAD = 4096" in res.items[0].definition
+
+    def test_define_constant(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["APP_MODE"])
+        assert len(res.items) == 1
+        assert "define('APP_MODE'" in res.items[0].definition
+
+    def test_missing_identifier_unresolved(self, tree: Path) -> None:
+        res = resolve_identifiers(tree, ["ghost_helper"])
+        assert res.items == []
+        assert "not found" in res.unresolved[0]["reason"]
+
+    def test_dynamic_method_injection_marked_unresolvable(
+        self, tmp_path: Path,
+    ) -> None:
+        _write(tmp_path, "hooks.php", '''\
+<?php
+$handler->onSave = function () { return 1; };
+''')
+        res = resolve_identifiers(tmp_path, ["onSave"])
+        assert res.items == []
+        assert "dynamic attribute assignment" in res.unresolved[0]["reason"]
+
+    def test_ordinary_property_assignment_not_monkeypatching(
+        self, tmp_path: Path,
+    ) -> None:
+        # ``$this->total = 0`` is plain property initialisation — the
+        # closure-RHS requirement keeps it off the monkey-patching
+        # reason; the honest fallback reason applies instead.
+        _write(tmp_path, "acc.php", '''\
+<?php
+class Acc {
+    public function __construct() {
+        $this->total = 0;
+    }
+}
+''')
+        res = resolve_identifiers(tmp_path, ["total"])
+        assert res.items == []
+        assert "dynamic attribute assignment" not in (
+            res.unresolved[0]["reason"]
+        )
+        assert "no static definition" in res.unresolved[0]["reason"]
+
+    def test_grammar_absence_degrades_to_regex_tier(
+        self, tree: Path, monkeypatch,
+    ) -> None:
+        # Without tree_sitter_php the inventory layer falls back to
+        # its regex extractor: the function still resolves (name, doc,
+        # signature line) rather than going dark.
+        import core.inventory.extractors as ex
+        monkeypatch.setattr(ex, "_TS_AVAILABLE", False)
+        res = resolve_identifiers(tree, ["sanitize_html"])
+        assert [it.name for it in res.items] == ["sanitize_html"]
+        assert "Escapes HTML entities" in res.items[0].doc_comment
+
+
+class TestPhpPatternFloodPerformance:
+    """Keyword floods against the PHP fallback patterns: interior
+    ``\\s+`` under the MULTILINE ^-anchors was quadratic on
+    newline-separated keyword floods (seconds at 64KB). The
+    horizontal-only patterns run in milliseconds; the budget is
+    generous for slow machines yet an order of magnitude below the
+    quadratic variant at this input size."""
+
+    def test_const_pattern_on_keyword_flood(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("php", "SENTINEL")
+        assert pat is not None
+        flood = "public\n" * 18724  # ~128KB
+        start = time.monotonic()
+        assert pat.search(flood) is None
+        assert time.monotonic() - start < 2.0
+
+    def test_const_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("php", "MAX_N")
+        assert pat is not None
+        assert pat.search("  public const int MAX_N = 3;")
+        assert pat.search("define('MAX_N', 3);")
+
+    def test_type_pattern_on_keyword_flood(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("php", "SENTINEL")
+        assert pat is not None
+        flood = "final\n" * 21845  # ~128KB
+        start = time.monotonic()
+        assert pat.search(flood) is None
+        assert time.monotonic() - start < 2.0
+
+    def test_type_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("php", "Widget")
+        assert pat is not None
+        assert pat.search("abstract class Widget {")
+        assert pat.search("  final readonly class Widget")
+        assert pat.search("interface Widget")
 
 
 # ------------------------------------------------------------------

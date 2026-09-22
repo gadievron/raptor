@@ -234,7 +234,7 @@ libexec/raptor-run-lifecycle fail "$OUTPUT_DIR" "error description" --command un
 
 Modes combine and run in order: map → trace → hunt → teach. This matches the natural attack progression, so build context first, then trace a specific flow, then hunt for variants. Running `--map --trace EP-001` first maps, then traces the specified entry point.
 
-`--study` runs independently — it is a separate pipeline (study-prep → LLM extraction → synthesis) that produces `domain-model.json`. Its output feeds into `--teach` via SAGE or local file lookup. Do not combine `--study` with other modes in a single invocation. Study is multi-language: C/C++ resolve through the study-prep corpus; Python, Go, Java, JavaScript/TypeScript, and Rust identifiers resolve in-process (unresolvable identifiers are returned as unresolved with a reason, never guessed).
+`--study` runs independently — it is a separate pipeline (study-prep → LLM extraction → synthesis) that produces `domain-model.json`. Its output feeds into `--teach` via SAGE or local file lookup. Do not combine `--study` with other modes in a single invocation. Study is multi-language: C/C++ resolve through the study-prep corpus; Python, Go, Java, JavaScript/TypeScript, Rust, and PHP identifiers resolve in-process (unresolvable identifiers are returned as unresolved with a reason, never guessed).
 
 ## Examples
 

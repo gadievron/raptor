@@ -4,7 +4,7 @@ The reading-list study loop verifies external-contract assumptions a
 review relied on ("Does ``json.loads`` reject NaN?") against the actual
 source.  The C/C++ path lives in ``libexec/raptor-study-prep``; this
 module is the equivalent resolution machinery for the other first-class
-languages: Python, Go, Java, JavaScript/TypeScript, and Rust.
+languages: Python, Go, Java, JavaScript/TypeScript, Rust, and PHP.
 
 Two resolution modes, mirroring the C/C++ study-prep shapes:
 
@@ -55,6 +55,7 @@ logger = logging.getLogger(__name__)
 #: tree-sitter grammar branch plus an AST/regex fallback.
 STUDY_LANGUAGES: frozenset[str] = frozenset({
     "python", "go", "java", "javascript", "typescript", "tsx", "rust",
+    "php",
 })
 
 #: File suffixes covered by :data:`STUDY_LANGUAGES`.
@@ -115,6 +116,11 @@ _DOTTED_RE = re.compile(
 _BARE_RE = re.compile(
     r"\b([A-Za-z_]\w*_\w+|[A-Z][a-z]+[A-Z]\w*|[a-z]+[A-Z]\w*)\b",
 )
+# PHP instance access: the receiver of ``$obj->method`` is a runtime
+# value, so only the member name is statically resolvable — extract
+# the tail alone (static ``Class::method`` keeps its qualifier via
+# the dotted pattern above).
+_PHP_ARROW_RE = re.compile(r"\$[A-Za-z_]\w*\s*->\s*([A-Za-z_]\w*)")
 
 _QUESTION_STOPWORDS = frozenset({
     # question scaffolding that survives the shape filters
@@ -150,6 +156,8 @@ def extract_question_identifiers(
             _add(m.group(1))
         for m in _DOTTED_RE.finditer(text):
             _add(m.group(1))
+        for m in _PHP_ARROW_RE.finditer(text):
+            _add(m.group(1))
         for m in _BARE_RE.finditer(text):
             _add(m.group(1))
     return out
@@ -157,8 +165,9 @@ def extract_question_identifiers(
 
 def identifier_tail(name: str) -> str:
     """Last path segment of a qualified identifier
-    (``json.loads`` → ``loads``, ``Vec::new`` → ``new``)."""
-    return re.split(r"\.|::", name)[-1]
+    (``json.loads`` → ``loads``, ``Vec::new`` → ``new``,
+    ``$obj->method`` → ``method``)."""
+    return re.split(r"\.|::|->", name)[-1]
 
 
 # ------------------------------------------------------------------
@@ -351,6 +360,7 @@ _LINE_COMMENT = {
     "tsx": ("//",),
     "rust": ("///", "//!", "//"),
     "python": ("#",),
+    "php": ("//", "#"),
 }
 
 # Lines that sit between a doc comment and the definition and should be
@@ -441,6 +451,19 @@ def _const_pattern(language: str, name: str) -> re.Pattern | None:
             rf"^[ \t]*(?:export\s+)?(?:const|let|var)\s+{esc}\b",
             re.MULTILINE,
         )
+    if language == "php":
+        # ``const`` (module or class scope, optionally typed) and the
+        # runtime ``define('NAME', ...)`` form. Horizontal-only
+        # ``[ \t]+`` between the keywords: interior ``\s+`` under a
+        # MULTILINE ^-anchor is quadratic on keyword/blank floods.
+        # Trade-off: a declaration split across lines won't match —
+        # acceptable for this regex fallback tier.
+        return re.compile(
+            rf"^[ \t]*(?:(?:public|private|protected|final)[ \t]+)*"
+            rf"const[ \t]+(?:\w+[ \t]+)?{esc}\s*=|"
+            rf"\bdefine\s*\(\s*['\"]{esc}['\"]",
+            re.MULTILINE,
+        )
     return None
 
 
@@ -471,6 +494,15 @@ def _type_pattern(language: str, name: str) -> re.Pattern | None:
         return re.compile(
             rf"^[ \t]*(?:export\s+)?(?:abstract\s+)?"
             rf"(?:class|interface|enum|type)\s+{esc}\b",
+            re.MULTILINE,
+        )
+    if language == "php":
+        # Horizontal-only ``[ \t]+`` between keywords — same
+        # flood-safety/split-across-lines trade-off as the const
+        # pattern above.
+        return re.compile(
+            rf"^[ \t]*(?:(?:abstract|final|readonly)[ \t]+)*"
+            rf"(?:class|interface|trait|enum)[ \t]+{esc}\b",
             re.MULTILINE,
         )
     return None
@@ -514,12 +546,23 @@ def _dynamic_assignment_found(
 ) -> bool:
     tail = identifier_tail(name)
     pattern = re.compile(rf"[\w\)\]]\.{re.escape(tail)}\s*=[^=]")
+    # PHP's analog is a closure assigned to a property — dynamic
+    # method injection. The RHS keyword requirement is what keeps
+    # ordinary property initialisation (``$this->total = 0``) from
+    # mislabelling an unresolved identifier as monkey-patching.
+    php_pattern = re.compile(
+        rf"->\s*{re.escape(tail)}\s*=\s*(?:static[ \t]+)?(?:function|fn)\b",
+    )
     for lang, content in contents.values():
         if tail not in content:
             continue
         if lang == "python" and re.search(
             rf"\bsetattr\s*\([^,]+,\s*['\"]{re.escape(tail)}['\"]", content,
         ):
+            return True
+        # Scoped to PHP contents so C's ``ps->field = v`` never trips
+        # the reason.
+        if lang == "php" and php_pattern.search(content):
             return True
         if pattern.search(content):
             return True

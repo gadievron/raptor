@@ -164,11 +164,11 @@ _BUG_CLASS_FIELD = {
 # lifting the gate for another language.
 STUDY_SUPPORTED_LANGUAGES = (
     "C", "C++", "Python", "Go", "Java", "JavaScript", "TypeScript",
-    "Rust",
+    "Rust", "PHP",
 )
 
 _STUDY_LANGS_TEXT = (
-    "C/C++, Python, Go, Java, JavaScript/TypeScript, and Rust"
+    "C/C++, Python, Go, Java, JavaScript/TypeScript, Rust, and PHP"
 )
 
 # Claim shape for the folded spec-inference response field — mirrors

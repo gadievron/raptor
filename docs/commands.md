@@ -606,8 +606,8 @@ Deep, adversarial code comprehension for security research.  Five modes.
 modes; the `libexec/raptor-understand` substrate (binary `--map`,
 multi-model `--hunt`/`--trace`) accepts exactly one of its three
 modes per invocation.  Study is multi-language: C/C++ resolve through
-the study-prep corpus; Python, Go, Java, JavaScript/TypeScript, and
-Rust identifiers resolve in-process.  Compiled artefacts route through
+the study-prep corpus; Python, Go, Java, JavaScript/TypeScript,
+Rust, and PHP identifiers resolve in-process.  Compiled artefacts route through
 `libexec/raptor-binary-study`: the binary's RE database (from a prior
 `/ghidra import --decompile-all` or attach) is materialized as a
 decomp-tree — pseudo-source plus a `decomp-map.json` sidecar resolving

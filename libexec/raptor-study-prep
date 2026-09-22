@@ -1801,7 +1801,7 @@ def _multilang_pass(
     """Resolve reading-list identifiers in non-C sources.
 
     The C/C++ extraction above only sees ``_C_EXTENSIONS`` files; this
-    pass dispatches Python/Go/Java/JS-TS/Rust identifiers to
+    pass dispatches Python/Go/Java/JS-TS/Rust/PHP identifiers to
     ``core.concepts.lang_resolve`` and mirrors its output into the
     study-list shapes.  Returns ``(items, related_docs, unresolved)``
     where *unresolved* records carry the honest reason an identifier
@@ -3259,7 +3259,7 @@ def main() -> None:
                   file=sys.stderr)
 
     # Multi-language pass: resolve reading-list identifiers that live
-    # in Python/Go/Java/JS-TS/Rust sources (the C passes above only
+    # in Python/Go/Java/JS-TS/Rust/PHP sources (the C passes above only
     # scan _C_EXTENSIONS files).
     ml_items, ml_docs, ml_unresolved = _multilang_pass(
         target if target.is_dir() else target.parent,

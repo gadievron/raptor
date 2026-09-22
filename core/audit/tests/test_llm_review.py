@@ -495,7 +495,7 @@ class TestReadingListLanguageGate:
     def test_supported_language_registry(self) -> None:
         from core.audit.llm_review import STUDY_SUPPORTED_LANGUAGES
         for lang in ("C", "C++", "Python", "Go", "Java",
-                     "JavaScript", "TypeScript", "Rust"):
+                     "JavaScript", "TypeScript", "Rust", "PHP"):
             assert lang in STUDY_SUPPORTED_LANGUAGES
 
     def test_schema_no_longer_c_only(self) -> None:
@@ -530,7 +530,7 @@ class TestReadingListLanguageGate:
         )
         for prompt in (_DEFAULT_SYSTEM_PROMPT, _QUALITY_SYSTEM_PROMPT):
             assert "ASSUMED KNOWLEDGE (C/C++, Python, Go, Java, " \
-                   "JavaScript/TypeScript, and Rust)" in prompt
+                   "JavaScript/TypeScript, Rust, and PHP)" in prompt
             assert "C/C++ only" not in prompt
             assert "cannot resolve assumptions in other languages" \
                    not in prompt

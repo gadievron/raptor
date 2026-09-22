@@ -89,9 +89,9 @@ class TestPartitionStudyBatch:
     def test_multilang_files_route_in_process(self) -> None:
         c, ml, un = _partition_study_batch([
             _req("a.py"), _req("b.go"), _req("C.java"),
-            _req("d.ts"), _req("e.rs"), _req("f.js"),
+            _req("d.ts"), _req("e.rs"), _req("f.js"), _req("g.php"),
         ])
-        assert not c and len(ml) == 6 and not un
+        assert not c and len(ml) == 7 and not un
 
     def test_unsupported_language_partitioned_out(self) -> None:
         c, ml, un = _partition_study_batch([_req("a.rb"), _req("b.lua")])
@@ -615,6 +615,39 @@ class TestConsumerMultilangDispatch:
         rl = _load_rl(out)
         assert rl["items"][0]["resolved"]
 
+    def test_php_question_resolves_and_merges(
+        self, monkeypatch, tmp_path,
+    ) -> None:
+        target = tmp_path / "src"
+        (target / "app").mkdir(parents=True)
+        (target / "app" / "auth.php").write_text(
+            "<?php\n"
+            "/** Constant-time comparison of two digests. */\n"
+            "function compare_digest(string $a, string $b): bool {\n"
+            "    return hash_equals($a, $b);\n"
+            "}\n",
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        config = OrchestratorConfig(target_path=target, out_dir=out)
+        _stub_prep(monkeypatch, out)
+        _stub_llm(monkeypatch)
+        _stub_run_study(
+            monkeypatch, out, [{"id": "compare_digest_contract"}],
+        )
+
+        q = "Does `compare_digest` reject digests of unequal length?"
+        _run_loop(config, _queue(StudyRequest(
+            question=q, source_file="app/auth.php",
+            source_function="login",
+        )))
+
+        study_list = json.loads((out / "study-list.json").read_text())
+        names = {i["name"] for i in study_list["items"]}
+        assert "compare_digest" in names
+        rl = _load_rl(out)
+        assert rl["items"][0]["resolved"]
+
     def test_unresolvable_python_question_marked_with_reason(
         self, monkeypatch, tmp_path,
     ) -> None:
@@ -752,6 +785,7 @@ class TestStudyGateSuffixes:
         ("a.c", True), ("b.cpp", True),
         ("pkg/app.py", True), ("srv/main.go", True),
         ("App.java", True), ("web/app.ts", True), ("lib.rs", True),
+        ("web/index.php", True),
         ("script.rb", False), ("conf.lua", False), ("style.css", False),
     ])
     def test_supported_path(self, path, expected) -> None:
