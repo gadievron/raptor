@@ -5229,7 +5229,6 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
 
     # Graph store: boost gap-queue items connected to prior findings/hypotheses.
     # Bumps priority_score so graph-connected items rank higher in the budget cut.
-    import sqlite3 as _graph_sqlite3
     try:
         from core.understand_graph import graph_path_for_run, hypothesis_seeds
         _gp = graph_path_for_run(config.out_dir, str(config.target_path or ""))
@@ -5245,7 +5244,13 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                 if _boosted:
                     logger.info("graph store: boosted %d/%d gaps from %d hypothesis seeds",
                                 _boosted, len(gaps), len(seeds))
-    except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+    # Broad except: the graph boost is best-effort by design (sibling
+    # graph-enrichment sites use the same spelling). Opening the store
+    # mkdirs the graph dir and reads artifact-shaped rows, so the
+    # failure surface spans OSError, sqlite errors, shape errors, and
+    # bind overflows — any of them must degrade to this warning lane
+    # instead of crashing prep for an optional signal.
+    except Exception:
         logger.debug("graph hypothesis_seeds skipped", exc_info=True)
 
     if getattr(config, "rank_gaps", False):
@@ -9767,13 +9772,19 @@ def _run_audit_body(
 
     # Graph store enrichment — ingest audit hypotheses + scan findings.
     if config.out_dir:
-        import sqlite3 as _graph_sqlite3_end
         try:
             from core.understand_graph import ingest_audit_hypotheses, ingest_scan_findings
             _tgt = str(config.target_path or "")
             ingest_audit_hypotheses(config.out_dir, _tgt)
             ingest_scan_findings(config.out_dir, _tgt)
-        except (ImportError, _graph_sqlite3_end.Error, KeyError, TypeError, ValueError):
+        # Broad except: enrichment is best-effort by design (sibling
+        # graph-enrichment sites use the same spelling). The ingest
+        # mkdirs the graph dir and binds artifact-derived values, so
+        # the failure surface spans OSError, sqlite errors, shape
+        # errors, and bind overflows — any of them must degrade to
+        # this warning lane, not revoke an otherwise-successful audit
+        # at its final optional step.
+        except Exception:
             logger.debug("graph store enrichment skipped", exc_info=True)
 
     return result

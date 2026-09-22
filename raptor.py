@@ -789,7 +789,6 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
         # this lane is skipped for command=="agentic" and raptor_agentic.py
         # has no ingest call of its own (wiring pending).
         if command in ("scan", "codeql"):
-            import sqlite3 as _graph_sqlite3
             try:
                 _target_str = target or ""
                 if command == "scan":
@@ -798,7 +797,14 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
                 if command == "codeql":
                     from core.understand_graph import ingest_codeql_sarif
                     ingest_codeql_sarif(out_dir, _target_str)
-            except (ImportError, _graph_sqlite3.Error, KeyError, TypeError, ValueError):
+            # Broad except: enrichment is best-effort by design (the
+            # sibling graph-enrichment sites use the same spelling). The
+            # ingest mkdirs the graph dir and binds artifact-derived
+            # values, so the failure surface spans OSError, sqlite errors,
+            # shape errors, and bind overflows — any of them must degrade
+            # to this warning lane, not revoke the already-complete run's
+            # success at its final optional step.
+            except Exception:
                 logging.getLogger(__name__).debug(
                     "graph store enrichment skipped", exc_info=True,
                 )
