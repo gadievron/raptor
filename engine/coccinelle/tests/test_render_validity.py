@@ -26,6 +26,7 @@ TestVocabRendered) and structurally in test_vocab_renderer.
 
 from __future__ import annotations
 
+import logging
 import re
 import shutil
 import subprocess
@@ -115,6 +116,49 @@ class _RepresentativeVocab:
             setattr(self, attr, frozenset({f"probe_{attr}"}))
 
 
+def _vocab_buckets(text: str) -> list[str]:
+    """Bucket names of every ``@vocab`` marker, in file order."""
+    return [
+        m.group(1)
+        for m in (
+            vocab_renderer._MARKER_RE.match(line.rstrip())
+            for line in text.splitlines()
+        )
+        if m
+    ]
+
+
+def _render_capturing_warnings(
+    rule: Path, vocab: object,
+) -> tuple[Path | None, list[str]]:
+    """Render ``rule`` and capture the renderer's warning channel.
+
+    Returns ``(rendered_path_or_None, warning_messages)``. The
+    renderer deliberately degrades on an unknown ``@vocab`` bucket
+    (warn, splice nothing) so a sweep never goes dark at run time —
+    which makes the warning channel the ONLY witness that a rule
+    carries a dead splice slot. The oracle tests below promote those
+    warnings to failures.
+    """
+    captured: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    log = logging.getLogger(vocab_renderer.__name__)
+    handler = _Capture(level=logging.WARNING)
+    old_level = log.level
+    log.addHandler(handler)
+    log.setLevel(logging.WARNING)
+    try:
+        rendered = vocab_renderer.render(rule, vocab)
+    finally:
+        log.removeHandler(handler)
+        log.setLevel(old_level)
+    return rendered, [r.getMessage() for r in captured]
+
+
 def test_universe_is_nonempty():
     # Guards the globs themselves — a moved rules dir must not turn
     # both parametrized gates into vacuous zero-case passes.
@@ -189,11 +233,70 @@ def test_seed_rule_parses(rule):
 @pytest.mark.parametrize(
     "rule", _VOCAB_RULES, ids=lambda p: p.stem,
 )
+def test_no_unknown_vocab_buckets(rule):
+    """Every ``@vocab`` bucket a stock rule names must be mapped.
+
+    At run time an unknown bucket only warns and splices nothing, so
+    the marked slot is silently dead on every vocabulary-bearing
+    audit. Here that warning is a failure, and a rule whose buckets
+    are ALL unmapped fails with the rule and bucket names rather than
+    tripping the incidental rendered-no-change assertion.
+    """
+    text = rule.read_text(encoding="utf-8")
+    buckets = _vocab_buckets(text)
+    unmapped = sorted(
+        {b for b in buckets if b not in vocab_renderer._BUCKET_MAP}
+    )
+    rendered, warnings = _render_capturing_warnings(
+        rule, _RepresentativeVocab(),
+    )
+    if rendered is not None:
+        rendered.unlink()
+    unknown = [w for w in warnings if "unknown @vocab bucket" in w]
+    scope = (
+        "EVERY @vocab marker in the rule is a dead splice slot"
+        if unmapped and set(unmapped) == set(buckets)
+        else "those splice slots are silently dead"
+    )
+    assert not unmapped and not unknown, (
+        f"{rule.name} names @vocab bucket(s) with no "
+        f"vocab_renderer._BUCKET_MAP entry: {', '.join(unmapped)} — "
+        f"{scope} on every vocabulary-bearing audit; renderer "
+        f"warnings: {unknown}"
+    )
+
+
+def test_unknown_bucket_detection_self_check(tmp_path):
+    # The gate above proves the universe clean only if the warning
+    # capture actually works — flag a synthetic unknown bucket here so
+    # a broken capture channel cannot green the universe silently.
+    rule = tmp_path / "synthetic.cocci"
+    rule.write_text(
+        "// @vocab: not_a_real_bucket\n"
+        r"\(kfree\|kvfree\)(E);" + "\n",
+        encoding="utf-8",
+    )
+    assert _vocab_buckets(rule.read_text(encoding="utf-8")) == [
+        "not_a_real_bucket",
+    ]
+    rendered, warnings = _render_capturing_warnings(
+        rule, _RepresentativeVocab(),
+    )
+    assert rendered is None
+    unknown = [w for w in warnings if "unknown @vocab bucket" in w]
+    assert unknown and "not_a_real_bucket" in unknown[0]
+
+
+@pytest.mark.parametrize(
+    "rule", _VOCAB_RULES, ids=lambda p: p.stem,
+)
 def test_rendered_rule_parses(rule):
     rendered = render(rule, _RepresentativeVocab())
     assert rendered is not None, (
-        f"{rule.name} carries // @vocab: markers but rendered no "
-        f"change with a non-empty vocabulary in every bucket"
+        f"{rule.name} carries // @vocab: markers "
+        f"({', '.join(_vocab_buckets(rule.read_text(encoding='utf-8')))}) "
+        f"but rendered no change with a non-empty vocabulary in every "
+        f"mapped bucket"
     )
     try:
         proc = _parse_cocci(rendered)
