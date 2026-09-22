@@ -28,6 +28,21 @@ import core.startup.process_init  # noqa: E402,F401
 import argparse  # noqa: E402
 import json  # noqa: E402
 
+from core.security.log_sanitisation import (  # noqa: E402
+    escape_nonprintable,
+    sanitise_for_terminal as _sft,
+)
+
+
+def _term_block(value: object, max_len: int = 8_000) -> str:
+    """Escape a multi-line hostile-influenced block for terminal
+    display: control/BIDI bytes escaped, real newlines preserved,
+    length bounded with an explicit elision marker."""
+    out = escape_nonprintable(str(value), preserve_newlines=True)
+    if len(out) > max_len:
+        out = out[:max_len] + f"...[+{len(out) - max_len} chars]"
+    return out
+
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -153,11 +168,16 @@ def main() -> int:
     if not payload.get("exists", True):
         print(f"Graph: not found ({db_path})")
         return 1
+    # Everything below interpolates graph-store content into the
+    # operator TTY. Node ids / labels / paths are ingested from run
+    # artifacts (scanned-tree file and function names, LLM hypothesis
+    # text), so the terminal lanes escape at the sink — the prompt
+    # consumers of the same strings ride the envelope instead.
     if "nodes" in payload:
-        print(f"Graph: {payload.get('path', db_path)}")
+        print(f"Graph: {_sft(str(payload.get('path', db_path)))}")
         latest = payload.get("latest_snapshot") or {}
         if latest.get("target_path"):
-            print(f"Target: {latest['target_path']}")
+            print(f"Target: {_sft(str(latest['target_path']))}")
         print("Nodes:")
         for kind, count in sorted((payload.get("nodes") or {}).items()):
             print(f"  {kind}: {count}")
@@ -171,21 +191,21 @@ def main() -> int:
             sink = item.get("sink", {})
             status = "unchecked" if item.get("unchecked") else "bounded"
             print(
-                f"{entry.get('id') or '?'} {entry.get('label') or '?'}"
-                f" -> {sink.get('id') or '?'} {sink.get('label') or '?'}"
-                f" ({status}, {item.get('confidence') or 'candidate'},"
+                f"{_sft(str(entry.get('id') or '?'))} {_sft(str(entry.get('label') or '?'))}"
+                f" -> {_sft(str(sink.get('id') or '?'))} {_sft(str(sink.get('label') or '?'))}"
+                f" ({status}, {_sft(str(item.get('confidence') or 'candidate'))},"
                 f" risk={item.get('risk_score')})"
             )
             if item.get("missing_boundary"):
-                print(f"  missing: {item['missing_boundary']}")
+                print(f"  missing: {_sft(str(item['missing_boundary']), max_len=500)}")
         return 0
     if "graph_context" in payload:
-        print(payload.get("graph_context") or "No graph-backed risks found.")
+        print(_term_block(payload.get("graph_context") or "No graph-backed risks found."))
         return 0
     for item in payload.get("reachable_sinks", []):
         src = item.get("source") or item.get("source_file") or "source"
         sink = item.get("sink") or item.get("sink_file") or "sink"
-        print(f"{src} -> {sink} ({item.get('confidence') or 'candidate'})")
+        print(f"{_sft(str(src))} -> {_sft(str(sink))} ({_sft(str(item.get('confidence') or 'candidate'))})")
     return 0
 
 

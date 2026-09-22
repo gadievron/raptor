@@ -442,6 +442,12 @@ _REPORT_WRITER_FILES = (
     # core/run/metadata chokepoint; per-shim stage-failure relays are
     # escaped in-file. Terminal writers — sanitise_for_terminal grade.
     "libexec/raptor-enrich-context-map",
+    # Graph-store query CLI: node ids / labels / target paths come
+    # from ingested run artifacts (scanned-tree names, LLM hypothesis
+    # text). Terminal writer — sanitise_for_terminal grade; the
+    # multi-line threat-context block uses the script's newline-
+    # preserving _term_block helper.
+    "libexec/raptor-graph-query",
     "libexec/raptor-render-diagrams",
     "libexec/raptor-smt-check-negative-bypass",
     "libexec/raptor-smt-check-null-deref",
