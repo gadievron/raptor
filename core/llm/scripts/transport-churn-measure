@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Measure the LLM transport's connection-reuse failure modes.
+
+Hermetic: drives the real pooled ``httpx`` client stack
+(``core.llm.http_pool.pool_limits`` — the same construction the
+dispatcher's upstream leg and the SDK transports use) against a
+captive in-process upstream (``core.llm.tests.mock_upstream``) that
+simulates keep-alive teardown: idle close (FIN/RST), half-open
+sockets (the proxied-CONNECT-tunnel shape), RST mid-response, and
+close-after-response. No LLM calls, no network egress.
+
+Run via ``bin/raptor`` (which sets ``CLAUDECODE``) or with
+``_RAPTOR_TRUSTED=1`` for direct invocation.
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+import argparse  # noqa: E402
+import json  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+
+import httpx  # noqa: E402
+
+from core.llm.http_pool import pool_limits  # noqa: E402
+from core.llm.tests.mock_upstream import MockUpstream  # noqa: E402
+
+
+@dataclass
+class _Outcome:
+    """One logical call: per-attempt dispositions + total latency."""
+    attempts: list[str] = field(default_factory=list)  # "ok" | exc name
+    latency_s: float = 0.0
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.attempts) and self.attempts[-1] == "ok"
+
+
+def _drive(
+    *,
+    mode: str,
+    idle_s: float,
+    gap_s: float,
+    workers: int,
+    rounds: int,
+    retries: int,
+    keepalive_s: float | None,
+    request_bytes: int,
+    retry_transport: str = "pool",
+) -> dict:
+    """Run one scenario; return the measurement record."""
+    env_backup = os.environ.get("RAPTOR_HTTP_KEEPALIVE_S")
+    if keepalive_s is not None:
+        os.environ["RAPTOR_HTTP_KEEPALIVE_S"] = str(keepalive_s)
+    try:
+        limits = pool_limits()
+    finally:
+        if keepalive_s is not None:
+            if env_backup is None:
+                os.environ.pop("RAPTOR_HTTP_KEEPALIVE_S", None)
+            else:
+                os.environ["RAPTOR_HTTP_KEEPALIVE_S"] = env_backup
+
+    payload = json.dumps({
+        "model": "m", "messages": [{"role": "user", "content": "x" * request_bytes}],
+    }).encode()
+
+    outcomes: list[_Outcome] = []
+    outcomes_lock = threading.Lock()
+    barrier = threading.Barrier(workers)
+
+    with MockUpstream(mode, idle_s=idle_s) as upstream, httpx.Client(
+        limits=limits, timeout=10.0, trust_env=False,
+    ) as client:
+
+        def worker() -> None:
+            barrier.wait()
+            for _ in range(rounds):
+                out = _Outcome()
+                t0 = time.monotonic()
+                attempt = 0
+                while True:
+                    try:
+                        if attempt > 0 and retry_transport == "fresh":
+                            # Retry on a dedicated one-shot client:
+                            # a guaranteed fresh connection instead
+                            # of another draw from a pool whose idle
+                            # set the far side condemned all at once.
+                            with httpx.Client(
+                                limits=limits, timeout=10.0,
+                                trust_env=False,
+                            ) as one:
+                                one.post(
+                                    upstream.base_url + "/v1/messages",
+                                    content=payload,
+                                    headers={
+                                        "Content-Type": "application/json",
+                                    },
+                                ).raise_for_status()
+                        else:
+                            client.post(
+                                upstream.base_url + "/v1/messages",
+                                content=payload,
+                                headers={
+                                    "Content-Type": "application/json",
+                                },
+                            ).raise_for_status()
+                        out.attempts.append("ok")
+                        break
+                    except httpx.HTTPError as exc:
+                        out.attempts.append(type(exc).__name__)
+                        attempt += 1
+                        if attempt > retries:
+                            break
+                out.latency_s = time.monotonic() - t0
+                with outcomes_lock:
+                    outcomes.append(out)
+                # Synchronized idle: every worker sleeps at once, the
+                # whole pool idles together — the review-loop cadence
+                # (all workers think, then all fire).
+                time.sleep(gap_s)
+
+        threads = [threading.Thread(target=worker) for _ in range(workers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        counters = upstream.counters()
+
+    calls = len(outcomes)
+    ok = sum(1 for o in outcomes if o.ok)
+    error_attempts: dict[str, int] = {}
+    for o in outcomes:
+        for a in o.attempts:
+            if a != "ok":
+                error_attempts[a] = error_attempts.get(a, 0) + 1
+    recovered = sum(1 for o in outcomes if o.ok and len(o.attempts) > 1)
+    lat = sorted(o.latency_s for o in outcomes)
+    return {
+        "mode": mode,
+        "idle_s": idle_s,
+        "gap_s": gap_s,
+        "workers": workers,
+        "rounds": rounds,
+        "retries": retries,
+        "keepalive_expiry_s": limits.keepalive_expiry,
+        "calls": calls,
+        "ok": ok,
+        "failed": calls - ok,
+        "recovered_by_retry": recovered,
+        "error_attempts": error_attempts,
+        "latency_p50_s": round(lat[len(lat) // 2], 4) if lat else None,
+        "latency_max_s": round(lat[-1], 4) if lat else None,
+        "server": counters,
+    }
+
+
+# Scenario matrix. idle_s models the far side's idle-close threshold
+# (proxy tunnel or upstream keep-alive timeout); gap_s is the
+# workers' think-time between calls, placed below / at / above the
+# threshold to separate the three reuse regimes:
+#   gap < idle  : reuse works (baseline)
+#   gap ~ idle  : close races the reuse (race window)
+#   gap > idle  : the close has SETTLED before reuse — client-side
+#                 detectability decides the outcome (FIN visible vs
+#                 half-open invisible)
+def _scenarios(args: argparse.Namespace) -> list[dict]:
+    t = args.idle_s
+    common = {
+        "idle_s": t, "workers": args.workers, "rounds": args.rounds,
+        "request_bytes": args.request_bytes,
+    }
+    return [
+        dict(name="baseline-reuse", mode="keepalive",
+             gap_s=t * 0.3, retries=0, keepalive_s=None, **common),
+        dict(name="settled-fin", mode="idle-close-fin",
+             gap_s=t * 2.0, retries=0, keepalive_s=None, **common),
+        dict(name="fin-race", mode="idle-close-fin",
+             gap_s=t, retries=0, keepalive_s=None, **common),
+        dict(name="settled-rst", mode="idle-close-rst",
+             gap_s=t * 2.0, retries=0, keepalive_s=None, **common),
+        dict(name="half-open", mode="half-open",
+             gap_s=t * 2.0, retries=0, keepalive_s=None, **common),
+        dict(name="half-open-rst", mode="half-open-rst",
+             gap_s=t * 2.0, retries=0, keepalive_s=None, **common),
+        dict(name="half-open-blind-retry", mode="half-open",
+             gap_s=t * 2.0, retries=2, keepalive_s=None, **common),
+        dict(name="half-open-fresh-retry", mode="half-open",
+             gap_s=t * 2.0, retries=1, keepalive_s=None,
+             retry_transport="fresh", **common),
+        dict(name="half-open-tuned-expiry", mode="half-open",
+             gap_s=t * 2.0, retries=0, keepalive_s=t * 0.5, **common),
+        dict(name="mid-response-rst-blind-retry", mode="rst-mid-response",
+             gap_s=t * 0.3, retries=2, keepalive_s=None, **common),
+        dict(name="close-after-response", mode="close-after-response",
+             gap_s=t * 0.3, retries=0, keepalive_s=None, **common),
+    ]
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Measure pooled-httpx behaviour against keep-alive teardown",
+    )
+    parser.add_argument("--idle-s", type=float, default=0.6,
+                        help="far-side idle-close threshold (default 0.6)")
+    parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--rounds", type=int, default=6)
+    parser.add_argument("--request-bytes", type=int, default=4096)
+    parser.add_argument("--scenario", action="append", default=None,
+                        help="run only the named scenario(s)")
+    parser.add_argument("--json", action="store_true",
+                        help="emit one JSON record per scenario")
+    args = parser.parse_args()
+
+    records = []
+    for spec in _scenarios(args):
+        name = spec.pop("name")
+        if args.scenario and name not in args.scenario:
+            continue
+        rec = _drive(mode=spec["mode"], idle_s=spec["idle_s"],
+                     gap_s=spec["gap_s"], workers=spec["workers"],
+                     rounds=spec["rounds"], retries=spec["retries"],
+                     keepalive_s=spec["keepalive_s"],
+                     request_bytes=spec["request_bytes"],
+                     retry_transport=spec.get("retry_transport", "pool"))
+        rec["name"] = name
+        rec["retry_transport"] = spec.get("retry_transport", "pool")
+        records.append(rec)
+        if args.json:
+            print(json.dumps(rec))
+        else:
+            errs = ", ".join(
+                f"{k}x{v}" for k, v in sorted(rec["error_attempts"].items())
+            ) or "none"
+            print(
+                f"{name:32s} calls={rec['calls']:3d} ok={rec['ok']:3d} "
+                f"failed={rec['failed']:3d} recovered={rec['recovered_by_retry']:3d} "
+                f"errors=[{errs}] "
+                f"conns={rec['server']['connections']:3d} "
+                f"processed={rec['server']['requests_processed']:3d} "
+                f"stale_hits={rec['server']['stale_hits']:3d} "
+                f"p50={rec['latency_p50_s']}s max={rec['latency_max_s']}s"
+            )
+    return 0 if records else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
