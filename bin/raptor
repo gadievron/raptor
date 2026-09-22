@@ -223,7 +223,19 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
                         unset _shown_d
                         continue
                     fi
-                    _rp rm -rf -- "$_d"
+                    # A failed removal (root-owned or immutable
+                    # leftovers from container/sandbox tool runs)
+                    # must not abort the launch — and would otherwise
+                    # re-abort EVERY launch until cleaned by hand.
+                    # rm's own stderr is nulled: it echoes raw
+                    # scratch-content filenames (tool/target-derived
+                    # bytes); the bounded, stripped path below is the
+                    # operator-facing report.
+                    if ! _rp rm -rf -- "$_d" 2>/dev/null; then
+                        _shown_d="${_d//[![:print:]]/}"
+                        echo "raptor: could not fully remove stale session dir (clean up manually): ${_shown_d:0:200}" >&2
+                        unset _shown_d
+                    fi
                 fi
             fi
         done
@@ -235,6 +247,11 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
         # that status would kill the launcher with stderr already
         # nulled. du still prints the total it summed, so keep it.
         _kb="$(_rp du -sk "$_tmp_base" 2>/dev/null | _rp cut -f1)" || true
+        # Single-bracket `[` on purpose: `[[ ]]` arithmetic-evaluates
+        # its -gt operands, and _kb derives from du output over an
+        # attacker-influenceable base path. `[` treats a non-numeric
+        # _kb as an error (status 2, nulled, condition false) instead
+        # of evaluating it. Do not rewrite to `[[ ]]`.
         if [ -n "$_kb" ] && [ "$_kb" -gt 5242880 ] 2>/dev/null; then
             _shown_tb="${_tmp_base//[![:print:]]/}"
             echo "raptor: note: ${_shown_tb:0:200} holds >5G of session scratch — stale dirs sweep on each launch; live ones may need manual cleanup" >&2
