@@ -118,19 +118,65 @@ def _provenance_note(data: object) -> str:
     )
 
 
-def _graph_path_for_directory(out_dir: Path) -> Path | None:
+def _derive_directory_target(out_dir: Path) -> str | None:
+    """Derive the run directory's analysis target, honestly.
+
+    The ``target_path`` sealed into ``.raptor-run.json`` at start_run
+    is authoritative. ``checklist.json``'s ``target_path`` is written
+    by analysis stages into the run dir — an artifact-derived value is
+    a HINT that can drift or be tampered with, so it is corroborated
+    against the sealed record when one exists, then existence-gated:
+    the value must resolve to an existing directory before use, and it
+    is used only to SCOPE a graph read, never to author output.
+    Returns None when no trustworthy target can be derived.
+    """
+    from core.run.metadata import corroborate_target_path, load_run_metadata
+
+    meta = load_run_metadata(out_dir) or {}
+    candidate = meta.get("target_path")
+    if not (isinstance(candidate, str) and candidate):
+        checklist = _load_json(out_dir / "checklist.json")
+        candidate = (checklist.get("target_path")
+                     if isinstance(checklist, dict) else None)
+        if not (isinstance(candidate, str) and candidate):
+            return None
+        if corroborate_target_path(out_dir, candidate):
+            return None  # artifact value contradicts the sealed record
+    try:
+        resolved = Path(candidate).resolve()
+        if not resolved.is_dir():
+            return None
+    except OSError:
+        return None
+    return str(resolved)
+
+
+def _served_target_matches(served: object, wanted: str) -> bool:
+    """True when the graph snapshot's target is the derived target.
+
+    ``build_context_map`` falls back to the latest ANY-target snapshot
+    when the requested target has none, so the served ``meta.target``
+    must be checked against what this directory is actually about.
+    """
+    if not isinstance(served, str) or not served:
+        return False
+    try:
+        return Path(served).resolve() == Path(wanted).resolve()
+    except OSError:
+        return False
+
+
+def _graph_path_for_directory(out_dir: Path, target: str | None) -> Path | None:
     direct = out_dir / "graph" / _GRAPH_FILENAME
     if direct.exists():
         return direct
 
-    checklist = _load_json(out_dir / "checklist.json") if (out_dir / "checklist.json").exists() else None
-    target_path = checklist.get("target_path") if isinstance(checklist, dict) else None
-    if not target_path:
+    if not target:
         return None
 
     from core.understand_graph import graph_path_for_run
 
-    graph_path = graph_path_for_run(out_dir, target_path)
+    graph_path = graph_path_for_run(out_dir, target)
     return graph_path if graph_path.exists() else None
 
 
@@ -255,10 +301,19 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
     if not context_map_rendered:
         try:
             from core.understand_graph import build_context_map
-            graph_path = _graph_path_for_directory(out_dir)
-            if graph_path and graph_path.exists():
-                data, stale = build_context_map(graph_path)
-                if data:
+            # The persistent graph serves whichever snapshot matches
+            # the requested target — and the latest ANY-target snapshot
+            # when none does. Without a trustworthy target for this
+            # directory, that is an any-target answer (possibly another
+            # codebase), so the fallback section is not served at all.
+            graph_target = _derive_directory_target(out_dir)
+            graph_path = (_graph_path_for_directory(out_dir, graph_target)
+                          if graph_target else None)
+            if graph_target and graph_path and graph_path.exists():
+                data, stale = build_context_map(graph_path, graph_target)
+                if data and _served_target_matches(
+                        (data.get("meta") or {}).get("target"),
+                        graph_target):
                     diagram = context_map.generate(data)
                     stale_note = (
                         f"\n\n_Stale files excluded: {len(stale)}_"
