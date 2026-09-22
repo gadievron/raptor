@@ -47,7 +47,7 @@ on:
       - '**/Containerfile'
       - '**/docker-compose*.yml'
       - '**/.pre-commit-config.yaml'
-      - '.github/workflows/*.yml'
+      - '.github/workflows/*.y*ml'
       - '.gitlab-ci.yml'
       - '.github/workflows/sca-pr-gate.yml'
 

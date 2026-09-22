@@ -113,7 +113,10 @@ def test_every_workflow_is_referenced_in_ci_controls_doc() -> None:
     doc = _read("docs/ci-controls.md")
     missing = sorted(
         wf.name
-        for wf in (REPO / ".github/workflows").glob("*.yml")
+        # ``*.y*ml``: GHA accepts both workflow extensions — a .yaml
+        # workflow must not escape the universe (same idiom as the
+        # token/checkout gates below).
+        for wf in (REPO / ".github/workflows").glob("*.y*ml")
         if wf.name not in _WORKFLOWS_EXEMPT_FROM_CONTROLS_DOC
         and wf.name not in doc
     )
