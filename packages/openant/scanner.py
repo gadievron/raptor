@@ -53,6 +53,35 @@ _OBJECT_MAX_BYTES = 64 * 1024 * 1024
 # Source: `openant scan --help` → `--language {auto,python,javascript,go,c,ruby,php}`
 _OPENANT_CLI_LANGUAGES = {"auto", "python", "javascript", "go", "c", "ruby", "php"}
 
+# RAPTOR model names → the pinned OpenAnt checkout's concrete model ids
+# (utilities/model_config.py at OPENANT_PINNED_COMMIT: CLAUDE_SONNET /
+# CLAUDE_OPUS). The pinned CLI has no --model flag — model selection is
+# spelled as an llm-config PROFILE (--llm-config <name>, resolved from
+# config.json under $XDG_CONFIG_HOME), whose entries bind concrete
+# per-phase model ids. Advance this table WITH the pin: the pinned-CLI
+# contract test compares it against the checkout's own constants.
+_OPENANT_MODEL_IDS = {
+    "sonnet": "claude-sonnet-4-6",
+    "opus": "claude-opus-4-8",
+}
+
+# The pinned checkout's closed LLM phase set (utilities/llm/config.py:
+# PHASES). A user-authored llm-config profile must bind EVERY phase
+# explicitly — upstream rejects partial profiles, there is no
+# per-phase fallback. RAPTOR binds its single selected model to all of
+# them, preserving the old --model semantics (one model drives the
+# whole pipeline). The per-phase capability is deliberately available
+# but unused — a future multi-model mapping plugs in here.
+_OPENANT_LLM_PHASES = (
+    "analyze", "enhance", "verify", "report",
+    "dynamic_test", "llm_reach", "app_context",
+)
+
+# Directory under the scan out_dir that the child's XDG_CONFIG_HOME
+# points at (so <out_dir>/<this>/openant/config.json is the config the
+# pinned CLI resolves).
+_XDG_STAGE_DIRNAME = "openant-xdg"
+
 from .config import OPENANT_PINNED_COMMIT, OPENANT_UPSTREAM_URL, OpenAntConfig
 
 logger = get_logger()
@@ -743,6 +772,11 @@ def _run_subprocess(
     root — which also contains a `core/` package and would otherwise shadow it.
     """
     env = _build_subprocess_env(config)
+    # Model selection: the child resolves `--llm-config raptor-<model>`
+    # from $XDG_CONFIG_HOME/openant/config.json — point it at the
+    # run-local staged copy (see _stage_llm_config for why not the
+    # operator's real ~/.config file).
+    env["XDG_CONFIG_HOME"] = str(_stage_llm_config(out_dir, config.model))
     cmd = _build_command(repo_path, out_dir, config)
 
     logger.info(f"Running OpenAnt: {' '.join(str(c) for c in cmd)}")
@@ -871,6 +905,126 @@ def _find_venv_python(core_path: Path) -> str:
     return sys.executable
 
 
+def _normalized_model(model: str) -> str:
+    """Clamp *model* to the names the integration can translate.
+
+    Both argv surfaces (/openant --model, /agentic --openant-model)
+    already validate against {sonnet, opus}; the remaining unvalidated
+    lane is ``OpenAntConfig.from_env`` reading a raw ``$OPENANT_MODEL``.
+    An untranslatable name warns loudly and falls back to ``sonnet`` —
+    the same warn-and-fall-back posture as ``config.env_choice`` —
+    rather than shipping a profile the upstream provider would reject
+    mid-scan.
+    """
+    if model in _OPENANT_MODEL_IDS:
+        return model
+    logger.warning(
+        "OpenAnt model %r has no pinned model-id mapping "
+        "(choices: %s); using sonnet",
+        str(model)[:60], ", ".join(sorted(_OPENANT_MODEL_IDS)),
+    )
+    return "sonnet"
+
+
+def _llm_profile_name(model: str) -> str:
+    """The RAPTOR-owned llm-config profile name for *model*."""
+    return f"raptor-{_normalized_model(model)}"
+
+
+def _operator_config_path() -> Path:
+    """The config.json the pinned CLI would resolve in THIS process's
+    environment — mirrors upstream ``registry.default_config_path()``
+    ($XDG_CONFIG_HOME/openant/config.json, else
+    ~/.config/openant/config.json)."""
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    base = Path(xdg) if xdg else Path.home() / ".config"
+    return base / "openant" / "config.json"
+
+
+def _stage_llm_config(out_dir: Path, model: str) -> Path:
+    """Stage a run-local OpenAnt config.json carrying RAPTOR's profile.
+
+    The pinned CLI selects models via ``--llm-config <profile>`` read
+    from ``$XDG_CONFIG_HOME/openant/config.json`` (no config-path CLI
+    override exists at the pin). RAPTOR must therefore materialise a
+    profile binding its selected model — this writes it to a RUN-LOCAL
+    copy under *out_dir* and the subprocess env points
+    ``XDG_CONFIG_HOME`` at it, deliberately NOT into the operator's
+    real ``~/.config/openant/config.json``:
+
+    * the operator's file is never mutated (no RAPTOR-authored entries
+      left behind, no write races with concurrent runs or the
+      operator's own ``openant llm-config`` edits);
+    * the mount-ns sandbox lane binds only target/output/tool paths —
+      ``~/.config`` is not in the child's filesystem view, a run-local
+      file under the (bound, writable) out_dir always is.
+
+    The operator's existing config is MERGED, not shadowed: providers
+    and foreign llm-config profiles are copied verbatim so a custom
+    ``anthropic`` provider entry (base_url, thinking policy) still
+    applies; only the RAPTOR-owned ``raptor-<model>`` profile key is
+    written. No credential is invented — the profile references
+    provider ``"anthropic"``, which upstream synthesises from
+    ``$ANTHROPIC_API_KEY`` when config.json defines no such provider.
+    The staged copy may carry operator-authored provider api_keys, so
+    the directory is created 0700 and the file written 0600.
+
+    Returns the staged XDG_CONFIG_HOME directory.
+    """
+    raw: dict[str, Any] = {"$schema_version": 2}
+    src = _operator_config_path()
+    if src.exists():
+        data = load_json(src, max_bytes=_OUTPUT_MAX_BYTES)
+        if isinstance(data, dict):
+            raw = data
+        else:
+            # A malformed operator config would hard-error the upstream
+            # scan anyway; staging a fresh one keeps the scan the
+            # operator asked for running (their custom providers are
+            # named in the warning, never silently dropped).
+            logger.warning(
+                "OpenAnt config %s is not a JSON object — staging a "
+                "fresh run-local config without it (custom providers "
+                "in that file will not apply to this run)", src,
+            )
+    configs = raw.get("llm_configs")
+    if not isinstance(configs, dict):
+        if configs is not None:
+            logger.warning(
+                "OpenAnt config %s: 'llm_configs' is not a JSON object "
+                "— replacing it in the run-local staged copy", src,
+            )
+        configs = {}
+        raw["llm_configs"] = configs
+    model = _normalized_model(model)
+    configs[_llm_profile_name(model)] = {
+        phase: {"provider": "anthropic", "model": _OPENANT_MODEL_IDS[model]}
+        for phase in _OPENANT_LLM_PHASES
+    }
+
+    xdg_home = out_dir / _XDG_STAGE_DIRNAME
+    cfg_dir = xdg_home / "openant"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(xdg_home, 0o700)
+    dest = cfg_dir / "config.json"
+    # Atomic write (tempfile + rename) so a concurrent reader never
+    # sees a torn file; 0600 before content lands.
+    import tempfile
+    fd, tmp_name = tempfile.mkstemp(dir=str(cfg_dir), suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh, indent=2)
+        os.replace(tmp_name, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+    return xdg_home
+
+
 def _build_command(
     repo_path: Path,
     out_dir: Path,
@@ -885,7 +1039,10 @@ def _build_command(
         python_exe, "-m", "openant",
         "scan", str(repo_path),
         "--output", str(out_dir),
-        "--model", config.model,
+        # The pinned CLI removed --model (an argv --model is an
+        # unconditional argparse error); model selection travels as the
+        # staged llm-config profile — see _stage_llm_config.
+        "--llm-config", _llm_profile_name(config.model),
         "--level", config.level,
         "--language", lang,
         "--workers", str(config.workers),
