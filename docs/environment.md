@@ -233,8 +233,9 @@ AWS credentials alone never select Bedrock.
 ### Credential-isolation dispatcher knobs
 
 Numeric knobs on the dispatcher server
-(`core/llm/dispatcher/server.py`), plus one boolean opt-out
-(`RAPTOR_LLM_TOKEN_RENEW`). The numeric knobs resolve env > default —
+(`core/llm/dispatcher/server.py`), plus the worker-side boolean
+toggles (`RAPTOR_LLM_TOKEN_RENEW`, `RAPTOR_LLM_RETRY_CONSUMED`).
+The numeric knobs resolve env > default —
 only the token pair (`RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S` /
 `_TOKEN_BUDGET`) additionally accepts a caller argument, which wins
 over both. Non-numeric or below-minimum values fall back to the
@@ -247,6 +248,7 @@ The minimum is 1 unless a row says otherwise.
 | `RAPTOR_LLM_DISPATCHER_STALE_RETRY_CEILING_S` | `2.0` | Retry-eligibility ceiling for the forwarding leg's transparent fresh-connection re-send: an upstream connection that dies pre-response is retried only when the attempt died within this many seconds of the send — bounding both the double-send residual (a slow pre-response death plausibly followed billable upstream work) and the age of a re-sent SigV4 signature. Too low and genuine stale-connection deaths on a sluggish egress path lose recovery (churn resurfaces as 502 bursts); too high re-admits the mid-generation double-buy and stale-signature 403s. Float, minimum `0`; `0` disables the retry. |
 | `RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S` | `28800` (8 h) | Lifetime of a worker's one-shot auth token; bump for kernel-scale runs that outlive the default. The in-process self-serve route (`core/llm/dispatcher/lifecycle.py`) sizes its own token to 7 days when this is unset — an explicit value pins both. Workers renew a still-valid token in place before expiry (see `RAPTOR_LLM_TOKEN_RENEW`), so for a live worker the TTL bounds time-since-last-renewal, not total run length. |
 | `RAPTOR_LLM_TOKEN_RENEW` | enabled | Worker-side proactive token renewal on the dispatcher socket (`POST /_token/renew` shortly before the token's TTL window closes). Set `0` / `false` / `no` to opt out — the worker then keeps the original fixed TTL and runs longer than it will 401 at expiry. |
+| `RAPTOR_LLM_RETRY_CONSUMED` | off | Worker-side escape hatch on the spend-aware retry gate. By default a transport death AFTER the dispatcher relayed the upstream response head (its `X-Raptor-Upstream-State: response-started` stamp) is not re-sent: the upstream already processed — and billed — the generation, so a retry buys the same generation again; the attempt fails with a loud warning naming the spend and falls through to fallback models. Set `1` / `true` / `yes` to keep retrying anyway on a flaky provider — availability over cost, each retry a full re-purchase (still warned per failure). Pre-response failures and non-dispatcher transports are unaffected either way. |
 | `RAPTOR_LLM_DISPATCHER_TOKEN_BUDGET` | `10000` | Requests allowed per worker token; bump alongside the TTL for runs whose workers legitimately make more calls. |
 | `RAPTOR_LLM_DISPATCHER_MAX_BODY_BYTES` | `33554432` (32 MiB) | Request-body ceiling on the provider plane. Content-Length is peer-typed input even on the token-authenticated planes, so oversized or negative declared lengths are refused instead of allocated. Clears the largest legitimate Messages payloads (multi-image requests); the child-admin plane keeps its own fixed 1 MiB cap. |
 | `RAPTOR_LLM_DISPATCHER_RELAY_MAX_BYTES` | `268435456` (256 MiB) | Cumulative byte cap on one upstream response relay — bounds what a fire-hosing (mis)behaving upstream can stream through the process. Exceeding it aborts the request mid-stream: partial usage is booked and a `request.error` audit row records the limit class. |

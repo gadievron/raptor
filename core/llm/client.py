@@ -140,6 +140,25 @@ def is_budget_exceeded_error(exc: BaseException) -> bool:
     )
 
 
+class MidResponseDeathError(RuntimeError):
+    """Transport death AFTER the upstream response started — the
+    upstream fully processed (and billed) the generation before the
+    wire failed, so a re-send is a second purchase of the same
+    generation, not a recovery.
+
+    Raised (as the model's terminal attempt error) by the retry gate
+    when the credential-isolation dispatcher stamped the failed
+    attempt's response head ``response-started`` and the failure is
+    transport-class. Measurable with
+    ``core/llm/scripts/transport-churn-measure``: under blind retry a
+    mid-response death multiplies upstream-processed generations by
+    attempts per call; the spend-aware gate holds it at one. Carries
+    the original transport error on ``__cause__``. Operators who
+    prefer paying to failing on a flaky provider can re-enable the
+    blind retry with ``RAPTOR_LLM_RETRY_CONSUMED=1``.
+    """
+
+
 class LLMAuthPersistentError(RuntimeError):
     """Persistent auth-layer refusal — TERMINAL for the consuming phase.
 
@@ -967,6 +986,116 @@ def _is_retryable_error(error: Exception) -> bool:
     # Anything else is non-retryable (schema errors, 400, 401, 403, 404,
     # Instructor failures, Pydantic validation, etc.).
     return any(p in error_str for p in json_parse_patterns)
+
+
+# Exception types that mean "the WIRE failed", as opposed to a complete
+# response with an error status (status-code retry policy) or a bad
+# response shape (parse/validation — whose retries are deliberate
+# new-sample purchases). Type-name tokens cover every SDK's wrapper
+# without importing them: anthropic/openai ``APIConnectionError`` and
+# ``APITimeoutError``, httpx ``RemoteProtocolError`` / ``ReadError`` /
+# ``WriteError`` / ``ReadTimeout``, stdlib ``ConnectionError`` /
+# ``TimeoutError`` / ``http.client.IncompleteRead``. Deliberately NOT
+# message-based: a status error whose body text mentions "connection"
+# must never classify as a wire death. Misses fail open — an unmatched
+# wire death keeps today's retry behaviour, it never blocks a retry
+# that would otherwise run.
+_TRANSPORT_FAILURE_TYPE_TOKENS = (
+    "ConnectionError", "Timeout", "ProtocolError", "ReadError",
+    "WriteError", "NetworkError", "IncompleteRead",
+)
+
+
+def _is_transport_failure(error: Exception) -> bool:
+    """True when *error* is a wire-level failure (connection died,
+    protocol violated, read/write timed out) rather than a complete
+    response the server chose to send or a response-shape problem."""
+    if isinstance(error, (ConnectionError, TimeoutError)):
+        return True
+    name = type(error).__name__
+    return any(t in name for t in _TRANSPORT_FAILURE_TYPE_TOKENS)
+
+
+def _retry_consumed_enabled() -> bool:
+    """Operator opt-in: keep retrying attempts whose upstream
+    generation is already processed and billed. Both directions of
+    the default: ON trades money for availability — every retry of a
+    mid-response death is a full re-purchase of a generation the
+    worker never received (and the extra spend is invisible on the
+    worker's own ledger, because the billed attempt returned no usage
+    to book). OFF (the default) trades availability for money — a
+    mid-stream wire death terminates this model's attempts and falls
+    through to fallback models / the caller's own recovery, which is
+    a visible failure instead of a silent double-bill. Read per
+    failure (cheap, and honours mid-run env changes in tests)."""
+    from core.config import env_flag
+    return env_flag("RAPTOR_LLM_RETRY_CONSUMED", False)
+
+
+def _consumed_attempt_veto(
+    error: Exception, provider: str, model_name: str,
+) -> MidResponseDeathError | None:
+    """Spend-aware retry gate: the replacement terminal error when the
+    failed attempt must NOT be re-sent because its generation is
+    already processed (and billed) upstream; ``None`` when ordinary
+    retry policy applies.
+
+    Fires only when BOTH hold:
+
+    * the dispatcher stamped the attempt's response head
+      ``response-started`` (read destructively via
+      :func:`core.llm.dispatcher.client.take_upstream_response_started`
+      so the signal can never leak into a later unrelated failure on
+      this thread), and
+    * the failure is transport-class (:func:`_is_transport_failure`).
+      A COMPLETED response followed by a response-shape failure
+      (malformed JSON, schema mismatch) keeps its deliberate
+      retry-as-new-sample semantics — those re-buys are the feature.
+
+    Exactly one operator-visible WARNING either way: the spend is
+    named whether the gate blocks the retry or the
+    ``RAPTOR_LLM_RETRY_CONSUMED`` escape hatch lets it proceed —
+    the operator sees why a call failed (or what a retry costs)
+    instead of silently re-buying.
+    """
+    try:
+        from core.llm.dispatcher.client import (
+            take_upstream_response_started,
+        )
+        started = take_upstream_response_started()
+    except Exception:  # noqa: BLE001 — the gate must never break retry
+        return None
+    if not started or not _is_transport_failure(error):
+        return None
+    from core.security.log_sanitisation import escape_nonprintable as _esc
+    from core.security.redaction import redact_secrets as _redact
+    safe_e = _esc(_redact(str(error)))[:200]
+    if _retry_consumed_enabled():
+        logger.warning(
+            "%s/%s: transport died after the upstream response started "
+            "— the generation was already processed (and billed) "
+            "upstream; retrying anyway per RAPTOR_LLM_RETRY_CONSUMED=1 "
+            "(each retry re-buys the generation): %s",
+            _esc(provider), _esc(model_name), safe_e,
+        )
+        return None
+    logger.warning(
+        "%s/%s: transport died after the upstream response started — "
+        "the generation was already processed (and billed) upstream; "
+        "NOT re-sending (a retry would buy the same generation again; "
+        "set RAPTOR_LLM_RETRY_CONSUMED=1 to retry anyway on a flaky "
+        "provider): %s",
+        _esc(provider), _esc(model_name), safe_e,
+    )
+    veto = MidResponseDeathError(
+        f"mid-response transport death — the upstream generation was "
+        f"already processed and billed; not re-sent "
+        f"({type(error).__name__})",
+    )
+    # Manual chain (the caller records rather than raises this):
+    # structural classifiers walk __cause__ for the typed SDK error.
+    veto.__cause__ = error
+    return veto
 
 
 def _get_quota_guidance(model_name: str, provider: str) -> str:
@@ -2843,6 +2972,18 @@ class LLMClient:
                             error=_safe_e[:200],
                         )
 
+                        # Spend-aware gate BEFORE the generic retry
+                        # policy: a mid-response death matches the
+                        # retryable connection-error shapes below, but
+                        # its generation is already billed upstream —
+                        # re-sending buys it again.
+                        _veto = _consumed_attempt_veto(
+                            e, model.provider, model.model_name,
+                        )
+                        if _veto is not None:
+                            last_error = _veto
+                            break
+
                         if not _is_retryable_error(e):
                             logger.info("Non-retryable error — skipping remaining retries for %s/%s", model.provider, model.model_name)
                             break
@@ -3451,6 +3592,17 @@ class LLMClient:
                             http_version=_transport_http_version(),
                             error=_safe_e[:200],
                         )
+
+                        # Spend-aware gate BEFORE the generic retry
+                        # policy — same contract as ``generate``
+                        # above: a mid-response death's generation is
+                        # already billed upstream.
+                        _veto = _consumed_attempt_veto(
+                            e, model.provider, model.model_name,
+                        )
+                        if _veto is not None:
+                            last_error = _veto
+                            break
 
                         if not _is_retryable_error(e):
                             logger.info("Non-retryable error — skipping remaining retries for %s/%s", model.provider, model.model_name)

@@ -32,6 +32,55 @@ _logger = logging.getLogger(__name__)
 
 _TOKEN_HEADER = "X-Raptor-Token"
 
+# Attempt-state signal (server-side twin: ``server._UPSTREAM_STATE_
+# HEADER``). The dispatcher stamps every head it sends toward the
+# worker: ``response-started`` on a relayed upstream head — from that
+# head onward the generation is processed (and billed) upstream —
+# and ``pre-response`` on its own 502 for a forward-leg failure
+# before any upstream response byte. The hooks below record the stamp
+# per worker thread so the retry gate (``core.llm.client``) can
+# refuse to re-buy a consumed generation. Thread-local is the right
+# scope: httpx runs sync event hooks on the calling thread, and each
+# provider call's request, response head, and any raised failure all
+# happen on that one thread.
+_UPSTREAM_STATE_HEADER = "X-Raptor-Upstream-State"
+_UPSTREAM_STATE_STARTED = "response-started"
+
+_attempt_state = threading.local()
+
+
+def _reset_attempt_state(_request) -> None:
+    """httpx request hook: a new wire request on this thread starts a
+    fresh attempt — whatever state was recorded belongs to a previous
+    one and must not leak into this attempt's failure handling."""
+    _attempt_state.response_started = False
+
+
+def _note_attempt_state(response) -> None:
+    """httpx response hook: record the dispatcher's attempt-state
+    stamp for the head that just arrived. Fires before the body is
+    read (httpx runs response hooks on head receipt), so a mid-body
+    transport death cannot erase it."""
+    state = response.headers.get(_UPSTREAM_STATE_HEADER)
+    _attempt_state.response_started = state == _UPSTREAM_STATE_STARTED
+
+
+def take_upstream_response_started() -> bool:
+    """Read-and-clear: True when the most recent dispatcher-routed
+    request on THIS thread received a relayed upstream response head
+    (the ``response-started`` stamp) — the upstream fully processed,
+    and billed, the generation before any subsequent failure.
+
+    Destructive read on purpose: the signal is scoped to the one
+    failure it is consulted for, so a later unrelated exception on
+    the same thread cannot inherit it (the per-request reset hook is
+    the second line of defence). Always False on non-dispatcher
+    transports and pre-stamp dispatchers — callers must treat that as
+    "no signal", never as evidence the attempt was free."""
+    started = getattr(_attempt_state, "response_started", False)
+    _attempt_state.response_started = False
+    return bool(started)
+
 # Worker-token renewal (mirrors server._TOKEN_RENEW_PATH). The
 # dispatcher's worker-token TTL bounds time-since-last-renewal, not
 # total run length: a still-valid token may re-arm its window via
@@ -364,6 +413,14 @@ def _make_httpx_client(
         headers={_TOKEN_HEADER: token},
         auth=_TokenRenewalAuth(token, socket_path),
         timeout=httpx.Timeout(request_timeout, connect=5.0),
+        # Attempt-state recording for the spend-aware retry gate. The
+        # renewal side-channel client (_TokenRenewalAuth) carries no
+        # hooks, so an out-of-band renewal can never clobber the
+        # state of the main request it precedes.
+        event_hooks={
+            "request": [_reset_attempt_state],
+            "response": [_note_attempt_state],
+        },
     )
 
 
