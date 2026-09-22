@@ -1,10 +1,15 @@
 """Exit-path contract for the /openant command (raptor_openant.py).
 
-A hard scanner failure (timeout, launch failure, exit >= 2, missing
-pipeline output) must exit non-zero so the run lifecycle records a
-FAILED run — an empty-findings exit 0 is indistinguishable from a
-target that scanned clean. Genuine not-configured skips (no
-openant-core checkout) keep exit 0 and the run completes.
+Every path on which the target was NOT scanned must exit non-zero so
+the run lifecycle records a FAILED run — an empty-findings exit 0 is
+indistinguishable from a target that scanned clean in every cross-run
+findings view. Hard scanner failures (timeout, launch failure,
+exit >= 2, missing pipeline output) exit 1 with report
+outcome=scan_failed; not-configured runs (no usable openant-core)
+exit 3 with report outcome=not_configured, and neither writes an
+``openant_findings.json`` (the file is a claim that OpenAnt scanned
+the target). Only a scan that actually ran writes the findings file
+and completes the run.
 
 No LLM ever launches here: the fake openant-core provides its own
 ``openant`` module that either exits with an error code or writes an
@@ -117,6 +122,12 @@ class TestHardErrorFailsRun(unittest.TestCase):
                              f"stdout={proc.stdout}\nstderr={proc.stderr}")
             self.assertIn("OpenAnt scan failed", proc.stdout + proc.stderr)
             self.assertEqual(_run_status(out_dir), "failed")
+            self.assertFalse(
+                (out_dir / "openant_findings.json").exists(),
+                "a failed scan must not leave a findings file behind")
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            self.assertEqual(report["outcome"], "scan_failed")
 
     def test_scanner_exit3_direct_exit_code(self):
         """Direct raptor_openant.py invocation: same exit 1 without the
@@ -136,12 +147,14 @@ class TestHardErrorFailsRun(unittest.TestCase):
                              f"stdout={proc.stdout}\nstderr={proc.stderr}")
 
 
-class TestNotConfiguredCompletesRun(unittest.TestCase):
-    """Genuine not-configured skip → exit 0, lifecycle completes."""
+class TestNotConfiguredFailsRun(unittest.TestCase):
+    """Not-configured → distinct exit 3, lifecycle records a FAILED
+    run, no findings file — the run cannot masquerade as a clean
+    completed scan in cross-run findings views."""
 
-    def test_invalid_core_path_completes(self):
-        """--openant-core pointing nowhere is a config problem, not a
-        failed scan: warn, empty report, exit 0, status=completed."""
+    def test_invalid_core_path_fails_honestly(self):
+        """--openant-core pointing nowhere: nothing was scanned — exit
+        3, status=failed, outcome=not_configured, no findings file."""
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             src = _make_repo(base)
@@ -153,16 +166,22 @@ class TestNotConfiguredCompletesRun(unittest.TestCase):
                  "--openant-core-unpinned"],
                 {},
             )
-            self.assertEqual(proc.returncode, 0,
+            self.assertEqual(proc.returncode, 3,
                              f"stdout={proc.stdout}\nstderr={proc.stderr}")
             self.assertIn("OpenAnt not available", proc.stdout + proc.stderr)
-            self.assertEqual(_run_status(out_dir), "completed")
+            self.assertEqual(_run_status(out_dir), "failed")
+            self.assertFalse(
+                (out_dir / "openant_findings.json").exists(),
+                "a not-configured run must not leave a findings file")
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            self.assertEqual(report["outcome"], "not_configured")
 
     @unittest.skipIf(_discovery_would_succeed(),
                      "a real openant-core is discoverable on this machine")
-    def test_missing_core_checkout_exits_zero(self):
+    def test_missing_core_checkout_exits_three(self):
         """No OPENANT_CORE, no discoverable checkout: the discovery
-        RuntimeError is the documented skip — exit 0."""
+        RuntimeError is a not-configured outcome — exit 3."""
         with tempfile.TemporaryDirectory() as td:
             base = Path(td)
             src = _make_repo(base)
@@ -171,7 +190,7 @@ class TestNotConfiguredCompletesRun(unittest.TestCase):
                  "--repo", str(src), "--out", str(base / "out")],
                 {}, env_drop=("OPENANT_CORE", "RAPTOR_DIR"),
             )
-            self.assertEqual(proc.returncode, 0,
+            self.assertEqual(proc.returncode, 3,
                              f"stdout={proc.stdout}\nstderr={proc.stderr}")
             self.assertIn("OpenAnt not available", proc.stdout + proc.stderr)
 
