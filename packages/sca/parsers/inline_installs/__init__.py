@@ -173,6 +173,36 @@ def _collapse_continuations(text: str) -> list[tuple[int, str, bool]]:
 # O(1) — real workflow expressions are a fraction of that.
 _GHA_EXPR_RE = re.compile(r"\$\{\{(?:[^}]|\}(?!\})){0,400}\}\}")
 
+# Shell I/O redirections — matched at the token level and stripped before
+# PM arg parsing so ``2>&1``, ``>> logfile``, ``> /dev/null`` etc. don't
+# leak through as phantom packages (``2>&1`` looks like package "2" with
+# a ``>`` version comparator to the PEP 508 classifier).
+_REDIRECT_TOKEN_RE = re.compile(r"^\d*[><](?!=)")
+_FD_DUP_RE = re.compile(r"^\d*>&\d+$")
+
+
+def _strip_redirects(args: str) -> str:
+    """Remove shell I/O redirections from an argument string."""
+    tokens = args.split()
+    out: list[str] = []
+    skip_next = False
+    for tok in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if _FD_DUP_RE.match(tok):
+            continue
+        if _REDIRECT_TOKEN_RE.match(tok):
+            if re.match(r"^\d*[><]{1,3}$", tok):
+                skip_next = True
+            continue
+        if tok.startswith("&>"):
+            if tok == "&>":
+                skip_next = True
+            continue
+        out.append(tok)
+    return " ".join(out)
+
 
 def _scan_shell_lines(
     lines: list[tuple[int, str, bool]],
@@ -227,7 +257,7 @@ def _scan_shell_lines(
                 # tokens past the install verb are English words, not
                 # package names. Skip to avoid emitting bogus deps.
                 continue
-            args = sub[m.end():]
+            args = _strip_redirects(sub[m.end():])
             for parsed in mgr.parse_args(args):
                 # Most managers yield (name, version, pin); the pip
                 # manager additionally yields (floor, ceiling) corridor

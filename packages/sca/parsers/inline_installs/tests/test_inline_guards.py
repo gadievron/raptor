@@ -15,6 +15,7 @@ from pathlib import Path
 from packages.sca.parsers.inline_installs import (
     parse_devcontainer_json,
     parse_gha_workflow,
+    parse_shell_script,
 )
 
 
@@ -51,3 +52,23 @@ def test_devcontainer_jsonc_url_not_mangled(tmp_path: Path) -> None:
     by = {d.name: d for d in deps}
     assert "requests" in by
     assert by["requests"].version == "2.31.0"
+
+
+def test_shell_redirect_not_emitted_as_package(tmp_path: Path) -> None:
+    """``2>&1`` and ``>> file`` are shell redirects, not package names.
+
+    Without the redirect filter ``2>&1`` looks like package "2" with
+    a ``>`` PEP 508 comparator, producing spurious ``PyPI:2@`` findings.
+    """
+    sh = tmp_path / "setup.sh"
+    sh.write_text(
+        "#!/bin/bash\n"
+        'pip install --no-cache-dir uv==0.12.6 >> "$LOG" 2>&1\n'
+        "pip install requests > /dev/null\n"
+        "pip install flask 2>/dev/null\n"
+        "pip install numpy &> /tmp/out.log\n",
+        encoding="utf-8",
+    )
+    deps = parse_shell_script(sh)
+    names = {d.name for d in deps}
+    assert names == {"uv", "requests", "flask", "numpy"}
