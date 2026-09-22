@@ -434,16 +434,32 @@ def _const_pattern(language: str, name: str) -> re.Pattern | None:
             re.MULTILINE,
         )
     if language == "rust":
+        # The visibility spec's class excludes newlines: an
+        # unterminated ``pub(`` otherwise re-scans to EOF from every
+        # line's anchor (quadratic on ``pub(`` floods). Trade-off: a
+        # visibility spec split across lines won't match — acceptable
+        # for this regex fallback tier.
         return re.compile(
-            rf"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+{esc}\b",
+            rf"^[ \t]*(?:pub(?:\([^)\n]*\))?\s+)?(?:const|static)\s+{esc}\b",
             re.MULTILINE,
         )
     if language == "java":
+        # ``final``/``static`` field declarations. Horizontal-only
+        # ``[ \t]+`` after each modifier: interior ``\s+`` under the
+        # MULTILINE ^-anchors let the modifier loop swallow
+        # newline-separated keyword floods from every line's anchor
+        # (quadratic on keyword floods). Each branch's required
+        # keyword stays out of its own modifier loop, and the
+        # type/name separator is a single ``[ \t]`` after a type
+        # class that itself absorbs blanks — a variable-length
+        # separator overlapping the type class was quadratic on
+        # space floods. Trade-off: a declaration split across lines
+        # won't match — acceptable for this regex fallback tier.
         return re.compile(
-            rf"^[ \t]*(?:(?:public|private|protected|static|final)\s+)*"
-            rf"final\s+\w[\w<>\[\], ]*\s+{esc}\s*=|"
-            rf"^[ \t]*(?:(?:public|private|protected|final)\s+)*"
-            rf"static\s+\w[\w<>\[\], ]*\s+{esc}\s*=",
+            rf"^[ \t]*(?:(?:public|private|protected|static)[ \t]+)*"
+            rf"final[ \t]+\w[\w<>\[\], \t]*[ \t]{esc}\s*=|"
+            rf"^[ \t]*(?:(?:public|private|protected|final)[ \t]+)*"
+            rf"static[ \t]+\w[\w<>\[\], \t]*[ \t]{esc}\s*=",
             re.MULTILINE,
         )
     if language in ("javascript", "typescript", "tsx"):
@@ -479,15 +495,20 @@ def _type_pattern(language: str, name: str) -> re.Pattern | None:
             rf"^type\s+{esc}\s+(?:struct|interface)\b", re.MULTILINE,
         )
     if language == "rust":
+        # Newline-free visibility class — same flood-safety and
+        # split-across-lines trade-off as the const pattern above.
         return re.compile(
-            rf"^[ \t]*(?:pub(?:\([^)]*\))?\s+)?"
+            rf"^[ \t]*(?:pub(?:\([^)\n]*\))?\s+)?"
             rf"(?:struct|enum|trait|union|type)\s+{esc}\b",
             re.MULTILINE,
         )
     if language == "java":
+        # Horizontal-only ``[ \t]+`` after each modifier — same
+        # flood-safety and split-across-lines trade-off as the const
+        # pattern above.
         return re.compile(
-            rf"^[ \t]*(?:(?:public|private|protected|abstract|final|static)\s+)*"
-            rf"(?:class|interface|enum|record)\s+{esc}\b",
+            rf"^[ \t]*(?:(?:public|private|protected|abstract|final|static)[ \t]+)*"
+            rf"(?:class|interface|enum|record)[ \t]+{esc}\b",
             re.MULTILINE,
         )
     if language in ("javascript", "typescript", "tsx"):

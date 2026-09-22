@@ -636,6 +636,96 @@ class TestPhpPatternFloodPerformance:
         assert pat.search("interface Widget")
 
 
+class TestJavaPatternFloodPerformance:
+    """Keyword floods against the Java fallback patterns: interior
+    ``\\s+`` under the MULTILINE ^-anchors let the modifier loop
+    swallow newline-separated keyword floods from every line's
+    anchor, and the type/name separator overlapped the type class on
+    space floods — each quadratic (seconds at 64KB). The fixed
+    patterns run in milliseconds; the budget is generous for slow
+    machines yet an order of magnitude below the quadratic variants
+    at this input size."""
+
+    def test_const_pattern_on_keyword_floods(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("java", "SENTINEL")
+        assert pat is not None
+        for unit in ("public\n", "static\n", "final\n",
+                     "public static final\n"):
+            flood = unit * (128 * 1024 // len(unit))
+            start = time.monotonic()
+            assert pat.search(flood) is None
+            assert time.monotonic() - start < 2.0
+
+    def test_const_pattern_on_type_whitespace_flood(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("java", "SENTINEL")
+        assert pat is not None
+        flood = "final int" + " " * (128 * 1024)
+        start = time.monotonic()
+        assert pat.search(flood) is None
+        assert time.monotonic() - start < 2.0
+
+    def test_const_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern
+        pat = _const_pattern("java", "MAX_N")
+        assert pat is not None
+        assert pat.search("public static final int MAX_N = 3;")
+        assert pat.search("final Map<String, Integer> MAX_N = of();")
+        assert pat.search("final static long MAX_N = 1L;")
+        assert pat.search("static\tint\tMAX_N = 1;")
+        # Neither static nor final: not a constant.
+        assert pat.search("int MAX_N = 3;") is None
+
+    def test_type_pattern_on_keyword_flood(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("java", "SENTINEL")
+        assert pat is not None
+        flood = "abstract\n" * (128 * 1024 // 9)
+        start = time.monotonic()
+        assert pat.search(flood) is None
+        assert time.monotonic() - start < 2.0
+
+    def test_type_pattern_still_matches(self) -> None:
+        from core.concepts.lang_resolve import _type_pattern
+        pat = _type_pattern("java", "Widget")
+        assert pat is not None
+        assert pat.search("public final class Widget {")
+        assert pat.search("interface Widget {")
+        assert pat.search("public record Widget(int x) {}")
+
+
+class TestRustPatternFloodPerformance:
+    """An unterminated ``pub(`` re-scanned to EOF from every line's
+    anchor when the visibility class could cross newlines —
+    quadratic on ``pub(`` floods."""
+
+    def test_patterns_on_pub_paren_flood(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern, _type_pattern
+        # 256KB: the newline-crossing variant squeaks under the
+        # budget at 128KB on a fast machine, and quadratic scaling
+        # puts 256KB decisively over it.
+        flood = "pub(\n" * (256 * 1024 // 5)
+        for mkpat in (_const_pattern, _type_pattern):
+            pat = mkpat("rust", "SENTINEL")
+            assert pat is not None
+            start = time.monotonic()
+            assert pat.search(flood) is None
+            assert time.monotonic() - start < 2.0
+
+    def test_patterns_still_match_visibility_specs(self) -> None:
+        from core.concepts.lang_resolve import _const_pattern, _type_pattern
+        cpat = _const_pattern("rust", "MAX")
+        assert cpat is not None
+        assert cpat.search("pub const MAX: usize = 10;")
+        assert cpat.search("pub(crate) static MAX: &str = \"x\";")
+        assert cpat.search("pub(in crate::m) const MAX: i32 = 0;")
+        tpat = _type_pattern("rust", "Widget")
+        assert tpat is not None
+        assert tpat.search("pub(crate) enum Widget {")
+        assert tpat.search("pub struct Widget {")
+
+
 # ------------------------------------------------------------------
 # Unresolvable semantics
 # ------------------------------------------------------------------
