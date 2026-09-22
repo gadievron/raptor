@@ -150,10 +150,14 @@ def _extend_when_block(
     if not names:
         return list(lines[start:end]), consumed
 
+    # Reuse the last when-line's indentation when that line itself
+    # starts with ``when``; a block opener like ``... when != f(``
+    # keeps the six-space default instead of inheriting the dots'
+    # indent.
     indent = "      "
-    m = re.match(r"^(\s*)when", lines[last_when].lstrip() and lines[last_when])
-    if m:
-        indent = " " * (len(lines[last_when]) - len(lines[last_when].lstrip()))
+    last_line = lines[last_when]
+    if last_line.lstrip().startswith("when"):
+        indent = " " * (len(last_line) - len(last_line.lstrip()))
 
     extra = [f"{indent}when != {n}(...)\n" for n in sorted(names)]
     return (
