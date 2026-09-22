@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.artifacts.context_map_budget import save_context_map
 from core.artifacts.provenance import (
     CONTEXT_MAP_TEXT_SCHEMA,
     sanitise_free_text,
@@ -1979,8 +1980,8 @@ def analyse_blackbox_binary(
     save_json(out_dir / "binary-manifest.json", manifest.to_dict())
     save_json(out_dir / "binary-evidence.json", {"evidence": [record.to_dict() for record in evidence]})
     _stamp_context_map(context_map)
-    save_json(out_dir / "binary-context-map.json", context_map)
-    save_json(out_dir / "context-map.json", context_map)
+    save_context_map(out_dir / "binary-context-map.json", context_map)
+    save_context_map(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-decompilations.json", decompilations)
     save_json(out_dir / "binary-validation-handoff.json", validation_handoff)
     save_json(out_dir / "binary-checklist.json", {
@@ -2087,8 +2088,8 @@ def append_fuzz_evidence_to_run(
             seen.add(record.id)
     context_map["evidence"] = existing
     _stamp_context_map(context_map)
-    save_json(out_dir / "binary-context-map.json", context_map)
-    save_json(out_dir / "context-map.json", context_map)
+    save_context_map(out_dir / "binary-context-map.json", context_map)
+    save_context_map(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-evidence.json", {"evidence": existing})
     decompilations = load_json(out_dir / "binary-decompilations.json")
     if not isinstance(decompilations, dict):
@@ -2383,8 +2384,8 @@ def append_runtime_evidence_to_run(
     )
     context_map["evidence"] = existing
     _stamp_context_map(context_map)
-    save_json(out_dir / "binary-context-map.json", context_map)
-    save_json(out_dir / "context-map.json", context_map)
+    save_context_map(out_dir / "binary-context-map.json", context_map)
+    save_context_map(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-evidence.json", {"evidence": existing})
     save_json(out_dir / "binary-validation-handoff.json", validation_handoff)
     checklist["input_channels"] = [channel.to_dict() for channel in channels]

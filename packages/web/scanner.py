@@ -36,6 +36,7 @@ if __name__ == "__main__":
     # fall back to a positional walk.
     sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.artifacts.context_map_budget import save_context_map
 from core.context_guard import build_web_context_guard_report
 from core.json import append_jsonl, save_json
 from core.logging import get_logger
@@ -2324,8 +2325,13 @@ class WebScanner:
         """Build a URL-native context map for the discovered attack surface."""
         logger.info("Phase 6a: Building web context map")
         context_map = self._build_web_context_map(crawl_data, discovery)
-        self._save_artifact(self.out_dir / "context-map.json", context_map)
-        self._save_artifact(self.out_dir / "web-context-map.json", context_map)
+        # Through the context-map producer chokepoint (compact encoding
+        # + size budget), not the pretty-printing artifact writer —
+        # bounded context-map readers cap on file bytes. Redaction view
+        # first, matching _save_artifact.
+        view = self._artifact_view(context_map)
+        save_context_map(self.out_dir / "context-map.json", view)
+        save_context_map(self.out_dir / "web-context-map.json", view)
         self._phases_completed.append("understand")
         return context_map
 

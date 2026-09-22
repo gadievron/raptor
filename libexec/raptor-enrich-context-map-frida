@@ -38,9 +38,9 @@ import logging  # noqa: E402
 
 from core.artifacts.context_map_budget import (  # noqa: E402
     CONTEXT_MAP_CONSUMER_MAX_BYTES as _MAX_CONTEXT_MAP_BYTES,
-    enforce_context_map_budget,
+    save_context_map,
 )
-from core.json import load_json, save_json  # noqa: E402
+from core.json import load_json  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +113,7 @@ def main() -> int:
         # A merged map must not leave here over the consumer byte cap —
         # strict downstream readers (including this shim's next run)
         # refuse an oversize file.
-        enforce_context_map_budget(result)
-        save_json(ctx_path, result)
+        save_context_map(ctx_path, result)
         enriched = sum(
             1 for ep in (result.get("entry_points") or [])
             if isinstance(ep, dict) and ep.get("runtime_confirmed")

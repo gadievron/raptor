@@ -14,9 +14,9 @@ from typing import Any
 
 from core.artifacts.context_map_budget import (
     CONTEXT_MAP_CONSUMER_MAX_BYTES,
-    enforce_context_map_budget,
+    save_context_map,
 )
-from core.json import load_json, save_json
+from core.json import load_json
 
 from .lifecycle_model import StateField
 
@@ -66,8 +66,7 @@ def save_state_fields(
 
     data["state_fields"] = [f.to_dict() for f in fields]
 
-    enforce_context_map_budget(data)
-    save_json(cm_path, data)
+    save_context_map(cm_path, data)
     return cm_path
 
 

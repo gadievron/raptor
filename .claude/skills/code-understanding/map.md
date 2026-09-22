@@ -218,6 +218,9 @@ checklist in the same dir as ground truth to:
   the target into relative ones)
 - warn (non-fatal) on hallucinated files / out-of-range line numbers /
   cross-reference typos in `unchecked_flows`
+- re-write the artifact in the compact producer encoding and enforce
+  the size budget (bounded readers cap on file bytes; an indented
+  write of the same data can exceed caps the compact form fits)
 
 ```bash
 libexec/raptor-normalize-context-map "$WORKDIR"
@@ -472,6 +475,7 @@ libexec/raptor-sandbox-observe --json --out "$WORKDIR/probe" -- \
 python3 -c "
 import json
 from pathlib import Path
+from core.artifacts.context_map_budget import save_context_map
 from core.sandbox.observe_profile import (
     ConnectTarget, ObserveProfile,
 )
@@ -495,7 +499,9 @@ merged = merge_observation_into_context_map(
     binary='/path/to/binary',
     command=['/path/to/binary'] + ['<args>'],
 )
-(w / 'context-map.json').write_text(json.dumps(merged, indent=2))
+# Producer chokepoint: compact encoding + size budget (bounded
+# readers cap on file bytes — never pretty-print this artifact).
+save_context_map(w / 'context-map.json', merged)
 "
 ```
 

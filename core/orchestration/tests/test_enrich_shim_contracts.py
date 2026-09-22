@@ -316,6 +316,30 @@ class TestImportsShim:
 
 
 # ---------------------------------------------------------------------------
+# Normalize shim: producer encoding
+# ---------------------------------------------------------------------------
+
+class TestNormalizeShimEncoding:
+    def test_pass_rewrites_indented_map_compact(
+        self, understand_dir: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A pass through the normaliser leaves the compact producer
+        encoding on disk: bounded readers cap on file bytes, and an
+        indented write of the same data can exceed caps the compact
+        form fits."""
+        cm_path = understand_dir / "context-map.json"
+        data = json.loads(cm_path.read_text(encoding="utf-8"))
+        cm_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+        code = _run_script(NORMALIZE_SHIM, monkeypatch, str(understand_dir))
+        assert code == 0
+        raw = cm_path.read_text(encoding="utf-8")
+        assert raw.rstrip("\n").count("\n") == 0, "not compact"
+        parsed = json.loads(raw)
+        assert parsed["entry_points"] == data["entry_points"]
+
+
+# ---------------------------------------------------------------------------
 # Standalone sinks shim: IRIS extra_sinks parity with the combined pass
 # ---------------------------------------------------------------------------
 

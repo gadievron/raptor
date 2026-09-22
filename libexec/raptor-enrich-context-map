@@ -36,9 +36,9 @@ if not (os.environ.get("CLAUDECODE")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.artifacts.context_map_budget import (  # noqa: E402
-    enforce_context_map_budget,
+    save_context_map,
 )
-from core.json import load_json, save_json  # noqa: E402
+from core.json import load_json  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,6 @@ def main() -> int:
                   "recovered target", file=sys.stderr)
             return 1
 
-    changed = False
     summary: list[str] = []
 
     if not target_path:
@@ -117,7 +116,6 @@ def main() -> int:
             context_map, checklist_path, checklist=checklist,
         )
         if n_edges:
-            changed = True
             summary.append(f"callgraph: {n_edges} edges")
     except Exception as e:
         _stage_failed("callgraph enrichment", e)
@@ -147,7 +145,6 @@ def main() -> int:
                 context_map, Path(target_path), inventory=inventory,
             )
             if n_ep:
-                changed = True
                 summary.append(f"forward-reachable: {n_ep} entry points")
         except Exception as e:
             _stage_failed("forward-reachable enrichment", e)
@@ -162,7 +159,6 @@ def main() -> int:
                 context_map, Path(target_path), inventory=inventory,
             )
             if n_ast:
-                changed = True
                 summary.append(f"ast-view: {n_ast} entries")
         except Exception as e:
             _stage_failed("ast-view enrichment", e)
@@ -199,7 +195,6 @@ def main() -> int:
                 total_enriched_sites,
             )
             if total_enriched_sites(counts):
-                changed = True
                 summary.append(
                     f"sites: {counts['ownership_model']} ownership + "
                     f"{counts['privilege_model']} privilege + "
@@ -246,17 +241,19 @@ def main() -> int:
                 context_map, Path(target_path), **sink_kwargs,
             )
             if n_sinks:
-                changed = True
                 summary.append(f"sinks: {n_sinks} entries")
         except Exception as e:
             logger.warning("sink enrichment failed: %s", e, exc_info=True)
 
-    # Budget check even when nothing changed: an already-oversize map
-    # from an earlier writer must not survive a pass through here.
-    if enforce_context_map_budget(context_map):
-        changed = True
-    if changed:
-        save_json(context_map_path, context_map)
+    # Save unconditionally through the producer chokepoint: even a
+    # no-op enrichment pass must not let an oversize or pretty-printed
+    # map from an earlier writer survive — compact re-encoding alone
+    # can bring an over-read-cap artifact back under the consumer cap,
+    # and the chokepoint degrades further only when the compact form
+    # still exceeds the producer budget.
+    applied = save_context_map(context_map_path, context_map)
+    if applied:
+        summary.append(f"size budget: {'; '.join(applied)}")
 
     if summary:
         print(f"raptor-enrich-context-map: {', '.join(summary)} "
