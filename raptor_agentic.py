@@ -3569,6 +3569,13 @@ def main() -> int:
                 out_dir=str(oa_out),
                 config=oa_config,
             )
+            # Provenance travels to THIS run's report too — the
+            # standalone workflow already records it, and dropping it
+            # here left /agentic output with no record of which
+            # OpenAnt core produced the findings.
+            openant_metrics["core_provenance"] = (
+                oa_result.get("core_provenance") or {}
+            )
 
             if oa_result.get("skipped"):
                 print(f"⚠️  OpenAnt unavailable: {oa_result.get('error', 'unknown')}")
@@ -3591,11 +3598,11 @@ def main() -> int:
                 openant_findings_count = len(openant_findings)
                 save_json(out_dir / "openant_findings.json", openant_findings)
                 print(f"✓ OpenAnt: {openant_findings_count} unique finding(s)")
-                openant_metrics = {
+                openant_metrics.update({
                     "total_findings": openant_findings_count,
                     "model": oa_config.model,
                     "level": oa_config.level,
-                }
+                })
                 token_usage = oa_result.get("token_usage") or {}
                 if token_usage:
                     openant_metrics["token_usage"] = token_usage

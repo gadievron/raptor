@@ -203,6 +203,7 @@ def main() -> int:
             "enhance": oa_config.enhance,
             "verify": oa_config.verify,
             "language": oa_config.language,
+            "core_provenance": scan_result.get("core_provenance") or {},
         },
         "phases": {
             "openant_scan": {

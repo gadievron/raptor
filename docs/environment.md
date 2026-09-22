@@ -472,7 +472,7 @@ stale configuration and each reader's schema guard says so.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `OPENANT_CORE` | auto-detected | Path to the `openant-core` directory (the OpenAnt repository's `libs/openant-core`). Auto-detection probes exactly one path: `<parent-of-RAPTOR_DIR>/libs/openant-core`. Override when OpenAnt is installed elsewhere. Also settable via `--openant-core`. |
+| `OPENANT_CORE` | auto-detected | Path to the `openant-core` directory (the OpenAnt repository's `libs/openant-core`, checked out at the pinned commit in `packages/openant/config.py:OPENANT_PINNED_COMMIT`). Auto-detection probes exactly one path: `<parent-of-RAPTOR_DIR>/libs/openant-core`. Override when OpenAnt is installed elsewhere. Also settable via `--openant-core`. A non-pinned checkout runs with a loud provenance warning. |
 | `OPENANT_MODEL` | `sonnet` | LLM model for OpenAnt analysis (`sonnet` or `opus`). Also settable via `--openant-model`. |
 | `OPENANT_LEVEL` | `reachable` | Analysis depth (`all`, `reachable`, `codeql`, `exploitable`). Also settable via `--openant-level`. |
 

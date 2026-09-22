@@ -20,6 +20,22 @@ OPENANT_CORE_ENV = "OPENANT_CORE"
 OPENANT_MODEL_ENV = "OPENANT_MODEL"
 OPENANT_LEVEL_ENV = "OPENANT_LEVEL"
 
+# Supply-chain pin for the external OpenAnt checkout. Pin by commit
+# id, not tag or branch name: refs are movable, git object ids are
+# not. This is the upstream master commit the bridge's schema
+# contract (the translator's stage-1/stage-2 verdict enumeration,
+# documented against OpenAnt's core/reporter.py) was verified
+# against. Staleness note: a checkout at any other commit still runs
+# — the scan records and loudly warns EVERY non-pinned provenance
+# shape (mismatched commit AND unverifiable non-git / unexpected-
+# layout checkouts) instead of refusing — but advance this pin
+# deliberately and re-verify the
+# translator's verdict enumeration when you do; a renamed verdict in
+# a newer OpenAnt degrades findings to level=note (warned, never
+# silently dropped).
+OPENANT_UPSTREAM_URL = "https://github.com/knostic/OpenAnt"
+OPENANT_PINNED_COMMIT = "abd1dcf416a1ca329441c4bf8ebb68f70dd0f3cf"
+
 _SENTINEL = Path("/does/not/exist")
 _CORE_MARKER = "core/scanner.py"
 

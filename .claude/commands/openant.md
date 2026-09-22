@@ -16,13 +16,20 @@ authentication bypasses, and subtle injection patterns that static tools miss.
 
 ## Prerequisites
 
-Set `OPENANT_CORE` to the `openant-core` directory:
+Check out OpenAnt at the pinned commit (commit id, not a movable
+tag/branch — see `packages/openant/config.py:OPENANT_PINNED_COMMIT`)
+and point `OPENANT_CORE` at its `libs/openant-core` directory:
 
 ```bash
+git clone https://github.com/knostic/OpenAnt /path/to/OpenAnt
+git -C /path/to/OpenAnt checkout abd1dcf416a1ca329441c4bf8ebb68f70dd0f3cf
 export OPENANT_CORE=/path/to/OpenAnt/libs/openant-core
 ```
 
-Or pass `--openant-core <path>` directly.
+Or pass `--openant-core <path>` directly. A checkout at any other
+commit still runs — the run report records the provenance and the
+scan warns loudly (schema drift in a newer OpenAnt can change verdict
+spellings).
 
 ---
 

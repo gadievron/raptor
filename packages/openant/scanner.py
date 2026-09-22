@@ -35,9 +35,96 @@ STDERR_MAX_BYTES = 1_000_000  # 1 MiB
 # Source: `openant scan --help` → `--language {auto,python,javascript,go,c,ruby,php}`
 _OPENANT_CLI_LANGUAGES = {"auto", "python", "javascript", "go", "c", "ruby", "php"}
 
-from .config import OpenAntConfig
+from .config import OPENANT_PINNED_COMMIT, OPENANT_UPSTREAM_URL, OpenAntConfig
 
 logger = get_logger()
+
+
+def _warn_unpinned_provenance(
+    result: dict[str, Any], core_path: Path,
+) -> dict[str, Any]:
+    """One loud stderr warning for EVERY non-pinned provenance shape.
+
+    ``matches is False`` (a git checkout at a different commit) is the
+    cooperative-mistake shape; ``matches is None`` (not a git checkout
+    at the documented ``libs/openant-core`` layout — tarball extract,
+    deleted ``.git``, or an attacker-written directory) is the hostile
+    shape. Warning only on the first left the second SILENT, which
+    inverted the risk ordering: unverifiable provenance is the shape a
+    planted core presents.
+    """
+    if result["matches"] is True:
+        return result
+    if result["matches"] is False:
+        logger.warning(
+            "OpenAnt checkout is at %s, integration is pinned to %s — "
+            "schema drift possible; re-checkout the pinned commit or "
+            "re-verify the translator's verdict enumeration",
+            str(result["head"])[:12], OPENANT_PINNED_COMMIT[:12],
+        )
+    else:
+        logger.warning(
+            "OpenAnt core provenance UNVERIFIABLE — %s is not a git "
+            "checkout at the documented libs/openant-core layout, so the "
+            "pinned commit %s cannot be confirmed. A tampered or "
+            "attacker-written core executes with network access; "
+            "re-clone %s at the pin or verify the directory by hand",
+            core_path, OPENANT_PINNED_COMMIT[:12], OPENANT_UPSTREAM_URL,
+        )
+    return result
+
+
+def checkout_provenance(core_path: Path) -> dict[str, Any]:
+    """Compare the openant-core checkout's HEAD against the pin.
+
+    The checkout is INTERNET-SOURCED and operator-managed, so its
+    .git/config is untrusted — the rev-parse goes through the strict
+    read-only argv with the sanitised git env (same posture as the
+    recall corpora's pinned-clone verification). Never raises, and
+    EVERY non-pinned result warns loudly on stderr (mismatched commit
+    AND unverifiable non-git / unexpected-layout shapes); recorded, not
+    enforced here (an operator may deliberately run a newer OpenAnt;
+    the translator keeps unknown verdicts visible instead of dropping
+    them). The ``--openant-core`` consent gate is the enforcement
+    point for the flag surface.
+    """
+    result: dict[str, Any] = {
+        "pinned_commit": OPENANT_PINNED_COMMIT,
+        "head": None,
+        "matches": None,
+    }
+    try:
+        from core.git import get_safe_git_env, safe_git_readonly_command
+
+        def _git(*args: str) -> "subprocess.CompletedProcess[str]":
+            return subprocess.run(
+                safe_git_readonly_command("-C", str(core_path), *args),
+                capture_output=True, text=True, timeout=30, check=False,
+                env=get_safe_git_env(),
+            )
+
+        # Layout guard: `git -C` discovers UPWARD, so a non-git
+        # openant-core (tarball extract) sitting inside an unrelated
+        # repository would otherwise record the ENCLOSING repo's HEAD
+        # as OpenAnt provenance. Require the documented layout — the
+        # checkout's toplevel carries core_path at libs/openant-core.
+        top = _git("rev-parse", "--show-toplevel")
+        toplevel = top.stdout.strip()
+        if top.returncode != 0 or not toplevel:
+            return _warn_unpinned_provenance(result, core_path)
+        expected = Path(toplevel) / "libs" / "openant-core"
+        if expected.resolve() != Path(core_path).resolve():
+            return _warn_unpinned_provenance(result, core_path)
+
+        proc = _git("rev-parse", "HEAD")
+    except (OSError, subprocess.SubprocessError):
+        return _warn_unpinned_provenance(result, core_path)
+    head = proc.stdout.strip().lower()
+    if proc.returncode != 0 or not head:
+        return _warn_unpinned_provenance(result, core_path)
+    result["head"] = head
+    result["matches"] = head == OPENANT_PINNED_COMMIT
+    return _warn_unpinned_provenance(result, core_path)
 
 
 def run_openant_scan(
@@ -59,7 +146,10 @@ def run_openant_scan(
     repo_path = Path(repo_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    return _run_subprocess(repo_path, out_dir, config)
+    provenance = checkout_provenance(config.core_path)
+    result = _run_subprocess(repo_path, out_dir, config)
+    result["core_provenance"] = provenance
+    return result
 
 
 def _run_subprocess(
