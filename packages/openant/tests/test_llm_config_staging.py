@@ -303,6 +303,8 @@ class TestSubprocessEnvPointsAtStagedConfig(unittest.TestCase):
         def fake_sandbox_run(cmd, **kwargs):
             captured["env"] = kwargs.get("env")
             captured["cmd"] = cmd
+            captured["env_caller_filtered"] = kwargs.get(
+                "env_caller_filtered")
             raise RuntimeError("stop after capture")
 
         with tempfile.TemporaryDirectory() as td:
@@ -319,6 +321,9 @@ class TestSubprocessEnvPointsAtStagedConfig(unittest.TestCase):
             self.assertEqual(captured["env"]["XDG_CONFIG_HOME"],
                              str(out_dir / _XDG_STAGE_DIRNAME))
             self.assertIn("--llm-config", captured["cmd"])
+            # The env is get_safe_env-derived with intentional
+            # overrides (validated PYTHONPATH) — the call asserts so.
+            self.assertIs(captured["env_caller_filtered"], True)
 
 
 if __name__ == "__main__":
