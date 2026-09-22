@@ -1080,10 +1080,11 @@ class DatabaseManager:
                 database_path=None,
                 metadata=None,
                 errors=[
-                    ("target repo has unsafe CodeQL pack config — refusing "
-                     "to invoke `codeql database create`. Re-run with "
-                     "--trust-repo to override after auditing the printed "
-                     "findings.")
+                    ("target repo failed the CodeQL trust check (unsafe "
+                     "pack config, or the repo could not be examined — "
+                     "see the printed diagnostic) — refusing to invoke "
+                     "`codeql database create`. Re-run with --trust-repo "
+                     "to override after auditing the printed findings.")
                 ],
                 duration_seconds=time.time() - start_time,
                 cached=False,
