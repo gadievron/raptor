@@ -2756,25 +2756,32 @@ def _bridge_understand_output(out_dir, checklist, target,
     )
 
 
-    graph_bridge = load_understand_graph_context(out_dir, target)
-    if graph_bridge.get("context_map_loaded"):
-        enrich_checklist(checklist, graph_bridge["context_map"], str(out_dir))
-        n_sources = graph_bridge["attack_surface"]["sources"]
-        n_sinks = graph_bridge["attack_surface"]["sinks"]
-        n_paths = graph_bridge.get("graph_attack_paths", {}).get("imported_as_paths", 0)
-        n_targets = len(checklist.get("priority_targets", []))
-        stale = graph_bridge.get("stale_files_excluded") or []
-        stale_note = f", {len(stale)} stale file(s) excluded" if stale else ""
-        print(f"  Bridge: loaded graph memory"
-              f" — {n_sources} sources, {n_sinks} sinks,"
-              f" {n_paths} graph paths,"
-              f" {n_targets} priority targets{stale_note}")
-        return
-
+    # File lane first: in-session /understand writes context-map.json /
+    # flow-trace-*.json WITHOUT a graph ingest, so a fresh co-located (or
+    # sibling / global) artifact must win. Graph memory is a fallback only
+    # — it can be stale, and its latest snapshot can even belong to a
+    # different codebase than this run's target.
     understand_dir, stale_files = find_understand_output(
         out_dir, target_path=target,
     )
     if not understand_dir:
+        graph_bridge = load_understand_graph_context(out_dir, target)
+        if graph_bridge.get("context_map_loaded"):
+            enrich_checklist(checklist, graph_bridge["context_map"],
+                             str(out_dir))
+            n_sources = graph_bridge["attack_surface"]["sources"]
+            n_sinks = graph_bridge["attack_surface"]["sinks"]
+            n_paths = graph_bridge.get("graph_attack_paths", {}).get(
+                "imported_as_paths", 0)
+            n_targets = len(checklist.get("priority_targets", []))
+            stale = graph_bridge.get("stale_files_excluded") or []
+            stale_note = (f", {len(stale)} stale file(s) excluded"
+                          if stale else "")
+            print(f"  Bridge: no /understand files found —"
+                  f" loaded graph memory"
+                  f" — {n_sources} sources, {n_sinks} sinks,"
+                  f" {n_paths} graph paths,"
+                  f" {n_targets} priority targets{stale_note}")
         return
 
     # Tier 1 (shared --out): find_understand_output can't detect stale files
