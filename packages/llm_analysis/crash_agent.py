@@ -497,14 +497,16 @@ class CrashAnalysisAgent:
         # ``raptor_fuzzing.py``). Mirrors the
         # ``AutonomousSecurityAgentV2`` contract.
         self.judge_intent = judge_intent
-        # Record each LLM-emitted exploit as a canonical Witness
-        # alongside the fuzz-crash witnesses that
-        # ``raptor_fuzzing.py`` already records. Same data path,
-        # same WitnessStore root — the bytes_hash deduplicates if
-        # an exploit ever matches a real crash input. Default on;
-        # opt out via ``--no-record-witnesses``. Lazy store open
-        # (filesystem untouched on prep-only / failed runs);
-        # failures are non-fatal.
+        # Record each LLM-emitted exploit as a canonical Witness.
+        # Sibling store to the fuzz-crash witnesses: raptor_fuzzing.py
+        # records crashes under ``<run>/witnesses`` while this agent
+        # (constructed with ``out_dir=<run>/analysis``) lazy-opens its
+        # store at ``self.out_dir / "witnesses"`` =
+        # ``<run>/analysis/witnesses`` — two run-local roots, both
+        # surfaced by the fuzzing summary. Default on; opt out via
+        # ``--no-record-witnesses``. Lazy store open (filesystem
+        # untouched on prep-only / failed runs); failures are
+        # non-fatal.
         self.record_witnesses = record_witnesses
         self._witness_store = None  # lazy
         # Execute the LLM-emitted exploit against the fuzzed binary
@@ -940,8 +942,10 @@ FULL LLM RESPONSE:
                 self._judge_exploit_intent(crash_context, exploit_code)
 
             # Record the LLM-emitted exploit as a canonical
-            # Witness alongside the fuzz-crash witnesses from
-            # ``raptor_fuzzing.py``. Same store, same source=
+            # Witness in this agent's own store
+            # (``<run>/analysis/witnesses`` — the fuzz-crash
+            # witnesses from ``raptor_fuzzing.py`` live in the
+            # sibling ``<run>/witnesses``). Same source=
             # LLM_EMIT_RUN, outcome=NOT_RUN encoding as the
             # /agentic path. Failures are non-fatal.
             if self.record_witnesses:
