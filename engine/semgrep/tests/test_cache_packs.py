@@ -42,6 +42,22 @@ def test_fetch_pack_normal_response_normalised(
     assert out == b'{"rules":[{"id":"r1"}]}'
 
 
+def test_fetch_pack_socket_error_reported_per_pack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A socket-level error from read() (timeout, reset) is the same
+    per-pack failure as a URLError — a FAILED line, not a traceback."""
+    mod = _load_tool()
+
+    class _Resets:
+        def read(self, amt: int | None = None) -> bytes:
+            raise TimeoutError("timed out")
+
+    monkeypatch.setattr(mod, "urlopen", lambda req, timeout: _Resets())
+    with pytest.raises(SystemExit, match=r"FAILED: security-audit"):
+        mod.fetch_pack("security-audit")
+
+
 def test_fetch_pack_oversize_response_refused(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -133,3 +149,88 @@ def test_import_valid_members_unchanged(tmp_path: Path) -> None:
     assert (cache / "c.p.security-audit.json").read_bytes() == b'{"rules": [{"id": "r1"}]}'
     assert (cache / "c.p.secrets.json").exists()
     assert not (cache / "manifest.json").exists()
+
+
+# --- pack-id validation (the direct update/fetch side) ----------------------
+
+
+def test_parse_pack_ids_rejects_separator_shaped_ids() -> None:
+    """The pack id is spliced into both the registry URL and the cache
+    filename — a separator or '..'-leading id must die at parse, never
+    reach `CACHE_DIR / cache_filename(pid)`."""
+    mod = _load_tool()
+    for hostile in (
+        "../../x", "a/b", "a\\b", "..", ".hidden", "-flag",
+        "UPPER", "sp ace", "",
+    ):
+        with pytest.raises(SystemExit, match="invalid pack id"):
+            mod.parse_pack_ids(hostile)
+
+
+def test_parse_pack_ids_accepts_registry_names() -> None:
+    mod = _load_tool()
+    assert mod.parse_pack_ids("security-audit,p/owasp-top-ten, jwt") == [
+        "security-audit", "owasp-top-ten", "jwt",
+    ]
+    # Interior dots stay within the flat cache namespace
+    # (c.p.<pid>.json has no separators to escape with).
+    assert mod.parse_pack_ids("r2c.internal") == ["r2c.internal"]
+
+
+def test_cmd_update_refuses_hostile_pack_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: a traversal-shaped --packs id aborts update before
+    any fetch or filesystem write."""
+    mod = _load_tool()
+    mod.CACHE_DIR = tmp_path / "cache"
+
+    def _no_fetch(pid):  # pragma: no cover - must not be reached
+        raise AssertionError("fetch_pack reached with unvalidated id")
+
+    monkeypatch.setattr(mod, "fetch_pack", _no_fetch)
+    with pytest.raises(SystemExit, match="invalid pack id"):
+        mod.cmd_update(argparse.Namespace(packs="../../etc/passwd"))
+    assert not (tmp_path / "cache").exists()
+
+
+# --- DEFAULT_PACKS stays in sync with every pack-requesting layer -----------
+
+
+def test_default_packs_match_every_pack_source() -> None:
+    """DEFAULT_PACKS is intentionally duplicated so the tool stays
+    standalone on the connected machine; this is the sync oracle the
+    duplication comment promises, over EVERY layer that can request a
+    registry pack at scan time: RaptorConfig's baseline and
+    policy-group maps, plus the target-type catalog's semgrep_packs
+    lists (a matched catalog entry's default packs REPLACE the config
+    baseline in the scanner's resolver, so a catalog-only pack missing
+    from the bundle is a coverage loss on exactly those target types).
+    Drift in the harmful direction — any layer gains a pack the airgap
+    bundle lacks — fails here instead of surfacing as a missing pack
+    on the airgapped side."""
+    pytest.importorskip("yaml")
+    from core.config import RaptorConfig
+    from core.run import target_types
+
+    mod = _load_tool()
+    expected = {
+        pack.removeprefix("p/")
+        for _, pack in RaptorConfig.BASELINE_SEMGREP_PACKS
+    } | {
+        pack.removeprefix("p/")
+        for _, pack in RaptorConfig.POLICY_GROUP_TO_SEMGREP_PACK.values()
+    }
+    for entry in target_types.all_entries():
+        # Optional packs are cached too: they are catalog-declared
+        # requestables, and a bundle that lacks one degrades the run
+        # that opts in.
+        for pack in (*entry.semgrep_packs_default,
+                     *entry.semgrep_packs_optional):
+            expected.add(pack.removeprefix("p/"))
+    assert len(expected) >= 8, "pack-source derivation looks broken"
+    assert set(mod.DEFAULT_PACKS) == expected
+    # Every default id must satisfy the tool's own grammar.
+    assert mod.parse_pack_ids(",".join(mod.DEFAULT_PACKS)) == list(
+        mod.DEFAULT_PACKS,
+    )

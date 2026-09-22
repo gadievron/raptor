@@ -25,11 +25,11 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import re
 import zipfile
 import zlib
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 SEMGREP_ENGINE_DIR = Path(__file__).resolve().parents[1]
@@ -45,9 +45,14 @@ MAX_PACK_BYTES = 32 * 1024 * 1024
 
 # Every pack RAPTOR may request at scan time.  Derived from
 # RaptorConfig.BASELINE_SEMGREP_PACKS + POLICY_GROUP_TO_SEMGREP_PACK
-# + target-type catalog entries.  Keep in sync manually — the list
-# is intentionally duplicated here so the script is standalone
-# (no RAPTOR imports needed on the connected side).
+# + the target-type catalog's semgrep_packs lists
+# (core/run/target_types/*.yml — the scanner's baseline resolver takes
+# a matched catalog entry's default packs over the config baseline).
+# The list is intentionally duplicated here so the script is
+# standalone (no RAPTOR imports needed on the connected side);
+# tests/test_cache_packs.py holds it in sync against all three
+# sources so drift fails CI instead of shipping an airgap bundle
+# missing a pack the scanner requests.
 DEFAULT_PACKS = [
     "security-audit",
     "owasp-top-ten",
@@ -58,7 +63,31 @@ DEFAULT_PACKS = [
     "xss",
     "0xdea",
     "trailofbits",
+    "python-django",
+    "python-flask",
 ]
+
+# Registry pack ids are flat lowercase names. The id is spliced into
+# both the registry URL path and the cache filename, so anything with
+# a separator (or any other unexpected character) is rejected at
+# parse — a pid like `../../x` must never reach
+# `CACHE_DIR / cache_filename(pid)` or the URL.
+_PACK_ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]*")
+
+
+def parse_pack_ids(packs_arg: str) -> list[str]:
+    """Split and validate a ``--packs`` argument."""
+    pack_ids = []
+    for raw in packs_arg.split(","):
+        pid = raw.strip().removeprefix("p/")
+        if not _PACK_ID_RE.fullmatch(pid):
+            msg = (
+                f"invalid pack id {pid!r} — expected a flat lowercase "
+                f"registry name ([a-z0-9][a-z0-9._-]*)"
+            )
+            raise SystemExit(msg)
+        pack_ids.append(pid)
+    return pack_ids
 
 
 def cache_filename(pack_id: str) -> str:
@@ -74,7 +103,12 @@ def fetch_pack(pack_id: str) -> bytes:
         # Bounded read: one extra byte past the cap detects "too
         # large" without ever buffering an unbounded response.
         data = resp.read(MAX_PACK_BYTES + 1)
-    except URLError as exc:
+    except OSError as exc:
+        # OSError covers URLError/HTTPError plus the socket-level
+        # timeouts and resets that resp.read() raises directly —
+        # all of them are one pack's fetch failing, reported the
+        # same way (callers print the per-pack FAILED line and
+        # continue with the remaining packs).
         msg = f"  FAILED: {pack_id} — {exc}"
         raise SystemExit(msg) from exc
     if len(data) > MAX_PACK_BYTES:
@@ -150,7 +184,7 @@ def cmd_list(args: argparse.Namespace) -> None:
 def cmd_fetch(args: argparse.Namespace) -> None:
     """Fetch packs and bundle into a zip."""
     if args.packs:
-        pack_ids = [p.strip().removeprefix("p/") for p in args.packs.split(",")]
+        pack_ids = parse_pack_ids(args.packs)
     else:
         pack_ids = list(DEFAULT_PACKS)
 
@@ -295,7 +329,7 @@ def cmd_import(args: argparse.Namespace) -> None:
 def cmd_update(args: argparse.Namespace) -> None:
     """Fetch packs and write directly to the local cache (requires connectivity)."""
     if args.packs:
-        pack_ids = [p.strip().removeprefix("p/") for p in args.packs.split(",")]
+        pack_ids = parse_pack_ids(args.packs)
     else:
         pack_ids = list(DEFAULT_PACKS)
 
