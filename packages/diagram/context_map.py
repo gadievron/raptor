@@ -8,12 +8,16 @@ with unchecked flows shown as dashed edges.
 from __future__ import annotations
 
 import html
-
-from core.json import load_json
+import re
 from pathlib import Path
 from typing import Any
 
-from .sanitize import sanitize as _sanitize, sanitize_id as _sid
+from core.json import load_json
+
+from .sanitize import sanitize as _sanitize
+from .sanitize import sanitize_id as _sid
+
+_C0_RE = re.compile(r"[\x00-\x09\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def _addr(v: Any) -> str:
@@ -24,15 +28,27 @@ def _addr(v: Any) -> str:
     return str(v)
 
 
-def _node_id(prefix: str, index: int) -> str:
-    return f"{prefix}{index:03d}"
-
-
 def _text(value: Any) -> str:
-    """Return label-safe text while preserving readable operators."""
     if value is None:
         return ""
-    return _sanitize(html.unescape(str(value))).replace("-&gt;", "->")
+    raw = _C0_RE.sub(" ", html.unescape(str(value)))
+    return _sanitize(raw).replace("-&gt;", "->")
+
+
+def _id_list(value: Any) -> list[str]:
+    """Coerce an id-list field (``covers`` / ``reaches_from``) to a list.
+
+    LLM-emitted maps sometimes carry a scalar ("EP-001") where the
+    schema says array — bare iteration over a string yields one
+    garbage single-char node per character, so scalars are treated as
+    a one-element (comma-separable) list instead. Non-list/str shapes
+    contribute nothing.
+    """
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, list):
+        return [str(v) for v in value if v]
+    return []
 
 
 def _first_text(item: dict[str, Any], *keys: str) -> str:
@@ -49,7 +65,7 @@ def _first_text(item: dict[str, Any], *keys: str) -> str:
 def _entry_label(ep: dict[str, Any]) -> str:
     method = _first_text(ep, "method")
     route = _first_text(ep, "path", "entry", "route", "name", "function", "id")
-    if method and route and not route.startswith(method):
+    if method and route and not (route.startswith(method + " ") or route == method):
         return f"{method} {route}"
     return route or "?"
 
@@ -58,9 +74,17 @@ def _sink_label(sink: dict[str, Any]) -> str:
     return _first_text(sink, "operation", "location", "name", "type", "id") or "?"
 
 
-def _is_blackbox_binary(data: dict[str, Any]) -> bool:
-    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
-    return str(meta.get("analysis_mode") or "").lower() == "blackbox_binary"
+def _location_text(item: dict[str, Any], *, compact_binary: bool = False) -> str:
+    file_ref = str(item.get("file") or "")
+    line_ref = item.get("line")
+    address = _addr(item.get("address"))
+    if compact_binary and file_ref:
+        file_ref = Path(file_ref).name
+    if file_ref and line_ref not in (None, ""):
+        return f"{file_ref}:{line_ref}"
+    if file_ref and address:
+        return f"{file_ref}@{address}"
+    return file_ref or address
 
 
 def _is_remote_surface(data: dict[str, Any]) -> bool:
@@ -72,6 +96,11 @@ def _is_remote_surface(data: dict[str, Any]) -> bool:
         or "httpd-" in target
         or target.endswith("/httpd")
     )
+
+
+def _is_blackbox_binary(data: dict[str, Any]) -> bool:
+    meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+    return str(meta.get("analysis_mode") or "").lower() == "blackbox_binary"
 
 
 def _is_support_tool(item: dict[str, Any]) -> bool:
@@ -182,10 +211,8 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    %% Entry Points")
     for ep in entry_points:
         ep_id = _sid(ep.get("id", "EP-?"))
-        file_ref = ep.get("file", "")
-        line_ref = ep.get("line", "")
-        loc = f"{file_ref}:{line_ref}" if file_ref else ""
-        auth = "" if ep.get("auth_required", True) else " [PUBLIC]"
+        loc = _location_text(ep, compact_binary=blackbox_binary)
+        auth = " [PUBLIC]" if ep.get("auth_required") is False else ""
         label = _text(f"{_entry_label(ep)}{auth}\\n{loc}".strip())
         lines.append(f'    {ep_id}["{label}"]')
 
@@ -196,11 +223,19 @@ def generate(data: dict[str, Any]) -> str:
     for tb in boundary_details:
         tb_id = _sid(tb.get("id", "TB-?"))
         boundary = _text(tb.get("boundary", tb.get("type", "?")))
-        file_ref = tb.get("file", "")
-        line_ref = tb.get("line", "")
-        loc = f"{file_ref}:{line_ref}" if file_ref else ""
+        loc = _location_text(tb, compact_binary=blackbox_binary)
         label = _text(f"{boundary}\\n{loc}".strip())
         lines.append(f'    {tb_id}{{"{label}"}}')
+
+    if candidate_function_nodes:
+        lines.append("")
+        lines.append("    %% Candidate Functions (binary xref context)")
+    for fn in candidate_function_nodes.values():
+        fn_id = _sid(fn.get("id", "BFN-?"))
+        name = _text(_first_text(fn, "name", "id") or "?")
+        address = _text(_addr(fn.get("address")))
+        label = _text(f"{name}\\n{address}".strip())
+        lines.append(f'    {fn_id}["{label}"]')
 
     # -- Sink nodes --
     if sink_details:
@@ -208,9 +243,7 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    %% Sinks")
     for sink in sink_details:
         sink_id = _sid(sink.get("id", "SINK-?"))
-        file_ref = sink.get("file", "")
-        line_ref = sink.get("line", "")
-        loc = f"{file_ref}:{line_ref}" if file_ref else ""
+        loc = _location_text(sink, compact_binary=blackbox_binary)
         label = _text(f"{_sink_label(sink)}\\n{loc}".strip())
         lines.append(f'    {sink_id}[/"{label}"\\]')
 
@@ -228,33 +261,23 @@ def generate(data: dict[str, Any]) -> str:
 
     for tb in boundary_details:
         tb_id = _sid(tb.get("id", "TB-?"))
-        covers = tb.get("covers", [])
-        if isinstance(covers, str):
-            covers = [covers]
-        for ep_id in [_sid(e) for e in covers]:
+        for ep_id in [_sid(e) for e in _id_list(tb.get("covers"))]:
             add_edge(f"    {ep_id} --> {tb_id}")
             covered_eps.add(ep_id)
 
     # -- Edges: TB → SINK (reaches_from) --
     for sink in sink_details:
         sink_id = _sid(sink.get("id", "SINK-?"))
-        reaches_from = sink.get("reaches_from", [])
-        if isinstance(reaches_from, str):
-            reaches_from = [reaches_from]
-        for ep_id in [_sid(e) for e in reaches_from]:
+        for ep_id in [_sid(e) for e in _id_list(sink.get("reaches_from"))]:
             # Find which TB covers this EP
             tb_for_ep = [
                 _sid(tb.get("id")) for tb in boundary_details
-                if ep_id in [_sid(e) for e in (
-                    [tb.get("covers")] if isinstance(tb.get("covers"), str)
-                    else tb.get("covers", [])
-                )]
+                if ep_id in [_sid(e) for e in _id_list(tb.get("covers"))]
             ]
             if tb_for_ep:
                 for tb_id in tb_for_ep:
                     add_edge(f"    {tb_id} --> {sink_id}")
             else:
-                # No TB, direct edge (will also appear as unchecked)
                 add_edge(f"    {ep_id} --> {sink_id}")
 
     # -- Unchecked flows: dashed red edges --
@@ -268,18 +291,33 @@ def generate(data: dict[str, Any]) -> str:
         add_edge(f"    {ep_id} -. \"{reason}\" .-> {sink_id}")
 
     # -- Binary candidate flows: dotted grey edges, explicitly not taint proof --
-    if blackbox_binary and candidate_flows:
+    if candidate_flows:
         lines.append("")
         lines.append("    %% Candidate Call Edges (xref-backed, not taint proof)")
-        for flow in candidate_flows:
-            source_id = str(flow.get("source_function") or "")
-            fn = functions_by_id.get(source_id)
-            if not fn:
-                continue
-            src_id = entry_by_address.get(_addr(fn.get("address")), _sid(source_id))
-            sink_id = _sid(flow.get("sink", "?"))
-            relationship = _text(flow.get("relationship") or "candidate")
-            add_edge(f'    {src_id} -. "{relationship}" .-> {sink_id}')
+    for flow in candidate_flows:
+        source_id = str(flow.get("source_function") or "")
+        fn = functions_by_id.get(source_id)
+        if not fn:
+            continue
+        # Only draw edges from DECLARED nodes: candidate function
+        # nodes are declared only in blackbox mode, so a flow whose
+        # source resolves neither to an entry point nor to a declared
+        # candidate would otherwise materialise as an unstyled bare-id
+        # node Mermaid auto-creates outside any section.
+        addr_id = entry_by_address.get(_addr(fn.get("address")))
+        if addr_id is not None:
+            src_id = addr_id
+        elif source_id in candidate_function_nodes:
+            src_id = _sid(source_id)
+        else:
+            continue
+        sink_id = _sid(flow.get("sink", "?"))
+        relationship = _text(flow.get("relationship") or "")
+        # Suffix "candidate" only when a distinct relationship exists —
+        # the default otherwise rendered the doubled label
+        # "candidate candidate".
+        label = f"{relationship} candidate" if relationship else "candidate"
+        add_edge(f'    {src_id} -. "{label}" .-> {sink_id}')
 
     # -- Style classes --
     lines.append("")
@@ -311,7 +349,8 @@ def generate(data: dict[str, Any]) -> str:
 def generate_from_file(path: Path) -> str:
     data = load_json(path)
     if data is None:
-        raise ValueError(f"Failed to load {path}")
+        msg = f"Failed to load {path}"
+        raise ValueError(msg)
     return generate(data)
 
 
@@ -351,14 +390,18 @@ def generate_forward_reachable_blocks(
         diagram = _render_one_entry_forward(ep, fr)
         if not diagram:
             continue
-        ep_id = ep.get("id", "EP-?")
-        host = fr.get("host", "?")
+        # Both values come raw from the context-map JSON; route through
+        # _text (html-unescape + C0 strip + sanitize) so a crafted
+        # id/host can't break the section heading out of its line or
+        # smuggle control characters into diagrams.md.
+        ep_id = _text(ep.get("id", "EP-?"))
+        host = _text(fr.get("host", "?"))
         title = f"{ep_id}: {host}"
         out.append((title, diagram))
     return out
 
 
-def _render_one_entry_forward(ep: dict[str, Any], fr: dict[str, Any]) -> str:
+def _render_one_entry_forward(_ep: dict[str, Any], fr: dict[str, Any]) -> str:
     """Render one entry's forward closure as a top-down flowchart.
 
     Layout: host at top, internal callees branching down (green),
@@ -371,7 +414,7 @@ def _render_one_entry_forward(ep: dict[str, Any], fr: dict[str, Any]) -> str:
     host_id = "HOST"
     lines.append("")
     lines.append("    %% Host (entry point's enclosing function)")
-    lines.append(f'    {host_id}["{_sanitize(host)}"]')
+    lines.append(f'    {host_id}["{_text(host)}"]')
 
     internal_names = list(fr.get("internal_names") or [])
     external_names = list(fr.get("external_names") or [])
@@ -386,7 +429,7 @@ def _render_one_entry_forward(ep: dict[str, Any], fr: dict[str, Any]) -> str:
     for i, name in enumerate(internal_names):
         nid = f"INT{i:03d}"
         int_ids.append(nid)
-        lines.append(f'    {nid}["{_sanitize(name)}"]')
+        lines.append(f'    {nid}["{_text(name)}"]')
         lines.append(f"    {host_id} --> {nid}")
 
     # External nodes — parallelogram shape, distinct from
@@ -399,7 +442,7 @@ def _render_one_entry_forward(ep: dict[str, Any], fr: dict[str, Any]) -> str:
     for i, name in enumerate(external_names):
         nid = f"EXT{i:03d}"
         ext_ids.append(nid)
-        lines.append(f'    {nid}[/"{_sanitize(name)}"\\]')
+        lines.append(f'    {nid}[/"{_text(name)}"\\]')
         lines.append(f"    {host_id} --> {nid}")
 
     # Truncation note — closure walk hit max_depth, the listed
