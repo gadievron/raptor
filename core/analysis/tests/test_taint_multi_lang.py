@@ -13,6 +13,7 @@ from core.analysis.taint_multi_lang import (
     _extract_js_functions,
     _extract_php_extra_flows,
     _find_brace_end,
+    _GO_FUNC,
     _JAVA_FUNC,
     _JS_NULL_CHECK,
     _PHP_FUNC,
@@ -664,6 +665,60 @@ class TestJsWhitespaceFloodPerformance:
         assert _JS_NULL_CHECK.findall("if ( ! x === null)") == ["x"]
         assert _JS_NULL_CHECK.findall("if (!x !== undefined)") == ["x"]
         assert _JS_NULL_CHECK.findall("if (y == null)") == ["y"]
+
+
+class TestFuncPatternBoundedClassPerformance:
+    """Every variable-length class in the function patterns carries
+    the 400-char cap the sink-argument scans established: unbounded,
+    an unclosed-paren (or unclosed-generics) flood re-scanned to EOF
+    from every candidate signature and was quadratic through all
+    five arms."""
+
+    def test_unclosed_paren_floods(self):
+        cases = [
+            (_JAVA_FUNC, "a b("),
+            (_GO_FUNC, "func f("),
+            (_RUST_FUNC, "fn f("),
+            (_PHP_FUNC, "function f("),
+        ]
+        for pat, unit in cases:
+            flood = unit * (128 * 1024 // len(unit))
+            start = time.monotonic()
+            assert pat.findall(flood) == []
+            assert time.monotonic() - start < 2.0
+
+    def test_js_unclosed_paren_flood(self):
+        flood = "f(" * (64 * 1024)  # 128KB, no closing paren
+        start = time.monotonic()
+        assert _extract_js_functions(flood) == []
+        assert time.monotonic() - start < 2.0
+
+    def test_unclosed_generics_floods(self):
+        # The Rust flood is sized at 256KB: the unbounded variant
+        # squeaks under the budget at 128KB on a fast machine, and
+        # quadratic scaling puts 256KB decisively over it.
+        for pat, unit, size in (
+            (_JAVA_FUNC, "a<", 128 * 1024),
+            (_RUST_FUNC, "fn f<a ", 256 * 1024),
+        ):
+            flood = unit * (size // len(unit))
+            start = time.monotonic()
+            assert pat.findall(flood) == []
+            assert time.monotonic() - start < 2.0
+
+    def test_multiline_params_still_matched(self):
+        src = "void multi(\n    String a,\n    int b\n) {"
+        assert _JAVA_FUNC.findall(src) == [
+            ("multi", "\n    String a,\n    int b\n"),
+        ]
+
+    def test_params_past_cap_unmatched(self):
+        # Direction check documenting the accepted trade-off: a
+        # parameter list longer than the 400-char bound leaves the
+        # function unmatched.
+        long_params = ", ".join(f"int p{i}" for i in range(80))
+        assert len(long_params) > 400
+        assert _JAVA_FUNC.findall(f"void f({long_params}) {{") == []
 
 
 class TestHashComments:

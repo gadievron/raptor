@@ -151,6 +151,14 @@ _PHP_INT_CAST = re.compile(r"\(\s*int(?:eger)?\s*\)\s*\$(\w+)")
 
 # -- Function extraction patterns --
 
+# Every variable-length class in these patterns is bounded at 400
+# chars (the cap the sink-argument scans already carry): an unbounded
+# class re-scans to EOF from every candidate position, so an
+# unclosed-paren or unclosed-generics flood is quadratic. Trade-off:
+# a parameter list, generics text, or throws clause past the cap
+# leaves that function unmatched — the accepted bound for these
+# heuristic-tier extractors.
+
 # No modifier prefix (same reasoning as _PHP_FUNC below): the captures
 # and the body-search anchor are carried by the return-type/name/params
 # tail, so when modifiers precede the return type the tail simply
@@ -160,12 +168,12 @@ _PHP_INT_CAST = re.compile(r"\(\s*int(?:eger)?\s*\)\s*\$(\w+)")
 # clause class also matches whitespace, and the overlap made a
 # whitespace flood after ``throws`` quadratic.
 _JAVA_FUNC = re.compile(
-    r"\b(?:\w+(?:<[^>]*>)?)\s+"
-    r"(\w+)\s*\(([^)]*)\)\s*(?:throws\s[^{]*)?\{"
+    r"\b(?:\w+(?:<[^>]{0,400}>)?)\s+"
+    r"(\w+)\s*\(([^)]{0,400})\)\s*(?:throws\s[^{]{0,400})?\{"
 )
 
 _GO_FUNC = re.compile(
-    r"func\s+(?:\(\s*\w+\s+\*?\w+\s*\)\s+)?(\w+)\s*\(([^)]*)\)"
+    r"func\s+(?:\(\s*\w+\s+\*?\w+\s*\)\s+)?(\w+)\s*\(([^)]{0,400})\)"
 )
 
 # The whitespace before the parameter list rides inside the optional
@@ -174,7 +182,7 @@ _GO_FUNC = re.compile(
 # (the same run splits between them every possible way). Matched
 # language is unchanged — whitespace runs concatenate.
 _RUST_FUNC = re.compile(
-    r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>\s*)?\(([^)]*)\)"
+    r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]{0,400}>\s*)?\(([^)]{0,400})\)"
 )
 
 # No modifier prefix: visibility keywords before ``function`` don't
@@ -182,7 +190,7 @@ _RUST_FUNC = re.compile(
 # at the keyword, so a prefix adds nothing while a repeated-keyword
 # alternation is quadratic on hostile keyword floods.
 _PHP_FUNC = re.compile(
-    r"\bfunction\s+&?(\w+)\s*\(([^)]*)\)"
+    r"\bfunction\s+&?(\w+)\s*\(([^)]{0,400})\)"
 )
 
 
@@ -431,8 +439,10 @@ def _extract_js_functions(
     # whitespace after the annotation rides inside the optional group
     # — two ``\s*`` runs adjacent through a skipped optional are
     # quadratic on a whitespace flood after the parameter list.
+    # Parameter classes bounded like the module-level patterns': an
+    # unbounded class is quadratic on unclosed-paren floods.
     named_re = re.compile(
-        r"(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)\s*(?::\s*\S+\s*)?\{",
+        r"(?:async\s+)?function\s+(\w+)\s*\(([^)]{0,400})\)\s*(?::\s*\S+\s*)?\{",
     )
     for match in named_re.finditer(content):
         name = match.group(1)
@@ -445,8 +455,9 @@ def _extract_js_functions(
     # Arrow functions and methods
     method_re = re.compile(
         r"(?:(?:const|let|var)\s+)?(\w+)\s*(?:=\s*(?:async\s*)?"
-        r"(?:\(([^)]*)\)|(\w+))\s*=>|:\s*(?:async\s+)?function\s*\(([^)]*)\)\s*\{"
-        r"|\(([^)]*)\)\s*\{)",
+        r"(?:\(([^)]{0,400})\)|(\w+))\s*=>"
+        r"|:\s*(?:async\s+)?function\s*\(([^)]{0,400})\)\s*\{"
+        r"|\(([^)]{0,400})\)\s*\{)",
     )
     seen = {r[0] for r in results}
     for match in method_re.finditer(content):
