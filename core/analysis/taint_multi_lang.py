@@ -409,14 +409,27 @@ def _extract_java_preconditions(
     return preconditions
 
 
+# Shared callee-scan bounds. Word-start anchoring (the lookbehind in
+# each scanner) stops the scan re-anchoring at every character of a
+# long word run, and the segment/chain caps bound the work per
+# anchor — unanchored and unbounded, a hostile body of one long
+# identifier or dotted chain was quadratic. Trade-off: identifiers
+# past 200 chars or chains past 21 segments go unmatched — the
+# accepted bound for these heuristic-tier scans.
+_JAVA_CALLEE_RE = re.compile(r"(?<!\w)(\w{1,200}(?:\.\w{1,200}){0,20})\s*\(")
+
+
 def _extract_callees_java(body: str) -> list[str]:
     """Extract method calls from Java function body."""
-    pattern = re.compile(r"(?:(\w+)\.)?(\w+)\s*\(")
     callees: list[str] = []
     seen: set[str] = set()
-    for match in pattern.finditer(body):
-        obj = match.group(1) or ""
-        method = match.group(2)
+    for match in _JAVA_CALLEE_RE.finditer(body):
+        # Last two segments reproduce the previous obj.method shape
+        # (the single-level ``(?:(\w+)\.)?(\w+)`` scan recorded only
+        # the final receiver segment of a longer chain).
+        segs = match.group(1).split(".")
+        obj = segs[-2] if len(segs) >= 2 else ""
+        method = segs[-1]
         if method in ("if", "for", "while", "switch", "catch", "return"):
             continue
         callee = f"{obj}.{method}" if obj else method
@@ -453,8 +466,14 @@ def _extract_js_functions(
             results.append((name, params, body_start, body_end))
 
     # Arrow functions and methods
+    # The leading name capture anchors at a word start (lookbehind):
+    # unanchored, the scan re-anchored at every character of a long
+    # word run (any long identifier/base64/hex blob in a source
+    # file), which is quadratic. A match starting mid-word is always
+    # subsumed by the word-start attempt, so anchoring drops no
+    # matches.
     method_re = re.compile(
-        r"(?:(?:const|let|var)\s+)?(\w+)\s*(?:=\s*(?:async\s*)?"
+        r"(?<!\w)(?:(?:const|let|var)\s+)?(\w+)\s*(?:=\s*(?:async\s*)?"
         r"(?:\(([^)]{0,400})\)|(\w+))\s*=>"
         r"|:\s*(?:async\s+)?function\s*\(([^)]{0,400})\)\s*\{"
         r"|\(([^)]{0,400})\)\s*\{)",
@@ -516,9 +535,13 @@ def _extract_js_preconditions(
     return preconditions
 
 
+# Word-start anchor + bounded chain — see _JAVA_CALLEE_RE.
+_JS_CALLEE_RE = re.compile(r"(?<!\w)(\w{1,200}(?:\.\w{1,200}){0,20})\s*\(")
+
+
 def _extract_callees_js(body: str) -> list[str]:
     """Extract function/method calls from JS body."""
-    pattern = re.compile(r"(?:(\w+(?:\.\w+)*))\s*\(")
+    pattern = _JS_CALLEE_RE
     callees: list[str] = []
     seen: set[str] = set()
     for match in pattern.finditer(body):
@@ -589,9 +612,13 @@ def _extract_go_preconditions(
     return preconditions
 
 
+# Word-start anchor + bounded chain — see _JAVA_CALLEE_RE.
+_GO_CALLEE_RE = re.compile(r"(?<!\w)(\w{1,200}(?:\.\w{1,200}){0,20})\s*\(")
+
+
 def _extract_callees_go(body: str) -> list[str]:
     """Extract function calls from Go body."""
-    pattern = re.compile(r"(\w+(?:\.\w+)*)\s*\(")
+    pattern = _GO_CALLEE_RE
     callees: list[str] = []
     seen: set[str] = set()
     for match in pattern.finditer(body):
@@ -668,9 +695,13 @@ def _extract_rust_preconditions(
     return preconditions
 
 
+# Word-start anchor + bounded chain — see _JAVA_CALLEE_RE.
+_RUST_CALLEE_RE = re.compile(r"(?<!\w)(\w{1,200}(?:::\w{1,200}){0,20})\s*[!(]\s*")
+
+
 def _extract_callees_rust(body: str) -> list[str]:
     """Extract function/method calls from Rust body."""
-    pattern = re.compile(r"(\w+(?:::\w+)*)\s*[!(]\s*")
+    pattern = _RUST_CALLEE_RE
     callees: list[str] = []
     seen: set[str] = set()
     for match in pattern.finditer(body):
@@ -757,9 +788,13 @@ def _extract_php_preconditions(
     return preconditions
 
 
+# Word-start anchor + bounded segments — see _JAVA_CALLEE_RE.
+_PHP_CALLEE_RE = re.compile(r"(?<!\w)((?:\w{1,200}::)?\w{1,200})\s*\(")
+
+
 def _extract_callees_php(body: str) -> list[str]:
     """Extract function/method calls from a PHP body."""
-    pattern = re.compile(r"((?:\w+::)?\w+)\s*\(")
+    pattern = _PHP_CALLEE_RE
     callees: list[str] = []
     seen: set[str] = set()
     for match in pattern.finditer(body):

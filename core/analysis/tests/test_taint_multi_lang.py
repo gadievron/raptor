@@ -9,7 +9,11 @@ from core.analysis.taint_multi_lang import (
     extract_php_summaries,
     extract_rust_summaries,
     extract_summaries_for_file,
+    _extract_callees_go,
     _extract_callees_java,
+    _extract_callees_js,
+    _extract_callees_php,
+    _extract_callees_rust,
     _extract_js_functions,
     _extract_php_extra_flows,
     _find_brace_end,
@@ -719,6 +723,76 @@ class TestFuncPatternBoundedClassPerformance:
         long_params = ", ".join(f"int p{i}" for i in range(80))
         assert len(long_params) > 400
         assert _JAVA_FUNC.findall(f"void f({long_params}) {{") == []
+
+
+class TestCalleeScanFloodPerformance:
+    """Word-run and dotted-/::-chain floods against the callee
+    scanners and the JS method pattern: unanchored, each scan
+    re-anchored at every character of a long word run (any long
+    identifier/base64/hex blob) and at every segment of a dotted
+    chain — quadratic through all five arms, reachable end-to-end
+    via extract_summaries_for_file on a hostile function body. The
+    anchored, bounded scans run in milliseconds at this size."""
+
+    def test_callee_scanners_on_word_run_flood(self):
+        run = "x" * (128 * 1024)
+        for fn in (_extract_callees_java, _extract_callees_js,
+                   _extract_callees_go, _extract_callees_rust,
+                   _extract_callees_php):
+            start = time.monotonic()
+            assert fn(run) == []
+            assert time.monotonic() - start < 2.0
+
+    def test_callee_scanners_on_chain_floods(self):
+        dotted = "a." * (64 * 1024)  # 128KB
+        colons = "a::" * (43 * 1024)  # ~128KB
+        for fn, flood in (
+            (_extract_callees_java, dotted),
+            (_extract_callees_js, dotted),
+            (_extract_callees_go, dotted),
+            (_extract_callees_rust, colons),
+        ):
+            start = time.monotonic()
+            assert fn(flood) == []
+            assert time.monotonic() - start < 2.0
+
+    def test_method_pattern_on_word_run_flood(self):
+        run = "x" * (128 * 1024)
+        start = time.monotonic()
+        assert _extract_js_functions(run) == []
+        assert time.monotonic() - start < 2.0
+
+    def test_end_to_end_hostile_body_flood(self):
+        java_file = "void f(int a) {\n" + "x" * (128 * 1024) + "\n}"
+        start = time.monotonic()
+        extract_summaries_for_file(java_file, "A.java")
+        assert time.monotonic() - start < 2.0
+
+    def test_real_callee_shapes_still_extracted(self):
+        # Direction checks: chains, post-call member invocations,
+        # qualified and macro calls all survive the anchoring.
+        assert _extract_callees_js("res.status(200).json(b);") == [
+            "res.status", "json",
+        ]
+        assert _extract_callees_js("foo().bar(x);") == ["foo", "bar"]
+        assert _extract_callees_js("a.b.c(1);") == ["a.b.c"]
+        assert _extract_callees_java("System.out.println(m);") == [
+            "out.println",
+        ]
+        assert _extract_callees_go("exec.Command(n)") == ["exec.Command"]
+        assert _extract_callees_rust("Command::new(x)") == ["Command::new"]
+        assert _extract_callees_rust('println!("{}", v)') == ["println"]
+        assert _extract_callees_php("Foo::bar($x);") == ["Foo::bar"]
+
+    def test_callees_past_caps_unmatched(self):
+        # Direction check documenting the accepted trade-off:
+        # identifiers past 200 chars and (for the single-chain
+        # scanners) chains past 21 segments are not extracted as-is.
+        assert _extract_callees_js("y" * 201 + "(x)") == []
+        long_chain = ".".join(["s"] * 25) + "(x)"
+        assert _extract_callees_js(long_chain) == [".".join(["s"] * 21)]
+        # The Java scanner's obj.method reduction is cap-insensitive.
+        assert _extract_callees_java(long_chain) == ["s.s"]
 
 
 class TestHashComments:
