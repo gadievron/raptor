@@ -36,7 +36,7 @@ Or pass `--openant-core <path>` directly.
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--repo <path>` | `$RAPTOR_CALLER_DIR` | Repository to scan (required) |
+| `--repo <path>` | active project target, then vetted caller dir | Repository to scan (required; no-path runs resolve per DEFAULT TARGET DIRECTORY, volatile-target gate included) |
 | `--model <name>` | `sonnet` | LLM model: `sonnet` or `opus` |
 | `--level <name>` | `reachable` | Depth: `all`, `reachable`, `codeql`, `exploitable` |
 | `--language <lang>` | `auto` | Override language detection: `python`, `javascript`, `go`, `c`, `ruby`, `php` (out-of-set values fall back to `auto`) |

@@ -105,3 +105,27 @@ class TestFeatR005OpenantFlagsInAgentic(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOpenantDefaultTargetDoctrine(unittest.TestCase):
+    """`/openant` resolves no-path runs like every sibling analysis
+    command: raptor.py back-fills --repo via resolve_default_target
+    (active project target, vetted caller dir, volatile-target gate).
+    The child must NOT default --repo from raw RAPTOR_CALLER_DIR —
+    that bypassed both the project target and the gate."""
+
+    def test_openant_in_repo_target_commands(self):
+        raptor_src = (Path(__file__).parents[3] / "raptor.py").read_text()
+        self.assertRegex(
+            raptor_src,
+            r'_REPO_TARGET_COMMANDS = frozenset\(\{[^}]*"openant"[^}]*\}\)',
+            "raptor.py must back-fill --repo for openant",
+        )
+
+    def test_child_has_no_raw_caller_dir_default(self):
+        child_src = (Path(__file__).parents[3] / "raptor_openant.py").read_text()
+        self.assertNotIn(
+            'default=os.environ.get("RAPTOR_CALLER_DIR")', child_src,
+            "raptor_openant.py must not back-fill --repo from raw "
+            "RAPTOR_CALLER_DIR (unvetted, bypasses the volatile-target gate)",
+        )

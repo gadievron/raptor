@@ -444,7 +444,7 @@ def _unpack_archive_target(target: str, args: list, out_dir: Path):
 # fuzz and web children do NOT parse --repo as their target: fuzz
 # needs --binary and web needs --url, and a project target (a source
 # directory) is meaningless for both.
-_REPO_TARGET_COMMANDS = frozenset({"scan", "agentic", "codeql"})
+_REPO_TARGET_COMMANDS = frozenset({"scan", "agentic", "codeql", "openant"})
 _REQUIRED_TARGET_FLAG = {"fuzz": "--binary", "web": "--url"}
 # fuzz utility modes that legitimately run without --binary.
 _FUZZ_STANDALONE_FLAGS = ("--export-seed-corpus", "--prepare-corpus")

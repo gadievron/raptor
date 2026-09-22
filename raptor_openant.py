@@ -38,8 +38,13 @@ def main() -> int:
 
     parser.add_argument(
         "--repo",
-        default=os.environ.get("RAPTOR_CALLER_DIR"),
-        help="Path to repository to scan (required)",
+        # No env default: raptor.py back-fills --repo through
+        # resolve_default_target (active project target, then the
+        # vetted caller dir with the volatile-target gate) like every
+        # sibling analysis command. A raw RAPTOR_CALLER_DIR default
+        # here bypassed both the project target and the gate.
+        help="Path to repository to scan (required; back-filled from "
+             "the active project / caller dir when run via raptor.py)",
     )
     parser.add_argument("--out", help="Output directory (injected by raptor.py lifecycle)")
     parser.add_argument(
