@@ -547,6 +547,37 @@ class TestPhpKeywordFloodPerformance:
         assert ("$_GET", -1, "eval", 0) in flows
 
 
+class TestSharedSinkScanFloodPerformance:
+    """The shared param→sink argument scan serves every language arm;
+    its argument class carries the same 400-char cap as the PHP
+    scans — unbounded, an unclosed-paren flood was quadratic through
+    Java/JS/Go/Rust/PHP alike."""
+
+    def test_unclosed_paren_flood(self):
+        from core.analysis.taint_multi_lang import _find_flows_to_sinks
+        flood = "eval(" * 26000  # ~130KB, no closing paren
+        start = time.monotonic()
+        assert _find_flows_to_sinks(["p"], flood, {"eval"}) == []
+        assert time.monotonic() - start < 2.0
+
+    def test_normal_flow_still_found(self):
+        from core.analysis.taint_multi_lang import _find_flows_to_sinks
+        flows = _find_flows_to_sinks(
+            ["cmd"], "log(); exec(prefix + cmd);", {"exec"},
+        )
+        assert (0, "exec", 0) in flows
+
+    def test_args_past_cap_unmatched(self):
+        # Direction check documenting the accepted trade-off: an
+        # argument list longer than the 400-char bound is not scanned.
+        from core.analysis.taint_multi_lang import _find_flows_to_sinks
+        long_args = "cmd + \"" + "x" * 500 + "\""
+        flows = _find_flows_to_sinks(
+            ["cmd"], f"exec({long_args});", {"exec"},
+        )
+        assert flows == []
+
+
 class TestHashComments:
     def test_hash_comment_brace_masked(self):
         # A brace in a PHP '#' comment must not shift the extents.

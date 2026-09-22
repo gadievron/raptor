@@ -309,8 +309,13 @@ def _find_flows_to_sinks(
 
     for sink in sinks:
         sink_short = sink.split(".")[-1] if "." in sink else sink
+        # Bounded argument class (mirrors _PHP_KEYWORD_SINK_RE's cap):
+        # an unbounded class is quadratic on unclosed-paren floods.
+        # Trade-off: argument text past 400 chars goes unmatched —
+        # same accepted bound as the keyword-sink and extra-flows
+        # scans.
         pattern = re.compile(
-            rf"\b{re.escape(sink_short)}\s*\(([^){{}}]*)\)",
+            rf"\b{re.escape(sink_short)}\s*\(([^){{}}]{{0,400}})\)",
         )
         for match in pattern.finditer(body):
             args_str = match.group(1)
