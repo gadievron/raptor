@@ -72,6 +72,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -110,7 +111,11 @@ _logger = logging.getLogger(__name__)
 #   abstraction layer. The dispatcher's INFO-level audit was a
 #   third copy of the same fact, alongside the provider's own
 #   error log — see the retry-dedupe commit for the full cluster.
-_DEMOTED_AUDIT_EVENTS = frozenset({"request.dispatch"})
+# * ``request.retry`` (status="ok"): transparent pre-response
+#   recovery of a stale pooled upstream connection. The call
+#   proceeds and the worker never observes an error, so there is no
+#   operator action; the on-disk row keeps the churn measurable.
+_DEMOTED_AUDIT_EVENTS = frozenset({"request.dispatch", "request.retry"})
 
 
 def _scrub(value: str | None) -> str | None:
@@ -438,6 +443,94 @@ def _upstream_timeout() -> httpx.Timeout:
         _UPSTREAM_DEFAULT_TIMEOUT_S,
     )
     return httpx.Timeout(float(read_s), connect=_UPSTREAM_CONNECT_TIMEOUT_S)
+
+
+# Failure shapes eligible for the transparent pre-response retry —
+# the stale keep-alive reuse signature: the far side (egress-proxy
+# CONNECT tunnel or provider) idled out a pooled connection, and when
+# the teardown is half-open (client side held open, no FIN delivered)
+# the pool's readable-socket checkout guard cannot see it, so the
+# death only surfaces when the next request is written into it —
+# as RemoteProtocolError (FIN answers the write) or ReadError (RST
+# answers it). Measured with core/llm/scripts/transport-churn-measure:
+# settled closes are silently discarded at pool checkout (never seen
+# here); half-open teardown fails EVERY reuse past the far side's
+# idle threshold; and none of those requests reached upstream request
+# handling, so re-sending the buffered bytes cannot double-process.
+# Deliberately narrow: timeouts (the request may be mid-generation
+# upstream — re-sending double-bills) and connect errors (fresh-
+# connection failure means the provider is down; a retry only delays
+# the worker's failover) are excluded.
+_STALE_REUSE_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError)
+
+
+@contextlib.contextmanager
+def _upstream_stream_with_stale_retry(
+    client: httpx.Client,
+    fresh_client: Callable[[], httpx.Client],
+    method: str,
+    url: str,
+    *,
+    content: bytes,
+    headers: dict[str, str],
+    timeout: httpx.Timeout,
+    on_retry: Callable[[Exception], None],
+) -> Iterator[httpx.Response]:
+    """Open the upstream response stream, retrying a stale-reuse death
+    ONCE on a dedicated fresh connection.
+
+    Only the stream OPEN is retried — ``httpx.Client.stream`` sends
+    the request and reads the response head inside ``__enter__``, so a
+    failure there is provably pre-response (zero bytes relayed to the
+    worker, no headers seen). Once the response has started, failures
+    propagate unchanged: a mid-response death may follow upstream
+    processing that already cost real money, and re-sending it here
+    would double-process (the worker layer owns that decision).
+
+    Why exactly one retry, and why NOT through the shared pool: when
+    the far side idles out its connections, it condemns the whole
+    idle pool at once, so an immediate pooled retry frequently draws
+    ANOTHER condemned connection — measured under 8 synchronized
+    workers, two pooled retries still leaked ~10% of calls as 502s,
+    while a single retry on a fresh one-shot connection recovered
+    every stale-reuse failure. Fewer (zero) retries leaks every churn
+    burst as spurious 502s that burn the worker retry loop's paid-
+    attempt budget; more would only mask an upstream that genuinely
+    dies pre-response on every attempt (each extra try is a full
+    re-send against a broken provider and delays worker failover).
+    The fresh connection costs one connection setup (through a proxy:
+    a CONNECT chain + TLS) — paid only after an actual stale failure.
+
+    Safe for the SigV4 path: the retry re-sends the identical
+    prepared bytes and the signature stays valid well within the
+    provider's clock-skew window (the retry is immediate).
+    """
+    oneshot: httpx.Client | None = None
+    try:
+        cm = client.stream(
+            method, url, content=content, headers=headers, timeout=timeout,
+        )
+        try:
+            up = cm.__enter__()
+        except _STALE_REUSE_ERRORS as exc:
+            on_retry(exc)
+            oneshot = fresh_client()
+            cm = oneshot.stream(
+                method, url, content=content, headers=headers,
+                timeout=timeout,
+            )
+            # A failure here propagates: the fresh connection rules
+            # out connection-reuse artifacts, so this is genuine
+            # upstream trouble for the ordinary 502 + worker-retry
+            # path.
+            up = cm.__enter__()
+        try:
+            yield up
+        finally:
+            cm.__exit__(None, None, None)
+    finally:
+        if oneshot is not None:
+            oneshot.close()
 
 
 # Socket-dir prefix shared by every construction route: run-scoped
@@ -1623,6 +1716,22 @@ class LLMDispatcher:
                         )
             return self._upstream_http
 
+    def _fresh_upstream_client(self) -> httpx.Client:
+        """One-shot forwarding-leg client for the stale-reuse retry —
+        a guaranteed fresh connection, never the shared pool, whose
+        remaining idle connections may be condemned by the same
+        far-side idle timeout that killed the first attempt (see
+        :func:`_upstream_stream_with_stale_retry`). Same proxy-env
+        behaviour and protocol observability as the pooled client;
+        the retry helper closes it once the relayed response is
+        drained."""
+        from core.llm.http_pool import http2_enabled, response_event_hooks
+        return httpx.Client(
+            timeout=_upstream_timeout(),
+            http2=http2_enabled(),
+            event_hooks=response_event_hooks(),
+        )
+
     def shutdown(self) -> None:
         """Stop the server thread and remove the socket directory.
 
@@ -2323,10 +2432,28 @@ def _make_request_handler(
             # Booking is not idempotent — the abort handler must know
             # whether the ok-path already settled this scanner.
             _usage_booked = False
+
+            def _note_stale_retry(exc: Exception) -> None:
+                # Pre-response recovery is transparent to the worker;
+                # the audit row keeps the connection churn observable
+                # (how often the egress path idles out pooled
+                # connections) without an operator-facing error line.
+                dispatcher._audit(AuditEvent(
+                    ts=time.time(), event="request.retry",
+                    peer_pid=None, peer_uid=None,
+                    token_id=(rec.token_id or _short(rec.value)),
+                    worker_label=rec.worker_label,
+                    status="ok",
+                    reason=f"{type(exc).__name__} (fresh-connection retry)",
+                ))
+
             try:
-                with dispatcher._upstream_client().stream(
+                with _upstream_stream_with_stale_retry(
+                    dispatcher._upstream_client(),
+                    dispatcher._fresh_upstream_client,
                     method, url, content=body, headers=forwarded,
                     timeout=_upstream_timeout(),
+                    on_retry=_note_stale_retry,
                 ) as up:
                     try:
                         from core.llm.http_pool import (
