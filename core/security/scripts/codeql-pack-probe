@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Probe: does `codeql database create` consume repo-tree pack config?
+
+The codeql trust gate (core/security/codeql_trust.py) is documented as
+defense-in-depth on the strength of exactly this experiment: under
+RAPTOR's invocation shape (`database create --language=<lang>
+--source-root=<repo> --build-mode=none`, no pack search flags), the
+CLI reads repo-tree qlpack.yml only as ordinary source data — a bogus
+`extractor:` and a `buildCommand:` canary resolve and execute nothing,
+and a directory symlink is never traversed.
+
+Run this after a host codeql CLI upgrade (the version-anchor test,
+.github/tests/test_codeql_cli_version_anchor.py, fails until you do)
+and bump PACK_PROBE_VERIFIED_CLI in codeql_trust.py on a clean pass.
+
+Exit codes:
+    0  verified — no pack consumption observed (bump the anchor)
+    1  CONSUMPTION OBSERVED — the gate's defense-in-depth framing no
+       longer holds for this CLI; revisit codeql_trust.py's docstring
+       and the walk boundaries before bumping anything
+    3  environment missing (no codeql on PATH, create failed for an
+       unrelated reason) — probe result is NOT a verdict
+"""
+
+from __future__ import annotations
+
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+MARKER_PACK = "probe-raptor/pack"
+MARKER_EXTRACTOR = "probe-raptor-nonexistent-extractor"
+
+
+def _pack_yaml(name: str, canary: Path) -> str:
+    return (
+        f"name: {MARKER_PACK}-{name}\n"
+        "version: 0.0.1\n"
+        f"extractor: {MARKER_EXTRACTOR}\n"
+        f"buildCommand: /usr/bin/touch {canary}\n"
+    )
+
+
+def main() -> int:
+    codeql = shutil.which("codeql")
+    if not codeql:
+        print("codeql-pack-probe: no codeql on PATH", file=sys.stderr)
+        return 3
+
+    with tempfile.TemporaryDirectory(prefix="codeql-pack-probe-") as d:
+        base = Path(d)
+        repo = base / "repo"
+        outside = base / "outside" / "sub"
+        staging = base / "db"
+        canaries = {
+            "root": base / "CANARY-root",
+            "dotted": base / "CANARY-dotted",
+            "symlinked": base / "CANARY-symlinked",
+        }
+
+        (repo / ".hidden").mkdir(parents=True)
+        outside.mkdir(parents=True)
+        (repo / "app.py").write_text('print("probe")\n')
+        (repo / "qlpack.yml").write_text(_pack_yaml("root", canaries["root"]))
+        (repo / ".hidden" / "qlpack.yml").write_text(
+            _pack_yaml("dotted", canaries["dotted"]))
+        (outside / "qlpack.yml").write_text(
+            _pack_yaml("symlinked", canaries["symlinked"]))
+        (repo / "vendor").symlink_to(outside)
+
+        try:
+            proc = subprocess.run(
+                [codeql, "database", "create", str(staging),
+                 "--language=python", f"--source-root={repo}",
+                 "--build-mode=none", "--threads=2"],
+                capture_output=True, text=True, timeout=600, cwd=repo,
+            )
+        except (subprocess.TimeoutExpired, OSError) as e:
+            # Environment trouble, not a consumption verdict — exit 1
+            # is reserved for observed consumption.
+            print(f"codeql-pack-probe: create did not complete "
+                  f"({type(e).__name__}) — not a consumption verdict",
+                  file=sys.stderr)
+            return 3
+        if proc.returncode != 0:
+            print("codeql-pack-probe: create failed (rc="
+                  f"{proc.returncode}) — not a consumption verdict:\n"
+                  f"{proc.stderr[-2000:]}", file=sys.stderr)
+            return 3
+
+        evidence: list[str] = []
+        for label, path in canaries.items():
+            if path.exists():
+                evidence.append(f"canary EXECUTED ({label} buildCommand)")
+        haystacks = [("stdout", proc.stdout), ("stderr", proc.stderr)]
+        for log in sorted((staging / "log").glob("*")):
+            try:
+                haystacks.append((log.name, log.read_text(errors="replace")))
+            except OSError:
+                continue
+        for src, text in haystacks:
+            for needle in (MARKER_PACK, MARKER_EXTRACTOR):
+                for line in text.splitlines():
+                    # No line-shape exclusions, deliberately: on a
+                    # non-consuming CLI the markers appear NOWHERE
+                    # (file-index and TRAP-import lines name only the
+                    # qlpack.yml PATH, never its content), and a
+                    # quiet-consumption message would most naturally
+                    # name both the pack and its file — an exclusion
+                    # keyed on the filename would eat exactly that
+                    # evidence.
+                    if needle in line:
+                        evidence.append(f"{needle!r} consumed via {src}: "
+                                        f"{line.strip()[:160]}")
+
+        if evidence:
+            print("codeql-pack-probe: CONSUMPTION OBSERVED — the trust "
+                  "gate is load-bearing on this CLI:")
+            for e in evidence:
+                print(f"  - {e}")
+            return 1
+
+    print("codeql-pack-probe: no create-time repo-tree pack consumption "
+          "observed on this CLI (canary execution and marker echoes in "
+          "output/logs are the oracle — silent-at-create consumption is "
+          "outside its sight). Bump PACK_PROBE_VERIFIED_CLI in "
+          "core/security/codeql_trust.py.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

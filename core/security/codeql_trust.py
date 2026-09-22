@@ -33,7 +33,10 @@ again if ANY of these change:
     same class includes ``--extractor-option(-file)`` and
     ``--extra-tracing-config`` (unused anywhere today);
   - a codeql CLI upgrade adds create-time workspace/pack discovery —
-    re-verify on major CLI bumps;
+    mechanically reminded: the version-anchor test fails once the
+    host CLI outruns ``PACK_PROBE_VERIFIED_CLI``; re-run
+    ``core/security/scripts/codeql-pack-probe`` and bump the anchor
+    on a clean pass;
   - RAPTOR ever writes per-user codeql config (``~/.config/codeql/
     config`` or ``CODEQL_CONFIG_FILE``): it injects default flags —
     including the class above — into EVERY invocation. The env route
@@ -137,6 +140,16 @@ class FileScan:
 # ---------------------------------------------------------------------------
 # Constants + helpers
 # ---------------------------------------------------------------------------
+
+# The newest codeql CLI release on which core/security/scripts/
+# codeql-pack-probe verified that `database create` consumes no
+# repo-tree pack config (the module docstring's defense-in-depth
+# premise). The version-anchor test
+# (.github/tests/test_codeql_cli_version_anchor.py) fails when the
+# host CLI is newer at major.minor granularity: re-run the probe;
+# bump this on exit 0; a probe exit 1 means the gate became
+# load-bearing — revisit the docstring and walk boundaries instead.
+PACK_PROBE_VERIFIED_CLI = "2.26.3"
 
 # packages/codeql/.. — three levels up from this file.
 _RAPTOR_DIR = Path(__file__).resolve().parents[2]
