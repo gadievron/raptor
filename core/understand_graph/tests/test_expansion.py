@@ -789,3 +789,84 @@ def test_codeql_ingest_infers_target_from_run_metadata(tmp_path):
             "SELECT target_path FROM snapshots WHERE producer='codeql'"
         )}
     assert targets == {str(target)}
+
+
+# ---------------------------------------------------------------------------
+# Confidence ordering — rank semantics, not TEXT sort
+# ---------------------------------------------------------------------------
+
+def _write_confidence_run(run_dir: Path, target: Path) -> Path:
+    """Five entry points reach the same dangerous sink with confidences
+    chosen so a lexicographic TEXT sort misorders them ("medium" >
+    "high"; an unknown "zebra-tier" spelling sorts above everything)."""
+    src = target / "server.c"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text("void a(){}\n", encoding="utf-8")
+    import hashlib
+    sha = hashlib.sha256(src.read_bytes()).hexdigest()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    save_json(run_dir / "checklist.json", {
+        "target_path": str(target),
+        "total_files": 1,
+        "total_items": 1,
+        "files": [{
+            "path": "server.c",
+            "language": "c",
+            "sha256": sha,
+            "items": [
+                {"kind": "function", "name": "a", "line_start": 1, "line_end": 1},
+            ],
+        }],
+    })
+    save_json(run_dir / "context-map.json", {
+        "meta": {"target": str(target)},
+        "entry_points": [
+            {"id": "EP-HIGH", "name": "ep_high", "file": "server.c", "line": 1, "type": "exported"},
+            {"id": "EP-MED", "name": "ep_medium", "file": "server.c", "line": 2, "type": "exported"},
+            {"id": "EP-CAND", "name": "ep_candidate", "file": "server.c", "line": 3, "type": "exported"},
+            {"id": "EP-ODD", "name": "ep_unknown", "file": "server.c", "line": 4, "type": "exported"},
+            {"id": "EP-BLOCKED", "name": "ep_blocked", "file": "server.c", "line": 5, "type": "exported"},
+        ],
+        "sink_details": [
+            {"id": "SINK-1", "name": "system", "file": "server.c", "line": 9, "type": "command_injection"},
+        ],
+        "unchecked_flows": [
+            {"id": "F1", "entry_point": "EP-MED", "sink": "SINK-1", "confidence": "medium"},
+            {"id": "F2", "entry_point": "EP-HIGH", "sink": "SINK-1", "confidence": "high"},
+            {"id": "F3", "entry_point": "EP-CAND", "sink": "SINK-1", "confidence": "candidate"},
+            {"id": "F4", "entry_point": "EP-ODD", "sink": "SINK-1", "confidence": "zebra-tier"},
+            {"id": "F5", "entry_point": "EP-BLOCKED", "sink": "SINK-1", "confidence": "confirmed"},
+        ],
+    })
+    graph_path = ingest_run(run_dir, str(target))
+    assert graph_path is not None
+    return graph_path
+
+
+def test_alternative_paths_orders_by_confidence_rank(tmp_path):
+    from core.understand_graph import alternative_paths
+    target = tmp_path / "target"
+    graph_path = _write_confidence_run(tmp_path / "understand-run", target)
+    with open_graph(graph_path) as conn:
+        sink_id = conn.execute(
+            "SELECT id FROM nodes WHERE kind='sink' AND name='system'"
+        ).fetchone()["id"]
+        blocked_id = conn.execute(
+            "SELECT id FROM nodes WHERE kind='entry_point' AND name='ep_blocked'"
+        ).fetchone()["id"]
+    alts = alternative_paths(graph_path, sink_id, blocked_id)
+    names = [a["name"] for a in alts]
+    # high outranks medium outranks candidate; the unknown spelling
+    # never crashes the query and sorts last.
+    assert names == ["ep_high", "ep_medium", "ep_candidate", "ep_unknown"]
+
+
+def test_fuzz_targets_orders_by_confidence_rank(tmp_path):
+    target = tmp_path / "target"
+    graph_path = _write_confidence_run(tmp_path / "understand-run", target)
+    targets = fuzz_targets(graph_path, str(target))
+    names = [t["function"] for t in targets]
+    assert names[0] == "ep_blocked"  # confirmed outranks high
+    assert names.index("ep_high") < names.index("ep_medium")
+    assert names.index("ep_medium") < names.index("ep_candidate")
+    assert names[-1] == "ep_unknown"  # unknown spelling sorts last

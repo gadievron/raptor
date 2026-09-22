@@ -15,6 +15,25 @@ def _like_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+# The confidence column is TEXT, so ``ORDER BY confidence DESC`` sorts
+# lexicographically and ranks "medium" above "high". Explicit rank over
+# the vocabulary the ingest writers record (confidence, or the upstream
+# severity fallback, defaulting "candidate"); unknown spellings sort
+# last rather than erroring. ``{col}`` is always a code constant.
+_CONFIDENCE_RANK_SQL = """CASE lower({col})
+                WHEN 'confirmed' THEN 7
+                WHEN 'critical' THEN 6
+                WHEN 'high' THEN 5
+                WHEN 'error' THEN 5
+                WHEN 'medium' THEN 4
+                WHEN 'warning' THEN 4
+                WHEN 'low' THEN 3
+                WHEN 'note' THEN 3
+                WHEN 'candidate' THEN 2
+                ELSE 0
+            END"""
+
+
 def graph_summary(db_path: Path) -> dict[str, Any]:
     if not Path(db_path).exists():
         return {"exists": False}
@@ -417,7 +436,7 @@ def alternative_paths(
 
     def _do(conn, sink_id, blocked_id, lim):
         rows = conn.execute(
-            """
+            f"""
             SELECT src.id, src.name AS entry_name, src.file AS entry_file,
                    src.line_start, e.confidence, src.props_json
             FROM edges e
@@ -426,7 +445,7 @@ def alternative_paths(
               AND e.dst_id = ?
               AND e.src_id != ?
               AND src.kind IN ('entry_point', 'source')
-            ORDER BY e.confidence DESC
+            ORDER BY {_CONFIDENCE_RANK_SQL.format(col="e.confidence")} DESC
             LIMIT ?
             """,
             (sink_id, blocked_id, lim),
@@ -630,7 +649,7 @@ def fuzz_targets(
             WHERE fn.kind = 'entry_point' AND fn.stale = 0
               AND fn.snapshot_id = ?
               AND ({like_clauses})
-            ORDER BY r.confidence DESC
+            ORDER BY {_CONFIDENCE_RANK_SQL.format(col="r.confidence")} DESC
             LIMIT ?
             """,
             params,
