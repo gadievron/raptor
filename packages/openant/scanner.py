@@ -817,6 +817,13 @@ def _run_subprocess(
             max_capture_bytes=_CAPTURE_MAX_BYTES,
             timeout=config.timeout_seconds,
             env=env,
+            # The env above IS get_safe_env-derived; the one
+            # DANGEROUS_ENV_VARS member present (PYTHONPATH) is the
+            # intentional, validated core-path override — strict_env
+            # would strip it, so this acknowledgement is the honest
+            # spelling of "filtered upstream" (and retires the per-run
+            # operational-hygiene warning).
+            env_caller_filtered=True,
             cwd=str(config.core_path),
         )
     except subprocess.TimeoutExpired:
@@ -1227,7 +1234,17 @@ def _build_command(
 
 
 def _build_subprocess_env(config: OpenAntConfig) -> dict[str, str]:
-    safe = RaptorConfig.get_safe_env()
+    # preserve_proxy: this child's entire purpose is provider-API
+    # egress (OpenAnt calls the Anthropic API directly), so it gets
+    # the operator's launch-time proxy route — same adjudication as
+    # the dispatcher's own worker spawn, and unlike sandboxed TARGET
+    # children (which get the default strip because they must not
+    # learn the egress topology). Without it, a mandatory-egress-proxy
+    # host resolves the profile, builds the adapter, and dies at the
+    # first connection. A future dispatcher-fronted credential path
+    # (loopback gateway) would need no proxy; this serves the
+    # direct-API-key posture.
+    safe = RaptorConfig.get_safe_env(preserve_proxy=True)
     safe["ANTHROPIC_API_KEY"] = os.environ.get("ANTHROPIC_API_KEY", "")
     # Resolve to absolute path so .. / symlinks / relative components cannot be
     # used to redirect Python's import resolution to an attacker-controlled dir

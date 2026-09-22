@@ -180,8 +180,11 @@ class TestMountLaneReachesOpenAntArgv(unittest.TestCase):
             out = base / "out"
             out.mkdir()
             config = OpenAntConfig(core_path=_PINNED_CORE)
+            # Capture the raptor logger by name — it does not
+            # propagate to root, and assertLogs on root would fail on
+            # a (correctly) quiet run.
             with patch.object(scanner, "_build_command", with_bogus_flag), \
-                 self.assertLogs(level="INFO") as captured:
+                 self.assertLogs("raptor", level="DEBUG") as captured:
                 result = scanner.run_openant_scan(src, out, config)
 
         # The child's OWN argparse rejected the probe flag — the venv

@@ -585,5 +585,23 @@ class TestSurveyNitCorrections(unittest.TestCase):
         self.assertNotIn("_SENTINEL", config_src)
 
 
+class TestProxyRouteReachesChild(unittest.TestCase):
+    """The child's purpose is provider-API egress — the operator's
+    launch-time proxy route must survive into its env (same posture as
+    the dispatcher's worker spawn), or mandatory-egress-proxy hosts
+    resolve the profile and then die at the first connection."""
+
+    def test_proxy_vars_survive(self):
+        with tempfile.TemporaryDirectory() as td:
+            core = _make_fake_core(Path(td))
+            with patch.dict(os.environ,
+                            {"https_proxy": "http://proxy.example:3128",
+                             "no_proxy": "localhost"}, clear=False):
+                env = _build_subprocess_env(OpenAntConfig(core_path=core))
+            self.assertEqual(env.get("https_proxy"),
+                             "http://proxy.example:3128")
+            self.assertEqual(env.get("no_proxy"), "localhost")
+
+
 if __name__ == "__main__":
     unittest.main()
