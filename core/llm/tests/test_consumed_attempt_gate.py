@@ -247,6 +247,98 @@ class TestGenerateConsumedGate:
         assert prov2.generate.call_count == 2
 
 
+def _dispatcher_routed_success() -> None:
+    """A dispatcher-routed SUCCESS through the REAL hooks: the stamped
+    200 head is recorded and the body read completes — nothing
+    consumes the stamp on the success path, which is exactly the
+    lingering state a later hookless failure must not inherit."""
+    transport = httpx.MockTransport(lambda _req: httpx.Response(
+        200,
+        headers={"X-Raptor-Upstream-State": "response-started"},
+        json={"ok": True},
+    ))
+    with httpx.Client(
+        transport=transport,
+        event_hooks={
+            "request": [_reset_attempt_state],
+            "response": [_note_attempt_state],
+        },
+    ) as c:
+        assert c.post("http://_/anthropic/v1/messages").json()["ok"]
+    assert dispatcher_client._attempt_state.response_started is True
+
+
+class TestStaleStampDoesNotVetoHooklessTransports:
+    """A provider WITHOUT hooks (direct-SDK custom-gateway / local
+    inference paths, the claudecode subprocess transport, mixed
+    multi-model fallback chains) has no request-hook reset — the
+    attempt-start clear in the retry loops is what keeps a stamp left
+    by an earlier dispatcher-routed success from falsely vetoing its
+    pre-response failures."""
+
+    def test_generate_keeps_full_retry_budget(self, caplog):
+        _dispatcher_routed_success()
+        client = _client(max_retries=3)
+        with patch.object(client, "_get_provider") as mock_get:
+            prov = MagicMock()
+            prov.generate.side_effect = ConnectionError(
+                "connection refused",
+            )
+            mock_get.return_value = prov
+            with caplog.at_level("WARNING", logger="core.llm.client"):
+                with pytest.raises(RuntimeError) as excinfo:
+                    client.generate("prompt")
+        assert prov.generate.call_count == 3
+        assert not isinstance(
+            excinfo.value.__cause__, MidResponseDeathError,
+        )
+        assert not any(
+            "already processed (and billed)" in r.message
+            for r in caplog.records
+        )
+
+    def test_generate_timeout_shape_keeps_timeout_policy(self, caplog):
+        """Timeout-class failures (the claudecode-transport shape)
+        must keep their own capped retry policy — one retry — not the
+        stale-stamp terminal veto."""
+        _dispatcher_routed_success()
+        client = _client(max_retries=3)
+        with patch.object(client, "_get_provider") as mock_get:
+            prov = MagicMock()
+            prov.generate.side_effect = TimeoutError(
+                "claude -p timed out after 600s",
+            )
+            mock_get.return_value = prov
+            with caplog.at_level("WARNING", logger="core.llm.client"):
+                with pytest.raises(RuntimeError) as excinfo:
+                    client.generate("prompt")
+        # Timeout retry cap: 1 retry → 2 attempts, not a 1-attempt veto.
+        assert prov.generate.call_count == 2
+        assert not isinstance(
+            excinfo.value.__cause__, MidResponseDeathError,
+        )
+        assert not any(
+            "already processed (and billed)" in r.message
+            for r in caplog.records
+        )
+
+    def test_generate_structured_keeps_full_retry_budget(self):
+        _dispatcher_routed_success()
+        client = _client(max_retries=3)
+        with patch.object(client, "_get_provider") as mock_get:
+            prov = MagicMock()
+            prov.generate_structured.side_effect = ConnectionError(
+                "connection refused",
+            )
+            mock_get.return_value = prov
+            with pytest.raises(RuntimeError) as excinfo:
+                client.generate_structured("prompt", {"type": "object"})
+        assert prov.generate_structured.call_count == 3
+        assert not isinstance(
+            excinfo.value.__cause__, MidResponseDeathError,
+        )
+
+
 class TestGenerateStructuredConsumedGate:
     def test_mid_response_death_is_not_resent(self, caplog):
         client = _client(max_retries=3)

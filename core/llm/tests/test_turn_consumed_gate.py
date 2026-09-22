@@ -143,6 +143,33 @@ class TestAnthropicTurnConsumedGate:
         ) == 4
 
 
+class TestStaleStampDoesNotVetoTurn:
+    """The attempt-start clear in the turn() loops: a stamp left by an
+    earlier dispatcher-routed success on this thread must not veto a
+    hookless provider's pre-response failures (its stub never marks
+    response-started itself)."""
+
+    def test_anthropic_turn_keeps_transient_retry(self):
+        _mark_response_started()   # stale, from an earlier success
+        provider = _anthropic_provider()
+        calls = {"n": 0}
+        provider.client = _stub_anthropic_client(calls, mark_started=False)
+        resp = provider.turn(messages=_turn_messages(), tools=[])
+        assert calls["n"] == 4
+        assert resp.error_message is not None
+        assert "transient error" in resp.error_message
+
+    def test_openai_turn_keeps_transient_retry(self):
+        _mark_response_started()
+        provider = _openai_provider()
+        calls = {"n": 0}
+        provider.client = _stub_openai_client(calls, mark_started=False)
+        resp = provider.turn(messages=_turn_messages(), tools=[])
+        assert calls["n"] == 4
+        assert resp.error_message is not None
+        assert "transient error" in resp.error_message
+
+
 class TestOpenAITurnConsumedGate:
     def test_mid_response_death_is_terminal_not_resent(self, caplog):
         provider = _openai_provider()

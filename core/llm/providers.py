@@ -1916,6 +1916,12 @@ class OpenAICompatibleProvider(LLMProvider):
         )
         t_start = time.monotonic()
         for attempt in range(max_retries + 1):
+            # Attempt-local spend signal — same contract as the
+            # LLMClient loops: a stale response-started stamp from an
+            # earlier dispatcher-routed success must not veto THIS
+            # attempt's failure.
+            from core.llm.client import _clear_attempt_spend_signal
+            _clear_attempt_spend_signal()
             try:
                 resp = self.client.chat.completions.create(**kwargs)
                 break
@@ -3259,6 +3265,12 @@ class AnthropicProvider(LLMProvider):
         )
         t_start = time.monotonic()
         for attempt in range(max_retries + 1):
+            # Attempt-local spend signal — same contract as the
+            # LLMClient loops: a stale response-started stamp from an
+            # earlier dispatcher-routed success must not veto THIS
+            # attempt's failure.
+            from core.llm.client import _clear_attempt_spend_signal
+            _clear_attempt_spend_signal()
             try:
                 if use_stream_transport:
                     with self.client.messages.stream(

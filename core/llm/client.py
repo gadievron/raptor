@@ -1032,6 +1032,24 @@ def _retry_consumed_enabled() -> bool:
     return env_flag("RAPTOR_LLM_RETRY_CONSUMED", False)
 
 
+def _clear_attempt_spend_signal() -> None:
+    """Scope the dispatcher's response-started stamp to the attempt
+    about to run — called at the top of every gated retry-loop
+    attempt (here and in the providers' ``turn()`` loops). Without
+    this, a dispatcher-routed SUCCESS leaves the stamp set and a later
+    failure from a hookless transport on the same thread inherits it
+    (see :func:`core.llm.dispatcher.client.clear_upstream_response_started`).
+    Tolerant of the dispatcher client being unimportable — the signal
+    cannot exist then either."""
+    try:
+        from core.llm.dispatcher.client import (
+            clear_upstream_response_started,
+        )
+    except Exception:  # noqa: BLE001 — the reset must never break a call
+        return
+    clear_upstream_response_started()
+
+
 def _consumed_attempt_veto(
     error: Exception, provider: str, model_name: str,
 ) -> MidResponseDeathError | None:
@@ -2751,6 +2769,11 @@ class LLMClient:
                 # UnboundLocalError at the give-up log below.
                 for attempt in range(max(self.config.max_retries, 1)):
                     attempt_start = time.monotonic()
+                    # Attempt-local spend signal: a stale stamp from an
+                    # earlier dispatcher-routed success must not veto
+                    # THIS attempt's failure (hookless transports have
+                    # no request-hook reset of their own).
+                    _clear_attempt_spend_signal()
                     try:
                         if attempt > 0:
                             # DEBUG, not INFO: the prior attempt's
@@ -3286,6 +3309,11 @@ class LLMClient:
                 # this closes.
                 for attempt in range(max(self.config.max_retries, 1)):
                     attempt_start = time.monotonic()
+                    # Attempt-local spend signal: a stale stamp from an
+                    # earlier dispatcher-routed success must not veto
+                    # THIS attempt's failure (hookless transports have
+                    # no request-hook reset of their own).
+                    _clear_attempt_spend_signal()
                     try:
                         if attempt > 0:
                             # DEBUG, not INFO — see ``generate`` above

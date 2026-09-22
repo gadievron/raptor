@@ -65,6 +65,23 @@ def _note_attempt_state(response) -> None:
     _attempt_state.response_started = state == _UPSTREAM_STATE_STARTED
 
 
+def clear_upstream_response_started() -> None:
+    """Attempt-scoping reset, called at the START of every retry-loop
+    attempt that consults the signal.
+
+    The request hook resets the state for HOOKED (dispatcher-routed)
+    clients, and the destructive take clears it on consulted failures
+    — but a dispatcher-routed SUCCESS leaves ``response_started=True``
+    with nothing to consume it. A later failure from a provider
+    WITHOUT hooks on the same thread (direct-SDK paths — custom
+    ``api_base`` gateways, local inference servers — the claudecode
+    subprocess transport, and mixed multi-model fallback chains) would
+    inherit the stale stamp and be falsely vetoed as consumed spend.
+    Clearing at attempt start makes the stamp attempt-local across
+    every transport, hooked or not."""
+    _attempt_state.response_started = False
+
+
 def take_upstream_response_started() -> bool:
     """Read-and-clear: True when the most recent dispatcher-routed
     request on THIS thread received a relayed upstream response head
