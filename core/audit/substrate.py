@@ -35,6 +35,8 @@ language facts and tool receipts, never asserted by the LLM.
 from __future__ import annotations
 
 import logging
+import os
+import stat
 import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -193,6 +195,8 @@ def canonical_file_language(
         refine_language,
     )
 
+    from core.inventory.languages import _read_probe_head
+
     language = detect_language(file_path)
     full = Path(target_path) / file_path
     if language is None:
@@ -200,14 +204,29 @@ def canonical_file_language(
     elif language in ("c", "inc"):
         # Only these extension verdicts are content-refinable (.h may
         # be C++, .inc may be php/asm/c); everything else is final
-        # without touching the file.
-        try:
-            head = full.read_bytes()[:_REFINE_HEAD_BYTES].decode(
-                "utf-8", errors="replace",
+        # without touching the file. The read goes through the
+        # inventory's own probe primitive: O_NONBLOCK + fstat
+        # S_ISREG + O_NOFOLLOW with a bounded single read — a plain
+        # open()/read_bytes() here blocked forever on a FIFO named
+        # like a header and buffered an attacker-sized file before
+        # any slice applied.
+        head_bytes = _read_probe_head(str(full), _REFINE_HEAD_BYTES)
+        if head_bytes is None:
+            # Unreadable, or present but not a regular file (FIFO,
+            # device, symlink — the inventory's no-follow policy).
+            # A MISSING path keeps the extension verdict: memoised
+            # consults may ask about hypothetical paths, and there
+            # is no object to contradict the extension. Anything
+            # actually present that the probe refuses can prove
+            # nothing about substrate — answer unknown, never a
+            # language a refutation could be licensed on.
+            if os.path.lexists(full):
+                language = None
+        else:
+            language = refine_language(
+                language, file_path,
+                head_bytes.decode("utf-8", errors="replace"),
             )
-        except OSError:
-            head = ""
-        language = refine_language(language, file_path, head)
 
     with _LANG_LOCK:
         if len(_LANG_CACHE) >= _LANG_CACHE_MAX:
@@ -429,6 +448,19 @@ def substrate_covers(
     return cov
 
 
+def _is_regular_subject_file(target_path: Path | str, file_path: str) -> bool:
+    """Whether *file_path* names a regular file under the target.
+
+    lstat (no follow), mirroring the inventory probe's no-symlink
+    policy: only a plain regular file counts as a reviewable subject.
+    """
+    try:
+        st = os.lstat(Path(target_path) / file_path)
+    except (OSError, ValueError):
+        return False
+    return stat.S_ISREG(st.st_mode)
+
+
 def file_substrate_coverage(
     tool_type: str,
     *,
@@ -443,10 +475,43 @@ def file_substrate_coverage(
     detect/refine machinery. Returns None when *tool_type* has no
     file-scoped registry entry — chokepoint call sites no-op for
     unregistered tiers.
+
+    Raises:
+        SubstrateScopeError: *file_path* is a sentinel value that
+            does NOT exist as a regular file under the target (a
+            producer passed its result sentinel where the subject
+            file belongs).
     """
     entry = _REGISTRY.get(tool_type)
     if entry is None or entry.scope != SCOPE_FILE:
         return None
+    if file_path in SENTINEL_PATHS:
+        # Sentinel NAMES are legal filenames: a tree can ship a real
+        # file literally named "<codebase>" or "(path-check)", and
+        # the inventory reviews it like any other subject. This
+        # consult has the target context substrate_covers lacks, so
+        # it adjudicates by existence: a regular file under the
+        # target is a SUBJECT (raising here would let a hostile tree
+        # suppress that file's findings by naming alone — the
+        # dispatcher consults before its per-leg error handling, so
+        # a raise kills every hypothesis on the file, where the base
+        # behavior reviewed it normally). Only a sentinel that does
+        # not exist as a regular file keeps the programming-error
+        # raise.
+        if not _is_regular_subject_file(target_path, file_path):
+            msg = (
+                f"sentinel path {file_path!r} reached the file-scoped "
+                f"substrate consult for '{tool_type}' and no such "
+                "subject file exists under the target — the caller "
+                "must supply the scope's real context"
+            )
+            raise SubstrateScopeError(msg)
+        if language is None:
+            language = canonical_file_language(target_path, file_path)
+        cov = entry.predicate(language=language, file_path=file_path)
+        if cov.unknown_policy != entry.unknown_policy:
+            cov = replace(cov, unknown_policy=entry.unknown_policy)
+        return cov
     if language is None:
         language = canonical_file_language(target_path, file_path)
     return substrate_covers(

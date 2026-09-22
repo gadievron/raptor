@@ -6,6 +6,7 @@ live tools, no LLM calls.
 
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -135,6 +136,50 @@ class TestScopeContract:
         assert cov.unknown_policy == UNKNOWN_FAIL_OPEN
 
 
+class TestSentinelNamedSubjectFiles:
+    """Sentinel NAMES are legal filenames: a real file named after a
+    result sentinel is a subject, never a scope error — raising on it
+    would let a hostile tree suppress that file's findings by naming
+    alone."""
+
+    @pytest.mark.parametrize("name", ["<codebase>", "(path-check)"])
+    def test_hostile_php_file_is_adjudicated_normally(self, tmp_path, name):
+        (tmp_path / name).write_text("<?php system($_GET['c']);\n")
+        cov = file_substrate_coverage(
+            "coccinelle", target_path=tmp_path, file_path=name,
+        )
+        assert cov is not None
+        assert cov.covered is False  # php: normal substrate skip
+
+    def test_stamped_language_still_wins_on_sentinel_name(self, tmp_path):
+        (tmp_path / "(path-check)").write_text("int f(void){return 0;}\n")
+        cov = file_substrate_coverage(
+            "coccinelle", target_path=tmp_path,
+            file_path="(path-check)", language="c",
+        )
+        assert cov is not None
+        assert cov.covered is True
+
+    @pytest.mark.parametrize("name", ["<codebase>", "(path-check)"])
+    def test_missing_sentinel_still_raises(self, tmp_path, name):
+        # Genuine programming error: the sentinel names no subject.
+        with pytest.raises(SubstrateScopeError):
+            file_substrate_coverage(
+                "coccinelle", target_path=tmp_path, file_path=name,
+            )
+
+    def test_symlink_named_sentinel_raises(self, tmp_path):
+        # No-follow policy, mirroring the inventory probe: a symlink
+        # is not a reviewable subject file.
+        (tmp_path / "real.php").write_text("<?php\n")
+        (tmp_path / "<codebase>").symlink_to(tmp_path / "real.php")
+        with pytest.raises(SubstrateScopeError):
+            file_substrate_coverage(
+                "coccinelle", target_path=tmp_path,
+                file_path="<codebase>",
+            )
+
+
 class TestLicenseRefutation:
     def _cov(self, covered, policy=UNKNOWN_FAIL_OPEN) -> Coverage:
         return Coverage(
@@ -191,6 +236,23 @@ class TestCanonicalFileLanguage:
 
     def test_missing_file_keeps_extension_verdict(self, tmp_path):
         assert canonical_file_language(tmp_path, "gone.c") == "c"
+
+    @pytest.mark.skipif(
+        not hasattr(os, "mkfifo"), reason="platform lacks mkfifo",
+    )
+    def test_fifo_named_header_answers_unknown_promptly(self, tmp_path):
+        # A plain open() of a reader-less FIFO blocks forever; the
+        # probe must refuse non-regular files and the language must
+        # come back unknown (fail-open), never a refutation-licensing
+        # verdict for an object that is not source at all.
+        os.mkfifo(tmp_path / "evil.h")
+        assert canonical_file_language(tmp_path, "evil.h") is None
+
+    def test_symlink_header_answers_unknown(self, tmp_path):
+        # No-follow, matching the inventory probe's policy.
+        (tmp_path / "real.h").write_text("template <class T> struct X;\n")
+        (tmp_path / "alias.h").symlink_to(tmp_path / "real.h")
+        assert canonical_file_language(tmp_path, "alias.h") is None
 
 
 class TestTreeLanguageSet:

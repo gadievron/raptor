@@ -327,6 +327,70 @@ class TestDispatcherGate:
         assert tiers["coccinelle"].refuted == 1
 
 
+class TestHostileSentinelFilenames:
+    """Files literally named after the result sentinels are ordinary
+    subjects end-to-end: the dispatcher gate adjudicates them like
+    any other file instead of erroring the hypothesis away (base
+    parity — naming a backdoor file "<codebase>" must not suppress
+    its findings)."""
+
+    def test_php_file_named_codebase_skips_normally(
+        self, tmp_path, monkeypatch,
+    ):
+        rule = _tree(tmp_path)
+        (tmp_path / "<codebase>").write_text(
+            "<?php system($_GET['c']);\n",
+        )
+        sweep_calls: list = []
+        monkeypatch.setattr(
+            orch, "run_coccinelle_sweep",
+            lambda **kw: sweep_calls.append(kw),
+        )
+        cfg = _Cfg(tmp_path)
+        tiers = _make_tier_counters()
+        skipped: set = set()
+        confirmed = _dispatch(
+            cfg, {"type": "coccinelle", "config": {"rule": str(rule)}},
+            "<codebase>", tiers=tiers, skipped=skipped,
+        )
+        assert confirmed == []
+        assert not sweep_calls
+        assert "coccinelle" in skipped
+        assert tiers["coccinelle"].skipped_substrate == 1
+        assert tiers["coccinelle"].substrate_skip_languages == {"php": 1}
+
+    def test_c_file_named_path_check_keeps_its_findings(
+        self, tmp_path, monkeypatch,
+    ):
+        # The anti-suppression direction: a C-family subject with a
+        # sentinel name dispatches and its verdicts survive.
+        rule = _tree(tmp_path)
+        (tmp_path / "(path-check)").write_text(
+            "int f(void){ return 0; }\n",
+        )
+        monkeypatch.setattr(
+            orch, "run_coccinelle_sweep",
+            lambda **kw: SimpleNamespace(
+                outcome="confirmed", details=None, errors=[],
+                rule_id=str(rule), matches=[{"line": 1}],
+            ),
+        )
+        cfg = _Cfg(tmp_path)
+        cfg.inventory = {"files": [
+            {"path": "(path-check)", "language": "c",
+             "items": [{"name": "f", "line_start": 1, "line_end": 1}]},
+        ]}
+        tiers = _make_tier_counters()
+        skipped: set = set()
+        confirmed = _dispatch(
+            cfg, {"type": "coccinelle", "config": {"rule": str(rule)}},
+            "(path-check)", tiers=tiers, skipped=skipped,
+        )
+        assert confirmed, "the sentinel-named C subject must dispatch"
+        assert "coccinelle" not in skipped
+        assert tiers["coccinelle"].confirmed == 1
+
+
 class TestSkippedMemoReplay:
     def test_skipped_is_stored_and_replayed(self, tmp_path, monkeypatch):
         # Run-scoped, file-keyed, semantically stable: the second
