@@ -35,9 +35,12 @@ Run `python3 raptor.py --help` for the mode list, or
 | `frida` | Dynamic instrumentation via Frida (alpha) |
 
 
-## Global Flags
+## Sandbox Flags
 
-These sandbox flags apply to every mode. Pass them **after** the mode name:
+These sandbox flags exist on the `scan`, `fuzz`, `agentic`, and `codeql`
+modes — the modes that register `core.sandbox.add_cli_args`. The other
+modes do not accept them and reject them with an
+`unrecognized arguments` error. Pass them **after** the mode name:
 
 ```
 --sandbox {debug,frida,full,network-only,none,strict,target_run}
@@ -46,6 +49,11 @@ These sandbox flags apply to every mode. Pass them **after** the mode name:
 --audit                                    Log what enforcement would have blocked
 --audit-verbose                            With --audit, log every traced syscall
 --audit-budget N                           With --audit, override the record cap (default 10000)
+--sandbox-floor {mount-ns,mountless-ns,ns-only,landlock,none}
+                                           Per-run consent for the untrusted containment
+                                           floor (lower to accept a degraded host, raise to
+                                           pin the full contract; 'none' is never a
+                                           consentable untrusted floor)
 --sandbox-readable-path PATH               Extend the sandbox read allowlist (repeatable)
 --sandbox-tool-path DIR                    Make an operator-installed tool dir visible
                                            inside the sandbox (repeatable; read-only)
