@@ -100,10 +100,6 @@ from collections import defaultdict
 from pathlib import Path
 
 PY_ROOTS = ["core", "packages", "plugins", "engine", "libexec"]
-ROOT_PY_FILES = [
-    "raptor.py", "raptor_agentic.py", "raptor_codeql.py",
-    "raptor_fuzzing.py", "conftest.py",
-]
 BASH_ROOTS = ["bin", "libexec"]
 
 # Artifact/scratch directory names, pruned from the walk. A *tracked
@@ -650,8 +646,12 @@ def _iter_files(root: Path):
                 continue
             seen.add(p)
             yield p
-    for name in ROOT_PY_FILES:
-        p = root / name
+    # Repo-root entry modules, derived from the tree — never a name
+    # list (codeql_scope.py's doctrine: a hand-maintained entry-module
+    # list silently dropped new entry points before; the previous
+    # 5-name hand list here was already stale, missing
+    # raptor_openant.py and its OPENANT_CORE read).
+    for p in sorted(root.glob("*.py")):
         if p.is_file():
             yield p
 

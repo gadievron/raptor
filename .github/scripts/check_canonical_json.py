@@ -141,6 +141,14 @@ def iter_python_files(root: Path) -> Iterator[Path]:
                     continue
                 if b"python" in head.split(b"\n", 1)[0]:
                     yield p
+    # Repo-root entry modules, derived from the tree — never a name
+    # list (codeql_scope.py's doctrine: a hand-maintained entry-module
+    # list silently dropped new entry points before). A dumps-into-
+    # hash flow in raptor_agentic.py is the same regression as one
+    # under core/.
+    for p in sorted(root.glob("*.py")):
+        if p.is_file():
+            yield p
 
 
 def _callee_parts(node: ast.expr) -> tuple[str, ...]:

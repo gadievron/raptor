@@ -55,7 +55,11 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 BASELINE_PATH = SCRIPT_DIR / "optional_dep_imports_baseline.json"
 
-PY_ROOTS = ["core", "packages", "plugins"]
+# engine/ is a code root like the others: its rule-engine suites
+# (spatch/semgrep subprocess tests) run on the same CI deps image,
+# which installs requirements-dev only — an unguarded optional
+# import in an engine test fails the tier with this lint green.
+PY_ROOTS = ["core", "packages", "plugins", "engine"]
 SKIP_DIR_NAMES = {
     ".git", "__pycache__", "node_modules", "out", ".out", ".tox",
     ".venv", "venv", "build", "dist", "fixtures", "data",

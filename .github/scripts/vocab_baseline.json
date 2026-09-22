@@ -2698,5 +2698,47 @@
     "kind": "literal",
     "note": "Serialization schema keys of the reproduction-result dataclass record (report JSON field names), not a name vocabulary \u2014 same class as project.py::to_dict.",
     "reviewed": "2026-08-28"
+  },
+  "raptor.py::mode_handlers": {
+    "count": 12,
+    "kind": "literal",
+    "note": "CLI mode -> handler dispatch table (the command surface CLAUDE.md documents), a closed command taxonomy, not a learned name vocabulary; first indexed when the scan universe gained the repo-root entry modules.",
+    "reviewed": "2026-09-21"
+  },
+  "raptor_agentic.py::_build_fuzz_phase_summary": {
+    "count": 13,
+    "kind": "literal",
+    "note": "Fuzz-phase report summary dict: counter/artifact KEYS of the phase record (persistence schema keys, not a name vocabulary); root-module universe addition.",
+    "reviewed": "2026-09-21"
+  },
+  "raptor_agentic.py::_crash_context_to_validate_finding": {
+    "count": 16,
+    "kind": "literal",
+    "note": "Field-name mapping from crash-analysis context to the /validate finding schema (report JSON field names, not a name vocabulary); root-module universe addition.",
+    "reviewed": "2026-09-21"
+  },
+  "raptor_agentic.py::_materialise_threat_model_phase": {
+    "count": 21,
+    "kind": "literal",
+    "note": "Threat-model phase record: artifact/counter KEYS of the phase summary (persistence schema keys, not a name vocabulary); root-module universe addition.",
+    "reviewed": "2026-09-21"
+  },
+  "raptor_agentic.py::final_report": {
+    "count": 21,
+    "kind": "literal",
+    "note": "Pipeline final-report dict: per-phase artifact KEYS aggregated into the run report (persistence schema keys, not a name vocabulary); root-module universe addition.",
+    "reviewed": "2026-09-21"
+  },
+  "raptor_agentic.py::summary": {
+    "count": 15,
+    "kind": "literal",
+    "note": "Phase summary dict: artifact/flag KEYS of the scan-phase record (persistence schema keys, not a name vocabulary); root-module universe addition.",
+    "reviewed": "2026-09-21"
+  },
+  "raptor_codeql.py::summary": {
+    "count": 10,
+    "kind": "literal",
+    "note": "Autonomous-run summary dict: counter + provenance KEYS written to the analysis-summary JSON (persistence schema keys, not a name vocabulary); root-module universe addition.",
+    "reviewed": "2026-09-21"
   }
 }

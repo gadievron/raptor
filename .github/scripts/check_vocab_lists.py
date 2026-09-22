@@ -252,6 +252,14 @@ def iter_python_files(root: Path):
                 continue
             if _is_python_file(p):
                 yield p
+    # Repo-root entry modules, derived from the tree — never a name
+    # list (codeql_scope.py's doctrine: a hand-maintained entry-module
+    # list silently dropped new entry points before). raptor_agentic
+    # and friends are 1000+-line runtime modules; a curated vocabulary
+    # there is the same regression as one under core/.
+    for p in sorted(root.glob("*.py")):
+        if p.is_file():
+            yield p
 
 
 def _is_python_file(p: Path) -> bool:
