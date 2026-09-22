@@ -648,3 +648,58 @@ class TestHumanBranchScrub:
         assert "Build files:" in out
         for raw in ("\x1b", "\x07"):
             assert raw not in out
+
+
+class TestUnsupportedPrimaryBanner:
+    """A repo dominated by a language CodeQL cannot extract must say
+    so: the per-language Detected/Skipping lines only ever mention
+    extractor languages, so a PHP or Perl codebase read as
+    clean-by-silence otherwise."""
+
+    def _warnings(self, mock_logger):
+        return [
+            c.args[0] % tuple(c.args[1:]) if c.args[1:] else c.args[0]
+            for c in mock_logger.warning.call_args_list
+        ]
+
+    def test_php_majority_warns_and_names_covered_sliver(
+            self, tmp_path: Path, monkeypatch):
+        for i in range(12):
+            _write(tmp_path, f"src/page{i}.php", "<?php\n")
+        for i in range(3):
+            _write(tmp_path, f"native/helper{i}.c", "int f(void){}\n")
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+
+        LanguageDetector(tmp_path).detect_languages()
+
+        msgs = self._warnings(mock_logger)
+        banner = [m for m in msgs if "no extractor" in m]
+        assert banner, f"expected unsupported-primary banner; got {msgs}"
+        assert "php (12 files)" in banner[0]
+        assert "cpp (3 files)" in banner[0]
+
+    def test_detected_majority_stays_quiet(
+            self, tmp_path: Path, monkeypatch):
+        for i in range(5):
+            _write(tmp_path, f"src/mod{i}.py", "x = 1\n")
+        _write(tmp_path, "tools/one.php", "<?php\n")
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+
+        LanguageDetector(tmp_path).detect_languages()
+
+        msgs = self._warnings(mock_logger)
+        assert not any("no extractor" in m for m in msgs), msgs
+
+    def test_no_unsupported_files_stays_quiet(
+            self, tmp_path: Path, monkeypatch):
+        for i in range(4):
+            _write(tmp_path, f"src/mod{i}.py", "x = 1\n")
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+
+        LanguageDetector(tmp_path).detect_languages()
+
+        msgs = self._warnings(mock_logger)
+        assert not any("no extractor" in m for m in msgs), msgs

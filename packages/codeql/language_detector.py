@@ -154,6 +154,24 @@ class LanguageDetector:
     # the repo's build, verified on CLI 2.26.3.)
     EXTRACTOR_PROBED: ClassVar[set[str]] = {"rust"}
 
+    # Source extensions with NO CodeQL extractor, mapped to the
+    # language they indicate. Operator messaging only — when the
+    # repo's dominant source language lives here, the CodeQL lane is
+    # structurally absent and its silence must not read as coverage.
+    # Deliberately conservative: unambiguous source extensions only
+    # (no ``.m`` — Objective-C/MATLAB collision — and no ``.d``).
+    NO_EXTRACTOR_EXTENSIONS: ClassVar[dict[str, str]] = {
+        ".php": "php", ".phtml": "php",
+        ".pl": "perl", ".pm": "perl",
+        ".lua": "lua",
+        ".ex": "elixir", ".exs": "elixir",
+        ".erl": "erlang", ".hrl": "erlang",
+        ".hs": "haskell",
+        ".ml": "ocaml", ".mli": "ocaml",
+        ".dart": "dart",
+        ".r": "r",
+    }
+
     # Directories to ignore during scanning
     IGNORE_DIRS: ClassVar[set[str]] = {
         ".git", ".svn", ".hg", ".bzr",
@@ -266,6 +284,37 @@ class LanguageDetector:
             logger.warning("No languages detected that meet minimum criteria")
         else:
             logger.info("Total languages detected: %d", len(detected))
+
+        # Unsupported-primary visibility: when more source files sit
+        # in a language CodeQL cannot extract than in ANY detected
+        # language, the CodeQL lane is structurally absent for the
+        # code that matters and the operator must hear it here — the
+        # per-language "Detected"/"Skipping" lines above only ever
+        # mention extractor languages, so a PHP or Perl codebase read
+        # as clean-by-silence otherwise.
+        unsupported: dict[str, int] = defaultdict(int)
+        for ext, count in stats["extensions"].items():
+            no_extractor_lang = self.NO_EXTRACTOR_EXTENSIONS.get(ext.lower())
+            if no_extractor_lang:
+                unsupported[no_extractor_lang] += count
+        if unsupported:
+            top_lang, top_count = max(
+                unsupported.items(), key=lambda kv: kv[1],
+            )
+            detected_max = max(
+                (info.file_count for info in detected.values()), default=0,
+            )
+            if top_count > detected_max:
+                covered = ", ".join(
+                    f"{lang} ({info.file_count} files)"
+                    for lang, info in sorted(detected.items())
+                ) or "no language"
+                logger.warning(
+                    "⚠ Primary language appears to be %s (%d files) — "
+                    "CodeQL has no extractor for it; the CodeQL lane "
+                    "covers %s. Other channels are unaffected.",
+                    top_lang, top_count, covered,
+                )
 
         return detected
 
