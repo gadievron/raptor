@@ -485,7 +485,16 @@ class TestProxyNetnsContextWiring:
     The probe inputs are pinned by mock so each test asserts the TIER
     DECISION for one explicit host shape; tests whose decision lands
     on the netns tier additionally gate on the REAL probes because
-    they spawn a live child through that tier."""
+    they spawn a live child through that tier.
+
+    The PLATFORM the wiring consults is pinned the same way —
+    ``sys.platform`` branches before any probe is read, and macOS
+    truthfully stamps ``seatbelt_tcp`` for every non-netns proxy run,
+    so an unpinned simulation encodes one platform's answer against
+    whatever host runs it. Because the child is real, each pinned
+    direction also carries the native marker for the kernel it needs:
+    linux tiers spawn through Landlock/netns, the darwin tier through
+    seatbelt."""
 
     @pytest.fixture(autouse=True)
     def _tmpdir(self, tmp_path):
@@ -508,12 +517,30 @@ class TestProxyNetnsContextWiring:
         from core.sandbox import state
         state.reset_warn_once("_proxy_tier2_port_pin_warned")
 
-    def _enforcement_with(self, *, abi: int, net: bool, mount: bool):
+    def _enforcement_with(self, *, abi: int, net: bool, mount: bool,
+                          platform: str) -> "str | None":
         """Run a trivial child with the probe surface pinned; return
-        the proxy_enforcement the context chose."""
+        the proxy_enforcement the context chose.
+
+        ``platform`` pins the platform the wiring consults (the same
+        seam ``_enter_egress`` pins): the tier selection branches on
+        ``sys.platform`` BEFORE it reads any probe, so an unpinned
+        simulation asserts one platform's tier names against whatever
+        host runs the suite — on a real mac the truthful stamp for
+        every non-netns proxy run is ``seatbelt_tcp``, not the linux
+        tier names. The pin makes each test's platform assumption
+        explicit; it does NOT make the test host-independent, because
+        the child is REAL: the linux direction spawns through the
+        selected linux tier (Landlock/netns — ``linux_native``), and
+        the darwin direction needs the real seatbelt backend (a
+        mocked-available seatbelt fails closed at spawn on any other
+        kernel — ``darwin_native``)."""
+        import core.sandbox.context as ctx
         from core.sandbox import sandbox
 
-        with mock.patch(
+        with mock.patch.object(
+            ctx.sys, "platform", platform,
+        ), mock.patch(
             "core.sandbox.context._get_landlock_abi", return_value=abi,
         ), mock.patch(
             "core.sandbox.context.check_landlock_available",
@@ -545,7 +572,9 @@ class TestProxyNetnsContextWiring:
     @requires_landlock
     def test_netns_path_selected_on_low_abi(self):
         """ABI < 4 with the spawn backend live → netns enforcement."""
-        assert self._enforcement_with(abi=3, net=True, mount=True) == "netns"
+        assert self._enforcement_with(
+            abi=3, net=True, mount=True, platform="linux",
+        ) == "netns"
 
     @pytest.mark.skipif(
         not _spawn_backend_live(),
@@ -558,23 +587,43 @@ class TestProxyNetnsContextWiring:
         spawn backend is live — the Landlock pin is port-scoped to
         any host and needs the seccomp UDP block, so ABI >= 4 no
         longer routes to landlock_tcp on backend-capable hosts."""
-        assert self._enforcement_with(abi=4, net=True, mount=True) == "netns"
+        assert self._enforcement_with(
+            abi=4, net=True, mount=True, platform="linux",
+        ) == "netns"
 
+    @pytest.mark.linux_native
     def test_landlock_tcp_when_mount_probe_fails_on_high_abi(self):
         """netns capability alone is NOT enough: without the mount-ns
         spawn backend there is no forwarder, so the context must take
         the Landlock TCP pin tier (the netns tier would hand the child
         an empty namespace with no route to the proxy)."""
-        assert (self._enforcement_with(abi=4, net=True, mount=False)
-                == "landlock_tcp")
+        assert (self._enforcement_with(
+            abi=4, net=True, mount=False, platform="linux",
+        ) == "landlock_tcp")
 
+    @pytest.mark.linux_native
     def test_advisory_tier_when_mount_probe_fails_on_low_abi(self):
         """Same mount-gate routing on ABI < 4 — but stamped for what
         it IS: Landlock has no TCP allowlist before ABI 4, so nothing
         enforces the pin and the honest label is ``advisory``
         (env-vars only), not the enforcing tier's name."""
-        assert (self._enforcement_with(abi=3, net=True, mount=False)
-                == "advisory")
+        assert (self._enforcement_with(
+            abi=3, net=True, mount=False, platform="linux",
+        ) == "advisory")
+
+    @pytest.mark.darwin_native
+    def test_seatbelt_tcp_stamped_on_darwin(self):
+        """Darwin direction of the same wiring: on macOS every
+        non-netns proxy run enforces the port pin through seatbelt
+        SBPL, and the stamp says so truthfully — ``seatbelt_tcp``,
+        never a linux tier name, even on the exact probe shape the
+        linux direction maps to ``landlock_tcp`` (the netns bridge is
+        a linux tier; its capability probe is platform-gated off on
+        darwin before any probe is read). Real seatbelt backend
+        required: the child spawns through sandbox-exec."""
+        assert (self._enforcement_with(
+            abi=4, net=True, mount=False, platform="darwin",
+        ) == "seatbelt_tcp")
 
     def _enter_egress(self, *, platform, net, mount, require, env=None, monkeypatch=None):
         """Enter sandbox() with the probe/platform surface pinned and exit
@@ -638,13 +687,19 @@ class TestProxyNetnsContextWiring:
         """Without the flag (trusted egress callers), the guard never fires."""
         self._enter_egress(platform="linux", net=True, mount=False, require=False)
 
+    @pytest.mark.linux_native
     def test_tcp_path_when_netns_unavailable(self):
         """Without netns capability, ABI >= 4 falls back to the
-        Landlock TCP pin tier — the pre-generalisation posture."""
+        Landlock TCP pin tier — the pre-generalisation posture.
+        Platform pinned like ``_enforcement_with``: the tier under
+        test is the linux fallback ladder."""
+        import core.sandbox.context as ctx
         from core.sandbox import sandbox
 
         abi = 4
-        with mock.patch(
+        with mock.patch.object(
+            ctx.sys, "platform", "linux",
+        ), mock.patch(
             "core.sandbox.context._get_landlock_abi", return_value=abi,
         ), mock.patch(
             "core.sandbox.context.check_landlock_available",
@@ -665,18 +720,25 @@ class TestProxyNetnsContextWiring:
             assert result.returncode == 0
             assert result.sandbox_info.get("proxy_enforcement") == "landlock_tcp"
 
+    @pytest.mark.linux_native
     @pytest.mark.usefixtures("_fresh_tier2_latch")
     def test_tier2_port_pin_warns_and_records_evidence(self, caplog):
         """Tier-2 engagement (Landlock TCP port pin) must be
         operator-visible — a WARNING naming the weaker port-scoped
         guarantee (pre-fix it was DEBUG-silent) — and the reduced
-        guarantee must land in the per-run sandbox_info evidence."""
+        guarantee must land in the per-run sandbox_info evidence.
+        Platform pinned like ``_enforcement_with``: the asserted
+        stamp and evidence text are the LINUX tier's (macOS records
+        the seatbelt SBPL equivalents)."""
         import logging
 
+        import core.sandbox.context as ctx
         from core.sandbox import sandbox
 
         abi = 4
-        with mock.patch(
+        with mock.patch.object(
+            ctx.sys, "platform", "linux",
+        ), mock.patch(
             "core.sandbox.context._get_landlock_abi", return_value=abi,
         ), mock.patch(
             "core.sandbox.context.check_landlock_available",
