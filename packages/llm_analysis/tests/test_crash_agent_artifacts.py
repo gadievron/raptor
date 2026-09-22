@@ -26,6 +26,7 @@ from packages.llm_analysis.crash_agent import (  # noqa: E402
     _build_crash_analysis_bundle,
     _build_crash_exploit_bundle,
     exploit_artifact_path,
+    refined_exploit_artifact_path,
 )
 
 AFL_ID = "id:000000,sig:11,src:000001,op:havoc,rep:2"
@@ -94,6 +95,25 @@ class TestExploitArtifactPath:
         assert p.parent == tmp_path / "exploits"
         assert p.name == f"{_safe_id(AFL_ID)}_exploit.cpp"
         assert ":" not in p.name
+
+    def test_refined_paths_sanitise_afl_id_both_suffixes(self, tmp_path):
+        validated = refined_exploit_artifact_path(tmp_path, AFL_ID, validated=True)
+        best = refined_exploit_artifact_path(tmp_path, AFL_ID, validated=False)
+        assert validated.parent == tmp_path / "exploits"
+        assert best.parent == tmp_path / "exploits"
+        assert validated.name == f"{_safe_id(AFL_ID)}_exploit_validated.c"
+        assert best.name == f"{_safe_id(AFL_ID)}_exploit_best_attempt.c"
+        for p in (validated, best):
+            assert ":" not in p.name
+            assert "," not in p.name
+
+    def test_refined_path_contains_hostile_id(self, tmp_path):
+        # A crash id derived from a hostile filename stem must not
+        # escape the exploits/ directory or smuggle separators.
+        hostile = "id:0,../..//etc,op:havoc"
+        p = refined_exploit_artifact_path(tmp_path, hostile, validated=True)
+        assert p.parent == tmp_path / "exploits"
+        assert "/" not in p.name and ".." not in p.name
 
     def test_writer_uses_canonical_path(self, tmp_path, monkeypatch):
         f = tmp_path / "crash-input"

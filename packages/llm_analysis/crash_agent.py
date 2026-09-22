@@ -46,6 +46,24 @@ def exploit_artifact_path(out_dir: Path, crash_id: str) -> Path:
     return Path(out_dir) / "exploits" / f"{_safe_id(crash_id)}_exploit.cpp"
 
 
+def refined_exploit_artifact_path(
+    out_dir: Path, crash_id: str, *, validated: bool
+) -> Path:
+    """Canonical on-disk location of a refined exploit for ``crash_id``.
+
+    Same contract as :func:`exploit_artifact_path`: the id is routed
+    through ``_safe_id`` (AFL crash ids contain ``:`` and ``,``), so
+    the validate-and-refine writer and any consumer derive the path
+    here, never by interpolating the raw crash id.
+
+    ``validated=True`` names the refinement that passed
+    validate-and-refine; ``validated=False`` names the best attempt
+    kept when refinement did not validate.
+    """
+    suffix = "_exploit_validated.c" if validated else "_exploit_best_attempt.c"
+    return Path(out_dir) / "exploits" / f"{_safe_id(crash_id)}{suffix}"
+
+
 def _input_file_size_str(input_file: Path) -> str:
     """``st_size`` as a string, or ``"unknown"`` when the crash input
     has vanished (AFL queue rotation, tmpdir cleanup). The prompt

@@ -452,10 +452,10 @@ out/fuzz_<binary>_<timestamp>/
                                  use; there is no crash_ prefix)
     exploits/
       <safe_id>_exploit.cpp   -- Generated exploit PoCs
-      <crash_id>_exploit_validated.c
+      <safe_id>_exploit_validated.c
                               -- Refined exploit that passed
                                  validate-and-refine (--autonomous)
-      <crash_id>_exploit_best_attempt.c
+      <safe_id>_exploit_best_attempt.c
                               -- Refinement attempted but did not
                                  validate; best attempt kept
                                  (--autonomous)

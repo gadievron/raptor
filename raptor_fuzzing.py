@@ -49,6 +49,7 @@ from packages.fuzzing import AFLRunner, CrashCollector
 from packages.llm_analysis.crash_agent import (
     CrashAnalysisAgent,
     exploit_artifact_path,
+    refined_exploit_artifact_path,
 )
 
 logger = get_logger()
@@ -1219,7 +1220,9 @@ Examples:
 
                             # If refined version is better, save it
                             if success and refined_code:
-                                refined_file = out_dir / "analysis" / "exploits" / f"{crash.crash_id}_exploit_validated.c"
+                                refined_file = refined_exploit_artifact_path(
+                                    out_dir / "analysis", crash.crash_id, validated=True
+                                )
                                 refined_file.write_text(refined_code, encoding="utf-8")
                                 logger.info("Validated exploit saved: %s", refined_file)
 
@@ -1233,7 +1236,9 @@ Examples:
                                     )
                             elif refined_code:
                                 # Refinement attempted but failed - save best attempt
-                                refined_file = out_dir / "analysis" / "exploits" / f"{crash.crash_id}_exploit_best_attempt.c"
+                                refined_file = refined_exploit_artifact_path(
+                                    out_dir / "analysis", crash.crash_id, validated=False
+                                )
                                 refined_file.write_text(refined_code, encoding="utf-8")
                                 logger.warning("Best attempt exploit saved: %s", refined_file)
 
