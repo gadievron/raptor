@@ -43,6 +43,7 @@ import re
 import tempfile
 from pathlib import Path
 
+from .substrate import file_substrate_coverage, license_refutation
 from .sweep import SweepResult, _check_path_containment, _match_in_range
 
 logger = logging.getLogger(__name__)
@@ -454,13 +455,21 @@ def run_flow_cocci_sweep(
     line_start: int | None = None,
     line_end: int | None = None,
     timeout: int = 120,
+    language: str | None = None,
 ) -> SweepResult:
     """Run a flow-sensitive per-hypothesis Coccinelle rule on one file.
+
+    ``language`` is the file's canonical language when the caller
+    already knows it (inventory-stamped); None detects it via the
+    canonical machinery.
 
     Outcomes:
       * ``confirmed``    — the rendered rule matched inside the
         function range (matches carry line + bound-identifier message).
       * ``refuted``      — spatch ran cleanly and nothing matched.
+      * ``skipped``      — the file is provably outside the C family:
+        spatch parses everything as C and exits 0 with zero matches
+        on foreign source, so the channel did not look.
       * ``inconclusive`` — no template applies or the hypothesis names
         no bindable identifier (negative control: no binding, no
         verdict).
@@ -479,6 +488,24 @@ def run_flow_cocci_sweep(
             function_name=function_name,
             outcome="error",
             errors=[f"file not found: {full_path}"],
+        )
+
+    # Substrate license (in-sweep, belt-and-braces behind the
+    # dispatcher's pre-dispatch gate so every caller crosses one
+    # chokepoint).
+    cov = file_substrate_coverage(
+        TOOL_NAME,
+        target_path=target_path,
+        file_path=file_path,
+        language=language,
+    )
+    if cov is not None and cov.covered is False:
+        return SweepResult(
+            tool=TOOL_NAME,
+            file_path=file_path,
+            function_name=function_name,
+            outcome="skipped",
+            details={"reason": cov.reason, "substrate": cov.as_receipt()},
         )
 
     template = template or flow_template_for_hypothesis(hypothesis)
@@ -603,7 +630,7 @@ def run_flow_cocci_sweep(
             details={"binding": binding},
         )
 
-    return SweepResult(
+    refuted = SweepResult(
         tool=TOOL_NAME,
         file_path=file_path,
         function_name=function_name,
@@ -611,6 +638,11 @@ def run_flow_cocci_sweep(
         rule_id=f"cocci-flow:{template}",
         details={"binding": binding},
     )
+    if cov is not None:
+        # Licensed refutations carry their substrate receipt;
+        # unknown-language coverage fails open by tier policy.
+        return license_refutation(refuted, cov)
+    return refuted
 
 
 def chain_entry_for_cwe(cwe: str) -> dict | None:

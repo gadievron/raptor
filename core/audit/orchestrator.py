@@ -86,6 +86,9 @@ from .diagnostics import (
 from .diagnostics import (
     iris_candidate_to_spec as _iris_candidate_to_spec,
 )
+from .diagnostics import (
+    tally_substrate_skip_language as _tally_substrate_language,
+)
 from .exploit_feedback import (
     FeedbackState,
     format_feedback_for_context,
@@ -95,6 +98,12 @@ from .exploit_feedback import (
 from .findings import write_findings
 from .substrate import (
     classify_sweep_outcome as _classify_sweep_outcome,
+)
+from .substrate import (
+    file_substrate_coverage as _substrate_file_coverage,
+)
+from .substrate import (
+    registered_scope as _substrate_registered_scope,
 )
 from .environment import (
     make_dispatch_gate as _make_dispatch_gate,
@@ -1129,6 +1138,13 @@ class TierCounters:
     inconclusive: int = 0
     skipped: int = 0
     errors: int = 0
+    # Substrate skips (sub-count of ``skipped``): dispatches withheld
+    # because the tier's substrate provably cannot model the target
+    # (e.g. coccinelle on a PHP file). The per-language tally feeds
+    # the report's honesty block, so a run against an unmodeled
+    # language is diagnosable at a glance.
+    skipped_substrate: int = 0
+    substrate_skip_languages: dict[str, int] = field(default_factory=dict)
     wall_time_s: float = 0.0
     cpg_build_s: float = 0.0
 
@@ -17525,6 +17541,56 @@ def _note_codeql_degraded_skip(
     )
 
 
+def _substrate_tree_languages(
+    config: OrchestratorConfig,
+) -> frozenset[str] | None:
+    """Canonical language mix of the run's inventory, or None."""
+    from .substrate import tree_language_set
+
+    return tree_language_set(getattr(config, "inventory", None))
+
+
+def _note_substrate_skip(
+    config: OrchestratorConfig,
+    tier_counters: dict[str, TierCounters] | None,
+    tool_type: str,
+    file_path: str,
+    function_name: str,
+    *,
+    reason: str,
+    language: str | None,
+    receipt: dict[str, Any] | None,
+) -> None:
+    """Book one substrate skip: the skip + substrate counters, the
+    per-language tally the report's honesty block reads, and a
+    journal row. Accounting must never cost the dispatch, so the
+    journal write degrades to a debug line."""
+    if tier_counters:
+        _increment_tier_dict(tier_counters, tool_type, "skipped")
+        _increment_tier_dict(tier_counters, tool_type, "skipped_substrate")
+        _tally_substrate_language(tier_counters, tool_type, language)
+    logger.debug(
+        "substrate skip: %s did not look at %s:%s — %s",
+        tool_type, file_path, function_name, reason,
+    )
+    if not config.out_dir:
+        return
+    try:
+        row: dict[str, Any] = {
+            "action": "substrate_skip",
+            "key": f"{file_path}:{function_name}",
+            "file": file_path,
+            "function": function_name,
+            "tool": tool_type,
+            "reason": reason,
+        }
+        if receipt:
+            row["substrate"] = receipt
+        append_audit_log(config.out_dir, row)
+    except Exception:
+        logger.debug("substrate-skip journal row failed", exc_info=True)
+
+
 # Query IDs already reported as unsupported (log once per id, not once
 # per dispatch — a hot CWE class would otherwise spam the log). The
 # set stays the reset unit (tests swap in a fresh set()); the lock
@@ -18216,6 +18282,35 @@ def _run_tool_chain(
                 tool_type, file_path, function_name, _exit_receipt,
             )
             continue
+
+        # Substrate gate (pre-dispatch): a registered tier whose
+        # substrate provably cannot model this file skips before the
+        # tool spawns — its silence would be booked with verdict
+        # weight otherwise. The sweep layer holds the same license
+        # (belt-and-braces) for callers that bypass this dispatcher.
+        # The whole-tree coccinelle entry is deliberately gated on
+        # the SUBJECT file here: tree-scoped evidence licenses only
+        # its "<codebase>" result inside the sweep — a stray C file
+        # elsewhere must not license a refutation against a non-C
+        # hypothesis file (conjunct, not replacement).
+        if _substrate_registered_scope(tool_type) == "file":
+            _sub_cov = _substrate_file_coverage(
+                tool_type,
+                target_path=effective_target,
+                file_path=file_path,
+                language=_inventory_language_hint(config, file_path),
+            )
+            if _sub_cov is not None and _sub_cov.covered is False:
+                if skipped_types is not None and tool_type not in _ran_types:
+                    skipped_types.add(tool_type)
+                _note_substrate_skip(
+                    config, tier_counters, tool_type,
+                    file_path, function_name,
+                    reason=_sub_cov.reason,
+                    language=_sub_cov.evidence.get("language"),
+                    receipt=_sub_cov.as_receipt(),
+                )
+                continue
 
         _ran_types.add(tool_type)
 
@@ -19273,6 +19368,10 @@ def _run_tool_chain(
                         function_name=function_name,
                         cocci_rule=tool_cfg["rule"],
                         domain_vocab=domain_vocab,
+                        # Tree-scoped license context for the
+                        # "<codebase>" result (the subject-file gate
+                        # already ran at dispatch).
+                        tree_languages=_substrate_tree_languages(config),
                     )
                 else:
                     _cc_line_end = _checklist_line_end(
@@ -19292,6 +19391,13 @@ def _run_tool_chain(
                             # unresolvable.
                             line_end=_cc_line_end,
                             domain_vocab=domain_vocab,
+                            # Inventory-stamped language (canonical);
+                            # None lets the sweep detect it. Run-stable
+                            # either way, so the memo key needs no
+                            # language dimension.
+                            language=_inventory_language_hint(
+                                config, file_path,
+                            ),
                         )
 
                     if domain_vocab is None:
@@ -19337,7 +19443,21 @@ def _run_tool_chain(
                     # rule as the codeql/joern skips.
                     if skipped_types is not None:
                         skipped_types.add(tool_type)
-                    if tier_counters:
+                    _cc_details = cocci_result.details or {}
+                    _cc_receipt = _cc_details.get("substrate")
+                    if _cc_receipt:
+                        _note_substrate_skip(
+                            config, tier_counters, "coccinelle",
+                            file_path, function_name,
+                            reason=_cc_details.get(
+                                "reason", "substrate not modeled",
+                            ),
+                            language=(
+                                _cc_receipt.get("evidence") or {}
+                            ).get("language"),
+                            receipt=_cc_receipt,
+                        )
+                    elif tier_counters:
                         _increment_tier_dict(
                             tier_counters, "coccinelle", "skipped",
                         )
@@ -19820,6 +19940,7 @@ def _run_tool_chain(
                     template=tool_cfg.get("template"),
                     line_start=line_start or None,
                     line_end=None,
+                    language=_inventory_language_hint(config, file_path),
                 )
                 _cf_oc = _classify_sweep_outcome(cf_result)
                 if _cf_oc == "confirmed":
@@ -19852,7 +19973,21 @@ def _run_tool_chain(
                     # the channel did not look (phantom-coverage rule).
                     if skipped_types is not None:
                         skipped_types.add(tool_type)
-                    if tier_counters:
+                    _cf_details = cf_result.details or {}
+                    _cf_receipt = _cf_details.get("substrate")
+                    if _cf_receipt:
+                        _note_substrate_skip(
+                            config, tier_counters, "coccinelle_flow",
+                            file_path, function_name,
+                            reason=_cf_details.get(
+                                "reason", "substrate not modeled",
+                            ),
+                            language=(
+                                _cf_receipt.get("evidence") or {}
+                            ).get("language"),
+                            receipt=_cf_receipt,
+                        )
+                    elif tier_counters:
                         _increment_tier_dict(
                             tier_counters, "coccinelle_flow", "skipped",
                         )
@@ -20745,6 +20880,11 @@ def _proactive_validate(
                     line_end=_checklist_line_end(
                         config, outcome.file, outcome.function,
                     ) or None,
+                    # Inventory-stamped language (canonical); None
+                    # lets the sweep detect it.
+                    language=_inventory_language_hint(
+                        config, outcome.file,
+                    ),
                 )
                 if cocci_result.outcome == "confirmed":
                     confirmed_tools.append(f"coccinelle:{Path(cocci_rule).stem}")
@@ -20773,7 +20913,21 @@ def _proactive_validate(
                     # run, so scrub it (same rule as the joern leg's
                     # vacuous-silence scrub).
                     ran.discard("coccinelle")
-                    if tier_counters:
+                    _pv_details = cocci_result.details or {}
+                    _pv_receipt = _pv_details.get("substrate")
+                    if _pv_receipt:
+                        _note_substrate_skip(
+                            config, tier_counters, "coccinelle",
+                            outcome.file, outcome.function,
+                            reason=_pv_details.get(
+                                "reason", "substrate not modeled",
+                            ),
+                            language=(
+                                _pv_receipt.get("evidence") or {}
+                            ).get("language"),
+                            receipt=_pv_receipt,
+                        )
+                    elif tier_counters:
                         _increment_tier_dict(
                             tier_counters, "coccinelle", "skipped",
                         )

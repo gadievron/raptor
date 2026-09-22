@@ -121,6 +121,27 @@ def increment_tier(
             tc.inconclusive += 1
 
 
+def tally_substrate_skip_language(
+    tier_counters: dict[str, Any],
+    tier: str,
+    language: str | None,
+) -> None:
+    """Bump the tier's substrate-skip language tally (thread-safe).
+
+    ``None`` folds into "unknown" — the receipt itself carries the
+    detail; the tally only has to name the dominant unmodeled
+    language for the report."""
+    tc = tier_counters.get(tier)
+    if tc is None:
+        return
+    lang = language or "unknown"
+    with _TIER_COUNTER_LOCK:
+        langs = getattr(tc, "substrate_skip_languages", None)
+        if langs is None:
+            return
+        langs[lang] = langs.get(lang, 0) + 1
+
+
 def format_tier_diagnostics(
     tier_counters: dict[str, Any],
 ) -> str:
@@ -196,6 +217,14 @@ def write_tier_diagnostics(
         }
         if tc.cpg_build_s > 0:
             data[name]["cpg_build_s"] = round(tc.cpg_build_s, 2)
+        # Substrate-skip breakdown (sub-count of "skipped"): written
+        # only when present, so pre-existing consumers of the plain
+        # skipped counter see no shape change on unaffected runs.
+        if getattr(tc, "skipped_substrate", 0):
+            data[name]["skipped_substrate"] = tc.skipped_substrate
+            langs = getattr(tc, "substrate_skip_languages", None)
+            if langs:
+                data[name]["substrate_skip_languages"] = dict(langs)
     # Scoped-run slot-allocation report (see gaps.truncate_gaps_to_
     # budget): surfaced here so an operator reading tier diagnostics
     # sees which in-scope files got zero review slots.

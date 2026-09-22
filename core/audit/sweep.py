@@ -42,6 +42,11 @@ from core.json import load_json
 
 from ._util import is_valid_identifier, safe_join
 from .run_memo import BoundedMemo
+from .substrate import (
+    file_substrate_coverage,
+    license_refutation,
+    substrate_covers,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1427,6 +1432,7 @@ def run_coccinelle_sweep(
     line_start: int | None = None,
     line_end: int | None = None,
     domain_vocab: Any = None,
+    language: str | None = None,
 ) -> SweepResult:
     """Run a Coccinelle rule against a single C file.
 
@@ -1435,6 +1441,12 @@ def run_coccinelle_sweep(
         file_path: Relative path to the C source file.
         function_name: Function being audited.
         cocci_rule: Path to the .cocci rule file.
+        language: Canonical language of the file when the caller
+            already knows it (inventory-stamped); None detects it via
+            the canonical machinery. Non-C-family files yield
+            ``outcome="skipped"`` — spatch parses every input as C
+            and exits 0 with zero matches on foreign source, so its
+            silence there is not evidence.
         defines: Optional spatch -D defines (e.g. {"func": "parse_input"}).
         line_start: Restricts matches to the audited function's span;
             matches outside it are dropped. When ``line_end`` is
@@ -1462,6 +1474,26 @@ def run_coccinelle_sweep(
             function_name=function_name,
             outcome="error",
             errors=[f"file not found: {full_path}"],
+        )
+
+    # Substrate license (in-sweep, belt-and-braces behind the
+    # dispatcher's pre-dispatch gate so EVERY caller crosses one
+    # chokepoint): a provably non-C file is refused before spatch
+    # spawns — the channel did not look.
+    cov = file_substrate_coverage(
+        "coccinelle",
+        target_path=target_path,
+        file_path=file_path,
+        language=language,
+    )
+    if cov is not None and cov.covered is False:
+        return SweepResult(
+            tool="coccinelle",
+            file_path=file_path,
+            function_name=function_name,
+            outcome="skipped",
+            rule_id=cocci_rule,
+            details={"reason": cov.reason, "substrate": cov.as_receipt()},
         )
 
     try:
@@ -1541,7 +1573,7 @@ def run_coccinelle_sweep(
             ]
 
         outcome = "confirmed" if matches else "refuted"
-        return SweepResult(
+        result = SweepResult(
             tool="coccinelle",
             file_path=file_path,
             function_name=function_name,
@@ -1549,6 +1581,11 @@ def run_coccinelle_sweep(
             matches=matches,
             rule_id=cocci_rule,
         )
+        if cov is not None:
+            # Licensed refutations carry their substrate receipt;
+            # unknown-language coverage fails open by tier policy.
+            return license_refutation(result, cov)
+        return result
     except Exception as exc:  # noqa: BLE001
         return SweepResult(
             tool="coccinelle",
@@ -3305,6 +3342,7 @@ def run_consistency_check(
     function_name: str,
     cocci_rule: str,
     domain_vocab: Any = None,
+    tree_languages: frozenset[str] | None = None,
 ) -> SweepResult:
     """Run a Coccinelle consistency check across the entire target.
 
@@ -3325,6 +3363,13 @@ def run_consistency_check(
         domain_vocab: DomainVocabulary used to render vocabulary
             placeholders in the rule to a tempfile before running;
             when None the rule file is run as-is.
+        tree_languages: Canonical languages present in the target
+            tree (the inventory's language mix). The result is
+            tree-scoped — its file_path is the "<codebase>" sentinel
+            — so its refutation license is "the corpus contains
+            something spatch can parse": zero C-family languages
+            yields ``outcome="skipped"``; None (no inventory to
+            answer from) keeps historic behavior by tier policy.
 
     Returns:
         SweepResult with matches being the inconsistent call sites.
@@ -3336,6 +3381,24 @@ def run_consistency_check(
             function_name=function_name,
             outcome="error",
             errors=[f"invalid function name for -D define: {function_name!r}"],
+        )
+
+    # Tree-scoped substrate license: this licenses only THIS
+    # "<codebase>" result — the dispatching chain leg's pre-dispatch
+    # gate keeps the file-scoped predicate on the subject file, so a
+    # stray C file elsewhere never licenses a whole-tree refutation
+    # against a non-C hypothesis (conjunct, not replacement).
+    cov = substrate_covers(
+        "coccinelle_consistency", tree_languages=tree_languages,
+    )
+    if cov.covered is False:
+        return SweepResult(
+            tool="coccinelle_consistency",
+            file_path="<codebase>",
+            function_name=function_name,
+            outcome="skipped",
+            rule_id=cocci_rule,
+            details={"reason": cov.reason, "substrate": cov.as_receipt()},
         )
 
     try:
@@ -3399,13 +3462,16 @@ def run_consistency_check(
                 matches.append({"raw": str(match)})
 
         outcome = "confirmed" if matches else "refuted"
-        return SweepResult(
-            tool="coccinelle_consistency",
-            file_path="<codebase>",
-            function_name=function_name,
-            outcome=outcome,
-            matches=matches,
-            rule_id=cocci_rule,
+        return license_refutation(
+            SweepResult(
+                tool="coccinelle_consistency",
+                file_path="<codebase>",
+                function_name=function_name,
+                outcome=outcome,
+                matches=matches,
+                rule_id=cocci_rule,
+            ),
+            cov,
         )
     except ImportError:
         return SweepResult(
