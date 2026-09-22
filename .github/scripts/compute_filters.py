@@ -26,7 +26,7 @@ FILTERS: dict[str, list[str]] = {
         "**/*.py",
         "requirements*.txt",
         "pyproject.toml",
-        "poetry.lock",
+        "uv.lock",
         ".github/workflows/codeql.yml",
         ".github/codeql/**",
     ],

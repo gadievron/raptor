@@ -10,10 +10,14 @@ name: Miswiring scan (daily)
 # .github/scripts/miswiring_baseline.json. Baseline entries that no
 # longer fire are warned as stale in the job log.
 #
-# Deliberately a scheduled job, not a PR gate: the full-repo AST
-# index takes ~a minute and the finding classes need human triage
-# judgment, so the daily cadence keeps the signal without taxing
-# the merge queue.
+# These detectors ALSO gate PRs: lint.yml's ``repo-invariants`` job
+# runs the same five scripts on every pull_request / push-to-main /
+# merge_group, because schedule-only coverage let a new finding merge
+# green and fail here the next morning — delayed and misattributed.
+# The daily sweep stays as belt-and-braces (catches baseline drift
+# that lands outside the gated paths) and as the triage surface where
+# stale-baseline warnings get read on a calm cadence rather than in a
+# PR's merge path.
 
 on:
   schedule:

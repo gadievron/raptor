@@ -78,7 +78,7 @@
     // .github/tests/test_devcontainer_config.py.
     "source=${localEnv:HOME}/.claude,target=/home/vscode/.claude,type=bind,consistency=cached"
   ],
-  "postCreateCommand": "uv sync --locked --extra llm --extra web --extra sage --extra binary --extra grammars --extra h2 --extra frida && uv tool install semgrep==1.173.0",
+  "postCreateCommand": "uv sync --locked --extra llm --extra web --extra sage --extra binary --extra grammars --extra h2 --extra frida && uv tool install semgrep==1.177.0",
   "postStartCommand": "sudo sh -c 'echo 1 > /proc/sys/kernel/perf_event_paranoid 2>/dev/null || true'",
   "remoteUser": "vscode"
 }

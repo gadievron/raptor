@@ -72,7 +72,7 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 # SEMGREP (static-analysis, scan, raptor-scan, agentic commands)
 # ============================================================================
 
-RUN pip install --no-cache-dir semgrep==1.177.0
+RUN uv tool install semgrep==1.177.0
 
 # ============================================================================
 # RR DEBUGGER (rr-debugger skill, crash-analysis agents)
