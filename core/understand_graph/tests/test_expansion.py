@@ -755,3 +755,37 @@ def test_validation_coverage_is_a_findings_ratio(tmp_path):
     # 2 scan findings + 2 unchecked flows known; FLOW-1 and the
     # command-injection finding validated.
     assert cov == 0.5
+
+
+def test_codeql_ingest_infers_target_from_run_metadata(tmp_path):
+    """A SARIF ingest without an explicit target must not snapshot
+    with target '' (unmatchable by every target-scoped query) when
+    the run's own metadata names the target."""
+    target = tmp_path / "target"
+    target.mkdir()
+    run_dir = tmp_path / "codeql-run"
+    run_dir.mkdir()
+    save_json(run_dir / ".raptor-run.json", {
+        "command": "codeql",
+        "status": "completed",
+        "target_path": str(target),
+    })
+    save_json(run_dir / "results.sarif", {
+        "runs": [{
+            "results": [{
+                "ruleId": "cpp/command-injection",
+                "message": {"text": "m"},
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": "server.c"},
+                    "region": {"startLine": 2},
+                }}],
+            }],
+        }],
+    })
+    graph_path = ingest_codeql_sarif(run_dir)
+    assert graph_path is not None
+    with open_graph(graph_path) as conn:
+        targets = {r["target_path"] for r in conn.execute(
+            "SELECT target_path FROM snapshots WHERE producer='codeql'"
+        )}
+    assert targets == {str(target)}

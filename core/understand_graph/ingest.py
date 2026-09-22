@@ -365,7 +365,7 @@ def ingest_scan_findings(run_dir: Path, target_path: Optional[str] = None) -> Op
     if not findings or not isinstance(findings, list):
         return None
 
-    target = str(target_path or _infer_target(run_dir, findings))
+    target = str(target_path or _infer_run_target(run_dir))
     if not target:
         return None
     graph_path = graph_path_for_run(run_dir, target or None)
@@ -412,7 +412,7 @@ def ingest_codeql_sarif(run_dir: Path, target_path: Optional[str] = None) -> Opt
     if not sarif_paths:
         return None
 
-    target = str(target_path or "")
+    target = str(target_path or _infer_run_target(run_dir))
     graph_path = graph_path_for_run(run_dir, target or None)
     ingested = False
 
@@ -460,7 +460,7 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None)
     if not outcomes or not isinstance(outcomes, list):
         return None
 
-    target = str(target_path or "")
+    target = str(target_path or _infer_run_target(run_dir))
     graph_path = graph_path_for_run(run_dir, target or None)
     snap_id = make_snapshot_id(target, _hash_json(outcomes), str(run_dir.resolve()))
 
@@ -507,7 +507,7 @@ def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None) ->
     if not journal_path.exists():
         return None
 
-    target = str(target_path or "")
+    target = str(target_path or _infer_run_target(run_dir))
     graph_path = graph_path_for_run(run_dir, target or None)
 
     entries: list[dict[str, Any]] = []
@@ -572,7 +572,18 @@ def _upsert_snapshot(conn, snap_id: str, target: str, run_dir: Path, *, producer
     )
 
 
-def _infer_target(run_dir: Path, findings: list) -> str:
+def _infer_run_target(run_dir: Path) -> str:
+    """Best-effort target path for a run dir when the caller passed
+    none: the run's own lifecycle metadata first, then the checklist /
+    context-map. Ingesting a snapshot with target '' makes it
+    unmatchable by every target-scoped query — the run's memory is
+    then invisible exactly where it should answer.
+    """
+    from core.run.metadata import RUN_METADATA_FILE
+
+    meta = load_json(run_dir / RUN_METADATA_FILE)
+    if isinstance(meta, dict) and meta.get("target_path"):
+        return str(meta["target_path"])
     checklist = load_json(run_dir / "checklist.json")
     if isinstance(checklist, dict) and checklist.get("target_path"):
         return str(checklist["target_path"])
