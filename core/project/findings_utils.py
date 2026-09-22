@@ -167,10 +167,22 @@ def _load_size_gated_json(path: Path) -> Any | None:
 def load_findings_from_dir(run_dir: Path) -> list[dict[str, Any]]:
     """Load findings list from a run directory's findings.json.
 
+    Standalone ``/openant`` runs write their translated findings to
+    ``openant_findings.json`` and no top-level ``findings.json``, so the
+    unified project views (findings / report / correlate / diff) never
+    saw them. Fall back to that file when ``findings.json`` is absent —
+    fallback-only, because ``/agentic`` runs write BOTH and their
+    ``findings.json`` already contains the merged OpenAnt rows (reading
+    both would double-count). The rows are already normalised to the
+    common finding shape by the translator, so they group, dedup, and
+    render through the same machinery.
+
     Oversized files (see :data:`MAX_FINDINGS_JSON_BYTES`) are skipped
     with a warning rather than parsed wholesale into memory.
     """
     data = _load_size_gated_json(run_dir / "findings.json")
+    if data is None:
+        data = _load_size_gated_json(run_dir / "openant_findings.json")
     if data is None:
         logger.debug("No findings.json in %s", run_dir)
         return []

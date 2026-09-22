@@ -11,6 +11,7 @@ from core.project.findings_utils import (
     finding_file,
     group_findings,
     group_key,
+    load_findings_from_dir,
     load_sca_findings_from_dir,
     merge_sca_findings,
 )
@@ -251,3 +252,43 @@ class TestMergeScaFindings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLoadFindingsOpenantFallback(unittest.TestCase):
+    """Standalone /openant runs write openant_findings.json and no
+    top-level findings.json; the loader falls back so project views
+    (findings / report / correlate / diff) see them."""
+
+    @staticmethod
+    def _openant_row(finding_id: str) -> dict:
+        return {
+            "id": finding_id,
+            "file": "src/app.py",
+            "function": "handler",
+            "line": 12,
+            "vuln_type": "sql_injection",
+            "severity": "high",
+            "tool": "openant",
+        }
+
+    def test_standalone_openant_findings_are_loaded(self):
+        with TemporaryDirectory() as td:
+            run_dir = Path(td)
+            rows = [self._openant_row("OA-1")]
+            (run_dir / "openant_findings.json").write_text(
+                json.dumps(rows), encoding="utf-8")
+            got = load_findings_from_dir(run_dir)
+            self.assertEqual([f["id"] for f in got], ["OA-1"])
+
+    def test_fallback_only_findings_json_wins_when_both_exist(self):
+        # /agentic runs write both, and findings.json already contains
+        # the merged OpenAnt rows — reading both would double-count.
+        with TemporaryDirectory() as td:
+            run_dir = Path(td)
+            (run_dir / "findings.json").write_text(
+                json.dumps({"findings": [self._openant_row("MERGED-1")]}),
+                encoding="utf-8")
+            (run_dir / "openant_findings.json").write_text(
+                json.dumps([self._openant_row("OA-1")]), encoding="utf-8")
+            got = load_findings_from_dir(run_dir)
+            self.assertEqual([f["id"] for f in got], ["MERGED-1"])

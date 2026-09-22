@@ -39,6 +39,12 @@ KNOWN_FILES = {
     "verification.json",
     "orchestrated_report.json",
     "raptor_agentic_report.json",
+    # Standalone /openant runs: the findings feed merge_findings via
+    # load_findings_from_dir's openant fallback; the per-run report
+    # pair is handled like its raptor_agentic_report.json sibling.
+    "openant_findings.json",
+    "raptor_openant_report.json",
+    "openant-report.md",
 }
 
 # Patterns for known file types (matched by extension).
