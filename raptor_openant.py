@@ -9,6 +9,14 @@ schema for downstream validation and analysis.
 Usage:
     raptor_openant.py --repo /path/to/code [options]
     python3 raptor.py openant --repo /path/to/code [options]
+
+Exit codes:
+    0  the target was scanned (findings written, possibly zero)
+    1  the scan was attempted and failed (report outcome=scan_failed)
+    2  refused before any work (argparse error, --openant-core consent)
+    3  OpenAnt is not configured — the target was NOT scanned (report
+       outcome=not_configured; the lifecycle records a failed run so
+       the empty run cannot masquerade as a clean completed scan)
 """
 
 import argparse
@@ -267,14 +275,20 @@ def main() -> int:
         oa_config.workers = args.workers
 
     except RuntimeError as e:
-        # Not configured: OpenAnt is an optional add-on, so a missing
-        # openant-core checkout is a documented skip (exit 0, run
-        # completes), clearly distinct from a scan that RAN and failed
-        # (hard error, exit 1 below).
-        print(f"\n⚠️  OpenAnt not available: {_sft(str(e))}")
-        print("  Set OPENANT_CORE to the openant-core directory path.")
-        _write_empty_report(out_dir, repo_path, str(e))
-        return 0
+        # Not configured: no openant-core checkout is discoverable, so
+        # NOTHING was scanned. This must not end as a completed run —
+        # the lifecycle vocabulary has no skipped status, and a
+        # status=completed run with an empty findings file surfaces in
+        # cross-run findings views as a target that scanned clean. Exit
+        # non-zero (distinct code 3) so the lifecycle records
+        # status=failed; the report carries outcome=not_configured to
+        # distinguish it from a scan that RAN and failed (exit 1).
+        print(f"\n⚠️  OpenAnt not available: {_sft(str(e))}", file=sys.stderr)
+        print("  Install OpenAnt at <raptor-parent>/libs/openant-core "
+              "or pass --openant-core <path>.", file=sys.stderr)
+        _write_skip_report(out_dir, repo_path, str(e),
+                           outcome="not_configured")
+        return 3
 
     # ------------------------------------------------------------------
     # PHASE 1: OPENANT SCAN
@@ -295,10 +309,11 @@ def main() -> int:
     except RuntimeError as e:
         # Not-configured discovered at subprocess-env build time (the
         # core path vanished or is not an openant-core tree) — same
-        # skip semantics as the discovery failure above.
-        print(f"\n⚠️  OpenAnt not available: {_sft(str(e))}")
-        _write_empty_report(out_dir, repo_path, str(e))
-        return 0
+        # honest not-configured outcome as the discovery failure above.
+        print(f"\n⚠️  OpenAnt not available: {_sft(str(e))}", file=sys.stderr)
+        _write_skip_report(out_dir, repo_path, str(e),
+                           outcome="not_configured")
+        return 3
 
     if scan_result.get("skipped"):
         error = scan_result.get("error", "unknown error")
@@ -309,11 +324,15 @@ def main() -> int:
             # empty-findings exit 0 here would be indistinguishable
             # from a target that scanned clean.
             print(f"\n✗ OpenAnt scan failed: {_sft(error)}", file=sys.stderr)
-            _write_empty_report(out_dir, repo_path, error)
+            _write_skip_report(out_dir, repo_path, error,
+                               outcome="scan_failed")
             return 1
-        print(f"\n⚠️  OpenAnt scan skipped: {_sft(error)}")
-        _write_empty_report(out_dir, repo_path, error)
-        return 0
+        # A skipped-but-not-hard-error result also means the target was
+        # NOT scanned — same honesty rule as the not-configured paths.
+        print(f"\n⚠️  OpenAnt scan skipped: {_sft(error)}", file=sys.stderr)
+        _write_skip_report(out_dir, repo_path, error,
+                           outcome="not_configured")
+        return 3
 
     pipeline_output = scan_result.get("pipeline_output") or {}
     raw_findings = pipeline_output.get("findings") or []
@@ -391,14 +410,25 @@ def main() -> int:
     return 0
 
 
-def _write_empty_report(out_dir: Path, repo_path: Path, error: str) -> None:
-    save_json(out_dir / "openant_findings.json", [])
+def _write_skip_report(out_dir: Path, repo_path: Path, error: str,
+                       *, outcome: str) -> None:
+    """Report for a run in which the target was NOT scanned.
+
+    ``outcome`` (snake_case, machine-readable): ``not_configured`` (no
+    usable openant-core — nothing was attempted) or ``scan_failed``
+    (the scan ran and hard-failed). Deliberately writes NO
+    ``openant_findings.json``: cross-run findings views load that file
+    from every run directory, so an empty list here reads as "OpenAnt
+    scanned this target and found nothing" — a claim neither outcome
+    supports.
+    """
     save_json(out_dir / "raptor_openant_report.json", {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "repository": str(repo_path),
+        "outcome": outcome,
         "error": error,
         "phases": {"openant_scan": {"completed": False, "error": error}},
-        "outputs": {"openant_findings": str(out_dir / "openant_findings.json")},
+        "outputs": {},
     })
 
 
