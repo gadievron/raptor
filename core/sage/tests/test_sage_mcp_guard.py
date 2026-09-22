@@ -416,7 +416,9 @@ class TestIdCoercion(unittest.TestCase):
     def test_response_to_pending_request_flows_during_boot(self):
         """A response answering a real pending client request (e.g.
         tools/list issued before the init response arrived) is normal
-        interleaved traffic — never dropped by the boot window."""
+        interleaved traffic — never dropped by the boot window. With
+        no stamp there is no tools baseline, so the tools/list
+        response flows with the in-band unverified notice appended."""
         state = self._state_with_init(1)
         self.guard._watch_request(
             json.dumps({"jsonrpc": "2.0", "id": 2,
@@ -426,8 +428,26 @@ class TestIdCoercion(unittest.TestCase):
         )
         resp = {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}}
         line = json.dumps(resp).encode() + b"\n"
+        out = self.guard._filter_response(line, state, None)
+        self.assertNotEqual(out, b"", "boot window must not drop it")
+        msg = json.loads(out)
+        self.assertEqual(msg["id"], 2)
+        tools = msg["result"]["tools"]
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0]["name"],
+                         self.guard._NOTICE_TOOL_NAME)
+        # A non-tools/list response to a pending request is untouched.
+        self.guard._watch_request(
+            json.dumps({"jsonrpc": "2.0", "id": 4,
+                        "method": "prompts/list", "params": {}}
+                       ).encode() + b"\n",
+            state,
+        )
+        other = json.dumps(
+            {"jsonrpc": "2.0", "id": 4, "result": {"prompts": []}}
+        ).encode() + b"\n"
         self.assertEqual(
-            self.guard._filter_response(line, state, None), line)
+            self.guard._filter_response(other, state, None), other)
 
     def test_unhashable_id_dropped_not_crash(self):
         """S04-15: a list/dict id must not TypeError-kill the proxy."""
