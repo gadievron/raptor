@@ -1107,7 +1107,7 @@ def graph_risk_context_for_target(target: Path, *, limit: int = 8) -> str:
     """Return compact graph-backed risks for a target, if project graph exists."""
     try:
         from core.project.project import ProjectManager
-        from core.understand_graph import graph_path_for_run, threat_model_graph_context
+        from core.understand_graph import threat_model_graph_context
 
         mgr = ProjectManager()
         project = mgr.find_project_for_target(str(target))
@@ -1116,10 +1116,12 @@ def graph_risk_context_for_target(target: Path, *, limit: int = 8) -> str:
             candidate = mgr.load(active) if active else None
             if candidate and _same_path(candidate.target, target):
                 project = candidate
-        if project is not None:
-            graph_path = Path(project.output_dir) / "graph" / "raptor.graph.sqlite"
-        else:
-            graph_path = graph_path_for_run(Path("."), str(target))
+        if project is None:
+            # The process CWD is the framework dir, never the analysis
+            # target, so a CWD-relative graph probe can only ever read
+            # the wrong graph — non-project targets get no graph context.
+            return ""
+        graph_path = Path(project.output_dir) / "graph" / "raptor.graph.sqlite"
         if not graph_path.exists():
             return ""
         return threat_model_graph_context(graph_path, str(target), limit=limit)
