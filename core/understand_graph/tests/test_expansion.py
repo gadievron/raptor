@@ -6,6 +6,8 @@ from pathlib import Path
 
 from core.json import save_json
 from core.understand_graph import (
+    attack_paths,
+    build_context_map,
     dashboard_summary,
     fuzz_targets,
     graph_summary,
@@ -68,8 +70,8 @@ def _write_understand_run(run_dir: Path, target: Path) -> Path:
             {"id": "SINK-2", "name": "strcpy", "file": "server.c", "line": 5, "type": "buffer_overflow"},
         ],
         "unchecked_flows": [
-            {"entry_point": "EP-1", "sink": "SINK-1", "confidence": "high"},
-            {"entry_point": "EP-1", "sink": "SINK-2", "confidence": "medium"},
+            {"id": "FLOW-1", "entry_point": "EP-1", "sink": "SINK-1", "confidence": "high"},
+            {"id": "FLOW-2", "entry_point": "EP-1", "sink": "SINK-2", "confidence": "medium"},
         ],
     })
     graph_path = ingest_run(run_dir, str(target))
@@ -127,10 +129,18 @@ def _write_validation_outcomes(run_dir: Path) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     save_json(run_dir / "validation-outcomes.json", [
         {
-            "finding_id": "command-injection",
+            # References the unchecked flow (FLOW-1 -> SINK-1) so the
+            # VALIDATES edge identifies a sink via HAS_SINK.
+            "finding_id": "FLOW-1",
             "status": "exploitable",
             "verdict": "exploitable",
             "description": "System call reachable from network input",
+        },
+        {
+            "finding_id": "command-injection",
+            "status": "exploitable",
+            "verdict": "exploitable",
+            "description": "Scan finding confirmed",
         },
     ])
 
@@ -494,13 +504,17 @@ def test_coverage_residual_filters_validated(tmp_path):
     graph_path = _write_understand_run(run_dir, target)
 
     unvalidated = coverage_residual(graph_path, str(target))
-    assert len(unvalidated) >= 1
+    # Both flows (SINK-1, SINK-2) are unvalidated attack paths.
+    assert {p["sink"]["id"] for p in unvalidated} == {"SINK-1", "SINK-2"}
 
     _write_validation_outcomes(run_dir)
     ingest_validation_outcomes(run_dir, str(target))
 
+    # FLOW-1 -> SINK-1 was validated; the residual keeps exactly the
+    # never-validated SINK-2 path (exact join — the scan-finding
+    # outcome identifies no sink and suppresses nothing).
     after = coverage_residual(graph_path, str(target))
-    assert len(after) < len(unvalidated)
+    assert {p["sink"]["id"] for p in after} == {"SINK-2"}
 
 
 # ---------------------------------------------------------------------------
@@ -667,3 +681,58 @@ def test_rebuild_graph(tmp_path, monkeypatch):
         snapshots = conn.execute("SELECT target_path FROM snapshots").fetchall()
         assert snapshots
         assert all(row["target_path"] == str(tmp_path / "t") for row in snapshots)
+
+
+# ---------------------------------------------------------------------------
+# Snapshot scoping — no cross-target fallback, producer-scoped maps
+# ---------------------------------------------------------------------------
+
+def test_unmatched_target_never_answers_from_another_target(tmp_path):
+    """A target-scoped query for a codebase the graph has never seen
+    must return nothing — not the newest snapshot of some OTHER
+    target while claiming target scope (graph text reaches prompts)."""
+    target_a = tmp_path / "target-a"
+    run_dir = tmp_path / "run-a"
+    graph_path = _write_understand_run(run_dir, target_a)
+
+    other = tmp_path / "never-ingested"
+    other.mkdir()
+    context_map, _stale = build_context_map(graph_path, str(other))
+    assert context_map == {}
+    assert attack_paths(graph_path, str(other)) == []
+
+
+def test_context_map_survives_newer_non_understand_snapshot(tmp_path):
+    """A newer scan/validate snapshot of the SAME target carries no
+    entry-point/sink nodes; the reconstructed context map must keep
+    reading the understand snapshot instead of going blank."""
+    target = tmp_path / "target"
+    run_dir = tmp_path / "run"
+    graph_path = _write_understand_run(run_dir, target)
+
+    _write_scan_findings(run_dir)
+    ingest_scan_findings(run_dir, str(target))
+
+    context_map, _stale = build_context_map(graph_path, str(target))
+    assert context_map.get("entry_points"), (
+        "newer scan snapshot blanked the context map"
+    )
+
+
+def test_seeds_and_fuzz_targets_survive_newer_scan_snapshot(tmp_path):
+    """hypothesis_seeds / fuzz_targets read understand-shaped nodes;
+    a newer scan snapshot of the same target must not blank them."""
+    target = tmp_path / "target"
+    run_dir = tmp_path / "run"
+    graph_path = _write_understand_run(run_dir, target)
+
+    seeds_before = hypothesis_seeds(graph_path, str(target))
+    fuzz_before = fuzz_targets(graph_path, str(target))
+    assert seeds_before
+    assert fuzz_before
+
+    _write_scan_findings(run_dir)
+    ingest_scan_findings(run_dir, str(target))
+
+    assert hypothesis_seeds(graph_path, str(target)) == seeds_before
+    assert fuzz_targets(graph_path, str(target)) == fuzz_before

@@ -44,7 +44,7 @@ def build_context_map(db_path: Path, target_path: Optional[str] = None) -> tuple
     if not Path(db_path).exists():
         return {}, set()
     with open_graph(db_path) as conn:
-        snapshot = _latest_snapshot(conn, target_path)
+        snapshot = _latest_snapshot(conn, target_path, producer="understand")
         if not snapshot:
             return {}, set()
         stale_files = _stale_files_for_snapshot(conn, snapshot, target_path)
@@ -117,7 +117,7 @@ def reachable_sinks(db_path: Path, target_path: Optional[str] = None) -> list[di
     if not Path(db_path).exists():
         return []
     with open_graph(db_path) as conn:
-        snapshot = _latest_snapshot(conn, target_path)
+        snapshot = _latest_snapshot(conn, target_path, producer="understand")
         if not snapshot:
             return []
         rows = conn.execute(
@@ -364,7 +364,9 @@ def hypothesis_seeds(
     from .store import query_graph
 
     def _do(conn, target, lim):
-        snapshot = _latest_snapshot(conn, target)
+        # understand-shaped nodes only: a newer scan/validate snapshot
+        # of the same target would blank the result otherwise.
+        snapshot = _latest_snapshot(conn, target, producer="understand")
         if not snapshot:
             return []
         rows = conn.execute(
@@ -495,34 +497,56 @@ def coverage_residual(
     if not paths:
         return []
 
-    def _do(conn):
+    def _do(conn, target):
+        # Exact graph join, never substring-in-key: a VALIDATES edge
+        # whose dst is an unchecked_flow identifies the flow's sink
+        # via its HAS_SINK edge. (A short sink id or label like
+        # "system" substring-matching an unrelated
+        # scan_finding://... key used to falsely drop never-validated
+        # paths from the residual this function exists to report.
+        # VALIDATES edges pointing at scan_finding/codeql_result
+        # nodes identify no sink and never suppress a path.)
+        # Matching is by the sink's context-map ID only — sink NAMES
+        # are callee labels ("system") shared across distinct sinks,
+        # and matching them would re-open the false-suppression lane
+        # at label grain. Scoped to the queried target's snapshots
+        # when a target is given.
+        target_join = ""
+        params: list[str] = []
+        if target:
+            target_join = (
+                "JOIN snapshots s ON s.id = sk.snapshot_id "
+                "AND (s.target_path=? OR s.target_path=?) "
+            )
+            params = [str(target), str(Path(target).resolve())]
         rows = conn.execute(
-            """
-            SELECT DISTINCT dst.stable_key
-            FROM edges e
-            JOIN nodes src ON src.id = e.src_id AND src.kind = 'verified_outcome'
-            JOIN nodes dst ON dst.id = e.dst_id
-            WHERE e.kind = 'VALIDATES' AND e.stale = 0
-            """
+            f"""
+            SELECT DISTINCT sk.props_json
+            FROM edges v
+            JOIN nodes vo ON vo.id = v.src_id AND vo.kind = 'verified_outcome'
+            JOIN nodes fl ON fl.id = v.dst_id AND fl.kind = 'unchecked_flow'
+            JOIN edges hs ON hs.src_id = fl.id AND hs.kind = 'HAS_SINK'
+                         AND hs.stale = 0
+            JOIN nodes sk ON sk.id = hs.dst_id AND sk.kind = 'sink'
+            {target_join}
+            WHERE v.kind = 'VALIDATES' AND v.stale = 0
+            """,
+            params,
         ).fetchall()
-        return {row["stable_key"] for row in rows}
+        validated: set[str] = set()
+        for row in rows:
+            props = json_loads(row["props_json"])
+            sink_id = props.get("id")
+            if sink_id:
+                validated.add(str(sink_id))
+        return validated
 
-    validated_keys = query_graph(db_path, _do)
-    if validated_keys is None:
-        validated_keys = set()
-    if not validated_keys:
+    validated_sink_ids = query_graph(db_path, _do, target_path)
+    if not validated_sink_ids:
         return paths
 
     def _sink_validated(path: dict[str, Any]) -> bool:
-        sink = path.get("sink", {})
-        sink_id = str(sink.get("id") or "")
-        sink_label = str(sink.get("label") or "")
-        for vk in validated_keys:
-            if sink_id and sink_id in vk:
-                return True
-            if sink_label and sink_label in vk:
-                return True
-        return False
+        return str(path.get("sink", {}).get("id") or "") in validated_sink_ids
 
     return [p for p in paths if not _sink_validated(p)]
 
@@ -587,7 +611,9 @@ def fuzz_targets(
     )
 
     def _do(conn, target, lim):
-        snapshot = _latest_snapshot(conn, target)
+        # understand-shaped nodes only: a newer scan/validate snapshot
+        # of the same target would blank the result otherwise.
+        snapshot = _latest_snapshot(conn, target, producer="understand")
         if not snapshot:
             return []
         like_clauses = " OR ".join(["s.name LIKE ?"] * len(_DANGEROUS))
@@ -1037,19 +1063,34 @@ def _snapshot_public(snapshot) -> dict[str, Any]:
     }
 
 
-def _latest_snapshot(conn, target_path: Optional[str]):
+def _latest_snapshot(conn, target_path: Optional[str],
+                     producer: Optional[str] = None):
+    """Newest snapshot; target-scoped when a target is given.
+
+    A given-but-unmatched target returns None — NEVER another
+    target's snapshot. The old any-target fallback made target-scoped
+    queries answer for whatever codebase was ingested most recently
+    while claiming target scope, and that text reaches prompts.
+    Callers already no-op on a missing snapshot.
+
+    ``producer`` scopes to one snapshot producer. Context-map-shaped
+    consumers pass "understand": a newer scan/validate snapshot of
+    the SAME target carries no entry-point/sink nodes and would blank
+    the reconstructed map.
+    """
+    clauses: list[str] = []
+    params: list[str] = []
     if target_path:
-        rows = conn.execute(
-            """
-            SELECT * FROM snapshots
-            WHERE target_path=? OR target_path=?
-            ORDER BY created_at DESC LIMIT 1
-            """,
-            (str(target_path), str(Path(target_path).resolve())),
-        ).fetchall()
-        if rows:
-            return rows[0]
-    return conn.execute("SELECT * FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
+        clauses.append("(target_path=? OR target_path=?)")
+        params += [str(target_path), str(Path(target_path).resolve())]
+    if producer:
+        clauses.append("producer=?")
+        params.append(producer)
+    where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
+    return conn.execute(
+        f"SELECT * FROM snapshots {where}ORDER BY created_at DESC LIMIT 1",  # noqa: S608 — clauses are literals, values bound
+        tuple(params),
+    ).fetchone()
 
 
 def _stale_files_for_snapshot(conn, snapshot, target_path: Optional[str]) -> set[str]:
