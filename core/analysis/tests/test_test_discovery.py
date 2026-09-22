@@ -137,6 +137,179 @@ class TestCFamilySupport:
             assert noise not in result
 
 
+class TestPhpSupport:
+    def test_phpunit_class_convention(self, tmp_path):
+        """tests/<Name>Test.php with camelCase test methods and
+        $this->assert* assertions."""
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "UserStoreTest.php").write_text(
+            "<?php\n"
+            "class UserStoreTest extends TestCase {\n"
+            "    public function testFindUser(): void {\n"
+            "        $store = new UserStore();\n"
+            "        $user = $store->findUser(7);\n"
+            "        $this->assertSame(7, $user['id']);\n"
+            "    }\n"
+            "}\n",
+        )
+        files, skipped = _find_test_files(tmp_path)
+        assert len(files) == 1
+        assert skipped == 0
+
+        result = discover_tests(tmp_path)
+        assert "findUser" in result
+        tc = result["findUser"][0]
+        assert tc.test_function == "testFindUser"
+        assert any("assertSame" in a for a in tc.assertions)
+
+    def test_suffix_convention_outside_test_dirs(self, tmp_path):
+        """A *Test.php beside the source it tests (no tests/ dir) is
+        still discovered via the file-name convention."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ValidatorTest.php").write_text(
+            "<?php\n"
+            "class ValidatorTest extends TestCase {\n"
+            "    public function testSanitize(): void {\n"
+            "        static::assertTrue(sanitize('<b>x</b>') === 'x');\n"
+            "    }\n"
+            "}\n",
+        )
+        result = discover_tests(tmp_path)
+        assert "sanitize" in result
+        assert any(
+            "assertTrue" in a for a in result["sanitize"][0].assertions
+        )
+
+    def test_snake_case_function_and_bare_assert(self, tmp_path):
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "helpers.php").write_text(
+            "<?php\n"
+            "function test_render_widget() {\n"
+            "    $out = render_widget(['id' => 3]);\n"
+            "    assert($out !== '');\n"
+            "}\n",
+        )
+        result = discover_tests(tmp_path)
+        assert "render_widget" in result
+        assert any(
+            "assert(" in a for a in result["render_widget"][0].assertions
+        )
+
+    def test_php_constructs_not_inferred_as_targets(self, tmp_path):
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "EdgeTest.php").write_text(
+            "<?php\n"
+            "class EdgeTest extends TestCase {\n"
+            "    public function testParseHeader(): void {\n"
+            "        $h = parse_header($raw);\n"
+            "        if (isset($h['len']) && !empty($h)) {\n"
+            "            $n = count($h);\n"
+            "        }\n"
+            "        $this->assertGreaterThan(0, count($h));\n"
+            "    }\n"
+            "}\n",
+        )
+        result = discover_tests(tmp_path)
+        assert "parse_header" in result
+        for noise in ("isset", "empty", "count"):
+            assert noise not in result
+
+    def test_helper_named_tester_is_not_a_test(self, tmp_path):
+        """Only test_ / test[A-Z] openers count — a lowercase
+        continuation (tester, testify) is a helper, not a test."""
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "MiscTest.php").write_text(
+            "<?php\n"
+            "function tester($x) {\n"
+            "    return frobnicate($x);\n"
+            "}\n",
+        )
+        result = discover_tests(tmp_path)
+        assert result == {}
+
+    def test_expectation_setup_not_a_target(self, tmp_path):
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "FailTest.php").write_text(
+            "<?php\n"
+            "class FailTest extends TestCase {\n"
+            "    public function testRejectsBadKey(): void {\n"
+            "        $this->expectException(ValueError::class);\n"
+            "        decode_key('bogus');\n"
+            "    }\n"
+            "}\n",
+        )
+        result = discover_tests(tmp_path)
+        assert "decode_key" in result
+        assert "expectException" not in result
+
+    def test_php_files_not_counted_as_skipped(self, tmp_path):
+        tests = _make_unsupported_suite(tmp_path, 2)
+        (tests / "AlphaTest.php").write_text(
+            "<?php\n"
+            "class AlphaTest extends TestCase {\n"
+            "    public function testAlpha(): void {\n"
+            "        $this->assertSame(2, alpha(1));\n"
+            "    }\n"
+            "}\n",
+        )
+        files, skipped = _find_test_files(tmp_path)
+        assert [f.name for f in files] == ["AlphaTest.php"]
+        assert skipped == 2
+
+
+class TestCamelAndNoiseAreSuffixScoped:
+    """The PHPUnit camel opener and the PHP builtin stoplist apply to
+    .php files only — other ecosystems use lowercase-test camel names
+    for HELPERS (Go acceptance testAccCheck*, JS testSetup), and the
+    PHP builtin names are legitimate project functions elsewhere."""
+
+    def test_go_acceptance_helper_is_not_a_test(self, tmp_path):
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "widget_test.go").write_text(
+            "package widget\n"
+            "\n"
+            "func testAccCheckWidgetExists(n string) error {\n"
+            "\treturn errors.New(n)\n"
+            "}\n",
+        )
+        result = discover_tests(tmp_path)
+        assert result == {}
+
+    def test_python_project_count_function_kept(self, tmp_path):
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_stats.py").write_text(
+            "def test_totals():\n"
+            "    assert count(items) == 3\n"
+            "    assert sprintf(fmt, 1) == 'x'\n",
+        )
+        result = discover_tests(tmp_path)
+        assert "count" in result
+        assert "sprintf" in result
+
+    def test_php_still_gets_camel_and_noise_scoping(self, tmp_path):
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "SumTest.php").write_text(
+            "<?php\n"
+            "class SumTest extends TestCase {\n"
+            "    public function testSumRows(): void {\n"
+            "        $this->assertSame(3, sum_rows(count($rows)));\n"
+            "    }\n"
+            "}\n",
+        )
+        result = discover_tests(tmp_path)
+        assert "sum_rows" in result
+        assert "count" not in result
+
+
 class TestSummaryMessage:
     def test_zero_on_unsupported_suite_names_language_boundary(
         self, tmp_path, caplog,

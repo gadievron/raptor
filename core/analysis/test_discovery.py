@@ -42,7 +42,10 @@ def _dir_matches_test_pattern(part: str) -> bool:
         elif part.startswith((pat + "_", pat + "-")):
             return True
     return False
-_TEST_FILE_PATTERNS = re.compile(r"(?:test_\w+|_test)\.\w+$")
+# ``\w+Test.php`` is the PHPUnit file convention (class-per-file,
+# suffix mandatory for the default phpunit.xml discovery); the
+# prefix/suffix ``test`` shapes cover the rest of the ecosystems.
+_TEST_FILE_PATTERNS = re.compile(r"(?:test_\w+|_test)\.\w+$|\w+Test\.php$")
 # Languages the extraction heuristics below understand. Test-tree files
 # in other languages are counted and reported as skipped, not silently
 # dropped — a huge native test suite used to surface as "found 0 test
@@ -52,6 +55,8 @@ _SUPPORTED_EXTENSIONS = (
     ".py", ".js", ".ts", ".go", ".rs", ".rb", ".java",
     # C/C++ test conventions (regress/, tests/, *_test.c, test_*.c).
     ".c", ".cc", ".cpp", ".cxx",
+    # PHP test conventions (tests/, *Test.php, PHPUnit test* methods).
+    ".php",
 )
 _ASSERT_PATTERN = re.compile(
     # Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
@@ -64,7 +69,10 @@ _ASSERT_PATTERN = re.compile(
     # ecosystem vocabulary (like the def/fn/func keywords above), not
     # project-specific API lists.
     r"assert\(|ASSERT_\w+\s*\(|EXPECT_\w+\s*\(|ck_assert\w*\s*\(|"
-    r"CU_ASSERT\w*\s*\(|TEST_ASSERT\w*\s*\()"
+    r"CU_ASSERT\w*\s*\(|TEST_ASSERT\w*\s*\(|"
+    # PHPUnit: instance and static assertion/expectation styles.
+    r"\$this\s*->\s*(?:assert|expect)\w+\s*\(|"
+    r"(?:self|static)::assert\w+\s*\()"
     r"(.+)",
     re.MULTILINE,
 )
@@ -77,6 +85,27 @@ _TEST_FUNC_PATTERN = re.compile(
     r"(?:def|function|fn|func)\s+(test_\w+)"
     r"|(?:static\s+)?(?:void|int|bool)\s+\**(test_\w+|\w+_tests?)\s*\(",
 )
+# PHP variant: ``test[A-Z]\w*`` adds the PHPUnit camelCase method
+# convention (uppercase continuation required, so ``tester``/
+# ``testify`` helpers don't read as tests). Enabled for .php ONLY:
+# in the other ecosystems a lowercase-``test`` camel name is a helper
+# convention, not a test — Go's real tests are ``TestXxx`` and its
+# ``testAccCheck*`` acceptance helpers, JS ``testSetup``-style
+# helpers, and Python's unittest camel methods would either fabricate
+# targets or change long-standing base behaviour.
+_PHP_TEST_FUNC_PATTERN = re.compile(
+    r"(?:def|function|fn|func)\s+(test_\w+|test[A-Z]\w*)"
+    r"|(?:static\s+)?(?:void|int|bool)\s+\**(test_\w+|\w+_tests?)\s*\(",
+)
+# PHP construct / ubiquitous stdlib noise the ``name(`` heuristic
+# would misread as targets in PHPUnit test bodies. Applied to .php
+# only — in other languages these are legitimate project-function
+# names (a Python suite calling its own count() keeps the mapping).
+_PHP_CALL_NOISE = frozenset({
+    "isset", "empty", "unset", "array",
+    "count", "sprintf", "implode", "explode",
+    "in_array", "array_merge",
+})
 
 
 @dataclass
@@ -126,9 +155,12 @@ def discover_tests(
         except OSError:
             continue
 
-        test_funcs = _extract_test_functions(source)
+        suffix = test_file.suffix.lower()
+        test_funcs = _extract_test_functions(source, suffix)
         for test_func_name, test_body in test_funcs:
-            targets = _infer_target_functions(test_func_name, test_body)
+            targets = _infer_target_functions(
+                test_func_name, test_body, suffix,
+            )
             assertions = _extract_assertions(test_body)
 
             for target_fn in targets:
@@ -345,11 +377,18 @@ def _find_test_files(target: Path) -> tuple[List[Path], int]:
     return test_files[:500], skipped_unsupported
 
 
-def _extract_test_functions(source: str) -> List[tuple]:
-    """Extract test function names and their bodies from source."""
+def _extract_test_functions(source: str, suffix: str = "") -> List[tuple]:
+    """Extract test function names and their bodies from source.
+
+    ``suffix`` selects per-language openers: .php gains the PHPUnit
+    camelCase convention; every other language keeps the base set.
+    """
     results = []
 
-    func_starts = list(_TEST_FUNC_PATTERN.finditer(source))
+    pattern = (
+        _PHP_TEST_FUNC_PATTERN if suffix == ".php" else _TEST_FUNC_PATTERN
+    )
+    func_starts = list(pattern.finditer(source))
     for i, match in enumerate(func_starts):
         # Group 1: keyword-introduced definitions; group 2: C-family.
         name = match.group(1) or match.group(2)
@@ -364,16 +403,26 @@ def _extract_test_functions(source: str) -> List[tuple]:
 def _infer_target_functions(
     test_name: str,
     test_body: str,
+    file_suffix: str = "",
 ) -> List[str]:
     """Infer which function(s) a test exercises.
 
     Uses naming convention: test_<function_name>[_suffix].
+    ``file_suffix`` scopes per-language call-reference noise: the PHP
+    stoplist applies to .php bodies only, so a project function that
+    shares a PHP builtin's name (``count``, ``sprintf``) keeps its
+    call-reference mapping in every other language.
     """
     targets = []
 
     stripped = test_name
     if stripped.startswith("test_"):
         stripped = stripped[5:]
+    elif re.match(r"test[A-Z]", stripped):
+        # PHPUnit camelCase convention: testFindUser exercises
+        # findUser.
+        rest = stripped[4:]
+        stripped = rest[0].lower() + rest[1:]
     elif stripped.endswith(("_tests", "_test")):
         # C-family suffix convention (``sshkey_tests``): the driver
         # name itself is not a target; call references in the body
@@ -390,6 +439,7 @@ def _infer_target_functions(
     if stripped and len(stripped) >= 2:
         targets.append(stripped)
 
+    php = file_suffix == ".php"
     calls = re.findall(r"(\w{2,})\s*\(", test_body)
     for call in calls:
         if (
@@ -397,6 +447,11 @@ def _infer_target_functions(
             and not call.startswith("test_")
             and not call.startswith("assert")
             and not call.startswith("self")
+            # PHPUnit expectation setup ($this->expectException(...))
+            # is assertion machinery, not a target — same treatment
+            # as the assert prefix above, .php-scoped.
+            and not (php and call.startswith("expect"))
+            and not (php and call in _PHP_CALL_NOISE)
             and call not in ("print", "len", "str", "int", "list",
                              "dict", "set", "range", "type", "isinstance",
                              "hasattr", "getattr", "setattr", "super",

@@ -159,9 +159,15 @@
     "count": 13,
     "kind": "literal"
   },
+  "core/analysis/test_discovery.py::_PHP_CALL_NOISE": {
+    "count": 10,
+    "kind": "literal",
+    "note": "PHP construct/stdlib noise stoplist for test-target inference, .php-suffix-scoped so the same names stay valid call-reference targets in other languages — ecosystem names like the C libc entries inline in _infer_target_functions, not project APIs"
+  },
   "core/analysis/test_discovery.py::_infer_target_functions": {
-    "count": 37,
-    "kind": "literal"
+    "count": 55,
+    "kind": "literal",
+    "note": "call-reference stoplist: language keywords, Python builtin/pytest scaffolding, and C libc noise the name( heuristic would misread as targets — ecosystem vocabulary, not project APIs (PHP entries live in the suffix-scoped _PHP_CALL_NOISE)"
   },
   "core/analysis/typestate.py::_BLOCKING_CALLS": {
     "count": 26,
