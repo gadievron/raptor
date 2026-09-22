@@ -445,11 +445,24 @@ out/fuzz_<binary>_<timestamp>/
     secondaryNN/              -- Parallel instance results
     merged_crashes/           -- All instances' crashes (hardlinked) when a
                                  secondary found any; analysis reads this dir
-  analysis/
-    crash_*.json              -- Per-crash LLM analysis
+  analysis/                   -- LLM crash-analysis output
+    analysis/
+      <safe_id>.json          -- Per-crash LLM analysis (<safe_id> is the
+                                 AFL crash id sanitised for filesystem
+                                 use; there is no crash_ prefix)
     exploits/
-      crash_*_exploit.c       -- Generated exploit PoCs
-  witnesses/                  -- Crash Witness objects
+      <safe_id>_exploit.cpp   -- Generated exploit PoCs
+      <crash_id>_exploit_validated.c
+                              -- Refined exploit that passed
+                                 validate-and-refine (--autonomous)
+      <crash_id>_exploit_best_attempt.c
+                              -- Refinement attempted but did not
+                                 validate; best attempt kept
+                                 (--autonomous)
+    witnesses/                -- LLM-exploit Witness objects
+                                 (skipped with --no-record-witnesses)
+  witnesses/                  -- Crash Witness objects for the fuzz
+                                 crashes themselves (always recorded)
   binary-context-map.json     -- radare2 binary analysis (when enabled)
   coverage-fuzz.json          -- Function-precise runtime coverage record
                                  (gcov-instrumented targets; reaches the
