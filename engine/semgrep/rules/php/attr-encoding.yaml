@@ -1,0 +1,59 @@
+rules:
+  # CWE-116: improper encoding for the output context — the
+  # single-quoted-attribute residual of htmlspecialchars. A flags
+  # argument without ENT_QUOTES leaves the single quote unencoded, so
+  # a value emitted right after a ...=' attribute opener can close the
+  # attribute and add event-handler attributes. Both rules key on the
+  # string literal IMMEDIATELY concatenated before the call ending in
+  # an attribute opener — echoing into text content stays clean.
+  #
+  # Flagless htmlspecialchars($x) is deliberately NOT matched: since
+  # PHP 8.1 the default flags include ENT_QUOTES, so a flagless call
+  # is only unsafe on older runtimes — flagging it would FP on every
+  # modern codebase (known FN on legacy PHP instead).
+  #
+  # Known FP modes:
+  #   - The attribute opener and the encoded value assembled in
+  #     different statements (sprintf templates, heredoc) are missed
+  #     (FN); conversely a literal that merely ENDS with ='/=" outside
+  #     real HTML (e.g. building a config line) would fire (FP) —
+  #     both bounded by requiring the explicit non-ENT_QUOTES
+  #     constant expression.
+  - id: raptor.php.attr-encoding.single-quote-attr
+    languages: [php]
+    severity: MEDIUM
+    message: >
+      htmlspecialchars without ENT_QUOTES leaves single quotes
+      unencoded, but the value is emitted into a single-quoted
+      attribute (literal ends with ='). The attacker closes the
+      attribute and injects event handlers. Pass ENT_QUOTES.
+    patterns:
+      - pattern: $LIT . htmlspecialchars($X, $FLAGS, ...)
+      - metavariable-regex:
+          metavariable: $LIT
+          regex: .*='"$
+      - metavariable-regex:
+          metavariable: $FLAGS
+          regex: ^(?!.*ENT_QUOTES)ENT_\w+(\s*\|\s*ENT_\w+)*$
+    metadata:
+      cwe: ["CWE-116"]
+  - id: raptor.php.attr-encoding.noquotes-double-attr
+    languages: [php]
+    severity: MEDIUM
+    message: >
+      htmlspecialchars with ENT_NOQUOTES encodes neither quote
+      character, but the value is emitted into a double-quoted
+      attribute (literal ends with ="). The attacker closes the
+      attribute and injects event handlers. Pass ENT_QUOTES.
+    patterns:
+      - pattern: $LIT . htmlspecialchars($X, $FLAGS, ...)
+      - metavariable-regex:
+          metavariable: $LIT
+          regex: .*="'$
+      # ENT_NOQUOTES present, nothing that re-enables double-quote
+      # encoding (ENT_QUOTES or ENT_COMPAT) OR-ed in.
+      - metavariable-regex:
+          metavariable: $FLAGS
+          regex: ^(?=.*ENT_NOQUOTES)(?!.*ENT_QUOTES)(?!.*ENT_COMPAT)ENT_\w+(\s*\|\s*ENT_\w+)*$
+    metadata:
+      cwe: ["CWE-116"]

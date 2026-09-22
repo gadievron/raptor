@@ -1,0 +1,48 @@
+rules:
+  # CWE-88: argument injection — request data lands inside a shell
+  # command string with no per-argument quoting. escapeshellcmd is
+  # deliberately NOT a sanitizer: it neutralizes shell metacharacters
+  # for the command as a whole but leaves spaces and leading dashes
+  # untouched, so a value placed in argument position can still smuggle
+  # extra options/arguments ("-oProxyCommand=...", "--include=/etc/*").
+  # Only escapeshellarg (single argument, fully quoted) or a numeric
+  # cast neutralizes argument boundaries.
+  #
+  # Known FP modes:
+  #   - Values validated by means the rule cannot see (ctype_alnum
+  #     guard, preg_match allowlist in an early-return branch) still
+  #     fire — guard-shaped validation is invisible to taint mode.
+  #   - Overlaps CWE-78 command injection on purpose: an unquoted
+  #     tainted value is both; reviews emitting either class get a
+  #     verifying chain.
+  - id: raptor.php.argument-injection.exec-family
+    mode: taint
+    languages: [php]
+    severity: HIGH
+    message: >
+      Request data is concatenated into a shell command string without
+      escapeshellarg. Even under escapeshellcmd, spaces and leading
+      dashes survive, so the attacker can append extra arguments or
+      options to the invoked program (argument injection). Quote each
+      value with escapeshellarg or avoid the shell (proc_open with an
+      argument array).
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET[...]
+          - pattern: $_POST[...]
+          - pattern: $_REQUEST[...]
+          - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: escapeshellarg(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+      - pattern: (float) $X
+    pattern-sinks:
+      - pattern: exec(...)
+      - pattern: system(...)
+      - pattern: passthru(...)
+      - pattern: shell_exec(...)
+      - pattern: popen(...)
+      - pattern: proc_open(...)
+    metadata:
+      cwe: ["CWE-88"]

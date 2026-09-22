@@ -1,0 +1,57 @@
+rules:
+  # CWE-93: CRLF injection into protocol streams (SMTP/IMAP/NNTP/FTP
+  # command channels). Request data reaching a socket write without
+  # CR/LF neutralization lets the attacker terminate the current
+  # protocol command and append their own.
+  #
+  # Known FP modes:
+  #   - Any str_replace/preg_replace call on the tainted path counts
+  #     as a sanitizer even when its arguments do not touch CR/LF —
+  #     the precision-preserving direction (missed finding, never a
+  #     false confirmation of clean code).
+  #   - A socket handle received as a function parameter (not opened
+  #     via fsockopen/stream_socket_client in the same function) is
+  #     not recognised, so those writes are missed (FN, not FP).
+  - id: raptor.php.crlf-injection.socket-write
+    mode: taint
+    languages: [php]
+    severity: HIGH
+    message: >
+      Request data flows into a socket write without CR/LF
+      neutralization. Embedded "\r\n" terminates the current protocol
+      command (SMTP/IMAP/NNTP/FTP) and injects attacker-chosen
+      commands into the stream. Strip or reject CR/LF
+      (e.g. str_replace(["\r", "\n"], '', $value)) before writing.
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET[...]
+          - pattern: $_POST[...]
+          - pattern: $_REQUEST[...]
+          - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: str_replace(...)
+      - pattern: preg_replace(...)
+      - pattern: urlencode(...)
+      - pattern: rawurlencode(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+    pattern-sinks:
+      # fwrite/fputs count only when the handle is provably a network
+      # stream (opened in the same function): a plain fwrite to a file
+      # handle is log injection, a different class.
+      - patterns:
+          - pattern-either:
+              - pattern: fwrite($SOCK, ...)
+              - pattern: fputs($SOCK, ...)
+          - pattern-either:
+              - pattern-inside: |
+                  $SOCK = fsockopen(...);
+                  ...
+              - pattern-inside: |
+                  $SOCK = stream_socket_client(...);
+                  ...
+      # The socket_* API is sockets-only, no handle-origin proof needed.
+      - pattern: socket_write(...)
+      - pattern: socket_send(...)
+    metadata:
+      cwe: ["CWE-93"]

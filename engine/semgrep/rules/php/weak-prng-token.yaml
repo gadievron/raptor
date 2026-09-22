@@ -1,0 +1,56 @@
+rules:
+  # CWE-338: non-cryptographic PRNG output stored under a
+  # security-material name (token/secret/nonce/otp/csrf/api key/
+  # session id/activation/reset/pad). mt_rand/rand/uniqid/lcg_value
+  # are seedable/predictable; str_shuffle and array_rand draw from
+  # them. The name anchor is the precision gate — a bare mt_rand()
+  # (jitter, sampling, shard selection) never fires, only one whose
+  # result is stored as security material. Hashing the PRNG output
+  # (md5(uniqid(rand(), true))) does not add entropy; the deep
+  # expression match (<... ...>) sees through those wrappers.
+  #
+  # Known FP modes:
+  #   - Name-anchored: a security token stored under a neutral name
+  #     ($val, $id) is missed (FN), and a non-security variable that
+  #     happens to carry an anchor substring (e.g. $keypad_layout via
+  #     "pad") fires (FP). Bare "key" is deliberately NOT an anchor —
+  #     $cache_key/$array_key would swamp the signal; api_key/apikey
+  #     carry the security sense.
+  - id: raptor.php.weak-prng-token.var
+    languages: [php]
+    severity: HIGH
+    message: >
+      Security material is derived from a non-cryptographic PRNG
+      (mt_rand/rand/uniqid/lcg_value/str_shuffle/array_rand). These
+      sequences are predictable from a small number of outputs or a
+      guessable seed, so the token/secret is forgeable. Use
+      random_bytes()/random_int() (CSPRNG).
+    patterns:
+      - pattern: $VAR = <... $RAND(...) ...>;
+      - metavariable-regex:
+          metavariable: $RAND
+          regex: ^(mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
+      - metavariable-regex:
+          metavariable: $VAR
+          regex: (?i)\$\w*(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset|pad)\w*
+    metadata:
+      cwe: ["CWE-338"]
+  - id: raptor.php.weak-prng-token.property
+    languages: [php]
+    severity: HIGH
+    message: >
+      Security material is derived from a non-cryptographic PRNG
+      (mt_rand/rand/uniqid/lcg_value/str_shuffle/array_rand). These
+      sequences are predictable from a small number of outputs or a
+      guessable seed, so the token/secret is forgeable. Use
+      random_bytes()/random_int() (CSPRNG).
+    patterns:
+      - pattern: $OBJ->$PROP = <... $RAND(...) ...>;
+      - metavariable-regex:
+          metavariable: $RAND
+          regex: ^(mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
+      - metavariable-regex:
+          metavariable: $PROP
+          regex: (?i)\w*(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)\w*
+    metadata:
+      cwe: ["CWE-338"]

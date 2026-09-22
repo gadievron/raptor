@@ -112,6 +112,30 @@ _CASES = {
         ["gotls_pos.go"],
         ["gotls_neg.go"],
     ),
+    "php/crlf-injection.yaml": (
+        ["crlf_socket_pos.php"],
+        ["crlf_socket_neg.php"],
+    ),
+    "php/unsafe-reflection.yaml": (
+        ["unsafe_reflection_pos.php"],
+        ["unsafe_reflection_neg.php"],
+    ),
+    "php/argument-injection.yaml": (
+        ["arg_injection_pos.php"],
+        ["arg_injection_neg.php"],
+    ),
+    "php/attr-encoding.yaml": (
+        ["attr_encoding_pos.php"],
+        ["attr_encoding_neg.php"],
+    ),
+    "php/weak-prng-token.yaml": (
+        ["weak_prng_token_pos.php"],
+        ["weak_prng_token_neg.php"],
+    ),
+    "php/weak-password-hash.yaml": (
+        ["weak_password_hash_pos.php"],
+        ["weak_password_hash_neg.php"],
+    ),
 }
 
 pytestmark = pytest.mark.skipif(
@@ -210,6 +234,28 @@ def test_negative_fixtures_stay_silent(rule_rel: str):
         results = _run_semgrep(rule_file, [target])["results"]
         hits = [(r["check_id"], r["start"]["line"]) for r in results]
         assert not hits, f"{rule_rel} fired on clean fixture {fixture}: {hits}"
+
+
+def test_php_rules_silent_on_c_targets(tmp_path: Path):
+    """The php/ pack must neither fire nor load-error when a scan
+    hands it C sources — the audit dispatch is language-gated, but a
+    whole-tree /scan is not, so a C/C++ target sweeping rules/ must
+    see the PHP rules stay inert."""
+    c_file = tmp_path / "native.c"
+    c_file.write_text(
+        "#include <stdio.h>\n"
+        "int main(int argc, char **argv) {\n"
+        "    char buf[64];\n"
+        '    snprintf(buf, sizeof buf, "%s", argv[1]);\n'
+        '    printf("%s\\n", buf);\n'
+        "    return 0;\n"
+        "}\n"
+    )
+    php_rules = sorted((_RULES_DIR / "php").glob("*.yaml"))
+    assert php_rules, "php rule pack missing"
+    for rule_file in php_rules:
+        data = _run_semgrep(rule_file, [c_file])
+        assert not data["results"], f"{rule_file.name} fired on C source"
 
 
 def test_every_rule_has_cwe_metadata():

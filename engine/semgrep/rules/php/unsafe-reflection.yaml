@@ -1,0 +1,59 @@
+rules:
+  # CWE-470: unsafe reflection — attacker-selected code unit. Request
+  # data used as a variable-function name ($fn()), a callable handed
+  # to call_user_func/call_user_func_array, a dynamically instantiated
+  # class (new $cls), or a variable method name ($obj->$m()).
+  #
+  # Known FP modes:
+  #   - The in_array/array_key_exists/isset sanitizers are
+  #     by-side-effect: ANY membership check on the tainted value
+  #     downstream-clears it, including a check against an
+  #     attacker-influencable array (rare, but a check against
+  #     array_keys($_POST) would clear taint it should not).
+  #   - A deny-style check (in_array against a blocklist, taken
+  #     branch aborts on MATCH rather than on miss) also clears taint
+  #     — the rule cannot see branch polarity.
+  #   Both modes suppress findings on code that performs *some*
+  #   membership check; neither invents a finding on unchecked code.
+  - id: raptor.php.unsafe-reflection.tainted-callable
+    mode: taint
+    languages: [php]
+    severity: HIGH
+    message: >
+      Request data is used to select the code to execute (variable
+      function, call_user_func callable, dynamic class instantiation,
+      or variable method name). An attacker can invoke any defined
+      function/class, e.g. system or an autoloadable gadget class.
+      Route through a fixed allowlist (in_array($v, [...], true) or a
+      literal-keyed dispatch map) before the call.
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET[...]
+          - pattern: $_POST[...]
+          - pattern: $_REQUEST[...]
+          - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: in_array($V, ...)
+              - pattern: array_key_exists($V, ...)
+              - pattern: isset($MAP[$V])
+          - focus-metavariable: $V
+    pattern-sinks:
+      - patterns:
+          - pattern: $FN(...)
+          - focus-metavariable: $FN
+      - patterns:
+          - pattern-either:
+              - pattern: call_user_func($FN, ...)
+              - pattern: call_user_func_array($FN, ...)
+          - focus-metavariable: $FN
+      - patterns:
+          - pattern: new $CLS(...)
+          - focus-metavariable: $CLS
+      - patterns:
+          - pattern: $OBJ->$M(...)
+          - focus-metavariable: $M
+    metadata:
+      cwe: ["CWE-470"]
