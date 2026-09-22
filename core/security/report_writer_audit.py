@@ -392,6 +392,12 @@ _REPORT_WRITER_FILES = (
     "packages/sca/patch_apply.py",
     "packages/static-analysis/scanner.py",
     "raptor_agentic.py",
+    # OpenAnt workflow: openant-report.md interpolates finding fields
+    # that derive from the scanned repo (snippet = verbatim target
+    # code) and from OpenAnt's LLM output (message / vuln_name).
+    # Markdown writer — markdown_render (md_fence / md_inline /
+    # md_prose) grade; terminal lanes use sanitise_for_terminal.
+    "raptor_openant.py",
     "libexec/raptor-audit",
     "libexec/raptor-review",
     "libexec/raptor-study-loop",

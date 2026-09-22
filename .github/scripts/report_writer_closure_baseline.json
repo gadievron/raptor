@@ -723,18 +723,6 @@
     },
     "raptor_fuzzing.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
-    },
-    "raptor_openant.py::<module>::unsanitised_exception_text::e": {
-      "note": "top-level exception handler: prints str(e) from internal library calls, not LLM output"
-    },
-    "raptor_openant.py::_write_markdown_report::unsanitised_llm_value::file": {
-      "note": "openant report writer: file path from scan inventory (operator-supplied target tree)"
-    },
-    "raptor_openant.py::_write_markdown_report::unsanitised_llm_value::function": {
-      "note": "openant report writer: function name from scan inventory (source-tree symbol, not LLM text)"
-    },
-    "raptor_openant.py::main::unsanitised_llm_value::error": {
-      "note": "openant main: error carries the bounded OpenAnt stderr snippet \u2014 tool output produced over a hostile repo, not merely internal exception text (mechanism residual); triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     }
   },
   "bash_manual_audit": {

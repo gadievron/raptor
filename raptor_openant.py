@@ -22,6 +22,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from core.json import save_json
 from core.logging import get_logger
 from core.security.cc_trust import check_repo_claude_trust
+from core.security.log_sanitisation import sanitise_for_terminal as _sft
+from core.security.markdown_render import md_fence, md_inline, md_prose
 
 logger = get_logger()
 
@@ -138,7 +140,7 @@ def main() -> int:
         oa_config.workers = args.workers
 
     except RuntimeError as e:
-        print(f"\n✗ OpenAnt not available: {e}")
+        print(f"\n✗ OpenAnt not available: {_sft(str(e))}")
         print("  Set OPENANT_CORE to the openant-core directory path.")
         _write_empty_report(out_dir, repo_path, str(e))
         return 1
@@ -160,7 +162,7 @@ def main() -> int:
     )
 
     if scan_result.get("skipped"):
-        print(f"\n⚠️  OpenAnt scan skipped: {scan_result.get('error', 'unknown error')}")
+        print(f"\n⚠️  OpenAnt scan skipped: {_sft(scan_result.get('error', 'unknown error'))}")
         _write_empty_report(out_dir, repo_path, scan_result.get("error", ""))
         return 0
 
@@ -244,10 +246,18 @@ def _write_markdown_report(
     repo_path: Path,
     duration: float,
 ) -> None:
+    # Every finding-derived value below is hostile-influenced: snippet
+    # is verbatim target code (a repo being scanned is untrusted),
+    # message / vuln_name are OpenAnt LLM output that can quote target
+    # text, and file / function come from the scanned tree. Markdown
+    # slots route through core.security.markdown_render so an embedded
+    # ``` cannot terminate the snippet fence and inject live markdown
+    # (autofetch links, forged headings, prompt text for a later LLM
+    # pass reading the report) into openant-report.md.
     lines = [
         "# OpenAnt Vulnerability Report",
         "",
-        f"**Repository:** `{repo_path}`  ",
+        f"**Repository:** `{md_inline(repo_path)}`  ",
         f"**Duration:** {duration:.1f}s  ",
         f"**Findings:** {len(findings)}",
         "",
@@ -271,17 +281,24 @@ def _write_markdown_report(
             lines.append("")
             for f in group:
                 meta = f.get("metadata") or {}
-                lines.append(f"### {f.get('cwe_id', 'Unknown')} — {meta.get('vuln_name', '')} [{f.get('finding_id', '')}]")
+                lines.append(
+                    f"### {md_inline(f.get('cwe_id') or 'Unknown')} — "
+                    f"{md_inline(meta.get('vuln_name', ''))} "
+                    f"[{md_inline(f.get('finding_id', ''))}]"
+                )
                 lines.append("")
-                lines.append(f"**File:** `{f.get('file', '')}` — `{meta.get('function', '')}`  ")
-                lines.append(f"**Stage 1:** {meta.get('stage1_verdict', '')} / **Stage 2:** {meta.get('stage2_verdict', '') or 'n/a'}  ")
+                lines.append(f"**File:** `{md_inline(f.get('file', ''))}` — `{md_inline(meta.get('function', ''))}`  ")
+                lines.append(
+                    f"**Stage 1:** {md_inline(meta.get('stage1_verdict', ''))} / "
+                    f"**Stage 2:** {md_inline(meta.get('stage2_verdict', '') or 'n/a')}  "
+                )
                 lines.append("")
                 if f.get("message"):
-                    lines.append(f.get("message", ""))
+                    lines.append(md_prose(f.get("message", "")))
                     lines.append("")
                 if f.get("snippet"):
                     lines.append("```")
-                    lines.append(f.get("snippet", ""))
+                    lines.append(md_fence(f.get("snippet", "")))
                     lines.append("```")
                     lines.append("")
 
@@ -295,7 +312,11 @@ if __name__ == "__main__":
         print("\n\nInterrupted")
         sys.exit(130)
     except Exception as e:
-        print(f"\n✗ Fatal error: {e}")
+        print(f"\n✗ Fatal error: {_sft(str(e))}")
         import traceback
-        traceback.print_exc()
+        # The traceback's last line re-renders the raw exception text
+        # (which can quote hostile target content) — escape every
+        # line; the per-line loop keeps the frames readable.
+        for _tb_line in traceback.format_exc().splitlines():
+            print(_sft(_tb_line, max_len=400), file=sys.stderr)
         sys.exit(1)
