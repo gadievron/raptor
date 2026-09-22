@@ -787,7 +787,17 @@ def _run_subprocess(
             block_network=False,
             target=str(repo_path),
             output=str(out_dir),
-            readable_paths=[str(config.core_path)],
+            # tool_paths, not readable_paths: the openant core IS the
+            # toolchain being run (cmd[0] is its venv Python, cwd is
+            # the core). readable_paths is a documented no-op here
+            # (restrict_reads=False) and never enters the mount-ns
+            # bind set — so a core outside the system dirs (e.g.
+            # under the operator home via --openant-core) left cmd[0]
+            # outside the bind tree and silently demoted every run to
+            # the mountless backend. tool_paths binds the core
+            # read-only into the mount view and grants it in the
+            # Landlock read allowlist, so the mount lane engages.
+            tool_paths=[str(config.core_path)],
             caller_label="openant",
             capture_output=True,
             text=True,
