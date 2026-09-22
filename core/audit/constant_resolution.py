@@ -35,8 +35,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_IF_RE = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b", re.MULTILINE)
-_ENDIF_RE = re.compile(r"^\s*#\s*endif\b", re.MULTILINE)
+# Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+# on blank-line runs (identical match set per line).
+_IF_RE = re.compile(r"^[^\S\n]*#\s*(?:if|ifdef|ifndef)\b", re.MULTILINE)
+_ENDIF_RE = re.compile(r"^[^\S\n]*#\s*endif\b", re.MULTILINE)
 
 _IDENT_RE = re.compile(r"[a-zA-Z_]")
 _SAFE_ARITH_RE = re.compile(

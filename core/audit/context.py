@@ -2661,7 +2661,7 @@ def _extract_type_definition(
     # Must be applied against the full content block so the DOTALL
     # dot matches the newlines between braces.
     multiline_pat = re.compile(
-        rf'^\s*typedef\s+struct\s+\w*\s*\{{[^}}]*\}}\s*{re.escape(type_name)}\s*;',
+        rf'^[^\S\n]*typedef\s+struct\s+\w*\s*\{{[^}}]*\}}\s*{re.escape(type_name)}\s*;',
         re.DOTALL | re.MULTILINE,
     )
     m = multiline_pat.search(content)

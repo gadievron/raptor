@@ -1766,8 +1766,11 @@ def _auth_patterns(
             patterns.append((re.compile(rf"\b({alts})\s*\("), kind))
     return patterns
 
+# Horizontal-only indent in the three return-line patterns — the
+# MULTILINE ^\s* idiom is quadratic on blank-line runs in scanned
+# source (identical match set per line for the per-line users).
 _SUCCESS_RETURN_RE = re.compile(
-    r"^\s*return\s+(0|nil|None|True|true|EXIT_SUCCESS)\s*;?\s*$",
+    r"^[^\S\n]*return\s+(0|nil|None|True|true|EXIT_SUCCESS)\s*;?\s*$",
     re.MULTILINE,
 )
 
@@ -2073,7 +2076,7 @@ _LOCK_PAIRS = [
     (re.compile(r"\b(rcu_read_lock)\s*\("), "rcu_read_unlock"),
 ]
 
-_RETURN_RE = re.compile(r"^\s*return\b", re.MULTILINE)
+_RETURN_RE = re.compile(r"^[^\S\n]*return\b", re.MULTILINE)
 
 _GOTO_RE = re.compile(r"\bgoto\s+(\w+)\s*;")
 
@@ -2516,7 +2519,7 @@ _FREE_NAMES = frozenset({
 _FREE_RE = re.compile(r"\b(\w+_free_\w+)\s*\(")
 
 _ERROR_RETURN_RE = re.compile(
-    r"^\s*return\s+(-\w+|NULL|ERR_PTR\s*\(|err|ret|rc|status)",
+    r"^[^\S\n]*return\s+(-\w+|NULL|ERR_PTR\s*\(|err|ret|rc|status)",
     re.MULTILINE,
 )
 

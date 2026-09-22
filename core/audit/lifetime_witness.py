@@ -1627,7 +1627,7 @@ class _Analysis:
         if not func_source or len(func_source) > _MAX_SOURCE_BYTES:
             raise ProofRefusal("function source empty or too large")
         func_source = _trim_to_function(func_source)
-        if re.search(r"^\s*#", func_source, re.MULTILINE):
+        if re.search(r"^[^\S\n]*#", func_source, re.MULTILINE):
             raise ProofRefusal(
                 "preprocessor directive inside the function source"
             )

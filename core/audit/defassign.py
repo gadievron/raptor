@@ -1974,7 +1974,7 @@ def check_definite_assignment(
         return refusal(f"not a C identifier: {variable!r}")
     if not func_source or len(func_source) > _MAX_SOURCE_BYTES:
         return refusal("function source empty or too large")
-    if re.search(r"^\s*#", func_source, re.MULTILINE):
+    if re.search(r"^[^\S\n]*#", func_source, re.MULTILINE):
         return refusal(
             "preprocessor directive inside the function source"
         )

@@ -599,7 +599,7 @@ def _alias_resolved_dangerous(source: str, ext: str) -> bool:
     # hop, single pass — a longer alias chain stays unresolved (the
     # surface spelling remains visible to the per-function evidence
     # layers, so the residual is prefilter-tier).
-    for am in re.finditer(r"(?m)^\s*(\w+)\s*:?=\s*(\w+)\s*$", source):
+    for am in re.finditer(r"(?m)^[^\S\n]*(\w+)\s*:?=\s*(\w+)\s*$", source):
         local, rhs = am.group(1), am.group(2)
         if rhs in imports and local not in imports:
             imports[local] = imports[rhs]
@@ -616,11 +616,11 @@ def _alias_resolved_dangerous(source: str, ext: str) -> bool:
         flagged = False
     if flagged:
         for wm in re.finditer(
-            r'(?m)^\s*(?:import\s+)?\.\s+"([^"]+)"', source,
+            r'(?m)^[^\S\n]*(?:import\s+)?\.\s+"([^"]+)"', source,
         ):
             wildcard_modules.append(wm.group(1))
         for wm in re.finditer(
-            r"(?m)^\s*from\s+([\w.]+)\s+import\s+\*", source,
+            r"(?m)^[^\S\n]*from\s+([\w.]+)\s+import\s+\*", source,
         ):
             wildcard_modules.append(wm.group(1))
 

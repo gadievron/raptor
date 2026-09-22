@@ -309,13 +309,15 @@ def _collect_branches_ts(
 # Regex fallback
 # ---------------------------------------------------------------------------
 
+# Indent captures are HORIZONTAL-only ([^\S\n]): the MULTILINE
+# ^\s* idiom is quadratic on blank-line runs in scanned source.
 _CASE_HEADER_RE = re.compile(
-    r"^(\s*)(?:case\s+(.+?):|when\s+(.+?)\s|default\s*:)",
+    r"^([^\S\n]*)(?:case\s+(.+?):|when\s+(.+?)\s|default\s*:)",
     re.MULTILINE,
 )
 
 _IF_ELIF_RE = re.compile(
-    r"^(\s*)(if|elif|else\s+if|else)\s*[\s(:]",
+    r"^([^\S\n]*)(if|elif|else\s+if|else)\s*[\s(:]",
     re.MULTILINE,
 )
 

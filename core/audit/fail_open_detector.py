@@ -286,7 +286,7 @@ def _detect_truncation_via_ts(
             continue
         if not func_body:
             continue
-        if not re.search(r"^\s*return\b", func_body, re.MULTILINE):
+        if not re.search(r"^[^\S\n]*return\b", func_body, re.MULTILINE):
             continue
         if _TRUNCATION_SIGNAL_RE.search(func_body):
             continue
@@ -331,7 +331,7 @@ def _detect_truncation_not_signaled(
             continue
 
         # Must have a return statement (to be a function returning results)
-        if not re.search(r"^\s*return\b", body, re.MULTILINE):
+        if not re.search(r"^[^\S\n]*return\b", body, re.MULTILINE):
             continue
 
         # Check whether truncation is signaled anywhere in the body

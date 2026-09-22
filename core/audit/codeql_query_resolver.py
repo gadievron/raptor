@@ -47,7 +47,9 @@ _LANG_PREFIX_TO_PACK: dict[str, str] = {
 #: language prefix plus a slug.
 _QUERY_ID_RE = re.compile(r"^[a-z]{1,8}/[A-Za-z0-9_.-]{1,80}$")
 
-_ID_HEADER_RE = re.compile(r"^\s*\*\s*@id\s+(\S+)", re.MULTILINE)
+# Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+# on blank-line runs.
+_ID_HEADER_RE = re.compile(r"^[^\S\n]*\*\s*@id\s+(\S+)", re.MULTILINE)
 
 # One pack walk indexes every query, so even the biggest standard
 # pack costs a single bounded directory scan per process.

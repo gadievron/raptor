@@ -566,7 +566,7 @@ def _normalise_call_site(site: str) -> str:
     literals and structure so that calls with identical argument
     shapes hash together.
     """
-    text = re.sub(r"^\s*\d+\s+", "", site, flags=re.MULTILINE)
+    text = re.sub(r"^[^\S\n]*\d+[^\S\n]+", "", site, flags=re.MULTILINE)
     # Strip comments only OUTSIDE string literals: a '#' inside a
     # string arg used to truncate the call-site (losing the closing
     # quote), so f("a #b", x) and f("a #c", y) collided in

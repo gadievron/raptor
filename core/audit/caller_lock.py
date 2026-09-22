@@ -151,6 +151,17 @@ _CONDITIONAL_ACQUIRE_RE = re.compile(
     r"(?:_interruptible|_killable|_?trylock|try_lock)\b",
 )
 
+#: ``static`` at a statement start (line start or after ``;``/``{``/
+#: ``}``) — local static state in the callee body.  The gap after the
+#: statement boundary is HORIZONTAL-only ([^\S\n]): with a ``\s*``
+#: gap the MULTILINE ``^`` branch re-scans a run of blank lines from
+#: every line start inside it — quadratic on attacker-shaped function
+#: source.  A ``static`` on a later line is still matched by the
+#: ``^`` branch anchoring its own line.
+_LOCAL_STATIC_RE = re.compile(
+    r"(?:^|[;{}])[^\S\n]*static\b", re.MULTILINE,
+)
+
 #: C keywords that look call-shaped to _CALL_IDENT_RE.
 _C_CALL_KEYWORDS = frozenset({
     "if", "while", "for", "switch", "return", "sizeof", "typeof",
@@ -1006,9 +1017,8 @@ def check_caller_lock_serialization(
     # is shared across ALL lock objects — out of the witness's scope.
     # Matched at every statement start, not just line starts.
     body_start = func_source.find("{")
-    if body_start >= 0 and re.search(
-        r"(?:^|[;{}])\s*static\b", func_source[body_start:],
-        re.MULTILINE,
+    if body_start >= 0 and _LOCAL_STATIC_RE.search(
+        func_source[body_start:],
     ):
         return _refuse(
             f"{function_name} declares local static state — a "

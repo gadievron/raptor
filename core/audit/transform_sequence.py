@@ -555,8 +555,10 @@ _C_EXTS = frozenset((".c", ".h", ".cc", ".cpp", ".cxx", ".go", ".js", ".ts"))
 # are no longer recognised, so a chain can be attributed to the
 # PREVIOUS function's name — sequence recall is preferred over label
 # precision in this tree-sitter-absent fallback.
+# Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+# on blank-line runs (identical match set per line).
 _FUNC_HEADER_RE = re.compile(
-    r"^\s*(?:(?:static|inline|void|int|char|unsigned|const|auto|"
+    r"^[^\S\n]*(?:(?:static|inline|void|int|char|unsigned|const|auto|"
     r"func|function|export|async|public|private|protected|"
     r"internal|override|virtual|abstract|final|synchronized|"
     r"fn|def)\s+)+"
