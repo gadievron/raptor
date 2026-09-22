@@ -963,3 +963,61 @@ def test_default_true_json_dumps_is_clean_nonconstant_fires():
         "    print(json.dumps(e['details'], ensure_ascii=flag))\n"
     )
     assert any(v.detail == "details" for v in audit_source(nonconst))
+
+
+# ---------------------------------------------------------------------------
+# Finding-schema vocabulary: message / snippet / vuln_name
+# ---------------------------------------------------------------------------
+
+def test_rule_catches_whole_value_message_append():
+    """``lines.append(f.get("message"))`` — the whole-value append of a
+    finding's free text into a joined markdown write. The accumulator
+    sink model always saw this shape; the finding-schema field names
+    were missing from the vocabulary, so the flow produced no
+    violation at all."""
+    src = (
+        "def render(findings):\n"
+        "    lines = []\n"
+        "    for f in findings:\n"
+        "        lines.append(f.get('message', ''))\n"
+        "    return '\\n'.join(lines)\n"
+    )
+    assert any(v.detail == "message" for v in audit_source(src))
+
+
+def test_rule_catches_snippet_between_fences():
+    src = (
+        "def render(f, lines):\n"
+        "    lines.append('```')\n"
+        "    lines.append(f.get('snippet', ''))\n"
+        "    lines.append('```')\n"
+    )
+    assert any(v.detail == "snippet" for v in audit_source(src))
+
+
+def test_rule_catches_vuln_name_in_heading():
+    src = (
+        "def render(meta, lines):\n"
+        "    lines.append(f\"### {meta.get('vuln_name', '')}\")\n"
+    )
+    assert any(v.detail == "vuln_name" for v in audit_source(src))
+
+
+def test_rule_passes_md_helper_wrapped_finding_fields():
+    src = (
+        "def render(f, lines):\n"
+        "    lines.append(md_prose(f.get('message', '')))\n"
+        "    lines.append(md_fence(f.get('snippet', '')))\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_rule_accepts_safe_for_render_helper():
+    """core/threat_model's _safe_for_render chokepoint is a recognised
+    sanitiser (it builds on escape_nonprintable, satisfying the
+    name-shadow arm)."""
+    src = (
+        "def render(issue, lines):\n"
+        "    lines.append(_safe_for_render(issue.get('message', '')))\n"
+    )
+    assert audit_source(src) == []

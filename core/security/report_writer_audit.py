@@ -157,6 +157,20 @@ _LLM_DERIVED_KEYS = frozenset({
     "identifiers",
     "concepts",
     "working_dir",
+    # Finding free-text fields (normalised finding schema): message is
+    # the scanner/LLM description (SARIF message text, OpenAnt LLM
+    # output), snippet is verbatim code from the SCANNED tree, and
+    # vuln_name is an LLM-authored display name. The whole-value
+    # `lines.append(f.get("message"))` writer shape was already inside
+    # the sink model (accumulator receivers + .get() reads) — these
+    # names were simply absent from the vocabulary, so the openant
+    # report writer's raw message/snippet lanes produced no findings
+    # to baseline. Measured before widening: 10 finding-keys
+    # tree-wide, each fixed or triaged with a note — no flooding, so
+    # the widening is sound by this rule's own noise criteria.
+    "message",
+    "snippet",
+    "vuln_name",
 })
 
 
@@ -289,6 +303,10 @@ _SANITISERS = frozenset({
     "md_fence",
     "md_inline",
     "md_prose",
+    # core/threat_model's markdown-slot chokepoint (strips structural
+    # markdown chars, then escape_nonprintable, byte-capped) — every
+    # renderer lane in that module routes untrusted values through it.
+    "_safe_for_render",
 })
 
 
@@ -363,6 +381,10 @@ _REPORT_WRITER_FILES = (
     "packages/diagram/flow_trace.py",
     "packages/diagram/hypotheses.py",
     "packages/diagram/renderer.py",
+    # Exploit-feasibility error report: message/suggestion lanes can
+    # quote exception text and paths derived from the analysed binary.
+    # Terminal writer — sanitise_for_terminal grade.
+    "packages/exploit_feasibility/errors.py",
     "packages/exploitability_validation/report.py",
     # Second validation-report.md generator (the orchestrator's
     # inline _generate_report/_render_finding_lines) — same artifact,

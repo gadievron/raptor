@@ -109,6 +109,9 @@
     "core/audit/corpus/corpus_metrics.py::main::unsanitised_llm_value::format_report": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },
+    "core/audit/corpus/rule_eval.py::evaluate::unsanitised_llm_value::message": {
+      "note": "corpus evaluator: engine hit message written into the machine-readable label_rows JSON artifact (save_json lane), from local tool runs over the checked-in corpus fixtures; not a rendered operator report"
+    },
     "core/audit/corpus/rule_eval.py::format_summary::unsanitised_llm_value::reason": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"
     },
@@ -183,6 +186,9 @@
     },
     "core/audit/postcondition_verify.py::format_postcondition_context::unsanitised_llm_value::description": {
       "note": "prompt/context construction \u2014 the flagged accumulator feeds an LLM prompt, not an operator render surface; the input side is the prompt-envelope audit's territory"
+    },
+    "core/audit/prefilter.py::PrefilterResult.mechanical_evidence::unsanitised_llm_value::message": {
+      "note": "prefilter mechanical-evidence block builds LLM PROMPT text (input side, prompt_envelope territory), not an operator report surface; hit.message is the detector's rule message which can quote target source \u2014 the envelope quarantines it before the model"
     },
     "core/audit/proto_length_checker.py::format_findings::unsanitised_llm_value::evidence": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
@@ -318,27 +324,6 @@
     },
     "core/threat_model/__init__.py::prompt_context::unsanitised_llm_value::rendered": {
       "note": "title/summary route through the module's _safe_for_render/escape_nonprintable discipline (helper names outside the audit vocabulary); prompt_context feeds an LLM prompt"
-    },
-    "core/threat_model/__init__.py::render_markdown::unsanitised_llm_value::notes": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
-    },
-    "core/threat_model/__init__.py::render_report::unsanitised_llm_value::ev": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
-    },
-    "core/threat_model/__init__.py::render_report::unsanitised_llm_value::id": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
-    },
-    "core/threat_model/__init__.py::render_report::unsanitised_llm_value::status": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
-    },
-    "core/threat_model/__init__.py::render_report::unsanitised_llm_value::summary": {
-      "note": "title/summary route through the module's _safe_for_render/escape_nonprintable discipline (helper names outside the audit vocabulary); prompt_context feeds an LLM prompt"
-    },
-    "core/threat_model/__init__.py::render_report::unsanitised_llm_value::title": {
-      "note": "title/summary route through the module's _safe_for_render/escape_nonprintable discipline (helper names outside the audit vocabulary); prompt_context feeds an LLM prompt"
-    },
-    "core/threat_model/__init__.py::save_report::unsanitised_llm_value::render_report": {
-      "note": "helper-return of the same renderer whose summary/title rows are triaged above; save_report writes the md artifact"
     },
     "core/understand_graph/queries.py::threat_model_graph_context::unsanitised_llm_value::entry": {
       "note": "graph-store threat-model context: entry label from SQLite (operator-seeded graph data, not raw LLM output)"
@@ -486,6 +471,12 @@
     },
     "packages/codeql/autonomous_analyzer.py::AutonomousCodeQLAnalyzer.generate_exploit::unsanitised_llm_value::line": {
       "note": "exploit PoC source assembly \u2014 byte-exact artifact by design, not a rendered report"
+    },
+    "packages/codeql/dataflow_visualizer.py::DataflowVisualizer.generate_ascii::unsanitised_llm_value::message": {
+      "note": "routed through the function-local _clean (sanitise_string-based, byte-capped); a nested local helper def is outside the audit's sanitiser vocabulary so the wrapped read still fires"
+    },
+    "packages/codeql/dataflow_visualizer.py::DataflowVisualizer.generate_ascii::unsanitised_llm_value::snippet": {
+      "note": "routed through the function-local _clean (sanitise_string-based, byte-capped); a nested local helper def is outside the audit's sanitiser vocabulary so the wrapped read still fires"
     },
     "packages/cve_diff/cve_diff/oracle/cross_check.py::_render_markdown::unsanitised_llm_value::notes": {
       "note": "dev corpus/bench harness terminal lane over self-produced corpora; sanitise + register on next functional touch"

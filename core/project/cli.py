@@ -2232,11 +2232,13 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
         info = len([i for i in issues if i.get("severity") == "info"])
         print(f"Threat model lint: {errors} errors, {warnings} warnings, {info} info")
         for issue in issues:
+            # Lint messages can quote threat-model / context-map text
+            # (LLM-refreshed fields) — terminal lane, escape at print.
             print(
                 "  - {severity}: {field}: {message}".format(
                     severity=str(issue.get("severity", "info")).title(),
-                    field=issue.get("field", "?"),
-                    message=issue.get("message", ""),
+                    field=sanitise_for_terminal(str(issue.get("field", "?")), max_len=120),
+                    message=sanitise_for_terminal(str(issue.get("message", "")), max_len=500),
                 )
             )
         return
