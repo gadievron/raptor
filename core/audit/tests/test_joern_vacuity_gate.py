@@ -225,3 +225,160 @@ class TestEmptySinkMenu:
         assert tiers["joern"].skipped == 1
         assert "joern" in skipped
         assert srv.queries == []
+
+
+class TestProactiveValidateLeg:
+    """The CWE-dispatch verification leg is a second live-query
+    consumer: silence must pass the same coverage gate, and a vacuous
+    dispatch must not stay in the dispatch record (it is added before
+    the query runs)."""
+
+    def _outcome(self):
+        from core.audit.orchestrator import ReviewOutcome
+
+        outcome = ReviewOutcome(
+            file="src/a.c", function="f", status="suspicious",
+            body="looks off",
+            hypothesis="attacker data reaches system()", line=3,
+        )
+        outcome.review_result = {
+            "cwe": "CWE-78", "mechanism": "command injection",
+        }
+        return outcome
+
+    def _run(self, tmp_path, server):
+        from core.audit.orchestrator import _proactive_validate
+
+        _write_tree(tmp_path)
+        tiers = {"joern": TierCounters(), "smt": TierCounters(),
+                 "codeql": TierCounters(), "semgrep": TierCounters()}
+        result = _proactive_validate(
+            self._outcome(), _Cfg(tmp_path),
+            tier_counters=tiers, joern_server=server,
+        )
+        return tiers["joern"], result
+
+    def test_uncovered_function_skips_and_leaves_dispatch_record(
+            self, tmp_path):
+        tc, result = self._run(tmp_path, _Server(covers=False))
+        assert tc.refuted == 0
+        assert tc.skipped == 1
+        assert "joern" not in (result.tools_dispatched or set())
+
+    def test_covered_function_silence_still_refutes_and_ran(
+            self, tmp_path):
+        tc, result = self._run(tmp_path, _Server(covers=True))
+        assert tc.refuted == 1
+        assert tc.skipped == 0
+        assert "joern" in (result.tools_dispatched or set())
+
+
+class TestUnqueryableNames:
+    """Names outside the substitution allowlist (C++ qualified,
+    operators, $-prefixed) are definitional skips: no dial, no
+    health accounting — booking them as channel errors farms the
+    health breaker on ordinary C++ inventories."""
+
+    def test_tool_chain_leg_skips_quietly(self, tmp_path):
+        cfg = _Cfg(tmp_path)
+        cfg.joern_health = _Health()
+        _write_tree(tmp_path)
+        srv = _Server(covers=True)
+        tiers = {"joern": TierCounters()}
+        skipped: set = set()
+        _run_tool_chain(
+            [{"type": "joern", "config": {"sinks": ["memcpy"]}}],
+            config=cfg, file_path="src/a.c",
+            function_name="Foo::operator()",
+            source="int f(void){}", hypothesis="taint reaches memcpy",
+            line_start=1, tier_counters=tiers,
+            joern_server=srv, skipped_types=skipped,
+        )
+        assert tiers["joern"].skipped == 1
+        assert tiers["joern"].refuted == 0
+        assert "joern" in skipped
+        assert srv.queries == []
+        assert cfg.joern_health.errors == []
+        assert cfg.joern_health.successes == 0
+
+    def test_proactive_leg_skips_quietly(self, tmp_path):
+        from core.audit.orchestrator import (
+            ReviewOutcome,
+            _proactive_validate,
+        )
+
+        cfg = _Cfg(tmp_path)
+        cfg.joern_health = _Health()
+        _write_tree(tmp_path)
+        srv = _Server(covers=True)
+        tiers = {"joern": TierCounters(), "smt": TierCounters(),
+                 "codeql": TierCounters(), "semgrep": TierCounters()}
+        outcome = ReviewOutcome(
+            file="src/a.c", function="Foo::operator()",
+            status="suspicious", body="looks off",
+            hypothesis="attacker data reaches system()", line=3,
+        )
+        outcome.review_result = {
+            "cwe": "CWE-78", "mechanism": "command injection",
+        }
+        result = _proactive_validate(
+            outcome, cfg, tier_counters=tiers, joern_server=srv,
+        )
+        assert tiers["joern"].skipped == 1
+        assert tiers["joern"].refuted == 0
+        assert "joern" not in (result.tools_dispatched or set())
+        assert srv.queries == []
+        assert cfg.joern_health.errors == []
+
+    def test_verify_channel_leg_skips_dotted_names(self, tmp_path):
+        # The check functions require the BARE identifier shape —
+        # stricter than the query-substitution allowlist, which admits
+        # dotted qualified names ('Cls.method' on Python inventories).
+        # A dotted name reaching the check returns outcome=error and
+        # farms the breaker; the leg must quiet-skip it too.
+        cfg = _Cfg(tmp_path)
+        cfg.joern_health = _Health()
+        _write_tree(tmp_path)
+        srv = _Server(covers=True)
+        tiers = {"joern_guard": TierCounters()}
+        skipped: set = set()
+        _run_tool_chain(
+            [{"type": "joern_guard",
+              "config": {"sinks": ["memcpy"]}}],
+            config=cfg, file_path="src/a.c",
+            function_name="Cls.method",
+            source="int f(void){}",
+            hypothesis="missing bounds check on `len` before memcpy",
+            line_start=1, tier_counters=tiers,
+            joern_server=srv, skipped_types=skipped,
+        )
+        assert tiers["joern_guard"].skipped == 1
+        assert "joern_guard" in skipped
+        assert srv.queries == []
+        assert cfg.joern_health.errors == []
+
+    def test_verify_channel_leg_skips_unqueryable_names(self, tmp_path):
+        # Third live-lane consumer: joern_guard/joern_flow chain steps
+        # route through the check functions, which return outcome=error
+        # for names they cannot validate — the same breaker-farming
+        # shape; the leg must quiet-skip before dispatch.
+        cfg = _Cfg(tmp_path)
+        cfg.joern_health = _Health()
+        _write_tree(tmp_path)
+        srv = _Server(covers=True)
+        tiers = {"joern_guard": TierCounters()}
+        skipped: set = set()
+        _run_tool_chain(
+            [{"type": "joern_guard",
+              "config": {"sinks": ["memcpy"]}}],
+            config=cfg, file_path="src/a.c",
+            function_name="Foo::operator()",
+            source="int f(void){}",
+            hypothesis="missing bounds check on `len` before memcpy",
+            line_start=1, tier_counters=tiers,
+            joern_server=srv, skipped_types=skipped,
+        )
+        assert tiers["joern_guard"].skipped == 1
+        assert "joern_guard" in skipped
+        assert srv.queries == []
+        assert cfg.joern_health.errors == []

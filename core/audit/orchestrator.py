@@ -51,6 +51,7 @@ from core.smt_solver.availability import Z3_ERRORS
 from packages.checker_synthesis.library import RuleLibrary
 
 from ._util import extract_context_map_set
+from ._util import is_valid_identifier as _jv_is_valid_identifier
 from .codeql_backend import (
     build_sink_results as _build_sink_results_raw,
 )
@@ -132,6 +133,9 @@ from .joern_backend import (
 )
 from .joern_backend import (
     joern_function_in_cpg as _joern_function_in_cpg,
+)
+from .joern_backend import (
+    joern_name_queryable as _joern_name_queryable,
 )
 from .joern_backend import (
     joern_live_query as _joern_live_query,
@@ -19118,6 +19122,19 @@ def _run_tool_chain(
                                 tier_counters, "joern", "skipped",
                             )
                         continue
+                    if not _joern_name_queryable(function_name):
+                        # Unqueryable name (qualified/operator/dynamic
+                        # shapes outside the substitution allowlist):
+                        # the query would return empty without dialing
+                        # the server — a definitional skip, not a
+                        # health-accountable round trip.
+                        if skipped_types is not None:
+                            skipped_types.add(tool_type)
+                        if tier_counters:
+                            _increment_tier_dict(
+                                tier_counters, "joern", "skipped",
+                            )
+                        continue
                     _live_errors: list = []
                     _live_timeout = _joern_live_timeout_s(
                         config, joern_server,
@@ -19399,11 +19416,20 @@ def _run_tool_chain(
                 if (
                     not ident or not sink or joern_server is None
                     or _joern_dispatch_blocked(config)
+                    or not _jv_is_valid_identifier(function_name)
                 ):
                     # No binding (identifier-consistency control), no
-                    # live server, or the channel-health gate tripped
-                    # — decline, don't guess. The channel did not
-                    # look, so it must leave the dispatch record too.
+                    # live server, the channel-health gate tripped, or
+                    # a name the check functions themselves reject —
+                    # their precondition is the BARE identifier shape
+                    # (stricter than the query-substitution allowlist,
+                    # which admits dotted qualified names): a
+                    # qualified/operator/dynamic name returns
+                    # outcome=error from _validate_common and farms
+                    # the health breaker on ordinary C++/Python
+                    # inventories. Decline, don't guess. The channel
+                    # did not look, so it must leave the dispatch
+                    # record too.
                     if skipped_types is not None:
                         skipped_types.add(tool_type)
                     if tier_counters:
@@ -20274,6 +20300,12 @@ def _proactive_validate(
             if _live_timeout == 0:
                 if tier_counters:
                     _increment_tier_dict(tier_counters, "joern", "skipped")
+            elif not _joern_name_queryable(outcome.function):
+                # Unqueryable name — definitional skip, never a
+                # health-accountable round trip (see the tool-chain
+                # leg).
+                if tier_counters:
+                    _increment_tier_dict(tier_counters, "joern", "skipped")
             else:
                 ran.add("joern")
                 _live_errors: list = []
@@ -20305,10 +20337,33 @@ def _proactive_validate(
                     errored.add("joern")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "joern", "errors")
-                else:
+                elif (_cov := _joern_function_in_cpg(
+                    joern_server, outcome.function,
+                )):
                     _record_joern_outcome(config, error=False)
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "joern", "refuted")
+                else:
+                    # Silence from a CPG that does not model the
+                    # function is vacuous — the channel did NOT look.
+                    # It was added to the dispatch record before the
+                    # query, so remove it: gate resolution must not
+                    # read vacuous silence as a covering channel that
+                    # ran silent. (Same rule as the tool_chain leg.)
+                    ran.discard("joern")
+                    if _cov is False:
+                        # The probe ANSWERED — a healthy round trip.
+                        _record_joern_outcome(config, error=False)
+                    else:
+                        _record_joern_outcome(
+                            config, error=True,
+                            detail="coverage probe unanswerable",
+                            key=f"{outcome.file}:{outcome.function}",
+                        )
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "joern", "skipped",
+                        )
         elif not pre_hit and sinks and joern_server is not None:
             # Health gate tripped: the channel does not look — do NOT
             # add it to the ran/dispatch record (phantom coverage).

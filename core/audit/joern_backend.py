@@ -340,6 +340,24 @@ def _flow_sort_key(flow: Any) -> tuple:
 _FN_COVERAGE_CACHE_ATTR = "_raptor_fn_in_cpg_cache"
 
 
+def joern_name_queryable(function_name: str) -> bool:
+    """Whether *function_name* can be interpolated into a query at all.
+
+    Names outside the substitution allowlist — C++ qualified names and
+    operators, ``$``-prefixed dynamic-language names — are unqueryable
+    by construction: the live query returns empty without dialing the
+    server and the coverage probe cannot answer. That is a
+    definitional skip for the caller, never a channel-health error
+    (no transport round trip ever happened, so booking one as an
+    error farms the health breaker on ordinary C++ inventories).
+    """
+    try:
+        from packages.joern.runner import _validate_substitution_value
+    except ImportError:
+        return False
+    return bool(_validate_substitution_value(function_name))
+
+
 def joern_function_in_cpg(
     server: Any,
     function_name: str,
