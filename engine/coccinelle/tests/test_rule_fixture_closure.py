@@ -34,15 +34,10 @@ from core.audit.sweep import get_rule_role
 _RULES_DIR = Path(__file__).resolve().parents[1] / "rules"
 _TESTS_DIR = Path(__file__).resolve().parent
 
-# Fixture-coverage debt recorded 2026-09-21: verification rules that
-# existed before this gate. Burn these down — write fixtures, delete
-# the entry. Never add to this set; new rules ship with fixtures.
-_UNCOVERED_ALLOWLIST = {
-    "gfp_kernel_under_spinlock",
-    "is_err_not_ptr_err",
-    "rcu_dereference_outside_rcu",
-    "rcu_no_lock",
-}
+# Fixture-coverage debt, fully burned down 2026-09-21: every
+# verification rule now ships a fixture pair. Never add to this set;
+# new rules ship with fixtures.
+_UNCOVERED_ALLOWLIST: set[str] = set()
 
 # Positive lane: an exact-count expectation (results[0] subscripting,
 # len(...) == N with N >= 1, or list-equality against a non-empty
