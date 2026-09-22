@@ -40,10 +40,19 @@ def _run_help(path_value: str, extra_env: dict | None = None):
     }
     if extra_env:
         env.update(extra_env)
-    return subprocess.run(
-        ["bash", str(_LAUNCHER), "--help"],
-        capture_output=True, text=True, timeout=60, env=env,
-    )
+    with tempfile.TemporaryDirectory() as scratch:
+        # Isolated session-scratch base: without it the launcher
+        # falls back to the shared per-uid /tmp base, where
+        # concurrent launcher instances (parallel test workers,
+        # live sessions on the same host) race the ownership/squat
+        # checks and a losing racer exits non-zero — an
+        # environment flake, not a scrub verdict. Tests probing
+        # the scratch lane itself pass their own RAPTOR_WORK_DIR.
+        env.setdefault("RAPTOR_WORK_DIR", scratch)
+        return subprocess.run(
+            ["bash", str(_LAUNCHER), "--help"],
+            capture_output=True, text=True, timeout=60, env=env,
+        )
 
 
 class TestPathScrubWarningsEscaped(unittest.TestCase):
