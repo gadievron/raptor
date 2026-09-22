@@ -79,9 +79,6 @@
     "artifacts:orphan_reader::exploit-context.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
-    "artifacts:orphan_reader::findings-deduped.json": {
-      "note": "runtime pipeline artifact: produced by /agentic dedup step (raptor_agentic.py save_json), consumed by graph ingest (ingest.py:317) to seed finding nodes"
-    },
     "artifacts:orphan_reader::flow.jsonl": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },

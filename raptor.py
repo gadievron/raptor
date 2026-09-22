@@ -784,8 +784,10 @@ def _run_with_lifecycle(command: str, script_path: Path, args: list,
             except Exception as e:  # noqa: BLE001
                 logging.getLogger(__name__).debug("coverage summary skipped: %s", e)
 
-        # Graph store enrichment for standalone /scan and /codeql.
-        # /agentic handles its own (raptor_agentic.py complete_run block).
+        # Graph store enrichment for standalone /scan and /codeql only.
+        # /agentic does NOT ingest its findings into the graph yet —
+        # this lane is skipped for command=="agentic" and raptor_agentic.py
+        # has no ingest call of its own (wiring pending).
         if command in ("scan", "codeql"):
             import sqlite3 as _graph_sqlite3
             try:

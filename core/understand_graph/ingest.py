@@ -311,10 +311,10 @@ def ingest_scan_findings(run_dir: Path, target_path: Optional[str] = None) -> Op
     """Ingest /scan or /agentic findings into the graph.
 
     Creates scan_finding nodes linked to function nodes via AFFECTS edges.
-    Prefers findings-deduped.json (from /agentic) over findings.json.
+    Reads findings.json — the findings artifact scan-family runs write.
     """
     run_dir = Path(run_dir)
-    findings = load_json(run_dir / "findings-deduped.json") or load_json(run_dir / "findings.json")
+    findings = load_json(run_dir / "findings.json")
     if not findings or not isinstance(findings, list):
         return None
 
@@ -779,10 +779,7 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
         if (d / "checklist.json").exists() or (d / "context-map.json").exists():
             ingest_run(d, target)
 
-        findings_path = d / "findings-deduped.json"
-        if not findings_path.exists():
-            findings_path = d / "findings.json"
-        if findings_path.exists():
+        if (d / "findings.json").exists():
             ingest_scan_findings(d, target)
 
         sarif_files = list(d.glob("*.sarif")) + list(d.glob("*.sarif.json"))
