@@ -198,6 +198,7 @@ from .record import (
 from .record import (
     append_audit_log,
     load_audit_log,
+    load_verified_audit_log,
 )
 # Fail-soft by contract: every scorecard_events entry point catches
 # internally, so the call sites below never need their own guard.
@@ -6414,12 +6415,18 @@ def _bypass_findings_to_gaps(
 def _fail_open_adjudicated_sites(out_dir: Path | None) -> set:
     """(file, line) pairs the fail_open channel already adjudicated —
     the CWE-252 premise-split dedup: the census defers, the
-    fail_open verdict wins (deeper role+fallibility receipts)."""
+    fail_open verdict wins (deeper role+fallibility receipts).
+
+    Verified rows only: deferral SUPPRESSES census sites, so a
+    planted ``fail_open_check`` row in a reused/resumed out_dir would
+    silence real CWE-252 findings — the same forged-row lever the
+    resume reader closed. An unverified row fails toward NOT
+    deferring (the census reviews the site)."""
     sites: set = set()
     if not out_dir:
         return sites
     try:
-        for record in load_audit_log(out_dir):
+        for record in load_verified_audit_log(out_dir):
             if record.get("action") != "fail_open_check":
                 continue
             if record.get("outcome") not in ("confirmed", "refuted"):
@@ -7370,7 +7377,14 @@ def _run_audit_body(
         if config.resume
         else set()
     )
-    audit_log = load_audit_log(config.out_dir) if config.resume else []
+    # Verified rows only: this list feeds _check_finding_gates' G3
+    # re-recording check, where a planted prior "finding/suspicious"
+    # row demotes a genuine finding as a gate violation — authority,
+    # not telemetry. Unverified rows drop (no prior record → no G3
+    # demotion → the finding stands: fail toward not-suppressing).
+    audit_log = (
+        load_verified_audit_log(config.out_dir) if config.resume else []
+    )
 
     workqueue = []
     fn_filter = None
@@ -26689,12 +26703,20 @@ def _relog_final_statuses(
     ``strategies`` so strategy_stats never double-counts a function.
     Must run AFTER the collector flush — the buffered mid-loop rows
     have to land first for last-row-wins ordering to hold.
+
+    The join reads VERIFIED rows only: it decides which corrective
+    rows reach the log, so a planted last row matching the final
+    status would suppress the correction and leave the forged row as
+    the last word for every last-row-per-key consumer. An unverified
+    row is invisible to the join — correction decisions come from
+    genuine history alone (a legacy unstamped trail simply gets no
+    corrections, the never-logged shape).
     """
     if not config.out_dir:
         return 0
     try:
         last_status: dict[str, str] = {}
-        for entry in load_audit_log(config.out_dir):
+        for entry in load_verified_audit_log(config.out_dir):
             if entry.get("action") not in (
                 "orchestrator_review", "sweep_promotion",
             ):

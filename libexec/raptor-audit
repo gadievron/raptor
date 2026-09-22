@@ -289,7 +289,12 @@ def cmd_context(args: argparse.Namespace) -> int:
 
 def cmd_record(args: argparse.Namespace) -> int:
     from core.audit.journal import ReviewJournalEntry, append_entry, now_iso
-    from core.audit.record import _compute_hash, append_audit_log, load_audit_log
+    from core.audit.record import (
+        _compute_hash,
+        append_audit_log,
+        load_audit_log,
+        load_verified_audit_log,
+    )
 
     out_dir = Path(args.out)
     target_path = Path(args.target) if args.target else _guess_target(out_dir)
@@ -301,7 +306,25 @@ def cmd_record(args: argparse.Namespace) -> int:
 
     # G5: READ-FIRST — context must have been called for this function,
     # OR for the primary function if --related-to is set.
-    audit_log = load_audit_log(out_dir)
+    #
+    # Gate reads take VERIFIED rows only: the log is target-writable,
+    # and both gates that read it RELAX on a matching row — a planted
+    # `action=context` row satisfies READ-FIRST without any read, and
+    # a planted confirmed `action=sweep` row lets a fabricated finding
+    # through the G2 receipt check. Rows minted by this install for
+    # this run dir (the `context` / `sweep` subcommands write through
+    # append_audit_log, which stamps) verify on the happy path at no
+    # cost. Degrade: when this install has NO usable MAC key (the key
+    # file lives under the operator's data dir, outside any target
+    # write grant — an attacker cannot force this branch), rows
+    # cannot have been stamped, so requiring verification would brick
+    # the record workflow outright; the gates then fall back to the
+    # unverified read and are honest hint-tier, as before the MAC.
+    from core.coverage import journal_mac
+    if journal_mac.key_usable():
+        audit_log = load_verified_audit_log(out_dir)
+    else:
+        audit_log = load_audit_log(out_dir)
     func_key = f"{args.file}:{args.function}"
     related_to = args.related_to
     # Display spellings: file/function names come from the scanned

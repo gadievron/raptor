@@ -105,6 +105,49 @@ def load_audit_log(out_dir: Path) -> list[dict[str, Any]]:
     )
 
 
+def load_verified_audit_log(out_dir: Path) -> list[dict[str, Any]]:
+    """Rows of the audit event log whose run-bound integrity token
+    verifies — the loader for AUTHORITY-bearing consumers.
+
+    The log lives in the target-writable run dir; any consumer whose
+    read SUPPRESSES work or relaxes a gate (resume dedup, fail_open
+    census-site deferral, the end-of-run re-log join, cmd_record's
+    mechanical gates) must judge only rows this install minted for
+    THIS run directory, or a planted row steers the decision
+    (``core.coverage.journal_mac``, audit-log domain, run-bound).
+    Unstamped (pre-MAC legacy or forged), tampered, and cross-run-
+    replayed rows are dropped here and thereby fail toward
+    NOT-suppressing — the same tolerant-reader compromise as the
+    journal's unstamped tier. Telemetry consumers (strategy stats,
+    critique, gate-engagement summaries) keep reading
+    :func:`load_audit_log` directly: dropped rows keep their
+    telemetry value, they just never carry authority. The consumer
+    census test pins which readers sit on which side.
+    """
+    from core.coverage import journal_mac
+    binding = journal_mac.audit_log_run_binding(out_dir)
+    verified: list[dict[str, Any]] = []
+    dropped = 0
+    for row in load_audit_log(out_dir):
+        if not isinstance(row, dict):
+            dropped += 1
+            continue
+        if journal_mac.verify_audit_log_row(
+            row, row.get(journal_mac.TOKEN_KEY), binding,
+        ):
+            verified.append(row)
+        else:
+            dropped += 1
+    if dropped:
+        logger.warning(
+            "audit log: %d row(s) without a verifying integrity token "
+            "excluded from an authority-bearing read (telemetry "
+            "consumers still see them; affected functions/sites "
+            "re-review)", dropped,
+        )
+    return verified
+
+
 def stamp_audit_log_row(
     entry: dict[str, Any], out_dir: Path,
 ) -> dict[str, Any]:
