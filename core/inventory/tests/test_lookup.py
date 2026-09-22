@@ -277,5 +277,41 @@ class TestFileIndexCache(unittest.TestCase):
         self.assertEqual(fn["name"], "exact")
 
 
+class TestLookupFileLanguage(unittest.TestCase):
+    """File-level language lookup (hint tier for consumers)."""
+
+    CHECKLIST = {
+        "files": [
+            {"path": "src/table.inc", "language": "c", "items": []},
+            {"path": "web/header.inc", "language": "php", "items": []},
+            {"path": "src/untagged.x", "items": []},
+        ],
+    }
+
+    def test_returns_recorded_language(self):
+        from core.inventory.lookup import lookup_file_language
+        self.assertEqual(
+            lookup_file_language(self.CHECKLIST, "src/table.inc", "/repo"),
+            "c")
+        self.assertEqual(
+            lookup_file_language(self.CHECKLIST, "web/header.inc", "/repo"),
+            "php")
+
+    def test_absent_path_or_language_is_none(self):
+        from core.inventory.lookup import lookup_file_language
+        self.assertIsNone(
+            lookup_file_language(self.CHECKLIST, "src/missing.inc", "/repo"))
+        self.assertIsNone(
+            lookup_file_language(self.CHECKLIST, "src/untagged.x", "/repo"))
+
+    def test_absolute_path_without_root_is_none_not_error(self):
+        # Best-effort contract: consumers use this as a hint, so an
+        # unresolvable query yields no hint instead of raising (unlike
+        # lookup_function, whose callers must not silently lose data).
+        from core.inventory.lookup import lookup_file_language
+        self.assertIsNone(
+            lookup_file_language(self.CHECKLIST, "/abs/src/table.inc"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -11468,13 +11468,47 @@ def _launch_codeql_warmup(config: "OrchestratorConfig") -> None:
 def _codeql_db_for(config, file_path):
     """CodeQL database for ``file_path`` via the run's router.
 
+    Extensions the router's table cannot map (.inc fragments, niche
+    suffixes) get a language hint from the run's inventory, whose
+    checklist content-routes such files (``.inc`` → php/c/asm). Known
+    extensions never consult the inventory — the table is authoritative
+    there, so the hint costs nothing on the common path.
+
     Falls back to the single configured path when the router is absent
     (unit tests driving internals without run_orchestrator's
     normalisation)."""
     router = getattr(config, "codeql_db_router", None)
-    if router is not None:
-        return router.for_file(file_path)
-    return config.codeql_db_path
+    if router is None:
+        return config.codeql_db_path
+    from .codeql_dbs import CODEQL_EXT_LANGUAGE
+    hint = None
+    if file_path and (
+            Path(file_path).suffix.lower() not in CODEQL_EXT_LANGUAGE):
+        hint = _inventory_language_hint(config, file_path)
+    return router.for_file(file_path, language_hint=hint)
+
+
+def _inventory_language_hint(config, file_path: str) -> str | None:
+    """The inventory's recorded language for ``file_path``, or None.
+
+    Best-effort: a run without an inventory (or a path the checklist
+    does not carry) simply yields no hint — routing then behaves
+    exactly as before the hint existed."""
+    inventory = getattr(config, "inventory", None)
+    if not isinstance(inventory, dict) or not inventory.get("files"):
+        return None
+    try:
+        from core.inventory.lookup import lookup_file_language
+        return lookup_file_language(
+            inventory, file_path,
+            str(getattr(config, "target_path", "") or ""),
+        )
+    except Exception:  # noqa: BLE001 — a hint failure must not cost the dispatch
+        logger.debug(
+            "inventory language hint failed for %s", file_path,
+            exc_info=True,
+        )
+        return None
 
 
 def _build_prior_finding_analyses(

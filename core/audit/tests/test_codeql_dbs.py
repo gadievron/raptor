@@ -106,3 +106,104 @@ class TestRouter:
         cpp = _make_db(tmp_path, "cpp-db", "cpp")
         router = CodeqlDbRouter([str(a), str(b), str(cpp)])
         assert router.for_file("x.py") == str(a)
+
+    def test_js_extractor_extensions_route_to_javascript(self, tmp_path):
+        # The JavaScript extractor owns Vue SFCs (.vue is one of its
+        # declared file types) and the TS 4.7 module suffixes.
+        js = _make_db(tmp_path, "javascript-db", "javascript")
+        py = _make_db(tmp_path, "python-db", "python")
+        router = CodeqlDbRouter([str(js), str(py)])
+        for name in ("App.vue", "mod.mts", "mod.cts"):
+            assert router.for_file(f"src/{name}") == str(js), name
+
+
+class TestRouterLanguageHint:
+    """Checklist-language fallback for extensions outside the table."""
+
+    def test_inc_with_c_hint_routes_to_cpp_db(self, tmp_path):
+        cpp = _make_db(tmp_path, "cpp-db", "cpp")
+        py = _make_db(tmp_path, "python-db", "python")
+        router = CodeqlDbRouter([str(cpp), str(py)])
+        # The inventory content-routes .inc; its 'c' tag must
+        # normalise to the cpp extractor's database.
+        assert router.for_file(
+            "src/impl.inc", language_hint="c") == str(cpp)
+
+    def test_inc_with_c_hint_serves_sole_cpp_db(self, tmp_path):
+        cpp = _make_db(tmp_path, "cpp-db", "cpp")
+        router = CodeqlDbRouter([str(cpp)])
+        assert router.for_file(
+            "src/impl.inc", language_hint="c") == str(cpp)
+
+    def test_unknown_extension_without_hint_stays_none(self, tmp_path):
+        cpp = _make_db(tmp_path, "cpp-db", "cpp")
+        py = _make_db(tmp_path, "python-db", "python")
+        router = CodeqlDbRouter([str(cpp), str(py)])
+        assert router.for_file("src/impl.inc") is None
+        assert router.for_file("src/impl.inc", language_hint=None) is None
+
+    def test_known_extension_beats_conflicting_hint(self, tmp_path):
+        cpp = _make_db(tmp_path, "cpp-db", "cpp")
+        py = _make_db(tmp_path, "python-db", "python")
+        router = CodeqlDbRouter([str(cpp), str(py)])
+        # Extension stays authoritative: a wrong hint on a mapped
+        # suffix must not reroute the file.
+        assert router.for_file(
+            "src/a.py", language_hint="cpp") == str(py)
+
+    def test_hint_outside_extractor_languages_is_no_route(self, tmp_path):
+        cpp = _make_db(tmp_path, "cpp-db", "cpp")
+        py = _make_db(tmp_path, "python-db", "python")
+        router = CodeqlDbRouter([str(cpp), str(py)])
+        # php-routed .inc: no CodeQL extractor, no database, no serve.
+        assert router.for_file(
+            "web/header.inc", language_hint="php") is None
+
+
+class TestOrchestratorDbForHint:
+    """_codeql_db_for resolves the hint from the run's inventory."""
+
+    def _config(self, tmp_path, router, inventory):
+        from core.audit.orchestrator import OrchestratorConfig
+        config = OrchestratorConfig(
+            target_path=tmp_path, out_dir=None, codeql_db_path=None,
+        )
+        config.codeql_db_router = router
+        config.inventory = inventory
+        return config
+
+    def test_inc_checklist_c_routes_via_hint(self, tmp_path):
+        from core.audit.orchestrator import _codeql_db_for
+        cpp = _make_db(tmp_path, "cpp-db", "cpp")
+        py = _make_db(tmp_path, "python-db", "python")
+        config = self._config(
+            tmp_path,
+            CodeqlDbRouter([str(cpp), str(py)]),
+            {"files": [{"path": "src/table.inc", "language": "c"}]},
+        )
+        assert _codeql_db_for(config, "src/table.inc") == str(cpp)
+
+    def test_unknown_extension_absent_from_inventory_stays_none(
+            self, tmp_path):
+        from core.audit.orchestrator import _codeql_db_for
+        cpp = _make_db(tmp_path, "cpp-db", "cpp")
+        py = _make_db(tmp_path, "python-db", "python")
+        config = self._config(
+            tmp_path,
+            CodeqlDbRouter([str(cpp), str(py)]),
+            {"files": [{"path": "src/other.c", "language": "c"}]},
+        )
+        assert _codeql_db_for(config, "src/table.inc") is None
+
+    def test_known_extension_never_consults_inventory(self, tmp_path):
+        from core.audit.orchestrator import _codeql_db_for
+        cpp = _make_db(tmp_path, "cpp-db", "cpp")
+        py = _make_db(tmp_path, "python-db", "python")
+        # A poisoned checklist row on a mapped suffix must be inert:
+        # the extension's answer wins without a lookup.
+        config = self._config(
+            tmp_path,
+            CodeqlDbRouter([str(cpp), str(py)]),
+            {"files": [{"path": "src/a.py", "language": "cpp"}]},
+        )
+        assert _codeql_db_for(config, "src/a.py") == str(py)

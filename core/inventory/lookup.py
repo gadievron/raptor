@@ -107,6 +107,31 @@ def _file_index(checklist: dict[str, Any],
     return index
 
 
+def lookup_file_language(checklist: dict[str, Any], file_path: str,
+                         repo_root: str = "") -> str | None:
+    """The inventory's recorded language for *file_path*, or None.
+
+    Same path normalisation and cached index as
+    :func:`lookup_function`. Best-effort by contract (consumers treat
+    the answer as a hint, e.g. CodeQL database routing for extensions
+    outside the extension table): an absolute path without a
+    ``repo_root`` returns None instead of raising — a hint must never
+    guess against the caller's cwd. Duplicate entries for one path
+    (generated/handwritten splits of the same file) carry the same
+    source language, so the first entry with one wins.
+    """
+    if not checklist or not file_path:
+        return None
+    if os.path.isabs(strip_file_uri(file_path)) and not repo_root:
+        return None
+    norm_path = normalise_path(file_path, repo_root)
+    for file_entry in _file_index(checklist, repo_root).get(norm_path, ()):
+        lang = file_entry.get("language")
+        if lang:
+            return str(lang)
+    return None
+
+
 def lookup_function(checklist: dict[str, Any], file_path: str, line: int,
                     repo_root: str = "") -> dict[str, Any] | None:
     """Find the function containing a given file:line in the checklist.

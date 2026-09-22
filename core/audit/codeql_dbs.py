@@ -30,6 +30,12 @@ CODEQL_EXT_LANGUAGE = {
     ".py": "python", ".pyi": "python",
     ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript",
     ".cjs": "javascript", ".ts": "javascript", ".tsx": "javascript",
+    ".mts": "javascript", ".cts": "javascript",
+    # .vue is honest here: the CodeQL JavaScript extractor declares
+    # Vue.js single-file components as one of its own file types
+    # (codeql-extractor.yml ``file_types``), so an SFC routes to the
+    # same extractor — and database — as plain .js/.ts.
+    ".vue": "javascript",
     ".java": "java", ".kt": "java", ".kts": "java",
     ".go": "go",
     ".rb": "ruby", ".erb": "ruby",
@@ -100,6 +106,8 @@ class CodeqlDbRouter:
       (historic behaviour, kept for metadata-less stand-ins).
     - Multiple databases: strict language match via the file's
       extension; no match returns None.
+    - ``language_hint`` (a checklist/inventory language) fills in only
+      for extensions the routing table cannot map.
     """
 
     def __init__(self, paths) -> None:
@@ -137,7 +145,11 @@ class CodeqlDbRouter:
         route per-file (the IRIS tool runner, capability flags)."""
         return self.paths[0] if self.paths else None
 
-    def for_file(self, file_path: str | None) -> str | None:
+    def for_file(
+        self,
+        file_path: str | None,
+        language_hint: str | None = None,
+    ) -> str | None:
         if not self.paths:
             return None
         if not file_path:
@@ -145,6 +157,15 @@ class CodeqlDbRouter:
             # sole database; with several there is nothing to pick.
             return self.paths[0] if len(self.paths) == 1 else None
         lang = CODEQL_EXT_LANGUAGE.get(Path(file_path).suffix.lower())
+        if lang is None:
+            # A known extension stays authoritative over any hint: the
+            # table states how CodeQL's extractors ingest a suffix,
+            # while a hint (inventory content-routing, checklist
+            # metadata) is a heuristic one step removed. The hint only
+            # fills the gap for suffixes the table cannot map — .inc
+            # fragments the inventory content-routes to php/c/asm,
+            # niche extensions.
+            lang = normalise_language(language_hint)
         if len(self.paths) == 1:
             # Trade-off, both directions weighed: gating the sole
             # database on language match loses the old speculative
