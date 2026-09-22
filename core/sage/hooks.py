@@ -2199,8 +2199,11 @@ def _apply_relevance_gate(
             score += 0.2
 
         if "Study scope:" in content:
+            # Shared row-line iteration (hint-tier scoring only, but
+            # no consumer keeps a private splitter over row content).
+            from core.concepts.study import _iter_row_lines
             scope_line = [
-                ln for ln in content.split("\n")
+                ln for ln, _m in _iter_row_lines(content)
                 if ln.strip().startswith("Study scope:")
             ]
             if scope_line:

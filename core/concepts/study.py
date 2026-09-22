@@ -16,6 +16,7 @@ import contextlib
 import logging
 import os
 import re
+from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -4090,8 +4091,6 @@ def run_study(
 # ------------------------------------------------------------------
 
 
-_EVIDENCE_HASH_RE = re.compile(r"\[h=([a-f0-9]+)\]")
-
 #: Minimum normalised-name length for a non-exact (segment-boundary)
 #: concept match in the SAGE-prior lookup.  Short generic names
 #: ('walk', 'init') appear as segments inside many unrelated concept
@@ -4132,9 +4131,60 @@ def concept_matches_identifier(concept_id: str, identifier: str) -> bool:
     return re.search(rf"(?:^|_){re.escape(norm)}(?:_|$)", c_norm) is not None
 
 
+def _match_evidence_line(line: str) -> re.Match[str] | None:
+    """Anchored match of ONE physical line against the evidence grammar.
+
+    THE single extraction discipline for evidence lines. Every consumer
+    that turns SAGE row content back into evidence values — the
+    hash-set extractor (:func:`_extract_evidence_hashes`), the
+    staleness verifier (:func:`_verify_evidence_hashes`), and the
+    reconstruction parser (:func:`_reconstruct_from_sage`) — must match
+    whole stripped lines through here, and must take the lines
+    themselves from :func:`_iter_row_lines` (one canonical split — a
+    private splitter re-opens the divergence this closes). The
+    discipline is anchored per-line because reconstruction's is, and
+    reconstruction mints the Evidence objects the mechanical path acts
+    on: an unanchored multi-line scan pairs text differently (a match
+    whose ``\\s+`` separator crosses a newline swallows the NEXT
+    physical line into its observation group), so any consumer on that
+    discipline verifies a different hash set than reconstruction
+    consumes — a line it never saw can still become a minted Evidence
+    object.
+    """
+    return _SAGE_EVIDENCE_RE.match(line.strip())
+
+
+def _iter_row_lines(content: str) -> Iterator[tuple[str, re.Match[str] | None]]:
+    """Iterate a row's lines, each paired with its evidence match.
+
+    THE single line-splitting discipline, owning iteration for every
+    consumer that walks row content (the hash-set extractor, the
+    composite fold, the staleness verifier, and the reconstruction
+    parser) — none keeps a private splitter. ``str.splitlines`` is the
+    canonical split: it breaks on every character Python treats as a
+    line boundary (``\\r``, ``\\v``, ``\\f``, FS/GS/RS, NEL,
+    U+2028/U+2029), all of which the grammar's ``.`` and ``\\s`` match
+    INSIDE a line. A consumer splitting only on ``\\n`` reads one
+    PARSING line where this split reads two non-parsing fragments — a
+    hash invisible to the fold and the verifier would still be minted
+    by that consumer. On the shared split every boundary character
+    splits for everyone alike, and a fragment that no longer parses is
+    dropped by everyone alike (fail-closed).
+    """
+    for line in content.splitlines():
+        yield line, _match_evidence_line(line)
+
+
+def _iter_evidence_matches(content: str) -> Iterator[re.Match[str]]:
+    """Every evidence-line match in *content* (see :func:`_iter_row_lines`)."""
+    for _line, m in _iter_row_lines(content):
+        if m:
+            yield m
+
+
 def _extract_evidence_hashes(content: str) -> set[str]:
     """Extract per-evidence [h=...] hashes from SAGE content."""
-    return set(_EVIDENCE_HASH_RE.findall(content))
+    return {m.group(4) for m in _iter_evidence_matches(content) if m.group(4)}
 
 
 def _verify_evidence_hashes(
@@ -4155,9 +4205,14 @@ def _verify_evidence_hashes(
     from core.staleness import hash_spans
 
     # (path, line, stored_hash) triples grouped by file for one read
-    # per file.
+    # per file. Extraction is the shared per-line discipline
+    # (_iter_evidence_matches): the verifier must see exactly the
+    # evidence lines reconstruction will mint — an unanchored scan of
+    # the same content can miss a hashed line (swallowed into a
+    # neighbouring match's observation across a newline) and verify a
+    # smaller hash set than the mechanical path then consumes.
     by_file: dict[Path, list[tuple[int, str]]] = {}
-    for m in _SAGE_EVIDENCE_RE.finditer(content):
+    for m in _iter_evidence_matches(content):
         file_str = m.group(2).strip()
         line_str = m.group(3)
         stored_hash = m.group(4)
@@ -4203,12 +4258,17 @@ def _reconstruct_from_sage(
 
     Returns None if the content doesn't parse into at least one concept.
     """
-    lines = content.split("\n")
-    if not lines:
+    # Shared iteration (_iter_row_lines): reconstruction consumes the
+    # same split and the same per-line matches as the composite fold
+    # and the staleness verifier — a private split here once read one
+    # parsing line where the fold read two non-parsing fragments,
+    # minting a hash the verifier never saw.
+    row_lines = list(_iter_row_lines(content))
+    if not row_lines:
         return None
 
     # First line is "Concept [id] in scope: description"
-    first = lines[0]
+    first = row_lines[0][0]
     m = re.match(r"Concept\s+\[([^\]]+)\]\s+in\s+.+?:\s+(.*)", first)
     if not m:
         return None
@@ -4221,10 +4281,9 @@ def _reconstruct_from_sage(
     contracts: list[Contract] = []
     pending_inv_cwes: Invariant | None = None
 
-    for ln in lines[1:]:
+    for ln, ev_m in row_lines[1:]:
         stripped = ln.strip()
 
-        ev_m = _SAGE_EVIDENCE_RE.match(stripped)
         if ev_m:
             evidence.append(Evidence(
                 type=ev_m.group(1),
