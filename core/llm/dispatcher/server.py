@@ -111,10 +111,13 @@ _logger = logging.getLogger(__name__)
 #   abstraction layer. The dispatcher's INFO-level audit was a
 #   third copy of the same fact, alongside the provider's own
 #   error log — see the retry-dedupe commit for the full cluster.
-# * ``request.retry`` (status="ok"): transparent pre-response
-#   recovery of a stale pooled upstream connection. The call
-#   proceeds and the worker never observes an error, so there is no
-#   operator action; the on-disk row keeps the churn measurable.
+# * ``request.retry`` (status="attempt"): a stale pooled upstream
+#   connection died pre-response and a fresh-connection re-send is
+#   about to fire. The row is written BEFORE the retry's outcome is
+#   known (status "attempt", not "ok" — trail readers must not count
+#   these as recoveries; the following request.dispatch/request.error
+#   row carries the outcome). No operator action either way; the
+#   on-disk row keeps the churn measurable.
 _DEMOTED_AUDIT_EVENTS = frozenset({"request.dispatch", "request.retry"})
 
 
@@ -455,13 +458,46 @@ def _upstream_timeout() -> httpx.Timeout:
 # answers it). Measured with core/llm/scripts/transport-churn-measure:
 # settled closes are silently discarded at pool checkout (never seen
 # here); half-open teardown fails EVERY reuse past the far side's
-# idle threshold; and none of those requests reached upstream request
-# handling, so re-sending the buffered bytes cannot double-process.
+# idle threshold; and in those measured stale-reuse regimes none of
+# the failed requests reached upstream request handling.
 # Deliberately narrow: timeouts (the request may be mid-generation
 # upstream — re-sending double-bills) and connect errors (fresh-
 # connection failure means the provider is down; a retry only delays
-# the worker's failover) are excluded.
+# the worker's failover) are excluded. Large-body coverage rests on
+# the current httpcore behaviour of surfacing write-side failures
+# during request transmission under these read-class shapes rather
+# than WriteError (version-dependent; pinned by the large-body test
+# in test_upstream_stale_retry.py).
 _STALE_REUSE_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError)
+
+# Retry-eligibility ceiling: a failed attempt is only retried when it
+# died within this many seconds of the request being sent. The error
+# CLASS alone cannot distinguish "stale pooled connection, request
+# never read" from "upstream read the request, did billable work,
+# then died before the response head" — both surface pre-response as
+# the same exceptions. Elapsed time can: measured stale-reuse deaths
+# complete within ~2 RTTs of the send (p50 3-40ms on loopback, well
+# under a second even through a slow proxy chain), while a death that
+# follows real generation work arrives seconds-to-minutes later.
+# Both directions of this value: TOO LOW and a sluggish egress path
+# (long CONNECT chains, congested RTTs) pushes genuine stale deaths
+# past the ceiling — recovery is lost and churn bursts resurface as
+# 502s. TOO HIGH re-admits the was-probably-mid-generation retry:
+# a double-buy of upstream work, and a SigV4 signature whose age at
+# re-send approaches the provider's clock-skew window (a stale
+# X-Amz-Date turns a transient death into a terminal 403). The
+# ceiling also bounds signature age at retry, which is what keeps the
+# SigV4 re-send valid.
+_STALE_RETRY_CEILING_DEFAULT_S = 2.0
+
+
+def _stale_retry_ceiling_s() -> float:
+    """Env-tunable per request (one lookup), same knob pattern as the
+    upstream timeout."""
+    return _env_float(
+        "RAPTOR_LLM_DISPATCHER_STALE_RETRY_CEILING_S",
+        _STALE_RETRY_CEILING_DEFAULT_S,
+    )
 
 
 @contextlib.contextmanager
@@ -481,11 +517,18 @@ def _upstream_stream_with_stale_retry(
 
     Only the stream OPEN is retried — ``httpx.Client.stream`` sends
     the request and reads the response head inside ``__enter__``, so a
-    failure there is provably pre-response (zero bytes relayed to the
-    worker, no headers seen). Once the response has started, failures
-    propagate unchanged: a mid-response death may follow upstream
-    processing that already cost real money, and re-sending it here
-    would double-process (the worker layer owns that decision).
+    failure there guarantees ZERO BYTES WERE RELAYED to the worker (no
+    headers seen). That is a relay-side guarantee, not an upstream
+    one: a pre-response death can still follow upstream request
+    handling (read the request, did billable work, died before the
+    response head). The elapsed-time gate is what bounds that
+    residual: a retry fires only when the attempt died within
+    ``_stale_retry_ceiling_s()`` of the send — the window measured
+    stale-reuse deaths live in (in those regimes the request provably
+    never reached upstream handling) and far too early for real
+    generation work to be at stake. Once the response has started, or
+    the death arrives past the ceiling, failures propagate unchanged
+    to the ordinary 502 + worker-retry path.
 
     Why exactly one retry, and why NOT through the shared pool: when
     the far side idles out its connections, it condemns the whole
@@ -501,18 +544,28 @@ def _upstream_stream_with_stale_retry(
     The fresh connection costs one connection setup (through a proxy:
     a CONNECT chain + TLS) — paid only after an actual stale failure.
 
-    Safe for the SigV4 path: the retry re-sends the identical
-    prepared bytes and the signature stays valid well within the
-    provider's clock-skew window (the retry is immediate).
+    SigV4 path: the retry re-sends the identical prepared bytes, and
+    the ceiling bounds the signature's age at re-send to a couple of
+    seconds — well inside the provider's clock-skew window. Without
+    the gate, a death late in a long pre-response dwell would re-send
+    an expired X-Amz-Date and turn a transient failure into a
+    terminal 403.
     """
     oneshot: httpx.Client | None = None
     try:
         cm = client.stream(
             method, url, content=content, headers=headers, timeout=timeout,
         )
+        sent_at = time.monotonic()
         try:
             up = cm.__enter__()
         except _STALE_REUSE_ERRORS as exc:
+            if time.monotonic() - sent_at > _stale_retry_ceiling_s():
+                # Died pre-response but slowly: the upstream plausibly
+                # spent that time HANDLING the request, and a SigV4
+                # signature has aged by the same amount. Not the
+                # stale-reuse shape — no retry.
+                raise
             on_retry(exc)
             oneshot = fresh_client()
             cm = oneshot.stream(
@@ -2434,16 +2487,18 @@ def _make_request_handler(
             _usage_booked = False
 
             def _note_stale_retry(exc: Exception) -> None:
-                # Pre-response recovery is transparent to the worker;
-                # the audit row keeps the connection churn observable
-                # (how often the egress path idles out pooled
-                # connections) without an operator-facing error line.
+                # Written before the retry's outcome is known —
+                # status "attempt", never "ok" (the next dispatch/
+                # error row carries the outcome). The row keeps the
+                # connection churn observable (how often the egress
+                # path idles out pooled connections) without an
+                # operator-facing error line.
                 dispatcher._audit(AuditEvent(
                     ts=time.time(), event="request.retry",
                     peer_pid=None, peer_uid=None,
                     token_id=(rec.token_id or _short(rec.value)),
                     worker_label=rec.worker_label,
-                    status="ok",
+                    status="attempt",
                     reason=f"{type(exc).__name__} (fresh-connection retry)",
                 ))
 

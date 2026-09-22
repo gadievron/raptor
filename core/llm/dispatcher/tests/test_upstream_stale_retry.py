@@ -64,13 +64,18 @@ def _worker_token(d: LLMDispatcher) -> str:
     return token
 
 
-def _post(d: LLMDispatcher, token: str) -> httpx.Response:
+def _post(
+    d: LLMDispatcher, token: str, *, body_bytes: int = 0,
+) -> httpx.Response:
     transport = httpx.HTTPTransport(uds=str(d.socket_path))
+    payload: dict = {"model": "m", "messages": []}
+    if body_bytes:
+        payload["messages"] = [{"role": "user", "content": "x" * body_bytes}]
     with httpx.Client(transport=transport, timeout=30.0) as client:
         return client.post(
             "http://_/anthropic/v1/messages",
             headers={_TOKEN_HEADER: token},
-            content=json.dumps({"model": "m", "messages": []}),
+            content=json.dumps(payload),
         )
 
 
@@ -134,7 +139,12 @@ class TestUpstreamStaleRetry:
             time.sleep(0.9)
             second = _post(d, token)
             assert second.status_code == 200
-            assert _wait_audit(d, "request.retry")
+            retries = _wait_audit(d, "request.retry")
+            assert retries
+            # Written before the retry's outcome is known — never a
+            # recovery claim (trail readers count recoveries from the
+            # following dispatch row).
+            assert retries[0]["status"] == "attempt"
             assert not _audit_events(d, "request.error")
             counters = upstream.counters()
             # Both logical requests processed exactly once — the
@@ -162,8 +172,67 @@ class TestUpstreamStaleRetry:
             assert "RemoteProtocolError" in resp.text
             assert _wait_audit(d, "request.error")
             assert len(_audit_events(d, "request.retry")) == 1
+            counters = upstream.counters()
             # 1 initial attempt + 1 fresh-connection retry, no more.
-            assert upstream.counters()["connections"] == 2
+            assert counters["connections"] == 2
+            # ACCEPTED RESIDUAL, owned here: this upstream READ both
+            # requests before dying, so the retry double-sent a
+            # request the error class alone cannot prove unhandled.
+            # The elapsed-time ceiling bounds the exposure to deaths
+            # within a couple of seconds of the send — too early for
+            # real generation work to be at stake — and to exactly
+            # one extra send per worker attempt.
+            assert counters["requests_processed"] == 2
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_slow_pre_response_death_past_ceiling_is_not_retried(
+        self, fake_creds, tmp_path, monkeypatch,
+    ):
+        """The other direction of the retry-eligibility ceiling: a
+        pre-response death that arrives SLOWLY (the upstream read the
+        request and plausibly spent the dwell handling it — billable
+        work, and a SigV4 signature aging all the while) must not be
+        re-sent. Ordinary 502, zero retries, single upstream send."""
+        monkeypatch.setenv(
+            "RAPTOR_LLM_DISPATCHER_STALE_RETRY_CEILING_S", "0.2",
+        )
+        upstream = MockUpstream("no-response-close", response_delay_s=0.8)
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            resp = _post(d, token)
+            assert resp.status_code == 502
+            assert _wait_audit(d, "request.error")
+            assert not _audit_events(d, "request.retry")
+            counters = upstream.counters()
+            assert counters["connections"] == 1
+            # Processed exactly once — the slow death was NOT re-sent.
+            assert counters["requests_processed"] == 1
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_large_body_stale_reuse_recovers(
+        self, fake_creds, tmp_path,
+    ):
+        """Large request bodies surface half-open deaths through a
+        different wire path (the failure hits mid-request-write, not
+        on the response read) — httpcore currently maps those into
+        the same read-class shapes ``_STALE_REUSE_ERRORS`` names.
+        Version-dependent behaviour: this pins that a large-body
+        stale death still lands in the retryable set."""
+        upstream = MockUpstream("half-open", idle_s=0.4)
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token = _worker_token(d)
+            assert _post(d, token, body_bytes=262144).status_code == 200
+            time.sleep(0.9)
+            assert _post(d, token, body_bytes=262144).status_code == 200
+            assert _wait_audit(d, "request.retry")
+            assert not _audit_events(d, "request.error")
+            assert upstream.counters()["requests_processed"] == 2
         finally:
             upstream.shutdown()
             d.shutdown()
