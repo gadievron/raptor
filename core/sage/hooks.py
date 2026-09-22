@@ -1708,6 +1708,12 @@ def _concepts_domain(repo_path: str) -> str:
     return f"raptor-concepts-{_repo_key(repo_path)}"
 
 
+# Line-anchored (the horizontal-only ``[ \t]*`` form — ``^\s*`` with
+# re.M compounds across blank lines): the genuine 'Source hash:' line
+# always starts its line; see _verified_concept_rows.
+_CONCEPT_SRC_RE = re.compile(r"^[ \t]*Source hash: (\S+)", re.MULTILINE)
+
+
 def _verified_concept_rows(
     rows: list[dict[str, Any]],
     hook: str,
@@ -1731,22 +1737,50 @@ def _verified_concept_rows(
     ids are routinely semantic names ('scatter_walk_state_machine' for
     identifier 'scatter_walk'), so anything stricter drops legitimate
     self rows.
+
+    The MAC also covers only the header fields {kind, concept, src},
+    never the row body, so the third check binds the body's evidence
+    lines to the token: the composite re-folded from the row's
+    evidence-line hashes (the same per-line extraction and fold the
+    store side minted src with) must equal the MAC-bound ``src`` —
+    both-empty passes (a concept stored without parseable evidence
+    hashes). Without it, a hostile store holding a previously-issued
+    genuine header+token could splice forged evidence lines into the
+    body whose hashes match CURRENT source; the freshness verifier
+    downstream re-hashes whatever locations those lines claim, so such
+    a row would sail into the mechanical skip path. The composite
+    binds the evidence-hash multiset only — see the scope note at the
+    check site.
     """
-    if expected_concept is not None:
-        # Lazy: only the study pipeline passes expected_concept, and it
-        # has already imported the module.
-        from core.concepts.study import concept_matches_identifier
+    # Lazy: core.concepts.study imports this module back (call-time in
+    # both directions, so neither import can cycle at load).
+    from core.concepts.study import (
+        concept_matches_identifier,
+        stamped_evidence_composite,
+    )
     out: list[dict[str, Any]] = []
     for row in rows or []:
         clean, token = rowmac.strip(str(row.get("content") or ""))
         m_id = re.search(r"Concept \[([^\]]+)\]", clean)
-        m_src = re.search(r"Source hash: (\S+)", clean)
+        # The genuine 'Source hash:' line is the LAST one the writer
+        # emits, and it starts its line; take the last line-anchored
+        # occurrence so a row whose earlier prose merely mentions
+        # 'Source hash: ...' at a line start cannot shadow it (an
+        # unanchored first-occurrence search let exactly that break MAC
+        # verification of a legitimate row). Inline mentions never
+        # start a line: the writer folds newlines out of field values.
+        src_matches = _CONCEPT_SRC_RE.findall(clean)
         concept = m_id.group(1) if m_id else ""
         fields = {
             "kind": "study_concept",
             "concept": concept,
-            "src": m_src.group(1) if m_src else "",
+            "src": src_matches[-1] if src_matches else "",
         }
+        # Gate order: MAC first (authorship — everything after trusts
+        # the header fields only once the token verifies), then
+        # addressee (is this row for the querying identifier), then
+        # evidence composite (is the body's evidence what the token
+        # was minted for).
         if not _row_mac_ok(hook, fields, token):
             continue
         if expected_concept is not None and not concept_matches_identifier(
@@ -1755,6 +1789,34 @@ def _verified_concept_rows(
             logger.debug(
                 "SAGE %s: recall row is for concept %r, not %r — dropped from mechanical path",
                 hook, concept, expected_concept,
+            )
+            continue
+        # Evidence-composite binding. Scope: this binds WHICH evidence
+        # hashes the row carries (as a multiset), not the surrounding
+        # text — observation prose, invariants, contracts, and
+        # HASHLESS evidence lines stay outside both the MAC and the
+        # composite. A hashless forged evidence line is not mere seed
+        # prose: reconstruction still mints it as an Evidence object
+        # (file:line + observation) inside a skipped concept; only the
+        # hashed lines are pinned, and the freshness verifier
+        # separately constrains each hashed line's file:line to a
+        # location whose current content matches its hash. Recall-side
+        # recomputation rather than a body hash in the MAC fields, so
+        # every already-stored stamped row keeps its mechanical effect.
+        recomputed = stamped_evidence_composite(clean)
+        src = fields["src"]
+        # Rows minted before the composite went full-length carry a
+        # 12-hex prefix of the same fold; prefix-compare for exactly
+        # that src length keeps them verifying. No downgrade surface:
+        # src is MAC-bound, so an attacker cannot shorten a full-length
+        # row's src without breaking the MAC.
+        expected = recomputed[:12] if len(src) == 12 else recomputed
+        if expected != src:
+            logger.debug(
+                "SAGE %s: recall row evidence composite %.16s does not "
+                "match MAC-bound source hash %.16s (concept %.80r) — "
+                "mechanical use demoted to hint",
+                hook, recomputed, src, concept,
             )
             continue
         out.append(row)

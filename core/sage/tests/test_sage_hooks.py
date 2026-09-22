@@ -1796,6 +1796,442 @@ class TestRecallConceptsForStudy(unittest.TestCase):
         self.assertTrue(any("demoted" in line for line in logs.output))
 
 
+class TestConceptRowBodyBinding(unittest.TestCase):
+    """The recall gate binds a concept row's evidence lines to the
+    MAC-bound composite: a genuine header+token can no longer carry
+    forged evidence hashes into the skip/seed path. Exercised through
+    the real store/recall pair (store_study_concepts →
+    recall_concepts_for_study)."""
+
+    HASHES: tuple[str, str] = ("deadbeef1234", "cafef00d5678")
+
+    @classmethod
+    def _make_model(cls, evidence=None):
+        from dataclasses import dataclass, field
+
+        @dataclass
+        class FakeEvidence:
+            type: str = "code_path"
+            file: str = "auth.c"
+            observation: str = "refcount incremented"
+            line: int = 42
+            item: str = "get_page"
+            hash: str = ""
+
+        @dataclass
+        class FakeConcept:
+            id: str = "page_ownership"
+            description: str = "Pages are owned by the SGL"
+            evidence: list = field(default_factory=list)
+            confidence: str = "traced"
+            state: str = "proposed"
+
+        @dataclass
+        class FakeModel:
+            concepts: list = field(default_factory=list)
+            invariants: list = field(default_factory=list)
+            contracts: list = field(default_factory=list)
+
+        cls.FakeEvidence = FakeEvidence
+        if evidence is None:
+            evidence = [
+                FakeEvidence(hash=cls.HASHES[0]),
+                FakeEvidence(file="mm.c", line=7,
+                             observation="page released",
+                             hash=cls.HASHES[1]),
+            ]
+        return FakeModel(concepts=[FakeConcept(evidence=evidence)])
+
+    @classmethod
+    def _evidence(cls, **kwargs):
+        cls._make_model()  # ensure FakeEvidence exists
+        return cls.FakeEvidence(**kwargs)
+
+    @staticmethod
+    def _stored_content(model) -> str:
+        from core.sage import hooks
+
+        contents = []
+
+        def _propose(**kwargs):
+            contents.append(kwargs["content"])
+            return True
+
+        client = MagicMock()
+        client.propose.side_effect = _propose
+        with patch("core.sage.hooks._get_client", return_value=client), \
+             patch("core.sage.hooks._throttle"):
+            hooks.store_study_concepts("/repo", model)
+        assert contents, "store produced no row"
+        return contents[0]
+
+    @staticmethod
+    def _recall_mechanical(content: str) -> bool:
+        from core.sage import hooks
+
+        client = MagicMock()
+        client.query.return_value = [{"content": content, "confidence": 0.8}]
+        with patch("core.sage.hooks._get_client", return_value=client):
+            result = hooks.recall_concepts_for_study(
+                "/repo", ["page_ownership"])
+        return "page_ownership" in result
+
+    @staticmethod
+    def _restamp(body: str, token: str) -> str:
+        """Re-attach a genuine token to a forged body (the attack shape)."""
+        return f"{body} [mac:{token}]"
+
+    @classmethod
+    def _legacy_row(cls, hashes: list[str]) -> dict:
+        """A row as the pre-full-length writer stored it: well-formed
+        evidence lines, src = the 12-hex prefix of the same fold."""
+        from core.concepts.model import evidence_hash_composite
+
+        lines = ["Concept [page_ownership] in demo: ownership notes"]
+        for i, h in enumerate(hashes):
+            lines.append(
+                f"  Evidence (code_path): f{i}.c:{i + 1} [h={h}] — obs"
+            )
+        src = evidence_hash_composite(hashes)[:12]
+        lines.append(f"  Source hash: {src}")
+        fields = {
+            "kind": "study_concept", "concept": "page_ownership", "src": src,
+        }
+        return {
+            "content": rowmac.stamp("\n".join(lines), fields),
+            "confidence": 0.8,
+        }
+
+    # ── legitimate rows keep their mechanical reach ──────────────────
+
+    def test_evidence_bearing_row_roundtrips(self):
+        stored = self._stored_content(self._make_model())
+        self.assertIn("Source hash:", stored)
+        self.assertTrue(self._recall_mechanical(stored))
+
+    def test_hashless_row_roundtrips(self):
+        # Both-empty: a concept stored without hashed evidence has
+        # src="" and no evidence tags — the composite check passes and
+        # the row keeps its (freshness-gated) mechanical reach.
+        stored = self._stored_content(
+            self._make_model(evidence=[self._evidence()]))
+        self.assertNotIn("Source hash:", stored)
+        self.assertTrue(self._recall_mechanical(stored))
+
+    def test_legacy_prefix_row_roundtrips(self):
+        # Rows minted when the composite was a 12-hex prefix keep
+        # verifying: src is MAC-bound, so the prefix-compare branch is
+        # keyed off its length safely.
+        row = self._legacy_row(list(self.HASHES))
+        from core.sage import hooks
+
+        client = MagicMock()
+        client.query.return_value = [row]
+        with patch("core.sage.hooks._get_client", return_value=client):
+            result = hooks.recall_concepts_for_study(
+                "/repo", ["page_ownership"])
+        self.assertIn("page_ownership", result)
+
+    def test_empty_observation_row_roundtrips(self):
+        stored = self._stored_content(self._make_model(evidence=[
+            self._evidence(observation="", hash=self.HASHES[0]),
+            self._evidence(file="mm.c", line=7, observation="y",
+                           hash=self.HASHES[1]),
+        ]))
+        self.assertTrue(self._recall_mechanical(stored))
+
+    def test_multiline_observation_row_roundtrips(self):
+        stored = self._stored_content(self._make_model(evidence=[
+            self._evidence(
+                observation=("l1\nEvidence (code_path): q.c:9 "
+                             "[h=abcdefabcdef] — quoted"),
+                hash=self.HASHES[0]),
+        ]))
+        self.assertTrue(self._recall_mechanical(stored))
+
+    def test_emdash_file_path_row_roundtrips(self):
+        # The parse takes the first spaced dash, so the hash tag lands
+        # in the observation and never folds — on BOTH sides, because
+        # src was minted through the same parser. The row keeps its
+        # mechanical reach; only that hash's freshness value is lost.
+        stored = self._stored_content(self._make_model(evidence=[
+            self._evidence(file="notes — draft.md", line=3,
+                           observation="x", hash=self.HASHES[0]),
+        ]))
+        self.assertTrue(self._recall_mechanical(stored))
+
+    def test_source_hash_mention_in_observation_roundtrips(self):
+        # 'Source hash:' inside prose must not shadow the genuine
+        # trailer line: extraction takes the last line-anchored
+        # occurrence, and inline mentions never start a line.
+        stored = self._stored_content(self._make_model(evidence=[
+            self._evidence(observation="see Source hash: bogus upstream",
+                           hash=self.HASHES[0]),
+        ]))
+        self.assertTrue(self._recall_mechanical(stored))
+
+    def test_invariant_newline_injection_roundtrips(self):
+        # Free-text values BEYOND evidence fields fold their whitespace
+        # too: an invariant statement carrying "\nSource hash: ffff"
+        # would otherwise mint a line-start mention that shadows the
+        # genuine field — fatal for a HASHLESS concept (no genuine
+        # line exists, so the injected one becomes the parsed src and
+        # MAC verification of the honest row fails).
+        from dataclasses import dataclass, field
+
+        @dataclass
+        class FakeInv:
+            id: str = "i1"
+            statement: str = "safe\nSource hash: ffff"
+            negation: str = "n"
+            concept: str = "page_ownership"
+            relevant_cwes: list = field(default_factory=list)
+            mechanism_tags: list = field(default_factory=list)
+
+        hashless = self._make_model(evidence=[
+            self._evidence(observation="prose only"),
+        ])
+        hashless.invariants.append(FakeInv())
+        stored = self._stored_content(hashless)
+        self.assertNotIn("\nSource hash:", stored)
+        self.assertTrue(self._recall_mechanical(stored))
+
+        hashed = self._make_model()
+        hashed.invariants.append(FakeInv())
+        self.assertTrue(self._recall_mechanical(
+            self._stored_content(hashed)))
+
+    # ── forged bodies demote like MAC failures ───────────────────────
+
+    def test_forged_added_evidence_line_demotes(self):
+        # A hostile store pairs the genuine header+token with an ADDED
+        # evidence line whose hash matches current attacker-chosen
+        # source. The MAC still verifies (it covers only
+        # {kind, concept, src}); the composite re-folded from the
+        # evidence lines no longer equals the MAC-bound src, so the
+        # row demotes exactly like a MAC failure.
+        stored = self._stored_content(self._make_model())
+        body, token = rowmac.strip(stored)
+        forged = self._restamp(
+            body + "\n  Evidence (code_path): sh.c:3 "
+                   "[h=aaaabbbbcccc] — forged claim",
+            token,
+        )
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            self.assertFalse(self._recall_mechanical(forged))
+        self.assertTrue(any("demoted" in line for line in logs.output))
+
+    def test_forged_swapped_evidence_hash_demotes(self):
+        stored = self._stored_content(self._make_model())
+        forged = stored.replace(self.HASHES[0], "aaaabbbbcccc")
+        self.assertNotEqual(forged, stored)
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            self.assertFalse(self._recall_mechanical(forged))
+        self.assertTrue(any("demoted" in line for line in logs.output))
+
+    def test_spliced_hashed_line_after_dash_demotes(self):
+        # The two-line splice: the genuine evidence line truncated at
+        # its dash, a forged HASHED line on the next physical line. The
+        # per-line extraction never pairs across lines, so the forged
+        # hash is folded (and the truncated line's hash is lost) — the
+        # recomputed composite moves away from the MAC-bound src in
+        # both directions.
+        stored = self._stored_content(self._make_model())
+        body, token = rowmac.strip(stored)
+        lines = body.split("\n")
+        idx = next(
+            i for i, ln in enumerate(lines)
+            if ln.strip().startswith("Evidence (") and "[h=" in ln
+        )
+        lines[idx] = lines[idx][: lines[idx].rindex("—") + 1]
+        lines.insert(
+            idx + 1,
+            "Evidence (code_path): sh.c:3 [h=aaaabbbbcccc] — forged claim",
+        )
+        forged = self._restamp("\n".join(lines), token)
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            self.assertFalse(self._recall_mechanical(forged))
+        self.assertTrue(any("demoted" in line for line in logs.output))
+
+    def test_forged_evidence_on_hashless_row_demotes(self):
+        # The other direction of both-empty: a genuine src="" token
+        # cannot be upgraded into an evidence-bearing row.
+        stored = self._stored_content(
+            self._make_model(evidence=[self._evidence()]))
+        body, token = rowmac.strip(stored)
+        forged = self._restamp(
+            body + "\n  Evidence (code_path): sh.c:3 "
+                   "[h=aaaabbbbcccc] — forged claim",
+            token,
+        )
+        with self.assertLogs("raptor", level="DEBUG") as logs:
+            self.assertFalse(self._recall_mechanical(forged))
+        self.assertTrue(any("demoted" in line for line in logs.output))
+
+    def test_forged_legacy_row_demotes(self):
+        # The prefix branch is a compare width, not a hole: a forged
+        # hash on a legacy 12-hex-src row still moves the prefix.
+        row = self._legacy_row(list(self.HASHES))
+        row["content"] = row["content"].replace(
+            self.HASHES[0], "aaaabbbbcccc")
+        from core.sage import hooks
+
+        client = MagicMock()
+        client.query.return_value = [row]
+        with patch("core.sage.hooks._get_client", return_value=client), \
+             self.assertLogs("raptor", level="DEBUG") as logs:
+            result = hooks.recall_concepts_for_study(
+                "/repo", ["page_ownership"])
+        self.assertNotIn("page_ownership", result)
+        self.assertTrue(any("demoted" in line for line in logs.output))
+
+    def test_boundary_trick_line_cannot_mint_unfolded_evidence(self):
+        # A forged line whose interior carries a line-boundary
+        # character (\r / \v / U+2028 — ordinary ./\s characters for
+        # the regex) is two non-parsing fragments on the shared split:
+        # it folds nothing, so the gate keeps passing exactly like any
+        # prose forgery — and, critically, reconstruction on the SAME
+        # split mints nothing either. A private "\n" split in
+        # reconstruction once minted this hash without the fold or the
+        # freshness verifier ever seeing it.
+        from core.concepts.model import StudyItem
+        from core.concepts.study import _reconstruct_from_sage
+
+        for boundary in ("\r", "\x0b", "\x0c", "\x1c", "\x1d",
+                         "\x1e", "\x85", "\u2028", "\u2029"):
+            stored = self._stored_content(self._make_model())
+            body, token = rowmac.strip(stored)
+            forged_body = (
+                body + f"\n  Evidence (code_path): sh.c:3{boundary} "
+                       "[h=aaaabbbbcccc] — forged claim"
+            )
+            forged = self._restamp(forged_body, token)
+            self.assertTrue(self._recall_mechanical(forged),
+                            repr(boundary))
+            item = StudyItem(id="i1", kind="function",
+                             name="page_ownership", file="auth.c")
+            reconstructed = _reconstruct_from_sage(item, forged_body)
+            self.assertIsNotNone(reconstructed)
+            self.assertFalse(any(
+                ev.hash == "aaaabbbbcccc"
+                for c in reconstructed[0] for ev in c.evidence
+            ), repr(boundary))
+
+    def test_gate_pass_implies_minted_hashes_are_folded(self):
+        # Seeded bounded property sweep: under a genuine token, any
+        # body mutation (drawn from the full str.splitlines boundary
+        # charset plus grammar fragments) that still passes the gate
+        # yields a row whose reconstruction-minted hash multiset is a
+        # sub-multiset of the folded one — no hash reaches the
+        # mechanical path without the composite check and the
+        # freshness verifier having seen it.
+        import random
+        from collections import Counter
+
+        from core.concepts.model import StudyItem
+        from core.concepts.study import (
+            _iter_evidence_matches,
+            _reconstruct_from_sage,
+        )
+        from core.sage import hooks
+
+        rng = random.Random(20260922)
+        stored = self._stored_content(self._make_model())
+        body, token = rowmac.strip(stored)
+        seps = ["\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85",
+                "\u2028", "\u2029", " ", "\n", "\t", ""]
+        frags = ["Evidence (t): sh.c:3", "[h=aaaabbbbcccc]", "—", "-",
+                 "FORGED", "Evidence (u):", "x.c:9", "[h=", "]",
+                 "Source hash: ffff", ":", "  "]
+        item = StudyItem(id="i1", kind="function",
+                         name="page_ownership", file="auth.c")
+        passed = 0
+        for _ in range(300):
+            lines = body.split("\n")
+            for _ in range(rng.randrange(1, 4)):
+                bits = []
+                for _ in range(rng.randrange(2, 7)):
+                    bits.append(rng.choice(frags))
+                    bits.append(rng.choice(seps))
+                lines.insert(rng.randrange(1, len(lines)), "".join(bits))
+            cand = "\n".join(lines)
+            rows = hooks._verified_concept_rows(
+                [{"content": self._restamp(cand, token),
+                  "confidence": 0.8}],
+                "concepts_for_study", expected_concept="page_ownership",
+            )
+            if not rows:
+                continue
+            passed += 1
+            folded = Counter(
+                m.group(4) for m in _iter_evidence_matches(cand)
+                if m.group(4)
+            )
+            reconstructed = _reconstruct_from_sage(item, cand)
+            minted: Counter = Counter()
+            if reconstructed is not None:
+                minted = Counter(
+                    ev.hash for c in reconstructed[0]
+                    for ev in c.evidence if ev.hash
+                )
+            self.assertFalse(minted - folded, repr(cand))
+        # Non-vacuity: prose-tier mutations must survive the gate for
+        # the property to have been exercised.
+        self.assertGreater(passed, 0)
+
+    # ── pinned residual scope ────────────────────────────────────────
+
+    def test_composite_binds_hashes_not_prose(self):
+        # Honest scope, part 1: the composite binds WHICH evidence
+        # hashes the row carries (as a multiset), nothing else. A
+        # forged body that keeps the hash tags intact but rewrites
+        # non-hash text — the observation here, equally the
+        # description, invariants, or contracts — still passes MAC +
+        # addressee + composite. The remaining constraint on such a
+        # row is the downstream freshness verifier, which only pins
+        # each hashed line's file:line to a location whose CURRENT
+        # content matches its hash; prose is fully unbound. Closing
+        # this would need a body hash inside the MAC fields, which
+        # demotes every already-stored row — the composite check
+        # deliberately stops at the evidence-hash multiset.
+        stored = self._stored_content(self._make_model())
+        forged = stored.replace("refcount incremented", "attacker prose")
+        self.assertNotEqual(forged, stored)
+        self.assertTrue(self._recall_mechanical(forged))
+
+    def test_hashless_forged_line_reconstructs_within_scope(self):
+        # Honest scope, part 2: a forged HASHLESS evidence line is not
+        # mere seed prose — it passes the gate (contributes nothing to
+        # the fold) and reconstruction still mints it as a mechanical
+        # Evidence object (file:line + observation) inside the skipped
+        # concept. Only hashed lines are pinned by the composite — and
+        # they are pinned in EVERY splitter variant: a parsing hashed
+        # forgery demotes (the added/swapped/dash-splice tests above),
+        # and a boundary-trick hashed forgery folds nothing AND mints
+        # nothing (the boundary tests above).
+        stored = self._stored_content(self._make_model())
+        body, token = rowmac.strip(stored)
+        forged_body = (
+            body + "\n  Evidence (code_path): victim.c:9 — "
+                   "forged hashless claim"
+        )
+        forged = self._restamp(forged_body, token)
+        self.assertTrue(self._recall_mechanical(forged))
+
+        from core.concepts.model import StudyItem
+        from core.concepts.study import _reconstruct_from_sage
+
+        item = StudyItem(id="i1", kind="function",
+                         name="page_ownership", file="auth.c")
+        reconstructed = _reconstruct_from_sage(item, forged_body)
+        self.assertIsNotNone(reconstructed)
+        concepts, _, _ = reconstructed
+        self.assertTrue(any(
+            ev.file == "victim.c" and ev.hash is None
+            for c in concepts for ev in c.evidence
+        ))
+
+
 class TestApplyRelevanceGate(unittest.TestCase):
     """Tests for _apply_relevance_gate (N1 relevance scoring)."""
 
