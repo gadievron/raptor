@@ -1955,6 +1955,22 @@ class OpenAICompatibleProvider(LLMProvider):
                     )
                 if is_credit_exhausted(exc):
                     raise  # let callers fail fast
+                # Spend-aware gate before the transient policy: a
+                # mid-response death classifies transient (connection
+                # error) but its generation is already billed
+                # upstream — terminal for the turn, never re-sent.
+                # The veto already logged the spend warning.
+                consumed_msg = _consumed_attempt_message(
+                    exc, self.config.provider, self.config.model_name,
+                )
+                if consumed_msg is not None:
+                    return TurnResponse(
+                        content=[],
+                        stop_reason=StopReason.ERROR,
+                        input_tokens=0,
+                        output_tokens=0,
+                        error_message=consumed_msg,
+                    )
                 if _is_rate_limit(exc):
                     from core.llm.throttle import broadcast_rate_limit
                     broadcast_rate_limit()
@@ -2381,6 +2397,35 @@ _OPENAI_FINISH_REASON_MAP = {
     "content_filter": StopReason.REFUSED,
     "function_call": StopReason.NEEDS_TOOL_CALL,            # legacy alias
 }
+
+
+def _consumed_attempt_message(
+    exc: BaseException, provider: str, model_name: str,
+) -> str | None:
+    """Spend-aware veto for the ``turn()`` transient-retry loops — the
+    sibling surface of ``LLMClient``'s attempt loops. Returns the
+    terminal error message when the failed attempt's upstream
+    generation is already processed (and billed) — the dispatcher
+    stamped its response head ``response-started`` and the failure is
+    wire-class — so a transient-class re-send would buy the same
+    generation again; ``None`` when ordinary transient policy applies.
+
+    Delegates to ``core.llm.client._consumed_attempt_veto`` so there
+    is exactly ONE gate, one ``RAPTOR_LLM_RETRY_CONSUMED`` escape
+    hatch, and one operator-warning shape across both retry surfaces
+    (the veto logs the spend; callers only turn the returned message
+    into their own terminal error value). Lazy import keeps the
+    module graph acyclic. Only the non-streaming ``turn()`` loops
+    need this: the ``turn_stream()`` retry loops wrap the stream OPEN
+    alone (which completes at the response head, before any billed
+    output is at stake), and mid-stream deaths there propagate to the
+    tool-use loop's content-gated retry instead of being re-sent.
+    """
+    if not isinstance(exc, Exception):
+        return None
+    from core.llm.client import _consumed_attempt_veto
+    veto = _consumed_attempt_veto(exc, provider, model_name)
+    return str(veto) if veto is not None else None
 
 
 def _is_transient_openai(exc: BaseException) -> bool:
@@ -3226,6 +3271,21 @@ class AnthropicProvider(LLMProvider):
             except (APIConnectionError, APIStatusError, APIError) as exc:
                 if is_credit_exhausted(exc):
                     raise  # let callers fail fast
+                # Spend-aware gate before the transient policy — same
+                # contract as the OpenAI turn() loop above: a
+                # mid-response death's generation is already billed
+                # upstream; the veto logged the spend warning.
+                consumed_msg = _consumed_attempt_message(
+                    exc, self.config.provider, self.config.model_name,
+                )
+                if consumed_msg is not None:
+                    return TurnResponse(
+                        content=[],
+                        stop_reason=StopReason.ERROR,
+                        input_tokens=0,
+                        output_tokens=0,
+                        error_message=consumed_msg,
+                    )
                 if _is_rate_limit(exc):
                     from core.llm.throttle import broadcast_rate_limit
                     broadcast_rate_limit()
