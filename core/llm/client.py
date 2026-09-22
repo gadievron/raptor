@@ -2981,10 +2981,27 @@ class LLMClient:
                             time.monotonic() - attempt_start, _safe_e,
                         )
 
+                        # Spend-aware gate BEFORE the generic retry
+                        # policy: a mid-response death matches the
+                        # retryable connection-error shapes below, but
+                        # its generation is already billed upstream —
+                        # re-sending buys it again. Decided before the
+                        # telemetry emit so the attempt's disposition
+                        # is honest — "consumed", not "retryable" —
+                        # and the rollup counter exists for an
+                        # operator to notice a flaky-provider day and
+                        # weigh RAPTOR_LLM_RETRY_CONSUMED=1.
+                        _veto = _consumed_attempt_veto(
+                            e, model.provider, model.model_name,
+                        )
+
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
                             event="attempt_failed",
-                            disposition=_failure_disposition(e),
+                            disposition=(
+                                "consumed" if _veto is not None
+                                else _failure_disposition(e)
+                            ),
                             call_class=call_class,
                             provider=model.provider.lower(),
                             model=model.model_name,
@@ -2995,14 +3012,6 @@ class LLMClient:
                             error=_safe_e[:200],
                         )
 
-                        # Spend-aware gate BEFORE the generic retry
-                        # policy: a mid-response death matches the
-                        # retryable connection-error shapes below, but
-                        # its generation is already billed upstream —
-                        # re-sending buys it again.
-                        _veto = _consumed_attempt_veto(
-                            e, model.provider, model.model_name,
-                        )
                         if _veto is not None:
                             last_error = _veto
                             break
@@ -3606,10 +3615,21 @@ class LLMClient:
                             attempt + 1, _safe_e,
                         )
 
+                        # Spend-aware gate BEFORE the generic retry
+                        # policy — same contract (and same honest
+                        # "consumed" disposition on the telemetry row)
+                        # as ``generate`` above.
+                        _veto = _consumed_attempt_veto(
+                            e, model.provider, model.model_name,
+                        )
+
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
                             event="attempt_failed",
-                            disposition=_failure_disposition(e),
+                            disposition=(
+                                "consumed" if _veto is not None
+                                else _failure_disposition(e)
+                            ),
                             call_class=call_class,
                             provider=model.provider.lower(),
                             model=model.model_name,
@@ -3621,13 +3641,6 @@ class LLMClient:
                             error=_safe_e[:200],
                         )
 
-                        # Spend-aware gate BEFORE the generic retry
-                        # policy — same contract as ``generate``
-                        # above: a mid-response death's generation is
-                        # already billed upstream.
-                        _veto = _consumed_attempt_veto(
-                            e, model.provider, model.model_name,
-                        )
                         if _veto is not None:
                             last_error = _veto
                             break

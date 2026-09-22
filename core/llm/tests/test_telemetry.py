@@ -87,6 +87,25 @@ class TestSink:
                      "disposition": "timeout"})
         assert "1 failed attempts (1 timeout)" in sink.summary_line()
 
+    def test_summary_line_reports_consumed_separately(self, tmp_path):
+        """Consumed = mid-response deaths the spend-aware retry gate
+        refused to re-send (each a generation billed upstream but
+        never received) — broken out so an operator can spot a
+        flaky-provider day from the rollup."""
+        sink = TelemetrySink(tmp_path / "t.jsonl")
+        sink.record({"event": "attempt_failed", "call_class": "review",
+                     "disposition": "consumed"})
+        sink.record({"event": "attempt_failed", "call_class": "review",
+                     "disposition": "timeout"})
+        line = sink.summary_line()
+        assert "2 failed attempts (1 timeout, 1 consumed)" in line
+
+    def test_summary_line_omits_consumed_when_zero(self, tmp_path):
+        sink = TelemetrySink(tmp_path / "t.jsonl")
+        sink.record({"event": "attempt_failed", "call_class": "review",
+                     "disposition": "timeout"})
+        assert "consumed" not in sink.summary_line()
+
     def test_write_failure_is_silent_and_keeps_aggregates(self, tmp_path):
         target = tmp_path / "not-a-dir"
         target.write_text("occupied")  # parent path is a FILE

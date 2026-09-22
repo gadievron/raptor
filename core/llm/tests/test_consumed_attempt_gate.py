@@ -198,6 +198,59 @@ class TestGenerateConsumedGate:
         ]
         assert len(rebuy_lines) == 2
 
+    def test_vetoed_attempt_emits_consumed_disposition(self, monkeypatch):
+        """The attempt_failed telemetry row must carry the honest
+        disposition: 'consumed', not 'retryable' — the rollup counter
+        is how a flaky-provider day becomes visible."""
+        import core.llm.telemetry as telemetry_mod
+        records: list[dict] = []
+        monkeypatch.setattr(
+            telemetry_mod, "emit", lambda **kw: records.append(kw),
+        )
+        client = _client(max_retries=3)
+        with patch.object(client, "_get_provider") as mock_get:
+            prov = MagicMock()
+
+            def _die_mid_response(*_a, **_kw):
+                _mark_response_started()
+                raise FakeAPIConnectionError("Connection error.")
+
+            prov.generate.side_effect = _die_mid_response
+            mock_get.return_value = prov
+            with pytest.raises(RuntimeError):
+                client.generate("prompt")
+        failed = [r for r in records if r.get("event") == "attempt_failed"]
+        assert [r["disposition"] for r in failed] == ["consumed"]
+
+    def test_hatch_on_rebuy_attempts_keep_retryable_disposition(
+        self, monkeypatch,
+    ):
+        """With the escape hatch on, the retry really runs — so the
+        disposition stays 'retryable': consumed counts only attempts
+        the gate terminated."""
+        monkeypatch.setenv("RAPTOR_LLM_RETRY_CONSUMED", "1")
+        import core.llm.telemetry as telemetry_mod
+        records: list[dict] = []
+        monkeypatch.setattr(
+            telemetry_mod, "emit", lambda **kw: records.append(kw),
+        )
+        client = _client(max_retries=2)
+        with patch.object(client, "_get_provider") as mock_get:
+            prov = MagicMock()
+
+            def _die_mid_response(*_a, **_kw):
+                _mark_response_started()
+                raise FakeAPIConnectionError("Connection error.")
+
+            prov.generate.side_effect = _die_mid_response
+            mock_get.return_value = prov
+            with pytest.raises(RuntimeError):
+                client.generate("prompt")
+        failed = [r for r in records if r.get("event") == "attempt_failed"]
+        assert [r["disposition"] for r in failed] == [
+            "retryable", "retryable",
+        ]
+
     def test_shape_failure_after_completed_response_keeps_retrying(self):
         """A COMPLETED response whose body fails to parse keeps its
         deliberate retry-as-new-sample semantics — the head stamp

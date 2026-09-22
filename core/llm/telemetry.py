@@ -46,6 +46,7 @@ class _ClassStats:
     failed_attempts: int = 0
     timeouts: int = 0
     blocked: int = 0
+    consumed: int = 0
     cost_usd: float = 0.0
     duration_s: float = 0.0
     tokens_in: int = 0
@@ -98,6 +99,8 @@ class TelemetrySink:
                 st.timeouts += 1
             elif rec.get("disposition") == "blocked":
                 st.blocked += 1
+            elif rec.get("disposition") == "consumed":
+                st.consumed += 1
         elif rec.get("disposition") == "cache_hit":
             st.cache_hits += 1
         else:
@@ -160,6 +163,7 @@ class TelemetrySink:
             failed = sum(s.failed_attempts for s in self._by_class.values())
             timeouts = sum(s.timeouts for s in self._by_class.values())
             blocked = sum(s.blocked for s in self._by_class.values())
+            consumed = sum(s.consumed for s in self._by_class.values())
             cost = sum(s.cost_usd for s in self._by_class.values())
             tin = sum(s.tokens_in for s in self._by_class.values())
             tout = sum(s.tokens_out for s in self._by_class.values())
@@ -186,6 +190,14 @@ class TelemetrySink:
                     # lumping them in with retryable infrastructure
                     # noise.
                     breakdown += f", {blocked} blocked"
+                if consumed:
+                    # Mid-response deaths the spend-aware retry gate
+                    # refused to re-send — each one a generation
+                    # billed upstream but never received. Called out
+                    # so an operator can spot a flaky-provider day
+                    # from the rollup and weigh the
+                    # RAPTOR_LLM_RETRY_CONSUMED=1 trade consciously.
+                    breakdown += f", {consumed} consumed"
                 parts.append(
                     f"{failed} failed attempts ({breakdown})"
                 )
