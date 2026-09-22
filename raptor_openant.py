@@ -180,7 +180,21 @@ def main() -> int:
     # ------------------------------------------------------------------
     # Trust check — scan a potentially untrusted repo
     # ------------------------------------------------------------------
-    check_repo_claude_trust(repo_path)
+    # Advisory by design: the openant pipeline never dispatches Claude
+    # Code against the repo (packages/openant is API-transport only),
+    # so there is no CC dispatch here for the verdict to gate — the
+    # danger report (or the cannot-examine refusal line) prints for
+    # the operator, and the CC-dispatching consumers of openant
+    # findings re-check at their own dispatch sites. If openant ever
+    # grows a CC dispatch path, gate it on this verdict — the
+    # structural pin in .github/tests/test_openant_cc_advisory_pin.py
+    # fails first.
+    cc_blocked = check_repo_claude_trust(repo_path)
+    if cc_blocked:
+        logger.warning(
+            "cc-trust verdict is blocking for this repo — advisory "
+            "here (openant performs no Claude Code dispatch); "
+            "CC-dispatching consumers re-check at their own sites")
 
     # ------------------------------------------------------------------
     # Build OpenAnt config
