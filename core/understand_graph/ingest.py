@@ -10,7 +10,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from core.json import load_json
+from core.json import load_json as _load_json_uncapped
+from core.security.capped_read import read_capped
+
+# Run-dir artifacts are producer-written but live beside scanned-tree
+# output; a runaway or hostile artifact must cost a skipped ingest,
+# not memory. Same ceiling as the coverage readers
+# (core.coverage.record.RUN_ARTIFACT_MAX_BYTES).
+from core.coverage.record import RUN_ARTIFACT_MAX_BYTES as _ARTIFACT_MAX_BYTES
+
+
+def load_json(path, **kwargs):
+    """Module-wide capped load_json: every ingest reader takes the
+    shared run-artifact budget unless the caller overrides it."""
+    kwargs.setdefault("max_bytes", _ARTIFACT_MAX_BYTES)
+    return _load_json_uncapped(path, **kwargs)
+
 
 from .schema import (
     content_hash,
@@ -49,6 +64,23 @@ def ingest_run(run_dir: Path, target_path: Optional[str] = None) -> Optional[Pat
     checklist_hash = _hash_json(checklist)
     snap_id = make_snapshot_id(target, checklist_hash, str(run_dir.resolve()))
 
+    # Load artifact JSON and compute sha256 digests BEFORE opening the
+    # write transaction: multi-second file reads/hashes inside it hold
+    # the write lock against every concurrent reader for their whole
+    # duration.
+    traces = [(tp, load_json(tp)) for tp in trace_paths]
+    results = [(rp, load_json(rp)) for rp in result_paths]
+    digests = {
+        path: _artifact_digest(path)
+        for path in [
+            run_dir / "context-map.json",
+            *trace_paths,
+            run_dir / "variants.json",
+            *result_paths,
+        ]
+        if path.exists()
+    }
+
     with graph_connection(graph_path) as conn:
         conn.execute(
             """
@@ -70,20 +102,24 @@ def ingest_run(run_dir: Path, target_path: Optional[str] = None) -> Optional[Pat
         _ingest_checklist(conn, snap_id, checklist)
         if isinstance(context_map, dict):
             _ingest_context_map(conn, snap_id, context_map)
-            _artifact(conn, snap_id, "context_map", run_dir / "context-map.json", run_dir)
-        for trace_path in trace_paths:
-            trace = load_json(trace_path)
+            cm_path = run_dir / "context-map.json"
+            _artifact(conn, snap_id, "context_map", cm_path, run_dir,
+                      digest=digests.get(cm_path, ""))
+        for trace_path, trace in traces:
             if isinstance(trace, dict):
                 _ingest_flow_trace(conn, snap_id, trace)
-                _artifact(conn, snap_id, "flow_trace", trace_path, run_dir)
+                _artifact(conn, snap_id, "flow_trace", trace_path, run_dir,
+                          digest=digests.get(trace_path, ""))
         if variants is not None:
             _ingest_variants(conn, snap_id, variants)
-            _artifact(conn, snap_id, "variants", run_dir / "variants.json", run_dir)
-        for path in result_paths:
-            result = load_json(path)
+            v_path = run_dir / "variants.json"
+            _artifact(conn, snap_id, "variants", v_path, run_dir,
+                      digest=digests.get(v_path, ""))
+        for path, result in results:
             if isinstance(result, dict):
                 _ingest_multimodel_result(conn, snap_id, result)
-                _artifact(conn, snap_id, result.get("mode") or path.stem, path, run_dir)
+                _artifact(conn, snap_id, result.get("mode") or path.stem, path, run_dir,
+                          digest=digests.get(path, ""))
     return graph_path
 
 
@@ -281,13 +317,24 @@ def _ingest_multimodel_result(conn, snapshot_id: str, result: dict[str, Any]) ->
             _upsert_node(conn, snapshot_id, kind, item.get("id") or f"{mode}-{i + 1}", props)
 
 
-def _artifact(conn, snapshot_id: str, kind: str, path: Path, run_dir: Path) -> None:
+def _artifact_digest(path: Path) -> str:
+    """sha256 of an artifact file, bounded by the shared budget
+    (oversized/unreadable degrade to an empty digest)."""
+    raw = read_capped(path, _ARTIFACT_MAX_BYTES)
+    if raw is None:
+        return ""
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _artifact(conn, snapshot_id: str, kind: str, path: Path, run_dir: Path,
+              digest: str | None = None) -> None:
+    """Record an artifact row. Pass ``digest`` when calling inside a
+    write transaction — hashing the file there holds the write lock
+    through the whole read."""
     if not path.exists():
         return
-    try:
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        digest = ""
+    if digest is None:
+        digest = _artifact_digest(path)
     conn.execute(
         """
         INSERT OR REPLACE INTO artifacts
@@ -464,12 +511,15 @@ def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None) ->
     graph_path = graph_path_for_run(run_dir, target or None)
 
     entries: list[dict[str, Any]] = []
+    raw = read_capped(journal_path, _ARTIFACT_MAX_BYTES)
+    if raw is None:
+        return None
     try:
-        for line in journal_path.read_text(encoding="utf-8").splitlines():
+        for line in raw.decode("utf-8", "replace").splitlines():
             line = line.strip()
             if line:
                 entries.append(json.loads(line))
-    except (OSError, json.JSONDecodeError):
+    except json.JSONDecodeError:
         return None
     if not entries:
         return None
