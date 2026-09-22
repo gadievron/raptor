@@ -303,6 +303,48 @@ def test_license_findings_carry_canonical_key() -> None:
     assert len(d.persistent) == 1
 
 
+def _scan_health_row(kind: str = "osv_lookup_degraded") -> dict:
+    return {
+        "id": f"sca:scan_health:{kind}",
+        "finding_id": f"sca:scan_health:{kind}",
+        "vuln_type": f"sca:scan_health:{kind}",
+        "severity": "info",
+        "suppressed": False,
+        "sca": {"kind": kind},
+    }
+
+
+def test_scan_health_rows_carry_canonical_key() -> None:
+    """The identical mechanism the license fix above closed, on the
+    unfixed sibling lane: scan_health rows are emitted specifically
+    so pipelines can see that a scan's coverage degraded, yet
+    _canonical_key returned None for them — a baseline-gated PR
+    pipeline reported \"0 new findings\" green when the current scan
+    NEWLY degraded (e.g. OSV feed unreachable, advisories
+    unchecked). New degradation must surface in the delta; a
+    degradation present on both sides is persistent; one that
+    cleared resolves."""
+    row = _scan_health_row()
+    d_new = diff.compute_delta([], [row])
+    assert len(d_new.new) == 1
+    d_persistent = diff.compute_delta([row], [row])
+    assert len(d_persistent.persistent) == 1
+    d_resolved = diff.compute_delta([row], [])
+    assert len(d_resolved.resolved) == 1
+
+
+def test_scan_health_kinds_are_distinct_identities() -> None:
+    """Different degradation kinds are different findings — an OSV
+    outage clearing while a registry outage appears must not read
+    as persistent."""
+    old = [_scan_health_row("osv_lookup_degraded")]
+    new = [_scan_health_row("registry_lookup_degraded")]
+    d = diff.compute_delta(old, new)
+    assert len(d.new) == 1
+    assert len(d.resolved) == 1
+    assert len(d.persistent) == 0
+
+
 def test_persistent_severity_breakdown_in_summary() -> None:
     """Markdown report's persistent line carries the severity
     breakdown so operators reading CI logs see whether the backlog

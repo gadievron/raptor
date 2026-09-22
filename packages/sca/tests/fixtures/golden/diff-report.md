@@ -2,7 +2,7 @@
 
 - New: **1**
 - Resolved: **1**
-- Persistent: **3** (1 critical, 1 medium, 1 low)
+- Persistent: **4** (1 critical, 1 medium, 1 low, 1 info)
 - Suppression added: **1**
 - Suppression lifted: **1**
 
@@ -37,4 +37,5 @@
 | Critical | npm:lodash@4.17.20 GHSA-aaaa-bbbb-cccc | yes | 0.97 |
 | Medium | OCI:alpine@3.19 |  |  |
 | Low | npm:express@4.0.0 |  |  |
+| Info | :@ |  |  |
 

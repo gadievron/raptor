@@ -553,6 +553,26 @@
           "reason": "manifest says ^4.0.0"
         }
       }
+    },
+    {
+      "id": "sca:scan_health:osv_lookup_failed",
+      "finding_id": "sca:scan_health:osv_lookup_failed",
+      "vuln_type": "sca:scan_health:osv_lookup_failed",
+      "tool": "sca",
+      "file": "",
+      "function": "",
+      "line": 0,
+      "severity": "info",
+      "suppressed": false,
+      "suppression_reason": null,
+      "title": "Osv lookup failed",
+      "description": "OSV lookups failed transiently for 1 ecosystem",
+      "sca": {
+        "kind": "osv_lookup_failed",
+        "failed_ecosystems": [
+          "Cargo"
+        ]
+      }
     }
   ],
   "summary": {
@@ -560,11 +580,12 @@
     "resolved": 1,
     "suppression_added": 1,
     "suppression_lifted": 1,
-    "persistent": 3,
+    "persistent": 4,
     "persistent_by_severity": {
       "critical": 1,
       "medium": 1,
-      "low": 1
+      "low": 1,
+      "info": 1
     }
   }
 }

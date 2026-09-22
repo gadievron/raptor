@@ -309,6 +309,16 @@ def _canonical_key(row: FindingRow) -> tuple[str, ...] | None:
         # dep, not version-specific (an SPDX change between
         # versions is a separate finding anyway).
         return ("license", row.vuln_type, eco, name)
+    if row.is_scan_health:
+        # Same mechanism as the license fix above, unfixed sibling:
+        # scan_health rows are emitted precisely so pipelines can
+        # see that a scan's coverage degraded, yet they fell through
+        # to None — a baseline-gated pipeline reported "0 new
+        # findings" green while the current scan NEWLY degraded
+        # (quiet fail-open on the producer's own degradation
+        # signal). Identity is the degradation KIND (vuln_type =
+        # ``sca:scan_health:<kind>``): scan-level, no dep coords.
+        return ("scan_health", row.vuln_type)
     return None
 
 
