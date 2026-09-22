@@ -109,7 +109,7 @@ patches.
 | `--compiler-scan-max-tus <n>` | Cap on translation units for `--compiler-scan` (default 2000) |
 | `--expanded-semgrep` | Re-run rules over preprocessor-expanded views of macro-heavy C/C++ TUs |
 | `--openant` | Run the [OpenAnt](#openant) LLM semantic scan in addition to Semgrep/CodeQL |
-| `--openant-only` | Replace Semgrep/CodeQL entirely: only the OpenAnt semantic scan runs |
+| `--openant-only` | Replace Semgrep/CodeQL entirely: only the OpenAnt semantic scan runs (combining with `--codeql`/`--codeql-only` is refused at parse time) |
 | `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`). The flag surface is consent-gated: a core that is not a clean checkout of the pinned commit (wrong commit, modified/untracked files at the pin, unverifiable provenance) refuses at startup |
 | `--openant-core-unpinned` | Consent to run a `--openant-core` checkout that is not a clean pinned checkout this run (the project `config` trust marker grants the same, standing) |
 | `--openant-model <name>` | OpenAnt LLM model: `sonnet` (default) or `opus` |

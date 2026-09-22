@@ -12,6 +12,8 @@ These tests verify:
 """
 
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -353,51 +355,123 @@ if __name__ == "__main__":
 
 
 class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
-    """--openant-only must count as an enabled scanner: the
-    "no scanners enabled" guard used to exit 2 before the OpenAnt
-    phase was ever reached (the flag only worked combined with
+    """OpenAnt (--openant / --openant-only) must count as an enabled
+    scanner: the "no scanners enabled" guard used to exit 2 before the
+    OpenAnt phase was ever reached (the flag only worked combined with
     --sarif)."""
 
-    def test_guard_exempts_openant_only(self):
+    _EMPTY_SARIF = (
+        '{"version": "2.1.0", "runs": [{"tool": {"driver": '
+        '{"name": "test", "rules": []}}, "results": []}]}'
+    )
+
+    def test_guard_exempts_openant(self):
         src = (Path(__file__).parents[3] / "raptor_agentic.py").read_text()
         self.assertIn(
-            "if not skip_scan and not _openant_only "
+            "if not skip_scan and not _openant_enabled "
             "and not (run_semgrep or run_codeql):",
             src,
-            "the no-scanners guard must exempt --openant-only",
+            "the no-scanners guard must exempt --openant / --openant-only",
+        )
+
+    def test_guard_message_names_openant_remedies(self):
+        """The nothing-to-scan message must offer the OpenAnt flags as
+        remedies, not just the CodeQL flag permutations."""
+        src = (Path(__file__).parents[3] / "raptor_agentic.py").read_text()
+        guard_msg = src.split("nothing to scan")[1][:400]
+        self.assertIn("--openant", guard_msg)
+
+    def _run_agentic(self, td: str, extra_args: list) -> subprocess.CompletedProcess:
+        """Invoke raptor_agentic.py against a tiny repo with a stub
+        openant-core whose ``openant`` module exits 3 — a
+        deterministic hard scanner failure, so these tests exercise
+        the guard and phase banners without any LLM analysis ever
+        starting (the empty findings set ends the run at the
+        no-findings gates). The stub is nested INSIDE the scanned repo
+        because the scanner subprocess runs sandboxed with only the
+        target and output paths mounted. The stub is not the pinned
+        checkout, so the flag surface needs the explicit
+        --openant-core-unpinned consent."""
+        repo_root = Path(__file__).parents[3]
+        src_dir = Path(td) / "src"
+        src_dir.mkdir(exist_ok=True)
+        (src_dir / "app.py").write_text("import os\n")
+        fake_core = src_dir / "openant-core"
+        (fake_core / "core").mkdir(parents=True, exist_ok=True)
+        (fake_core / "core" / "scanner.py").touch()
+        pkg = fake_core / "openant"
+        pkg.mkdir(exist_ok=True)
+        (pkg / "__init__.py").write_text("")
+        (pkg / "__main__.py").write_text("import sys\nsys.exit(3)\n")
+        out_dir = Path(td) / "out"
+        return subprocess.run(
+            [sys.executable, str(repo_root / "raptor_agentic.py"),
+             "--repo", str(src_dir),
+             "--openant-core", str(fake_core),
+             "--openant-core-unpinned",
+             "--out", str(out_dir), *extra_args],
+            capture_output=True, text=True, timeout=300,
+            cwd=str(repo_root),
+            env={**os.environ, "_RAPTOR_TRUSTED": "1"},
         )
 
     def test_openant_only_invocation_reaches_openant_phase(self):
         """Real invocation shape: --repo <dir> --openant-only must get
         past the guard and print the OpenAnt phase banner (the fake
         core then fails the subprocess, which is fine — the guard bug
-        exited 2 before the phase banner). The fake core is not the
-        pinned checkout, so the flag surface needs the explicit
-        --openant-core-unpinned consent."""
-        import os
-        import subprocess
-        repo_root = Path(__file__).parents[3]
+        exited 2 before the phase banner)."""
         with tempfile.TemporaryDirectory() as td:
-            src_dir = Path(td) / "src"
-            src_dir.mkdir()
-            (src_dir / "app.py").write_text("import os\n")
-            fake_core = Path(td) / "openant-core" / "core"
-            fake_core.mkdir(parents=True)
-            (fake_core / "scanner.py").touch()
-            out_dir = Path(td) / "out"
-            proc = subprocess.run(
-                [sys.executable, str(repo_root / "raptor_agentic.py"),
-                 "--repo", str(src_dir), "--openant-only",
-                 "--openant-core", str(fake_core.parent),
-                 "--openant-core-unpinned",
-                 "--out", str(out_dir)],
-                capture_output=True, text=True, timeout=300,
-                cwd=str(repo_root),
-                env={**os.environ, "_RAPTOR_TRUSTED": "1"},
-            )
+            proc = self._run_agentic(td, ["--openant-only"])
             combined = proc.stdout + proc.stderr
             self.assertNotIn("nothing to scan", combined)
             self.assertIn("OPENANT SEMANTIC SCAN", combined)
+
+    def test_sarif_also_scan_openant_only(self):
+        """--sarif + --also-scan + --openant-only: skip_scan is False,
+        yet OpenAnt is the enabled scanner — the run must reach BOTH
+        the OpenAnt phase and the SARIF import, never the guard."""
+        with tempfile.TemporaryDirectory() as td:
+            sarif = Path(td) / "imported.sarif"
+            sarif.write_text(self._EMPTY_SARIF)
+            proc = self._run_agentic(
+                td, ["--sarif", str(sarif), "--also-scan", "--openant-only"])
+            combined = proc.stdout + proc.stderr
+            self.assertNotIn("nothing to scan", combined)
+            self.assertIn("OPENANT SEMANTIC SCAN", combined)
+            self.assertIn("SARIF IMPORT", combined)
+
+    def test_sarif_openant_only(self):
+        """--sarif + --openant-only (no --also-scan): the import
+        replaces the pattern-scan step and OpenAnt still runs."""
+        with tempfile.TemporaryDirectory() as td:
+            sarif = Path(td) / "imported.sarif"
+            sarif.write_text(self._EMPTY_SARIF)
+            proc = self._run_agentic(
+                td, ["--sarif", str(sarif), "--openant-only"])
+            combined = proc.stdout + proc.stderr
+            self.assertNotIn("nothing to scan", combined)
+            self.assertIn("OPENANT SEMANTIC SCAN", combined)
+            self.assertIn("SARIF IMPORT", combined)
+
+    def test_openant_only_with_codeql_only_refused(self):
+        """--openant-only + --codeql-only is contradictory (two
+        mutually exclusive "only" claims) — refused loudly at parse
+        time, naming both flags, instead of silently dropping CodeQL."""
+        with tempfile.TemporaryDirectory() as td:
+            proc = self._run_agentic(td, ["--openant-only", "--codeql-only"])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("--openant-only", proc.stderr)
+            self.assertIn("--codeql-only", proc.stderr)
+            self.assertNotIn("OPENANT SEMANTIC SCAN", proc.stdout)
+
+    def test_openant_only_with_codeql_refused(self):
+        """--openant-only + --codeql is the same contradiction with
+        the additive CodeQL flag."""
+        with tempfile.TemporaryDirectory() as td:
+            proc = self._run_agentic(td, ["--openant-only", "--codeql"])
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("--openant-only", proc.stderr)
+            self.assertIn("--codeql", proc.stderr)
 
 
 class TestOpenantCoreConsentGate(unittest.TestCase):

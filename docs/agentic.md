@@ -58,8 +58,9 @@ scan  →  dedup  →  prep  →  analyse (per finding)
    (repeatable; add `--also-scan` to merge with a fresh scan).
    `--openant` adds the [OpenAnt](commands.md#openant) LLM semantic scan
    as a further channel alongside the pattern scanners.  `--openant-only`
-   replaces Semgrep/CodeQL entirely with OpenAnt.  Configure it with
-   `--openant-core`, `--openant-model`, and `--openant-level`.
+   replaces Semgrep/CodeQL entirely with OpenAnt (combining it with
+   `--codeql`/`--codeql-only` is refused at parse time).  Configure it
+   with `--openant-core`, `--openant-model`, and `--openant-level`.
    `--openant-core` is consent-gated: a core that is not a clean
    checkout of the pinned commit (wrong commit, modified/untracked
    files at the pin, unverifiable provenance) refuses at startup

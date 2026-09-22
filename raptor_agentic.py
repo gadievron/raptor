@@ -2416,6 +2416,20 @@ def main() -> int:
 
     apply_cli_args(args, parser=parser)
 
+    # --openant-only replaces the pattern scanners entirely, so pairing
+    # it with an explicit CodeQL request is contradictory. Refuse at
+    # parse time (before any run directory or phase work) rather than
+    # silently ignoring one of the two flags.
+    if getattr(args, "openant_only", False) and (args.codeql or args.codeql_only):
+        _codeql_flag = "--codeql-only" if args.codeql_only else "--codeql"
+        parser.error(
+            f"--openant-only cannot be combined with {_codeql_flag}: "
+            "--openant-only disables the pattern scanners while "
+            f"{_codeql_flag} requests CodeQL. Drop --openant-only to "
+            f"keep CodeQL, drop {_codeql_flag} to run OpenAnt alone, "
+            "or use --openant --codeql to run both."
+        )
+
     if args.project is not None:
         from core.run.pin import set_process_project
         set_process_project(args.project)
@@ -3149,19 +3163,22 @@ def main() -> int:
     # Launch scanners in parallel when both are enabled
     # --openant-only skips Semgrep/CodeQL entirely
     _openant_only = getattr(args, "openant_only", False)
+    _openant_enabled = getattr(args, "openant", False) or _openant_only
     run_semgrep = not args.codeql_only and not skip_scan and not _openant_only
     run_codeql = (args.codeql or args.codeql_only) and not args.no_codeql and not skip_scan and not _openant_only
 
-    # Defensive guard for the "no scanners enabled" case.
-    # --openant-only IS an enabled scanner (the Phase 1b semantic
-    # scan): pre-fix the guard exited 2 before the OpenAnt phase was
-    # ever reached, so the flag only worked when --sarif also skipped
-    # the scan step.
-    if not skip_scan and not _openant_only and not (run_semgrep or run_codeql):
+    # Defensive guard for the "no scanners enabled" case. OpenAnt
+    # (--openant or --openant-only) IS an enabled scanner — the Phase
+    # 1b semantic scan — so the guard fires only when truly nothing
+    # will run: no SARIF import replacing the scan step, no OpenAnt
+    # phase, and both pattern scanners disabled.
+    if not skip_scan and not _openant_enabled and not (run_semgrep or run_codeql):
         print(
             "\n✗ Both Semgrep and CodeQL are disabled — nothing to scan.\n"
-            "  Re-run without --codeql-only / --no-codeql, or pass only one "
-            "of those flags.",
+            "  Re-run without --codeql-only / --no-codeql, pass only one "
+            "of those flags,\n"
+            "  or enable the OpenAnt semantic scan (--openant / "
+            "--openant-only).",
             file=sys.stderr,
         )
         return 2
@@ -3640,7 +3657,7 @@ def main() -> int:
     openant_findings = []
     openant_findings_count = 0
     openant_metrics = {}
-    if getattr(args, "openant", False) or _openant_only:
+    if _openant_enabled:
         try:
             from packages.openant import get_config, run_openant_scan, translate_pipeline_output, deduplicate_with_sarif
             from packages.openant.config import OpenAntConfig
