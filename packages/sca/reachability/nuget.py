@@ -35,20 +35,24 @@ _DEFAULT_MAX_DEPTH = 12
 
 _TEST_DIR_NAMES = {"tests", "test", "Tests", "Test"}
 
+# Leading indent in all three is HORIZONTAL-only ([^\S\n]): under
+# MULTILINE the ``^\s*`` spelling re-scans a run of blank lines from
+# every line start inside it — quadratic on attacker-supplied source
+# files (the import sweep walks every file of the ecosystem).
 # C#: ``using Foo.Bar;`` / ``using Alias = Foo.Bar;``
 _CS_USING_RE = re.compile(
-    r"^\s*(?:global\s+)?using\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?"
+    r"^[^\S\n]*(?:global\s+)?using\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?"
     r"([A-Za-z_][A-Za-z0-9_.]*)\s*;",
     re.MULTILINE,
 )
 # F#: ``open Foo.Bar``
 _FS_OPEN_RE = re.compile(
-    r"^\s*open\s+([A-Za-z_][A-Za-z0-9_.]*)",
+    r"^[^\S\n]*open\s+([A-Za-z_][A-Za-z0-9_.]*)",
     re.MULTILINE,
 )
 # VB: ``Imports Foo.Bar``
 _VB_IMPORTS_RE = re.compile(
-    r"^\s*Imports\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?([A-Za-z_][A-Za-z0-9_.]*)",
+    r"^[^\S\n]*Imports\s+(?:[A-Za-z_][A-Za-z0-9_]*\s*=\s*)?([A-Za-z_][A-Za-z0-9_.]*)",
     re.MULTILINE,
 )
 

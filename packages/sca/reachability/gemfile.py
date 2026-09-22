@@ -36,8 +36,11 @@ _TEST_DIR_NAMES = {"spec", "test", "tests", "features", "__tests__"}
 
 # ``require 'name'`` / ``require "name"`` — including possible ``::``
 # subpaths (``require 'rails/all'``).
+# Leading indent is HORIZONTAL-only ([^\S\n]): under MULTILINE the
+# ``^\s*`` spelling re-scans a run of blank lines from every line
+# start inside it — quadratic on attacker-supplied source files.
 _REQUIRE_RE = re.compile(
-    r"""^\s*(?:require|require_relative)\s+
+    r"""^[^\S\n]*(?:require|require_relative)\s+
         (['"])([^'"]+)\1""",
     re.MULTILINE | re.VERBOSE,
 )

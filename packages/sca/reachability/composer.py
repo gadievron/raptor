@@ -44,8 +44,11 @@ _DEFAULT_MAX_DEPTH = 12
 _TEST_DIR_NAMES = {"tests", "test", "Tests", "Test", "spec"}
 
 # ``use Vendor\Class;`` / ``use function Vendor\fn;`` / ``use const ...``
+# Leading indent is HORIZONTAL-only ([^\S\n]): under MULTILINE the
+# ``^\s*`` spelling re-scans a run of blank lines from every line
+# start inside it — quadratic on attacker-supplied source files.
 _PHP_USE_RE = re.compile(
-    r"^\s*use\s+(?:function\s+|const\s+)?"
+    r"^[^\S\n]*use\s+(?:function\s+|const\s+)?"
     r"([A-Z][A-Za-z0-9_]*(?:\\[A-Za-z_][A-Za-z0-9_]*)*)",
     re.MULTILINE,
 )

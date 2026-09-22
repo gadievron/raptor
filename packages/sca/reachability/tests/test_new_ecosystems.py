@@ -345,3 +345,21 @@ def test_orchestrator_dispatches_to_each(tmp_path: Path) -> None:
     # All should be not_reachable on an empty target.
     for r in out.values():
         assert r.verdict in ("not_reachable", "not_evaluated")
+
+
+def test_nuget_blank_line_run_is_fast(tmp_path: Path) -> None:
+    """Sibling of the Java sweep's blank-run quadratic — the MULTILINE
+    ``^\\s*`` idiom in ``_CS_USING_RE`` (the worst of the three NuGet
+    patterns: its alias alternation multiplies the backtracking) on a
+    trailing blank run; horizontal-only indent is linear and the
+    file's real using is still found."""
+    import time
+
+    (tmp_path / "App.cs").write_text(
+        "using Newtonsoft.Json;\nclass App {}\n"
+        + "\n" * (1 << 17), encoding="utf-8")
+    start = time.monotonic()
+    scan = rnuget.scan_imports(tmp_path)
+    assert time.monotonic() - start < 5.0
+    r = rnuget.resolve_dep("Newtonsoft.Json", scan, target=tmp_path)
+    assert r.verdict == "imported"

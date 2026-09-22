@@ -203,3 +203,21 @@ def test_resolve_dep_advisory_symbols_in_test_only(tmp_path: Path) -> None:
         advisory_symbols=["VulnerableFunc"],
     )
     assert r.verdict == "not_reachable"
+
+
+def test_blank_line_run_is_fast(tmp_path: Path) -> None:
+    """Sibling of the Java sweep's blank-run quadratic — the MULTILINE
+    ``^\\s*`` idiom in ``_IMPORT_SINGLE_RE`` on a trailing blank run;
+    horizontal-only indent is linear and the file's real import is
+    still found."""
+    import time
+
+    (tmp_path / "main.go").write_text(
+        'package main\nimport "github.com/foo/bar"\n'
+        + "\n" * (1 << 17),
+        encoding="utf-8",
+    )
+    start = time.monotonic()
+    scan = scan_imports(tmp_path)
+    assert time.monotonic() - start < 5.0
+    assert "github.com/foo/bar" in scan

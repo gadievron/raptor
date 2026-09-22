@@ -71,8 +71,12 @@ _DEFAULT_MAX_DEPTH = 12
 # Java imports: ``import x.y.Z;``, ``import static x.y.Z.method;``,
 # ``import x.*;``. Capture the dotted path before the optional
 # wildcard / method tail.
+# Leading indent is HORIZONTAL-only ([^\S\n]): under MULTILINE the
+# ``^\s*`` spelling re-scans a run of blank lines from every line
+# start inside it — quadratic on attacker-supplied source files
+# (the import sweep walks every file of the ecosystem).
 _IMPORT_RE = re.compile(
-    r"^\s*import\s+(?:static\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*(?:\.\*)?\s*;",
+    r"^[^\S\n]*import\s+(?:static\s+)?([A-Za-z_][A-Za-z0-9_.]*)\s*(?:\.\*)?\s*;",
     re.MULTILINE,
 )
 

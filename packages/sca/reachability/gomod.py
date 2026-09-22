@@ -32,8 +32,11 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_DEPTH = 12
 
 # Single-line: ``import "foo"`` (with optional alias prefix).
+# Leading indent is HORIZONTAL-only ([^\S\n]): under MULTILINE the
+# ``^\s*`` spelling re-scans a run of blank lines from every line
+# start inside it — quadratic on attacker-supplied source files.
 _IMPORT_SINGLE_RE = re.compile(
-    r'^\s*import\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+)?"([^"]+)"',
+    r'^[^\S\n]*import\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+)?"([^"]+)"',
     re.MULTILINE,
 )
 # Block form: ``import (\n  "foo"\n  alias "bar"\n)``. Only the
@@ -42,8 +45,12 @@ _IMPORT_SINGLE_RE = re.compile(
 # inside a trailing comment (``"fmt" // formatting (stdlib)``) and
 # silently drops every subsequent import.
 _IMPORT_BLOCK_OPEN_RE = re.compile(r"^\s*import\s*\(")
+# Applied per-line via ``.match`` (no blank-run exposure), but the
+# indent keeps the horizontal spelling anyway — identical match set
+# on a single line, and no MULTILINE ^\s* member for the idiom
+# census to chase.
 _BLOCK_LINE_RE = re.compile(
-    r'^\s*(?:[A-Za-z_][A-Za-z0-9_]*\s+)?"([^"]+)"',
+    r'^[^\S\n]*(?:[A-Za-z_][A-Za-z0-9_]*\s+)?"([^"]+)"',
     re.MULTILINE,
 )
 
