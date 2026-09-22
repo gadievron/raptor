@@ -995,14 +995,20 @@ def _is_retryable_error(error: Exception) -> bool:
 # without importing them: anthropic/openai ``APIConnectionError`` and
 # ``APITimeoutError``, httpx ``RemoteProtocolError`` / ``ReadError`` /
 # ``WriteError`` / ``ReadTimeout``, stdlib ``ConnectionError`` /
-# ``TimeoutError`` / ``http.client.IncompleteRead``. Deliberately NOT
-# message-based: a status error whose body text mentions "connection"
-# must never classify as a wire death. Misses fail open — an unmatched
-# wire death keeps today's retry behaviour, it never blocks a retry
-# that would otherwise run.
+# ``TimeoutError`` / ``http.client.IncompleteRead``. ``ConnectError``
+# is its own token — httpx's connect failure is neither a stdlib
+# ``ConnectionError`` subclass nor a name the ``ConnectionError``
+# token matches (harmless for the veto, whose stamp cannot be set on
+# a connect failure, but the classifier should not lie about a wire
+# death). ``SSLError`` covers mid-body TLS truncation surfaced
+# unwrapped. Deliberately NOT message-based: a status error whose
+# body text mentions "connection" must never classify as a wire
+# death. Misses fail open — an unmatched wire death keeps today's
+# retry behaviour, it never blocks a retry that would otherwise run.
 _TRANSPORT_FAILURE_TYPE_TOKENS = (
     "ConnectionError", "Timeout", "ProtocolError", "ReadError",
-    "WriteError", "NetworkError", "IncompleteRead",
+    "WriteError", "NetworkError", "IncompleteRead", "ConnectError",
+    "SSLError",
 )
 
 

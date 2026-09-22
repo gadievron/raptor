@@ -112,6 +112,15 @@ class TestIsTransportFailure:
         assert _is_transport_failure(ConnectionError("refused"))
         assert _is_transport_failure(TimeoutError("late"))
 
+    def test_httpx_connect_error(self):
+        # Not a stdlib ConnectionError subclass and not matched by the
+        # "ConnectionError" token — needs its own.
+        assert _is_transport_failure(httpx.ConnectError("refused"))
+
+    def test_ssl_error(self):
+        import ssl
+        assert _is_transport_failure(ssl.SSLError("tls truncated"))
+
     def test_status_error_is_not_a_wire_death(self):
         class InternalServerError(Exception):
             pass
