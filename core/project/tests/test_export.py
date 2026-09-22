@@ -38,6 +38,33 @@ class TestExportProject(unittest.TestCase):
                 self.assertTrue(any("report.md" in n for n in names))
 
 
+class TestKeyBearingStageExcluded(unittest.TestCase):
+    """The OpenAnt staged config view (openant-xdg, any depth) can
+    carry operator LLM provider api_keys; the scanner scrubs it after
+    each scan, and export excludes it defense-in-depth for stages a
+    crashed run left behind (zip transport strips the 0600)."""
+
+    def test_openant_xdg_never_ships(self):
+        with TemporaryDirectory() as d:
+            src = Path(d) / "project"
+            run = src / "openant_20990101_000000" / "openant_scan"
+            stage = run / "openant-xdg" / "openant"
+            stage.mkdir(parents=True)
+            (stage / "config.json").write_text(
+                '{"llm_providers": {"anthropic": {"api_key": "sk-fake"}}}')
+            (run / "pipeline_output.json").write_text("{}")
+            dest = Path(d) / "export.zip"
+            export_project(src, dest)
+            with zipfile.ZipFile(dest) as zf:
+                names = zf.namelist()
+                self.assertTrue(
+                    any("pipeline_output.json" in n for n in names))
+                self.assertFalse(any("openant-xdg" in n for n in names))
+                for name in names:
+                    self.assertNotIn("sk-fake", zf.read(name).decode(
+                        "utf-8", "replace"))
+
+
 class TestValidateZipContents(unittest.TestCase):
 
     def test_safe_zip(self):

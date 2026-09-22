@@ -258,6 +258,13 @@ def export_project(project_output_dir: Path, dest_path: Path,
     with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for dirpath, dirnames, filenames in os.walk(project_output_dir, followlinks=False):
             dirnames[:] = [d for d in dirnames if not Path(dirpath, d).is_symlink()]
+            # The OpenAnt scanner's staged config view (any depth) can
+            # carry operator-authored LLM provider api_keys merged from
+            # ~/.config/openant/config.json. The scanner scrubs it the
+            # moment its subprocess exits; this exclusion is
+            # defense-in-depth for a stage a crashed run left behind —
+            # zip transport strips the 0600 that protects it on disk.
+            dirnames[:] = [d for d in dirnames if d != "openant-xdg"]
             if Path(dirpath) == project_output_dir:
                 # Ghidra attach/import caches never ship: the cached
                 # re-database.json is the trust-bearing artifact
