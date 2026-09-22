@@ -799,10 +799,35 @@ def _ast_type_name(node: ast.AST) -> str:
     return ""
 
 
+# Flood-safe declaration patterns. The enrichment source is repo
+# content (hostile), so the same bounds as the taint extractors'
+# patterns apply: no repeated-modifier prefix (a keyword flood is
+# quadratic through it; the lazy type group absorbs the modifiers
+# instead — only the name/params groups are consumed), word-start
+# anchoring via lookbehind (an unanchored scan re-anchors at every
+# character of a long word run), and every variable-length class
+# bounded (an unclosed-paren/generics flood otherwise re-scans to
+# EOF from every candidate). The modifiers-plus-type group is a
+# short sequence of whitespace-separated tokens, lazy on the TOKEN
+# count — a flat character class mixing ``\s`` with a variable
+# whitespace separator re-split a flood at every character, so the
+# split candidates per anchor must be the handful of token
+# boundaries, not every position. Trade-off: declarations with more
+# than 9 modifier/type tokens, a token past 61 chars, or a
+# parameter list past the cap go unenriched — acceptable for this
+# hint-tier consumer.
+#
+# The C parameter cap is 1000 where the other arms use 400: real C
+# prototypes routinely carry long, column-aligned multi-line
+# parameter lists that overrun 400 chars, and at 400 those
+# declarations silently lose enrichment. The cost of raising it is
+# only a larger linear constant on unclosed-paren floods (each
+# candidate scans up to the cap); lowering it back would re-drop
+# real prototypes. Both directions are pinned by tests.
 _C_FUNC_PAT = re.compile(
-    r"(?:static\s+|inline\s+|extern\s+|const\s+)*"
-    r"(\w[\w\s\*]*?)\s+"
-    r"(\w+)\s*\(([^)]*)\)",
+    r"(?<!\w)"
+    r"(\w[\w\*]{0,60}(?:\s+[\w\*]{1,61}){0,8}?)\s+"
+    r"(\w+)\s*\(([^)]{0,1000})\)",
     re.MULTILINE,
 )
 
@@ -838,8 +863,12 @@ def _extract_c_types(source: str, function_name: str) -> list[dict[str, str]]:
     return results
 
 
+# Whitespace before the parameter list rides inside the optional
+# generics group (adjacent \s* runs across a skipped optional are
+# quadratic on a whitespace flood after ``fn name``); classes
+# bounded per the block comment above _C_FUNC_PAT.
 _RUST_FUNC_PAT = re.compile(
-    r"fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)",
+    r"fn\s+(\w+)\s*(?:<[^>]{0,400}>\s*)?\(([^)]{0,400})\)",
     re.MULTILINE,
 )
 
@@ -876,8 +905,11 @@ def _extract_rust_types(source: str, function_name: str) -> list[dict[str, str]]
     return results
 
 
+# Receiver and parameter classes bounded per the block comment above
+# _C_FUNC_PAT (a repeated unclosed ``func (`` re-scanned to EOF from
+# every occurrence).
 _GO_FUNC_PAT = re.compile(
-    r"func\s+(?:\([^)]*\)\s+)?(\w+)\s*\(([^)]*)\)",
+    r"func\s+(?:\([^)]{0,400}\)\s+)?(\w+)\s*\(([^)]{0,400})\)",
     re.MULTILINE,
 )
 
@@ -910,10 +942,14 @@ def _extract_go_types(source: str, function_name: str) -> list[dict[str, str]]:
     return results
 
 
+# No modifier/whitespace prefix loop (its bare ``|\s`` arm made a
+# whitespace or keyword flood catastrophic — the lazy type group
+# absorbs the modifiers instead); anchored and bounded per the block
+# comment above _C_FUNC_PAT.
 _JAVA_METHOD_PAT = re.compile(
-    r"(?:public|private|protected|static|final|abstract|synchronized|\s)*"
-    r"(\w[\w<>\[\],\s]*?)\s+"
-    r"(\w+)\s*\(([^)]*)\)",
+    r"(?<!\w)"
+    r"(\w[\w<>\[\],]{0,60}(?:\s+[\w<>\[\],]{1,61}){0,8}?)\s+"
+    r"(\w+)\s*\(([^)]{0,400})\)",
     re.MULTILINE,
 )
 

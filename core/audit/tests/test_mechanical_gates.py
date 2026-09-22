@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+import time
 
 from core.audit.mechanical_gates import (
     build_feeds_security_map,
@@ -669,6 +670,100 @@ class TestExtractTypeConstraints:
         """)
         results = extract_type_constraints(src, "test.py", "process")
         assert len(results) == 0
+
+
+class TestTypeConstraintPatternFloodPerformance:
+    """Hostile-source floods against the declaration patterns: the
+    repeated-modifier prefixes (the Java one's bare ``|\\s`` arm made
+    whitespace floods catastrophic), unanchored scans over long word
+    runs, and unbounded parameter/generics/receiver classes were each
+    quadratic or worse — tens of seconds to unbounded at 64KB. The
+    anchored, token-bounded patterns run in milliseconds; the budget
+    is generous for slow machines yet an order of magnitude below the
+    broken variants at this input size."""
+
+    def test_c_and_java_patterns_on_hostile_floods(self):
+        from core.audit.mechanical_gates import _C_FUNC_PAT, _JAVA_METHOD_PAT
+        floods = [
+            "public " * (128 * 1024 // 7),
+            "static\n" * (128 * 1024 // 7),
+            "synchronized " * (128 * 1024 // 13),
+            "x" * (128 * 1024),
+            " " * (128 * 1024),
+            "a b(" * (128 * 1024 // 4),
+            "a, " * (128 * 1024 // 3),
+            "int" + " " * (128 * 1024),
+        ]
+        for pat in (_C_FUNC_PAT, _JAVA_METHOD_PAT):
+            for flood in floods:
+                start = time.monotonic()
+                assert pat.findall(flood) == []
+                assert time.monotonic() - start < 2.0
+
+    def test_rust_and_go_patterns_on_hostile_floods(self):
+        from core.audit.mechanical_gates import _GO_FUNC_PAT, _RUST_FUNC_PAT
+        # The generics and receiver floods are sized at 256KB: the
+        # unbounded variants squeak under the budget at 128KB on a
+        # fast machine, and quadratic scaling puts 256KB decisively
+        # over it.
+        cases = [
+            (_RUST_FUNC_PAT, "fn f" + " " * (128 * 1024)),
+            (_RUST_FUNC_PAT, "fn f(" * (128 * 1024 // 5)),
+            (_RUST_FUNC_PAT, "fn f<a " * (256 * 1024 // 7)),
+            (_GO_FUNC_PAT, "func f(" * (128 * 1024 // 7)),
+            (_GO_FUNC_PAT, "func (" * (256 * 1024 // 6)),
+        ]
+        for pat, flood in cases:
+            start = time.monotonic()
+            assert pat.findall(flood) == []
+            assert time.monotonic() - start < 2.0
+
+    def test_real_declarations_still_enriched(self):
+        # Direction checks across all four arms, including the
+        # kernel-style split C declaration and generic/receiver
+        # shapes.
+        c_src = "static int\nkern(unsigned int flags, size_t len)\n{\n}\n"
+        assert extract_type_constraints(c_src, "k.c", "kern")
+        java_src = (
+            "protected static Map<String, Integer> gen(long id, "
+            "boolean flag) { return null; }"
+        )
+        assert extract_type_constraints(java_src, "G.java", "gen")
+        rust_src = "pub fn generic<T: Send>(n: usize, item: T) -> T { item }"
+        assert extract_type_constraints(rust_src, "g.rs", "generic")
+        go_src = "func (s *Server) Handle(count int, name string) {}"
+        assert extract_type_constraints(go_src, "h.go", "Handle")
+
+    def test_long_c_prototype_still_enriched(self):
+        # Direction check for the C arm's raised parameter cap:
+        # ~600 chars of column-aligned multi-line parameters — the
+        # shape long real C prototypes take — must keep enriching.
+        params = ",\n".join(
+            f"    const struct display_mode_lib *mode_lib_{i:02d}"
+            for i in range(12)
+        ) + ",\n    unsigned int flags"
+        assert 400 < len(params) <= 1000
+        src = f"static void dlg_get_reg(\n{params})\n{{\n}}\n"
+        results = extract_type_constraints(src, "d.c", "dlg_get_reg")
+        assert any(r["param"] == "flags" for r in results)
+
+    def test_declaration_past_caps_unenriched(self):
+        # Direction checks documenting the accepted trade-offs: the
+        # Java arm's parameter class is bounded at 400 chars, the C
+        # arm's at 1000 (see the cap comment at _C_FUNC_PAT).
+        params_520 = ", ".join(f"int p{i}" for i in range(60))
+        assert 400 < len(params_520) < 1000
+        java_src = f"public void wide({params_520}) {{}}"
+        assert extract_type_constraints(java_src, "W.java", "wide") == []
+        # The same list stays inside the C arm's higher cap...
+        assert extract_type_constraints(
+            f"int wide({params_520}) {{}}", "w.c", "wide",
+        )
+        # ...and past 1000 chars the C arm stops enriching too.
+        params_1200 = ", ".join(f"int q{i}" for i in range(140))
+        assert len(params_1200) > 1000
+        c_src = f"int huge({params_1200}) {{}}"
+        assert extract_type_constraints(c_src, "w.c", "huge") == []
 
 
 class TestFormatTypeConstraints:
