@@ -218,7 +218,21 @@ class LanguageDetector:
             msg = f"Repository path is not a directory: {repo_path}"
             raise ValueError(msg)
 
-    def detect_languages(self, min_files: int = 3) -> dict[str, LanguageInfo]:
+    def scan_repository(self) -> dict:
+        """One repository walk's raw statistics, for reuse across
+        detection tiers within a single run.
+
+        Fresh walk on every call — never memoised on the instance or
+        module, because repo state can change between runs. Callers
+        driving the tiered ``detect_languages`` retries pass the
+        returned dict to each tier so the walk (and its once-per-scan
+        banners) happens exactly once per run.
+        """
+        logger.info("Detecting languages in: %s", self.repo_path)
+        return self._scan_repository()
+
+    def detect_languages(self, min_files: int = 3,
+                         scan: dict | None = None) -> dict[str, LanguageInfo]:
         """
         Detect all languages in repository with confidence scores.
 
@@ -229,14 +243,16 @@ class LanguageDetector:
                 etc.) are detected regardless of source-file count,
                 provided the per-language confidence threshold is met
                 (gh #548).
+            scan: Statistics from a prior :meth:`scan_repository` walk
+                to reuse (retry tiers within one run — a re-walk would
+                also re-emit the once-per-scan banners). None = walk
+                now. The dict is annotated in place to record banners
+                already emitted for this walk.
 
         Returns:
             Dict mapping language name -> LanguageInfo
         """
-        logger.info("Detecting languages in: %s", self.repo_path)
-
-        # Scan repository and collect statistics
-        stats = self._scan_repository()
+        stats = scan if scan is not None else self.scan_repository()
 
         # Calculate confidence scores for each language
         detected = {}
@@ -297,7 +313,11 @@ class LanguageDetector:
             no_extractor_lang = self.NO_EXTRACTOR_EXTENSIONS.get(ext.lower())
             if no_extractor_lang:
                 unsupported[no_extractor_lang] += count
-        if unsupported:
+        # The marker rides on the stats dict, so a walk shared across
+        # retry tiers announces once while independent walks (separate
+        # runs) each announce — a module/instance flag would silence
+        # later runs of a changed repo.
+        if unsupported and not stats.get("unsupported_primary_announced"):
             top_lang, top_count = max(
                 unsupported.items(), key=lambda kv: kv[1],
             )
@@ -305,6 +325,7 @@ class LanguageDetector:
                 (info.file_count for info in detected.values()), default=0,
             )
             if top_count > detected_max:
+                stats["unsupported_primary_announced"] = True
                 covered = ", ".join(
                     f"{lang} ({info.file_count} files)"
                     for lang, info in sorted(detected.items())
@@ -318,7 +339,9 @@ class LanguageDetector:
 
         return detected
 
-    def detect_languages_floor(self, floor: int = 2) -> dict[str, LanguageInfo]:
+    def detect_languages_floor(self, floor: int = 2,
+                               scan: dict | None = None,
+                               ) -> dict[str, LanguageInfo]:
         """
         Last-resort detection tier — include any language with at least
         ``floor`` source files, **ignoring the per-language confidence
@@ -337,17 +360,21 @@ class LanguageDetector:
             floor: Minimum source files required per language. Default 2
                 — high enough to filter out a single stray file from
                 another language, low enough to admit minimal repros.
+            scan: Statistics from a prior :meth:`scan_repository` walk
+                to reuse (this tier only ever runs after two
+                detect_languages passes — a third walk of the same
+                tree buys nothing and re-emits the walk banner).
+                None = walk now.
 
         Returns:
             Dict mapping language name -> LanguageInfo for languages
             meeting only the file-count floor.
         """
         logger.info(
-            "Detecting languages in: %s (floor tier, floor=%s, ignoring confidence gate)",
-            self.repo_path,
+            "Floor-tier detection: floor=%s, ignoring confidence gate",
             floor
         )
-        stats = self._scan_repository()
+        stats = scan if scan is not None else self.scan_repository()
 
         detected = {}
         for lang, patterns in self.LANGUAGE_PATTERNS.items():

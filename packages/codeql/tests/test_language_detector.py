@@ -703,3 +703,65 @@ class TestUnsupportedPrimaryBanner:
 
         msgs = self._warnings(mock_logger)
         assert not any("no extractor" in m for m in msgs), msgs
+
+
+class TestScanReuseAcrossTiers:
+    """A walk shared via ``scan=`` must not re-walk or re-announce; an
+    independent call (separate run) must keep doing both — repo state
+    can change between runs, so nothing may be memoised past the
+    caller's own dict."""
+
+    def _sparse_php_repo(self, tmp_path: Path) -> Path:
+        # Unsupported-primary shape: no extractor language passes any
+        # tier, so a caller runs all three tiers back to back.
+        for i in range(12):
+            _write(tmp_path, f"src/page{i}.php", "<?php\n")
+        return tmp_path
+
+    def _instrument(self, detector, monkeypatch):
+        walks = []
+        original = detector._scan_repository
+
+        def counting():
+            walks.append(1)
+            return original()
+
+        monkeypatch.setattr(detector, "_scan_repository", counting)
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+        return walks, mock_logger
+
+    def _banners(self, mock_logger):
+        msgs = [
+            c.args[0] % tuple(c.args[1:]) if c.args[1:] else c.args[0]
+            for c in mock_logger.warning.call_args_list
+        ]
+        return [m for m in msgs if "no extractor" in m]
+
+    def test_shared_scan_walks_once_and_announces_once(
+            self, tmp_path: Path, monkeypatch):
+        detector = LanguageDetector(self._sparse_php_repo(tmp_path))
+        walks, mock_logger = self._instrument(detector, monkeypatch)
+
+        scan = detector.scan_repository()
+        assert not detector.detect_languages(min_files=3, scan=scan)
+        assert not detector.detect_languages(min_files=1, scan=scan)
+        assert not detector.detect_languages_floor(floor=2, scan=scan)
+
+        assert len(walks) == 1, "shared scan must not re-walk the repo"
+        assert len(self._banners(mock_logger)) == 1, (
+            "unsupported-primary banner must announce once per walk"
+        )
+
+    def test_independent_calls_each_walk_and_announce(
+            self, tmp_path: Path, monkeypatch):
+        detector = LanguageDetector(self._sparse_php_repo(tmp_path))
+        walks, mock_logger = self._instrument(detector, monkeypatch)
+
+        assert not detector.detect_languages(min_files=3)
+        assert not detector.detect_languages(min_files=3)
+
+        assert len(walks) == 2, (
+            "independent runs must re-walk — repo state can change"
+        )
+        assert len(self._banners(mock_logger)) == 2

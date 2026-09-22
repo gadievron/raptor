@@ -372,7 +372,15 @@ class CodeQLAgent:
                     )
             else:
                 logger.info("Auto-detecting languages...")
-                detected = self.language_detector.detect_languages(min_files=min_files)
+                # One repository walk serves every retry tier below.
+                # Re-scanning per tier re-emitted the walk-scoped
+                # banners (unsupported-primary warning) on sparse
+                # targets. Scoped to this flow on purpose — repo state
+                # can change between runs, so nothing is memoised on
+                # the detector or module.
+                scan = self.language_detector.scan_repository()
+                detected = self.language_detector.detect_languages(
+                    min_files=min_files, scan=scan)
                 detected = self.language_detector.filter_codeql_supported(detected)
 
                 # Small-target retry. The default min_files=3 is a
@@ -387,7 +395,8 @@ class CodeQLAgent:
                         "No languages met min_files=%s threshold; retrying with min_files=1 (small target — single-file fixtures and minimal repros land here)",
                         min_files
                     )
-                    detected = self.language_detector.detect_languages(min_files=1)
+                    detected = self.language_detector.detect_languages(
+                        min_files=1, scan=scan)
                     detected = self.language_detector.filter_codeql_supported(detected)
 
                 # Confidence-gate fallback. The min_confidence threshold
@@ -407,7 +416,8 @@ class CodeQLAgent:
                         "two retries; falling back to file-count floor "
                         "(low-confidence detection — verify results)"
                     )
-                    detected = self.language_detector.detect_languages_floor(floor=2)
+                    detected = self.language_detector.detect_languages_floor(
+                        floor=2, scan=scan)
                     detected = self.language_detector.filter_codeql_supported(detected)
 
             if not detected:
