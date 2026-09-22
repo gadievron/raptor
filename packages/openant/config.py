@@ -36,6 +36,30 @@ OPENANT_LEVEL_ENV = "OPENANT_LEVEL"
 OPENANT_UPSTREAM_URL = "https://github.com/knostic/OpenAnt"
 OPENANT_PINNED_COMMIT = "abd1dcf416a1ca329441c4bf8ebb68f70dd0f3cf"
 
+
+def env_choice(env_var: str, choices: tuple[str, ...], fallback: str) -> str:
+    """Env-seeded argparse default with EXPLICIT validation.
+
+    argparse does not validate string ``default=`` values against
+    ``choices`` — an invalid env value would silently steer the run.
+    Invalid values warn on stderr and fall back; the explicit flag
+    always wins over whatever this returns.
+    """
+    value = os.environ.get(env_var)
+    if value is None or value == "":
+        return fallback
+    if value in choices:
+        return value
+    import sys
+
+    from core.security.log_sanitisation import sanitise_for_terminal
+    print(
+        f"⚠️  Ignoring invalid {env_var}={sanitise_for_terminal(value, max_len=60)!r} "
+        f"(choices: {', '.join(choices)}); using {fallback}",
+        file=sys.stderr,
+    )
+    return fallback
+
 _SENTINEL = Path("/does/not/exist")
 _CORE_MARKER = "core/scanner.py"
 

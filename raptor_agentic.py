@@ -2176,11 +2176,18 @@ Examples:
                         help="Run OpenAnt only (skip Semgrep/CodeQL)")
     parser.add_argument("--openant-core", default=os.environ.get("OPENANT_CORE"),
                         help="Path to openant-core directory (default: $OPENANT_CORE)")
-    parser.add_argument("--openant-model", default="sonnet", choices=["opus", "sonnet"],
-                        help="OpenAnt LLM model (default: sonnet)")
-    parser.add_argument("--openant-level", default="reachable",
+    from packages.openant.config import env_choice
+    parser.add_argument("--openant-model",
+                        default=env_choice("OPENANT_MODEL",
+                                           ("opus", "sonnet"), "sonnet"),
+                        choices=["opus", "sonnet"],
+                        help="OpenAnt LLM model (default: $OPENANT_MODEL or sonnet)")
+    parser.add_argument("--openant-level",
+                        default=env_choice("OPENANT_LEVEL",
+                                           ("all", "reachable", "codeql",
+                                            "exploitable"), "reachable"),
                         choices=["all", "reachable", "codeql", "exploitable"],
-                        help="OpenAnt analysis depth (default: reachable)")
+                        help="OpenAnt analysis depth (default: $OPENANT_LEVEL or reachable)")
 
     parser.add_argument(
         "--rank", action="store_true",

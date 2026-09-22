@@ -203,3 +203,42 @@ class TestSupplyChainPin(unittest.TestCase):
                     prov = scanner.checkout_provenance(core)
             self.assertIs(prov["matches"], True)
             self.assertEqual(prov["head"], head)
+
+
+class TestEnvKnobsReachArgparse(unittest.TestCase):
+    """$OPENANT_MODEL / $OPENANT_LEVEL are documented operator knobs;
+    both entry points must seed their argparse defaults from them
+    (env respected), while an explicit flag always wins."""
+
+    def _parser(self):
+        import raptor_openant
+        return raptor_openant._build_parser()
+
+    def test_env_seeds_defaults(self):
+        with patch.dict(os.environ, {"OPENANT_MODEL": "opus",
+                                     "OPENANT_LEVEL": "all"}, clear=False):
+            args = self._parser().parse_args(["--repo", "/x"])
+        self.assertEqual(args.model, "opus")
+        self.assertEqual(args.level, "all")
+
+    def test_explicit_flag_beats_env(self):
+        with patch.dict(os.environ, {"OPENANT_MODEL": "opus",
+                                     "OPENANT_LEVEL": "all"}, clear=False):
+            args = self._parser().parse_args(
+                ["--repo", "/x", "--model", "sonnet", "--level", "codeql"])
+        self.assertEqual(args.model, "sonnet")
+        self.assertEqual(args.level, "codeql")
+
+    def test_invalid_env_value_falls_back_loudly(self):
+        # argparse does NOT validate string defaults against choices —
+        # env_choice must reject the value itself.
+        with patch.dict(os.environ, {"OPENANT_MODEL": "garbage",
+                                     "OPENANT_LEVEL": "bogus"}, clear=False):
+            args = self._parser().parse_args(["--repo", "/x"])
+        self.assertEqual(args.model, "sonnet")
+        self.assertEqual(args.level, "reachable")
+
+    def test_agentic_surface_is_env_aware(self):
+        src = (Path(__file__).parents[3] / "raptor_agentic.py").read_text()
+        self.assertIn('env_choice("OPENANT_MODEL"', src)
+        self.assertIn('env_choice("OPENANT_LEVEL"', src)

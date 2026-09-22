@@ -30,7 +30,7 @@ logger = get_logger()
 _BASE = Path(__file__).parent
 
 
-def main() -> int:
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="OpenAnt LLM-powered source-code vulnerability scan",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -47,17 +47,28 @@ def main() -> int:
              "the active project / caller dir when run via raptor.py)",
     )
     parser.add_argument("--out", help="Output directory (injected by raptor.py lifecycle)")
+    from packages.openant.config import env_choice
+
     parser.add_argument(
         "--model",
-        default="sonnet",
+        # Documented operator knob: $OPENANT_MODEL seeds the default,
+        # the explicit flag always wins. env_choice validates the env
+        # value itself — argparse does NOT check string defaults
+        # against choices, so an unvalidated env default would let a
+        # typo'd knob silently steer the run.
+        default=env_choice("OPENANT_MODEL", ("opus", "sonnet"), "sonnet"),
         choices=["opus", "sonnet"],
-        help="OpenAnt LLM model (default: sonnet)",
+        help="OpenAnt LLM model (default: $OPENANT_MODEL or sonnet)",
     )
     parser.add_argument(
         "--level",
-        default="reachable",
+        default=env_choice(
+            "OPENANT_LEVEL",
+            ("all", "reachable", "codeql", "exploitable"),
+            "reachable",
+        ),
         choices=["all", "reachable", "codeql", "exploitable"],
-        help="Analysis depth (default: reachable)",
+        help="Analysis depth (default: $OPENANT_LEVEL or reachable)",
     )
     parser.add_argument("--no-enhance", action="store_true", help="Skip OpenAnt enhance phase")
     parser.add_argument("--verify", action="store_true", help="Enable OpenAnt stage-2 verification")
@@ -84,6 +95,11 @@ def main() -> int:
         help="OpenAnt parallel workers (default: 4)",
     )
 
+    return parser
+
+
+def main() -> int:
+    parser = _build_parser()
     args = parser.parse_args()
 
     if not args.repo:
