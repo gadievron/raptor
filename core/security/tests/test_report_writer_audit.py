@@ -38,6 +38,8 @@ run, forcing a security-review checkpoint at file-add time.
 
 from __future__ import annotations
 
+import pytest
+
 from core.security.report_writer_audit import (
     audit_repo,
     audit_source,
@@ -46,6 +48,10 @@ from core.security.report_writer_audit import (
 )
 
 
+# Runs the full AST taint rule over every registered report writer —
+# genuinely heavy; over the fast tier's budget. The registry and rule
+# fixtures below keep the audit machinery pinned in the default tier.
+@pytest.mark.slow
 def test_no_unallowlisted_raw_llm_values_in_report_writers():
     """Every LLM-derived value reaching a write sink in the registered
     report writers must be sanitised at the call site OR carry an

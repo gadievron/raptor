@@ -50,6 +50,10 @@ def test_module_filter_swallows_the_exact_message():
     assert "SUPPRESSED-OK" in r.stdout
 
 
+# Boots a whole nested pytest session under the repo config — the
+# child interpreter + collection startup is the cost, and it is the
+# mechanism under test; over the fast tier's budget.
+@pytest.mark.slow
 def test_pytest_config_swallows_the_exact_message(tmp_path):
     probe = tmp_path / "test_forkwarn_probe.py"
     probe.write_text(textwrap.dedent(f"""

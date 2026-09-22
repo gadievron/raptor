@@ -2279,6 +2279,11 @@ class TestCliProfileAuthoritative(unittest.TestCase):
 class TestSandboxObservability(unittest.TestCase):
     """Test signal interpretation and sandbox_info."""
 
+    # gcc compile plus the spawn backend's whole child setup (userns
+    # maps, pivot_root, pid-ns fork, fresh /proc, Landlock, seccomp) —
+    # measured 5-7s on loaded workers (see the budget comment below);
+    # over the fast tier's budget.
+    @pytest.mark.slow
     def test_crash_detected(self):
         """A segfaulting process gets sandbox_info with crash evidence."""
         # Write a tiny C program that segfaults, compile and run it

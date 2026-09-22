@@ -526,6 +526,10 @@ _SUPERVISOR = textwrap.dedent("""\
 # Exercises mount-delivered capability; hosts with userns but no mount
 # capability degrade by design -> named SKIP, not a mid-flight failure.
 @requires_mount
+# Two overlapped real spawns plus a post-SIGKILL wait on the watcher's
+# poll bound — the wall time IS the property; far over the fast tier's
+# budget.
+@_pytest.mark.slow
 def test_cohort_reaped_when_supervisor_hard_killed(tmp_path: Path) -> None:
     """The leaked-cohort shape: SIGKILL a supervisor with two
     overlapped spawns in flight. Every target must be reaped within

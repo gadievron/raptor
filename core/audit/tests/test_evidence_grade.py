@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from core.audit.evidence_grade import (
     VALID_EVIDENCE_TOOLS,
     Confidence,
@@ -860,6 +862,11 @@ class TestProducerStampClosure:
                         found.append((f"{rel}:{node.lineno}", stamp))
         return found, call_sites
 
+    # Full AST parse + producer-site walk of every core/audit runtime
+    # module with function-local constant resolution — genuinely heavy;
+    # over the fast tier's budget. The attribute-writer sibling keeps a
+    # sweep of the same closure in the default tier.
+    @pytest.mark.slow
     def test_every_finding_producer_stamp_passes_the_firewall(self):
         from core.audit.evidence_grade import (
             _PROVENANCE_WRAPPERS,

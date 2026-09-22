@@ -5666,6 +5666,10 @@ class TestSageFpPrimer:
         )
         assert not (out / "suppressions.jsonl").exists()
 
+    # A full run_orchestrator pass over the fixture target — over the
+    # fast tier's budget on loaded workers. The matching-prior sibling
+    # keeps the primer's injection path in the default tier.
+    @pytest.mark.slow
     def test_blind_first_pass_withholds_hint(self, tmp_path: Path):
         def rows(target, **kw):
             if kw["function"] != "check_pw":

@@ -812,15 +812,21 @@ class TestVerdictIdiomClosure:
             "v = r.get('is_' 'true_positive', False)\n"
         )
 
+    # The key-mention pre-filter still reads every runtime file, so
+    # the smoke breached the fast tier's budget as the tree grew; it
+    # now runs in the nightly tier alongside the full scan. The
+    # fixture-level scanner tests above keep the detection itself
+    # pinned in the default tier.
+    @pytest.mark.slow
     def test_smoke_no_misreads_in_key_mentioning_runtime_code(self):
-        # Default-tier smoke: scan only the runtime files whose text
+        # Smoke: scan only the runtime files whose text
         # mentions a verdict key — the subset every realistically
         # written misread lives in (the flagged idioms read the key as
         # a string/attribute literal, which appears verbatim in source
         # unless deliberately split/escaped). Parser-folded literals
-        # are invisible to the selector and are owned by the nightly
+        # are invisible to the selector and are owned by the
         # full scan below; the folded-shapes scanner test above keeps
-        # the detection itself pinned daily.
+        # the detection itself pinned.
         subset = []
         for f in _runtime_py_files():
             try:
@@ -844,11 +850,12 @@ class TestVerdictIdiomClosure:
     # Full-tree scan: genuinely heavy (a full AST parse + walk of every
     # runtime module; it breached the default tier's per-test budget on
     # CI), so it runs in the nightly tier. Trade-off, both directions:
-    # unmarking it puts a multi-second, contention-sensitive test back
-    # in every PR run; marking it WITHOUT the smoke above would leave a
-    # new misread invisible until the next nightly. The smoke covers
-    # every file that textually mentions a key on every PR; only
-    # parser-folded key literals wait for nightly.
+    # unmarking it (or the smoke above, which later breached the same
+    # budget) puts a multi-second, contention-sensitive test back in
+    # every PR run; the cost of both waiting for nightly is that a new
+    # misread stays invisible until the next nightly run. The
+    # fixture-level scanner tests keep the detection logic itself
+    # pinned on every PR.
     @pytest.mark.slow
     def test_no_raw_tri_state_misreads_in_runtime_code(self):
         violations = []

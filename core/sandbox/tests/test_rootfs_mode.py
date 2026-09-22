@@ -348,6 +348,11 @@ class TestRootfsPivotE2E(_RootfsE2EBase):
     @requires_userns
     # Exercises mount-delivered capability; hosts with userns but no mount capability degrade by design -> named SKIP. Class siblings that validate arguments or parse files stay ungated: they run on any host.
     @requires_mount
+    # Full namespace + pivot_root + PID-1 waiter setup around a real
+    # crash — measured multi-second on loaded runners; over the fast
+    # tier's budget. The exit-status sibling keeps the E2E path in the
+    # default tier.
+    @_pytest.mark.slow
     def test_signal_death_mirrored_as_128_plus_n(self):
         """abort()-class deaths are the raison d'être of the PID-1
         waiter: a PID-1 target would have the self-signal filtered by

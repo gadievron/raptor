@@ -191,6 +191,9 @@ class TestConfigureCliLogging:
         finally:
             root.handlers = saved
 
+    # git ls-files plus a read + pattern scan of every runtime source
+    # file — genuinely heavy tree sweep; over the fast tier's budget.
+    @pytest.mark.slow
     def test_runtime_sources_never_configure_console_outside_chokepoint(self):
         """Closure oracle for the logging-sink exclusion of the
         exception-relay arm: the exclusion is sound only while every
