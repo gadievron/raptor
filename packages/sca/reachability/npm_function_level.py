@@ -24,9 +24,11 @@ tier doesn't fire — module-level verdict preserved.
 ## Verdict transitions (mirror the PyPI tier)
 
   * Any affected function CALLED → ``likely_called``.
-  * All affected functions NOT_CALLED, none UNCERTAIN →
-    ``not_function_reachable``.
-  * Any UNCERTAIN OR mixed → leave at ``imported``.
+  * EVERY advisory-listed function evaluated and NOT_CALLED, none
+    UNCERTAIN → ``not_function_reachable``.
+  * Any UNCERTAIN, mixed, or unevaluable entry (e.g. a dotted
+    spelling the chain-based resolver can't bind) → leave at
+    ``imported``.
 
 ## Cost
 
@@ -170,6 +172,7 @@ def refine_npm_verdicts(
             continue
 
         verdicts = {r.verdict for _, r in paired}
+        covered = len(paired) == len(funcs)
         if Verdict.CALLED in verdicts:
             evidence_lines: list[str] = []
             called_fn_names: list[str] = []
@@ -189,7 +192,16 @@ def refine_npm_verdicts(
                 ),
                 affected_summary=affected,
             )
-        elif Verdict.UNCERTAIN in verdicts:
+        elif Verdict.UNCERTAIN in verdicts or not covered:
+            # ``not covered``: at least one advisory entry never
+            # paired — a dotted spelling ``_qualified_name`` refuses
+            # (chain semantics) or a query the resolver rejects. A
+            # mixed advisory list (``["helper", "Parser.parse"]`` —
+            # the realistic GHSA shape) would otherwise downgrade on
+            # the bindable remainder alone while the entry the
+            # project actually exercises was silently discarded:
+            # a false high-confidence suppression. Same epistemic
+            # state as UNCERTAIN → preserve the module-level verdict.
             continue
         else:
             out[d.key()] = Reachability(

@@ -8,9 +8,10 @@ and runs the cross-language resolver against OSV ``ecosystem_specific
 ## Verdict transitions
 
   * Any affected symbol CALLED -> ``likely_called``
-  * All affected symbols NOT_CALLED, none UNCERTAIN ->
-    ``not_function_reachable``
-  * Any UNCERTAIN OR mixed -> preserve existing verdict
+  * EVERY advisory-listed symbol evaluated and NOT_CALLED, none
+    UNCERTAIN -> ``not_function_reachable``
+  * Any UNCERTAIN, mixed, or unevaluable entry -> preserve existing
+    verdict
 
 ## Qualified-name shape
 
@@ -70,12 +71,16 @@ def refine_cargo_verdicts(
     cargo_symbol_map: dict[str, list[str]],
     inventory: dict[str, Any] | None = None,
 ) -> None:
+    # The any-dot check skips deps whose advisory entries are ALL
+    # unresolved markers — nothing queryable, so the tier could
+    # neither upgrade nor honestly downgrade; don't pay for an
+    # inventory build to abstain.
     candidates = [
         d for d in deps
         if d.ecosystem == "Cargo"
         and out.get(d.key()) is not None
         and out[d.key()].verdict == "imported"
-        and cargo_symbol_map.get(d.key())
+        and any("." in q for q in cargo_symbol_map.get(d.key()) or [])
     ]
     if not candidates:
         return
@@ -109,6 +114,7 @@ def refine_cargo_verdicts(
         if not paired:
             continue
         verdicts = {r.verdict for _, r in paired}
+        covered = len(paired) == len(qualified_names)
         if Verdict.CALLED in verdicts:
             evidence: list[str] = []
             called: list[str] = []
@@ -128,7 +134,12 @@ def refine_cargo_verdicts(
                 ),
                 affected_summary=affected,
             )
-        elif Verdict.UNCERTAIN in verdicts:
+        elif Verdict.UNCERTAIN in verdicts or not covered:
+            # ``not covered``: some advisory entry never paired — an
+            # UNRESOLVED_ENTRY marker (bare symbol under a
+            # non-namespace crate spelling) or a resolver refusal.
+            # Downgrading on the bindable remainder alone would be a
+            # false suppression → abstain.
             continue
         else:
             out[d.key()] = Reachability(

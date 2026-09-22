@@ -8,9 +8,10 @@ the cross-language resolver against OSV symbol data.
 ## Verdict transitions
 
   * Any affected symbol CALLED -> ``likely_called``
-  * All affected symbols NOT_CALLED, none UNCERTAIN ->
-    ``not_function_reachable``
-  * Any UNCERTAIN OR mixed -> preserve existing verdict
+  * EVERY advisory-listed symbol evaluated and NOT_CALLED, none
+    UNCERTAIN -> ``not_function_reachable``
+  * Any UNCERTAIN, mixed, or unevaluable entry -> preserve existing
+    verdict
 
 ## Qualified-name shape
 
@@ -90,12 +91,16 @@ def refine_nuget_verdicts(
     nuget_symbol_map: dict[str, list[str]],
     inventory: dict[str, Any] | None = None,
 ) -> None:
+    # The any-dot check skips deps whose advisory entries are ALL
+    # unresolved markers — nothing queryable, so the tier could
+    # neither upgrade nor honestly downgrade; don't pay for an
+    # inventory build to abstain.
     candidates = [
         d for d in deps
         if d.ecosystem == "NuGet"
         and out.get(d.key()) is not None
         and out[d.key()].verdict == "imported"
-        and nuget_symbol_map.get(d.key())
+        and any("." in q for q in nuget_symbol_map.get(d.key()) or [])
     ]
     if not candidates:
         return
@@ -129,6 +134,7 @@ def refine_nuget_verdicts(
         if not paired:
             continue
         verdicts = {r.verdict for _, r in paired}
+        covered = len(paired) == len(qualified_names)
         bare_using_masked = any(
             r.verdict == Verdict.NOT_CALLED
             and _bare_using_masks(inventory, qn)
@@ -151,12 +157,17 @@ def refine_nuget_verdicts(
                 ),
                 affected_summary=affected,
             )
-        elif Verdict.UNCERTAIN in verdicts or bare_using_masked:
+        elif Verdict.UNCERTAIN in verdicts or bare_using_masked \
+                or not covered:
             # UNCERTAIN → preserve, per the tier's honesty rule.
             # bare_using_masked is the same epistemic state: the
             # resolver returned NOT_CALLED only because a bare
             # namespace ``using`` leaves the class name unbound —
             # the matching call chain is right there in the file.
+            # ``not covered`` too: some advisory entry never paired
+            # (an UNRESOLVED_ENTRY marker or a resolver refusal), so
+            # "all listed symbols unreached" would overstate the
+            # evidence.
             continue
         else:
             out[d.key()] = Reachability(

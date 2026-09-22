@@ -21,9 +21,10 @@ match against Go projects.
 ## Verdict transitions (mirror the PyPI + npm tiers)
 
   * Any affected function CALLED → ``likely_called``.
-  * All affected functions NOT_CALLED, none UNCERTAIN →
-    ``not_function_reachable``.
-  * Any UNCERTAIN OR mixed → leave at ``imported``.
+  * EVERY advisory-listed symbol evaluated and NOT_CALLED, none
+    UNCERTAIN → ``not_function_reachable``.
+  * Any UNCERTAIN, mixed, or unevaluable entry → leave at
+    ``imported``.
 
 ## Qualified-name shape
 
@@ -110,9 +111,15 @@ def _extract_qualified(advisory: Any, dep_name: str) -> list[str]:
     ``"<path>.<symbol>"``.
 
     Flat fallback shapes (``affected_symbols`` /
-    ``affected_functions``) lack a per-symbol path; for those we
-    emit ``"<dep_name>.<symbol>"`` — operator gets module-level
-    matching for that case.
+    ``affected_functions``) lack a per-symbol path. An entry that
+    already carries the ``<dep_name>.`` or ``<dep_name>/`` prefix is
+    emitted verbatim; an entry spelled with the package TAIL
+    (``lib.Parse`` under ``example.com/lib``) is rebound onto the
+    module path; every dotted entry additionally emits the
+    slash-joined direct-sub-package twin
+    (``<dep_name>/<seg0>.<rest>``) and keeps the blindly-prefixed
+    twin; anything else is emitted as ``"<dep_name>.<symbol>"`` —
+    operator gets module-level matching for that case.
     """
     out: list[str] = []
     es = getattr(advisory, "ecosystem_specific", None) or {}
@@ -126,20 +133,64 @@ def _extract_qualified(advisory: Any, dep_name: str) -> list[str]:
             path = imp.get("path")
             symbols = imp.get("symbols") or []
             for s in symbols:
-                if not isinstance(s, str):
+                if not (isinstance(s, str) and s):
                     continue
                 head = path if isinstance(path, str) and path else dep_name
                 if not head:
                     continue
                 out.append(f"{head}.{s}")
-    # Flat-list fallback — no per-symbol path.
+    # Flat-list fallback — no per-symbol path. Blindly composing ONE
+    # reading of an entry minted well-formed garbage queries the
+    # resolver answers NOT_CALLED, manufacturing a false
+    # high-confidence ``not_function_reachable`` on a symbol the
+    # project genuinely calls. Per entry, emit the honest query for
+    # EVERY plausible reading — all twins are counted and queried, so
+    # whichever reading the advisory meant, the honest query is
+    # present and a flat entry can never pair vacuously and mint the
+    # suppression:
+    #   * already fully qualified, dot-joined (``<dep_name>.<sym>``)
+    #     or slash-joined sub-package path
+    #     (``example.com/lib/sub.Parse`` — the canonical OSV symbol
+    #     shape appearing in a flat list) → verbatim;
+    #   * package-TAIL spelling (``lib.Parse`` under
+    #     ``example.com/lib`` — the source-level spelling
+    #     human-written advisory function lists use, since Go call
+    #     sites read ``lib.Parse``) → rebind onto the module path
+    #     (``example.com/lib.Parse``);
+    #   * dotted head that may name a direct SUB-PACKAGE
+    #     (``sub.Parse`` meaning ``example.com/lib/sub.Parse`` —
+    #     realistically ``ssh.ParsePublicKey`` under
+    #     ``golang.org/x/crypto``) → slash-joined twin;
+    #   * every dotted entry keeps the blindly-prefixed twin
+    #     (``example.com/lib.lib.Parse``) for the rare type genuinely
+    #     named after its package, and bare entries get the plain
+    #     module-path prefix.
+    # A NESTED sub-package tail (``b.Parse`` meaning
+    # ``example.com/lib/a/b.Parse``) has no statically-composable
+    # honest spelling here — the refine pass closes it by deriving
+    # twins from the project's own imports of this module (a project
+    # can only call the function after importing its package, so the
+    # import-derived twin always exists for a called function).
+    tail: str = dep_name.rsplit("/", 1)[-1]
     for key in ("affected_symbols", "affected_functions"):
         for source in (es, ds):
             if not isinstance(source, dict):
                 continue
             v = source.get(key)
-            if isinstance(v, list):
-                out.extend(f"{dep_name}.{s}" for s in v if isinstance(s, str) and dep_name)
+            if not (isinstance(v, list) and dep_name):
+                continue
+            for s in v:
+                if not (isinstance(s, str) and s):
+                    continue
+                if s.startswith(dep_name + ".") or s.startswith(dep_name + "/"):
+                    out.append(s)
+                    continue
+                if tail and len(s) > len(tail) + 1 and s.startswith(tail + "."):
+                    out.append(f"{dep_name}.{s[len(tail) + 1:]}")
+                seg0, _, rest = s.partition(".")
+                if seg0 and rest:
+                    out.append(f"{dep_name}/{seg0}.{rest}")
+                out.append(f"{dep_name}.{s}")
     return out
 
 
@@ -193,25 +244,82 @@ def refine_go_verdicts(
             return
 
     from core.analysis.reachability import (
+        ReachabilityResult,
         Verdict,
         function_called,
     )
 
+    # The project's import universe — every import path the
+    # call-graph pass recorded. Used to derive per-entry twins for
+    # advisory spellings that name a sub-package by tail or by
+    # relative dotted path: a project can only CALL a function after
+    # IMPORTING its package, so for any spelling of a genuinely
+    # called function the import-derived twin exists and binds — the
+    # statically-composed reading can never pair vacuously alone.
+    universe: set[str] = {
+        v
+        for f in (inventory.get("files") or [])
+        for v in ((f.get("call_graph") or {}).get("imports") or {}).values()
+        if isinstance(v, str) and v
+    }
+
+    # Prefer-stronger ordering for combining one entry's verdicts
+    # across its reading twins: any CALLED wins outright, else any
+    # UNCERTAIN, and NOT_CALLED only when every reading came back
+    # not-called.
+    strength = {Verdict.NOT_CALLED: 0, Verdict.UNCERTAIN: 1, Verdict.CALLED: 2}
+
     for d in candidates:
+        dep_module = d.name
         qualified_names = go_symbol_map[d.key()]
         paired = []
         for qualified in qualified_names:
             if not qualified or "." not in qualified:
                 continue
-            try:
-                paired.append((qualified, function_called(inventory, qualified)))
-            except ValueError:
+            queries: list[str] = [qualified]
+            # Import-derived sub-package twins (restricted to imports
+            # under THIS dep's module path — a crafted entry can never
+            # borrow another module's packages): for a reading
+            # ``<module>.<head>.<rest>``, every imported
+            # ``<module>/...`` path whose tail segment == head, or
+            # whose slash-relative path dot-spells a prefix of the
+            # remainder, yields a ``<import_path>.<suffix>`` twin.
+            if dep_module and qualified.startswith(dep_module + "."):
+                rem = qualified[len(dep_module) + 1:]
+                head, _, rest = rem.partition(".")
+                if head and rest:
+                    for pth in universe:
+                        if not pth.startswith(dep_module + "/"):
+                            continue
+                        rel_dot = pth[len(dep_module) + 1:].replace("/", ".")
+                        twin: str | None = None
+                        if rem.startswith(rel_dot + "."):
+                            suffix = rem[len(rel_dot) + 1:]
+                            if suffix:
+                                twin = f"{pth}.{suffix}"
+                        elif pth.rsplit("/", 1)[-1] == head:
+                            twin = f"{pth}.{rest}"
+                        if twin and twin not in queries:
+                            queries.append(twin)
+            best: ReachabilityResult | None = None
+            for q in queries:
+                try:
+                    r = function_called(inventory, q)
+                except ValueError:
+                    continue
+                if best is None or strength[r.verdict] > strength[best.verdict]:
+                    best = r
+                if best.verdict == Verdict.CALLED:
+                    break
+            if best is None:
                 continue
+            paired.append((qualified, best))
 
         if not paired:
             continue
 
         verdicts = {r.verdict for _, r in paired}
+        covered = len(paired) == len(qualified_names)
         if Verdict.CALLED in verdicts:
             evidence_lines: list[str] = []
             called_qns: list[str] = []
@@ -231,7 +339,12 @@ def refine_go_verdicts(
                 ),
                 affected_summary=affected,
             )
-        elif Verdict.UNCERTAIN in verdicts:
+        elif Verdict.UNCERTAIN in verdicts or not covered:
+            # ``not covered``: at least one advisory entry was never
+            # evaluated (unresolvable spelling / resolver refusal) —
+            # claiming "all listed symbols unreached" from the
+            # bindable remainder would be a false suppression. Same
+            # epistemic state as UNCERTAIN → preserve the verdict.
             continue
         else:
             out[d.key()] = Reachability(

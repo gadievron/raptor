@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from packages.sca.reachability._shared import (
+    UNRESOLVED_ENTRY,
     extract_function_names,
     format_evidence,
     extract_qualified_symbols,
@@ -65,11 +66,16 @@ class TestExtractQualifiedSymbols:
             "bare_function",
         ]})
         # Even in head mode the slash-bearing composer name fails the
-        # namespace shape: qualified symbols are emitted unprefixed,
-        # bare symbols are left to the bare-name lane.
+        # namespace shape: qualified symbols are emitted unprefixed;
+        # the bare symbol has no bindable spelling and becomes an
+        # unresolved marker — counted (it blocks the downgrade) but
+        # never queried.
         assert extract_qualified_symbols(
             adv, "symfony/http-foundation",
-        ) == ["Symfony.Component.HttpFoundation.Request.create"]
+        ) == [
+            "Symfony.Component.HttpFoundation.Request.create",
+            UNRESOLVED_ENTRY,
+        ]
 
     def test_no_double_prefix_when_symbol_carries_dep_head(self):
         adv = _adv(ds={"affected_symbols": [
@@ -94,11 +100,12 @@ class TestExtractQualifiedSymbols:
 
     def test_missing_import_path_uses_flat_policy(self):
         # No path on the import record: same bindability policy as
-        # the flat lists (never an unconditional dep prefix).
+        # the flat lists (never an unconditional dep prefix; the
+        # unbindable bare symbol is counted via the marker).
         adv = _adv(es={"imports": [{"symbols": ["Mod::run", "bare"]}]})
         assert extract_qualified_symbols(
             adv, "vendor/pkg", dep_is_namespace_head=False,
-        ) == ["Mod.run"]
+        ) == ["Mod.run", UNRESOLVED_ENTRY]
 
     def test_import_path_falls_back_to_dep_name(self):
         adv = _adv(es={"imports": [{"symbols": ["run"]}]})
@@ -141,9 +148,12 @@ class TestExtractQualifiedSymbols:
         # a dep_name to qualify with.
         assert extract_qualified_symbols(adv, "") == ["p.s"]
 
-    def test_non_string_path_skipped(self):
+    def test_non_string_path_marks_symbols_unresolved(self):
+        # Junk path: never dep-qualify junk, but the string symbol
+        # still names an advisory function the tier can't evaluate —
+        # it must be counted, not silently dropped.
         adv = _adv(es={"imports": [{"path": 42, "symbols": ["s"]}]})
-        assert extract_qualified_symbols(adv, "dep") == []
+        assert extract_qualified_symbols(adv, "dep") == [UNRESOLVED_ENTRY]
 
 
 class TestExtractFunctionNames:

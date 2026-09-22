@@ -14,12 +14,13 @@ Three downgrade outcomes:
     ``likely_called`` (matches the Go pattern). A mix of
     CALLED + NOT_CALLED still upgrades — the dep is exercising
     vulnerable code even if not every listed function is hit.
-  * **All affected functions return NOT_CALLED, none UNCERTAIN** →
-    downgrade to ``not_function_reachable``. Same risk-multiplier
-    weight as ``not_reachable``: we have positive evidence the
-    vulnerable code path isn't exercised.
-  * **Any UNCERTAIN (with no CALLED)** → leave the verdict at
-    ``imported``. Honest reporting beats false confidence.
+  * **EVERY advisory-listed function evaluated and NOT_CALLED, none
+    UNCERTAIN** → downgrade to ``not_function_reachable``. Same
+    risk-multiplier weight as ``not_reachable``: we have positive
+    evidence the vulnerable code path isn't exercised.
+  * **Any UNCERTAIN (with no CALLED), or any entry no query spelling
+    could evaluate** → leave the verdict at ``imported``. Honest
+    reporting beats false confidence.
 
 When OSV doesn't carry ``affected_functions`` for a dep's
 advisories, this tier doesn't fire — the existing module-level
@@ -229,6 +230,7 @@ def refine_pypi_verdicts(
             continue
 
         verdicts = {r.verdict for _, r in paired}
+        covered = len(paired) == len(funcs)
         if Verdict.CALLED in verdicts:
             evidence_lines: list[str] = []
             called_fn_names: list[str] = []
@@ -248,9 +250,15 @@ def refine_pypi_verdicts(
                 ),
                 affected_summary=affected,
             )
-        elif Verdict.UNCERTAIN in verdicts:
+        elif Verdict.UNCERTAIN in verdicts or not covered:
             # Mixed / uncertain — leave at module-level imported.
             # Don't downgrade; don't upgrade. Honest reporting.
+            # ``not covered`` is the same epistemic state: at least
+            # one advisory entry never paired (every query spelling
+            # refused by the resolver), so "all listed functions
+            # unreached" would suppress on the evaluated remainder
+            # while silently discarding the entry the project may
+            # actually exercise.
             continue
         else:
             # All NOT_CALLED.

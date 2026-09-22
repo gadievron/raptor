@@ -33,6 +33,20 @@ _NAMESPACE_HEAD_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*"
 )
 
+# Placeholder emitted for an advisory function entry that has NO
+# resolver-bindable spelling (a bare symbol under a non-namespace dep
+# name, a symbol under a malformed imports path, Java flat-list
+# entries, ...). The refine passes never query it — it is dot-less by
+# construction, so the existing "not dotted → skip" guard drops it
+# from pairing — but its PRESENCE keeps the entry counted: a tier may
+# only downgrade to ``not_function_reachable`` when EVERY advisory
+# entry was actually evaluated, and silently discarding unbindable
+# entries manufactured exactly the false high-confidence suppression
+# the shape-parametrised tests pin. The NUL prefix keeps any
+# legitimate advisory string from colliding; a hostile advisory that
+# ships the literal marker only BLOCKS a downgrade (fail-safe).
+UNRESOLVED_ENTRY = "\x00unresolved-advisory-entry"
+
 
 def _normalise_qualified(name: str) -> str:
     r"""Map Rust ``::``, Ruby ``#``, and PHP ``\`` qualifier
@@ -67,8 +81,11 @@ def extract_qualified_symbols(
         an already-qualified symbol is emitted verbatim (normalised),
         with a ``dep_name.``-prefixed variant added only when the dep
         name can head a namespace chain; a bare symbol is emitted
-        only under such a prefix. Unconditional ``dep_name.symbol``
-        minting produced names like
+        under such a prefix, or as :data:`UNRESOLVED_ENTRY` when no
+        bindable spelling exists (so the entry stays COUNTED — the
+        refine passes refuse the ``not_function_reachable`` downgrade
+        while any advisory entry went unevaluated). Unconditional
+        ``dep_name.symbol`` minting produced names like
         ``symfony/http-foundation.Symfony.Component...`` and
         ``actionpack.ActionDispatch...`` that the resolver's
         dot-split import binding can never match — every one paired
@@ -105,10 +122,15 @@ def extract_qualified_symbols(
                 out.append(f"{dep_head}.{ns}")
         elif prefix_ok:
             out.append(f"{dep_head}.{ns}")
-        # A bare symbol under a non-namespace dep name has no
-        # bindable spelling — the bare-name lane
-        # (extract_function_names) covers it; minting an unbindable
-        # prefix here would only manufacture NOT_CALLED pairs.
+        else:
+            # A bare symbol under a non-namespace dep name has no
+            # bindable spelling — minting an unbindable prefix here
+            # would only manufacture NOT_CALLED pairs. Emit the
+            # unresolved marker instead of dropping the entry: the
+            # advisory DID name this function, so the tier must not
+            # claim "every listed function is unreached" from the
+            # bindable remainder alone.
+            out.append(UNRESOLVED_ENTRY)
 
     out: list[str] = []
     es = getattr(advisory, "ecosystem_specific", None) or {}
@@ -121,7 +143,14 @@ def extract_qualified_symbols(
                 continue
             path = imp.get("path")
             if path is not None and not isinstance(path, str):
-                continue  # malformed entry — never dep-qualify junk
+                # Malformed entry — never dep-qualify junk, but its
+                # string symbols still name advisory functions this
+                # tier cannot evaluate: mark them unresolved so the
+                # downgrade arm abstains instead of suppressing.
+                for s in imp.get("symbols") or []:
+                    if isinstance(s, str) and s:
+                        out.append(UNRESOLVED_ENTRY)
+                continue
             symbols = imp.get("symbols") or []
             for s in symbols:
                 if not (isinstance(s, str) and s):
@@ -161,15 +190,17 @@ def extract_function_names(advisory: Any) -> list[str]:
             if not isinstance(imp, dict):
                 continue
             syms = imp.get("symbols") or []
-            out.extend(s for s in syms if isinstance(s, str))
-    # Flat-list variants.
+            out.extend(s for s in syms if isinstance(s, str) and s)
+    # Flat-list variants. Empty strings are schema junk that names no
+    # function — excluded so they can neither pair as NOT_CALLED nor
+    # block a downgrade under the full-coverage gate.
     for key in ("affected_symbols", "affected_functions"):
         for source in (es, ds):
             if not isinstance(source, dict):
                 continue
             v = source.get(key)
             if isinstance(v, list):
-                out.extend(s for s in v if isinstance(s, str))
+                out.extend(s for s in v if isinstance(s, str) and s)
     return out
 
 

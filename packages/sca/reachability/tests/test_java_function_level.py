@@ -89,10 +89,14 @@ def test_extract_symbols_with_path():
     }
 
 
-def test_extract_skips_entries_without_path():
-    """Maven flat fallback (``affected_functions`` without path) is
-    skipped — the dep name (``groupId:artifactId``) is not a Java
-    package, so we can't build a valid qualified name."""
+def test_extract_marks_flat_entries_unresolved():
+    """Maven flat fallback (``affected_functions`` without path) has
+    no queryable spelling — the dep name (``groupId:artifactId``) is
+    not a Java package — but the entry is COUNTED via the unresolved
+    marker so the refine pass abstains instead of downgrading on the
+    queryable remainder."""
+    from packages.sca.reachability._shared import UNRESOLVED_ENTRY
+
     adv = _Adv(database_specific={"affected_functions": ["readValue"]})
     out = build_maven_symbol_map([
         _OsvResult(
@@ -100,7 +104,7 @@ def test_extract_skips_entries_without_path():
             advisories=[adv],
         ),
     ])
-    assert out == {}
+    assert out == {"Maven:com.example:foo@1.0": [UNRESOLVED_ENTRY]}
 
 
 def test_extract_database_specific_path():
@@ -159,9 +163,13 @@ def test_empty_or_missing_returns_empty():
     ]) == {}
 
 
-def test_skips_malformed_imports():
-    """Imports with no path field (or non-string path) are skipped
-    silently; entry-by-entry, not whole-advisory."""
+def test_pathless_imports_marked_unresolved():
+    """Imports with no path field (or non-string path) can't be
+    queried — entry-by-entry, not whole-advisory — but their string
+    symbols are counted via the unresolved marker (deduplicated),
+    never silently dropped."""
+    from packages.sca.reachability._shared import UNRESOLVED_ENTRY
+
     adv = _Adv(ecosystem_specific={
         "imports": [
             {"symbols": ["NoPath.m"]},        # no path
@@ -172,7 +180,9 @@ def test_skips_malformed_imports():
     out = build_maven_symbol_map([
         _OsvResult(dep_key="Maven:x:y@1.0", advisories=[adv]),
     ])
-    assert out == {"Maven:x:y@1.0": ["com.good.Good.m"]}
+    assert out == {
+        "Maven:x:y@1.0": [UNRESOLVED_ENTRY, "com.good.Good.m"],
+    }
 
 
 # ---------------------------------------------------------------------------

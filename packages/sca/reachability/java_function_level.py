@@ -16,9 +16,10 @@ the tier promotes to ``likely_called`` or downgrades to
 ## Verdict transitions
 
   * Any affected method CALLED → ``likely_called``.
-  * All affected methods NOT_CALLED, none UNCERTAIN →
-    ``not_function_reachable``.
-  * Any UNCERTAIN OR mixed → leave at the existing verdict.
+  * EVERY advisory-listed method evaluated and NOT_CALLED, none
+    UNCERTAIN → ``not_function_reachable``.
+  * Any UNCERTAIN, mixed, or unevaluable entry → leave at the
+    existing verdict.
 
 ## Qualified-name shape
 
@@ -48,10 +49,14 @@ correctly. Same family of limitation as Go interface dispatch and
 Python method-on-instance.
 
 The flat fallback shapes (``affected_functions`` /
-``affected_symbols`` without a path) are skipped for Java — unlike
-Go where the dep name equals the import path, Maven dep names
+``affected_symbols`` without a path) cannot be QUERIED for Java —
+unlike Go where the dep name equals the import path, Maven dep names
 (``groupId:artifactId``) are not Java packages, so the dep name
-alone can't form a valid qualified name.
+alone can't form a valid qualified name. They still COUNT: each such
+entry is recorded as unresolved and blocks the
+``not_function_reachable`` downgrade (the advisory named a function
+this tier could not evaluate), while the ``likely_called`` upgrade
+from the path-qualified entries is unaffected.
 """
 
 from __future__ import annotations
@@ -62,6 +67,7 @@ from typing import Any
 from collections.abc import Iterable
 
 from ..models import Confidence, Dependency, Reachability
+from ._shared import UNRESOLVED_ENTRY
 
 logger = logging.getLogger(__name__)
 
@@ -100,9 +106,13 @@ def _extract_qualified(advisory: Any) -> list[str]:
 
     Reads ``ecosystem_specific.imports[].path`` and
     ``ecosystem_specific.imports[].symbols``, plus the same shape
-    under ``database_specific``. Skips entries without a path —
-    the Maven dep name is ``groupId:artifactId``, not a Java
-    package, so we can't synthesise a qualified name from it.
+    under ``database_specific``. Entries without a usable path — and
+    the flat ``affected_symbols`` / ``affected_functions`` shapes —
+    have no queryable spelling (the Maven dep name is
+    ``groupId:artifactId``, not a Java package, so we can't
+    synthesise one) and are emitted as ``UNRESOLVED_ENTRY`` markers:
+    never queried, but counted, so the refine pass abstains from the
+    downgrade instead of suppressing on the queryable remainder.
     """
     out: list[str] = []
     es = getattr(advisory, "ecosystem_specific", None) or {}
@@ -113,11 +123,22 @@ def _extract_qualified(advisory: Any) -> list[str]:
         for imp in source.get("imports") or []:
             if not isinstance(imp, dict):
                 continue
+            symbols = [
+                s for s in (imp.get("symbols") or [])
+                if isinstance(s, str) and s
+            ]
             path = imp.get("path")
             if not isinstance(path, str) or not path:
+                out.extend(UNRESOLVED_ENTRY for _ in symbols)
                 continue
-            symbols = imp.get("symbols") or []
-            out.extend(f"{path}.{s}" for s in symbols if isinstance(s, str) and s)
+            out.extend(f"{path}.{s}" for s in symbols)
+        for key in ("affected_symbols", "affected_functions"):
+            v = source.get(key)
+            if isinstance(v, list):
+                out.extend(
+                    UNRESOLVED_ENTRY
+                    for s in v if isinstance(s, str) and s
+                )
     return out
 
 
@@ -149,6 +170,11 @@ def refine_maven_verdicts(
             continue
         symbols = maven_symbol_map.get(d.key())
         if not symbols:
+            continue
+        if not any("." in s for s in symbols):
+            # Only unresolved markers — nothing queryable, so the
+            # tier can neither upgrade nor honestly downgrade; skip
+            # before paying for an inventory build.
             continue
         candidates.append(d)
 
@@ -189,6 +215,7 @@ def refine_maven_verdicts(
             continue
 
         verdicts = {r.verdict for _, r in paired}
+        covered = len(paired) == len(qualified_names)
         if Verdict.CALLED in verdicts:
             evidence_lines: list[str] = []
             called_qns: list[str] = []
@@ -208,7 +235,12 @@ def refine_maven_verdicts(
                 ),
                 affected_summary=affected,
             )
-        elif Verdict.UNCERTAIN in verdicts:
+        elif Verdict.UNCERTAIN in verdicts or not covered:
+            # ``not covered``: some advisory entry never paired —
+            # an UNRESOLVED_ENTRY marker (flat / path-less shapes)
+            # or a resolver refusal. The advisory named a function
+            # this tier could not evaluate, so "all listed symbols
+            # unreached" would overstate the evidence → abstain.
             continue
         else:
             # Confidence tracks how much evidence backs the
