@@ -56,6 +56,12 @@ scan  →  dedup  →  prep  →  analyse (per finding)
    TUs.
    External SARIF can be imported with `--sarif` instead of scanning
    (repeatable; add `--also-scan` to merge with a fresh scan).
+   `--openant` adds the [OpenAnt](commands.md#openant) LLM semantic scan
+   as a further channel alongside the pattern scanners.  `--openant-only`
+   disables Semgrep/CodeQL, but currently trips the no-scanners guard
+   and exits before the OpenAnt phase unless `--sarif` also supplies
+   imported findings; use `/openant` for a standalone scan.  Configure
+   it with `--openant-core`, `--openant-model`, and `--openant-level`.
 2. **Dedup** -- collapse duplicate and overlapping findings so the same bug is
    not analysed twice.  Skip with `--skip-dedup`.
 3. **Prep** -- read the code around each finding, pull surrounding context, and

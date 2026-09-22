@@ -108,6 +108,11 @@ patches.
 | `--compiler-scan` / `--no-compiler-scan` | Enable/disable the compiler-analyzer scan channel (gcc `-fanalyzer` / clang `--analyze`) |
 | `--compiler-scan-max-tus <n>` | Cap on translation units for `--compiler-scan` (default 2000) |
 | `--expanded-semgrep` | Re-run rules over preprocessor-expanded views of macro-heavy C/C++ TUs |
+| `--openant` | Run the [OpenAnt](#openant) LLM semantic scan in addition to Semgrep/CodeQL |
+| `--openant-only` | Disable Semgrep/CodeQL so only OpenAnt runs (currently exits at the no-scanners guard unless combined with `--sarif`; use `/openant` for a standalone scan) |
+| `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`) |
+| `--openant-model <name>` | OpenAnt LLM model: `sonnet` (default) or `opus` |
+| `--openant-level <depth>` | OpenAnt analysis depth: `all`, `reachable` (default), `codeql`, `exploitable` |
 
 **Output control**
 
@@ -427,6 +432,39 @@ Analyse existing SARIF findings with LLM without re-scanning.
 | `--aggregate <model>` | Aggregation model |
 | `--deep-validate` / `--no-deep-validate` | Enable or disable deep validation |
 
+### /openant
+
+OpenAnt LLM-powered source-code vulnerability scan: AST analysis plus
+per-function LLM reasoning.  Unlike the pattern scanners, it reads each
+function in context, catching business-logic flaws and subtle injection
+patterns.  Requires the `openant-core` library: set `OPENANT_CORE` or
+pass `--openant-core` (auto-detection probes
+`<RAPTOR parent>/libs/openant-core`).
+
+```
+/openant --repo <path>
+```
+
+| Flag | Description |
+|------|-------------|
+| `--repo <path>` | Repository to scan (defaults to `$RAPTOR_CALLER_DIR`) |
+| `--model <name>` | OpenAnt LLM model: `sonnet` (default) or `opus` |
+| `--level <depth>` | Analysis depth: `all`, `reachable` (default), `codeql`, `exploitable` |
+| `--language <lang>` | Override language detection: `auto` (default), `python`, `javascript`, `go`, `c`, `ruby`, `php`; out-of-set values fall back to `auto` |
+| `--no-enhance` | Skip the OpenAnt enhance phase |
+| `--verify` | Enable the OpenAnt stage-2 verification pass |
+| `--workers <n>` | Parallel analysis workers (default 4) |
+| `--max-findings <n>` | Maximum findings to include in the report (default 50) |
+| `--openant-core <path>` | Path to the `openant-core` directory (default `$OPENANT_CORE`) |
+| `--out <dir>` | Output directory override |
+
+Output files: `openant_findings.json` (findings in Raptor schema),
+`openant-report.md` (human-readable report), `raptor_openant_report.json`
+(machine-readable run summary), and `openant_scan/pipeline_output.json`
+(raw OpenAnt output).  OpenAnt also runs inside [/agentic](#agentic) via
+`--openant`; `--openant-only` currently exits at /agentic's no-scanners
+guard unless combined with `--sarif`.
+
 ---
 
 ## Systematic Review
@@ -600,7 +638,10 @@ evidence).
 
 Pipeline integration: [/validate](#validate) Stage 0 automatically imports
 `/understand` output via the bridge.  See [architecture](architecture.md) for
-details.
+details.  `/understand` output also feeds the SQLite graph memory layer
+(project-scoped when a project is active, run-local otherwise); see
+[understand-graph](understand-graph.md) for what goes in and the
+`raptor-graph-query` operator CLI.
 
 ---
 

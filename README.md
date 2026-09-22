@@ -194,6 +194,7 @@ Environment variables that could inject code into the launcher chain are strippe
 | `/diagram` | Mermaid visual maps from `/understand` and `/validate` JSON outputs | Beta |
 | `/codeql` | CodeQL-only deep analysis with SMT dataflow pre-screening | Stable |
 | `/analyze` | Analyse existing SARIF findings with LLM, without re-scanning | Stable |
+| `/openant` | OpenAnt LLM source-code scan: AST analysis plus per-function LLM reasoning | Beta |
 | `/sca` | Software composition analysis: dependencies, advisories, supply-chain signals, SBOMs, and fixes | Beta |
 | `/cve-diff` | Discover and diff the fix commit for a CVE across OSV, NVD, GitHub, and GitLab | Beta |
 | `/cve-env` | Build and verify a Docker environment running a CVE's affected application at its pre-patch version | Experimental |

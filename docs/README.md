@@ -66,6 +66,7 @@ overview:
 | [Crash Analysis](crash-analysis.md) | Autonomous crash root-cause analysis |
 | [Audit](audit.md) | Systematic code review: hypotheses, tools, strategies, gates, long runs and resume |
 | [Validation](validation.md) | Exploitability validation pipeline (stages 0, A--F, 1) |
+| [Understand Graph](understand-graph.md) | SQLite graph memory behind `/understand`: what goes in, consumers, operator queries, snapshot diff |
 | [Binary Analysis](binary-analysis.md) | Binary oracle, `/binary`, exploit feasibility |
 | [SCA](sca.md) | Software composition analysis |
 | [CVE Patch Discovery](cve-diff.md) | Find, acquire, and diff the fix commit for a CVE |
