@@ -77,6 +77,21 @@ def _clean_part(value: Any) -> str:
     return text or "unknown"
 
 
+def function_ref(file_path: Any, name: Any) -> str:
+    """THE ``<file>::<name>`` reference for function-node keys.
+
+    Every producer that mints a function node key and every consumer
+    that looks one up must build the ref here — hand-rolled
+    ``f"{path}::{name}"`` spellings are exactly how cross-producer
+    joins go silently inert (seam registered in
+    .github/tests/test_join_seam_registry.py). Deliberately does NOT
+    normalise path spellings: producers write checklist-relative
+    paths and same-spelling consumers join on them; cross-producer
+    path normalisation is the pending constructor-unification work.
+    """
+    return f"{file_path}::{name}"
+
+
 def stable_key(kind: str, *parts: Any) -> str:
     body = "::".join(_clean_part(p) for p in parts if p is not None)
     if not body:

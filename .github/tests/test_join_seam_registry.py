@@ -102,6 +102,29 @@ SEAMS: tuple[Seam, ...] = (
         },
     ),
     Seam(
+        name="understand-graph function node keys",
+        home="core/understand_graph/schema.py",
+        constructors=("function_ref",),
+        sides={
+            # Every function-key mint in the ingest layer builds the
+            # ref through the constructor. The binary-verdict CONSUMER
+            # (queries.propagate_binary_verdicts) receives pre-joined
+            # keys minted by core/inventory/builder.py — converting
+            # that side belongs to the pending constructor
+            # unification, recorded there, not silently here.
+            "core/understand_graph/ingest.py": ("function_ref",),
+        },
+        forbidden={
+            # The hand-rolled spellings the constructor replaced.
+            "core/understand_graph/ingest.py": (
+                'f"{path}::{name}"',
+                'f"{file_path}::{fn_name}"',
+                'f"{step_file}::{step_fn}"',
+                'f"{ann.file}::{ann.function}"',
+            ),
+        },
+    ),
+    Seam(
         name="vuln_type → primitive-graph start node",
         home="packages/exploit_feasibility/primitives.py",
         constructors=("vuln_node_for",),

@@ -29,6 +29,7 @@ def load_json(path, **kwargs):
 
 from .schema import (
     content_hash,
+    function_ref,
     json_dumps,
     short_hash,
     snapshot_id as make_snapshot_id,
@@ -214,7 +215,7 @@ def _ingest_checklist(conn, snapshot_id: str, checklist: dict[str, Any]) -> None
                 continue
             props = dict(item)
             props.setdefault("file", path)
-            fn_id = _upsert_node(conn, snapshot_id, "function", f"{path}::{name}", props)
+            fn_id = _upsert_node(conn, snapshot_id, "function", function_ref(path, name), props)
             _upsert_edge(conn, snapshot_id, "CONTAINS", file_id, fn_id)
 
 
@@ -382,7 +383,7 @@ def ingest_scan_findings(run_dir: Path, target_path: Optional[str] = None) -> Op
             file_path = str(f.get("file") or f.get("path") or "?")
             key = f"{f.get('rule_id', '?')}::{file_path}::{fn_name}::{content_hash(f)}"
             node_id = _upsert_node(conn, snap_id, "scan_finding", key, f)
-            fn_key = stable_key("function", f"{file_path}::{fn_name}")
+            fn_key = stable_key("function", function_ref(file_path, fn_name))
             fn_row = conn.execute(
                 "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
                 (fn_key,),
@@ -651,7 +652,7 @@ def _ingest_sarif_result(conn, snap_id: str, result: dict[str, Any]) -> None:
                     if isinstance(ll, dict) and ll.get("name"):
                         step_fn = str(ll["name"])
                         break
-                step_key = stable_key("function", f"{step_file}::{step_fn}")
+                step_key = stable_key("function", function_ref(step_file, step_fn))
                 fn_row = conn.execute(
                     "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
                     (step_key,),
@@ -687,7 +688,7 @@ def _ingest_hypothesis_entry(conn, snap_id: str, entry: dict[str, Any]) -> None:
     }
     hyp_id = _upsert_node(conn, snap_id, "hypothesis", key, props)
     if target_fn:
-        fn_key = stable_key("function", f"{props.get('file', '')}::{target_fn}")
+        fn_key = stable_key("function", function_ref(props.get("file", ""), target_fn))
         fn_row = conn.execute(
             "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
             (fn_key,),
@@ -769,7 +770,7 @@ def ingest_annotations(
         conn.execute("BEGIN IMMEDIATE")
         _upsert_snapshot(conn, snap_id, target, run_dir, producer="annotate")
         for ann in annotations:
-            key = f"{ann.file}::{ann.function}"
+            key = function_ref(ann.file, ann.function)
             props: dict[str, Any] = {
                 "file": ann.file,
                 "name": ann.function,
