@@ -69,6 +69,17 @@ def test_md_prose_strips_autofetch_markup():
     assert "![" not in md_prose("look ![x](https://evil/beacon)")
 
 
+def test_md_prose_defuses_tilde_fence():
+    # A line-leading `~~~` opens a tilde fence (the ``` twin): left
+    # alive in a finding message it renders the writer's OWN following
+    # sections — snippet fence, next finding's heading — as literal
+    # code, hiding them from the report reader.
+    import re
+    out = md_prose("open\n~~~\nswallow the rest of the report")
+    assert not re.search(r"(?m)^[ \t]*~", out)
+    assert "swallow the rest of the report" in out
+
+
 # ---------------------------------------------------------------------------
 # Writer-audit recognition — the helpers ARE the recognised sanitisers
 # ---------------------------------------------------------------------------

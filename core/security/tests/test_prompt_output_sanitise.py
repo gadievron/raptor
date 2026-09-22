@@ -41,6 +41,19 @@ def test_strips_line_leading_code_fence():
     assert "```" not in s
 
 
+def test_strips_line_leading_tilde_fence():
+    # `~~~` is the tilde spelling of a fenced code block: left alive,
+    # one hostile line swallows every later section of the rendered
+    # report (writer fences, headings, the next finding) as literal
+    # code until a closing tilde run.
+    import re as _re
+    s = sanitise_string("open\n~~~\nswallowed section")
+    assert not _re.search(r"(?m)^[ \t]*~", s)
+    assert "swallowed section" in s
+    s = sanitise_string("~~~python\ncode")
+    assert not _re.search(r"(?m)^[ \t]*~", s)
+
+
 def test_keeps_mid_line_markdown_chars():
     s = sanitise_string("the * char is mid-string")
     assert s == "the * char is mid-string"

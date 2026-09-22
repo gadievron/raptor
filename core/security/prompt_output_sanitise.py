@@ -41,8 +41,14 @@ from core.security.prompt_envelope import _strip_autofetch_markup
 # REPEATED runs (separated by spaces/tabs) are consumed together:
 # stripping only the first run left `# # X` as ` # X`, which markdown
 # (up to 3 leading spaces) still renders as an h1.
+# `~` joined for tilde fences: a line-leading `~~~` opens a fenced
+# code block exactly like ``` (CommonMark), and a hostile value that
+# opens one swallows the REST of the rendered report — the writer's
+# own fences, headings, and every later finding render as literal
+# code until a closing tilde run. The backtick was in the class from
+# day one; the tilde spelling of the same construct was not.
 _LINE_LEAD_MD_RE = re.compile(
-    r'(?m)^([ \t]*)([`*_#|>]+(?:[ \t]+[`*_#|>]+)*)'
+    r'(?m)^([ \t]*)([`*_#|>~]+(?:[ \t]+[`*_#|>~]+)*)'
 )
 
 # Line-leading list markers (`- item`, `+ item`, `1. item`, `1) item`)
