@@ -622,6 +622,84 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
                   "System.loadLibrary",
                   "importlib.import_module", "__import__"],
     },
+    # PHP web-audit families — the curated semgrep rule file is the
+    # verifying channel (a new dispatch key, resolved by
+    # resolve_semgrep_rule_for_cwe). The rules self-select via their
+    # ``languages: [php]`` key AND the chain builder drops the leg for
+    # non-matching targets via ``semgrep_langs`` — so on C/C++ targets
+    # these classes keep their pre-entry behaviour exactly (empty
+    # chain, loud unmapped warning, checker-synthesis seeding) instead
+    # of dispatching a rule that scans nothing.
+    #
+    # CRLF injection into protocol streams: request data reaching a
+    # socket write / protocol command string with CR/LF intact.
+    "CWE-93": {
+        "smt": None,
+        "cocci": None,
+        "joern": False,
+        "codeql": None,
+        "sinks": [],
+        "semgrep": "php/crlf-injection.yaml",
+        "semgrep_langs": ("php",),
+    },
+    # Unsafe reflection: tainted variable function / callable /
+    # class-name / method-name selection.
+    "CWE-470": {
+        "smt": None,
+        "cocci": None,
+        "joern": False,
+        "codeql": None,
+        "sinks": [],
+        "semgrep": "php/unsafe-reflection.yaml",
+        "semgrep_langs": ("php",),
+    },
+    # Argument injection: tainted data in a shell command string with
+    # no escapeshellarg (escapeshellcmd does not quote argument
+    # boundaries — the rule encodes that).
+    "CWE-88": {
+        "smt": None,
+        "cocci": None,
+        "joern": False,
+        "codeql": None,
+        "sinks": [],
+        "semgrep": "php/argument-injection.yaml",
+        "semgrep_langs": ("php",),
+    },
+    # Improper encoding for the output context: the
+    # htmlspecialchars-without-ENT_QUOTES attribute residual only —
+    # the honestly expressible subset.
+    "CWE-116": {
+        "smt": None,
+        "cocci": None,
+        "joern": False,
+        "codeql": None,
+        "sinks": [],
+        "semgrep": "php/attr-encoding.yaml",
+        "semgrep_langs": ("php",),
+    },
+    # Weak crypto in a security context: md5/sha1 password digests
+    # (name-anchored — a checksum/etag md5 never fires).
+    "CWE-327": {
+        "smt": None,
+        "cocci": None,
+        "joern": False,
+        "codeql": None,
+        "sinks": [],
+        "semgrep": "php/weak-password-hash.yaml",
+        "semgrep_langs": ("php",),
+    },
+    # Weak PRNG for security material: mt_rand/rand/uniqid stored
+    # under token/secret/nonce-shaped names (name-anchored — bare
+    # mt_rand jitter never fires).
+    "CWE-338": {
+        "smt": None,
+        "cocci": None,
+        "joern": False,
+        "codeql": None,
+        "sinks": [],
+        "semgrep": "php/weak-prng-token.yaml",
+        "semgrep_langs": ("php",),
+    },
 }
 
 # Classes a deterministic tool CANNOT adjudicate — by policy, not by
@@ -827,6 +905,22 @@ _HYPOTHESIS_CWE_MAP = [
       r"ansi\s+escape.{0,25}(?:inject|spoof)|"
       r"control.(?:byte|char|sequence)\w*.{0,60}"
       r"(?:terminal|console|inject|spoof)"), "CWE-150"),
+    # PHP web-audit families (appended: first-match-wins, so
+    # pre-existing behaviour is unchanged — "shell/command ...
+    # injection" phrasings keep routing to the earlier CWE-78 row,
+    # "sql injection" to CWE-89).
+    (r"crlf.{0,40}inject|inject\w*.{0,30}crlf", "CWE-93"),
+    (r"argument.{0,12}inject|option.{0,12}inject", "CWE-88"),
+    ((r"unsafe.{0,8}reflection|reflection.{0,20}inject|"
+      r"variable.{0,8}(?:function|method).{0,30}"
+      r"(?:call|invok|invoc|user|attacker|taint|input)|"
+      r"call_user_func"), "CWE-470"),
+    (r"ent_quotes", "CWE-116"),
+    ((r"(?:md5|sha1).{0,40}password|password.{0,40}(?:md5|sha1)"),
+     "CWE-327"),
+    ((r"(?:mt_rand|uniqid|lcg_value)\w*.{0,60}"
+      r"(?:token|secret|nonce|session)|"
+      r"predictable.{0,20}(?:token|nonce|session)"), "CWE-338"),
 ]
 
 _HYPOTHESIS_CWE_RE = None
@@ -928,6 +1022,69 @@ def resolve_cocci_rules_for_cwe(cwe: str) -> list[str]:
                 name, cwe, _COCCI_RULES_DIR,
             )
     return resolved
+
+
+#: Where the table's semgrep rule names live on disk (names are
+#: relative to this directory, e.g. "php/crlf-injection.yaml").
+_SEMGREP_RULES_DIR = (
+    Path(__file__).resolve().parents[2] / "engine" / "semgrep" / "rules"
+)
+
+# Rule names already warned about (missing on disk) — one loud line
+# per name per process, not one per dispatch.
+_MISSING_SEMGREP_WARNED: set[str] = set()
+
+
+def semgrep_rule_for_cwe(cwe: str) -> str | None:
+    """Raw semgrep rule name from the dispatch table, or None.
+
+    Unresolved and language-ungated — chain builders use
+    :func:`resolve_semgrep_rule_for_cwe`.
+    """
+    entry = lookup(cwe)
+    if entry is None:
+        return None
+    return entry.get("semgrep")
+
+
+def resolve_semgrep_rule_for_cwe(cwe: str, file_path: str) -> str | None:
+    """Absolute on-disk semgrep rule path for a CWE's rule, or None.
+
+    Language-gated: when the entry declares ``semgrep_langs`` and the
+    audited file's semgrep language is not among them, the leg is
+    dropped — a language-mismatched rule file scans nothing (semgrep
+    never selects the target), the sweep degrades to inconclusive,
+    and via the chain's seen-types dedup the dead leg would shadow
+    the keyword-mapped dynamic semgrep leg. Missing rule files are
+    dropped loudly once per name (the resolve_cocci_rules_for_cwe
+    precedent: a bare table name resolves against the process CWD at
+    scan time, where it never exists).
+    """
+    entry = lookup(cwe)
+    if entry is None:
+        return None
+    name = entry.get("semgrep")
+    if not name:
+        return None
+    langs = entry.get("semgrep_langs") or ()
+    if langs:
+        from .hypothesis_mapping import semgrep_language_for
+
+        if semgrep_language_for(file_path or "") not in langs:
+            return None
+    path = Path(name)
+    if not path.is_absolute():
+        path = _SEMGREP_RULES_DIR / name
+    if not path.is_file():
+        if name not in _MISSING_SEMGREP_WARNED:
+            _MISSING_SEMGREP_WARNED.add(name)
+            logger.warning(
+                "cwe dispatch: semgrep rule %s (for %s) not found "
+                "under %s — dropped from the tool chain",
+                name, cwe, _SEMGREP_RULES_DIR,
+            )
+        return None
+    return str(path)
 
 
 def codeql_query_for_cwe(cwe: str) -> str | None:

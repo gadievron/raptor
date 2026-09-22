@@ -16903,7 +16903,7 @@ def _hypothesis_to_tool_chain(
     seen_types: set = set()
 
     if cwe:
-        cwe_chain = _cwe_fallback_chain(cwe, hypothesis)
+        cwe_chain = _cwe_fallback_chain(cwe, hypothesis, file_path)
         for entry in cwe_chain:
             chain.append(entry)
             seen_types.add(entry["type"])
@@ -17671,12 +17671,17 @@ def _warn_unmapped_cwe(cwe: str) -> None:
 def _cwe_fallback_chain(
     cwe: str,
     hypothesis: str = "",
+    file_path: str = "",
 ) -> list[dict[str, Any]]:
     """Generate tool chain from CWE dispatch when string matching fails.
 
     ``hypothesis`` gates the caller-conditional part of the
     api_boundary dispatch (CWE-415/416/476 route to the channel only
-    when the phrasing conditions on caller behaviour).
+    when the phrasing conditions on caller behaviour). ``file_path``
+    gates the curated-semgrep leg: dispatch entries that carry a rule
+    file declare the languages it can adjudicate, and the leg is
+    dropped for other targets (the rule would scan nothing and its
+    dead entry would shadow the keyword-mapped semgrep leg).
     """
     chain: list[dict[str, Any]] = []
     try:
@@ -17684,11 +17689,21 @@ def _cwe_fallback_chain(
             codeql_query_for_cwe,
             joern_applicable,
             resolve_cocci_rules_for_cwe,
+            resolve_semgrep_rule_for_cwe,
             sinks_for_cwe,
             smt_verb_for_cwe,
         )
     except ImportError:
         return chain
+
+    # Curated per-class semgrep rule (language-gated in the resolver):
+    # the cheapest deterministic leg, seeded first. No "keyword" in
+    # the config — the identifier-consistency and negative-control
+    # gates are for generated presence patterns; curated rules carry
+    # their own sanitizer/anchor precision (see run_tool_chain).
+    semgrep_rule = resolve_semgrep_rule_for_cwe(cwe, file_path)
+    if semgrep_rule:
+        chain.append({"type": "semgrep", "config": {"rule": semgrep_rule}})
 
     try:
         from .compiler_sweep import compiler_applicable
