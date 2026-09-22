@@ -476,11 +476,23 @@ The wrapper runs the boot-payload guard shim
 (`libexec/raptor-sage-mcp-guard`) between Claude Code and
 `docker compose exec -T sage /usr/local/bin/sage-gui mcp` inside the
 container.  The guard verifies every instruction surface the server
-emits (initialize instructions, the whole `sage_inception` content, and
-instruction-shaped preambles in the session's first tool result) against
-the operator-authorized record in `.sage/boot-payload.authorized`;
+emits (initialize instructions, the whole `sage_inception` content,
+instruction-shaped preambles in the session's first tool result, and
+every `tools/list` response — tool names, descriptions, and schemas
+load into the session at definition tier, so each tool object is
+compared whole, on every fetch and refetch) against the
+operator-authorized record in `.sage/boot-payload.authorized`;
 mismatched or undecodable content is stripped/dropped fail-closed with a
 `[raptor-sage-mcp] WARNING:` marker.  No SSE, no HTTP, no OAuth.
+
+Stamps recorded before the tools baseline existed have no `tools.list`
+section: the guard then forwards `tools/list` unmodified but appends an
+in-band unverified notice (plus a stderr note) until the operator
+baselines the surface — run `libexec/raptor-sage-setup review` and
+approve the displayed tool definitions at your own terminal
+(`review --approve`).  Sidecar upgrades that change tool definitions are
+handled the same way: the changed tools are stubbed with the warning
+until reviewed and approved.
 
 The setup script replaces `.mcpServers.sage` entirely on each run (stale
 `type`/`url` fields from an old SSE config are removed).  Other MCP
