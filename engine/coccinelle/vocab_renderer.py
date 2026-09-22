@@ -187,7 +187,14 @@ def _extend_disjunction(
     for n in sorted(names):
         rendered = tmpl.replace("%s", n)
         extra.append("|\n")
-        extra.append(f"  {rendered}\n")
+        if rendered.startswith("*"):
+            # Context-mode ``*`` annotations only match at column 0:
+            # an indented star line parses clean but silently never
+            # matches anything, so star templates must be emitted
+            # unindented.
+            extra.append(f"{rendered}\n")
+        else:
+            extra.append(f"  {rendered}\n")
 
     return (
         lines[start:close_idx] + extra + [lines[close_idx]],

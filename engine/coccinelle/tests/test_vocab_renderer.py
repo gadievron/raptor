@@ -120,6 +120,31 @@ class TestDisjunctionExtension:
         assert "kmalloc" in text
         Path(result).unlink()
 
+    def test_star_template_lands_at_column_zero(self, tmp_path):
+        # Context-mode ``*`` annotations only match at column 0 — an
+        # indented star entry parses clean but silently never matches,
+        # so the whole learned lane would be dead.
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            "// @vocab: allocators\n"
+            "// @vocab-tmpl: * E@p = %s(...);\n"
+            "(\n"
+            "* E@p = malloc(...);\n"
+            "|\n"
+            "* E@p = calloc(...);\n"
+            ")\n"
+        )
+        vocab = FakeVocab(allocators=frozenset({"zone_alloc"}))
+        result = render(rule, vocab)
+        assert result is not None
+        lines = result.read_text().splitlines()
+        assert "* E@p = zone_alloc(...);" in lines
+        assert not any(
+            line.lstrip().startswith("*") and line != line.lstrip()
+            for line in lines
+        ), "star line was indented — it would silently never match"
+        Path(result).unlink()
+
 
 class TestWhenClauseExtension:
     def test_extends_when_block(self, tmp_path):
