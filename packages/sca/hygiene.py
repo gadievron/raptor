@@ -34,6 +34,7 @@ import re
 from collections import defaultdict
 
 from .kinds import HYGIENE_PREFIX
+from .parsers import _safe_read
 from .models import (
     Confidence,
     Dependency,
@@ -68,7 +69,14 @@ _EXPECTED_LOCKFILES: dict[str, tuple[str, ...]] = {
     # Maven (via gradle.lockfile or no lockfile at all): no expectation.
 }
 
-_R_INCLUDE_RE = re.compile(r"^\s*-r\s+(.+?)\s*$", re.MULTILINE)
+# Leading indent and the post ``-r`` gap are HORIZONTAL-only
+# ([^\S\n]): under MULTILINE the ``^\s*`` spelling re-scans a run of
+# blank lines from every line start inside it — quadratic on a
+# hostile requirements manifest (and ``-r\s+`` silently captured its
+# argument from a LATER line).
+_R_INCLUDE_RE = re.compile(
+    r"^[^\S\n]*-r[^\S\n]+(.+?)[^\S\n]*$", re.MULTILINE,
+)
 
 # Pin styles considered "loose" — the dep can update silently.
 _LOOSE_PINS: set[PinStyle] = {PinStyle.CARET, PinStyle.TILDE, PinStyle.RANGE}
@@ -120,9 +128,11 @@ def _included_dir_has_lockfile(
     a blanket ``..`` refusal. ``None`` (direct/legacy callers) keeps
     the historic unbounded behaviour.
     """
-    try:
-        text = manifest_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    # Bounded read: a planted multi-hundred-MB requirements file must
+    # not buy unbounded memory + scan time (same cap every other
+    # scanned-manifest read in the package uses).
+    text = _safe_read.read_bounded(manifest_path)
+    if text is None:
         return False
     for m in _R_INCLUDE_RE.finditer(text):
         rel = m.group(1)
