@@ -371,11 +371,22 @@ def format_tests_for_context(
             f"({assertion_count} assertions total)."
         )
 
+    from core.security.prompt_envelope import neutralize_tag_forgery
+
     lines = [f"**{len(tests)} test(s):**"]
     for t in tests[:5]:
-        lines.append(f"- `{t.test_function}` in `{t.test_file}`")
+        # File names are repo-controlled and POSIX permits newlines
+        # and `<` in them: collapse whitespace first (a raw newline
+        # would mint a fresh line start inside the trusted block),
+        # then neutralize — neutralization always last. The function
+        # name needs neither: extraction constrains it to \w+.
+        fname = neutralize_tag_forgery(" ".join(t.test_file.split()))
+        lines.append(f"- `{t.test_function}` in `{fname}`")
         for a in t.assertions[:3]:
-            lines.append(f"  - assert: {a}")
+            # Assertion text is lifted verbatim from repo files — in a
+            # hostile repo it can carry envelope-tag / heading forgery
+            # aimed at the trusted prompt region this renders into.
+            lines.append(f"  - assert: {neutralize_tag_forgery(a)}")
 
     return "\n".join(lines)
 
