@@ -8,9 +8,46 @@ repo. Returns True if the caller should refuse to dispatch.
 
 **Distinct from cc_trust.** Claude Code config files
 (``.claude/settings.json``, ``.mcp.json``) go through ``cc_trust``;
-CodeQL pack files are loaded by the ``codeql`` binary itself during
-``codeql database create``, bypassing the CC trust path entirely.
-This module is the parallel check for the codeql side.
+this module is the parallel check for the codeql side.
+
+**Defense-in-depth, not an active channel.** Verified against CLI
+2.26.3 under RAPTOR's exact invocation (``database create
+--language=<lang> --source-root=<repo> --build-mode=none``, no pack
+search flags): the CLI does NOT consume repo-tree pack config at
+create time — planted ``qlpack.yml`` files (root, nested, dotted-dir)
+are read only as ordinary source data (TRAP/YAML extraction, source
+archive, line count); a bogus ``extractor:`` and a ``buildCommand:``
+canary produce no resolution, no execution, no log mention; directory
+symlinks are never traversed at all; ``.github/codeql/
+codeql-config.yml`` is consumed by the GitHub Action (or an explicit
+``--codescanning-config``), not by this invocation; caller cwd
+placement changes nothing (codeql launches its own children with
+cwd=source-root regardless). The gate stays because pack semantics
+are version-mobile and the scan is cheap. It becomes load-bearing
+again if ANY of these change:
+  - a target-repo-derived value reaches any codeql flag that steers
+    extractor/pack/config resolution — ``--search-path`` /
+    ``--additional-packs`` / ``--codescanning-config`` (every quoted
+    runtime site is pinned with value provenance by
+    ``.github/tests/test_codeql_pack_resolution_pins.py``), and the
+    same class includes ``--extractor-option(-file)`` and
+    ``--extra-tracing-config`` (unused anywhere today);
+  - a codeql CLI upgrade adds create-time workspace/pack discovery —
+    re-verify on major CLI bumps;
+  - RAPTOR ever writes per-user codeql config (``~/.config/codeql/
+    config`` or ``CODEQL_CONFIG_FILE``): it injects default flags —
+    including the class above — into EVERY invocation. The env route
+    is already stripped by ``get_safe_env``; the file route needs a
+    HOME write, which an untrusted repo cannot do;
+  - traced builds are a DIFFERENT channel: build execution is either
+    operator-consented (the ``build`` trust marker / traced-build
+    flag) or loudly disclosed for languages with no buildless mode —
+    and a running build system subsumes anything a pack file could
+    add.
+For the same reason the walk's documented boundaries (directory
+symlinks listed-never-entered; dotted dirs pruned except
+``.github``) are accepted blind spots, not bypasses: codeql itself
+resolves nothing through them at create time.
 
 Files inspected:
     codeql-pack.yml         (recursive walk, capped)
