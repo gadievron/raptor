@@ -37,13 +37,13 @@ while [ -L "$SCRIPT" ]; do
         echo "raptor-frida-patch-verify: symlink hop limit exceeded resolving $0" >&2
         exit 2
     fi
-    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops
 unset DIR
-RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+RAPTOR_DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")/.." && pwd)"
 
 if [ ! -f "$RAPTOR_DIR/raptor.py" ]; then
     echo "raptor-frida-patch-verify: cannot find raptor.py under $RAPTOR_DIR" >&2

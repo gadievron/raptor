@@ -38,12 +38,12 @@ while [ -L "$SCRIPT" ]; do
         echo "raptor-sage-mcp: symlink hop limit exceeded resolving $0" >&2
         exit 3
     fi
-    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops
-RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+RAPTOR_DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")/.." && pwd)"
 
 # Users who access docker via group membership (sg docker) rather than
 # direct socket permissions need the sg wrapper. Re-exec under sg if

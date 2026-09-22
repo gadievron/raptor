@@ -270,7 +270,7 @@ while [ -L "$SCRIPT" ]; do
         echo "raptor: symlink hop limit exceeded resolving $0" >&2
         exit 1
     fi
-    DIR="$(cd "$(command -p dirname "$SCRIPT")" && pwd)"
+    DIR="$(CDPATH= cd -- "$(command -p dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(command -p readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
@@ -336,7 +336,12 @@ def _symlink_block(label: str, exit_code: int, extra: tuple = ()) -> str:
         *extra,
         f"        exit {exit_code}",
         "    fi",
-        '    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"',
+        # CDPATH= : a CDPATH entry in the ambient env (the hostile
+        # PATH class) would redirect a relative dirname operand to
+        # the CDPATH base AND print the destination into the
+        # substitution — a wrong, newline-doubled DIR that then
+        # mis-derives the script's root.
+        '    DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")" && pwd)"',
         '    SCRIPT="$(readlink "$SCRIPT")"',
         '    [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"',
         "done",
@@ -730,6 +735,28 @@ class BashLauncherSurfaceTests(unittest.TestCase):
                 "bounded symlink-loop drift (golden body in "
                 "_symlink_block; per-script label/exit-code/extra "
                 "message in SYMLINK_LOOPS):\n" + "\n".join(problems)
+            ),
+        )
+
+    def test_cd_substitutions_are_cdpath_immune(self):
+        """Every cd-in-substitution on the bash launcher surface must
+        be spelled `$(CDPATH= cd -- ...)`: an ambient CDPATH entry
+        redirects a relative operand to the CDPATH base and prints
+        the destination into the substitution. The golden symlink
+        block pins only the loop's DIR site; the root-derivation site
+        (whose product feeds the env-strip `source`) sits after
+        `unset _symhops`, so this closure is what enforces it."""
+        problems = []
+        for path in _bash_scripts():
+            text = path.read_text(encoding="utf-8", errors="replace")
+            for i, ln in enumerate(text.splitlines(), 1):
+                if "$(cd " in ln:
+                    problems.append(f"{_rel(path)}:{i}: {ln.strip()}")
+        self.assertEqual(
+            problems, [],
+            msg=(
+                "unguarded cd substitution (spell it "
+                "`$(CDPATH= cd -- ...)`):\n" + "\n".join(problems)
             ),
         )
 

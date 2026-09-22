@@ -34,12 +34,12 @@ while [ -L "$SCRIPT" ]; do
         echo "raptor-agentic: symlink hop limit exceeded resolving $0" >&2
         exit 1
     fi
-    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops
-RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+RAPTOR_DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")/.." && pwd)"
 
 # Defensive: confirm we're really inside a RAPTOR install before exec'ing
 # python3 on what might be a missing path. Fails loudly if symlink-walk

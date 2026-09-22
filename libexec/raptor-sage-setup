@@ -207,12 +207,12 @@ while [ -L "$SCRIPT" ]; do
         echo "raptor-sage-setup: symlink hop limit exceeded resolving $0" >&2
         exit 3
     fi
-    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops
-RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+RAPTOR_DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")/.." && pwd)"
 # Exported for the python children (seed_sage_knowledge.py /
 # register_agents.py): script-mode invocations resolve the repo root
 # from RAPTOR_DIR per the path-safety rule, never from __file__.

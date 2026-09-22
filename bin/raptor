@@ -68,7 +68,12 @@ else
     _rp() { command "$@"; }
 fi
 
-# Resolve symlinks to find the real script location
+# Resolve symlinks to find the real script location.
+# Every cd inside a substitution here runs with `CDPATH= cd --`: a
+# CDPATH entry in the operator's env (the hostile-direnv threat
+# model; the env strip does not cover it) would both REDIRECT a
+# relative operand to the CDPATH base and print the resolved dir
+# into the substitution — a wrong, newline-doubled path.
 SCRIPT="$0"
 _symhops=0
 while [ -L "$SCRIPT" ]; do
@@ -77,12 +82,12 @@ while [ -L "$SCRIPT" ]; do
         echo "raptor: symlink hop limit exceeded resolving $0" >&2
         exit 1
     fi
-    DIR="$(cd "$(command -p dirname "$SCRIPT")" && pwd)"
+    DIR="$(CDPATH= cd -- "$(command -p dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(command -p readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops
-RAPTOR_DIR="$(cd "$(_rp dirname "$SCRIPT")/.." && pwd)"
+RAPTOR_DIR="$(CDPATH= cd -- "$(_rp dirname "$SCRIPT")/.." && pwd)"
 
 if [ ! -d "$RAPTOR_DIR/core" ]; then
     echo "raptor: cannot find RAPTOR installation at $RAPTOR_DIR" >&2
@@ -527,7 +532,12 @@ if [ -n "$_target_clean" ] && [ -d "$_target_clean" ]; then
     # only cd's terse stderr. Refuse loudly instead — an unresolvable
     # target cannot be vetted or scanned. Strip + bound the echoed
     # path: TARGET is operator-supplied argv.
-    if ! CHECK_TARGET="$(cd "$_target_clean" 2>/dev/null && pwd)"; then
+    # `CDPATH= cd --`: an operator-env CDPATH would resolve a
+    # relative target through the CDPATH base instead of the shell
+    # cwd — the gate would vet a different directory than the
+    # session scans (and capture it newline-doubled: a CDPATH hit
+    # makes cd print the resolved dir into the substitution).
+    if ! CHECK_TARGET="$(CDPATH= cd -- "$_target_clean" 2>/dev/null && pwd)"; then
         _shown_t="${_target_clean//[![:print:]]/}"
         echo "raptor: cannot resolve target directory (permission denied, or removed mid-launch): ${_shown_t:0:200}" >&2
         exit 1

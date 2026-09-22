@@ -27,12 +27,12 @@ while [ -L "$SCRIPT" ]; do
         echo "raptor-llm-scorecard: symlink hop limit exceeded resolving $0" >&2
         exit 1
     fi
-    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops
-REPO_ROOT="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+REPO_ROOT="$(CDPATH= cd -- "$(dirname "$SCRIPT")/.." && pwd)"
 
 if [ ! -f "$REPO_ROOT/core/llm/scorecard/cli.py" ]; then
     echo "raptor-llm-scorecard: cannot find scorecard CLI under $REPO_ROOT" >&2

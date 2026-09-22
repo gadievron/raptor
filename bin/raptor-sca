@@ -26,12 +26,12 @@ while [ -L "$SCRIPT" ]; do
         echo "raptor-sca: symlink hop limit exceeded resolving $0" >&2
         exit 1
     fi
-    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops
-RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+RAPTOR_DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")/.." && pwd)"
 
 if [ ! -f "$RAPTOR_DIR/libexec/raptor-sca-run" ]; then
     echo "raptor-sca: cannot find raptor-sca-run at $RAPTOR_DIR/libexec/" >&2

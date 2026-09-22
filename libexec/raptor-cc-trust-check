@@ -143,12 +143,12 @@ while [ -L "$SCRIPT" ]; do
         echo "  (likely a symlink cycle; refusing to resolve further)" >&2
         exit 3
     fi
-    DIR="$(cd "$(dirname "$SCRIPT")" && pwd)"
+    DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")" && pwd)"
     SCRIPT="$(readlink "$SCRIPT")"
     [[ "$SCRIPT" != /* ]] && SCRIPT="$DIR/$SCRIPT"
 done
 unset _symhops
-RAPTOR_DIR="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+RAPTOR_DIR="$(CDPATH= cd -- "$(dirname "$SCRIPT")/.." && pwd)"
 
 if ! command -v python3 >/dev/null 2>&1; then
     echo "raptor-cc-trust-check: python3 not found" >&2
