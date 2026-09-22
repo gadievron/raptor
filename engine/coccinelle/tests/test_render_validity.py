@@ -78,6 +78,31 @@ def _parse_cocci(rule: Path) -> subprocess.CompletedProcess:
     )
 
 
+def _template_disjunctions(text: str) -> list[tuple[int, str, list[str]]]:
+    """``(line_no, template, seed_entry_lines)`` for every
+    ``@vocab-tmpl`` marker followed by a multi-line disjunction block.
+
+    Reuses the renderer's own marker regex so this scanner and the
+    renderer never disagree about what constitutes a template.
+    """
+    lines = text.splitlines()
+    blocks: list[tuple[int, str, list[str]]] = []
+    for i, line in enumerate(lines):
+        m = vocab_renderer._TMPL_RE.match(line.rstrip())
+        if not m or i + 1 >= len(lines) or lines[i + 1].strip() != "(":
+            continue
+        entries: list[str] = []
+        for j in range(i + 2, len(lines)):
+            stripped = lines[j].strip()
+            if stripped == ")":
+                break
+            if stripped in ("", "|") or stripped.startswith("//"):
+                continue
+            entries.append(stripped)
+        blocks.append((i + 1, m.group(1).rstrip(), entries))
+    return blocks
+
+
 class _RepresentativeVocab:
     """One valid identifier in every bucket the renderer maps.
 
@@ -95,6 +120,59 @@ def test_universe_is_nonempty():
     # both parametrized gates into vacuous zero-case passes.
     assert len(_ALL_RULES) >= 60
     assert len(_VOCAB_RULES) >= 5
+    # The terminator gate below must see at least one statement-position
+    # template block, or it degrades to a vacuous pass.
+    blocks = [
+        b
+        for rule in _VOCAB_RULES
+        for b in _template_disjunctions(rule.read_text(encoding="utf-8"))
+    ]
+    assert any(
+        entries and all(e.endswith(";") for e in entries)
+        for _, _, entries in blocks
+    )
+
+
+@pytest.mark.parametrize(
+    "rule", _VOCAB_RULES, ids=lambda p: p.stem,
+)
+def test_template_terminator_matches_block_position(rule):
+    """A template must keep its disjunction block's position class.
+
+    The parse gate cannot catch this: a statement-position template
+    that drops its trailing ``;`` still parses — spatch reads the
+    spliced entry as an EXPRESSION disjunct, which additionally
+    matches assignments in subexpression position (``if ((a =
+    xnew(n)) == b)``, for-init clauses) that the statement-form seed
+    entries do not. The learned lane then silently diverges from the
+    seed lanes' match semantics, so the terminator class of every
+    template is pinned to the class of the seed entries it extends.
+    """
+    text = rule.read_text(encoding="utf-8")
+    for line_no, tmpl, entries in _template_disjunctions(text):
+        assert entries, (
+            f"{rule.name}:{line_no}: @vocab-tmpl block has no seed "
+            f"entries to derive the template's position class from"
+        )
+        term_classes = {e.endswith(";") for e in entries}
+        assert len(term_classes) == 1, (
+            f"{rule.name}:{line_no}: disjunction mixes statement- and "
+            f"expression-position seed entries — spliced entries "
+            f"cannot match both classes"
+        )
+        if term_classes == {True}:
+            assert tmpl.endswith(";"), (
+                f"{rule.name}:{line_no}: statement-position template "
+                f"{tmpl!r} lacks the trailing ';' its seed entries "
+                f"carry — the rendered entry parses as an expression "
+                f"disjunct and diverges from the seed lanes' match "
+                f"semantics"
+            )
+        else:
+            assert not tmpl.endswith(";"), (
+                f"{rule.name}:{line_no}: expression-position template "
+                f"{tmpl!r} carries a ';' its seed entries do not"
+            )
 
 
 @pytest.mark.parametrize(
