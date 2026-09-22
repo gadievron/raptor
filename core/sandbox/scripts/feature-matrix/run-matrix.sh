@@ -27,7 +27,7 @@
 # --self-test: docker-free wiring check — generates the lane seccomp
 # profiles, runs the feature probe on the host, and exercises the
 # report aggregator on synthetic fixtures (clean + environment-degraded
-# + shape-diverged).
+# + shape-diverged + test-failing).
 #
 # --build-only: build the selected images (with the sxv.reqhash label
 # and the same build args as a full run) and stop before any lane
@@ -144,6 +144,37 @@ PYEOF
     fi
     grep -q "BIND required-passing" "$TMP/out-bind-unbound" \
         || { echo "self-test FAIL: unbound guard not named in failures" >&2; exit 1; }
+    echo "== report gates lane test failures and mirrors junit counts"
+    # Pins the direction that makes a green matrix run a machine
+    # verdict on "0 failures": a junit-recorded test failure must fail
+    # the report and be named, and the summary's pass/fail figures
+    # must be the junit-derived counts, not a transcription.
+    L="$TMP/run-failing/u24/full"
+    mkdir -p "$L"
+    python3 - "$L/probe.json" <<'PYEOF'
+import json, sys
+json.dump({"shape": {"landlock": "present", "userns": "ok",
+                     "mount_in_userns": "ok",
+                     "proc_mount_in_userns": "ok",
+                     "pivot_root_in_userns": "ok", "seccomp": "ok"},
+           "landlock": {"abi": 8}}, open(sys.argv[1], "w"))
+PYEOF
+    printf '<testsuites><testsuite name="pytest" tests="3" failures="1" errors="0" skipped="0"><testcase classname="x" name="a"/><testcase classname="x" name="b"/><testcase classname="x" name="test_denied_write"><failure message="boom"/></testcase></testsuite></testsuites>' \
+        > "$L/junit-1.xml"
+    printf '{"rc": 0, "duration_s": 1}' > "$L/meta.json"
+    if python3 "$HERE/bin/report.py" "$TMP/run-failing" > "$TMP/out-failing"; then
+        echo "self-test FAIL: lane test failure not gated" >&2; exit 1
+    fi
+    grep -q "FAIL x::test_denied_write" "$TMP/run-failing/failures.txt" \
+        || { echo "self-test FAIL: failed test not named in failures.txt" >&2; exit 1; }
+    python3 - "$TMP/run-failing/matrix.json" "$TMP/run-clean/matrix.json" <<'PYEOF'
+import json, sys
+failing = json.load(open(sys.argv[1]))[0]
+assert (failing["tests"], failing["failures"]) == (3, 1), failing
+clean = json.load(open(sys.argv[2]))[0]
+assert (clean["tests"], clean["failures"]) == (2, 0), clean
+print("junit-derived counts ok")
+PYEOF
     echo "== report gates empty and stray-lane runs"
     mkdir -p "$TMP/run-empty"
     if python3 "$HERE/bin/report.py" "$TMP/run-empty" >/dev/null 2>&1; then
