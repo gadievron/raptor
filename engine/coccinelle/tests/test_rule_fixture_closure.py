@@ -42,7 +42,6 @@ _UNCOVERED_ALLOWLIST = {
     "double_close",
     "fcntl_flag_domain",
     "fdopendir_double_close",
-    "format_string",
     "free_stack_array",
     "gfp_kernel_under_spinlock",
     "inet_ntoa_double_call",
