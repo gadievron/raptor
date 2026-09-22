@@ -125,8 +125,12 @@ _JAVA_BOUNDS_CHECK = re.compile(
     r"if\s*\(\s*(\w+)\s*(?:[<>]=?\s*\d+|\.\s*(?:length|size)\s*\(\s*\))"
 )
 
+# The whitespace after ``!`` rides inside the optional group: with a
+# bare ``!?`` between them, the two ``\s*`` runs are adjacent and a
+# whitespace flood after ``if (`` is quadratic. Matched language is
+# unchanged — whitespace runs concatenate.
 _JS_NULL_CHECK = re.compile(
-    r"if\s*\(\s*!?\s*(\w+)\s*(?:===?\s*(?:null|undefined)|!==?\s*(?:null|undefined))"
+    r"if\s*\(\s*(?:!\s*)?(\w+)\s*(?:===?\s*(?:null|undefined)|!==?\s*(?:null|undefined))"
 )
 _JS_TYPE_CHECK = re.compile(r"typeof\s+(\w+)\s*(?:===?|!==?)")
 
@@ -147,21 +151,30 @@ _PHP_INT_CAST = re.compile(r"\(\s*int(?:eger)?\s*\)\s*\$(\w+)")
 
 # -- Function extraction patterns --
 
-# Modifiers each consume their own trailing whitespace and the return
-# type is word-boundary anchored — no overlapping \s quantifiers, so a
-# whitespace-heavy file cannot trigger quadratic backtracking.
+# No modifier prefix (same reasoning as _PHP_FUNC below): the captures
+# and the body-search anchor are carried by the return-type/name/params
+# tail, so when modifiers precede the return type the tail simply
+# matches one word later — identical groups either way — while a
+# repeated-modifier prefix is quadratic on hostile keyword floods.
+# ``throws`` consumes a single whitespace char, not ``\s+``: the
+# clause class also matches whitespace, and the overlap made a
+# whitespace flood after ``throws`` quadratic.
 _JAVA_FUNC = re.compile(
-    r"(?:\b(?:public|private|protected|static)\s+)*"
     r"\b(?:\w+(?:<[^>]*>)?)\s+"
-    r"(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[^{]*)?\{"
+    r"(\w+)\s*\(([^)]*)\)\s*(?:throws\s[^{]*)?\{"
 )
 
 _GO_FUNC = re.compile(
     r"func\s+(?:\(\s*\w+\s+\*?\w+\s*\)\s+)?(\w+)\s*\(([^)]*)\)"
 )
 
+# The whitespace before the parameter list rides inside the optional
+# generics group: two adjacent ``\s*`` runs separated only by an
+# optional group are quadratic on a whitespace flood after ``fn name``
+# (the same run splits between them every possible way). Matched
+# language is unchanged — whitespace runs concatenate.
 _RUST_FUNC = re.compile(
-    r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>)?\s*\(([^)]*)\)"
+    r"(?:pub\s+)?(?:async\s+)?fn\s+(\w+)\s*(?:<[^>]*>\s*)?\(([^)]*)\)"
 )
 
 # No modifier prefix: visibility keywords before ``function`` don't
@@ -414,9 +427,12 @@ def _extract_js_functions(
     """Extract JS/TS function definitions."""
     results = []
 
-    # Named functions (with optional TS return type annotation)
+    # Named functions (with optional TS return type annotation). The
+    # whitespace after the annotation rides inside the optional group
+    # — two ``\s*`` runs adjacent through a skipped optional are
+    # quadratic on a whitespace flood after the parameter list.
     named_re = re.compile(
-        r"(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)\s*(?::\s*\S+)?\s*\{",
+        r"(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)\s*(?::\s*\S+\s*)?\{",
     )
     for match in named_re.finditer(content):
         name = match.group(1)

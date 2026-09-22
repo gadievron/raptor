@@ -10,10 +10,13 @@ from core.analysis.taint_multi_lang import (
     extract_rust_summaries,
     extract_summaries_for_file,
     _extract_callees_java,
+    _extract_js_functions,
     _extract_php_extra_flows,
     _find_brace_end,
     _JAVA_FUNC,
+    _JS_NULL_CHECK,
     _PHP_FUNC,
+    _RUST_FUNC,
     _MAX_CALLEES,
     _parse_java_params,
     _parse_go_params,
@@ -576,6 +579,91 @@ class TestSharedSinkScanFloodPerformance:
             ["cmd"], f"exec({long_args});", {"exec"},
         )
         assert flows == []
+
+
+class TestJavaKeywordFloodPerformance:
+    """The Java/JS/Rust shapes carried the quadratic idioms fixed for
+    PHP: a modifier-repetition prefix on _JAVA_FUNC took seconds at
+    64KB keyword floods, and overlapping whitespace quantifiers made
+    whitespace floods quadratic. The fixed patterns run in
+    milliseconds; the budgets are generous for slow machines yet an
+    order of magnitude below the quadratic variants at this size."""
+
+    def test_java_func_on_modifier_keyword_floods(self):
+        for unit in ("public ", "public\n", "static "):
+            flood = unit * (128 * 1024 // len(unit))
+            start = time.monotonic()
+            assert _JAVA_FUNC.findall(flood) == []
+            assert time.monotonic() - start < 2.0
+
+    def test_java_func_on_throws_whitespace_flood(self):
+        flood = "void f() throws " + " " * (128 * 1024)
+        start = time.monotonic()
+        assert _JAVA_FUNC.findall(flood) == []
+        assert time.monotonic() - start < 2.0
+
+    def test_java_func_still_matches_modifier_signatures(self):
+        # Direction check for the modifier-less pattern: the captures
+        # anchor at the return type, so signatures with and without
+        # modifiers yield identical tuples.
+        sig = "public static Map<String, Integer> foo(int a, String b) {"
+        assert _JAVA_FUNC.findall(sig) == [("foo", "int a, String b")]
+        assert _JAVA_FUNC.findall("void bare(byte[] d) {") == [
+            ("bare", "byte[] d"),
+        ]
+        assert _JAVA_FUNC.findall(
+            "int run(String cmd) throws IOException {",
+        ) == [("run", "String cmd")]
+
+
+class TestRustWhitespaceFloodPerformance:
+    def test_rust_func_on_whitespace_floods(self):
+        # Adjacent \s* runs around the optional generics group made
+        # this quadratic.
+        for ws in (" ", "\n"):
+            flood = "fn f" + ws * (128 * 1024)
+            start = time.monotonic()
+            assert _RUST_FUNC.findall(flood) == []
+            assert time.monotonic() - start < 2.0
+
+    def test_rust_func_still_matches_generic_signatures(self):
+        assert _RUST_FUNC.findall(
+            "pub async fn fetch<T: Send>(url: &str) {",
+        ) == [("fetch", "url: &str")]
+        # Whitespace on either side of the generics still matches —
+        # the runs concatenate.
+        assert _RUST_FUNC.findall("fn spaced <T> (x: T) {") == [
+            ("spaced", "x: T"),
+        ]
+
+
+class TestJsWhitespaceFloodPerformance:
+    def test_named_function_on_whitespace_flood(self):
+        # Adjacent \s* runs around the optional TS return-type group
+        # made this quadratic.
+        flood = "function f()" + " " * (128 * 1024)
+        start = time.monotonic()
+        assert _extract_js_functions(flood) == []
+        assert time.monotonic() - start < 2.0
+
+    def test_named_function_still_matches_ts_annotation(self):
+        results = _extract_js_functions(
+            "function typed(x: number) : string { return String(x); }",
+        )
+        assert [(r[0], r[1]) for r in results] == [("typed", ["x"])]
+
+    def test_js_null_check_on_whitespace_flood(self):
+        # Adjacent \s* runs around the optional ``!`` made this
+        # quadratic.
+        flood = "if (" + " " * (128 * 1024)
+        start = time.monotonic()
+        assert _JS_NULL_CHECK.findall(flood) == []
+        assert time.monotonic() - start < 2.0
+
+    def test_js_null_check_still_matches_negation_spacings(self):
+        assert _JS_NULL_CHECK.findall("if ( ! x === null)") == ["x"]
+        assert _JS_NULL_CHECK.findall("if (!x !== undefined)") == ["x"]
+        assert _JS_NULL_CHECK.findall("if (y == null)") == ["y"]
 
 
 class TestHashComments:
