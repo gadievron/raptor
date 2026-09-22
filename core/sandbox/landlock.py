@@ -766,6 +766,19 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
     # Resolve in the parent, share the CDLL handle with the child.
     _libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
 
+    # Parent-side probe verdict, captured at BUILD time (cached — no
+    # extra syscalls) so the child's create-failure diagnosis states
+    # what actually happened. This builder is invoked on kernels WHOSE
+    # PROBE FAILED too: when the resolved containment floor requires
+    # the Landlock layer (landlock_required), _spawn builds the
+    # ruleset regardless of availability so the spawn fails CLOSED
+    # instead of delivering an unconsented weaker tier. Pre-fix the
+    # child's message unconditionally claimed "a kernel whose probe
+    # succeeded" — on a Landlock-less host that misdirected the
+    # operator toward a kernel anomaly when the real story is
+    # "kernel lacks Landlock + the policy refuses to run without it".
+    _kernel_probe_ok = check_landlock_available()
+
     def _apply_landlock():
         try:
             libc = _libc
@@ -775,17 +788,36 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
                                scoped=_scoped)
             fd = libc.syscall(SYS_create, ctypes.byref(attr), ctypes.sizeof(attr), 0)
             if fd < 0:
-                # Probe succeeded in the parent (check_landlock_available)
-                # so the kernel ABI is present. A post-fork syscall failure
-                # here means the ruleset cannot be installed at all — the
-                # child would proceed without filesystem-write or net-bind
-                # restrictions. Fail-closed: the parent expected an enforced
-                # sandbox, so silently downgrading is a contract violation.
+                # The ruleset cannot be installed at all — the child
+                # would proceed without filesystem-write or net-bind
+                # restrictions. Fail-closed either way: the parent
+                # expected an enforced sandbox, so silently
+                # downgrading is a contract violation. TWO distinct
+                # stories share this branch (see _kernel_probe_ok):
+                # a kernel whose probe succeeded failing here is an
+                # anomaly worth investigating; a kernel whose probe
+                # FAILED reaches here because the call's containment
+                # floor requires the Landlock layer and refusing to
+                # run is the consented outcome. Say which one it is.
                 _os_write(2, b"sandbox: landlock: SYS_landlock_create_ruleset failed post-fork\n")
                 if fail_raise:
-                    msg = ("Landlock ruleset creation failed post-fork "
-                           "(SYS_landlock_create_ruleset returned an error "
-                           "for a kernel whose probe succeeded)")
+                    if _kernel_probe_ok:
+                        msg = ("Landlock ruleset creation failed "
+                               "post-fork (SYS_landlock_create_ruleset "
+                               "returned an error for a kernel whose "
+                               "probe succeeded)")
+                    else:
+                        msg = ("Landlock ruleset creation failed "
+                               "post-fork: this kernel has no usable "
+                               "Landlock (the availability probe "
+                               "already failed) and the call's "
+                               "resolved containment floor requires "
+                               "the Landlock layer, so the spawn "
+                               "fails closed rather than run without "
+                               "the requested policy. Use a kernel "
+                               ">= 5.13 with Landlock enabled, or a "
+                               "containment floor that admits the "
+                               "ns-only tier.")
                     raise LandlockInstallError(msg)
                 os._exit(SANDBOX_EXIT_LANDLOCK_DOWNGRADE)
 

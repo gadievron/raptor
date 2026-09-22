@@ -404,6 +404,16 @@ class TestPerProcessProcfsE2E(unittest.TestCase):
     @requires_userns
     def test_proc_self_readable_path_spawn_succeeds(self) -> None:
         from core.sandbox._spawn import run_sandboxed
+        # landlock_required=False: this test's subject is the
+        # bind-source PIN behaviour for the volatile /proc/self class,
+        # not the containment floor. The default (True) makes a
+        # Landlock-LESS kernel abort the spawn fail-closed at 'L'
+        # before the pin scenario ever runs — the documented floor
+        # behaviour, but it turned this test into a floor test on
+        # such hosts. Tolerating kernel absence (the ns-only tier)
+        # lets the pin scenario run everywhere; on kernels WITH
+        # Landlock the flag is inert and the full stack is exercised
+        # unchanged.
         r = run_sandboxed(
             ["cat", "/proc/self/cgroup"],
             target=str(self.tgt), output=str(self.out),
@@ -416,6 +426,7 @@ class TestPerProcessProcfsE2E(unittest.TestCase):
             seccomp_profile=None, seccomp_block_udp=False,
             env=None, cwd=None, timeout=30,
             capture_output=True, text=True,
+            landlock_required=False,
         )
         status = getattr(r, "_setup_status", None)
         self.assertIsNone(
