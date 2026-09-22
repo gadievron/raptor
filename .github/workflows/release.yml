@@ -20,6 +20,9 @@ concurrency:
 
 permissions:
   contents: write
+  # `gh workflow run` — the Docker Hub re-dispatch below needs to
+  # create a workflow_dispatch event once the stamped tag has landed.
+  actions: write
 
 jobs:
   release:
@@ -117,6 +120,24 @@ jobs:
             git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${AUTH}" \
               push --force "https://github.com/${REPO}" "refs/tags/${TAG}"
           fi
+
+      # The versioned Docker Hub image must be built from the STAMPED
+      # tag: the force-moved tag was pushed with the workflow token,
+      # and token-initiated pushes never trigger workflows — without
+      # this dispatch, dockerhub-publish would build :<version> from
+      # the pre-stamp commit and the shipped image would self-report
+      # the previous version forever. workflow_dispatch is the
+      # documented exception deliverable by GITHUB_TOKEN. Runs
+      # unconditionally after the stamp step: on a re-release the tag
+      # already points at the stamped commit, and the dispatch is
+      # idempotent (same tag -> same image content).
+      - name: Publish versioned Docker Hub image from the stamped tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.name }}
+        run: |
+          set -euo pipefail
+          gh workflow run dockerhub-publish.yml --ref main -f tag="${TAG}"
 
       - name: Build release archives
         env:

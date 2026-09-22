@@ -220,6 +220,39 @@ def test_scheduled_workflows_keep_a_cadence_documented_reference() -> None:
     )
 
 
+def test_release_republishes_dockerhub_image_from_stamped_tag() -> None:
+    """The versioned Docker Hub image must be built from the STAMPED
+    tag. release.yml force-moves the release tag to its version-stamp
+    commit with the workflow GITHUB_TOKEN, and token-initiated pushes
+    never trigger workflows — so a tag-push build arm in
+    dockerhub-publish would ship the PRE-stamp tree (the image
+    self-reports the previous version forever). The coupling is:
+    release.yml dispatches dockerhub-publish with the tag AFTER the
+    re-tag (workflow_dispatch is deliverable by GITHUB_TOKEN), and
+    dockerhub-publish validates the tag input before it reaches
+    checkout's ref. Nothing else pins this workflow-graph coupling —
+    test_release_workflow.sh covers archives and stamping only."""
+    release = _read(".github/workflows/release.yml")
+    assert "gh workflow run dockerhub-publish.yml" in release
+    assert "-f tag=" in release
+
+    publish = _read(".github/workflows/dockerhub-publish.yml")
+    # The dispatch input exists and is validated pre-checkout.
+    assert "tag:" in publish
+    assert "v[0-9]+\\.[0-9]+\\.[0-9]+" in publish
+    assert (
+        publish.index("INPUT_TAG")
+        < publish.index("uses: actions/checkout")
+    )
+    # The versioned image is built only via the validated dispatch —
+    # a tags: push arm would rebuild it from the pre-stamp commit.
+    on_block = publish.split("\non:", 1)[1].split("\njobs:", 1)[0]
+    assert "tags:" not in on_block, (
+        "dockerhub-publish.yml grew a tag-push trigger back — the "
+        "versioned image would build from the pre-stamp tag commit"
+    )
+
+
 def test_project_samples_collector_total_failure_reddens() -> None:
     # Partial failure proceeds to the diff/PR step; TOTAL failure
     # (nonzero collector exit AND no sample file changed) must fail
@@ -302,6 +335,12 @@ _SCOPE_PUBLISH_VERBS: dict[str, str] = {
     "pull-requests": r"gh pr ",
     "packages": r"docker login|docker push|packages/container",
     "issues": r"gh issue ",
+    # Creating a workflow_dispatch event is the actions scope's
+    # publish operation (release.yml re-dispatches dockerhub-publish
+    # from the stamped tag). `actions: read` jobs (run queries) never
+    # enter the universe; a write grant is blessed only on the
+    # dispatch step itself.
+    "actions": r"gh workflow run",
 }
 
 

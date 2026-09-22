@@ -7,11 +7,25 @@ name: Publish devcontainer image to Docker Hub
 # Tags pushed:
 #   :latest      — moving tag, updated on every push to main that touches
 #                  the Dockerfile (mirrors ci-deps-image.yml's pattern).
-#   :<version>   — pushed only on tagged releases (vX.Y.Z -> X.Y.Z).
+#   :<version>   — pushed only on tagged releases (vX.Y.Z -> X.Y.Z), via
+#                  the dispatch from release.yml (see below).
 #
 # Uses the plain `docker` CLI rather than docker/* marketplace actions,
 # to keep the third-party action surface to just actions/checkout
 # (pinned to the same SHA the rest of the repo uses).
+#
+# VERSIONED-IMAGE COUPLING: release.yml commits the version stamp
+# AFTER the operator's tag push and force-moves the tag to the stamp
+# commit — pushed with the workflow GITHUB_TOKEN, and token-initiated
+# pushes never trigger workflows. Building :<version> from the
+# original tag-push event therefore ships the PRE-STAMP tree (the
+# image self-reports the previous version forever). So release.yml
+# dispatches THIS workflow with the tag name once the re-tag has
+# landed (workflow_dispatch IS deliverable by GITHUB_TOKEN — the
+# documented exception to the no-retrigger rule), and the tag-push
+# arm below builds only :latest-equivalent moving state. The `tag`
+# input is validated before it reaches checkout's ref (release.yml's
+# own pre-checkout validation lesson).
 
 on:
   push:
@@ -19,9 +33,16 @@ on:
     paths:
       - '.devcontainer/Dockerfile'
       - '.github/workflows/dockerhub-publish.yml'
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: >-
+          Release tag to build :<version> from (must match
+          v<major>.<minor>.<patch>[-prerelease] and already point at
+          the stamped commit). Empty: build :latest from main.
+        required: false
+        type: string
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}
@@ -36,18 +57,38 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # Validate the dispatch input BEFORE checkout — an arbitrary
+      # ref string must never flow into checkout's `ref:` field
+      # (same pre-checkout gate as release.yml's).
+      - name: Validate dispatch tag input
+        if: github.event.inputs.tag != ''
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$INPUT_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::tag must match v<major>.<minor>.<patch>[-prerelease], got '${INPUT_TAG}'" >&2
+            exit 1
+          fi
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          # Tag dispatches build the STAMPED tag ref (see the
+          # versioned-image coupling note above); everything else
+          # builds the triggering ref (main).
+          ref: ${{ github.event.inputs.tag != '' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
           persist-credentials: false
 
       - name: Determine image tags
         id: tags
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
         run: |
           set -euo pipefail
           image="danielcuthbert/raptor"
-          if [[ "${GITHUB_REF}" == refs/tags/v*.*.* ]]; then
-            version="${GITHUB_REF#refs/tags/v}"
+          if [[ -n "${INPUT_TAG}" ]]; then
+            version="${INPUT_TAG#v}"
             echo "tags=${image}:${version}" >> "$GITHUB_OUTPUT"
           else
             echo "tags=${image}:latest" >> "$GITHUB_OUTPUT"
