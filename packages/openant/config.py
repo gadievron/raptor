@@ -6,6 +6,17 @@ Discovers the OpenAnt core library via:
   3. raptor_dir/../libs/openant-core   (caller-supplied raptor_dir)
   4. RuntimeError with clear diagnostic
 
+Env-boundary note: through the raptor.py dispatch lane the launcher
+scripts (raptor_openant.py / raptor_agentic.py) run under a child
+environment rebuilt from the safe-env allowlist, and OPENANT_CORE /
+OPENANT_MODEL / OPENANT_LEVEL are deliberately NOT on it (OPENANT_CORE
+names a directory whose Python EXECUTES with network access and the
+Anthropic API key — the exec-path class the allowlist exists to keep
+out; the flag surface is consent-gated for the same reason). Surface 1
+therefore only applies to direct invocations from an unscrubbed shell;
+operator-facing guidance should name the --openant-core flag and the
+sibling layout (2/3 — RAPTOR_DIR is allowlisted).
+
 No sys.path manipulation here; that happens in scanner.py.
 """
 
@@ -103,7 +114,8 @@ class OpenAntConfig:
             raise RuntimeError(
                 f"OpenAnt core not found at {self.core_path!r}: "
                 f"expected {_CORE_MARKER} to exist. "
-                f"Set OPENANT_CORE to the libs/openant-core directory."
+                f"Pass --openant-core /path/to/libs/openant-core, or "
+                f"install the checkout at <raptor-parent>/libs/openant-core."
             )
 
     @classmethod
@@ -140,9 +152,14 @@ def _discover_core(raptor_dir: Optional[Path]) -> Path:
             return candidate
 
     raise RuntimeError(
-        "OpenAnt core library not found. Set one of:\n"
-        f"  {OPENANT_CORE_ENV}=/path/to/libs/openant-core\n"
-        "  RAPTOR_DIR=/path/to/raptor  (OpenAnt expected at ../libs/openant-core)\n"
+        "OpenAnt core library not found. Either:\n"
+        "  pass --openant-core /path/to/libs/openant-core, or\n"
+        "  install the checkout at <raptor-parent>/libs/openant-core "
+        "(auto-detected; a symlink works)\n"
+        f"  ({OPENANT_CORE_ENV}=<path> also works, but only for direct "
+        "raptor_openant.py invocations from an unscrubbed shell — the "
+        "raptor.py dispatch lane rebuilds the child environment from "
+        "the safe-env allowlist, which excludes it)\n"
     )
 
 

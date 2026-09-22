@@ -18,18 +18,29 @@ authentication bypasses, and subtle injection patterns that static tools miss.
 
 Check out OpenAnt at the pinned commit (commit id, not a movable
 tag/branch — see `packages/openant/config.py:OPENANT_PINNED_COMMIT`)
-and point `OPENANT_CORE` at its `libs/openant-core` directory:
+and make its `libs/openant-core` directory visible at the auto-detect
+layout `<raptor-parent>/libs/openant-core` (a symlink works):
 
 ```bash
 git clone https://github.com/knostic/OpenAnt /path/to/OpenAnt
 git -C /path/to/OpenAnt checkout abd1dcf416a1ca329441c4bf8ebb68f70dd0f3cf
-export OPENANT_CORE=/path/to/OpenAnt/libs/openant-core
+ln -s /path/to/OpenAnt/libs <raptor-parent>/libs
 ```
 
-Via `$OPENANT_CORE` / auto-detection, a checkout at any other commit
-still runs — the run report records the provenance and the scan warns
-loudly (schema drift in a newer OpenAnt can change verdict
-spellings).
+Alternatively pass the path per run with `--openant-core
+/path/to/OpenAnt/libs/openant-core` (consent-gated, see below).
+
+Do NOT rely on `export OPENANT_CORE` for `/openant` runs: the
+dispatch lane rebuilds the child environment from the safe-env
+allowlist, which deliberately excludes it (it names a directory whose
+Python executes with network access and the Anthropic API key — the
+exec-path class the allowlist keeps out), so the export never reaches
+the pipeline. The env var works only for direct `raptor_openant.py`
+invocations from an unscrubbed shell.
+
+Via auto-detection, a checkout at any other commit still runs — the
+run report records the provenance and the scan warns loudly (schema
+drift in a newer OpenAnt can change verdict spellings).
 
 Passing `--openant-core <path>` directly is CONSENT-GATED: the flag
 lives on pre-approved launcher argv, and the named directory's Python
@@ -84,7 +95,7 @@ operator's behalf.
 | `--verify` | off | Enable stage-2 LLM verification pass |
 | `--workers <n>` | `4` | Parallel analysis workers |
 | `--max-findings <n>` | `50` | Cap findings rendered in the markdown report (severity-first, truncation stated; must be >= 1). `openant_findings.json` is never capped |
-| `--openant-core <path>` | `$OPENANT_CORE` | Path to openant-core (flag surface is consent-gated: a core that is not a clean pinned checkout refuses at startup) |
+| `--openant-core <path>` | auto-detect at `<raptor-parent>/libs/openant-core` (`$OPENANT_CORE` applies to direct unscrubbed invocations only — the dispatch lane's safe-env rebuild drops it) | Path to openant-core (flag surface is consent-gated: a core that is not a clean pinned checkout refuses at startup) |
 | `--openant-core-unpinned` | off | Consent to run a `--openant-core` checkout that is not a clean pinned checkout this run (the project `config` trust marker grants the same, standing) |
 
 ### Analysis levels
