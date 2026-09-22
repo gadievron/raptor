@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import ast
 import re
+import unicodedata
 import unittest
 from pathlib import Path
 
@@ -66,6 +67,36 @@ _RE_FUNCS = {
     "compile", "search", "match", "fullmatch", "findall",
     "finditer", "split", "sub", "subn",
 }
+
+# Raw-text gate applied before the AST pass: a member REQUIRES
+# re.MULTILINE in effect, which can only arrive two ways — a flag
+# ATTRIBUTE named ``MULTILINE`` or ``M`` at the call site
+# (``_flags_has_multiline`` matches the AST attribute name), or an
+# inline ``(?m…)`` flag group inside the pattern string.  A file whose
+# raw text contains none of these spellings cannot produce a member,
+# so the census skips its parse+walk — the whole-tree cost was
+# dominated by files that never set MULTILINE at all (a bare ``\bM\b``
+# token gate was tried first and over-admitted half the runtime tree's
+# bytes on prose "M"s in comments).  ``\.\s*M\b`` is the textual shape
+# of the ``M`` attribute access: dot, then the identifier, with any
+# whitespace/newline layout between (false positives just pay the old
+# full-scan price).  The gate is applied to NFKC-NORMALIZED text:
+# Python normalizes identifiers with NFKC at parse time, so a
+# fullwidth ``re.Ｍ`` is the ``M`` attribute to the AST detector and
+# must be the ``M`` attribute to the gate too.  Known blind spots,
+# documented like the resolver's own spell-anchors-literally
+# discipline in ``_const_str_parts``: a comment or
+# backslash-continuation between the dot and the ``M``, and an inline
+# flag group no single string literal spells (escape-encoded
+# ``"(?\x6d)"`` or a concat split like ``"(?" + "m)"``) — spell flags
+# plainly and adjacently.  ``test_scan_catches_every_multiline_spelling``
+# plants every supported spelling through ``_scan_file`` so a gate
+# regression fails the census's own tests, not the closure.
+_MULTILINE_SOURCE_GATE = re.compile(
+    r"MULTILINE"          # re.MULTILINE / _rx.MULTILINE
+    r"|\.\s*M\b"          # re.M / _rx.M (attribute-shaped token)
+    r"|\(\?[a-zA-Z-]*m",  # inline flags: (?m) (?im) (?m:...) ...
+)
 
 
 def _iter_python_files() -> list[Path]:
@@ -325,44 +356,57 @@ def _census_key(path: Path, pattern: str,
 def _scan_file(path: Path) -> list[tuple[tuple[str, str], int]]:
     try:
         text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, ValueError):
+        return []  # binary libexec helper or undecodable
+    if _MULTILINE_SOURCE_GATE.search(
+            unicodedata.normalize("NFKC", text)) is None:
+        return []  # no MULTILINE spelling anywhere — cannot be a member
+    try:
         tree = ast.parse(text)
-    except (SyntaxError, UnicodeDecodeError, ValueError):
+    except (SyntaxError, ValueError):
         return []  # non-Python libexec helper (shell) or unparseable
 
-    # Names the ``re`` module is bound to in this file — module-level
-    # or function-local ``import re`` / ``import re as _re``.
-    re_names = {
-        alias.asname or "re"
-        for node in ast.walk(tree) if isinstance(node, ast.Import)
-        for alias in node.names if alias.name == "re"
-    }
-
+    # ONE pass over the tree collects everything the membership test
+    # needs (the census's cost is walk-bound, and separate walks per
+    # collection quadrupled it):
+    #  * re_names — names the ``re`` module is bound to in this file,
+    #    module-level or function-local ``import re`` / ``import re
+    #    as _re``;
+    #  * consts — single-target constant-ish assignments, resolved
+    #    with an empty namespace exactly as before (chained constant
+    #    references stay unresolved by design);
+    #  * assign_of — the name each call is assigned to (stable keys);
+    #  * calls — candidate ``re``-function call sites, judged against
+    #    the COMPLETE re_names set after the walk (an ``import re``
+    #    later in walk order than a call site must still count).
+    re_names: set[str] = set()
     consts: dict[str, str] = {}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
-                and isinstance(node.targets[0], ast.Name) \
-                and isinstance(node.value,
-                               (ast.Constant, ast.JoinedStr, ast.BinOp)):
-            value = _const_str_parts(node.value, {})
-            if value is not None:
-                consts[node.targets[0].id] = value
-
-    # Map each call to the name it is assigned to (for stable keys).
     assign_of: dict[ast.Call, str] = {}
+    calls: list[tuple[ast.Call, str]] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call) \
-                and len(node.targets) == 1 \
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "re":
+                    re_names.add(alias.asname or "re")
+        elif isinstance(node, ast.Assign) and len(node.targets) == 1 \
                 and isinstance(node.targets[0], ast.Name):
-            assign_of[node.value] = node.targets[0].id
-
-    members: list[tuple[tuple[str, str], int]] = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.Call)
+            if isinstance(node.value, ast.Call):
+                assign_of[node.value] = node.targets[0].id
+            elif isinstance(node.value,
+                            (ast.Constant, ast.JoinedStr, ast.BinOp)):
+                value = _const_str_parts(node.value, {})
+                if value is not None:
+                    consts[node.targets[0].id] = value
+        elif (isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr in _RE_FUNCS
                 and isinstance(node.func.value, ast.Name)
-                and node.func.value.id in re_names
                 and node.args):
+            calls.append((node, node.func.value.id))
+
+    members: list[tuple[tuple[str, str], int]] = []
+    for node, receiver in calls:
+        if receiver not in re_names:
             continue
         pattern = _const_str_parts(node.args[0], consts)
         if pattern is None:
@@ -437,6 +481,48 @@ class RedosIdiomCensus(unittest.TestCase):
             probe.unlink()
         self.assertEqual([key for key, _ in members],
                          [(probe.name, "pat")])
+
+    def test_scan_catches_every_multiline_spelling(self) -> None:
+        """Scan-level self-check for the raw-text gate: a planted
+        member must be caught through ``_scan_file`` under EVERY
+        supported MULTILINE spelling — the flag attribute, its ``M``
+        alias (on an aliased import), inline flag groups (bare and
+        combined), and the NFKC fullwidth ``Ｍ`` — plus the
+        branch-embedded anchor, so a gate regression fails here
+        instead of silently shrinking the census."""
+        import tempfile
+
+        plants: list[tuple[str, str]] = [
+            ("import re\n"
+             "p = re.compile(r'^\\s*planted', re.MULTILINE)\n", "p"),
+            ("import re as _rx\n"
+             "p = _rx.compile(r'^\\s*planted', _rx.M)\n", "p"),
+            ("import re\n"
+             "p = re.compile(r'(?m)^\\s*planted')\n", "p"),
+            ("import re\n"
+             "p = re.compile(r'(?im)^[\\s#]*planted')\n", "p"),
+            # Branch-embedded anchor member through the scan layer.
+            ("import re\n"
+             "p = re.compile(r'(?:^|;)\\s*planted', re.M)\n", "p"),
+            # Fullwidth Ｍ: Python NFKC-normalizes identifiers at
+            # parse time, so this IS the ``M`` attribute to the AST
+            # detector — the gate normalizes before matching so it
+            # agrees.
+            ("import re\n"
+             "p = re.compile(r'^\\s*planted', re.Ｍ)\n", "p"),
+        ]
+        for source, name in plants:
+            with tempfile.NamedTemporaryFile(
+                "w", suffix=".py", delete=False,
+            ) as fh:
+                fh.write(source)
+                probe = Path(fh.name)
+            try:
+                members = _scan_file(probe)
+            finally:
+                probe.unlink()
+            self.assertEqual([key for key, _ in members],
+                             [(probe.name, name)], source)
 
     def test_runtime_source_has_no_members(self) -> None:
         files = _iter_python_files()
