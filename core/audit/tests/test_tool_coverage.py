@@ -129,6 +129,82 @@ class TestIsClassCovered:
             "", "logic error", "", self.ALL_TOOLS, ran_tools={"semgrep"},
         ) is False
 
+    def test_php_semgrep_families_silence_stays_dark(self):
+        """Every PHP web-audit family (dispatch entries in
+        cwe_dispatch) is deliberately unmapped: each rule adjudicates
+        a narrow sub-shape (socket writes but not header()/mail()
+        response splitting; membership checks with invisible
+        haystack/polarity; the attribute-encoding residual;
+        name-anchored PRNG stores), so a silent rule must classify
+        the class dark — never clean. Pinned on the explicit
+        cwe_field path, which is mechanism-independent: a mapped row
+        here would grant clean-when-silent to every hypothesis the
+        review tags with the class, not just the shapes the rule can
+        see."""
+        for cwe in ("CWE-93", "CWE-470", "CWE-88", "CWE-116",
+                    "CWE-327", "CWE-338"):
+            covered = is_class_covered(
+                cwe, "", "", self.ALL_TOOLS, ran_tools={"semgrep"},
+            )
+            # CWE-88/327 rows PRE-EXIST this series (see the
+            # companion test below); the four rows this series could
+            # have added stay out.
+            if cwe in ("CWE-88", "CWE-327"):
+                assert covered is True
+            else:
+                assert covered is False
+
+    def test_preexisting_88_327_rows_now_systematically_armed(self):
+        """DOCUMENTED consequence, not a change: CWE-88 and CWE-327
+        carried semgrep rows before this series, but no PHP semgrep
+        leg ever dispatched for them — the rows were dormant. The
+        cwe_dispatch entries make semgrep receipts systematic on PHP
+        targets, so silence in these two classes now resolves
+        clean-when-silent through the pre-existing rows despite both
+        rules having narrow-shape gaps (helper-indirection taint for
+        CWE-88; neutral-name digests and non-digest weak-crypto
+        hypotheses for CWE-327). Accepted for this series; the
+        rule-granular receipt design (see _CWE_TOOL_MAP comment) is
+        the path to closing it."""
+        for cwe in ("CWE-88", "CWE-327"):
+            assert is_class_covered(
+                cwe, "", "", self.ALL_TOOLS, ran_tools={"semgrep"},
+            ) is True
+            assert is_class_covered(cwe, "", "", self.ALL_TOOLS) is False
+
+    def test_php_family_mechanisms_name_but_never_cover(self):
+        """Mechanism keywords for the unmapped families are
+        naming-only (the CWE-480/481 pattern): the class appears in
+        coverage records but never resolves clean-when-silent. No
+        crlf/header-injection keyword at all — response splitting is
+        canonically tagged CWE-93 and must not even be named as
+        semgrep territory."""
+        from core.audit.tool_coverage import _extract_cwes
+
+        assert _extract_cwes(
+            "", mechanism="crlf injection into the smtp stream",
+        ) == []
+        assert _extract_cwes(
+            "", mechanism="header injection via Location value",
+        ) == []
+        for mech in ("unsafe reflection over request parameter",
+                     "variable function call on user input"):
+            assert "CWE-470" in _extract_cwes("", mechanism=mech)
+            assert is_class_covered(
+                "", mech, "", self.ALL_TOOLS, ran_tools={"semgrep"},
+            ) is False
+
+    def test_sarif_cache_alias_never_covers_unmapped_families(self):
+        """Gate resolution adds "sarif_cache" to the ran set for any
+        file with prior semgrep findings, and the alias normalizes it
+        to "semgrep" — with a CWE-93/470 row that would have resolved
+        a C-file suspicious clean off an unrelated prior finding.
+        Unmapped families are immune to the alias by construction."""
+        for cwe in ("CWE-93", "CWE-470", "CWE-116", "CWE-338"):
+            assert is_class_covered(
+                cwe, "", "", self.ALL_TOOLS, ran_tools={"sarif_cache"},
+            ) is False
+
     def test_covered_via_mechanism(self):
         assert is_class_covered(
             "", "sql injection", "", self.ALL_TOOLS, ran_tools={"semgrep"},

@@ -76,6 +76,21 @@ _CWE_TOOL_MAP: dict[str, frozenset[str]] = {
     # ReDoS / prompt injection
     "CWE-1333": frozenset({"prefilter"}),                         # ReDoS
     "CWE-1336": frozenset({"prefilter"}),                         # prompt injection
+
+    # The PHP web-audit families (CWE-93/470/88/116/327/338 dispatch
+    # entries in cwe_dispatch) are DELIBERATELY absent from this map:
+    # every one of their rules adjudicates a narrow sub-shape (socket
+    # writes but not header()/mail() response splitting for CWE-93;
+    # membership checks with invisible haystack/polarity for CWE-470;
+    # the attribute-encoding residual for CWE-116; name-anchored PRNG
+    # stores for CWE-338), so rule silence must keep the class dark
+    # for human review — the race-condition/CWE-367 precedent above.
+    # Confirmed matches still stamp promotion-grade semgrep receipts
+    # through the chain; only the silence→clean direction is withheld.
+    # Re-earning coverage here means keying on the SPECIFIC rule
+    # receipt (the dispatched rule file adjudicated this exact claim)
+    # rather than the channel-granular "any semgrep ran" test — this
+    # map cannot express that today.
 }
 
 # Mechanism keywords → CWEs. Used when the LLM provides a mechanism
@@ -132,6 +147,14 @@ _MECHANISM_CWE_MAP: dict[str, list[str]] = {
     "prompt injection":    ["CWE-1336"],
     "indirect prompt injection": ["CWE-1336"],
     "llm injection":       ["CWE-1336"],
+    # Naming-only emissions (the CWE-480/481 pattern above): CWE-470
+    # is absent from _CWE_TOOL_MAP, so these keep the class named in
+    # coverage records while it classifies dark. No "crlf injection"
+    # or "header injection" row: reviews canonically tag header()/
+    # mail() response splitting as CWE-93 too, and naming it here buys
+    # nothing while the class is unmapped.
+    "unsafe reflection":   ["CWE-470"],
+    "variable function":   ["CWE-470"],
     # CWE-480/481 are DELIBERATELY absent from _CWE_TOOL_MAP: no
     # mechanical channel (cocci rule, semgrep rule, CodeQL query) in
     # this repo detects operator confusion, so these classes must
