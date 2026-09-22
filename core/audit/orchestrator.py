@@ -17452,19 +17452,27 @@ def _record_invariant_receipt(
 _CODEQL_DEGRADED_LOGGED: list[bool] = [False]
 
 
-def _note_codeql_degraded_skip(file_path: str, function_name: str) -> None:
+def _note_codeql_degraded_skip(
+    file_path: str, function_name: str,
+    reason: str = "no CodeQL database",
+) -> None:
     """One loud line the first time a codeql chain step is skipped
-    because the tier degraded at startup (no database), debug after."""
+    with no database to serve it, debug after.
+
+    ``reason`` distinguishes a run with no database at all from a run
+    whose database(s) simply do not cover this file's language — the
+    old fixed wording blamed startup degradation for router misses.
+    """
     if not _CODEQL_DEGRADED_LOGGED[0]:
         _CODEQL_DEGRADED_LOGGED[0] = True
         logger.info(
-            "codeql tier degraded at startup (no CodeQL database) — "
-            "codeql chain steps are skipped for this run; fallback "
-            "channels (semgrep/joern/smt) cover their claims",
+            "codeql chain steps skipped (%s) — fallback channels "
+            "(semgrep/joern/smt) cover their claims",
+            reason,
         )
     logger.debug(
-        "tool_chain codeql skipped %s:%s — tier degraded (no database)",
-        file_path, function_name,
+        "tool_chain codeql skipped %s:%s — %s",
+        file_path, function_name, reason,
     )
 
 
@@ -19210,13 +19218,23 @@ def _run_tool_chain(
             elif tool_type == "codeql":
                 _tool_db = _codeql_db_for(config, file_path)
                 if not _tool_db:
-                    # Startup already recorded this degradation
-                    # (codeql → semgrep taint mode); honour it at
-                    # dispatch instead of erroring at run time — the
-                    # rest of the chain (semgrep/joern/smt) covers the
-                    # claim. Loud once per run, then debug.
+                    # Either the tier degraded at startup (no database
+                    # at all) or the router has no database for this
+                    # file's language; honour it at dispatch instead
+                    # of erroring at run time — the rest of the chain
+                    # (semgrep/joern/smt) covers the claim. Loud once
+                    # per run, then debug.
+                    _has_any_db = bool(
+                        getattr(getattr(config, "codeql_db_router", None),
+                                "paths", None)
+                        or config.codeql_db_path,
+                    )
                     _note_codeql_degraded_skip(
                         file_path, function_name,
+                        reason=(
+                            "no database for this file's language"
+                            if _has_any_db else "no CodeQL database"
+                        ),
                     )
                     # Skipped = did not look: keep it out of the
                     # dispatch record (same phantom-coverage rule as

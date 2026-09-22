@@ -89,10 +89,13 @@ class TestCodeqlDegradedDispatch:
                 hypothesis="h",
                 tier_counters=_counters(),
             )
-        loud = [m for m in infos if "degraded at startup" in m]
+        loud = [m for m in infos if "codeql chain steps skipped" in m]
         assert len(loud) == 1, (
             f"degradation skip must announce exactly once, got {len(loud)}"
         )
+        # With NO database at all, the banner must name that case —
+        # not the router-miss wording.
+        assert "no CodeQL database" in loud[0]
 
 
 class TestCodeqlUnsupportedQueryId:
@@ -285,3 +288,39 @@ def _cleanup_chain_rules(chain):
         if isinstance(rule, str) and os.path.basename(rule).startswith(
                 "audit_sweep_"):
             _P(rule).unlink(missing_ok=True)
+
+
+class TestRouterMissBannerWording:
+    def test_language_miss_names_the_real_reason(self, tmp_path, monkeypatch):
+        """A database EXISTS but does not cover this file's language —
+        the banner must not blame startup degradation."""
+        import core.audit.orchestrator as _orch
+        from core.audit.codeql_dbs import CodeqlDbRouter
+
+        monkeypatch.setattr(_orch, "_CODEQL_DEGRADED_LOGGED", [False])
+        infos: list[str] = []
+
+        def _info(msg, *args, **kwargs):
+            infos.append(str(msg) % args if args else str(msg))
+
+        monkeypatch.setattr(_orch.logger, "info", _info)
+
+        db = tmp_path / "cpp-db"
+        db.mkdir()
+        (db / "codeql-database.yml").write_text("primaryLanguage: cpp\n")
+        config = OrchestratorConfig(
+            target_path=tmp_path, out_dir=None, codeql_db_path=None,
+        )
+        config.codeql_db_router = CodeqlDbRouter([str(db)])
+        _run_tool_chain(
+            [{"type": "codeql", "config": {"query": "cpp/x"}}],
+            config=config,
+            file_path="src/index.php",
+            function_name="f",
+            source="",
+            hypothesis="h",
+            tier_counters=_counters(),
+        )
+        loud = [m for m in infos if "codeql chain steps skipped" in m]
+        assert len(loud) == 1
+        assert "no database for this file's language" in loud[0]

@@ -54,13 +54,29 @@ class TestRouter:
         assert router.primary is None
         assert router.for_file("src/a.c") is None
 
-    def test_single_database_is_wildcard(self, tmp_path):
+    def test_single_known_language_database_serves_only_its_language(
+            self, tmp_path):
         db = _make_db(tmp_path, "python-db", "python")
         router = CodeqlDbRouter([str(db)])
         assert router.primary == str(db)
-        # Historic behaviour: one db serves every file, matching or not.
-        assert router.for_file("src/a.c") == str(db)
         assert router.for_file("src/a.py") == str(db)
+        # A foreign-language file must NOT reach the sole database:
+        # its queries error or return zero rows against a graph that
+        # cannot contain the file, and that silence reads as
+        # refutation-grade downstream.
+        assert router.for_file("src/a.c") is None
+        # Files outside the routing table are equally unanswerable.
+        assert router.for_file("src/index.php") is None
+        # Callers that cannot route (no file in hand) keep the sole db.
+        assert router.for_file(None) == str(db)
+
+    def test_single_unknown_language_database_stays_wildcard(
+            self, tmp_path):
+        db = _make_db(tmp_path, "mystery", None)
+        router = CodeqlDbRouter([str(db)])
+        # Language undecidable — lenient dispatch is the lesser harm.
+        assert router.for_file("src/a.c") == str(db)
+        assert router.for_file("src/index.php") == str(db)
         assert router.for_file(None) == str(db)
 
     def test_multi_database_routes_by_language(self, tmp_path):

@@ -4,10 +4,13 @@ A run may carry one database per language (multi-language targets;
 ``--codeql-db`` is repeatable). CodeQL queries are language-specific,
 so per-function dispatch must pick the database matching the file's
 language — pointing a Python query at a C++ database errors out and
-the channel silently degrades. Single-database runs keep the historic
-behaviour: the one database serves every file (the query menu already
-selects language-appropriate queries, and a mismatched sweep degrades
-per-call exactly as before).
+the channel silently degrades. A single database whose language is
+known serves only files of that language: dispatching a
+foreign-language file at it makes every query either error or run
+vacuously against a graph that cannot contain the file, and a
+zero-row result then reads as refutation-grade silence. Only a
+database whose language cannot be determined keeps the historic
+serve-every-file behaviour (metadata-less stand-ins).
 """
 
 from __future__ import annotations
@@ -33,6 +36,11 @@ CODEQL_EXT_LANGUAGE = {
     ".cs": "csharp",
     ".swift": "swift",
 }
+
+#: The real CodeQL extractor languages — the values a file extension
+#: can route to. A database label outside this set (a dir-name
+#: fallback artifact) is not a routable language claim.
+_CODEQL_LANGUAGES = frozenset(CODEQL_EXT_LANGUAGE.values())
 
 #: Language-tag aliases → CodeQL canonical form.
 _LANGUAGE_ALIASES = {
@@ -84,17 +92,23 @@ class CodeqlDbRouter:
     """Route a source file to the CodeQL database for its language.
 
     - No databases: ``for_file`` always returns None.
-    - One database: wildcard — serves every file (historic behaviour).
+    - One database of KNOWN language: serves files of that language
+      (and ``for_file(None)`` callers that cannot route); other files
+      return None and the caller takes its existing no-database
+      degradation path.
+    - One database of UNKNOWN language: wildcard — serves every file
+      (historic behaviour, kept for metadata-less stand-ins).
     - Multiple databases: strict language match via the file's
-      extension; no match returns None and the caller takes its
-      existing no-database degradation path.
+      extension; no match returns None.
     """
 
     def __init__(self, paths) -> None:
         self.paths: list[str] = [str(p) for p in (paths or []) if p]
+        self._path_langs: list[str | None] = []
         self._by_lang: dict[str, str] = {}
         for p in self.paths:
             lang = database_language(Path(p))
+            self._path_langs.append(lang)
             if lang is None:
                 logger.warning(
                     "codeql db router: could not determine language of "
@@ -126,11 +140,26 @@ class CodeqlDbRouter:
     def for_file(self, file_path: str | None) -> str | None:
         if not self.paths:
             return None
-        if len(self.paths) == 1:
-            return self.paths[0]
         if not file_path:
-            return None
+            # Callers that cannot route (no file in hand) keep the
+            # sole database; with several there is nothing to pick.
+            return self.paths[0] if len(self.paths) == 1 else None
         lang = CODEQL_EXT_LANGUAGE.get(Path(file_path).suffix.lower())
+        if len(self.paths) == 1:
+            # Trade-off, both directions weighed: gating the sole
+            # database on language match loses the old speculative
+            # dispatch for extensions outside the routing table, but
+            # those queries were unanswerable for the graph anyway —
+            # they came back as errors or as zero rows that read like
+            # refutation-grade silence downstream. Wildcard survives
+            # only while the database's language is not a real CodeQL
+            # extractor language (yml-less stand-ins, where the
+            # dir-name fallback manufactures a label): there a match
+            # is undecidable and lenient dispatch is the lesser harm.
+            sole_lang = self._path_langs[0] if self._path_langs else None
+            if sole_lang not in _CODEQL_LANGUAGES:
+                return self.paths[0]
+            return self.paths[0] if lang == sole_lang else None
         if lang is None:
             return None
         return self._by_lang.get(lang)
