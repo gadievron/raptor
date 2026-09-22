@@ -202,10 +202,14 @@ def main() -> int:
         oa_config.workers = args.workers
 
     except RuntimeError as e:
-        print(f"\n✗ OpenAnt not available: {_sft(str(e))}")
+        # Not configured: OpenAnt is an optional add-on, so a missing
+        # openant-core checkout is a documented skip (exit 0, run
+        # completes), clearly distinct from a scan that RAN and failed
+        # (hard error, exit 1 below).
+        print(f"\n⚠️  OpenAnt not available: {_sft(str(e))}")
         print("  Set OPENANT_CORE to the openant-core directory path.")
         _write_empty_report(out_dir, repo_path, str(e))
-        return 1
+        return 0
 
     # ------------------------------------------------------------------
     # PHASE 1: OPENANT SCAN
@@ -217,15 +221,33 @@ def main() -> int:
     oa_out = out_dir / "openant_scan"
     oa_out.mkdir(exist_ok=True)
 
-    scan_result = run_openant_scan(
-        repo_path=str(repo_path),
-        out_dir=str(oa_out),
-        config=oa_config,
-    )
+    try:
+        scan_result = run_openant_scan(
+            repo_path=str(repo_path),
+            out_dir=str(oa_out),
+            config=oa_config,
+        )
+    except RuntimeError as e:
+        # Not-configured discovered at subprocess-env build time (the
+        # core path vanished or is not an openant-core tree) — same
+        # skip semantics as the discovery failure above.
+        print(f"\n⚠️  OpenAnt not available: {_sft(str(e))}")
+        _write_empty_report(out_dir, repo_path, str(e))
+        return 0
 
     if scan_result.get("skipped"):
-        print(f"\n⚠️  OpenAnt scan skipped: {_sft(scan_result.get('error', 'unknown error'))}")
-        _write_empty_report(out_dir, repo_path, scan_result.get("error", ""))
+        error = scan_result.get("error", "unknown error")
+        if scan_result.get("hard_error"):
+            # The scan was attempted and failed (timeout, launch
+            # failure, exit >= 2, missing pipeline output). Exit
+            # non-zero so the lifecycle records a failed run — an
+            # empty-findings exit 0 here would be indistinguishable
+            # from a target that scanned clean.
+            print(f"\n✗ OpenAnt scan failed: {_sft(error)}", file=sys.stderr)
+            _write_empty_report(out_dir, repo_path, error)
+            return 1
+        print(f"\n⚠️  OpenAnt scan skipped: {_sft(error)}")
+        _write_empty_report(out_dir, repo_path, error)
         return 0
 
     pipeline_output = scan_result.get("pipeline_output") or {}

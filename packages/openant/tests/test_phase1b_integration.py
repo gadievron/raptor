@@ -714,3 +714,37 @@ class TestOpenantCoreConsentGate(unittest.TestCase):
             self.assertFalse(probe.exists(),
                              "the gate executed a config-named command "
                              "from the hostile clone")
+
+
+class TestAgenticOpenantHardFailure(unittest.TestCase):
+    """Phase 1b distinguishes an attempted-and-failed OpenAnt scan
+    (hard_error) from a not-configured skip, and a hard failure of the
+    run's only possible finding source fails the run with the real
+    reason instead of ending as if the target scanned clean."""
+
+    _run_agentic = TestOpenantOnlyReachesPhase1b._run_agentic
+    _EMPTY_SARIF = TestOpenantOnlyReachesPhase1b._EMPTY_SARIF
+
+    def test_sole_scanner_hard_failure_fails_run_with_reason(self):
+        with tempfile.TemporaryDirectory() as td:
+            proc = self._run_agentic(td, ["--openant-only"])
+            combined = proc.stdout + proc.stderr
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn("OpenAnt scan failed", combined)
+            self.assertNotIn("OpenAnt unavailable", combined)
+            self.assertIn("no other scan results", combined)
+
+    def test_hard_failure_beside_imported_sarif_continues(self):
+        """Another finding source exists (--sarif import): the run
+        continues past Phase 1b with the failed wording — the eventual
+        no-findings exit is the import gate, not the OpenAnt one."""
+        with tempfile.TemporaryDirectory() as td:
+            sarif = Path(td) / "imported.sarif"
+            sarif.write_text(self._EMPTY_SARIF)
+            proc = self._run_agentic(
+                td, ["--sarif", str(sarif), "--openant-only"])
+            combined = proc.stdout + proc.stderr
+            self.assertIn("OpenAnt scan failed", combined)
+            self.assertNotIn("OpenAnt unavailable", combined)
+            self.assertIn("SARIF IMPORT", combined)
+            self.assertNotIn("no other scan results", combined)

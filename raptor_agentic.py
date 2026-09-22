@@ -3657,6 +3657,12 @@ def main() -> int:
     openant_findings = []
     openant_findings_count = 0
     openant_metrics = {}
+    # Set when the OpenAnt scan was attempted and hard-failed (timeout,
+    # launch failure, exit >= 2, missing output) — distinct from a
+    # not-configured skip. Consulted at the no-results gates below so a
+    # run whose only possible finding source was OpenAnt cannot end as
+    # if the target scanned clean.
+    openant_hard_error = ""
     if _openant_enabled:
         try:
             from packages.openant import get_config, run_openant_scan, translate_pipeline_output, deduplicate_with_sarif
@@ -3689,7 +3695,16 @@ def main() -> int:
             )
 
             if oa_result.get("skipped"):
-                print(f"⚠️  OpenAnt unavailable: {oa_result.get('error', 'unknown')}")
+                # The error text can quote the subprocess's stderr
+                # (target-influenced) — escape before the terminal.
+                from core.security.log_sanitisation import sanitise_for_terminal
+                _oa_err = sanitise_for_terminal(
+                    str(oa_result.get("error") or "unknown"), max_len=600)
+                if oa_result.get("hard_error"):
+                    openant_hard_error = _oa_err
+                    print(f"✗ OpenAnt scan failed: {_oa_err}", file=sys.stderr)
+                else:
+                    print(f"⚠️  OpenAnt unavailable: {_oa_err}")
             else:
                 raw = translate_pipeline_output(
                     oa_result.get("pipeline_output") or {},
@@ -3780,12 +3795,21 @@ def main() -> int:
             save_json(normalized_path, normalized_sarif)
             all_sarif_files.append(normalized_path)
         elif not all_sarif_files and not openant_findings_count:
+            reason = "no findings in imported SARIF and no scan results"
+            if openant_hard_error:
+                reason += f"; OpenAnt scan failed: {openant_hard_error}"
             print("\n✗ No findings in imported SARIF and no scan results", file=sys.stderr)
-            _fail_run_and_exit(
-                out_dir, "no findings in imported SARIF and no scan results",
-            )
+            _fail_run_and_exit(out_dir, reason)
 
     if not all_sarif_files and not openant_findings_count:
+        if openant_hard_error:
+            # OpenAnt was the only scanner that could have produced
+            # results and it hard-failed — that failure IS the run's
+            # failure, not a clean scan with nothing to report.
+            print("\n✗ OpenAnt scan failed and no other scan results exist",
+                  file=sys.stderr)
+            _fail_run_and_exit(
+                out_dir, f"OpenAnt scan failed: {openant_hard_error}")
         print("\n✗ No SARIF files generated from scanning", file=sys.stderr)
         _fail_run_and_exit(out_dir, "no SARIF files generated from scanning")
 

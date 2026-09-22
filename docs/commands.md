@@ -440,7 +440,10 @@ per-function LLM reasoning.  Unlike the pattern scanners, it reads each
 function in context, catching business-logic flaws and subtle injection
 patterns.  Requires the `openant-core` library: set `OPENANT_CORE` or
 pass `--openant-core` (auto-detection probes
-`<RAPTOR parent>/libs/openant-core`).
+`<RAPTOR parent>/libs/openant-core`).  A missing checkout is a
+not-configured skip, not a failure: the command warns, writes an empty
+report, and the run completes; a scan that runs and hard-fails exits
+non-zero and the run is marked failed.
 
 ```
 /openant --repo <path>

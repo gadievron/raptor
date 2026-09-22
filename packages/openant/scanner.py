@@ -405,6 +405,13 @@ def run_openant_scan(
         token_usage           (dict)
         error                 (str | None)
         skipped               (bool)
+        hard_error            (bool)  True when the scan was attempted and
+                                      failed (timeout, launch failure,
+                                      exit >= 2, missing output) — the
+                                      target was NOT scanned. Absent/False
+                                      on success. Not-configured cases
+                                      raise RuntimeError instead (see
+                                      ``_build_subprocess_env``).
     """
     repo_path = Path(repo_path)
     out_dir = Path(out_dir)
@@ -450,10 +457,11 @@ def _run_subprocess(
         )
     except subprocess.TimeoutExpired:
         return _empty_result(
-            f"OpenAnt timed out after {config.timeout_seconds}s"
+            f"OpenAnt timed out after {config.timeout_seconds}s",
+            hard_error=True,
         )
     except Exception as exc:  # noqa: BLE001
-        return _empty_result(f"OpenAnt launch failed: {exc}")
+        return _empty_result(f"OpenAnt launch failed: {exc}", hard_error=True)
 
     # Persist stderr so debugging isn't capped at the 600-char snippet
     # we surface to the caller. (Adversarial-audit finding: long warnings
@@ -476,14 +484,16 @@ def _run_subprocess(
         snippet = (proc.stderr or "")[:600].strip()
         return _empty_result(
             f"OpenAnt exited {proc.returncode}: {snippet} "
-            f"(full stderr in {out_dir}/openant.stderr.log)"
+            f"(full stderr in {out_dir}/openant.stderr.log)",
+            hard_error=True,
         )
 
     pipeline_output_path = out_dir / "pipeline_output.json"
     pipeline_output = _load_json(pipeline_output_path)
     if not pipeline_output:
         return _empty_result(
-            f"OpenAnt produced no pipeline_output.json in {out_dir}"
+            f"OpenAnt produced no pipeline_output.json in {out_dir}",
+            hard_error=True,
         )
 
     token_usage = _extract_usage(proc.stdout, pipeline_output)
@@ -593,11 +603,15 @@ def _extract_usage(stdout: str, pipeline_output: dict) -> dict[str, Any]:
     return {"total_cost_usd": total_cost}
 
 
-def _empty_result(error: str) -> dict[str, Any]:
+def _empty_result(error: str, *, hard_error: bool) -> dict[str, Any]:
+    """Skipped-scan result. ``hard_error`` distinguishes an attempted
+    scan that FAILED (the caller must not report the target as scanned
+    clean) from a scan that never applied."""
     return {
         "pipeline_output_path": None,
         "pipeline_output": {"findings": []},
         "token_usage": {},
         "error": error,
         "skipped": True,
+        "hard_error": hard_error,
     }
