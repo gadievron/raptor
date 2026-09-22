@@ -7,6 +7,7 @@ radare2 installed.
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -331,7 +332,12 @@ class TestCacheWriteSubstrate:
         with patch.object(core_json, "save_json", side_effect=spy):
             save_cached_cfgs(binary, cfgs)
 
-        assert len(calls) == 1
+        # The patch window is process-global: background work from
+        # other components may legitimately route saves through the
+        # same chokepoint while it is open, so count only writes into
+        # this test's cache dir.
+        cache_calls = [p for p in calls if Path(p).parent == cache_dir]
+        assert len(cache_calls) == 1
         # No constant-name tempfile sidecar left (or racing) on disk.
         assert list(cache_dir.glob("*.json.tmp")) == []
         assert load_cached_cfgs(binary) is not None
