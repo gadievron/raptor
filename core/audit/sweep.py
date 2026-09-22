@@ -43,6 +43,8 @@ from core.json import load_json
 from ._util import is_valid_identifier, safe_join
 from .run_memo import BoundedMemo
 from .substrate import (
+    Coverage,
+    UNKNOWN_INCONCLUSIVE,
     file_substrate_coverage,
     license_refutation,
     substrate_covers,
@@ -791,6 +793,7 @@ def run_semgrep_sweep(
                 in_function.append(finding)
 
         capped_reason: str | None = None
+        witness_cov: Coverage | None = None
         if in_function and hypothesis:
             named = _hypothesis_identifiers(hypothesis)
             if named:
@@ -848,6 +851,18 @@ def run_semgrep_sweep(
             _examined = getattr(result, "files_examined", None)
             if _target_in_examined_files(_examined, full_path, file_path):
                 outcome = "refuted"
+                # The pre-existing scanned witness, re-expressed as a
+                # substrate receipt (vocabulary only — the decision
+                # above is unchanged): licensed refutations carry the
+                # evidence that the tool verifiably analysed the file.
+                witness_cov = Coverage(
+                    covered=True,
+                    tier="scanned-witness",
+                    reason=(
+                        "semgrep: target present in files_examined "
+                        "(paths.scanned)"
+                    ),
+                )
             else:
                 if _examined:
                     capped_reason = (
@@ -866,6 +881,12 @@ def run_semgrep_sweep(
                     file_path, function_name, capped_reason,
                 )
                 outcome = "inconclusive"
+                witness_cov = Coverage(
+                    covered=None,
+                    tier="scanned-witness",
+                    reason=capped_reason,
+                    unknown_policy=UNKNOWN_INCONCLUSIVE,
+                )
 
         if outcome == "refuted":
             # Second pass over the fidelity-3 expanded view: pattern
@@ -903,6 +924,11 @@ def run_semgrep_sweep(
         if control_error:
             details = details or {}
             details["negative_control_error"] = True
+        if witness_cov is not None:
+            # Receipt only — the witness decision above is unchanged;
+            # consumers tolerate extra detail keys by contract.
+            details = details or {}
+            details["substrate"] = witness_cov.as_receipt()
         return SweepResult(
             tool="semgrep",
             file_path=file_path,
@@ -3005,19 +3031,49 @@ def run_codeql_sweep(
         # dispatches.
         from .codeql_dbs import db_contains_source
         _membership = db_contains_source(db, file_path)
+        # The membership decision, re-expressed as a substrate receipt
+        # (vocabulary only — every branch's outcome is unchanged):
+        # skipped and refuted results carry the evidence the verdict
+        # rests on into details/journal/memo.
         if _membership is None:
             logger.debug(
                 "codeql sweep: source membership unknown for %s in %s "
                 "— proceeding (fail-open)", file_path, db,
             )
+            _member_cov = Coverage(
+                covered=None,
+                tier="db-membership",
+                reason=(
+                    "codeql: source-archive membership unknown (no "
+                    "readable src.zip) — refutation weight kept "
+                    "(fail-open)"
+                ),
+            )
         elif _membership is False:
+            _member_cov = Coverage(
+                covered=False,
+                tier="db-membership",
+                reason="file not in this database",
+            )
             return SweepResult(
                 tool="codeql",
                 file_path=file_path,
                 function_name=function_name,
                 outcome="skipped",
                 rule_id=query_path,
-                details={"reason": "file not in this database"},
+                details={
+                    "reason": "file not in this database",
+                    "substrate": _member_cov.as_receipt(),
+                },
+            )
+        else:
+            _member_cov = Coverage(
+                covered=True,
+                tier="db-membership",
+                reason=(
+                    "codeql: file present in the database's source "
+                    "archive"
+                ),
             )
 
         def _analyze_whole_db() -> list[dict[str, Any]]:
@@ -3113,6 +3169,12 @@ def run_codeql_sweep(
             outcome=outcome,
             matches=in_function,
             rule_id=query_path,
+            # Refutations carry the membership receipt; a match is
+            # its own substrate proof and stays receipt-free.
+            details=(
+                {"substrate": _member_cov.as_receipt()}
+                if outcome == "refuted" else None
+            ),
         )
     except ImportError:
         return SweepResult(
