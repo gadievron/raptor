@@ -156,6 +156,46 @@ def test_cve_primary_advisory_gets_kev_epss_ssvc() -> None:
     assert findings[0].ssvc_automatable == "yes"
 
 
+def test_lowercase_cve_alias_enrichment_matches_uppercase() -> None:
+    """Both directions of the case-drift join: a feed row spelling
+    its alias lowercase must produce the SAME enrichment as the
+    canonical uppercase spelling. The EPSS / SSVC maps are keyed
+    uppercase and KEV folds case internally — a raw-case join loses
+    epss/ssvc while in_kev stays true, the exact internal
+    inconsistency the CVE-primary fold was landed to eliminate."""
+    class FakeDecision:
+        is_active = True
+        has_exploit = True
+        automatable = "yes"
+
+    class FakeVulnrichment:
+        def lookup_many(self, cves, *, fetch_budget=None, max_workers=8):
+            return {
+                c: FakeDecision() for c in cves if c == "CVE-2024-0001"
+            }
+
+    results = {}
+    for spelling in ("CVE-2024-0001", "cve-2024-0001"):
+        d = _dep()
+        adv = _adv(aliases=[spelling])
+        osv = [OsvResult(dep_key=d.key(), advisories=[adv])]
+        findings = build_vuln_findings(
+            [d], osv,
+            kev=FakeKev(hits=["CVE-2024-0001"]),
+            epss=FakeEpss(scores={"CVE-2024-0001": 0.9}),
+            vulnrichment=FakeVulnrichment(),  # type: ignore[arg-type]
+        )
+        results[spelling] = findings[0]
+
+    upper, lower = results["CVE-2024-0001"], results["cve-2024-0001"]
+    assert upper.in_kev is True and upper.epss == 0.9
+    assert upper.ssvc_exploitation == "active"
+    assert lower.in_kev == upper.in_kev
+    assert lower.epss == upper.epss
+    assert lower.ssvc_exploitation == upper.ssvc_exploitation
+    assert lower.ssvc_automatable == upper.ssvc_automatable
+
+
 def test_cve_primary_kev_agrees_with_exploit_evidence() -> None:
     """Closure across the CVE-list consumers: the finding-level KEV
     verdict and the exploit-evidence annotation on the SAME finding

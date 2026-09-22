@@ -285,11 +285,19 @@ def cve_ids(advisory: Advisory) -> list[str]:
     scans inject). A consumer that keys KEV / EPSS / SSVC enrichment off
     the alias list alone silently loses those signals for CVE-primary
     advisories, so every CVE-list consumer routes through here.
+
+    Ids are normalised to UPPERCASE: the EPSS / SSVC enrichment maps
+    are keyed uppercase, so a lowercase feed spelling appended raw
+    would be admitted here yet silently lose its join downstream
+    (epss/ssvc null while the case-folding KEV join says listed).
+    Dedup is case-insensitive for the same reason.
     """
     out: list[str] = []
     for cand in (advisory.osv_id, *(advisory.aliases or [])):
-        if (isinstance(cand, str) and cand.upper().startswith("CVE-")
-                and cand not in out):
+        if not isinstance(cand, str):
+            continue
+        cand = cand.upper()
+        if cand.startswith("CVE-") and cand not in out:
             out.append(cand)
     return out
 

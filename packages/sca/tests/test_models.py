@@ -84,3 +84,41 @@ class TestClassifyPinStyle:
         from packages.sca.models import PinStyle, classify_pin_style
         assert classify_pin_style("16.3") is PinStyle.EXACT
         assert classify_pin_style("3.11-slim") is PinStyle.EXACT
+
+
+class TestCveIds:
+    """``cve_ids`` is THE owner of the CVE-list shape for every
+    enrichment consumer (KEV / EPSS / SSVC joins, harden ranking).
+    The enrichment maps are keyed UPPERCASE, so the owner must
+    normalise spellings — admitting a lowercase id but appending it
+    raw silently loses the join downstream."""
+
+    @staticmethod
+    def _adv(osv_id: str, aliases: list[str]):
+        from packages.sca.models import Advisory
+        return Advisory(
+            osv_id=osv_id, aliases=aliases, summary="s", details="d",
+            affected=[], severity=None, fixed_versions=[], references=[],
+        )
+
+    def test_lowercase_spellings_normalised_to_uppercase(self):
+        from packages.sca.models import cve_ids
+        adv = self._adv("GHSA-x", ["cve-2024-0001", "Cve-2024-0002"])
+        assert cve_ids(adv) == ["CVE-2024-0001", "CVE-2024-0002"]
+
+    def test_lowercase_primary_id_normalised(self):
+        from packages.sca.models import cve_ids
+        adv = self._adv("cve-2024-31337", [])
+        assert cve_ids(adv) == ["CVE-2024-31337"]
+
+    def test_case_variants_deduplicate(self):
+        from packages.sca.models import cve_ids
+        adv = self._adv(
+            "CVE-2024-0001", ["cve-2024-0001", "CVE-2024-0001"],
+        )
+        assert cve_ids(adv) == ["CVE-2024-0001"]
+
+    def test_uppercase_behaviour_unchanged(self):
+        from packages.sca.models import cve_ids
+        adv = self._adv("GHSA-x", ["CVE-2024-0001", "OSV-2024-1"])
+        assert cve_ids(adv) == ["CVE-2024-0001"]
