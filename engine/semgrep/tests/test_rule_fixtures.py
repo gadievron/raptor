@@ -1,9 +1,19 @@
-"""Fixture gate for the in-repo semgrep rules added by the taint-rules wave.
+"""Fixture and validity gates for the in-repo semgrep rules.
 
-Every rule file under test ships a positive fixture (must fire) and a
-negative fixture (must stay silent), mirroring the engine/negative_controls
-discipline for synthesized rules. The real semgrep binary adjudicates —
-skipped when it is not installed.
+Two tiers:
+
+1. **Universe gates** — derived mechanically from ``rules/**/*.yaml``
+   (registry-cache excluded), never a hand-typed list: every rule
+   file must pass ``semgrep --validate`` and every rule must carry
+   CWE metadata for the coverage machinery.
+2. **Fixture pairs** (``_CASES``) — rule files with a positive
+   fixture (must fire) and a negative fixture (must stay silent),
+   mirroring the engine/negative_controls discipline. ``_CASES``
+   started as the taint-rules wave and is the burn-down frontier:
+   rule files outside it meet only the universe bar, so new fixture
+   pairs grow it toward the full universe.
+
+The real semgrep binary adjudicates — skipped when not installed.
 """
 
 from __future__ import annotations
@@ -17,6 +27,24 @@ import pytest
 
 _RULES_DIR = Path(__file__).resolve().parents[1] / "rules"
 _FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def _rule_universe() -> list[Path]:
+    """Every in-repo rule file — registry-cache holds fetched packs,
+    not in-repo rules, and is excluded."""
+    files = sorted(
+        p
+        for pattern in ("*.yaml", "*.yml")
+        for p in _RULES_DIR.rglob(pattern)
+        if "registry-cache" not in p.parts
+    )
+    # Non-vacuity floor: a moved rules dir must not turn the universe
+    # gates into zero-case passes.
+    assert len(files) >= 40, (
+        f"only {len(files)} rule files derived — universe derivation "
+        f"looks broken"
+    )
+    return files
 
 # rule file → (positive fixtures that must fire, negative fixtures that
 # must not). Fixture names double as the language matrix.
@@ -113,6 +141,39 @@ def _run_semgrep(rule_file: Path, targets: list[Path]) -> dict:
     return json.loads(proc.stdout)
 
 
+def test_cases_are_within_the_universe():
+    """Guards _CASES against silent staleness (renamed/moved files)."""
+    universe = {p.relative_to(_RULES_DIR).as_posix() for p in _rule_universe()}
+    stale = sorted(set(_CASES) - universe)
+    assert not stale, f"_CASES entries not in rules/: {stale}"
+
+
+def test_every_rule_file_validates(tmp_path: Path):
+    """Whole-universe --validate in one invocation: an unparseable or
+    schema-invalid rule file anywhere under rules/ fails here instead
+    of erroring out mid-scan. The universe is copied so a populated
+    registry-cache on an operator checkout cannot leak into the run.
+    """
+    universe = _rule_universe()
+    stage = tmp_path / "rules"
+    for rule_file in universe:
+        dest = stage / rule_file.relative_to(_RULES_DIR)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(rule_file.read_bytes())
+    proc = subprocess.run(
+        ["semgrep", "scan", "--validate", "--config", str(stage),
+         "--metrics", "off"],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert proc.returncode == 0, (
+        f"--validate failed over {len(universe)} rule files:\n"
+        f"{proc.stderr[-3000:]}"
+    )
+
+
 @pytest.mark.parametrize("rule_rel", sorted(_CASES))
 def test_rule_file_is_valid(rule_rel: str):
     rule_file = _RULES_DIR / rule_rel
@@ -152,10 +213,18 @@ def test_negative_fixtures_stay_silent(rule_rel: str):
 
 
 def test_every_rule_has_cwe_metadata():
-    """New rules must carry CWE metadata for the coverage machinery."""
+    """Every rule in the universe must carry CWE metadata for the
+    coverage machinery — enforced over the derived universe, not just
+    the fixture-paired subset."""
     yaml = pytest.importorskip("yaml")
-    for rule_rel in _CASES:
-        doc = yaml.safe_load((_RULES_DIR / rule_rel).read_text())
-        for rule in doc["rules"]:
-            cwes = rule.get("metadata", {}).get("cwe", [])
-            assert cwes, f"{rule['id']} has no cwe metadata"
+    missing = []
+    for rule_file in _rule_universe():
+        doc = yaml.safe_load(rule_file.read_text())
+        rules = doc.get("rules") if isinstance(doc, dict) else None
+        if not rules:
+            missing.append(f"{rule_file}: no rules key")
+            continue
+        for rule in rules:
+            if not rule.get("metadata", {}).get("cwe"):
+                missing.append(f"{rule.get('id')} ({rule_file.name})")
+    assert not missing, "rules with no cwe metadata:\n  " + "\n  ".join(missing)
