@@ -18,9 +18,33 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.orchestration.llm_json import strip_json_fences
+from core.security.prompt_envelope import neutralize_tag_forgery
 from core.security.prompt_framing import with_audit_framing
 
 logger = logging.getLogger(__name__)
+
+# Line-separator controls that regex `.` matches straight through and
+# whose downstream renderings can start a new visual line: VT, FF, NEL,
+# LS, PS. The neutralizer's (?m)^ escapes fire only after \n, so these
+# must become spaces BEFORE neutralization — and never \n, which would
+# mint real line starts for the escaped content to land on.
+_LINE_SEPARATOR_CONTROLS = dict.fromkeys(
+    map(ord, "\v\f\x85\u2028\u2029\r"), " ",
+)
+
+
+def _defuse_repo_text(text: str) -> str:
+    """Defuse repo-derived free text headed for a trusted prompt region.
+
+    Order is load-bearing: any truncation must happen BEFORE this call
+    — a cut through already-neutralized text can amputate the very
+    character that masked a forgery token from the neutralizer's
+    word-boundary vocabulary, reviving it at line end. Neutralization
+    is always the last transform.
+    """
+    return neutralize_tag_forgery(
+        text.translate(_LINE_SEPARATOR_CONTROLS)
+    )
 
 
 @dataclass
@@ -316,12 +340,46 @@ def _infer_from_docstring(spec: InferredSpec, gap: dict[str, Any]) -> None:
             spec.preconditions.append(line.strip()[:120])
 
 
+def _case_in_test_tree(tc: Any) -> bool:
+    """Location provenance of one test case (object or dict shape).
+
+    Missing provenance reads as False: a case that cannot prove it
+    came from a recognized test tree must never be promoted to the
+    executable-spec trust grade.
+    """
+    if hasattr(tc, "in_test_tree"):
+        return bool(tc.in_test_tree)
+    if isinstance(tc, dict):
+        return bool(tc.get("in_test_tree", False))
+    return False
+
+
 def _infer_from_tests(
     spec: InferredSpec,
     function_name: str,
     tests: dict[str, Any] | None,
 ) -> None:
-    """Extract postconditions from test assertions."""
+    """Extract postconditions from test assertions.
+
+    Assertion text is repo-derived — in a hostile repo it is verbatim
+    attacker text headed for the trusted region of the review prompt,
+    so every line is truncated FIRST and then defused (structural
+    forgery only: envelope tags, markdown headings, line-separator
+    controls; plain imperative prose survives, bounded and labelled).
+    Evidence whose location is unverified — a loose test_*/ *_test
+    file planted next to production code, or a test-tree symlink
+    escaping the repo root — is additionally demoted: its lines are
+    labelled, its SpecSource confidence drops to "low", and it only
+    consumes assertion budget after in-tree evidence.
+
+    The confidence demotion is the THIN control here: the prompt
+    section's never-shed slot keys on ANY high-confidence source, so
+    high can still ride in via function_name / parameter_type — the
+    controls that actually contain planted text are the per-line
+    label, in-tree-first budget order, and defusal. Both grades share
+    ``signal="test_assertions"``; consumers must key on confidence,
+    never on the signal name alone.
+    """
     if not tests:
         return
 
@@ -329,20 +387,45 @@ def _infer_from_tests(
     if not test_cases:
         return
 
+    in_tree = [tc for tc in test_cases if _case_in_test_tree(tc)]
+    loose = [tc for tc in test_cases if not _case_in_test_tree(tc)]
+
     added = 0
-    for tc in test_cases:
+    added_loose = 0
+    for tc in in_tree + loose:
+        trusted_location = _case_in_test_tree(tc)
         assertions = getattr(tc, "assertions", []) if hasattr(tc, "assertions") else tc.get("assertions", [])
         for assertion in assertions:
             if added >= 5:
                 break
-            spec.postconditions.append(f"[test] {assertion[:100]}")
+            # Truncate BEFORE defusing: a cut through neutralized
+            # text can amputate the character that masked a forgery
+            # token (e.g. a digit suffix defeating the vocabulary's
+            # word boundary), leaving a live token at line end.
+            text = _defuse_repo_text(str(assertion)[:100])
+            if trusted_location:
+                spec.postconditions.append(f"[test] {text}")
+            else:
+                spec.postconditions.append(
+                    f"[test, unverified location] {text}"
+                )
+                added_loose += 1
             added += 1
 
-    if test_cases:
+    if in_tree:
         spec.sources.append(SpecSource(
             signal="test_assertions",
             confidence="high",
-            evidence=f"{len(test_cases)} test(s), {added} assertion(s)",
+            evidence=f"{len(in_tree)} test(s), {added - added_loose} assertion(s)",
+        ))
+    if loose:
+        spec.sources.append(SpecSource(
+            signal="test_assertions",
+            confidence="low",
+            evidence=(
+                f"{len(loose)} test(s) at unverified locations, "
+                f"{added_loose} assertion(s)"
+            ),
         ))
 
 

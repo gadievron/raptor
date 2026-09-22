@@ -328,6 +328,54 @@ class TestFormatContextForPrompt:
         assert "compile_failed" in result
 
 
+class TestInferredSpecSectionPriority:
+    """The spec section is never-shed (priority 0) only when a
+    high-confidence source backs it. Demoted evidence — e.g. test
+    assertions from a file outside recognized test dirs — must leave
+    the section sheddable, so planted text cannot claim the
+    priority-0 "a deviation IS the bug" framing THROUGH the test
+    channel. This protection is thin on its own: any other
+    high-confidence source (function_name, parameter_type) on the
+    same spec restores priority 0 — the controls that actually
+    contain planted assertion text are its per-line label, in-tree-
+    first budget order, and defusal."""
+
+    def _ctx(self, confidence):
+        from core.audit.spec_inference import InferredSpec, SpecSource
+        spec = InferredSpec(
+            function="foo",
+            file="a.c",
+            intent="does something specific",
+            postconditions=["[test] assert x == 1"],
+            sources=[SpecSource("test_assertions", confidence, "1 test(s)")],
+        )
+        return {
+            "file": "a.c",
+            "function": "foo",
+            "line_start": 1,
+            "source": "void foo() {}",
+            "metadata": {},
+            "callers": [],
+            "callees": [],
+            "sinks": [],
+            "existing_annotation": None,
+            "threat_model": None,
+            "inferred_spec": spec,
+        }
+
+    def test_high_confidence_spec_survives_budget_shedding(self):
+        result = format_context_for_prompt(
+            self._ctx("high"), budget_limit=1,
+        )
+        assert "Inferred specification" in result
+
+    def test_demoted_spec_is_shed_under_budget_pressure(self):
+        result = format_context_for_prompt(
+            self._ctx("low"), budget_limit=1,
+        )
+        assert "Inferred specification" not in result
+
+
 class TestBuildTrustSurface:
     def test_buffer_param_generates_question(self):
         metadata = {
