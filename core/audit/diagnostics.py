@@ -112,6 +112,11 @@ def increment_tier(
             tc.refuted += 1
         elif outcome_str == "error":
             tc.errors += 1
+        elif outcome_str == "skipped":
+            # Did-not-look outcomes get their own counter — folding
+            # them into inconclusive read as "the tier looked and
+            # could not decide", which overstates its coverage.
+            tc.skipped += 1
         else:
             tc.inconclusive += 1
 

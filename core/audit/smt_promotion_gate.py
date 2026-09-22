@@ -276,7 +276,22 @@ def _evaluate_caller_gate(
                 citation=res.reason,
                 channel_outcome="confirmed",
             )
+        if res.outcome == "skipped":
+            # A did-not-look result adjudicates nothing: it must not
+            # join the all-refuted quantifier below (a skip-only set
+            # would vacuously read "all call sites uphold the
+            # precondition" and mint a refuted-grade hold from zero
+            # adjudications).
+            continue
         adjudicated.append((contract, res))
+
+    if not adjudicated:
+        return _hold(
+            "caller-contract gate: no contract could be adjudicated "
+            "(every channel result was a did-not-look skip)",
+            precondition="; ".join(c.describe() for c in contracts),
+            channel_outcome="inconclusive",
+        )
 
     described = "; ".join(c.describe() for c, _ in adjudicated)
     if all(res.outcome == "refuted" for _, res in adjudicated):

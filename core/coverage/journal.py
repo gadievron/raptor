@@ -174,8 +174,11 @@ class ReviewJournalEntry:
     # (the old union let dispatched-but-unconfirming runs read
     # as confirming receipts in the durable journal).
     tools_dispatched: list[str] = field(default_factory=list)
-    # Chain step types skipped by the tool-chain early exit after a
-    # promotion-grade receipt confirmed the hypothesis. Kept separate
+    # Chain step types that did NOT look for this function: the
+    # tool-chain early exit after a promotion-grade receipt, channel
+    # health/coverage gates, codeql database-membership misses,
+    # definitional (unqueryable-name) skips, and substrate skips
+    # (target language outside the tier's model). Kept separate
     # from tools_dispatched (the channel did not look — it must not
     # read as coverage or as a silently-refuting run) and from
     # tools that errored. Additive; absent on rows without a skip.

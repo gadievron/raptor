@@ -463,6 +463,14 @@ def run_consistency_prepass(
                 continue
             counts = _dim(DIMENSION_RETURN_CHECK)
             counts[res.outcome] = counts.get(res.outcome, 0) + 1
+            if res.outcome not in (
+                "confirmed", "refuted", "inconclusive",
+            ):
+                # A skipped (did-not-look) or novel outcome must fall
+                # through to NEITHER lane: the refuted drop below
+                # reads "adjudicated and cleared", and everything
+                # past it is treated as a confirmation.
+                continue
             if res.outcome == "inconclusive":
                 reason_key = res.reason.split(":", 1)[0]
                 telemetry["inconclusive_reasons"][reason_key] = (
@@ -1158,6 +1166,12 @@ def run_consistency_prepass(
                     continue
                 counts[res.outcome] = counts.get(res.outcome, 0) + 1
                 if res.outcome == "refuted":
+                    continue
+                if res.outcome not in ("confirmed", "inconclusive"):
+                    # A skipped (did-not-look) or novel outcome is
+                    # neither dropped-as-refuted nor promoted: the
+                    # append below mints a mechanical record for
+                    # every outcome that survives to it.
                     continue
                 promoted = (
                     res.outcome == "confirmed"

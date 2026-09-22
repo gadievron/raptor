@@ -93,6 +93,9 @@ from .exploit_feedback import (
     load_feedback_state,
 )
 from .findings import write_findings
+from .substrate import (
+    classify_sweep_outcome as _classify_sweep_outcome,
+)
 from .environment import (
     make_dispatch_gate as _make_dispatch_gate,
     make_executor_on_tick as _make_executor_on_tick,
@@ -1032,8 +1035,11 @@ class ReviewOutcome:
     # gate-resolution pass must not count it as class coverage (a
     # Joern query timeout is a failure, not a refutation).
     tools_errored: set | None = field(default=None, repr=False)
-    # Chain step types skipped by the tool-chain early exit AFTER a
-    # promotion-grade receipt confirmed the hypothesis. Distinct from
+    # Chain step types that did NOT look for this function: the
+    # tool-chain early exit after a promotion-grade receipt, the
+    # joern health/coverage gates, codeql database-membership misses,
+    # definitional (unqueryable-name) skips, and substrate skips
+    # (target language outside the tier's model). Distinct from
     # errored (the channel was healthy) and excluded from
     # tools_dispatched (the channel did not look — coverage and
     # critique must not read the skip as a silent tool or as a bug).
@@ -18339,11 +18345,16 @@ def _run_tool_chain(
                             os.unlink(rule_path)
                         except OSError:
                             pass
-                if sweep.outcome == "confirmed":
+                # Normalized outcome dispatch: only an explicit
+                # refuted may reach the refuted counter — a skipped
+                # (did not look) or novel outcome falling into a bare
+                # else would be silently miscounted as refutation.
+                _sg_oc = _classify_sweep_outcome(sweep)
+                if _sg_oc == "confirmed":
                     confirmed.append(f"semgrep:{sweep.rule_id or 'hypothesis'}")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "semgrep", "confirmed")
-                elif sweep.outcome == "error":
+                elif _sg_oc == "error":
                     logger.debug(
                         "tool_chain semgrep error %s:%s: %s",
                         file_path,
@@ -18354,7 +18365,7 @@ def _run_tool_chain(
                         errored_types.add(tool_type)
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "semgrep", "errors")
-                elif sweep.outcome == "inconclusive":
+                elif _sg_oc == "inconclusive":
                     logger.info(
                         "tool_chain semgrep inconclusive %s:%s: %s",
                         file_path,
@@ -18365,7 +18376,16 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "semgrep", "inconclusive",
                         )
-                elif tier_counters:
+                elif _sg_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter (phantom-coverage rule).
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "semgrep", "skipped",
+                        )
+                elif _sg_oc == "refuted" and tier_counters:
                     _increment_tier_dict(tier_counters, "semgrep", "refuted")
 
             elif tool_type == "smt":
@@ -18392,11 +18412,12 @@ def _run_tool_chain(
                         target_path=str(effective_target),
                     ),
                 )
-                if smt_result.outcome == "confirmed":
+                _smt_oc = _classify_sweep_outcome(smt_result)
+                if _smt_oc == "confirmed":
                     confirmed.append(f"smt:{tool_cfg['verb']}")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "smt", "confirmed")
-                elif smt_result.outcome == "error":
+                elif _smt_oc == "error":
                     logger.debug(
                         "tool_chain smt error %s:%s: %s",
                         file_path,
@@ -18407,7 +18428,15 @@ def _run_tool_chain(
                         errored_types.add(tool_type)
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "smt", "errors")
-                elif smt_result.outcome == "inconclusive":
+                elif _smt_oc == "skipped":
+                    # Did not look: no refuted count, no clearing of
+                    # prior smt confirmations, out of the dispatch
+                    # record.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(tier_counters, "smt", "skipped")
+                elif _smt_oc == "inconclusive":
                     # Inconclusive (e.g. vacuous SAT on an
                     # unconstrained-arithmetic verb, missing operands,
                     # Z3 unavailable) is NOT a refutation — it must
@@ -18417,7 +18446,7 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "smt", "inconclusive",
                         )
-                else:
+                elif _smt_oc == "refuted":
                     smt_confirmations = [c for c in confirmed if c.startswith("smt:")]
                     # Early-exit invariant, pinned: an armed exit
                     # receipt is never revalidated after arming, so
@@ -18471,7 +18500,8 @@ def _run_tool_chain(
                 _record_api_boundary_receipt(
                     config, file_path, function_name, ab_res,
                 )
-                if ab_res.outcome == "confirmed":
+                _ch_oc = _classify_sweep_outcome(ab_res)
+                if _ch_oc == "confirmed":
                     confirmed.append("api_boundary:caller-contract")
                     logger.info(
                         "api-boundary confirmed %s:%s — %s",
@@ -18481,7 +18511,7 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "api_boundary", "confirmed",
                         )
-                elif ab_res.outcome == "refuted":
+                elif _ch_oc == "refuted":
                     logger.info(
                         "api-boundary refuted %s:%s — %s",
                         file_path, function_name, ab_res.reason,
@@ -18489,6 +18519,24 @@ def _run_tool_chain(
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "api_boundary", "refuted",
+                        )
+                elif _ch_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "api_boundary", "skipped",
+                        )
+                elif _ch_oc == "error":
+                    # Novel outcome shapes land in error accounting,
+                    # never the refuted counter.
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "api_boundary", "errors",
                         )
                 else:
                     logger.info(
@@ -18542,7 +18590,8 @@ def _run_tool_chain(
                 _record_fail_open_receipt(
                     config, file_path, function_name, fo_res,
                 )
-                if fo_res.outcome == "confirmed":
+                _ch_oc = _classify_sweep_outcome(fo_res)
+                if _ch_oc == "confirmed":
                     confirmed.append(fo_res.rule_id)
                     logger.info(
                         "fail-open confirmed %s:%s — %s",
@@ -18552,7 +18601,7 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "fail_open", "confirmed",
                         )
-                elif fo_res.outcome == "refuted":
+                elif _ch_oc == "refuted":
                     logger.info(
                         "fail-open refuted %s:%s — %s",
                         file_path, function_name, fo_res.reason,
@@ -18560,6 +18609,24 @@ def _run_tool_chain(
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "fail_open", "refuted",
+                        )
+                elif _ch_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "fail_open", "skipped",
+                        )
+                elif _ch_oc == "error":
+                    # Novel outcome shapes land in error accounting,
+                    # never the refuted counter.
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "fail_open", "errors",
                         )
                 else:
                     logger.info(
@@ -18673,7 +18740,8 @@ def _run_tool_chain(
                 _record_consistency_receipt(
                     config, file_path, function_name, cs_res,
                 )
-                if cs_res.outcome == "confirmed":
+                _ch_oc = _classify_sweep_outcome(cs_res)
+                if _ch_oc == "confirmed":
                     confirmed.append(cs_res.rule_id)
                     logger.info(
                         "consistency confirmed %s:%s — %s",
@@ -18683,7 +18751,7 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "consistency", "confirmed",
                         )
-                elif cs_res.outcome == "refuted":
+                elif _ch_oc == "refuted":
                     logger.info(
                         "consistency refuted %s:%s — %s",
                         file_path, function_name, cs_res.reason,
@@ -18691,6 +18759,24 @@ def _run_tool_chain(
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "consistency", "refuted",
+                        )
+                elif _ch_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "consistency", "skipped",
+                        )
+                elif _ch_oc == "error":
+                    # Novel outcome shapes land in error accounting,
+                    # never the refuted counter.
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "consistency", "errors",
                         )
                 else:
                     logger.info(
@@ -18734,7 +18820,8 @@ def _run_tool_chain(
                     config, "ptr_lifecycle_check", file_path,
                     function_name, pl_res,
                 )
-                if pl_res.outcome == "confirmed":
+                _ch_oc = _classify_sweep_outcome(pl_res)
+                if _ch_oc == "confirmed":
                     confirmed.append(pl_res.rule_id)
                     logger.info(
                         "ptr-lifecycle confirmed %s:%s — %s",
@@ -18744,7 +18831,7 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "ptr_lifecycle", "confirmed",
                         )
-                elif pl_res.outcome == "refuted":
+                elif _ch_oc == "refuted":
                     logger.info(
                         "ptr-lifecycle refuted %s:%s — %s",
                         file_path, function_name, pl_res.reason,
@@ -18752,6 +18839,24 @@ def _run_tool_chain(
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "ptr_lifecycle", "refuted",
+                        )
+                elif _ch_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "ptr_lifecycle", "skipped",
+                        )
+                elif _ch_oc == "error":
+                    # Novel outcome shapes land in error accounting,
+                    # never the refuted counter.
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "ptr_lifecycle", "errors",
                         )
                 else:
                     logger.info(
@@ -18795,7 +18900,8 @@ def _run_tool_chain(
                     config, "lock_region_check", file_path,
                     function_name, lr_res,
                 )
-                if lr_res.outcome == "confirmed":
+                _ch_oc = _classify_sweep_outcome(lr_res)
+                if _ch_oc == "confirmed":
                     confirmed.append(lr_res.rule_id)
                     logger.info(
                         "lock-region confirmed %s:%s — %s",
@@ -18814,7 +18920,7 @@ def _run_tool_chain(
                     )
                     if cocci_stamp and cocci_stamp not in confirmed:
                         confirmed.append(cocci_stamp)
-                elif lr_res.outcome == "refuted":
+                elif _ch_oc == "refuted":
                     logger.info(
                         "lock-region refuted %s:%s — %s",
                         file_path, function_name, lr_res.reason,
@@ -18822,6 +18928,24 @@ def _run_tool_chain(
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "lock_region", "refuted",
+                        )
+                elif _ch_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "lock_region", "skipped",
+                        )
+                elif _ch_oc == "error":
+                    # Novel outcome shapes land in error accounting,
+                    # never the refuted counter.
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "lock_region", "errors",
                         )
                 else:
                     logger.info(
@@ -18869,7 +18993,8 @@ def _run_tool_chain(
                     config, "resource_bounds_check", file_path,
                     function_name, rb_res,
                 )
-                if rb_res.outcome == "confirmed":
+                _ch_oc = _classify_sweep_outcome(rb_res)
+                if _ch_oc == "confirmed":
                     confirmed.append(rb_res.rule_id)
                     logger.info(
                         "resource-bounds confirmed %s:%s — %s",
@@ -18880,7 +19005,7 @@ def _run_tool_chain(
                             tier_counters, "resource_bounds",
                             "confirmed",
                         )
-                elif rb_res.outcome == "refuted":
+                elif _ch_oc == "refuted":
                     logger.info(
                         "resource-bounds refuted %s:%s — %s",
                         file_path, function_name, rb_res.reason,
@@ -18889,6 +19014,24 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "resource_bounds",
                             "refuted",
+                        )
+                elif _ch_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "resource_bounds", "skipped",
+                        )
+                elif _ch_oc == "error":
+                    # Novel outcome shapes land in error accounting,
+                    # never the refuted counter.
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "resource_bounds", "errors",
                         )
                 else:
                     logger.info(
@@ -18938,7 +19081,8 @@ def _run_tool_chain(
                     config, "release_order_check", file_path,
                     function_name, ro_res,
                 )
-                if ro_res.outcome == "confirmed":
+                _ch_oc = _classify_sweep_outcome(ro_res)
+                if _ch_oc == "confirmed":
                     confirmed.append(ro_res.rule_id)
                     logger.info(
                         "release-order confirmed %s:%s — %s",
@@ -18949,7 +19093,7 @@ def _run_tool_chain(
                             tier_counters, "release_order",
                             "confirmed",
                         )
-                elif ro_res.outcome == "refuted":
+                elif _ch_oc == "refuted":
                     logger.info(
                         "release-order refuted %s:%s — %s",
                         file_path, function_name, ro_res.reason,
@@ -18957,6 +19101,24 @@ def _run_tool_chain(
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "release_order", "refuted",
+                        )
+                elif _ch_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "release_order", "skipped",
+                        )
+                elif _ch_oc == "error":
+                    # Novel outcome shapes land in error accounting,
+                    # never the refuted counter.
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "release_order", "errors",
                         )
                 else:
                     logger.info(
@@ -19003,7 +19165,8 @@ def _run_tool_chain(
                     config, "protocol_state_check", file_path,
                     function_name, ps_res,
                 )
-                if ps_res.outcome == "confirmed":
+                _ch_oc = _classify_sweep_outcome(ps_res)
+                if _ch_oc == "confirmed":
                     confirmed.append(ps_res.rule_id)
                     logger.info(
                         "protocol-state confirmed %s:%s — %s",
@@ -19014,7 +19177,7 @@ def _run_tool_chain(
                             tier_counters, "protocol_state",
                             "confirmed",
                         )
-                elif ps_res.outcome == "refuted":
+                elif _ch_oc == "refuted":
                     logger.info(
                         "protocol-state refuted %s:%s — %s",
                         file_path, function_name, ps_res.reason,
@@ -19023,6 +19186,24 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "protocol_state",
                             "refuted",
+                        )
+                elif _ch_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "protocol_state", "skipped",
+                        )
+                elif _ch_oc == "error":
+                    # Novel outcome shapes land in error accounting,
+                    # never the refuted counter.
+                    if errored_types is not None:
+                        errored_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "protocol_state", "errors",
                         )
                 else:
                     logger.info(
@@ -19133,11 +19314,12 @@ def _run_tool_chain(
                         # per run state and has no stable content hash
                         # — vocab-rendered sweeps run unmemoized.
                         cocci_result = _run_cocci()
-                if cocci_result.outcome == "confirmed":
+                _cc_oc = _classify_sweep_outcome(cocci_result)
+                if _cc_oc == "confirmed":
                     confirmed.append(f"coccinelle:{Path(tool_cfg['rule']).stem}")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "coccinelle", "confirmed")
-                elif cocci_result.outcome == "error":
+                elif _cc_oc == "error":
                     logger.debug(
                         "tool_chain coccinelle error %s:%s: %s",
                         file_path,
@@ -19148,7 +19330,23 @@ def _run_tool_chain(
                         errored_types.add(tool_type)
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "coccinelle", "errors")
-                elif tier_counters:
+                elif _cc_oc == "skipped":
+                    # Substrate license withheld in the sweep layer
+                    # (unmodeled language / no C substrate in tree) —
+                    # the channel did not look. Same phantom-coverage
+                    # rule as the codeql/joern skips.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "coccinelle", "skipped",
+                        )
+                elif _cc_oc == "inconclusive":
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "coccinelle", "inconclusive",
+                        )
+                elif _cc_oc == "refuted" and tier_counters:
                     _increment_tier_dict(tier_counters, "coccinelle", "refuted")
 
             elif tool_type == "joern":
@@ -19381,11 +19579,12 @@ def _run_tool_chain(
                         memo=getattr(config, "codeql_memo", None),
                     ),
                 )
-                if codeql_result.outcome == "confirmed":
+                _cq_oc = _classify_sweep_outcome(codeql_result)
+                if _cq_oc == "confirmed":
                     confirmed.append(f"codeql:{Path(tool_cfg['query']).stem}")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "codeql", "confirmed")
-                elif codeql_result.outcome == "skipped":
+                elif _cq_oc == "skipped":
                     # The database never ingested this file (source-
                     # archive membership gate in run_codeql_sweep) —
                     # the channel could not look. Same phantom-
@@ -19406,7 +19605,7 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "codeql", "skipped",
                         )
-                elif codeql_result.outcome == "error":
+                elif _cq_oc == "error":
                     logger.debug(
                         "tool_chain codeql error %s:%s: %s",
                         file_path,
@@ -19417,7 +19616,12 @@ def _run_tool_chain(
                         errored_types.add(tool_type)
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "codeql", "errors")
-                elif tier_counters:
+                elif _cq_oc == "inconclusive":
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "codeql", "inconclusive",
+                        )
+                elif _cq_oc == "refuted" and tier_counters:
                     _increment_tier_dict(tier_counters, "codeql", "refuted")
 
             elif tool_type == "compiler":
@@ -19457,11 +19661,12 @@ def _run_tool_chain(
                         ),
                     ),
                 )
-                if comp_result.outcome == "confirmed":
+                _cp_oc = _classify_sweep_outcome(comp_result)
+                if _cp_oc == "confirmed":
                     confirmed.append(comp_result.rule_id or "compiler:analyzer")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "compiler", "confirmed")
-                elif comp_result.outcome == "error":
+                elif _cp_oc == "error":
                     logger.debug(
                         "tool_chain compiler error %s:%s: %s",
                         file_path,
@@ -19472,9 +19677,16 @@ def _run_tool_chain(
                         errored_types.add(tool_type)
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "compiler", "errors")
-                elif comp_result.outcome == "refuted":
+                elif _cp_oc == "refuted":
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "compiler", "refuted")
+                elif _cp_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(tier_counters, "compiler", "skipped")
                 elif tier_counters:
                     _increment_tier_dict(tier_counters, "compiler", "inconclusive")
 
@@ -19549,12 +19761,13 @@ def _run_tool_chain(
                             server=joern_server,
                             timeout=jv_timeout,
                         )
-                    if jv_result.outcome == "confirmed":
+                    _jv_oc = _classify_sweep_outcome(jv_result)
+                    if _jv_oc == "confirmed":
                         confirmed.append(jv_result.rule_id or f"joern:{tool_type}")
                         _record_joern_outcome(config, error=False)
                         if tier_counters:
                             _increment_tier_dict(tier_counters, tool_type, "confirmed")
-                    elif jv_result.outcome == "error":
+                    elif _jv_oc == "error":
                         logger.debug(
                             "tool_chain %s error %s:%s: %s",
                             tool_type, file_path, function_name,
@@ -19571,7 +19784,7 @@ def _run_tool_chain(
                             errored_types.add(tool_type)
                         if tier_counters:
                             _increment_tier_dict(tier_counters, tool_type, "errors")
-                    elif jv_result.outcome == "refuted":
+                    elif _jv_oc == "refuted":
                         # Mechanical refutation (dominating check found /
                         # no flow with endpoints present).  The chain
                         # contract returns confirmations only; the
@@ -19579,6 +19792,16 @@ def _run_tool_chain(
                         _record_joern_outcome(config, error=False)
                         if tier_counters:
                             _increment_tier_dict(tier_counters, tool_type, "refuted")
+                    elif _jv_oc == "skipped":
+                        # Did not look: out of the dispatch record,
+                        # never the refuted counter; no health
+                        # accounting (the tool was never dialed).
+                        if skipped_types is not None:
+                            skipped_types.add(tool_type)
+                        if tier_counters:
+                            _increment_tier_dict(
+                                tier_counters, tool_type, "skipped",
+                            )
                     else:
                         # Inconclusive still reached the server — a
                         # completed round trip for health purposes.
@@ -19598,14 +19821,15 @@ def _run_tool_chain(
                     line_start=line_start or None,
                     line_end=None,
                 )
-                if cf_result.outcome == "confirmed":
+                _cf_oc = _classify_sweep_outcome(cf_result)
+                if _cf_oc == "confirmed":
                     template_id = (cf_result.rule_id or "cocci-flow").split(":")[-1]
                     confirmed.append(f"coccinelle:flow-{template_id}")
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "coccinelle_flow", "confirmed",
                         )
-                elif cf_result.outcome == "error":
+                elif _cf_oc == "error":
                     logger.debug(
                         "tool_chain coccinelle_flow error %s:%s: %s",
                         file_path,
@@ -19618,10 +19842,19 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, "coccinelle_flow", "errors",
                         )
-                elif cf_result.outcome == "refuted":
+                elif _cf_oc == "refuted":
                     if tier_counters:
                         _increment_tier_dict(
                             tier_counters, "coccinelle_flow", "refuted",
+                        )
+                elif _cf_oc == "skipped":
+                    # Substrate license withheld in the sweep layer —
+                    # the channel did not look (phantom-coverage rule).
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "coccinelle_flow", "skipped",
                         )
                 elif tier_counters:
                     _increment_tier_dict(
@@ -19666,7 +19899,8 @@ def _run_tool_chain(
                         xref_source=_xref_src,
                     )
 
-                if _bc_res.outcome == "confirmed":
+                _bc_oc = _classify_sweep_outcome(_bc_res)
+                if _bc_oc == "confirmed":
                     confirmed.append(
                         f"{tool_type}:{_bc_res.rule_id}")
                     if tier_counters:
@@ -19674,7 +19908,7 @@ def _run_tool_chain(
                             tier_counters, tool_type,
                             "confirmed",
                         )
-                elif _bc_res.outcome == "error":
+                elif _bc_oc == "error":
                     logger.debug(
                         "tool_chain %s error %s:%s: %s",
                         tool_type,
@@ -19686,7 +19920,24 @@ def _run_tool_chain(
                         _increment_tier_dict(
                             tier_counters, tool_type, "errors",
                         )
-                elif tier_counters:
+                elif _bc_oc == "skipped":
+                    # Did not look: out of the dispatch record, never
+                    # the refuted counter.
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, tool_type, "skipped",
+                        )
+                elif _bc_oc == "inconclusive":
+                    # CWE outside the checker's scope: the checker
+                    # declined — an inconclusive counted as refuted
+                    # here overstated the checkers' refutation power.
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, tool_type, "inconclusive",
+                        )
+                elif _bc_oc == "refuted" and tier_counters:
                     _increment_tier_dict(
                         tier_counters, tool_type, "refuted",
                     )
@@ -20336,22 +20587,29 @@ def _proactive_validate(
                 hypothesis=outcome.hypothesis or "",
                 target_path=str(config.target_path),
             )
-            if smt_result.outcome == "confirmed":
+            _pv_smt_oc = _classify_sweep_outcome(smt_result)
+            if _pv_smt_oc == "confirmed":
                 confirmed_tools.append(f"smt:{smt_verb}")
                 if tier_counters:
                     _increment_tier_dict(tier_counters, "smt", "confirmed")
-            elif smt_result.outcome == "refuted":
+            elif _pv_smt_oc == "refuted":
                 if tier_counters:
                     _increment_tier_dict(tier_counters, "smt", "refuted")
+            elif _pv_smt_oc == "skipped":
+                # Did not look — it entered the dispatch record before
+                # the run, so scrub it (phantom-coverage rule).
+                ran.discard("smt")
+                if tier_counters:
+                    _increment_tier_dict(tier_counters, "smt", "skipped")
             else:
                 # inconclusive / error — count separately so the
                 # diagnostics don't overstate SMT's refutation power.
-                if smt_result.outcome == "error":
+                if _pv_smt_oc == "error":
                     errored.add("smt")
                 if tier_counters:
                     _increment_tier_dict(
                         tier_counters, "smt",
-                        "errors" if smt_result.outcome == "error"
+                        "errors" if _pv_smt_oc == "error"
                         else "inconclusive",
                     )
         except Exception:
@@ -20505,11 +20763,26 @@ def _proactive_validate(
                                     "consistency violation at"
                                     f" {m_file}:{match.get('line', '?')}",
                                 )
-                elif cocci_result.outcome == "error":
+                elif _classify_sweep_outcome(cocci_result) == "error":
                     errored.add("coccinelle")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "coccinelle", "errors")
-                elif tier_counters:
+                elif cocci_result.outcome == "skipped":
+                    # Substrate license withheld in the sweep layer —
+                    # the leg entered the dispatch record before the
+                    # run, so scrub it (same rule as the joern leg's
+                    # vacuous-silence scrub).
+                    ran.discard("coccinelle")
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "coccinelle", "skipped",
+                        )
+                elif cocci_result.outcome == "inconclusive":
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "coccinelle", "inconclusive",
+                        )
+                elif cocci_result.outcome == "refuted" and tier_counters:
                     _increment_tier_dict(tier_counters, "coccinelle", "refuted")
             except Exception:
                 logger.debug("proactive Coccinelle failed for %s", cwe, exc_info=True)
