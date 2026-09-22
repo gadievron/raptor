@@ -520,12 +520,29 @@ def check_repo_codeql_trust(
     """
     if not repo_path:
         return False
-    try:
-        resolved = str(Path(repo_path).resolve())
-    except (ValueError, OSError):
-        return False
     if trust_override is None:
         trust_override = _trust_override_set
+    # A SUPPLIED repo the checker cannot resolve or stat is refused,
+    # not waved through: these lanes previously returned "clean", but
+    # that verdict had examined nothing — a vanished (TOCTOU),
+    # mistyped, or pathological path skipped the gate entirely while
+    # the caller went on to run `codeql database create` against the
+    # same spelling. The trust override downgrades to warn-and-proceed
+    # exactly like a real finding. Mirrors cc_trust's gate.
+    try:
+        resolved = str(Path(repo_path).resolve())
+        os.stat(resolved)
+    except (ValueError, OSError) as e:
+        reason = getattr(e, "strerror", None) or type(e).__name__
+        shown = _truncate(_safe(repo_path), limit=200)
+        if trust_override:
+            print(f"raptor: cannot examine {shown} for CodeQL pack "
+                  f"config ({_safe(str(reason))}) — proceeding "
+                  f"(trust override active)")
+            return False
+        print(f"raptor: cannot examine {shown} for CodeQL pack "
+              f"config ({_safe(str(reason))}) — treating as dangerous")
+        return True
     scans, any_blocking = _scan_repo(resolved)
     if scans:
         target = Path(resolved)

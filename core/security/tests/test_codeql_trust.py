@@ -52,8 +52,38 @@ class TestNoConfig:
         """``Path("").resolve()`` would yield CWD — guard skips."""
         assert _check("") is False
 
-    def test_nonexistent_path(self, tmp_path):
+
+class TestUnexaminableTarget:
+    """A SUPPLIED repo the checker cannot resolve or stat is refused
+    (fail-closed), mirroring cc_trust: a "clean" verdict over an
+    unexamined path waved the gate open for vanished (TOCTOU),
+    mistyped, and pathological paths. The trust override downgrades to
+    warn-and-proceed like any real finding."""
+
+    def test_nonexistent_path_refuses(self, tmp_path, capsys):
+        assert _check(str(tmp_path / "does-not-exist")) is True
+        out = capsys.readouterr().out
+        assert "cannot examine" in out
+        assert "treating as dangerous" in out
+
+    def test_nonexistent_path_trust_override_proceeds(self, tmp_path, capsys):
+        set_trust_override(True)
         assert _check(str(tmp_path / "does-not-exist")) is False
+        out = capsys.readouterr().out
+        assert "cannot examine" in out
+        assert "trust override active" in out
+
+    def test_null_byte_in_path_refuses(self):
+        assert _check("./weird\x00path") is True
+
+    def test_very_long_path_refuses(self):
+        assert _check("/" + "a" * 10_000) is True
+
+    def test_message_bounds_and_escapes_the_path(self, tmp_path, capsys):
+        hostile = str(tmp_path / ("evil\x1b]0;pwned\x07" + "x" * 400))
+        assert _check(hostile) is True
+        out = capsys.readouterr().out
+        assert "\x1b" not in out and "\x07" not in out
 
 
 # ---------------------------------------------------------------------------
