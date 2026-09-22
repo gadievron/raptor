@@ -167,19 +167,25 @@ def test_nightly_toolchain_installs_carry_refuse_backstops() -> None:
 
 import re as _re
 
-# Write-capable default-token permission scopes (GitHub's
-# ``permissions:`` vocabulary). ANY ``<scope>: write`` grant — or the
-# ``write-all`` umbrella — puts the holding job in the gate's
-# universe. The original contents-only filter let ``packages: write``
-# workflows (push authority over the GHCR images every container-path
-# CI tier then executes — a supply-chain write into every subsequent
-# run) and ``pull-requests: write`` / ``issues: write`` workflows
-# escape the walk entirely.
-_WRITE_SCOPE_RE = _re.compile(
-    r"\b(actions|attestations|checks|contents|deployments|discussions"
-    r"|id-token|issues|packages|pages|pull-requests"
-    r"|repository-projects|security-events|statuses)\s*:\s*write\b"
-)
+# Write-capable default-token permission scopes. Universe ENTRY is
+# shape-derived, never enumerated: ANY ``<scope>: write`` grant
+# inside a permissions block — or the ``write-all`` umbrella — puts
+# the holding job in the gate's universe. GitHub's documented scope
+# vocabulary (GitHub Docs: "Controlling permissions for GITHUB_TOKEN"
+# + workflow-syntax ``permissions:``; transcribed 2026-09-21:
+# actions, attestations, checks, contents, deployments, discussions,
+# id-token, issues, models, packages, pages, pull-requests,
+# repository-projects, security-events, statuses) has grown before
+# (attestations, models) and a typed alternation left every grant
+# under a newer scope outside BOTH gates — a ``models: write`` job's
+# default token escaped the walk entirely, recreating one level up
+# the exact enumeration-bound entry that let ``packages: write``
+# (push authority over the GHCR images every container-path CI tier
+# then executes) and ``pull-requests: write`` / ``issues: write``
+# escape the original contents-only filter. Scope names are matched
+# generically; AUTHORITY stays default-deny in _SCOPE_PUBLISH_VERBS
+# (an unknown scope enters the universe but blesses nothing).
+_WRITE_SCOPE_RE = _re.compile(r"\b([\w-]+)\s*:\s*write\b")
 # Grants are anchored on the token VALUE, any key name, any nesting
 # level (step/job/workflow ``env:``, ``with: token:``, ...): matching
 # only well-known env key names let a rename or a hoisted env block
@@ -832,6 +838,25 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           python parse_manifest.py
+""",
+    # A scope OUTSIDE the gate's original 14-name alternation
+    # (GitHub grew the vocabulary before: attestations, models) —
+    # universe entry must be shape-derived (<scope>: write), else
+    # every grant under a newer scope escapes the walk entirely.
+    # No _SCOPE_PUBLISH_VERBS row exists for it, so default-deny
+    # also means no step in the job can be blessed.
+    "unlisted_scope_write_grant": """\
+permissions:
+  models: write
+jobs:
+  j:
+    runs-on: ubuntu-latest
+    steps:
+      - name: parse untrusted registry data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python parse_registry.py
 """,
     # Job-level elevation in a read-default workflow: the write grant
     # lives on the job, not the workflow — a workflow-granular walk
