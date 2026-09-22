@@ -300,8 +300,12 @@ class TestToolsBaselineEnforcement(_ToolsHarness):
                 self.assertEqual(tools[0], TOOL_RECALL)
                 self.assertEqual(tools[1]["name"],
                                  guard._NOTICE_TOOL_NAME)
-                self.assertIn("review --approve",
+                # The notice steers to the review display (where the
+                # operator sees the definitions before deciding) —
+                # never to an approve shortcut.
+                self.assertIn("raptor-sage-setup review",
                               tools[1]["description"])
+                self.assertNotIn("--approve", tools[1]["description"])
                 self.assertIn("forwarded UNVERIFIED", err)
 
     def test_absent_tools_key_is_not_flagged(self):
@@ -615,6 +619,59 @@ class TestListChangedEndToEnd(_GuardHarness):
                 break
         else:
             self.fail("tools/list response never reached the client")
+
+
+class TestMigrationAskContract(unittest.TestCase):
+    """The migration ask is LLM-performed, so its instruction lives in
+    core/sage/CLAUDE.md — pin the mechanical contract between that doc
+    and the guard's emitted notice so they cannot drift apart, and pin
+    the anti-phishing shape: the ask's action is the REVIEW (the
+    operator sees the definitions inside the review tool before
+    deciding), never an approve-without-review shortcut a hostile
+    sidecar could steer an operator through."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.guard = _load_guard()
+        doc = REPO_ROOT / "core" / "sage" / "CLAUDE.md"
+        cls.doc_text = doc.read_text(encoding="utf-8")
+        start = cls.doc_text.index(
+            "### Tools surface not yet baselined")
+        end = cls.doc_text.index("Two qualifications:")
+        cls.section = cls.doc_text[start:end]
+
+    def test_doc_trigger_matches_emitted_notice(self):
+        # The doc keys the ask off the guard's actual in-band marker.
+        self.assertIn(self.guard._NOTICE_TOOL_NAME, self.section)
+        self.assertIn("forwarded unverified", self.section)
+        self.assertIn("forwarded unverified",
+                      self.guard._NOTICE_TOOLS_UNVERIFIED)
+
+    def test_doc_follows_interactive_prompts_doctrine(self):
+        # Mandatory gate, availability check, once-per-session
+        # boundary, recommended tag, and an explicit non-interactive
+        # fallback naming the default applied.
+        self.assertIn("libexec/raptor-may-ask", self.section)
+        self.assertIn("AskUserQuestion", self.section)
+        self.assertIn("ONCE per session", self.section)
+        self.assertIn("never mid-pipeline", self.section)
+        self.assertIn("(Recommended)", self.section)
+        self.assertIn("Non-interactive fallback", self.section)
+        self.assertIn("notice-mode default applied", self.section)
+
+    def test_ask_action_is_review_never_approve_shortcut(self):
+        # The recommended action hands the REVIEW to the operator's
+        # own TTY; the decision happens inside the review tool after
+        # the display. The doc must not instruct an --approve
+        # invocation as the ask's action, and both doc and notice
+        # must state the TTY constraint.
+        self.assertIn("! libexec/raptor-sage-setup review", self.section)
+        self.assertNotIn("review --approve", self.section)
+        self.assertIn("NEVER run the approval", self.section)
+        notice = self.guard._NOTICE_TOOLS_UNVERIFIED
+        self.assertIn("raptor-sage-setup review", notice)
+        self.assertNotIn("--approve", notice)
+        self.assertIn("TTY-gated", notice)
 
 
 if __name__ == "__main__":
