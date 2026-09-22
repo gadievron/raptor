@@ -291,6 +291,23 @@ def generate_report(
         if tripped_channels:
             report["channel_health"] = tripped_channels
 
+    # Substrate skips: dispatches a tier refused because its
+    # substrate provably cannot model the target (e.g. coccinelle on
+    # a PHP tree). Zero receipts from such a tier mean "could not
+    # look", not "looked and found nothing" — the report must say so.
+    substrate_skips: dict[str, dict[str, Any]] = {}
+    for tier_name, rec in (tier_diag or {}).items():
+        if not isinstance(rec, dict):
+            continue
+        count = rec.get("skipped_substrate")
+        if isinstance(count, int) and count > 0:
+            substrate_skips[tier_name] = {
+                "count": count,
+                "languages": rec.get("substrate_skip_languages") or {},
+            }
+    if substrate_skips:
+        report["substrate_skips"] = substrate_skips
+
     # CodeQL database provisioning outcome: languages left without a
     # database (skipped builds, timed-out or failed background builds)
     # must reach the operator with the flag or marker that would
@@ -1632,6 +1649,32 @@ def _format_summary(report: dict[str, Any]) -> str:
         lines.append(
             "  CodeQL steps for the affected language(s) were skipped, "
             "not refuted."
+        )
+
+    substrate_skips = report.get("substrate_skips")
+    if substrate_skips:
+        lines.append("")
+        lines.append("### ⚠️ Substrate skips (tier could not look)")
+        for tier_name, rec in sorted(substrate_skips.items()):
+            langs = {
+                k: v for k, v in (rec.get("languages") or {}).items()
+                if isinstance(v, int)
+            }
+            dominant = max(langs, key=langs.__getitem__) if langs else ""
+            lang_note = (
+                f" — dominant unmodeled language "
+                f"`{_line(dominant, max_chars=20)}`"
+                if dominant and dominant != "unknown" else ""
+            )
+            lines.append(
+                f"  - {_line(tier_name, max_chars=30)}: "
+                f"{rec.get('count', 0)} check(s) skipped because the "
+                f"target is outside this tier's substrate{lang_note}; "
+                f"the tier contributed no verdicts to those checks."
+            )
+        lines.append(
+            "  Skipped is not refuted: these hypotheses were never "
+            "examined by the skipping tier."
         )
 
     phase_aborts = report.get("phase_aborts")

@@ -763,3 +763,65 @@ class TestChannelHealthBlockSanitised:
         )
         assert "consecutive dispatch failures" in summary
         assert "2 dispatch(es) completed before the trip" in summary
+
+
+class TestSubstrateSkipBlock:
+    """Report honesty block for substrate skips: a tier that could
+    not look must be named, with its skip count and dominant
+    unmodeled language — and stays silent on unaffected runs."""
+
+    def _tier_diag(self, tmp_path: Path, data: dict) -> None:
+        (tmp_path / "tier-diagnostics.json").write_text(
+            json.dumps(data),
+        )
+
+    def test_block_names_tier_count_and_language(self, tmp_path: Path):
+        self._tier_diag(tmp_path, {
+            "coccinelle": {
+                "confirmed": 0, "refuted": 0, "inconclusive": 0,
+                "skipped": 283, "errors": 0, "wall_time_s": 0.0,
+                "skipped_substrate": 283,
+                "substrate_skip_languages": {"php": 280, "unknown": 3},
+            },
+            "semgrep": {
+                "confirmed": 2, "refuted": 5, "inconclusive": 0,
+                "skipped": 0, "errors": 0, "wall_time_s": 1.0,
+            },
+        })
+        report = generate_report(tmp_path)
+        assert report["substrate_skips"] == {
+            "coccinelle": {
+                "count": 283,
+                "languages": {"php": 280, "unknown": 3},
+            },
+        }
+        summary = report["summary"]
+        assert "Substrate skips" in summary
+        assert "coccinelle: 283 check(s) skipped" in summary
+        assert "`php`" in summary
+        assert "Skipped is not refuted" in summary
+
+    def test_no_block_without_substrate_skips(self, tmp_path: Path):
+        # Early-exit/health skips alone must not raise the banner.
+        self._tier_diag(tmp_path, {
+            "coccinelle": {
+                "confirmed": 1, "refuted": 2, "inconclusive": 0,
+                "skipped": 4, "errors": 0, "wall_time_s": 0.0,
+            },
+        })
+        report = generate_report(tmp_path)
+        assert "substrate_skips" not in report
+        assert "Substrate skips" not in report["summary"]
+
+    def test_hostile_language_value_escaped(self, tmp_path: Path):
+        self._tier_diag(tmp_path, {
+            "coccinelle": {
+                "confirmed": 0, "refuted": 0, "inconclusive": 0,
+                "skipped": 1, "errors": 0, "wall_time_s": 0.0,
+                "skipped_substrate": 1,
+                "substrate_skip_languages": {"php\x1b[2J": 1},
+            },
+        })
+        summary = generate_report(tmp_path)["summary"]
+        assert "\x1b" not in summary
+        assert "Substrate skips" in summary
