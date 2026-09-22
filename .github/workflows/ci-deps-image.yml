@@ -7,8 +7,17 @@ name: CI deps image
 #
 # Tags pushed:
 #   :main        — moving tag the test tiers pull. Updated on every build.
-#   :req-<hash>  — content tag (first 12 hex of sha256 over requirements*.txt)
-#                  for traceability + rollback.
+#   :req-<hash>  — content tag (first 12 hex of sha256 over the ci-deps
+#                  Dockerfile + requirements*.txt — the Dockerfile is IN
+#                  the hash because it defines the image as much as the
+#                  pins do: a Dockerfile-only change under an unchanged
+#                  req-hash silently replaced the anchor's content, so a
+#                  rollback to :req-<hash> after a bad Dockerfile change
+#                  yielded the bad image). Soft anchor, same as
+#                  sandbox-matrix-image's :u24-<hash>: the weekly rebuild
+#                  refreshes the image under an unchanged tag (Debian
+#                  base patches), so it names the newest build of that
+#                  input set, not one immutable digest.
 #
 # Uses the plain `docker` CLI (preinstalled on ubuntu runners) rather than
 # docker/* marketplace actions, to keep the third-party action surface to
@@ -83,8 +92,12 @@ jobs:
           # and the repository_owner context can carry mixed case.
           owner="$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')"
           image="ghcr.io/${owner}/raptor-ci-deps"
-          # Content tag over the manifests that define the image.
-          reqhash="$(cat requirements.txt requirements-dev.txt | sha256sum | cut -c1-12)"
+          # Content tag over the inputs that define the image (fixed
+          # order — the hash must be reproducible from a checkout;
+          # same idiom as sandbox-matrix-image.yml's cthash).
+          reqhash="$(cat .github/docker/ci-deps.Dockerfile \
+                         requirements.txt requirements-dev.txt \
+                     | sha256sum | cut -c1-12)"
           docker build \
             -f .github/docker/ci-deps.Dockerfile \
             -t "${image}:main" \
@@ -139,7 +152,9 @@ jobs:
       # Tagged-anchor retention: keep the newest 10 tagged versions.
       # Bounded both ways deliberately (churn-prone limit): pruning an
       # old anchor costs only a rebuild-on-rollback — every :req-<hash>
-      # is reproducible from its git-pinned requirements — while
+      # is reproducible from its git-pinned inputs (Dockerfile +
+      # requirements), modulo the weekly base-refresh soft-anchor
+      # caveat in the header — while
       # unbounded anchors cost storage, package-page noise, and an
       # operator reasonably reading the ever-growing pile as broken
       # cleanup (this package reached 28 tagged versions that way,
