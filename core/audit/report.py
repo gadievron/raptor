@@ -44,7 +44,12 @@ def _line(value: Any, *, max_chars: int = 300) -> str:
     policy as ``core.project.report._md_heading``.
     """
     text = " ".join(str(value if value is not None else "").split()).strip()
-    return sanitise_string(text, max_chars=max_chars)
+    # Backticks are stripped, not escaped: several call sites wrap the
+    # value in a code span, and an embedded backtick would terminate
+    # the span and render the remainder as live markdown. Outside a
+    # span a backtick in these values (paths, names, language ids) is
+    # never meaningful, so stripping loses nothing.
+    return sanitise_string(text.replace("`", ""), max_chars=max_chars)
 
 
 def _cell(value: Any, *, max_chars: int = 300) -> str:

@@ -819,9 +819,21 @@ class TestSubstrateSkipBlock:
                 "confirmed": 0, "refuted": 0, "inconclusive": 0,
                 "skipped": 1, "errors": 0, "wall_time_s": 0.0,
                 "skipped_substrate": 1,
-                "substrate_skip_languages": {"php\x1b[2J": 1},
+                # ANSI bytes must be escaped AND an embedded backtick
+                # must not terminate the rendered code span (live
+                # markdown breakout).
+                "substrate_skip_languages": {
+                    "php\x1b[2J` **pwned**": 1,
+                },
             },
         })
         summary = generate_report(tmp_path)["summary"]
         assert "\x1b" not in summary
         assert "Substrate skips" in summary
+        assert "`php" in summary
+        # The hostile payload stays inside one code span: no bare
+        # backtick from the value survives to close it early.
+        line = next(
+            ln for ln in summary.splitlines() if "dominant" in ln
+        )
+        assert line.count("`") == 2
