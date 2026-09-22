@@ -39,7 +39,7 @@ Or pass `--openant-core <path>` directly.
 | `--repo <path>` | `$RAPTOR_CALLER_DIR` | Repository to scan (required) |
 | `--model <name>` | `sonnet` | LLM model: `sonnet` or `opus` |
 | `--level <name>` | `reachable` | Depth: `all`, `reachable`, `codeql`, `exploitable` |
-| `--language <lang>` | `auto` | Override language detection |
+| `--language <lang>` | `auto` | Override language detection: `python`, `javascript`, `go`, `c`, `ruby`, `php` (out-of-set values fall back to `auto`) |
 | `--no-enhance` | off | Skip OpenAnt enhance phase (faster, less accurate) |
 | `--verify` | off | Enable stage-2 LLM verification pass |
 | `--workers <n>` | `4` | Parallel analysis workers |
@@ -58,6 +58,11 @@ Or pass `--openant-core <path>` directly.
 ## Supported languages
 
 Python, JavaScript/TypeScript, PHP, Ruby, C/C++, Java, Go, Zig
+
+The `--language` override accepts only `auto`, `python`, `javascript`,
+`go`, `c`, `ruby`, and `php`. Languages outside that set (e.g. Java,
+Zig) are auto-detected but cannot be forced — an out-of-set
+`--language` value silently falls back to `auto`.
 
 ---
 
