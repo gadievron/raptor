@@ -404,6 +404,184 @@ class TestTemplateInterpolation:
         assert "f(" in view
 
 
+class TestHashLangInterpolation:
+    """Python f-string / ruby ``#{…}`` / shell ``$(…)``/``${…}``/
+    backtick interpolations are executable code and stay visible in
+    the blanked view — the same direction contract as the JS/TS
+    template arm. Blanking them hid a sink spelled inside an
+    interpolation from every blanked-view consumer (absence-receipt
+    forging, the swallow direction)."""
+
+    def test_python_fstring_expression_visible(self):
+        src = 'logger.info(f"r: {os.popen(cmd).read()}")\n'
+        view = sanitized_view(src, "a.py")
+        assert "os.popen(cmd).read()" in view
+        assert "r:" not in view
+
+    def test_python_plain_string_still_blanks(self):
+        # No f prefix: brace text is DATA, exactly as before.
+        src = 'logger.info("r: {os.popen(cmd)}")\n'
+        view = sanitized_view(src, "a.py")
+        assert "os.popen" not in view
+
+    def test_python_fstring_doubled_braces_are_data(self):
+        src = 'x = f"a {{prose popen( }} {run(c)}"\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(c)" in view
+        assert "popen" not in view
+
+    def test_python_identifier_tail_f_is_not_a_prefix(self):
+        # `shelf"…"` — the f is the tail of an identifier, not an
+        # f-string prefix; treating it as one would leak string data.
+        src = 'conf = shelf"{run(c)} data"\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(c)" not in view
+
+    def test_python_triple_fstring_expression_visible(self):
+        src = 'x = f"""head\n{os.system(c)}\ntail"""\n'
+        view = sanitized_view(src, "a.py")
+        assert "os.system(c)" in view
+        assert "head" not in view
+        assert view.count("\n") == src.count("\n")
+
+    def test_python_string_inside_interpolation_blanked(self):
+        # A nested literal inside the kept expression is string data
+        # again (mirrors the template arm's nested-string rule).
+        src = 'x = f"{d[\'prose popen( here\'] and run(c)}"\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(c)" in view
+        assert "popen" not in view
+
+    def test_python_fstring_backslash_brace_executes(self):
+        # There is no brace escape in f-strings: CPython treats the
+        # backslash as string data and EXECUTES the field —
+        # f"\{1+1}" == "\2" — so the expression must stay visible.
+        # Consuming \{ as an escape pair blanked the whole executable
+        # interpolation (the swallow direction).
+        src = 'x = f"\\{os.popen(c)}"\n'
+        view = sanitized_view(src, "a.py")
+        assert "os.popen(c)" in view
+        raw = 'x = rf"\\{os.popen(c)}"\n'
+        assert "os.popen(c)" in sanitized_view(raw, "a.py")
+
+    def test_python_fstring_backslash_double_brace_is_data(self):
+        # f"\{{x}}" == "\{x}" — the backslash is data AND the doubled
+        # brace is a literal brace, so everything after the backslash
+        # is string data. Consuming \{ as a pair left a single live {
+        # that leaked the prose as code (the over-inclusion twin of
+        # the swallow above).
+        src = 'x = f"\\{{prose popen( }} ok"\n'
+        view = sanitized_view(src, "a.py")
+        assert "popen" not in view
+
+    def test_python_pep701_same_quote_nesting_residual(self):
+        # DECLARED residual: 3.12+ allows the outer quote char inside
+        # the expression; the scanner's string end stops at the first
+        # inner quote, so code after a nested same-quote literal
+        # blanks — pinned so a change is visible.
+        src = 'x = f"{"cmd" + run(c)}"\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(c)" not in view
+
+    def test_python_nested_fstring_in_expression_residual(self):
+        # DECLARED residual: a nested f-string literal inside a kept
+        # expression blanks as a plain literal, its own interpolation
+        # included — pinned so a change is visible.
+        src = 'x = f"{f\'{run(c)}\' + y}"\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(c)" not in view
+
+    def test_ruby_interpolation_visible(self):
+        src = 'log("x: #{system(cmd)} y")\n'
+        view = sanitized_view(src, language="ruby")
+        assert "system(cmd)" in view
+        assert "x:" not in view
+
+    def test_ruby_single_quote_is_literal(self):
+        # Ruby single-quoted strings do not interpolate.
+        src = "log('x: #{system(cmd)} y')\n"
+        view = sanitized_view(src, language="ruby")
+        assert "system" not in view
+
+    def test_ruby_escaped_sigil_is_data(self):
+        # Ruby's escape genuinely suppresses interpolation:
+        # "\#{system(c)}" is the literal text #{system(c)} — the
+        # pair-blank matches the running language.
+        src = 'log("a \\#{system(c)} b")\n'
+        view = sanitized_view(src, language="ruby")
+        assert "system" not in view
+
+    def test_ruby_multiline_string_continuation_residual(self):
+        # DECLARED residual: plain multi-line double-quoted strings
+        # are unmodeled (single-line stop), so a continuation line
+        # starting #{…} reads as a comment and blanks — pinned so a
+        # change is visible (pre-existing; the wrapper tier's call
+        # gates read raw lines and still refuse the shape).
+        src = 'x = "a\n#{system(c)} b"\nrun(y)\n'
+        view = sanitized_view(src, language="ruby")
+        assert "system" not in view
+        assert "run(y)" in view
+
+    def test_shell_command_substitution_visible(self):
+        src = 'echo "r: $(rm -rf $x) t"\n'
+        view = sanitized_view(src, language="shell")
+        assert "rm -rf $x" in view
+        assert "r:" not in view
+
+    def test_shell_parameter_expansion_visible(self):
+        src = 'echo "v: ${x:-$(curl $u)}"\n'
+        view = sanitized_view(src, language="shell")
+        assert "curl $u" in view
+        assert "v:" not in view
+
+    def test_shell_backtick_substitution_visible(self):
+        src = 'echo "r: `rm $x` t"\n'
+        view = sanitized_view(src, language="shell")
+        assert "rm $x" in view
+
+    def test_shell_single_quote_is_literal(self):
+        src = "echo 'a $(rm $x) b'\n"
+        view = sanitized_view(src, language="shell")
+        assert "rm" not in view
+
+    def test_shell_single_quote_has_no_escapes(self):
+        # `'\'` closes at the second quote — treating `\'` as an
+        # escape desynced quote state and blanked live code after
+        # the real closer to end of line (the swallow direction).
+        src = "x='\\' ; run_thing $y\n"
+        view = sanitized_view(src, language="shell")
+        assert "run_thing $y" in view
+
+    def test_shell_escaped_dollar_is_data(self):
+        # Shell's double-quote escape genuinely suppresses
+        # substitution: "\$(rm $x)" is literal text — the pair-blank
+        # matches the running language.
+        src = 'echo "a \\$(rm $x) b"\n'
+        view = sanitized_view(src, language="shell")
+        assert "rm" not in view
+
+    def test_perl_interpolation_unchanged_residual(self):
+        # DECLARED residual: perl string interpolation is variable-
+        # only without the @{[…]} block idiom, whose grammar is the
+        # unmodeled perl quote-construct class — pinned so a change
+        # is visible.
+        src = 'my $t = "a @{[system($c)]}";\n'
+        view = sanitized_view(src, language="perl")
+        assert "system" not in view
+
+    def test_extension_routing_matches_language_routing(self):
+        src = 'echo "r: $(rm -rf $x)"\n'
+        assert (sanitized_view(src, "run.sh")
+                == sanitized_view(src, language="shell"))
+        rb = 'log("#{system(cmd)}")\n'
+        assert (sanitized_view(rb, "a.rb")
+                == sanitized_view(rb, language="ruby"))
+
+    def test_keep_strings_view_unchanged(self):
+        src = 'x = f"a {run(c)} b"\n'
+        assert sanitized_view(src, "a.py", keep_strings=True) == src
+
+
 class TestPhp:
     def test_hash_line_comment_blanked(self):
         view = sanitized_view("$x = 1; # system( in prose\nrun($c);\n",

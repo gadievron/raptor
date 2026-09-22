@@ -73,6 +73,15 @@ _HASH_COMMENT_LANGS = frozenset({
 
 _LUA_EXTS = (".lua",)
 
+# Extension → language id for the hash-comment scanner's per-language
+# interpolation grammar (see _strip_python_like). Extensions not named
+# here keep the interpolation-free common denominator.
+_HASH_COMMENT_EXT_LANG = {
+    ".py": "python", ".pyi": "python",
+    ".sh": "shell", ".bash": "bash",
+    ".rb": "ruby",
+}
+
 
 @dataclass(frozen=True)
 class _CFamilySpec:
@@ -163,14 +172,18 @@ def sanitized_view(
         if lang == "lua":
             return _strip_lua(source, keep_strings=keep_strings)
         if lang in _HASH_COMMENT_LANGS:
-            return _strip_python_like(source, keep_strings=keep_strings)
+            return _strip_python_like(
+                source, keep_strings=keep_strings, lang=lang)
         spec = _C_FAMILY_SPECS.get(lang, _DEFAULT_C_SPEC)
     else:
         lower = (file_path or "").lower()
         if lower.endswith(_LUA_EXTS):
             return _strip_lua(source, keep_strings=keep_strings)
         if lower.endswith(_HASH_COMMENT_EXTS):
-            return _strip_python_like(source, keep_strings=keep_strings)
+            ext = "." + lower.rsplit(".", 1)[-1]
+            return _strip_python_like(
+                source, keep_strings=keep_strings,
+                lang=_HASH_COMMENT_EXT_LANG.get(ext))
         ext = "." + lower.rsplit(".", 1)[-1] if "." in lower else ""
         spec = _C_FAMILY_SPECS.get(
             _C_FAMILY_EXT_LANG.get(ext, ""), _DEFAULT_C_SPEC)
@@ -360,7 +373,9 @@ def _strip_c_family(
     return "".join(chars)
 
 
-def _strip_python_like(source: str, *, keep_strings: bool = False) -> str:
+def _strip_python_like(
+    source: str, *, keep_strings: bool = False, lang: str | None = None,
+) -> str:
     chars = list(source)
     n = len(source)
     i = 0
@@ -380,21 +395,180 @@ def _strip_python_like(source: str, *, keep_strings: bool = False) -> str:
             _blank(chars, i, end)
             i = end
         elif ch in ('"', "'"):
+            interp = _interp_kind(source, i, ch, lang)
             triple = source[i:i + 3] in ('"""', "'''")
             if triple:
                 close = source.find(source[i:i + 3], i + 3)
                 end = n if close < 0 else close + 3
                 if not keep_strings:
-                    _blank(chars, i + 3, max(i + 3, end - 3))
+                    _blank_interpolated(
+                        chars, source, i + 3, max(i + 3, end - 3), interp)
                 i = end
             else:
-                end = _string_end(source, i, ch)
+                # Shell single-quoted strings have NO escapes: `'\''`
+                # ends at the second quote. Treating `\'` as an escape
+                # desynced quote state and blanked live code after the
+                # real closer to end of line (the swallow direction).
+                end = _string_end(
+                    source, i, ch,
+                    escapes=not (lang in ("shell", "bash") and ch == "'"))
                 if not keep_strings:
-                    _blank(chars, i + 1, min(end, n) - 1 if end <= n else n)
+                    _blank_interpolated(
+                        chars, source, i + 1,
+                        min(end, n) - 1 if end <= n else n, interp)
                 i = end
         else:
             i += 1
     return "".join(chars)
+
+
+def _interp_kind(
+    source: str, i: int, quote: str, lang: str | None,
+) -> str | None:
+    """The interpolation grammar active inside the string opened at
+    ``i``, or None for a plain literal.
+
+    Interpolation expressions are executable code — the same direction
+    contract as the JS/TS template arm ("interpolation stays visible —
+    it is executable code, and blanking it forged absence receipts").
+    Blanking `f"{os.popen(cmd)}"` / `"#{system(cmd)}"` / `"$(rm $x)"`
+    hid the sink from every blanked-view consumer while the language
+    executes it. Modeled: python f-strings, ruby ``#{…}`` (double
+    quotes), shell ``$(…)``/``${…}``/backticks (double quotes).
+    Documented residuals: perl string interpolation (variable-only
+    without the ``@{[…]}`` block idiom, whose grammar is the unmodeled
+    perl quote-construct class), ruby ``%``-literals, heredocs, and
+    plain multi-line double-quoted strings (single-line stop — a
+    continuation line reads as a comment), shell heredocs, and two
+    python nesting shapes that blank as plain literals: same-quote
+    nesting inside an expression (3.12+, the outer quote closes at
+    the first inner quote) and a nested f-string literal inside a
+    kept expression. All pinned known-direction.
+    """
+    if lang == "python":
+        # f-string prefix: 1-2 letters immediately before the quote
+        # containing f/F (f, rf, fR, …), not the tail of an identifier.
+        j = i - 1
+        prefix = ""
+        while j >= 0 and source[j] in "fFrRbBuU" and len(prefix) < 2:
+            prefix += source[j]
+            j -= 1
+        if j >= 0 and (source[j].isalnum() or source[j] == "_"):
+            return None
+        return "fstring" if "f" in prefix.lower() else None
+    if lang == "ruby" and quote == '"':
+        return "ruby"
+    if lang in ("shell", "bash") and quote == '"':
+        return "shell"
+    return None
+
+
+def _blank_interpolated(
+    chars: list[str], source: str, start: int, end: int,
+    interp: str | None,
+) -> None:
+    """Blank the string body ``chars[start:end]``, keeping
+    interpolation EXPRESSIONS visible as code (``interp`` from
+    :func:`_interp_kind`; None blanks the whole body).
+
+    Nested string literals inside a kept expression blank their own
+    contents (they are string data again — mirroring the template
+    arm; a nested f-string blanks with them, a declared pinned
+    residual — see :func:`_interp_kind`). An unterminated expression
+    keeps the rest of the body visible (over-inclusion — costs a
+    review, never a swallow).
+    """
+    if interp is None:
+        _blank(chars, start, end)
+        return
+    j = start
+    while j < end:
+        ch = source[j]
+        if ch == "\\":
+            if (interp == "fstring" and j + 1 < end
+                    and source[j + 1] in "{}"):
+                # There is no brace escape in f-strings: the backslash
+                # is string DATA and the brace stays live (CPython
+                # f'\{1+1}' == '\2'; f'a\}}b' == 'a\}b'). Blank the
+                # backslash alone so the brace is judged by the brace
+                # rules below — consuming the pair swallowed a whole
+                # executable interpolation as string data. Ruby and
+                # shell keep the pair-blank: their escapes genuinely
+                # suppress interpolation ("\#{…}", "\$(", "\`" are
+                # literal data in the running language).
+                chars[j] = " "
+                j += 1
+                continue
+            for k in range(j, min(j + 2, end)):
+                if chars[k] != "\n":
+                    chars[k] = " "
+            j += 2
+            continue
+        if interp == "fstring":
+            if source.startswith("{{", j) or source.startswith("}}", j):
+                # Doubled braces are literal brace DATA, not an
+                # interpolation opener.
+                for k in range(j, min(j + 2, end)):
+                    chars[k] = " "
+                j += 2
+                continue
+            if ch == "{":
+                j = _keep_expr(chars, source, j + 1, end, "{", "}")
+                continue
+        elif interp == "ruby":
+            if source.startswith("#{", j):
+                # The `#` sigil blanks (a line-leading `#` in the
+                # view would read as a comment/directive to textual
+                # line filters); the braced expression stays visible.
+                chars[j] = " "
+                j = _keep_expr(chars, source, j + 2, end, "{", "}")
+                continue
+        elif interp == "shell":
+            if source.startswith("$(", j):
+                j = _keep_expr(chars, source, j + 2, end, "(", ")")
+                continue
+            if source.startswith("${", j):
+                j = _keep_expr(chars, source, j + 2, end, "{", "}")
+                continue
+            if ch == "`":
+                # Backtick command substitution runs inside double
+                # quotes — code, same class as $( ).
+                k = j + 1
+                while k < end and source[k] != "`":
+                    k += 2 if source[k] == "\\" else 1
+                j = min(k + 1, end)
+                continue
+        if ch != "\n":
+            chars[j] = " "
+        j += 1
+
+
+def _keep_expr(
+    chars: list[str], source: str, j: int, end: int,
+    opener: str, closer: str,
+) -> int:
+    """Skip past an interpolation expression (kept visible), blanking
+    only nested string-literal CONTENTS inside it. Returns the index
+    just past the matching closer (or ``end`` when unterminated —
+    the remainder stays visible, the over-inclusion direction)."""
+    depth = 1
+    while j < end and depth:
+        c = source[j]
+        if c == opener:
+            depth += 1
+            j += 1
+        elif c == closer:
+            depth -= 1
+            j += 1
+        elif c in ('"', "'"):
+            e = _string_end(source, j, c)
+            for k in range(j + 1, min(e, end) - 1):
+                if chars[k] != "\n":
+                    chars[k] = " "
+            j = min(e, end)
+        else:
+            j += 1
+    return j
 
 
 def _char_literal_end(source: str, start: int) -> int | None:
@@ -409,17 +583,23 @@ def _char_literal_end(source: str, start: int) -> int | None:
     return m.end() if m else None
 
 
-def _string_end(source: str, start: int, quote: str, *, raw: bool = False) -> int:
+def _string_end(
+    source: str, start: int, quote: str, *,
+    raw: bool = False, escapes: bool = True,
+) -> int:
     """Index just past the closing quote (or end of line/file).
 
     Unterminated single-line strings stop at the newline — a lone
     apostrophe in text must not swallow the rest of the file.
+    ``escapes=False`` disables backslash handling for grammars whose
+    literal form has none (shell single quotes) while keeping the
+    newline stop.
     """
     n = len(source)
     i = start + 1
     while i < n:
         ch = source[i]
-        if ch == "\\" and not raw:
+        if ch == "\\" and not raw and escapes:
             i += 2
             continue
         if ch == quote:
