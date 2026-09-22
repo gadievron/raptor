@@ -103,9 +103,6 @@
     "artifacts:orphan_reader::layer0-findings.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
-    "artifacts:orphan_reader::lifecycle.json": {
-      "note": "runtime pipeline artifact: produced by raptor-run-lifecycle (shell script writes JSON), consumed by graph ingest (ingest.py:763) to resolve run target and creation time for the rebuild walk"
-    },
     "artifacts:orphan_reader::lifecycle.log": {
       "note": "externally produced input: written by libexec/raptor-run-lifecycle (shell), read by run tooling"
     },

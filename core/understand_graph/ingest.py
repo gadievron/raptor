@@ -744,10 +744,13 @@ def ingest_annotations(
 def rebuild_graph(project_dir: Path) -> Optional[Path]:
     """Delete and rebuild the graph from artefacts in *project_dir*.
 
-    Walks every run directory, sorted by lifecycle timestamp, calling
-    the appropriate ``ingest_*`` for each artefact type found.
-    Returns the graph path on success.
+    Walks every run directory, sorted by the start timestamp recorded
+    in each run's ``.raptor-run.json`` (the metadata file the run
+    lifecycle actually writes), calling the appropriate ``ingest_*``
+    for each artefact type found. Returns the graph path on success.
     """
+    from core.run.metadata import RUN_METADATA_FILE
+
     project_dir = Path(project_dir)
     graph_path = graph_path_for_run(project_dir)
 
@@ -760,18 +763,18 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
             continue
         if child.name in ("graph", "annotations"):
             continue
-        lifecycle = load_json(child / "lifecycle.json")
+        run_meta = load_json(child / RUN_METADATA_FILE)
         ts = ""
-        if isinstance(lifecycle, dict):
-            ts = str(lifecycle.get("created_at") or lifecycle.get("started_at") or "")
+        if isinstance(run_meta, dict):
+            ts = str(run_meta.get("timestamp") or "")
         run_dirs.append((ts, child))
     run_dirs.sort(key=lambda x: x[0])
 
     target = ""
     for ts, d in run_dirs:
-        lifecycle = load_json(d / "lifecycle.json")
-        if isinstance(lifecycle, dict):
-            target = target or str(lifecycle.get("target") or "")
+        run_meta = load_json(d / RUN_METADATA_FILE)
+        if isinstance(run_meta, dict):
+            target = target or str(run_meta.get("target_path") or "")
 
         if (d / "checklist.json").exists() or (d / "context-map.json").exists():
             ingest_run(d, target)

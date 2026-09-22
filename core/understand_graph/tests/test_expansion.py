@@ -628,7 +628,7 @@ def test_rebuild_graph(tmp_path, monkeypatch):
     # Run 1: an understand run
     run1 = project_dir / "run1"
     run1.mkdir()
-    save_json(run1 / "lifecycle.json", {"created_at": "2026-01-01T00:00:00Z", "target": str(tmp_path / "t")})
+    save_json(run1 / ".raptor-run.json", {"version": 2, "command": "understand", "timestamp": "2026-01-01T00:00:00Z", "status": "completed", "target_path": str(tmp_path / "t")})
     save_json(run1 / "checklist.json", {
         "target_path": str(tmp_path / "t"),
         "files": [{"path": "main.c", "sha256": "abc"}],
@@ -643,7 +643,7 @@ def test_rebuild_graph(tmp_path, monkeypatch):
     # Run 2: a scan run
     run2 = project_dir / "run2"
     run2.mkdir()
-    save_json(run2 / "lifecycle.json", {"created_at": "2026-01-02T00:00:00Z", "target": str(tmp_path / "t")})
+    save_json(run2 / ".raptor-run.json", {"version": 2, "command": "scan", "timestamp": "2026-01-02T00:00:00Z", "status": "completed", "target_path": str(tmp_path / "t")})
     save_json(run2 / "findings.json", [
         {"rule_id": "R1", "file": "main.c", "function": "main",
          "message": "cmd injection", "severity": "high"},
@@ -658,3 +658,9 @@ def test_rebuild_graph(tmp_path, monkeypatch):
         assert len(entries) >= 1
         findings = conn.execute("SELECT * FROM nodes WHERE kind='scan_finding' AND stale=0").fetchall()
         assert len(findings) >= 1
+        # Target resolution comes from each run's .raptor-run.json —
+        # the metadata file runs actually write — so rebuilt snapshots
+        # are never target-less.
+        snapshots = conn.execute("SELECT target_path FROM snapshots").fetchall()
+        assert snapshots
+        assert all(row["target_path"] == str(tmp_path / "t") for row in snapshots)
