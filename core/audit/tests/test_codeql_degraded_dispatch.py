@@ -355,6 +355,75 @@ class TestDegradedBannerThreadSafety:
         )
 
 
+class TestUnsupportedIdThreadSafety:
+    """Same shared-flag shape as the degraded banner, keyed per query
+    id: the naked check-then-add double-logged an id when parallel
+    workers dispatching a hot CWE class hit its first miss together."""
+
+    def _capture_infos(self, monkeypatch):
+        import core.audit.orchestrator as _orch
+
+        infos: list[str] = []
+
+        def _info(msg, *args, **kwargs):
+            infos.append(str(msg) % args if args else str(msg))
+
+        monkeypatch.setattr(_orch.logger, "info", _info)
+        return infos
+
+    def test_parallel_first_misses_announce_once_per_id(self, monkeypatch):
+        import threading
+
+        import core.audit.orchestrator as _orch
+
+        monkeypatch.setattr(_orch, "_CODEQL_UNSUPPORTED_IDS_LOGGED", set())
+        infos = self._capture_infos(monkeypatch)
+
+        n_threads = 8
+        barrier = threading.Barrier(n_threads)
+
+        def hammer() -> None:
+            barrier.wait()
+            for _ in range(50):
+                _orch._note_codeql_unsupported_query_id("cpp/x", "a.c", "f")
+                _orch._note_codeql_unsupported_query_id("cpp/y", "a.c", "f")
+
+        threads = [
+            threading.Thread(target=hammer) for _ in range(n_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        loud = [m for m in infos if "unsupported" in m]
+        assert len(loud) == 2, (
+            f"concurrent first misses must announce once per unique "
+            f"query id, got {len(loud)}"
+        )
+        assert len([m for m in loud if "'cpp/x'" in m]) == 1
+        assert len([m for m in loud if "'cpp/y'" in m]) == 1
+
+    def test_reset_by_swapping_set_still_rearms(self, monkeypatch):
+        # The reset unit stays the module-level set: tests monkeypatch
+        # a fresh set() and an already-seen id must announce again.
+        import core.audit.orchestrator as _orch
+
+        infos = self._capture_infos(monkeypatch)
+
+        monkeypatch.setattr(_orch, "_CODEQL_UNSUPPORTED_IDS_LOGGED", set())
+        _orch._note_codeql_unsupported_query_id("cpp/x", "a.c", "f")
+        _orch._note_codeql_unsupported_query_id("cpp/x", "a.c", "g")
+        monkeypatch.setattr(_orch, "_CODEQL_UNSUPPORTED_IDS_LOGGED", set())
+        _orch._note_codeql_unsupported_query_id("cpp/x", "b.c", "h")
+
+        loud = [m for m in infos if "unsupported" in m]
+        assert len(loud) == 2, (
+            f"one announcement per id per reset epoch expected, "
+            f"got {len(loud)}"
+        )
+
+
 class TestRouterMissBannerWording:
     def test_language_miss_names_the_real_reason(self, tmp_path, monkeypatch):
         """A database EXISTS but does not cover this file's language —

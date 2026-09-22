@@ -17520,8 +17520,12 @@ def _note_codeql_degraded_skip(
 
 
 # Query IDs already reported as unsupported (log once per id, not once
-# per dispatch — a hot CWE class would otherwise spam the log).
+# per dispatch — a hot CWE class would otherwise spam the log). The
+# set stays the reset unit (tests swap in a fresh set()); the lock
+# closes the check-then-add window, since parallel review workers
+# dispatching the same hot CWE class hit an id's first miss together.
 _CODEQL_UNSUPPORTED_IDS_LOGGED: set[str] = set()
+_CODEQL_UNSUPPORTED_IDS_LOCK = _threading.Lock()
 
 
 def _codeql_query_file(query: str) -> str | None:
@@ -17569,8 +17573,10 @@ def _note_codeql_unsupported_query_id(
     that is neither an on-disk query file nor resolvable against the
     installed packs, debug after — honest degradation instead of a
     permanently erroring dispatch."""
-    if query not in _CODEQL_UNSUPPORTED_IDS_LOGGED:
+    with _CODEQL_UNSUPPORTED_IDS_LOCK:
+        first = query not in _CODEQL_UNSUPPORTED_IDS_LOGGED
         _CODEQL_UNSUPPORTED_IDS_LOGGED.add(query)
+    if first:
         logger.info(
             "codeql chain step unsupported: query id %r is not an "
             "on-disk query file and did not resolve to an installed "
