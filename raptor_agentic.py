@@ -3631,7 +3631,6 @@ def main() -> int:
             else:
                 raw = translate_pipeline_output(
                     oa_result.get("pipeline_output") or {},
-                    str(original_repo_path),
                 )
                 if raw and not _openant_only and all_sarif_files:
                     from core.sarif.parser import parse_sarif_findings

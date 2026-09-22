@@ -79,55 +79,55 @@ class TestComputeLevel(unittest.TestCase):
 
 class TestTranslatePipelineOutput(unittest.TestCase):
     def test_empty_input_returns_empty(self):
-        self.assertEqual(translate_pipeline_output({}, "/repo"), [])
+        self.assertEqual(translate_pipeline_output({}), [])
 
     def test_no_findings_returns_empty(self):
-        self.assertEqual(translate_pipeline_output(_pipeline([]), "/repo"), [])
+        self.assertEqual(translate_pipeline_output(_pipeline([])), [])
 
     def test_vulnerable_confirmed_gives_error(self):
         f = _finding(stage1_verdict="vulnerable", stage2_verdict="confirmed")
-        results = translate_pipeline_output(_pipeline([f]), "/repo")
+        results = translate_pipeline_output(_pipeline([f]))
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["level"], "error")
         self.assertEqual(results[0]["tool"], "openant")
 
     def test_safe_is_suppressed(self):
         f = _finding(stage1_verdict="safe")
-        results = translate_pipeline_output(_pipeline([f]), "/repo")
+        results = translate_pipeline_output(_pipeline([f]))
         self.assertEqual(results, [])
 
     def test_protected_included_as_note(self):
         f = _finding(stage1_verdict="protected")
-        results = translate_pipeline_output(_pipeline([f]), "/repo")
+        results = translate_pipeline_output(_pipeline([f]))
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]["level"], "note")
 
     def test_finding_id_uses_openant_id(self):
         f = _finding(id="VULN-007")
-        results = translate_pipeline_output(_pipeline([f]), "/repo")
+        results = translate_pipeline_output(_pipeline([f]))
         self.assertEqual(results[0]["finding_id"], "openant:VULN-007")
 
     def test_cwe_str_formatting(self):
         f = _finding(cwe_id=78)
-        results = translate_pipeline_output(_pipeline([f]), "/repo")
+        results = translate_pipeline_output(_pipeline([f]))
         self.assertEqual(results[0]["cwe_id"], "CWE-78")
         self.assertEqual(results[0]["rule_id"], "openant/CWE-78")
 
     def test_file_propagated(self):
         f = _finding(location={"file": "src/handler.py", "function": "src/handler.py:run"})
-        results = translate_pipeline_output(_pipeline([f]), "/repo")
+        results = translate_pipeline_output(_pipeline([f]))
         self.assertEqual(results[0]["file"], "src/handler.py")
 
     def test_metadata_fields(self):
         f = _finding(stage1_verdict="vulnerable", stage2_verdict="agreed")
-        results = translate_pipeline_output(_pipeline([f]), "/repo")
+        results = translate_pipeline_output(_pipeline([f]))
         meta = results[0]["metadata"]
         self.assertEqual(meta["stage1_verdict"], "vulnerable")
         self.assertEqual(meta["stage2_verdict"], "agreed")
 
     def test_none_cwe_id(self):
         f = _finding(cwe_id=None)
-        results = translate_pipeline_output(_pipeline([f]), "/repo")
+        results = translate_pipeline_output(_pipeline([f]))
         self.assertIsNone(results[0]["cwe_id"])
         self.assertEqual(results[0]["rule_id"], "openant/unknown")
 
@@ -137,7 +137,7 @@ class TestTranslatePipelineOutput(unittest.TestCase):
             _finding(id="V-002", stage1_verdict="safe"),
             _finding(id="V-003", stage1_verdict="bypassable"),
         ]
-        results = translate_pipeline_output(_pipeline(findings), "/repo")
+        results = translate_pipeline_output(_pipeline(findings))
         self.assertEqual(len(results), 2)  # safe suppressed
 
 
@@ -202,21 +202,21 @@ class TestUnknownVerdictsStayVisible(unittest.TestCase):
         }]}
 
     def test_unknown_verdict_kept_at_note(self):
-        out = translate_pipeline_output(self._pipeline("exploitable_v2"), "/repo")
+        out = translate_pipeline_output(self._pipeline("exploitable_v2"))
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["level"], "note")
 
     def test_missing_verdict_kept_at_note(self):
-        out = translate_pipeline_output(self._pipeline(""), "/repo")
+        out = translate_pipeline_output(self._pipeline(""))
         self.assertEqual(len(out), 1)
         self.assertEqual(out[0]["level"], "note")
 
     def test_safe_still_suppresses(self):
-        out = translate_pipeline_output(self._pipeline("safe"), "/repo")
+        out = translate_pipeline_output(self._pipeline("safe"))
         self.assertEqual(out, [])
 
     def test_known_verdicts_unchanged(self):
-        out = translate_pipeline_output(self._pipeline("vulnerable"), "/repo")
+        out = translate_pipeline_output(self._pipeline("vulnerable"))
         self.assertEqual(out[0]["level"], "warning")
 
 

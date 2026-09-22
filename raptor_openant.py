@@ -239,7 +239,7 @@ def main() -> int:
     print("TRANSLATING FINDINGS")
     print("=" * 70)
 
-    translated = translate_pipeline_output(pipeline_output, str(repo_path))
+    translated = translate_pipeline_output(pipeline_output)
     print(f"✓ Translated: {len(translated)} finding(s) after suppression")
 
     findings_path = out_dir / "openant_findings.json"

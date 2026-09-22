@@ -15,7 +15,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from core.config import RaptorConfig
 from core.json import load_json
@@ -396,8 +396,6 @@ def run_openant_scan(
     repo_path: str | Path,
     out_dir: str | Path,
     config: OpenAntConfig,
-    *,
-    commit_sha: Optional[str] = None,
 ) -> dict[str, Any]:
     """Run OpenAnt scan and return a normalised result dict.
 

@@ -45,21 +45,19 @@ _STAGE2_BOOSTS: frozenset[str] = frozenset({"confirmed", "agreed"})
 _STAGE2_DEMOTES: frozenset[str] = frozenset({"rejected", "bypass_failed"})
 
 
-def translate_pipeline_output(
-    pipeline_output: dict,
-    repo_path: str | Path,
-) -> list[dict]:
+def translate_pipeline_output(pipeline_output: dict) -> list[dict]:
     """Convert OpenAnt pipeline_output.json findings to Raptor finding schema.
 
     Returns empty list on empty or malformed input; never raises.
+    OpenAnt reports repo-relative paths, so no repo root is needed here
+    — path relativisation happens at the dedup join
+    (``deduplicate_with_sarif``), where absolute SARIF URIs enter.
     """
     if not pipeline_output:
         return []
     findings = pipeline_output.get("findings") or []
     if not findings:
         return []
-    repo_info = pipeline_output.get("repository") or {}
-    repo_root = Path(repo_path)
     result = []
     unknown_verdicts: dict[str, int] = {}
     for idx, finding in enumerate(findings):
@@ -68,7 +66,7 @@ def translate_pipeline_output(
             unknown_verdicts[verdict or "<missing>"] = (
                 unknown_verdicts.get(verdict or "<missing>", 0) + 1
             )
-        translated = _translate_finding(finding, repo_info, repo_root, idx)
+        translated = _translate_finding(finding, idx)
         if translated is not None:
             result.append(translated)
     if unknown_verdicts:
@@ -84,8 +82,6 @@ def translate_pipeline_output(
 
 def _translate_finding(
     finding: dict,
-    repo_info: dict,
-    repo_path: Path,
     index: int,
 ) -> Optional[dict]:
     # OpenAnt uses "stage1_verdict" in pipeline_output.json
