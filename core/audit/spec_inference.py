@@ -197,37 +197,57 @@ def should_infer_with_llm(
 
 
 def format_spec_for_context(spec: InferredSpec) -> str:
-    """Render an inferred spec as a prompt section."""
+    """Render an inferred spec as a prompt section.
+
+    Every free-text field can carry repo-derived text (docstring
+    lines, assertion macros, test assertions, LLM claims), so each is
+    defused HERE as well as at extraction: one render seam covers
+    every producer channel at once — including specs whose producer
+    never routed through a defusing extractor — while extraction-side
+    defusal covers the non-render consumers (contracts, evidence
+    fusion). neutralize_tag_forgery is idempotent on its own output
+    (pinned in its test suite), so the double pass is byte-safe.
+    """
     if not spec.intent and not spec.preconditions and not spec.postconditions:
         return ""
 
     lines = ["### Inferred specification"]
 
     if spec.intent:
-        lines.append(f"**Intent:** {spec.intent}")
+        lines.append(f"**Intent:** {_defuse_repo_text(spec.intent)}")
 
     if spec.preconditions:
         lines.append("**Preconditions:**")
-        lines.extend(f"- {p}" for p in spec.preconditions[:6])
+        lines.extend(
+            f"- {_defuse_repo_text(p)}" for p in spec.preconditions[:6]
+        )
 
     if spec.postconditions:
         lines.append("**Postconditions:**")
-        lines.extend(f"- {p}" for p in spec.postconditions[:6])
+        lines.extend(
+            f"- {_defuse_repo_text(p)}" for p in spec.postconditions[:6]
+        )
 
     if spec.invariants:
         lines.append("**Invariants:**")
-        lines.extend(f"- {inv}" for inv in spec.invariants[:4])
+        lines.extend(
+            f"- {_defuse_repo_text(inv)}" for inv in spec.invariants[:4]
+        )
 
     if spec.negative_specs:
         lines.append("**Must NOT:**")
-        lines.extend(f"- {ns}" for ns in spec.negative_specs[:4])
+        lines.extend(
+            f"- {_defuse_repo_text(ns)}" for ns in spec.negative_specs[:4]
+        )
 
     if spec.llm_hints:
         lines.append(
             "**Unverified LLM hints** (no source anchor — NOT part of "
             "the spec; treat as leads only):"
         )
-        lines.extend(f"- {hint}" for hint in spec.llm_hints[:4])
+        lines.extend(
+            f"- {_defuse_repo_text(hint)}" for hint in spec.llm_hints[:4]
+        )
 
     source_strs = [f"{s.signal} [{s.confidence}]" for s in spec.sources[:5]]
     if source_strs:
@@ -315,10 +335,13 @@ def _infer_from_docstring(spec: InferredSpec, gap: dict[str, Any]) -> None:
     if not docstring or len(docstring) < 10:
         return
 
+    # Docstrings are repo text — the same forgery surface as test
+    # assertions, reachable without planting any test file. Truncate
+    # first, defuse last (see _defuse_repo_text).
     if not spec.intent:
         first_line = docstring.split("\n")[0].strip().rstrip(".")
         if 10 <= len(first_line) <= 200:
-            spec.intent = first_line.lower()
+            spec.intent = _defuse_repo_text(first_line.lower())
             spec.sources.append(SpecSource(
                 signal="docstring",
                 confidence="medium",
@@ -329,15 +352,15 @@ def _infer_from_docstring(spec: InferredSpec, gap: dict[str, Any]) -> None:
         line_stripped = line.strip().lower()
 
         if any(k in line_stripped for k in ("raises", "throw", "error")):
-            spec.postconditions.append(line.strip()[:120])
+            spec.postconditions.append(_defuse_repo_text(line.strip()[:120]))
 
         if any(k in line_stripped for k in ("returns", "return")):
-            spec.postconditions.append(line.strip()[:120])
+            spec.postconditions.append(_defuse_repo_text(line.strip()[:120]))
 
         if any(k in line_stripped for k in ("must be", "should be",
                                              "must not", "requires",
                                              "precondition", "expects")):
-            spec.preconditions.append(line.strip()[:120])
+            spec.preconditions.append(_defuse_repo_text(line.strip()[:120]))
 
 
 def _case_in_test_tree(tc: Any) -> bool:
@@ -546,7 +569,11 @@ def _infer_from_assertions(
             m = pattern.search(stripped)
             if not m:
                 continue
-            condition = m.group(1).strip()
+            # Assertion-macro conditions are repo text headed for the
+            # same trusted spec section as docstring lines — defuse at
+            # extraction so non-render consumers (contracts, evidence
+            # fusion, precondition verification) see defused text too.
+            condition = _defuse_repo_text(m.group(1).strip())
             if kind == "lock_precondition":
                 text = f"lock {condition} must be held on entry"
                 spec.preconditions.append(text)
