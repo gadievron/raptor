@@ -1,8 +1,8 @@
 {
   "_source": {
-    "fetched_at": "2026-09-15T10:40:10Z",
+    "fetched_at": "2026-09-22T10:33:27Z",
     "license": "Metasploit Framework is BSD-3-Clause. We embed only module-path references + booleans (a public fact about the framework's contents); no MSF code is stored.",
-    "modules_scanned": 7176,
+    "modules_scanned": 7180,
     "name": "Metasploit Framework module metadata",
     "provenance": "rapid7/metasploit-framework modules_metadata_base.json. We extract the CVE→module-path mapping; framework code itself is not redistributed.",
     "url": "https://raw.githubusercontent.com/rapid7/metasploit-framework/HEAD/db/modules_metadata_base.json"
@@ -19046,7 +19046,9 @@
     "CVE-2026-20929": {
       "has_msf_module": true,
       "module_paths": [
-        "auxiliary_server/relay/esc8_kerberos"
+        "auxiliary_server/relay/esc8_kerberos",
+        "auxiliary_spoof/dhcp/dhcpv6_dns_takeover",
+        "auxiliary_spoof/ipv6/ipv6_ra_dns_takeover"
       ]
     },
     "CVE-2026-22200": {
@@ -19385,6 +19387,12 @@
       "has_msf_module": true,
       "module_paths": [
         "exploit_linux/http/sonicwall_sma1000_couchdb_rce"
+      ]
+    },
+    "CVE-2026-85706": {
+      "has_msf_module": true,
+      "module_paths": [
+        "auxiliary_gather/gitlab_file_read_cve_2026_85706"
       ]
     },
     "CVE-2026-9082": {
