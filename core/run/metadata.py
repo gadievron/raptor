@@ -27,9 +27,25 @@ RUN_METADATA_FILE = ".raptor-run.json"
 
 #: Read budget for the run metadata file. It lives in the
 #: sandbox-writable run dir, so its size is attacker-writable; a
-#: legitimate stamp is a few KB. Single-homed so the ownership probe
-#: and the loader stay on one spelling.
+#: legitimate stamp is a few KB. Single-homed so every reader stays
+#: on one spelling.
 RUN_METADATA_MAX_BYTES = 1024 * 1024
+
+
+def _load_meta(path: Path) -> Any:
+    """Read a ``.raptor-run.json`` under the shared byte budget.
+
+    EVERY reader of the metadata file in this module routes through
+    here (or :func:`load_run_metadata`, its run-dir spelling) — the
+    file is sandbox-writable mid-run, so an oversize plant follows
+    the malformed-file contract (warn, return None) instead of
+    buffering unbounded. The uncapped readers this replaces put the
+    OOM inside the contention gate (every future start in the
+    project loads every sibling's metadata), the victim run's own
+    finalisers, and resume — the exact lanes the budget exists for.
+    The closure test derives the reader set and pins the routing.
+    """
+    return load_json(path, max_bytes=RUN_METADATA_MAX_BYTES)
 
 
 class RunOwnershipError(ValueError):
@@ -550,7 +566,7 @@ def _live_conflicting_run(project_dir: Path, self_dir: Path,
             meta_path = d / RUN_METADATA_FILE
             if not meta_path.exists():
                 continue
-            meta = load_json(meta_path)
+            meta = _load_meta(meta_path)
         except OSError:
             continue
         if not isinstance(meta, dict) or meta.get("status") != STATUS_RUNNING:
@@ -613,7 +629,7 @@ def _project_run_gate(project_dir: Path, output_dir: Path, command: str,
     # gating it against siblings could kill a run whose parent already
     # passed the gate.
     with contextlib.suppress(OSError):
-        own = load_json(Path(output_dir) / RUN_METADATA_FILE)
+        own = _load_meta(Path(output_dir) / RUN_METADATA_FILE)
         if isinstance(own, dict) and own.get("status") == STATUS_RUNNING:
             yield
             return
@@ -752,8 +768,7 @@ def start_run(output_dir: Path, command: str,
         # would silently kill the first session's hook attribution and
         # contention identity. resume_run is the sanctioned re-owning
         # path (it refreshes the full stamp).
-        _prior_meta = load_json(output_dir / RUN_METADATA_FILE,
-                                max_bytes=RUN_METADATA_MAX_BYTES)
+        _prior_meta = _load_meta(output_dir / RUN_METADATA_FILE)
         if (isinstance(_prior_meta, dict)
                 and _prior_meta.get("status") == STATUS_RUNNING
                 and _prior_meta.get("session_pid") is not None
@@ -978,7 +993,7 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
             meta_path = d / RUN_METADATA_FILE
             if not meta_path.exists():
                 continue
-            meta = load_json(meta_path)
+            meta = _load_meta(meta_path)
         except OSError:
             # Per-child stat may fail even after iterdir succeeded.
             continue
@@ -1167,6 +1182,9 @@ def _promote_checklist(project_dir: Path) -> None:
     # checklist became "newest" each time. Run-dir names embed a
     # PID + monotonic-ns tail (see core/run/output.unique_run_suffix),
     # so name-tie-break gives a chronologically meaningful disambiguation.
+    # Run-dir artifacts: sibling checklists are sandbox-writable; the
+    # shared run-artifact budget bounds the promotion scan.
+    from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
     checklists = []
     for d in sorted(children, key=lambda d: (_safe_mtime(d), d.name), reverse=True):
         try:
@@ -1177,7 +1195,7 @@ def _promote_checklist(project_dir: Path) -> None:
                 continue
         except OSError:
             continue
-        data = load_json(cl)
+        data = load_json(cl, max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if data:
             checklists.append(data)
 
@@ -1329,7 +1347,7 @@ def ensure_run_command(output_dir: Path,
     """
     if expected_command is None:
         return
-    metadata = load_json(Path(output_dir) / RUN_METADATA_FILE)
+    metadata = _load_meta(Path(output_dir) / RUN_METADATA_FILE)
     if not isinstance(metadata, dict):
         return
     owner = metadata.get("command")
@@ -1657,7 +1675,11 @@ def _snapshot_run_coverage(output_dir: Path,
         from core.coverage.store import CoverageStore, coverage_store_lock
         from core.json import load_json
 
-        checklist = load_json(checklist_path)
+        from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
+        # Run-dir artifact — same budget class as the importer's
+        # own reads of this file.
+        checklist = load_json(checklist_path,
+                              max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if not checklist:
             return
         cov_path = proj / "coverage.json"
@@ -1728,7 +1750,7 @@ def fail_run(output_dir: Path, error: str | None = None,
     # locked ``_update_status`` would refuse the flip anyway, but by
     # then the finalisers had already touched the run dir). Best-effort
     # pre-check — _update_status re-validates under the metadata lock.
-    _meta_now = load_json(Path(output_dir) / RUN_METADATA_FILE)
+    _meta_now = _load_meta(Path(output_dir) / RUN_METADATA_FILE)
     if (isinstance(_meta_now, dict)
             and _meta_now.get("status") in _TERMINAL_STATUSES
             and _meta_now.get("status") != STATUS_FAILED):
@@ -1832,7 +1854,7 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
     """
     path = Path(output_dir) / RUN_METADATA_FILE
     with _metadata_lock(path):
-        metadata = load_json(path)
+        metadata = _load_meta(path)
         if metadata is None:
             msg = f"No {RUN_METADATA_FILE} in {output_dir} — not a run directory"
             raise FileNotFoundError(msg)
@@ -1948,7 +1970,7 @@ def resume_run(output_dir: Path, note: str | None = None) -> int:
                         "with", output_dir, _marker_project, _witnessed)
                 _wsource = _wsource or "session"
                 with _metadata_lock(path):
-                    _fresh = load_json(path)
+                    _fresh = _load_meta(path)
                     if isinstance(_fresh, dict):
                         _fresh["project"] = _witnessed
                         _fresh["project_source"] = _wsource
@@ -1995,7 +2017,7 @@ def reopen_run(output_dir: Path, note: str | None = None) -> None:
     """
     path = Path(output_dir) / RUN_METADATA_FILE
     with _metadata_lock(path):
-        metadata = load_json(path)
+        metadata = _load_meta(path)
         if metadata is None:
             msg = f"No {RUN_METADATA_FILE} in {output_dir}"
             raise FileNotFoundError(msg)
@@ -2068,8 +2090,7 @@ def load_run_metadata(run_dir: Path) -> dict[str, Any] | None:
     oversize plant loads as None instead of buffering unbounded — the
     bash hook's read of the same file is capped for the same reason.
     """
-    return load_json(run_dir / RUN_METADATA_FILE,
-                     max_bytes=RUN_METADATA_MAX_BYTES)
+    return _load_meta(run_dir / RUN_METADATA_FILE)
 
 
 def corroborate_target_path(run_dir: Path, candidate) -> str | None:
@@ -2233,7 +2254,7 @@ def write_run_pin(run_dir: Path, project: str | None, source: str) -> None:
     # write (a resurrected status=running reads as abandoned and gets
     # sweep-failed; a dropped pin orphans the run).
     with _metadata_lock(path):
-        meta = load_json(path)
+        meta = _load_meta(path)
         if not isinstance(meta, dict):
             meta = {}
         if (meta.get("status") == STATUS_RUNNING
@@ -2284,7 +2305,7 @@ def _update_status(output_dir: Path, status: str,
     """
     path = Path(output_dir) / RUN_METADATA_FILE
     with _metadata_lock(path):
-        metadata = load_json(path)
+        metadata = _load_meta(path)
         if metadata is None:
             msg = f"No {RUN_METADATA_FILE} in {output_dir} — call start_run() first"
             raise FileNotFoundError(msg)

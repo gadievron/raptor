@@ -1620,3 +1620,103 @@ class TestSessionIdentityStamp(unittest.TestCase):
                 md._cleanup_abandoned(Path(d), "scan", 44444)
             meta = load_json(out / RUN_METADATA_FILE)
             self.assertEqual(meta["status"], "failed")
+
+
+class TestMetadataReadBudget(unittest.TestCase):
+    """Every reader of the sandbox-writable ``.raptor-run.json`` pays
+    the shared byte budget: an oversize plant costs no disk (sparse)
+    and OOM-killed the uncapped readers — including the contention
+    gate every future start in the project runs, the victim run's own
+    finalisers, and resume."""
+
+    def _sparse_meta(self, run_dir: Path) -> None:
+        from core.run.metadata import RUN_METADATA_MAX_BYTES
+        with (run_dir / RUN_METADATA_FILE).open("wb") as f:
+            f.truncate(RUN_METADATA_MAX_BYTES + 1)
+
+    def test_load_meta_refuses_oversize(self):
+        from core.run.metadata import _load_meta
+        with TemporaryDirectory() as d:
+            run = Path(d)
+            self._sparse_meta(run)
+            self.assertIsNone(_load_meta(run / RUN_METADATA_FILE))
+
+    def test_oversize_sibling_never_blocks_contention_gate(self):
+        # The gate loads EVERY sibling's metadata inside start_run —
+        # one planted sparse file must degrade to "no conflict", not
+        # buffer the payload or block the start.
+        from core.run.metadata import _live_conflicting_run
+        with TemporaryDirectory() as d:
+            project = Path(d)
+            me = project / "run_me"
+            me.mkdir()
+            sibling = project / "run_other"
+            sibling.mkdir()
+            self._sparse_meta(sibling)
+            self.assertIsNone(
+                _live_conflicting_run(project, me, None))
+
+    def test_oversize_meta_fails_resume_closed(self):
+        from core.run.metadata import resume_run
+        with TemporaryDirectory() as d:
+            run = Path(d)
+            self._sparse_meta(run)
+            # Over-budget follows the malformed/missing contract:
+            # refuse the resume, never materialise the payload.
+            with self.assertRaises((FileNotFoundError, ValueError)):
+                resume_run(run)
+
+    def test_every_metadata_read_routes_through_the_budget(self):
+        # Closure oracle (the intake-bounds commit's own pattern):
+        # no bare load_json may target the metadata file — readers
+        # go through _load_meta / load_run_metadata, so the budget
+        # is single-homed in fact, not just in the comment.
+        import ast
+        import inspect
+
+        from core.run import metadata as md
+        src = inspect.getsource(md)
+        tree = ast.parse(src)
+        offenders: list[int] = []
+        funcs = [
+            n for n in ast.walk(tree)
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+
+        def _enclosing(lineno: int) -> str:
+            best, span = "<module>", None
+            for f in funcs:
+                if f.lineno <= lineno <= (f.end_lineno or f.lineno):
+                    s = (f.end_lineno or f.lineno) - f.lineno
+                    if span is None or s < span:
+                        best, span = f.name, s
+            return best
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = ""
+            if isinstance(node.func, ast.Name):
+                name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                name = node.func.attr
+            if name != "load_json":
+                continue
+            if _enclosing(node.lineno) in ("_load_meta",):
+                continue  # the budgeted loader's own body
+            arg_src = (ast.get_source_segment(src, node.args[0])
+                       if node.args else "") or ""
+            has_cap = any(k.arg == "max_bytes" for k in node.keywords)
+            if has_cap:
+                continue
+            if "checklist" in arg_src:
+                # checklist.json readers carry the run-artifact
+                # budget class; the coverage/run closure test owns
+                # their cap spelling.
+                continue
+            offenders.append(f"{node.lineno}: load_json({arg_src})")
+        self.assertEqual(
+            offenders, [],
+            "bare load_json in metadata.py — metadata readers route "
+            "through _load_meta/load_run_metadata; other artifacts "
+            f"pass max_bytes: {offenders}")
