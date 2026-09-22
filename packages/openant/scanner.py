@@ -826,6 +826,11 @@ def _run_subprocess(
         )
     except Exception as exc:  # noqa: BLE001
         return _empty_result(f"OpenAnt launch failed: {exc}", hard_error=True)
+    finally:
+        # The staged config has served its purpose the moment the
+        # child exits (every path: success, timeout, launch failure) —
+        # see _scrub_stage for why it must not outlive the run.
+        _scrub_stage(out_dir)
 
     # Persist BOTH streams so debugging isn't capped at the truncated
     # snippet we surface to the caller (long warnings can push the
@@ -1078,8 +1083,22 @@ def _stage_llm_config(out_dir: Path, model: str) -> Path:
     }
 
     xdg_home = out_dir / _XDG_STAGE_DIRNAME
+    # Fresh-recreate, never reuse: the CHILD owns the writable out_dir
+    # while it runs — a hostile scan could replace a previous stage (or
+    # any component inside it) with a symlink so the NEXT stage into
+    # the same out_dir writes the merged operator config, provider keys
+    # included, THROUGH the link into an attacker-chosen directory (and
+    # chmods the victim). Remove whatever sits at the stage path
+    # without following it, then build from nothing — the chmod then
+    # only ever lands on a directory this call just created.
+    if os.path.lexists(xdg_home):
+        if xdg_home.is_symlink() or not xdg_home.is_dir():
+            xdg_home.unlink()
+        else:
+            import shutil
+            shutil.rmtree(xdg_home)
     cfg_dir = xdg_home / "openant"
-    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg_dir.mkdir(parents=True)
     os.chmod(xdg_home, 0o700)
     dest = cfg_dir / "config.json"
     # Atomic write (tempfile + rename) so a concurrent reader never
@@ -1098,6 +1117,34 @@ def _stage_llm_config(out_dir: Path, model: str) -> Path:
             pass
         raise
     return xdg_home
+
+
+def _scrub_stage(out_dir: Path) -> None:
+    """Remove the staged XDG view once the child has exited.
+
+    The staged config.json can carry operator-authored provider
+    api_keys (merged in from the operator's real config). Nothing
+    reads the stage after the subprocess exits, but the run directory
+    outlives the run — it ships in /project export archives, whose zip
+    transport strips the 0600 — so the key-bearing view is removed the
+    moment the child no longer needs it. Best-effort by design: a
+    scrub failure logs and never masks the scan result.
+    """
+    stage = out_dir / _XDG_STAGE_DIRNAME
+    try:
+        if stage.is_symlink():
+            stage.unlink()
+        elif stage.exists():
+            import shutil
+            shutil.rmtree(stage, ignore_errors=True)
+    except OSError:
+        pass
+    if os.path.lexists(stage):
+        logger.warning(
+            "openant: staged config scrub incomplete for %s — the "
+            "file can carry operator provider keys; remove it by hand",
+            stage,
+        )
 
 
 def _tool_root(core_path: Path) -> Path:

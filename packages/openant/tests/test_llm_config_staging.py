@@ -186,6 +186,109 @@ class TestOperatorConfigMergedNeverMutated(unittest.TestCase):
             self.assertEqual(list(staged["llm_configs"]), ["raptor-sonnet"])
 
 
+class TestStageLifetime(unittest.TestCase):
+    """The staged config can carry operator provider keys — it must
+    not outlive the child (run dirs ship in export zips, whose
+    transport strips the 0600), and a re-stage into a child-owned
+    out_dir must not follow anything the child planted."""
+
+    def _fake_core(self, base: Path) -> Path:
+        return _make_fake_core(base)
+
+    def test_stage_scrubbed_after_child_exits(self):
+        """No key material remains anywhere under out_dir once
+        run_openant_scan returns — every exit path, success or not."""
+        import subprocess as _sp
+
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            core = self._fake_core(base)
+            xdg = base / "xdg"
+            op_cfg = xdg / "openant" / "config.json"
+            op_cfg.parent.mkdir(parents=True)
+            op_cfg.write_text(json.dumps({
+                "$schema_version": 2,
+                "llm_providers": {"anthropic": {
+                    "type": "anthropic", "api_key": "sk-fake-op-key"}},
+            }))
+            out = base / "out"
+            out.mkdir()
+
+            def fake_run(cmd, **kwargs):
+                # The stage must exist WHILE the child runs...
+                self.assertTrue(
+                    (out / _XDG_STAGE_DIRNAME / "openant" /
+                     "config.json").is_file())
+                return _sp.CompletedProcess(cmd, 2, stdout="", stderr="e")
+
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}), \
+                 patch("core.sandbox.context.run", fake_run):
+                scanner.run_openant_scan(
+                    base / "repo-x", out,
+                    OpenAntConfig(core_path=core))
+            # ...and be gone, key material included, once it returns.
+            self.assertFalse((out / _XDG_STAGE_DIRNAME).exists())
+            for root, _dirs, files in os.walk(out):
+                for fname in files:
+                    data = Path(root, fname).read_bytes()
+                    self.assertNotIn(b"sk-fake-op-key", data,
+                                     f"key material left in {fname}")
+
+    def test_stage_scrubbed_when_launch_raises(self):
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            core = self._fake_core(base)
+            out = base / "out"
+            out.mkdir()
+
+            def fake_run(cmd, **kwargs):
+                raise RuntimeError("launch failed")
+
+            with patch.dict(os.environ,
+                            {"XDG_CONFIG_HOME": str(base / "xdg")}), \
+                 patch("core.sandbox.context.run", fake_run):
+                result = scanner.run_openant_scan(
+                    base / "repo-x", out, OpenAntConfig(core_path=core))
+            self.assertTrue(result["hard_error"])
+            self.assertFalse((out / _XDG_STAGE_DIRNAME).exists())
+
+    def test_restage_refuses_planted_symlinks(self):
+        """A child-planted symlink at the stage path (or inside it)
+        must not receive the merged operator config or the chmod —
+        the stage is removed no-follow and rebuilt from nothing."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            out = base / "out"
+            out.mkdir()
+            victim = base / "victim"
+            victim.mkdir()
+            victim.chmod(0o755)
+            # Shape 1: the whole stage dir is a symlink.
+            os.symlink(victim, out / _XDG_STAGE_DIRNAME)
+            with patch.dict(os.environ,
+                            {"XDG_CONFIG_HOME": str(base / "xdg")}):
+                _stage_llm_config(out, "sonnet")
+            self.assertEqual(list(victim.iterdir()), [],
+                             "config written through planted symlink")
+            self.assertEqual(os.stat(victim).st_mode & 0o777, 0o755,
+                             "victim chmodded through planted symlink")
+            self.assertFalse((out / _XDG_STAGE_DIRNAME).is_symlink())
+            # Shape 2: an inner component is a symlink.
+            import shutil
+            shutil.rmtree(out / _XDG_STAGE_DIRNAME)
+            (out / _XDG_STAGE_DIRNAME).mkdir()
+            os.symlink(victim, out / _XDG_STAGE_DIRNAME / "openant")
+            with patch.dict(os.environ,
+                            {"XDG_CONFIG_HOME": str(base / "xdg")}):
+                _stage_llm_config(out, "sonnet")
+            self.assertEqual(list(victim.iterdir()), [],
+                             "config written through inner symlink")
+            self.assertFalse(
+                (out / _XDG_STAGE_DIRNAME / "openant").is_symlink())
+
+
 class TestSubprocessEnvPointsAtStagedConfig(unittest.TestCase):
     """The sandbox invocation's env carries XDG_CONFIG_HOME → the
     staged directory (otherwise the child resolves the operator's real
