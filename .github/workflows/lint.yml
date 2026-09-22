@@ -175,9 +175,18 @@ jobs:
   # NOT a required status check — failure here means "drift, fix when
   # convenient" rather than "this PR is broken." Branch protection
   # gates on ``ruff-pr`` only.
+  #
+  # Deliberately EXEMPT from the pre_check dedup: the dedup treats a
+  # prior successful "Lint" run at the same (or PR-linked) SHA as
+  # equivalent, but PR-event runs execute ruff-pr (diff-only) and
+  # never this job — so on every squash/merge-landed PR the fallback
+  # found the PR run, set should_skip, and the push run's ONLY unique
+  # job was skipped: full-tree coverage was deferred to the weekly
+  # cron for every PR-landed change, and only direct pushes got it.
+  # Cost of the exemption: a true re-run at an identical push SHA
+  # repeats this ~2-minute informational job — accepted.
   ruff-tree:
-    needs: pre_check
-    if: needs.pre_check.outputs.should_skip != 'true' && (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    if: github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

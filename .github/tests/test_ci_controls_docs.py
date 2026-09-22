@@ -36,6 +36,33 @@ def test_lint_workflow_uses_ruff_config_instead_of_inline_rule_flags() -> None:
     assert workflow.count("ruff check --output-format=github") == 2
 
 
+def test_ruff_tree_is_exempt_from_the_run_dedup() -> None:
+    """The pre_check dedup matches prior successful "Lint" runs at
+    the same (or PR-linked) SHA — but PR-event runs execute ruff-pr
+    only, never ruff-tree, so consulting should_skip in ruff-tree's
+    `if:` skipped the push run's only unique job on every
+    squash/merge-landed PR: the full-tree audit (the job whose own
+    comment names the cross-file drift class only a full pass
+    catches) was deferred to the weekly cron for every PR-landed
+    change. Both directions: ruff-tree must not consult the dedup;
+    the PR-gate jobs (coverage-equivalent across the deduped events)
+    must keep it."""
+    workflow = _read(".github/workflows/lint.yml")
+    tree_block = workflow.split("\n  ruff-tree:", 1)[1].split(
+        "\n  command-metadata:", 1
+    )[0]
+    assert "should_skip" not in tree_block, (
+        "ruff-tree re-joined the pre_check dedup — PR runs don't "
+        "execute it, so dedup against them skips full-tree coverage "
+        "on every PR-landed push"
+    )
+    assert "github.event_name == 'push'" in tree_block
+    pr_block = workflow.split("\n  ruff-pr:", 1)[1].split(
+        "\n  ruff-tree:", 1
+    )[0]
+    assert "needs.pre_check.outputs.should_skip != 'true'" in pr_block
+
+
 def test_readme_links_to_ci_controls_doc() -> None:
     readme = _read("README.md")
     assert "## How RAPTOR checks itself" in readme
