@@ -805,10 +805,12 @@ def _run_subprocess(
             # bind set — so a core outside the system dirs (e.g.
             # under the operator home via --openant-core) left cmd[0]
             # outside the bind tree and silently demoted every run to
-            # the mountless backend. tool_paths binds the core
+            # the mountless backend. tool_paths binds the toolchain
             # read-only into the mount view and grants it in the
-            # Landlock read allowlist, so the mount lane engages.
-            tool_paths=[str(config.core_path)],
+            # Landlock read allowlist, so the mount lane engages. The
+            # bound dir is the clone root, not just the core — the
+            # pinned CLI reads clone-level assets (see _tool_root).
+            tool_paths=[str(_tool_root(config.core_path))],
             caller_label="openant",
             capture_output=True,
             text=True,
@@ -1044,6 +1046,55 @@ def _stage_llm_config(out_dir: Path, model: str) -> Path:
             pass
         raise
     return xdg_home
+
+
+def _tool_root(core_path: Path) -> Path:
+    """The directory the sandbox must bind for the OpenAnt toolchain.
+
+    The pinned CLI reads clone-level assets — ``config/languages.json``
+    (and ``config/models.json`` beside it) — located by an UPWARD
+    search from the core module (``core/language_registry.py``,
+    ``_search_upward``). In the documented monorepo layout those live
+    two levels above the core (``<clone>/config/...`` with the core at
+    ``<clone>/libs/openant-core``), so binding only the core directory
+    leaves the mount-ns child unable to find them: the scan exits 2
+    with upstream's "installation problem" error while the same
+    invocation works outside the sandbox.
+
+    The bound is STRUCTURAL, not a bare probe walk: the clone toplevel
+    is accepted only when the documented monorepo shape holds (the
+    core sits at ``<clone>/libs/openant-core``) and the anchor is
+    neither the filesystem root nor the operator home. A probe-only
+    upward walk (upstream's own is 6 levels) would let a core vendored
+    two levels below ``/`` or ``$HOME`` bind that ENTIRE tree
+    read-only into a network-enabled child on the strength of one
+    stray, user-creatable ``config/languages.json``. When the shape
+    does not hold, bind the core alone and let the child fail with
+    upstream's own clear diagnostic (naming $OPENANT_LANGUAGES_CONFIG
+    and the searched roots).
+    """
+    if (core_path / "config" / "languages.json").is_file():
+        return core_path
+    parent = core_path.parent
+    clone = parent.parent
+    if (
+        parent.name == "libs"
+        and _clone_anchor_ok(clone)
+        and (clone / "config" / "languages.json").is_file()
+    ):
+        return clone
+    return core_path
+
+
+def _clone_anchor_ok(clone: Path) -> bool:
+    """Whether *clone* may be bound wholesale as the toolchain root.
+
+    Refuses the filesystem root and the operator home outright — even
+    when the monorepo shape and the config probe both match, binding
+    either would expose the entire tree read-only to a
+    network-enabled child.
+    """
+    return clone != Path(clone.anchor) and clone != Path.home()
 
 
 def _build_command(

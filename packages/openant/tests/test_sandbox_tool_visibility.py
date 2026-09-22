@@ -56,8 +56,58 @@ class TestToolPathsDeclared(unittest.TestCase):
         src = Path(scanner.__file__).read_text()
         call = src.split("sandbox_run(", 1)[1]
         head = call[:2000]
-        self.assertIn("tool_paths=[str(config.core_path)]", head)
+        self.assertIn("tool_paths=[str(_tool_root(config.core_path))]", head)
         self.assertNotIn("readable_paths=", head)
+
+    def test_tool_root_covers_clone_level_assets(self):
+        """The pinned CLI reads config/languages.json from the CLONE
+        toplevel (upward search) — the bind must cover it. A bare core
+        with no clone-level config binds just the core."""
+        from packages.openant.scanner import _tool_root
+        with tempfile.TemporaryDirectory() as td:
+            clone = Path(td) / "clone"
+            core = clone / "libs" / "openant-core"
+            (core / "core").mkdir(parents=True)
+            (core / "core" / "scanner.py").touch()
+            # bare core: no clone-level config anywhere
+            self.assertEqual(_tool_root(core), core)
+            # monorepo layout: config/languages.json two levels up
+            (clone / "config").mkdir()
+            (clone / "config" / "languages.json").write_text("{}")
+            self.assertEqual(_tool_root(core), clone)
+
+    def test_tool_root_requires_monorepo_shape(self):
+        """A clone-level config is accepted only when the core sits at
+        <clone>/libs/openant-core — an arbitrary 2-deep core must not
+        promote its grandparent on the strength of a stray
+        config/languages.json."""
+        from packages.openant.scanner import _tool_root
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            core = base / "vendor" / "openant-core"  # parent != "libs"
+            (core / "core").mkdir(parents=True)
+            (base / "config").mkdir()
+            (base / "config" / "languages.json").write_text("{}")
+            self.assertEqual(_tool_root(core), core)
+
+    def test_tool_root_never_binds_home_or_root(self):
+        """~/libs/openant-core plus a user-creatable stray
+        ~/config/languages.json must NOT bind the operator's entire
+        home read-only into a network-enabled child; the filesystem
+        root is refused the same way."""
+        from packages.openant.scanner import _clone_anchor_ok, _tool_root
+        self.assertFalse(_clone_anchor_ok(Path("/")))
+        self.assertFalse(_clone_anchor_ok(Path.home()))
+        with tempfile.TemporaryDirectory() as td:
+            fake_home = Path(td)
+            core = fake_home / "libs" / "openant-core"
+            (core / "core").mkdir(parents=True)
+            (fake_home / "config").mkdir()
+            (fake_home / "config" / "languages.json").write_text("{}")
+            self.assertTrue(_clone_anchor_ok(fake_home))  # only home-ness protects
+            with patch("packages.openant.scanner.Path.home",
+                       return_value=fake_home):
+                self.assertEqual(_tool_root(core), core)
 
 
 class TestSymlinkedCoreResolved(unittest.TestCase):
