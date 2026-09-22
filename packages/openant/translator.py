@@ -22,6 +22,16 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from core.logging import get_logger
+
+logger = get_logger()
+
+# Stage-1 verdict -> finding level. ONLY "safe" suppresses. Any
+# verdict spelling this map does not know (schema drift in a newer
+# OpenAnt — the enumeration is pinned against the checkout commit in
+# config.OPENANT_PINNED_COMMIT) is kept at "note" and warned with
+# counts: an unknown verdict must never behave like "safe", or a
+# renamed verdict upstream silently zeroes a run's findings.
 _VERDICT_TO_LEVEL: dict[str, Optional[str]] = {
     "vulnerable": "warning",
     "bypassable": "note",
@@ -29,6 +39,7 @@ _VERDICT_TO_LEVEL: dict[str, Optional[str]] = {
     "protected": "note",
     "safe": None,
 }
+_UNKNOWN_VERDICT_LEVEL = "note"
 
 _STAGE2_BOOSTS: frozenset[str] = frozenset({"confirmed", "agreed"})
 _STAGE2_DEMOTES: frozenset[str] = frozenset({"rejected", "bypass_failed"})
@@ -50,10 +61,24 @@ def translate_pipeline_output(
     repo_info = pipeline_output.get("repository") or {}
     repo_root = Path(repo_path)
     result = []
+    unknown_verdicts: dict[str, int] = {}
     for idx, finding in enumerate(findings):
+        verdict = (finding.get("stage1_verdict") or "").lower()
+        if verdict not in _VERDICT_TO_LEVEL:
+            unknown_verdicts[verdict or "<missing>"] = (
+                unknown_verdicts.get(verdict or "<missing>", 0) + 1
+            )
         translated = _translate_finding(finding, repo_info, repo_root, idx)
         if translated is not None:
             result.append(translated)
+    if unknown_verdicts:
+        logger.warning(
+            "OpenAnt schema drift? %d finding(s) carry unknown "
+            "stage1_verdict value(s) %s — kept at level=note; re-verify "
+            "the checkout against the pinned commit",
+            sum(unknown_verdicts.values()),
+            sorted(unknown_verdicts),
+        )
     return result
 
 
@@ -105,9 +130,12 @@ def _translate_finding(
 
 
 def _compute_level(verdict: str, finding: dict) -> Optional[str]:
-    base = _VERDICT_TO_LEVEL.get(verdict)
-    if base is None:
-        return None
+    if verdict in _VERDICT_TO_LEVEL:
+        base = _VERDICT_TO_LEVEL[verdict]
+        if base is None:
+            return None  # "safe" — the only suppressing verdict
+    else:
+        base = _UNKNOWN_VERDICT_LEVEL
 
     stage2 = (finding.get("stage2_verdict") or "").lower()
 

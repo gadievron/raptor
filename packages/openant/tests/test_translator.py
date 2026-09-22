@@ -67,11 +67,14 @@ class TestComputeLevel(unittest.TestCase):
     def test_inconclusive_note(self):
         self.assertEqual(_compute_level("inconclusive", {}), "note")
 
-    def test_empty_verdict_suppressed(self):
-        self.assertIsNone(_compute_level("", {}))
+    def test_empty_verdict_kept_visible(self):
+        # A missing verdict must not behave like "safe" — kept at note.
+        self.assertEqual(_compute_level("", {}), "note")
 
-    def test_unknown_verdict_suppressed(self):
-        self.assertIsNone(_compute_level("garbage", {}))
+    def test_unknown_verdict_kept_visible(self):
+        # Schema drift (renamed verdict upstream) must not silently
+        # zero the run's findings — kept at note, warned with counts.
+        self.assertEqual(_compute_level("garbage", {}), "note")
 
 
 class TestTranslatePipelineOutput(unittest.TestCase):
@@ -182,3 +185,36 @@ class TestDeduplicateWithSarif(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUnknownVerdictsStayVisible(unittest.TestCase):
+    """Only 'safe' suppresses. A verdict spelling the map does not
+    know (schema drift in a newer OpenAnt) must be kept at level=note
+    and warned — never silently dropped like 'safe'."""
+
+    def _pipeline(self, verdict):
+        return {"findings": [{
+            "id": "VULN-001",
+            "stage1_verdict": verdict,
+            "location": {"file": "a.py", "function": "f"},
+            "cwe_id": 78,
+            "description": "d",
+        }]}
+
+    def test_unknown_verdict_kept_at_note(self):
+        out = translate_pipeline_output(self._pipeline("exploitable_v2"), "/repo")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["level"], "note")
+
+    def test_missing_verdict_kept_at_note(self):
+        out = translate_pipeline_output(self._pipeline(""), "/repo")
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["level"], "note")
+
+    def test_safe_still_suppresses(self):
+        out = translate_pipeline_output(self._pipeline("safe"), "/repo")
+        self.assertEqual(out, [])
+
+    def test_known_verdicts_unchanged(self):
+        out = translate_pipeline_output(self._pipeline("vulnerable"), "/repo")
+        self.assertEqual(out[0]["level"], "warning")
