@@ -586,6 +586,33 @@ def _upstream_stream_with_stale_retry(
             oneshot.close()
 
 
+# Upstream attempt-state stamp toward the worker. The worker's retry
+# loop cannot tell, from its exception alone, a transport death on a
+# request the upstream never handled (safe to re-send) from one whose
+# response had already STARTED — the upstream fully processed (and
+# billed) the generation, so a blind re-send buys it a second time.
+# The dispatcher is the one party that knows which case it saw, so it
+# stamps the response heads it sends toward the worker:
+#
+#   * ``response-started`` — a relayed upstream head. Any transport
+#     failure the worker sees AFTER this head is a mid-response death:
+#     the attempt is consumed and re-sending double-bills.
+#   * ``pre-response`` — the dispatcher's own 502 for a forward-leg
+#     failure before any upstream response byte. Worker-side retry
+#     stays eligible exactly as today (the slow-pre-response residual
+#     is owned by the elapsed-time ceiling above, not by this stamp).
+#
+# Absence of the header = the response never involved the upstream
+# forward leg (control planes, auth rejects) or predates the stamp;
+# the worker-side gate treats absence as "no signal" and keeps its
+# existing behaviour. The upstream's own copy of the header (never
+# legitimately present) is stripped so the stamp stays
+# dispatcher-authoritative.
+_UPSTREAM_STATE_HEADER = "X-Raptor-Upstream-State"
+_UPSTREAM_STATE_STARTED = "response-started"
+_UPSTREAM_STATE_PRE = "pre-response"
+
+
 # Socket-dir prefix shared by every construction route: run-scoped
 # dispatchers (``raptor-llm-<run_id>-`` via dispatcher_for_run) and the
 # in-process self-serve route (``raptor-llm-inproc-<hex8>-``) both mint
@@ -2113,7 +2140,10 @@ def _make_request_handler(
         def log_message(self, format, *args) -> None:
             return
 
-        def _send_simple(self, status: int, reason: str) -> None:
+        def _send_simple(
+            self, status: int, reason: str,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
             body = json.dumps({"error": reason}).encode("utf-8")
             # Status line carries the STANDARD reason phrase only —
             # ``reason`` is caller-composed and can embed peer input
@@ -2125,6 +2155,10 @@ def _make_request_handler(
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Connection", "close")
+            # ``extra_headers`` values are dispatcher-composed
+            # constants (the attempt-state stamp), never peer input.
+            for k, v in (extra_headers or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
 
@@ -2534,6 +2568,14 @@ def _make_request_handler(
                         )
                     response_started = True
                     self.send_response(up.status_code)
+                    # Attempt-state stamp: this head came FROM THE
+                    # UPSTREAM — from here on, the generation is
+                    # processed (and billed) upstream, and the
+                    # worker's retry gate must treat any subsequent
+                    # transport death as consumed spend.
+                    self.send_header(
+                        _UPSTREAM_STATE_HEADER, _UPSTREAM_STATE_STARTED,
+                    )
                     for k, v in up.headers.items():
                         # Strip hop-by-hop headers only. ``content-
                         # encoding`` is response-scoped and MUST be
@@ -2544,9 +2586,13 @@ def _make_request_handler(
                         # Stripping it ships gzipped bytes labelled
                         # as plain JSON — Anthropic always gzips,
                         # so worker SDK calls choke on the bytes.
+                        # The attempt-state header is stripped too:
+                        # only the dispatcher's own stamp above may
+                        # speak for the relay.
                         if k.lower() in (
                             "transfer-encoding",
                             "connection",
+                            _UPSTREAM_STATE_HEADER.lower(),
                         ):
                             continue
                         self.send_header(k, v)
@@ -2648,11 +2694,18 @@ def _make_request_handler(
                 ))
                 if not response_started:
                     # Nothing on the wire yet — a clean HTTP error
-                    # response is still possible.
+                    # response is still possible. The ``pre-response``
+                    # stamp tells the worker's retry gate no upstream
+                    # response byte was seen for this attempt, so its
+                    # existing retry policy stays in force.
                     try:
                         self._send_simple(
                             502,
                             f"upstream error: {type(exc).__name__}",
+                            extra_headers={
+                                _UPSTREAM_STATE_HEADER:
+                                    _UPSTREAM_STATE_PRE,
+                            },
                         )
                     except OSError:
                         pass
