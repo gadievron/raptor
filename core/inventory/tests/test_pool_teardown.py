@@ -35,6 +35,25 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _spawn_children_can_import_repo(monkeypatch):
+    """Pin the repo root FIRST on the import path for spawn children.
+
+    Spawn-context workers inherit the parent's sys.path snapshot
+    (multiprocessing's preparation data; PYTHONPATH alone does not
+    reach them) and re-import this module to unpickle the submitted
+    callables. Under a parallel runner the parent's path is
+    worker-order dependent — a relative entry rewritten against
+    another test's cwd can put a shadowing ``core`` package ahead of
+    the repo's, and the child then dies mid-unpickle with
+    ``No module named 'core.inventory'`` — BrokenProcessPool in the
+    happy-path test, nothing to do with the teardown behavior under
+    pin. Prepending the absolute repo root makes the child's
+    resolution first-match-deterministic. (Test-layer setup; the
+    runtime path-safety rule does not apply to test files.)"""
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[3]))
+
+
 def _wedge(sentinel: str = "") -> None:
     if sentinel:
         Path(sentinel).touch()
