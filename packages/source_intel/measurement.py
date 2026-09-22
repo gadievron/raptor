@@ -56,7 +56,7 @@ whether the sample size justifies the exit-gate claim.
 Why this lives under ``packages/source_intel/`` rather than
 ``libexec/``: it's source_intel-specific tooling for a one-shot
 exit-gate validation, not the general-purpose corpus infrastructure
-(``raptor-corpus-run`` / ``raptor-corpus-metrics`` in ``libexec/``)
+(``corpus-run`` / ``corpus-metrics`` in ``core/dataflow/scripts/``)
 that any validator can plug into. Operators who want to re-run the
 measurement do so as a Python module invocation, not via the
 ``raptor`` CLI.

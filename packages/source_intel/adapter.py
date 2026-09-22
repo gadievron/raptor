@@ -19,9 +19,9 @@ UNCERTAIN bucket separately — it doesn't contribute to precision /
 recall, so Phase 2 lands without harming the V2 baseline.
 
 Wire via:
-    libexec/raptor-corpus-run --output source_intel.csv \
+    core/dataflow/scripts/corpus-run --output source_intel.csv \
         --validator packages.source_intel.adapter:SourceIntelValidator
-    libexec/raptor-corpus-metrics source_intel.csv
+    core/dataflow/scripts/corpus-metrics source_intel.csv
 """
 
 from __future__ import annotations
