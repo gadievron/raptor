@@ -14,5 +14,10 @@ forget\s+(?:all\s+|the\s+|everything\s+)?(?:previous|prior|above|preceding|you\s
 your\s+(?:real|actual|new|true)\s+(?:task|goal|objective|purpose|mission)\s+is
 # Line-anchored ``[system]:`` marker. Lives in this corpus (not
 # english.txt) so re.MULTILINE makes ``^`` match the start of any
-# embedded line, defeating the prefix-then-newline bypass.
-^\s*\[?system\]?\s*[:>]
+# embedded line, defeating the prefix-then-newline bypass. The
+# leading indent is HORIZONTAL-only ([^\S\n]): with ``^\s*`` the
+# MULTILINE ``^`` re-scans a run of blank lines from every line
+# start inside it — quadratic on attacker-supplied content. A
+# marker on a later line is still caught by ``^`` anchoring its
+# own line.
+^[^\S\n]*\[?system\]?\s*[:>]
