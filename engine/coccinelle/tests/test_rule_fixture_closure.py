@@ -38,28 +38,10 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # existed before this gate. Burn these down — write fixtures, delete
 # the entry. Never add to this set; new rules ship with fixtures.
 _UNCOVERED_ALLOWLIST = {
-    "dead_memset_free",
-    "double_close",
-    "fcntl_flag_domain",
-    "fdopendir_double_close",
-    "free_stack_array",
     "gfp_kernel_under_spinlock",
-    "inet_ntoa_double_call",
     "is_err_not_ptr_err",
-    "malloc_strlen_strcpy",
-    "mmap_free",
-    "open_creat_no_mode",
-    "popen_fclose",
     "rcu_dereference_outside_rcu",
     "rcu_no_lock",
-    "realloc_losing_ptr",
-    "shift_overflow",
-    "signal_handler_unsafe",
-    "signal_sigkill_sigstop",
-    "sizeof_array_param",
-    "use_after_close",
-    "use_after_fclose",
-    "va_arg_mismatch",
 }
 
 # Positive lane: an exact-count expectation (results[0] subscripting,
