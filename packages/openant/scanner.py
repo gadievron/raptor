@@ -697,6 +697,17 @@ def run_openant_scan(
     repo_path = Path(repo_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    # Run the core at its RESOLVED path. The documented install layout
+    # is a symlink (<raptor-parent>/libs -> <clone>/libs), and the
+    # symlink spelling breaks inside the mount-ns sandbox whenever it
+    # crosses a directory the sandbox replaces (/tmp becomes a fresh
+    # per-sandbox tmpfs, so a /tmp/libs/... cmd[0]/cwd exists on the
+    # host but not in the child's view). PYTHONPATH already travels
+    # resolved (_build_subprocess_env); cmd[0], cwd, and the tool_paths
+    # bind must name the same real directory. Resolved BEFORE the
+    # provenance/spawn-recheck reads below so every survey walks the
+    # same real tree the child will execute.
+    config.core_path = Path(config.core_path).resolve()
     if config.gate_provenance is not None:
         # The consent gate already surveyed this core: ITS enriched
         # record (worktree_clean / deviations / consent route) is the

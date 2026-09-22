@@ -60,6 +60,54 @@ class TestToolPathsDeclared(unittest.TestCase):
         self.assertNotIn("readable_paths=", head)
 
 
+class TestSymlinkedCoreResolved(unittest.TestCase):
+    """The documented install layout is a symlink (<raptor-parent>/libs
+    -> <clone>/libs). Inside the mount-ns sandbox a symlink spelling
+    that crosses a replaced directory (/tmp is a fresh per-sandbox
+    tmpfs) exists on the host but not in the child's view — so cmd[0],
+    cwd, and the tool_paths bind must all travel at the RESOLVED real
+    path, like PYTHONPATH already does."""
+
+    def test_scan_runs_core_at_resolved_path(self):
+        import os
+
+        from packages.openant import scanner
+        from packages.openant.config import OpenAntConfig
+
+        captured = {}
+
+        def fake_sandbox_run(cmd, **kwargs):
+            captured["cmd0"] = cmd[0]
+            captured["cwd"] = kwargs.get("cwd")
+            captured["tool_paths"] = kwargs.get("tool_paths")
+            raise RuntimeError("stop after capture")
+
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            real = base / "clone" / "libs" / "openant-core"
+            (real / "core").mkdir(parents=True)
+            (real / "core" / "scanner.py").touch()
+            venv_bin = real / ".venv" / "bin"
+            venv_bin.mkdir(parents=True)
+            (venv_bin / "python3").touch()
+            (venv_bin / "python3").chmod(0o755)
+            link_parent = base / "elsewhere"
+            link_parent.mkdir()
+            os.symlink(base / "clone" / "libs", link_parent / "libs")
+            linked = link_parent / "libs" / "openant-core"
+            out = base / "out"
+            out.mkdir()
+            config = OpenAntConfig(core_path=linked)
+            with patch("core.sandbox.context.run", fake_sandbox_run):
+                result = scanner.run_openant_scan(base, out, config)
+            self.assertTrue(result["skipped"])
+            resolved = str(real.resolve())
+            self.assertEqual(captured["cmd0"],
+                             str(Path(resolved) / ".venv" / "bin" / "python3"))
+            self.assertEqual(captured["cwd"], resolved)
+            self.assertEqual(captured["tool_paths"], [resolved])
+
+
 @unittest.skipUnless(check_mount_available(),
                      "mount-ns lane not available on this host")
 @unittest.skipUnless(_core_exercises_visibility(),
