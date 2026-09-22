@@ -160,6 +160,17 @@ class TestReviewedSet:
         assert "a.c:ok" in keys
         assert "b.c:fail" not in keys
 
+    def test_dark_verdicts_excluded(self, tmp_path: Path) -> None:
+        # dark = unresolved gate-resolution bucket; a run interrupted
+        # before the post-loop dark pass must not suppress the key
+        # across segments (it re-enters the queue instead).
+        append_entry(tmp_path, _entry(file="a.c", function="ok", verdict="clean"))
+        append_entry(tmp_path, _entry(
+            file="b.c", function="pending", verdict="dark"))
+        keys = reviewed_set(tmp_path)
+        assert "a.c:ok" in keys
+        assert "b.c:pending" not in keys
+
 
 class TestLatestEntries:
     def test_most_recent_wins(self, tmp_path: Path) -> None:

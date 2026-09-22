@@ -855,9 +855,18 @@ def reviewed_set(out_dir: Path) -> set[str]:
 
     Error verdicts are excluded — they represent transient failures
     (budget exceeded, API error, truncation) and must be retried on
-    the next run, not suppressed as "already reviewed".
+    the next run, not suppressed as "already reviewed". ``dark``
+    verdicts are excluded for the same direction: dark is by
+    definition an UNRESOLVED state (the gate-resolution bucket,
+    journaled mid-loop and resolved by the post-loop dark pass) — an
+    interrupt in that window persists dark entries, and letting them
+    suppress re-review left the function at "needs concrete
+    verification" across every later segment.
     """
-    return {e.key for e in load_entries(out_dir) if e.verdict != "error"}
+    return {
+        e.key for e in load_entries(out_dir)
+        if e.verdict not in ("error", "dark")
+    }
 
 
 # ── Producer kind ────────────────────────────────────────────────────

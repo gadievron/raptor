@@ -162,6 +162,24 @@ class TestGetReviewedSet:
         assert "src/b.c:fail" not in result
         assert "src/c.c:also_fail" not in result
 
+    def test_dark_status_excluded(self, tmp_path: Path):
+        # ``dark`` is the unresolved gate-resolution bucket, written
+        # mid-loop and resolved by the POST-loop dark pass. A run
+        # interrupted between the flush and that pass persists dark
+        # rows; suppressing the key on resume left the function at
+        # "needs concrete verification" forever (the resumed
+        # segment's dark pass only walks its own outcomes).
+        from core.audit.record import append_audit_log
+        append_audit_log(tmp_path, {"action": "orchestrator_review",
+                                    "key": "src/a.c:ok",
+                                    "status": "clean"})
+        append_audit_log(tmp_path, {"action": "orchestrator_review",
+                                    "key": "src/b.c:pending",
+                                    "status": "dark"})
+        result = get_reviewed_set(tmp_path)
+        assert "src/a.c:ok" in result
+        assert "src/b.c:pending" not in result
+
     def test_forged_unstamped_row_never_suppresses(self, tmp_path: Path):
         """The log is target-writable mid-run and its rows are
         declared telemetry; a hand-planted clean row (the journal's

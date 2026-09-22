@@ -1495,7 +1495,15 @@ def get_reviewed_set(out_dir: Path) -> set:
 
     Error statuses are excluded — they represent transient failures
     (budget exceeded, API error, truncation) and must be retried on
-    the next run, not suppressed as "already reviewed".
+    the next run, not suppressed as "already reviewed". ``dark`` is
+    excluded too: it is the gate-resolution bucket ("tool-blind,
+    needs concrete verification"), resolved by the POST-loop dark
+    pass — an interrupt between the mid-loop flush and that pass
+    persists authority-bearing dark rows, and the resumed segment's
+    dark pass only walks its own outcomes, so a suppressed dark key
+    rested at "needs verification" forever. Dark functions re-enter
+    the queue instead (the hash-gated journal fold still supplies
+    their prior context at reuse cost).
 
     Suppression requires row integrity: the log lives in the
     target-writable run dir and record.py declares its rows telemetry,
@@ -1519,7 +1527,7 @@ def get_reviewed_set(out_dir: Path) -> set:
         if not isinstance(entry, dict):
             continue
         if entry.get("action") in ("record", "orchestrator_review"):
-            if entry.get("status") == "error":
+            if entry.get("status") in ("error", "dark"):
                 continue
             if entry.get("edge_callee"):
                 # Edge-contract records review one outgoing EDGE, not
