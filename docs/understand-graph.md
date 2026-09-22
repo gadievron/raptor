@@ -88,7 +88,14 @@ libexec/raptor-graph-query --project myapp --threat-context
 libexec/raptor-graph-query --project myapp --context-map --json
 ```
 
-This is read-only. Code should use `core.understand_graph`, not direct SQL.
+These queries are not read-only at the SQLite level: opening the graph
+takes the shared connection path, which runs the schema migration (a
+`PRAGMA user_version` + metadata write on every open, even when the
+schema is already current) and lets WAL mode mint `-wal`/`-shm` sidecar
+files beside the database. A query that hits a database error deletes
+the graph file, and that includes transient lock contention, not only
+real corruption: avoid running queries concurrently with an in-flight
+ingest. Code should use `core.understand_graph`, not direct SQL.
 
 ## Snapshot Diff
 
