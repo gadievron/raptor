@@ -34,12 +34,14 @@ from typing import Any
 _ON_WORDS = frozenset({"on", "true", "yes", "1", "enable", "enabled"})
 _OFF_WORDS = frozenset({"off", "false", "no", "0", "disable", "disabled"})
 
-_RE_PYPROJECT_PROJECT = re.compile(r"(?m)^\s*\[project\]")
-_RE_PYPROJECT_POETRY = re.compile(r"(?m)^\s*\[tool\.poetry\]")
-_RE_PYPROJECT_SCRIPTS = re.compile(r"(?m)^\s*\[project\.(gui-)?scripts\]")
-_RE_PYPROJECT_POETRY_SCRIPTS = re.compile(r"(?m)^\s*\[tool\.poetry\.scripts\]")
+# Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+# on blank-line runs in scanned manifests.
+_RE_PYPROJECT_PROJECT = re.compile(r"(?m)^[^\S\n]*\[project\]")
+_RE_PYPROJECT_POETRY = re.compile(r"(?m)^[^\S\n]*\[tool\.poetry\]")
+_RE_PYPROJECT_SCRIPTS = re.compile(r"(?m)^[^\S\n]*\[project\.(gui-)?scripts\]")
+_RE_PYPROJECT_POETRY_SCRIPTS = re.compile(r"(?m)^[^\S\n]*\[tool\.poetry\.scripts\]")
 _RE_SETUP_PACKAGES = re.compile(r"\b(packages|py_modules)\s*=")
-_RE_SETUP_PACKAGES_TOML = re.compile(r"(?m)^\s*packages\s*=")
+_RE_SETUP_PACKAGES_TOML = re.compile(r"(?m)^[^\S\n]*packages\s*=")
 _RE_CSPROJ_OUTPUT_TYPE = re.compile(
     r"<OutputType>\s*([A-Za-z]+)\s*</OutputType>", re.IGNORECASE,
 )

@@ -149,11 +149,13 @@ def detect_language_from_shebang(filepath: str) -> str | None:
 # positive (C header routed to cpp) is harmless; the miss direction
 # (C++ header parsed as C) is the recall bug this exists to fix.
 _CPP_HEADER_RE = re.compile(
+    # Horizontal-only indent in every ^ branch — the MULTILINE ^\s*
+    # idiom is quadratic on blank-line runs in scanned source.
     r'(?m)'
-    r'^\s*template\s*<'
-    r'|^\s*namespace\s+[A-Za-z_{]'
-    r'|^\s*class\s+[A-Za-z_]\w*'
-    r'|^\s*(?:public|private|protected)\s*:'
+    r'^[^\S\n]*template\s*<'
+    r'|^[^\S\n]*namespace\s+[A-Za-z_{]'
+    r'|^[^\S\n]*class\s+[A-Za-z_]\w*'
+    r'|^[^\S\n]*(?:public|private|protected)\s*:'
     r'|\bextern\s+"C\+\+"'
     r'|\bstd::'
     r'|\bvirtual\s+[A-Za-z_~]'
@@ -162,12 +164,17 @@ _CPP_HEADER_RE = re.compile(
 
 _INC_PHP_RE = re.compile(r'<\?php|<\?=')
 _INC_ASM_RE = re.compile(
-    r'(?m)^\s*(?:\.(?:text|data|globl|global|section|macro|equ)\b'
+    r'(?m)^[^\S\n]*(?:\.(?:text|data|globl|global|section|macro|equ)\b'
     r'|%macro\b|%define\b|section\s+\.)'
 )
 _INC_C_RE = re.compile(
-    r'(?m)^\s*#\s*(?:include|define|ifn?def|pragma)\b'
-    r'|^\s*[\w*\s]+\w+\s*\([^;{)]*\)\s*\{'
+    # Both branches horizontal-only: indent, and the signature
+    # token span [\w* \t] — the old [\w*\s] crossed newlines, so a
+    # line-broken signature no longer routes .inc content to C (a
+    # real C fragment virtually always carries an #include/#define
+    # or a same-line signature).
+    r'(?m)^[^\S\n]*#\s*(?:include|define|ifn?def|pragma)\b'
+    r'|^[^\S\n]*[\w* \t]+\w+\s*\([^;{)]*\)\s*\{'
 )
 
 

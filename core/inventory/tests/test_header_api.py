@@ -156,3 +156,31 @@ class TestReachabilityIntegration:
 
         assert _item_is_entry(non_static, "c", header_api=None)
         assert not _item_is_entry(static, "c", header_api=None)
+
+
+class TestBlankRunBudget:
+
+    def test_blank_run_header_is_fast(self, tmp_path: Path) -> None:
+        """A planted header that is one brace and a run of blank
+        lines: the declaration probe's `(?:^|;|\\})\\s*` boundary gap
+        and `[*\\s]*` pointer span both re-scanned the run from every
+        line start inside it — worse than quadratic (seconds at 2K
+        bytes, on the inventory build path). Horizontal spellings are
+        linear. Both-direction bound: the hostile shape is fast AND
+        declarations split across lines are still found."""
+        import time
+
+        _write(tmp_path / "hostile.h", "{" + "\n" * (1 << 18))
+        _write(tmp_path / "api.h",
+               "XMLPUBFUN int\n"
+               "    xmlSplitDecl(xmlDocPtr doc,\n"
+               "                 int flags);\n"
+               "int *\n"
+               "  ptrResult(void);\n"
+               "typedef int sameLineT; void afterTypedef(void);\n")
+        start = time.monotonic()
+        api = scan_public_api(str(tmp_path))
+        assert time.monotonic() - start < 5.0
+        assert "xmlSplitDecl" in api
+        assert "ptrResult" in api
+        assert "afterTypedef" in api

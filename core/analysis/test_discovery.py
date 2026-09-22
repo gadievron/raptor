@@ -54,7 +54,9 @@ _SUPPORTED_EXTENSIONS = (
     ".c", ".cc", ".cpp", ".cxx",
 )
 _ASSERT_PATTERN = re.compile(
-    r"^\s*(?:assert(?:Equal|True|False|Raises|In|NotIn|Is|IsNot|Greater|Less"
+    # Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+    # on blank-line runs in scanned source.
+    r"^[^\S\n]*(?:assert(?:Equal|True|False|Raises|In|NotIn|Is|IsNot|Greater|Less"
     r"|Regex|Almost|Count|Contains|Not)?|self\.assert\w+|expect\(|assert |"
     # C-family assertion conventions: libc assert(), openssh-style
     # ASSERT_INT_EQ / ASSERT_PTR_NE, gtest EXPECT_*/ASSERT_*, check's

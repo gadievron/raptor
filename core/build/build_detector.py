@@ -602,7 +602,9 @@ class BuildDetector:
 
         # Pattern: #include "something_config.h" OR #include "config.h"
         pattern = re.compile(
-            r'^\s*#\s*include\s*"([^"]*config(?:_[a-z0-9_]+)?\.h)"',
+            # Horizontal-only indent — the MULTILINE ^\s* idiom is
+            # quadratic on blank-line runs in scanned source.
+            r'^[^\S\n]*#\s*include\s*"([^"]*config(?:_[a-z0-9_]+)?\.h)"',
             re.MULTILINE | re.IGNORECASE,
         )
         seen_missing = set()

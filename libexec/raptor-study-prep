@@ -555,8 +555,11 @@ def _detect_refcount_fields(fields: list[str], block: str) -> list[str]:
         if _REFCOUNT_PATTERNS.search(f):
             result.append(f)
             continue
+        # Horizontal-only indent and type-token span — the MULTILINE
+        # ``^\s*`` spelling is quadratic on blank-line runs in scanned
+        # source, and a C field declaration is single-line anyway.
         line_re = re.compile(
-            r"^\s*\w[\w\s\*]*\b" + re.escape(f) + r"\b[^;]*;[^\n]*$",
+            r"^[^\S\n]*\w[\w \t\*]*\b" + re.escape(f) + r"\b[^;]*;[^\n]*$",
             re.MULTILINE,
         )
         lm = line_re.search(block)

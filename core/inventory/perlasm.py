@@ -376,8 +376,10 @@ def _build_file_record(gen: PerlasmGenerator, flavour: str,
 # (``$prefix="aes_v8";`` / ``my $foo = 'bar';``). Only literal
 # word-ish values interpolate — anything computed stays unresolved
 # and the label definition using it is skipped (best-effort).
+# Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+# on blank-line runs in scanned perlasm.
 _PL_SCALAR_ASSIGN_RE = re.compile(
-    r'(?m)^\s*(?:my\s+)?\$(\w+)\s*=\s*(["\'])([\w.$-]*)\2\s*;'
+    r'(?m)^[^\S\n]*(?:my\s+)?\$(\w+)\s*=\s*(["\'])([\w.$-]*)\2\s*;'
 )
 # Column-0 asm label DEFINITION inside a heredoc, possibly spelled
 # with perl interpolation (``${prefix}_encrypt_kernel:``).

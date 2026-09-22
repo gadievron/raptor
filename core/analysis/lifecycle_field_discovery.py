@@ -36,8 +36,10 @@ _PY_CLASS_RE = re.compile(
     r"^class\s+(\w+).*?:\s*$",
     re.MULTILINE,
 )
+# Horizontal-only indent — the MULTILINE ^\s+ idiom is quadratic
+# on blank-line runs in scanned source.
 _PY_ATTR_ASSIGN_RE = re.compile(
-    r"^\s+self\.(\w+)\s*=",
+    r"^[^\S\n]+self\.(\w+)\s*=",
     re.MULTILINE,
 )
 

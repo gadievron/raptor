@@ -49,8 +49,10 @@ _REVIEW_INSTRUCTIONS = (
 # "VERDICT: VULNERABLE" grades any reply that echoes or reasons about
 # the vulnerable option as VULNERABLE even when it concludes SAFE,
 # inflating flagged counts in both A/B arms.
+# Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+# on blank runs in a model reply.
 _VERDICT_LINE_RE = re.compile(
-    r"^\s*VERDICT:\s*(VULNERABLE|SAFE)\b", re.IGNORECASE | re.MULTILINE,
+    r"^[^\S\n]*VERDICT:\s*(VULNERABLE|SAFE)\b", re.IGNORECASE | re.MULTILINE,
 )
 
 

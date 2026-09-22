@@ -573,8 +573,11 @@ def _function_referenced_as_pointer_scan(
     # Single regex covering the common pointer-use shapes. Each
     # alternative requires ``function_name`` is NOT followed by ``(``
     # — otherwise it is just a normal call PR-4 would have caught.
+    # Line-start indent is HORIZONTAL-only ([^\S\n]): under MULTILINE
+    # the ``^\s*`` spelling re-scans a run of blank lines from every
+    # line start inside it — quadratic on scanned source.
     pat = _re.compile(
-        r"(?:[.=&,(]\s*" + fn + r"|^\s*" + fn + r")"
+        r"(?:[.=&,(]\s*" + fn + r"|^[^\S\n]*" + fn + r")"
         r"(?!\s*\()"  # NOT a call
         r"(?:\s*[,;)}]|\s*$|\s+\w)",
         _re.MULTILINE,
@@ -658,9 +661,12 @@ def _function_is_static(file_path: str, function_name: str) -> bool:
     if text is None:
         return False
     # Match `static [optional return-type tokens] funcname(`
+    # Line-start indent is HORIZONTAL-only ([^\S\n]): under MULTILINE
+    # the ``^\s*`` spelling re-scans a run of blank lines from every
+    # line start inside it — quadratic on scanned source.
     import re as _re
     pat = _re.compile(
-        r"^\s*static\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+|\*\s*)*"
+        r"^[^\S\n]*static\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+|\*\s*)*"
         + _re.escape(function_name) + r"\s*\(",
         _re.MULTILINE,
     )

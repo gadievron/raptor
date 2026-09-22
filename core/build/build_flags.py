@@ -331,8 +331,10 @@ def _from_kconfig(path: Path) -> BuildFlagsContext:
     )
 
 
+# Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+# on blank-line runs in scanned Makefiles.
 _CFLAGS_LINE_RE = re.compile(
-    r"^\s*(?:override\s+)?"
+    r"^[^\S\n]*(?:override\s+)?"
     r"(?:CFLAGS|CXXFLAGS|CPPFLAGS|COMMON_FLAGS|EXTRA_CFLAGS|"
     r"KBUILD_CFLAGS|HOSTCFLAGS|HOSTCXXFLAGS|TARGET_CFLAGS|AM_CFLAGS)"
     r"\s*[+:?]?=\s*(.+?)$",

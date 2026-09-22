@@ -35,13 +35,23 @@ _HEADER_EXTENSIONS = frozenset({".h", ".hpp", ".hxx", ".hh", ".h++"})
 # The qualifier/type group accepts keywords, macros (XMLPUBFUN),
 # __declspec, __attribute__, and any identifier (covers library
 # typedefs like xmlIDPtr, z_stream, etc.).
+#
+# The gap after the statement boundary and the pointer/space span
+# before the name are HORIZONTAL-only: with `\s*` there, the
+# MULTILINE `^` branch re-scans a run of blank lines from every line
+# start inside it — worse than quadratic on a planted blank-line
+# header (finditer over whole header content on the inventory build
+# path). A declaration on a later line is still matched by the `^`
+# branch anchoring its own line, and multi-line declarations still
+# match because the qualifier/type group's interior `\s+` separators
+# cross line breaks.
 _DECL_RE = re.compile(
     r"(?a)"
-    r"(?:^|;|\})\s*"
+    r"(?:^|;|\})[^\S\n]*"
     r"(?:__attribute__\s*\(\([^()]*(?:\([^()]*\)[^()]*)*\)\)\s+)*"
     r"(?:__declspec\s*\([^)]*\)\s+)*"
     r"(?:(?:\w+|\*)\s+)*?"
-    r"[*\s]*"
+    r"[* \t\r\f\v]*"
     r"(\w+)"                       # capture: function name
     r"\s*\([^)]*\)"                # parameter list
     r"\s*(?:__attribute__\s*\(\([^()]*(?:\([^()]*\)[^()]*)*\)\)\s*)*"

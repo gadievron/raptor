@@ -1578,8 +1578,10 @@ class AsmExtractor:
     # export. ``.type`` deliberately NOT included: GAS emits
     # ``.type sym, @function`` for file-local symbols too, so matching
     # it marked every typed local label exported.
+    # Horizontal-only indent — the MULTILINE ^\s* idiom is
+    # quadratic on blank-line runs in scanned asm.
     _GLOBL_RE = re.compile(
-        r'(?m)^\s*(?:\.globa?l|global)\s+([A-Za-z_][\w.$]*)'
+        r'(?m)^[^\S\n]*(?:\.globa?l|global)\s+([A-Za-z_][\w.$]*)'
     )
 
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
@@ -1630,7 +1632,8 @@ class GitHubWorkflowExtractor:
     _KEY_RE = re.compile(r'^(\s+)([A-Za-z_][\w.-]*):')
     _STEPS_RE = re.compile(r'^(\s+)steps:\s*(?:#.*)?$')
     _STEP_ITEM_RE = re.compile(r'^(\s+)-\s')
-    _RUN_RE = re.compile(r'(?m)^\s+(?:-\s+)?run:')
+    # Horizontal-only indent (see _GLOBL_RE).
+    _RUN_RE = re.compile(r'(?m)^[^\S\n]+(?:-\s+)?run:')
 
     def extract(self, _filepath: str, content: str) -> list[CodeItem]:
         lines = content.split('\n')

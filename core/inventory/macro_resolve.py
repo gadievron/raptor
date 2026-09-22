@@ -22,8 +22,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+# on blank-line runs in scanned source.
 _MACRO_DEF_RE = re.compile(
-    r"^\s*#\s*define\s+(\w+)(\([^)]*\))?\s+(.+?)(?:\s*\\)?$",
+    r"^[^\S\n]*#\s*define\s+(\w+)(\([^)]*\))?\s+(.+?)(?:\s*\\)?$",
     re.MULTILINE,
 )
 _MACRO_IDENT_RE = re.compile(r"\b([A-Za-z_]\w*)\b")

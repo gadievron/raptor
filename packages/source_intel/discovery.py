@@ -101,8 +101,10 @@ _MAX_FILES_SOURCE_SCAN: int = 5000
 # Macro names allow both upper and lower case: kernel uses ``__must_check``
 # (lowercase), glibc uses ``__wur``; conventional project macros use
 # uppercase (``MUST_CHECK``). Both shapes covered.
+# Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
+# on blank-line runs in scanned source.
 _DEFINE_RE = re.compile(
-    r"^\s*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)]*\))?\s+(.+?)$",
+    r"^[^\S\n]*#\s*define\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)]*\))?\s+(.+?)$",
     re.MULTILINE,
 )
 
