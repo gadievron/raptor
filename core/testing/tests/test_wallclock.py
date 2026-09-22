@@ -32,8 +32,20 @@ class TestCpuBudget:
     def test_idle_wait_does_not_charge_the_budget(self):
         # The whole point: blocked/descheduled time is not CPU time,
         # so a stall (here an honest sleep) cannot false-fail a pin.
-        with cpu_budget(0.05):
-            time.sleep(0.2)
+        #
+        # Bounds, both directions: the budget must sit well BELOW the
+        # sleep — a regression that charges idle wait (wall time
+        # leaking into cpu_s) reads charge ~= sleep and must overrun
+        # it — and well ABOVE incidental in-process CPU, because
+        # process_time() counts every thread in the process and a
+        # parallel-tier worker's siblings (execnet pump, GC) can burst
+        # tens of milliseconds during the sleep: a 0.05s budget over a
+        # 0.2s sleep false-failed on a loaded runner.
+        with cpu_budget(0.4) as sw:
+            time.sleep(1.0)
+        # Non-vacuity: the block really idled for the full sleep (a
+        # short-circuited sleep would pass the budget trivially).
+        assert sw.wall_s >= 0.9
 
 
 class TestWallDeadline:
