@@ -228,8 +228,13 @@ if [ -z "${RAPTOR_NO_LAUNCHER_HARDENING:-}" ]; then
             fi
         done
         unset _d _name _spid
-        # Advisory only — live sessions' scratch counts too.
-        _kb="$(_rp du -sk "$_tmp_base" 2>/dev/null | _rp cut -f1)"
+        # Advisory only — live sessions' scratch counts too. The
+        # measurement must never abort the launch: du exits nonzero
+        # when an entry vanishes mid-walk (live sibling sessions churn
+        # scratch here) or is unreadable, and under set -e/pipefail
+        # that status would kill the launcher with stderr already
+        # nulled. du still prints the total it summed, so keep it.
+        _kb="$(_rp du -sk "$_tmp_base" 2>/dev/null | _rp cut -f1)" || true
         if [ -n "$_kb" ] && [ "$_kb" -gt 5242880 ] 2>/dev/null; then
             _shown_tb="${_tmp_base//[![:print:]]/}"
             echo "raptor: note: ${_shown_tb:0:200} holds >5G of session scratch — stale dirs sweep on each launch; live ones may need manual cleanup" >&2
