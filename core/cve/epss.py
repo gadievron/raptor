@@ -27,6 +27,7 @@ on top of any CVE-tagged finding without depending on SCA-specific code.
 from __future__ import annotations
 
 import logging
+import math
 import re
 
 from core.http import HttpClient, HttpError
@@ -150,10 +151,30 @@ _NO_SCORE_SENTINEL = -1.0
 
 def _coerce_score(value: object) -> float | None:
     if isinstance(value, (int, float)):
-        if float(value) == _NO_SCORE_SENTINEL:
+        v = float(value)
+        if v == _NO_SCORE_SENTINEL:
             return None
-        return float(value)
+        # A cache written before ingest validation existed (or edited
+        # on disk) can hold an out-of-range value; degrade to "no
+        # signal" rather than serving poison to risk ranking.
+        if not _valid_score(v):
+            return None
+        return v
     return None
+
+
+def _valid_score(score: float) -> bool:
+    """EPSS is a probability: finite and within [0, 1] inclusive.
+
+    Float-parseable poison from a hostile / corrupted feed ("NaN",
+    "inf", "1e999", negative or >1 values) otherwise flows into
+    findings: ``nan`` serialises as a bare non-JSON token that makes
+    the whole findings.json unparseable for strict consumers, and
+    ``inf`` pins the risk estimate to its ceiling. The range check
+    also retires the ``_NO_SCORE_SENTINEL`` (-1.0) collision — a
+    valid feed row can never mint the sentinel.
+    """
+    return math.isfinite(score) and 0.0 <= score <= 1.0
 
 
 def _parse_response(payload: object) -> dict[str, float]:
@@ -163,6 +184,7 @@ def _parse_response(payload: object) -> dict[str, float]:
     if not isinstance(data, list):
         return {}
     out: dict[str, float] = {}
+    rejected = 0
     for entry in data:
         if not isinstance(entry, dict):
             continue
@@ -174,7 +196,19 @@ def _parse_response(payload: object) -> dict[str, float]:
             score_f = float(score)            # type: ignore[arg-type]
         except (TypeError, ValueError):
             continue
+        if not _valid_score(score_f):
+            # Reject per-row (see _valid_score) — the id degrades to
+            # "no signal" like any other unresolvable row instead of
+            # poisoning findings.json for the whole scan.
+            rejected += 1
+            continue
         out[cve.upper()] = score_f
+    if rejected:
+        logger.warning(
+            "core.cve.epss: rejected %d feed score(s) outside the "
+            "valid probability range (non-finite or not in [0, 1]); "
+            "affected CVEs left unresolved", rejected,
+        )
     return out
 
 

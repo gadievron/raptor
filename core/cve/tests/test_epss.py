@@ -168,6 +168,59 @@ class TestEpssErrors:
         )
         assert epss.scores(["CVE-2024-11111", "CVE-2024-22222"]) == {"CVE-2024-22222": 0.5}
 
+    def test_non_finite_and_out_of_range_scores_rejected(
+        self, tmp_path: Path,
+    ) -> None:
+        """Float-parseable poison from a hostile / corrupted feed:
+        ``"NaN"`` reaches findings.json as a bare non-JSON token
+        (strict consumers reject the whole document) and ``"1e999"``
+        parses to ``inf`` (risk estimate pinned to 100.0). EPSS is a
+        probability — anything non-finite or outside [0, 1] is
+        rejected per-row; the good row must still come through."""
+        payload = {"data": [
+            {"cve": "CVE-2024-00001", "epss": "NaN"},
+            {"cve": "CVE-2024-00002", "epss": "inf"},
+            {"cve": "CVE-2024-00003", "epss": "-inf"},
+            {"cve": "CVE-2024-00004", "epss": "1e999"},
+            {"cve": "CVE-2024-00005", "epss": "1.5"},
+            {"cve": "CVE-2024-00006", "epss": "-0.5"},
+            {"cve": "CVE-2024-00007", "epss": "0.5"},
+        ]}
+        epss = EpssClient(
+            FakeHttp(payload=payload), JsonCache(root=tmp_path),
+        )
+        result = epss.scores([f"CVE-2024-{i:05d}" for i in range(1, 8)])
+        assert result == {"CVE-2024-00007": 0.5}
+
+    def test_boundary_scores_accepted(self, tmp_path: Path) -> None:
+        """0.0 and 1.0 are legitimate probabilities — the range
+        check must be inclusive."""
+        payload = {"data": [
+            {"cve": "CVE-2024-00001", "epss": "0.0"},
+            {"cve": "CVE-2024-00002", "epss": "1.0"},
+        ]}
+        epss = EpssClient(
+            FakeHttp(payload=payload), JsonCache(root=tmp_path),
+        )
+        assert epss.scores(["CVE-2024-00001", "CVE-2024-00002"]) == {
+            "CVE-2024-00001": 0.0,
+            "CVE-2024-00002": 1.0,
+        }
+
+    def test_out_of_range_cached_score_not_served(
+        self, tmp_path: Path,
+    ) -> None:
+        """A cache written before ingest validation existed (or
+        corrupted on disk) can hold an out-of-range value — the read
+        side degrades it to 'no signal' instead of serving poison."""
+        cache = JsonCache(root=tmp_path)
+        cache.put("epss/CVE-2024-00001", 1.5, ttl_seconds=3600)
+        epss = EpssClient(
+            FakeHttp(payload={"data": []}), JsonCache(root=tmp_path),
+            offline=True,
+        )
+        assert epss.scores(["CVE-2024-00001"]) == {}
+
     def test_non_dict_response_returns_empty(self, tmp_path: Path) -> None:
         http = FakeHttp(payload="not a dict")  # type: ignore[arg-type]
         epss = EpssClient(http, JsonCache(root=tmp_path))

@@ -564,6 +564,24 @@ def test_scan_health_row_never_trips_thresholds(tmp_path: Path) -> None:
     assert passed and fails == []
 
 
+def test_write_findings_json_refuses_non_finite_floats(
+    tmp_path: Path,
+) -> None:
+    """A ``nan`` / ``inf`` float anywhere in a row serialises as a
+    bare non-JSON token (``NaN``) that strict consumers reject —
+    invalidating the WHOLE document, not one row. Refusing loudly at
+    the write chokepoint beats emitting a spec-invalid artifact."""
+    import pytest
+
+    out = tmp_path / "findings.json"
+    with pytest.raises(ValueError):
+        write_findings_json(out, scan_health=[{
+            "kind": "poisoned",
+            "detail": "d",
+            "evidence": {"score": float("nan")},
+        }])
+
+
 def test_atomic_write_no_partial_file(tmp_path: Path) -> None:
     out = tmp_path / "findings.json"
     write_findings_json(out)

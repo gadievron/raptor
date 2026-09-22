@@ -937,7 +937,15 @@ def write_findings_json(
     # Shared atomic-write primitive: random-suffix tempfile opened
     # O_EXCL|O_NOFOLLOW then renamed — a predictable ``<name>.json.tmp``
     # sibling is squattable / symlinkable in shared output dirs.
-    atomic_write_text(path, _json.dumps(rows, indent=2, default=_json_default))
+    # ``allow_nan=False``: a ``nan`` / ``inf`` float anywhere in a row
+    # would serialise as a bare non-JSON token (``NaN``) that strict
+    # consumers reject — invalidating the WHOLE document, not one row.
+    # Enrichment ingest validates scores upstream (core.cve.epss); this
+    # is the belt-and-braces refusal at the write chokepoint.
+    atomic_write_text(
+        path,
+        _json.dumps(rows, indent=2, default=_json_default, allow_nan=False),
+    )
     return len(rows)
 
 
