@@ -540,3 +540,136 @@ class MissingValidationReportTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             reason = missing_validation_report(Path(tmp))
         self.assertFalse(is_sandbox_setup_skip(reason))
+
+
+class ChildTailTests(unittest.TestCase):
+    """A failed child's narrative must survive: the CC child
+    multiplexes its errors onto stdout, so the old stderr-only excerpt
+    went blank exactly when the operator needed it."""
+
+    def _fail_sandbox(self, run_dir, *, returncode, stdout="", stderr=""):
+        dispatcher = _lifecycle_dispatcher(run_dir)
+
+        def _sandbox(cmd, *args, **kwargs):
+            dispatcher(cmd, *args, **kwargs)
+            return _ok(returncode=returncode, stdout=stdout, stderr=stderr)
+        return _sandbox
+
+    def test_nonzero_exit_surfaces_stdout_when_stderr_empty(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING") as logs:
+                result = _run(
+                    tmp, run_dir,
+                    sandbox=self._fail_sandbox(
+                        run_dir, returncode=1,
+                        stdout="Stage A written\nTypeError: boom\n",
+                        stderr=""),
+                )
+            self.assertFalse(result.ran)
+            joined = "\n".join(logs.output)
+            self.assertIn("stdout tail", joined)
+            self.assertIn("TypeError: boom", joined)
+            tail = run_dir / "dispatch-child-tail.log"
+            self.assertTrue(tail.is_file())
+            content = tail.read_text()
+            self.assertIn("exit=1", content)
+            self.assertIn("TypeError: boom", content)
+
+    def test_stderr_preferred_when_present(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING") as logs:
+                _run(
+                    tmp, run_dir,
+                    sandbox=self._fail_sandbox(
+                        run_dir, returncode=1,
+                        stdout="progress noise", stderr="real error"),
+                )
+            joined = "\n".join(logs.output)
+            self.assertIn("real error", joined)
+            self.assertNotIn("stdout tail", joined)
+
+    def test_silent_child_states_the_silence(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING") as logs:
+                _run(tmp, run_dir,
+                     sandbox=self._fail_sandbox(run_dir, returncode=1))
+            self.assertIn("no output captured", "\n".join(logs.output))
+
+    def test_validate_outputs_failure_persists_tail(self):
+        # Child exits 0 but the pass produced no terminal artifact —
+        # the narrative is the only account of what went wrong inside.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            result = _run(
+                tmp, run_dir,
+                sandbox=self._fail_sandbox(
+                    run_dir, returncode=0,
+                    stdout="stage helper crashed mid-run"),
+                validate_outputs=lambda d: "no verdicts produced",
+            )
+            self.assertFalse(result.ran)
+            self.assertEqual(result.skipped_reason, "no verdicts produced")
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+            self.assertIn("exit=0", content)
+            self.assertIn("stage helper crashed mid-run", content)
+
+
+class ChildTailPlantTests(unittest.TestCase):
+    """run_dir is child-writable by design: a planted symlink at the
+    artifact name must never steer the parent's write."""
+
+    def test_symlink_plant_never_clobbers_the_target(self):
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            victim = Path(tmp) / "victim.json"
+            victim.write_text('{"verdict": "untouched"}')
+            dispatcher = _lifecycle_dispatcher(run_dir)
+
+            def _sandbox(cmd, *args, **kwargs):
+                dispatcher(cmd, *args, **kwargs)
+                # The child plants the symlink inside its writable
+                # run dir, then fails.
+                link = run_dir / "dispatch-child-tail.log"
+                if not link.exists() and not link.is_symlink():
+                    link.symlink_to(victim)
+                return _ok(returncode=1, stdout="attacker narrative")
+
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                result = _run(tmp, run_dir, sandbox=_sandbox)
+            self.assertFalse(result.ran)
+            # Victim untouched; artifact name now a REGULAR file with
+            # the parent's content (rename replaced the symlink).
+            self.assertEqual(victim.read_text(),
+                             '{"verdict": "untouched"}')
+            tail = run_dir / "dispatch-child-tail.log"
+            self.assertFalse(tail.is_symlink())
+            self.assertIn("attacker narrative", tail.read_text())
+
+    def test_artifact_mode_is_owner_only(self):
+        import stat as _stat
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            dispatcher = _lifecycle_dispatcher(run_dir)
+
+            def _sandbox(cmd, *args, **kwargs):
+                dispatcher(cmd, *args, **kwargs)
+                return _ok(returncode=1, stdout="boom")
+
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                _run(tmp, run_dir, sandbox=_sandbox)
+            mode = _stat.S_IMODE(
+                (run_dir / "dispatch-child-tail.log").stat().st_mode)
+            self.assertEqual(mode, 0o600)

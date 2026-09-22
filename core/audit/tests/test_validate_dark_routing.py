@@ -385,3 +385,102 @@ class TestReportCompleteness:
         self._graded(tmp_path, n_dark=0, n_findings=2)
         report = generate_report(tmp_path, target_path=Path("/target"))
         assert "dark_awaiting" not in report["completeness"]
+
+
+class TestChildTailSurfacing:
+    """A failed dispatch leaves the child's narrative beside the pass;
+    the postpass record surfaces an excerpt so the operator's first
+    question — what did the child say — is answered without a dig."""
+
+    def _stub_failed_dispatch_with_tail(self, monkeypatch, tmp_path):
+        vdir = tmp_path / "validate-run"
+        vdir.mkdir()
+        (vdir / "dispatch-child-tail.log").write_text(
+            "exit=1\n--- stderr tail ---\n\n--- stdout tail ---\n"
+            "Stage A written\nTypeError: boom\n")
+
+        def fake(**kwargs):
+            return ValidatePostpassResult(
+                ran=False, validate_dir=str(vdir),
+                skipped_reason="subprocess returned 1",
+            )
+        monkeypatch.setattr(validate_mod, "_dispatch_validate", fake)
+        return vdir
+
+    def test_failed_dispatch_embeds_tail_excerpt(
+            self, tmp_path, monkeypatch):
+        vdir = self._stub_failed_dispatch_with_tail(monkeypatch, tmp_path)
+        validate_findings(_result(_outcome(status="finding")),
+                          target_path=Path("/target"), out_dir=tmp_path)
+        record = _postpass_record(tmp_path)
+        assert record["child_tail_path"] == str(
+            vdir / "dispatch-child-tail.log")
+        assert "TypeError: boom" in record["child_tail_excerpt"]
+
+    def test_successful_dispatch_carries_no_tail_keys(
+            self, tmp_path, monkeypatch):
+        calls: list = []
+        _stub_dispatch(monkeypatch, calls, ran=True)
+        validate_findings(_result(_outcome(status="finding")),
+                          target_path=Path("/target"), out_dir=tmp_path)
+        record = _postpass_record(tmp_path)
+        assert "child_tail_excerpt" not in record
+        assert "child_tail_path" not in record
+
+    def test_failed_dispatch_without_tail_stays_readable(
+            self, tmp_path, monkeypatch):
+        calls: list = []
+        _stub_dispatch(monkeypatch, calls, ran=False)
+        validate_findings(_result(_outcome(status="finding")),
+                          target_path=Path("/target"), out_dir=tmp_path)
+        record = _postpass_record(tmp_path)
+        assert record["ran"] is False
+        assert "child_tail_excerpt" not in record
+
+
+class TestChildTailReadHardening:
+    """The tail artifact sits in a child-writable directory, and on
+    the timeout/launch-failure paths the parent never wrote it —
+    whatever sits at that name is child-controlled."""
+
+    def _run_with_tail(self, tmp_path, monkeypatch, plant):
+        vdir = tmp_path / "validate-run"
+        vdir.mkdir()
+        plant(vdir / "dispatch-child-tail.log")
+
+        def fake(**kwargs):
+            return ValidatePostpassResult(
+                ran=False, validate_dir=str(vdir),
+                skipped_reason="timeout after 3600s",
+            )
+        monkeypatch.setattr(validate_mod, "_dispatch_validate", fake)
+        validate_findings(_result(_outcome(status="finding")),
+                          target_path=Path("/target"), out_dir=tmp_path)
+        return _postpass_record(tmp_path)
+
+    def test_symlink_plant_is_refused(self, tmp_path, monkeypatch):
+        secret = tmp_path / "secret.txt"
+        secret.write_text("SUPERSECRET-DO-NOT-EXFIL")
+        record = self._run_with_tail(
+            tmp_path, monkeypatch,
+            lambda p: p.symlink_to(secret))
+        assert "child_tail_excerpt" not in record
+        assert "child_tail_path" not in record
+
+    def test_oversize_plant_reads_only_the_tail(self, tmp_path, monkeypatch):
+        def plant(p):
+            with p.open("wb") as fh:
+                fh.seek(50 * 1024 * 1024)
+                fh.write(b"THE-REAL-END")
+        record = self._run_with_tail(tmp_path, monkeypatch, plant)
+        assert len(record["child_tail_excerpt"]) <= 2000
+        assert "THE-REAL-END" in record["child_tail_excerpt"]
+
+    def test_control_bytes_escaped_at_read_time(self, tmp_path, monkeypatch):
+        record = self._run_with_tail(
+            tmp_path, monkeypatch,
+            lambda p: p.write_bytes(b"before\x1b]0;owned\x07after\n"))
+        excerpt = record["child_tail_excerpt"]
+        assert "\x1b" not in excerpt
+        assert "\\x1b" in excerpt
+        assert "after" in excerpt

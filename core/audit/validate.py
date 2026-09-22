@@ -211,6 +211,44 @@ def _followup_command(target_path: Path, out_dir: Path) -> str:
     )
 
 
+#: Bytes read from the end of the tail artifact before escaping.
+_CHILD_TAIL_READ_BYTES = 4096
+
+
+def _read_child_tail_untrusted(path: Path) -> str | None:
+    """Bounded, symlink-refusing read of the dispatch tail artifact.
+
+    The artifact lives in a directory the CC child writes by design,
+    and on the timeout / launch-failure paths the PARENT never wrote
+    it — whatever sits at this name is child-controlled. Refuse
+    symlinks and specials (O_NOFOLLOW + fstat, the inventory probe's
+    discipline), read only the file's last 4 KiB (a planted sparse
+    giant must not buffer), and escape control bytes AT READ TIME —
+    the writer's escape only covers the paths where the parent wrote.
+    """
+    import stat as _stat
+
+    from core.security.log_sanitisation import escape_nonprintable
+
+    try:
+        fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not _stat.S_ISREG(st.st_mode):
+            return None
+        if st.st_size > _CHILD_TAIL_READ_BYTES:
+            os.lseek(fd, st.st_size - _CHILD_TAIL_READ_BYTES, os.SEEK_SET)
+        data = os.read(fd, _CHILD_TAIL_READ_BYTES)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    text = data.decode("utf-8", errors="replace")
+    return escape_nonprintable(text, preserve_newlines=True)[-2000:]
+
+
 def _write_postpass_record(
     *,
     out_dir: Path,
@@ -231,17 +269,28 @@ def _write_postpass_record(
     treats every dark row as awaiting).
     """
     dark_awaiting = dark_total if not postpass.ran else dark_deferred
+    record: dict[str, object] = {
+        "ran": postpass.ran,
+        "skipped_reason": postpass.skipped_reason,
+        "validate_dir": postpass.validate_dir,
+        "findings_selected": findings_selected,
+        "dark_total": dark_total,
+        "dark_selected": dark_selected,
+        "dark_awaiting": dark_awaiting,
+        "followup_command": _followup_command(target_path, out_dir),
+    }
+    if not postpass.ran and postpass.validate_dir:
+        # A failed dispatch usually leaves the child's narrative
+        # beside the pass (dispatch-child-tail.log); an excerpt in the
+        # record saves the operator a dig for the most common question
+        # — what did the child say.
+        tail = Path(postpass.validate_dir) / "dispatch-child-tail.log"
+        excerpt = _read_child_tail_untrusted(tail)
+        if excerpt is not None:
+            record["child_tail_path"] = str(tail)
+            record["child_tail_excerpt"] = excerpt
     try:
-        save_json(Path(out_dir) / "validate-postpass.json", {
-            "ran": postpass.ran,
-            "skipped_reason": postpass.skipped_reason,
-            "validate_dir": postpass.validate_dir,
-            "findings_selected": findings_selected,
-            "dark_total": dark_total,
-            "dark_selected": dark_selected,
-            "dark_awaiting": dark_awaiting,
-            "followup_command": _followup_command(target_path, out_dir),
-        })
+        save_json(Path(out_dir) / "validate-postpass.json", record)
     except Exception:
         logger.debug("validate-postpass.json write failed", exc_info=True)
 

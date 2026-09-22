@@ -264,6 +264,82 @@ def is_sandbox_setup_skip(reason: str | None) -> bool:
         _SANDBOX_SETUP_REASON_PREFIX)
 
 
+#: Bytes of each child stream kept in the on-disk failure artifact.
+_CHILD_TAIL_PERSIST_CHARS = 65536
+
+
+def _child_failure_tail(proc: subprocess.CompletedProcess) -> str:
+    """Bounded diagnostic line for a failed dispatch child.
+
+    The CC child multiplexes its own errors onto stdout — stderr is
+    routinely EMPTY on a nonzero exit, so a stderr-only excerpt goes
+    blank exactly when the operator needs it. Prefer stderr, fall back
+    to the stdout TAIL (a crash narrative ends the stream). Both
+    streams quote hostile-target bytes, so the excerpt is escaped and
+    bounded for the operator's terminal.
+    """
+    from core.security.log_sanitisation import sanitise_for_terminal
+
+    err = (proc.stderr or "").strip()
+    if err:
+        return sanitise_for_terminal(err, max_len=500)
+    out = (proc.stdout or "").strip()
+    if out:
+        return ("(stderr empty; stdout tail) "
+                + sanitise_for_terminal(out[-500:], max_len=500))
+    return "(no output captured on either stream)"
+
+
+def _persist_child_tail(
+    run_dir: Path | None, proc: subprocess.CompletedProcess,
+) -> None:
+    """Write bounded child-stream tails beside the failed pass.
+
+    The WARNING line carries 500 chars; the artifact keeps enough of
+    both streams to root-cause without re-running a multi-minute
+    child. Stream content quotes hostile-target bytes — escaped
+    (newlines kept: it is a multi-line narrative) before landing in an
+    operator-readable file. Best-effort — never let forensics fail the
+    failure path.
+    """
+    if run_dir is None:
+        return
+    content = (
+        f"exit={proc.returncode}\n--- stderr tail ---\n"
+        + _esc((proc.stderr or "")[-_CHILD_TAIL_PERSIST_CHARS:])
+        + "\n--- stdout tail ---\n"
+        + _esc((proc.stdout or "")[-_CHILD_TAIL_PERSIST_CHARS:])
+        + "\n"
+    )
+    try:
+        from core.atomic_fs import write_text_atomically
+
+        # run_dir is child-writable by design (output=, cwd) and the
+        # child holds MAKE_SYM: a plain open("w") here follows a
+        # child-planted symlink at this name and hands the UNSANDBOXED
+        # parent an arbitrary-file write. The atomic primitive stages
+        # in an O_EXCL tempfile and renames over the name — a rename
+        # replaces a symlink, never follows it. 0600 for stream-at-
+        # rest parity with the prompt tempfile hygiene.
+        write_text_atomically(
+            Path(run_dir) / "dispatch-child-tail.log", content, mode=0o600,
+        )
+    except OSError:
+        logger.debug("child tail persist failed", exc_info=True)
+
+
+def _esc(s: str) -> str:
+    """Control-byte escape for the tail artifact.
+
+    Length is bounded by the caller's slice; newlines are kept — the
+    tail is a multi-line narrative, and flattening it would destroy
+    exactly the tracebacks it exists to preserve.
+    """
+    from core.security.log_sanitisation import escape_nonprintable
+
+    return escape_nonprintable(s, preserve_newlines=True)
+
+
 def missing_validation_report(run_dir: Path) -> str | None:
     """``validate_outputs`` probe for /validate skill passes.
 
@@ -821,8 +897,9 @@ def run_skill_dispatch(
         if proc.returncode != 0:
             lifecycle_settled = True
             fail_lifecycle(run_dir, f"subprocess returned {proc.returncode}")
+            _persist_child_tail(run_dir, proc)
             logger.warning("%s returned %d: %s", log_label, proc.returncode,
-                           (proc.stderr or "")[:500])
+                           _child_failure_tail(proc))
             return SkillDispatchResult(
                 ran=False,
                 skipped_reason=f"subprocess returned {proc.returncode}",
@@ -833,6 +910,10 @@ def run_skill_dispatch(
             if error is not None:
                 lifecycle_settled = True
                 fail_lifecycle(run_dir, error)
+                # The child exited 0 but the pass produced no terminal
+                # artifact — its narrative is the only account of what
+                # went wrong inside.
+                _persist_child_tail(run_dir, proc)
                 logger.warning("%s: %s", log_label, error)
                 return SkillDispatchResult(
                     ran=False, skipped_reason=error, run_dir=run_dir,
