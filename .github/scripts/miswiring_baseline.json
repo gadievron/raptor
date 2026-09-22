@@ -94,6 +94,9 @@
     "artifacts:orphan_reader::joern-flows.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
+    "artifacts:orphan_reader::languages.json": {
+      "note": "upstream clone asset: packages/openant/scanner._tool_root existence-probes config/languages.json to size the sandbox toolchain bind; the file is authored by the pinned OpenAnt checkout and never written by RAPTOR (the only in-repo write is test scaffolding)"
+    },
     "artifacts:orphan_reader::layer0-findings.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
