@@ -36,7 +36,11 @@ typer-click ``confirm()`` call sites as literal AST calls
 outside it: this is a net for honestly-written prompts, not an
 adversarial-in-repo-author defense), bash ``read`` invocations
 carrying a ``-p`` prompt flag in any legal flag-grammar spelling
-(``-p``, ``-rp``, ``-pr``, ``-r -p``, ``-t 5 -p`` …), and markdown
+(``-p``, ``-rp``, ``-pr``, ``-r -p``, ``-t 5 -p`` …) at any
+simple-command position (line start, after ``&&``/``||``/``;``/``|``
+connectors, behind ``IFS=``-style assignment words or
+``while``/``if`` keywords — the canonical safe-read idioms prefix
+the command, and a line-start-only anchor missed them), and markdown
 files instructing an interactive structured choice. The bash lane
 spans EVERY tracked shell file — a shell suffix or an sh-family
 shebang, anywhere in the tree — not just ``libexec/``/``bin/``: a
@@ -118,14 +122,54 @@ def _shell_lane_member(rel: str, first_line: str) -> bool:
     )
 
 
+# ``read`` is a prompt surface wherever it sits at simple-command
+# position, not only at column zero of the line: the canonical safe
+# spellings prefix it with an assignment (``IFS= read -rp``), a
+# compound keyword (``while read -rp "> " cmd; do``), or a connector
+# (``ok && read -p ...``). A words[0]=="read" anchor was blind to all
+# three idioms — the very next honestly-written prompt spelled
+# ``IFS= read -rp`` would have re-opened the closure with CI green.
+_BASH_CMD_CONNECTOR_RE = re.compile(r"&&|\|\||[;|&]")
+_BASH_CMD_PREFIX_KEYWORDS = frozenset(
+    {"if", "while", "until", "then", "do", "else", "elif", "!", "time"}
+)
+_BASH_ASSIGNMENT_WORD_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?="
+)
+
+
 def _bash_read_has_prompt(line: str) -> bool:
-    """True when ``line`` is a ``read`` builtin invocation whose flags
-    include ``-p`` under bash's real option grammar (see above)."""
-    words = line.split()
-    if not words or words[0] != "read":
-        return False
+    """True when ``line`` carries a ``read`` builtin invocation at any
+    simple-command position whose flags include ``-p`` under bash's
+    real option grammar (see above).
+
+    Command positions covered: the line start, after the ``&&`` /
+    ``||`` / ``;`` / ``|`` / ``&`` connectors, and behind leading
+    ``NAME=value`` assignment words or compound-command keywords
+    (``while``/``if``/``until``/``then``/``do``/``else``/``elif``/
+    ``!``/``time``). The split is textual, not a shell parse —
+    connectors inside quoted strings can create junk segments, which
+    fail the ``read``-at-head test and never false-positive; a
+    ``read`` whose own prompt string contains a connector is still
+    caught via the pre-connector segment."""
+    for segment in _BASH_CMD_CONNECTOR_RE.split(line):
+        words = segment.split()
+        while words and (
+            words[0] in _BASH_CMD_PREFIX_KEYWORDS
+            or _BASH_ASSIGNMENT_WORD_RE.match(words[0])
+        ):
+            words.pop(0)
+        if not words or words[0] != "read":
+            continue
+        if _read_flag_words_have_prompt(words[1:]):
+            return True
+    return False
+
+
+def _read_flag_words_have_prompt(words: list[str]) -> bool:
+    """Bash option-grammar walk over the words following ``read``."""
     skip_next = False
-    for word in words[1:]:
+    for word in words:
         if skip_next:
             skip_next = False
             continue
@@ -662,6 +706,16 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
             'read -d "" -p "null-delim: " v',
             'read -i default -e -p "edit: " v',
             'read -a words -p "list: " ignored',
+            # Command-prefixed idioms: the canonical safe-read
+            # spellings put words before ``read`` — a
+            # words[0]=="read" anchor missed all of these.
+            'IFS= read -rp "Name? " ans',
+            'while read -rp "> " cmd; do',
+            'foo && read -p "sure? " a',
+            'if read -p "ok? " a; then',
+            '  LC_ALL=C IFS= read -rp "x: " v',
+            'do_thing || read -p "retry? " r',
+            'true; read -t 5 -p "quick? " ans',
         )
         for line in prompting:
             self.assertTrue(_bash_read_has_prompt(line), line)
@@ -675,6 +729,12 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
             "readarray -t arr",
             '# read -p "commented out" ans',
             'echo "read -p"',
+            # ``read`` in argument position is not a command.
+            "grep read -p file",
+            "xargs -0 read -p",
+            # Prefixed spellings without a prompt flag stay out.
+            'IFS= read -r line',
+            "while read line; do",
         )
         for line in promptless:
             self.assertFalse(_bash_read_has_prompt(line), line)
