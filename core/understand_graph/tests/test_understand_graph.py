@@ -159,6 +159,12 @@ def test_validation_bridge_can_load_project_graph(tmp_path, monkeypatch):
     assert bridge["context_map_loaded"] is True
     assert (validate_dir / "attack-surface.json").exists()
     assert (validate_dir / "context-map.graph.json").exists()
+    surface = json.loads((validate_dir / "attack-surface.json").read_text())
+    # The provenance stamp names the artifact actually imported — the
+    # graph-rebuilt context map written beside the surface — not a
+    # phantom path nested under the sqlite file.
+    assert surface["_imported_from"] == str(validate_dir / "context-map.graph.json")
+    assert Path(surface["_imported_from"]).exists()
     assert (validate_dir / "graph-priority-paths.json").exists()
     paths = json.loads((validate_dir / "attack-paths.json").read_text())
     assert any(p["source"] == "understand:graph" for p in paths)

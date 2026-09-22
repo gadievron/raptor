@@ -552,7 +552,8 @@ def load_understand_context(
             "(legacy artifact) — treating content as untrusted")
 
     # --- Populate attack-surface.json ---
-    surface_stats = _merge_attack_surface(context_map, validate_dir, understand_dir)
+    surface_stats = _merge_attack_surface(
+        context_map, validate_dir, _context_map_path(understand_dir))
     summary["attack_surface"] = surface_stats
 
     # --- Import flow-trace-*.json into attack-paths.json ---
@@ -639,7 +640,8 @@ def load_understand_graph_context(
         logger.info("understand_bridge: graph excluded %d entries referencing stale files", filtered)
 
     save_json(validate_dir / "context-map.graph.json", context_map, mode=0o600)
-    surface_stats = _merge_attack_surface(context_map, validate_dir, graph_path)
+    surface_stats = _merge_attack_surface(
+        context_map, validate_dir, validate_dir / "context-map.graph.json")
     map_smt_stats = _import_unchecked_flow_conditions(context_map, validate_dir)
     graph_path_stats = _import_graph_attack_paths(
         graph_path,
@@ -1509,11 +1511,21 @@ def _filter_context_map(context_map: dict[str, Any], stale_files: set[str]) -> i
     return removed
 
 
+def _context_map_path(understand_dir: Path) -> Path:
+    """The context-map file an understand dir carries.
+
+    Single source for the source/binary spelling choice, so the
+    attack-surface provenance stamp names the file actually loaded.
+    """
+    path = understand_dir / "context-map.json"
+    if not path.exists():
+        path = understand_dir / "binary-context-map.json"
+    return path
+
+
 def _load_context_map(understand_dir: Path) -> dict[str, Any] | None:
     #Load context-map.json (or binary-context-map.json) from an understand output directory.
-    context_map_path = understand_dir / "context-map.json"
-    if not context_map_path.exists():
-        context_map_path = understand_dir / "binary-context-map.json"
+    context_map_path = _context_map_path(understand_dir)
     if not context_map_path.exists():
         return None
 
@@ -1535,7 +1547,7 @@ def _load_context_map(understand_dir: Path) -> dict[str, Any] | None:
 def _merge_attack_surface(
     context_map: dict[str, Any],
     validate_dir: Path,
-    understand_dir: Path,
+    imported_from: Path,
 ) -> dict[str, Any]:
     # Populate or merge attack-surface.json from context-map data.
     surface_path = validate_dir / "attack-surface.json"
@@ -1607,7 +1619,7 @@ def _merge_attack_surface(
             "sink_details": _list_at(context_map, "sink_details"),
             "boundary_details": _list_at(context_map, "boundary_details"),
             "unchecked_flows": _list_at(context_map, "unchecked_flows"),
-            "_imported_from": str(understand_dir / "context-map.json"),
+            "_imported_from": str(imported_from),
             "_imported_at": datetime.now(timezone.utc).isoformat(),
         }
         taint_summary = context_map.get("taint_summary")
