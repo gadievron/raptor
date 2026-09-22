@@ -1949,8 +1949,12 @@ def _handle_graph(mgr, args: argparse.Namespace) -> None:
         if not graph_path.exists():
             print(f"Project '{name}': no graph store to clear.")
             return
-        graph_path.unlink()
-        print(_green(f"Cleared graph store for '{name}'"))
+        from core.understand_graph import remove_graph_db
+        if remove_graph_db(graph_path):
+            print(_green(f"Cleared graph store for '{name}'"))
+        else:
+            print(f"✗ Could not fully clear graph store for '{name}': "
+                  f"{graph_path}", file=sys.stderr)
 
     elif args.action == "rebuild":
         from core.understand_graph import rebuild_graph

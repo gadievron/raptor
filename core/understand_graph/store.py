@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
@@ -11,6 +13,96 @@ from typing import Iterator, Optional
 from .schema import SCHEMA_VERSION
 
 GRAPH_FILENAME = "raptor.graph.sqlite"
+
+# Per-connection write-lock wait before sqlite raises "database is
+# locked". Module constant so contention tests can shrink it.
+_BUSY_TIMEOUT_MS = 5000
+
+# Errors that mean the FILE is damaged — only these earn quarantine.
+# Everything else (locks, transient I/O, bad SQL from a caller) must
+# never remove the store: the graph is the project's durable
+# cross-run memory, and concurrent opens are routine (ingest during
+# /agentic vs. /project status from another session). Primary
+# discriminator is the sqlite extended error code; the FULL fixed
+# message phrases are a fallback for exceptions without one. Short
+# fragments are not safe here: "no such table: malformed" (a caller's
+# identifier echoed in an OperationalError) must not read as
+# corruption.
+_CORRUPTION_SQLITE_CODES = frozenset({
+    getattr(sqlite3, "SQLITE_CORRUPT", 11),
+    getattr(sqlite3, "SQLITE_NOTADB", 26),
+})
+_CORRUPTION_SIGNATURES = (
+    "database disk image is malformed",
+    "file is not a database",
+    "file is encrypted or is not a database",
+)
+
+
+def _is_corruption(exc: sqlite3.DatabaseError) -> bool:
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code is not None:
+        # Compare primary result codes: extended codes carry the
+        # primary in their low byte (e.g. SQLITE_CORRUPT_INDEX).
+        return (code & 0xFF) in _CORRUPTION_SQLITE_CODES
+    message = str(exc).lower()
+    return any(sig in message for sig in _CORRUPTION_SIGNATURES)
+
+# Lock-contention fragments worth a brief retry before degrading.
+_LOCK_SIGNATURES = ("database is locked", "database is busy")
+_LOCK_RETRIES = 3
+_LOCK_RETRY_DELAY_S = 0.25
+
+
+def graph_sidecar_paths(path: Path) -> list[Path]:
+    """The WAL-mode sidecar files that accompany a graph DB."""
+    path = Path(path)
+    return [path.with_name(path.name + suffix) for suffix in ("-wal", "-shm")]
+
+
+def remove_graph_db(path: Path) -> bool:
+    """Delete a graph DB together with its WAL sidecars.
+
+    Removing only the main file leaves a stale ``-wal`` next to a
+    recreated same-name DB; every deletion site routes through here.
+    Returns False when any victim could not be removed, so callers
+    can report the failure instead of claiming success.
+    """
+    path = Path(path)
+    ok = True
+    for victim in [path, *graph_sidecar_paths(path)]:
+        try:
+            victim.unlink(missing_ok=True)
+        except OSError:
+            ok = False
+    return ok
+
+
+def _quarantine_corrupt_graph(path: Path, exc: Exception) -> None:
+    """Move a genuinely corrupt graph aside (never silently unlink).
+
+    The DB and its sidecars are renamed to ``<name>.corrupt-<ts>``
+    (sidecar suffixes preserved so sqlite tooling can still open the
+    quarantined copy); rename failure degrades to sidecar-aware
+    deletion.
+    """
+    path = Path(path)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    # pid suffix: two corruption events in the same second must not
+    # rename over each other's quarantine.
+    quarantine = path.with_name(path.name + f".corrupt-{ts}-{os.getpid()}")
+    print(
+        f"graph: corrupt ({exc}), quarantining {path.name} -> {quarantine.name}",
+        file=sys.stderr,
+    )
+    try:
+        path.rename(quarantine)
+        for sidecar in graph_sidecar_paths(path):
+            if sidecar.exists():
+                sidecar.rename(quarantine.parent / sidecar.name.replace(
+                    path.name, quarantine.name, 1))
+    except OSError:
+        remove_graph_db(path)
 
 
 def graph_path_for_run(run_dir: Path, target_path: Optional[str] = None) -> Path:
@@ -77,7 +169,7 @@ def open_graph(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute(f"PRAGMA busy_timeout={int(_BUSY_TIMEOUT_MS)}")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -99,27 +191,49 @@ def graph_connection(path: Path) -> Iterator[sqlite3.Connection]:
 
 
 def query_graph(path: Path, fn, *args, **kwargs):
-    """Run a read query with corruption guard.
+    """Run a read query with a narrow corruption guard.
 
-    On DatabaseError, delete the corrupt graph and return None — consumers
-    see 'no graph' and degrade gracefully.
+    Only genuine file corruption (sqlite's malformed / not-a-database
+    errors) quarantines the graph; the query then returns None and
+    consumers degrade to 'no graph'. TRANSIENT errors must never
+    delete the store: ``sqlite3.OperationalError`` — "database is
+    locked" above all, which concurrent ingest makes routine — is a
+    ``DatabaseError`` subclass, and the old blanket guard unlinked the
+    project's accumulated cross-run memory on the first 5s lock
+    collision (or even on a caller's bad SQL). Lock contention gets a
+    brief retry, then None with the file untouched.
     """
     if not Path(path).exists():
         return None
-    try:
-        with graph_connection(path) as conn:
-            return fn(conn, *args, **kwargs)
-    except sqlite3.DatabaseError as exc:
-        print(f"graph: corrupt ({exc}), deleting {Path(path).name}", file=sys.stderr)
+    for attempt in range(_LOCK_RETRIES + 1):
         try:
-            Path(path).unlink(missing_ok=True)
-        except OSError:
-            pass
-        return None
+            with graph_connection(path) as conn:
+                return fn(conn, *args, **kwargs)
+        except sqlite3.DatabaseError as exc:
+            if _is_corruption(exc):
+                _quarantine_corrupt_graph(Path(path), exc)
+                return None
+            message = str(exc).lower()
+            if (any(sig in message for sig in _LOCK_SIGNATURES)
+                    and attempt < _LOCK_RETRIES):
+                time.sleep(_LOCK_RETRY_DELAY_S * (attempt + 1))
+                continue
+            print(
+                f"graph: query failed ({exc}); keeping {Path(path).name}",
+                file=sys.stderr,
+            )
+            return None
+    return None
 
 
 def migrate(conn: sqlite3.Connection) -> None:
     current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if current == SCHEMA_VERSION:
+        # Up to date: return before ANY write. Every open_graph() runs
+        # migrate(), so an unconditional PRAGMA user_version= +
+        # metadata INSERT made even pure read queries contend for the
+        # write lock against in-flight ingests.
+        return
     if current > SCHEMA_VERSION:
         raise RuntimeError(
             f"graph schema version {current} is newer than this RAPTOR ({SCHEMA_VERSION})"

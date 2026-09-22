@@ -21,7 +21,7 @@ from .schema import (
     stable_key,
     stable_node_id,
 )
-from .store import graph_connection, graph_path_for_run, open_graph
+from .store import graph_connection, graph_path_for_run, open_graph, remove_graph_db
 
 
 def ingest_run(run_dir: Path, target_path: Optional[str] = None) -> Optional[Path]:
@@ -755,7 +755,9 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
     graph_path = graph_path_for_run(project_dir)
 
     if graph_path.exists():
-        graph_path.unlink()
+        # Sidecar-aware: a stale -wal next to the recreated DB would
+        # replay old frames into the rebuilt store.
+        remove_graph_db(graph_path)
 
     run_dirs: list[tuple[str, Path]] = []
     for child in sorted(project_dir.iterdir()):

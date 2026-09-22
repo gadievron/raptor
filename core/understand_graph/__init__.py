@@ -36,6 +36,7 @@ from .store import (
     graph_path_for_run,
     open_graph,
     query_graph,
+    remove_graph_db,
 )
 
 __all__ = [
@@ -62,6 +63,7 @@ __all__ = [
     "query_graph",
     "reachable_sinks",
     "rebuild_graph",
+    "remove_graph_db",
     "sca_reachability",
     "scan_dedup_chains",
     "threat_model_graph_context",

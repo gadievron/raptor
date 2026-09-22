@@ -203,12 +203,15 @@ def test_query_graph_returns_none_for_missing_db(tmp_path):
     assert result is None
 
 
-def test_query_graph_deletes_corrupt_db(tmp_path):
+def test_query_graph_quarantines_corrupt_db(tmp_path):
     db_path = tmp_path / "corrupt.db"
     db_path.write_bytes(b"not a sqlite database")
     result = query_graph(db_path, lambda conn: conn.execute("SELECT 1"))
     assert result is None
     assert not db_path.exists()
+    # Genuine corruption is quarantined (renamed aside), never
+    # silently unlinked.
+    assert list(tmp_path.glob("corrupt.db.corrupt-*"))
 
 
 def test_query_graph_passes_through_result(tmp_path):
