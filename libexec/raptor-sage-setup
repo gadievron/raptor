@@ -842,10 +842,11 @@ run_boot_probe() {
     nonce=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
     _RAPTOR_TMP_FILES+=("$nonce_file")
     (umask 077; printf '%s' "$nonce" > "$nonce_file")
-    printf '%s\n%s\n%s\n' \
+    printf '%s\n%s\n%s\n%s\n' \
         '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"raptor-sage-setup","version":"1.0.0"}}}' \
         '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
         '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"sage_inception","arguments":{}}}' \
+        '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{}}' \
         | CLAUDECODE=1 RAPTOR_SAGE_BOOT_CAPTURE="$nonce" $timeout_cmd "$MCP_WRAPPER" 2>/dev/null || rc=$?
     rm -f "$nonce_file"
     return "$rc"
@@ -864,6 +865,14 @@ capture_boot_payload() {
     #   ### sage_inception.content         every observed variant's
     #                                      ENTIRE result.content as
     #                                      one JSON line
+    #   ### tools.list                     every observed tools/list
+    #                                      tool object (name,
+    #                                      description, inputSchema,
+    #                                      siblings), one JSON line
+    #                                      per tool — tool definitions
+    #                                      land at definition tier, so
+    #                                      the guard enforces them
+    #                                      like initialize.instructions
     # The payload is state-dependent (first connection returns an
     # "Auto-Inception" variant with boot safeguards; later connections
     # a shorter "Auto-Connect" variant), so TWO probes run and both
@@ -890,12 +899,19 @@ capture_boot_payload() {
     if [ -z "$r1" ] && [ -z "$r2" ]; then
         return 1
     fi
-    local init1 init2 msg1 content1 content2
+    local init1 init2 msg1 content1 content2 tools1 tools2
     init1=$(printf '%s\n' "$r1" | jq -r 'select(.id == 1) | .result.instructions // ""' 2>/dev/null || true)
     init2=$(printf '%s\n' "$r2" | jq -r 'select(.id == 1) | .result.instructions // ""' 2>/dev/null || true)
     msg1=$(printf '%s\n' "$r1" | jq -r 'select(.id == 2) | ((try (.result.content[0].text | fromjson | .message) catch "") // "")' 2>/dev/null || true)
     content1=$(printf '%s\n' "$r1" | jq -c 'select(.id == 2) | .result.content // empty' 2>/dev/null || true)
     content2=$(printf '%s\n' "$r2" | jq -c 'select(.id == 2) | .result.content // empty' 2>/dev/null || true)
+    # One JSON line per WHOLE tool object (jq -c: single-line output,
+    # injection-proof like the content sections above). `objects`
+    # keeps only object-typed entries: the guard authorizes dict
+    # variants only, so recording a non-object entry would emit a
+    # section that LOOKS populated while authorizing nothing.
+    tools1=$(printf '%s\n' "$r1" | jq -c 'select(.id == 3) | .result.tools[]? | objects' 2>/dev/null || true)
+    tools2=$(printf '%s\n' "$r2" | jq -c 'select(.id == 3) | .result.tools[]? | objects' 2>/dev/null || true)
     if [ -z "$content1" ] && [ -z "$content2" ]; then
         echo "raptor-sage-setup: boot probes answered but no sage_inception content could be extracted; refusing to record an empty boot-payload stamp" >&2
         return 1
@@ -951,6 +967,22 @@ sys.stdout.buffer.write(text.encode("utf-8"))
     fi
     if [ -n "$content2" ] && [ "$content2" != "$content1" ]; then
         printf '%s\n' "$content2"
+    fi
+    # tools/list baseline. The section is emitted only when at least
+    # one tool was extracted: an ABSENT section is the honest "no
+    # tools baseline" state (guard forwards tools/list with a loud
+    # unverified notice), while an empty section could masquerade as a
+    # recorded baseline. Missing tools do not fail the capture — the
+    # boot surfaces above are still worth stamping — but the gap is
+    # reported so the operator knows enforcement has not started.
+    if [ -n "$tools1" ] || [ -n "$tools2" ]; then
+        printf '### tools.list\n'
+        {
+            [ -z "$tools1" ] || printf '%s\n' "$tools1"
+            [ -z "$tools2" ] || printf '%s\n' "$tools2"
+        } | awk '!seen[$0]++'
+    else
+        echo "raptor-sage-setup: warning: the boot probes returned no tools/list definitions — the tools surface stays unbaselined (the MCP guard forwards tools/list with an unverified notice). Re-run 'bin/raptor sage-setup review' once the server serves tools." >&2
     fi
 }
 
@@ -1226,12 +1258,19 @@ sys.stdout.write("\n".join(rendered))
     } > "$tmp"
     mv "$tmp" "$AUTHORIZED_PAYLOAD"
     trap - RETURN
+    # Report tools.list only when the capture actually recorded it —
+    # a tools-less capture leaves the section out (see
+    # capture_boot_payload) and enforcement has not started for it.
+    local surfaces_line="initialize.instructions(+.json), sage_inception.message, sage_inception.content"
+    if printf '%s\n' "$payload" | grep -q '^### tools\.list$'; then
+        surfaces_line="$surfaces_line, tools.list"
+    fi
     echo "Recorded operator-authorized SAGE boot payload:"
     echo "  File:    $AUTHORIZED_PAYLOAD"
     echo "  Image:   $image"
     echo "  Running: $running_digest"
     echo "  SHA256:  $sha"
-    echo "  Surfaces: initialize.instructions(+.json), sage_inception.message, sage_inception.content"
+    echo "  Surfaces: $surfaces_line"
 }
 
 review_boot_payload() {
