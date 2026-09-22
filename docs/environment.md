@@ -484,13 +484,28 @@ stale configuration and each reader's schema guard says so.
 | `OPENANT_MODEL` | `sonnet` | LLM model for OpenAnt analysis (`sonnet` or `opus`). Explicit flags win: `--model` on `/openant`, `--openant-model` on `/agentic`. |
 | `OPENANT_LEVEL` | `reachable` | Analysis depth (`all`, `reachable`, `codeql`, `exploitable`). Explicit flags win: `--level` on `/openant`, `--openant-level` on `/agentic`. |
 
-None of the three is on the `get_safe_env()` allowlist, so they do not
-reach the OpenAnt subprocess as environment variables: the child
-environment starts from `get_safe_env()`, `OPENANT_CORE` reaches the
-subprocess as its `PYTHONPATH` (resolved to an absolute path first), and
-the model and level travel as command-line arguments. OpenAnt itself
-runs as a sandboxed subprocess (`core.sandbox.context.run`).
-`ANTHROPIC_API_KEY` is forwarded (OpenAnt calls the Anthropic API).
+None of the three is on the `get_safe_env()` allowlist — and that
+boundary sits one level HIGHER than the OpenAnt subprocess: through the
+`raptor.py` dispatch lane (`/openant`, `/agentic --openant`,
+`libexec/raptor-openant`) the launcher scripts themselves run under a
+safe-env-rebuilt child environment, so all three variables apply only
+to direct `raptor_openant.py` / `raptor_agentic.py` invocations from an
+unscrubbed shell. `OPENANT_CORE` stays off the allowlist deliberately:
+it names a directory whose Python executes with network access and the
+Anthropic API key (the exec-path class — same rule as
+`RAPTOR_EF_*_PATH`), and its env surface is warn-not-refuse where the
+equivalent `--openant-core` flag surface is consent-gated. Through the
+dispatch lane, use the flags (`--openant-core`, `--model` /
+`--openant-model`, `--level` / `--openant-level`) or the auto-detect
+layout `<raptor-parent>/libs/openant-core` (found via the allowlisted
+`RAPTOR_DIR`). Inside the pipeline, the resolved core reaches the
+OpenAnt subprocess as its `PYTHONPATH` (absolute path), the model
+travels as a staged llm-config profile (`--llm-config raptor-<model>`,
+with the child's `XDG_CONFIG_HOME` pointed at a run-local merged copy
+of the operator's `~/.config/openant/config.json`), and the level as a
+command-line argument. OpenAnt itself runs as a sandboxed subprocess
+(`core.sandbox.context.run`). `ANTHROPIC_API_KEY` is forwarded (OpenAnt
+calls the Anthropic API).
 
 
 ## SAGE
