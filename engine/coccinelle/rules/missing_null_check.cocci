@@ -13,7 +13,7 @@ identifier fld;
 @@
 
 // @vocab: allocators
-// @vocab-tmpl: * E@p = %s(...)
+// @vocab-tmpl: * E@p = %s(...);
 (
 * E@p = malloc(...);
 |
@@ -44,7 +44,7 @@ type T;
 @@
 
 // @vocab: allocators
-// @vocab-tmpl:   T E@p = %s(...)
+// @vocab-tmpl:   T E@p = %s(...);
 (
   T E@p = malloc(...);
 |
