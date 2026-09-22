@@ -439,6 +439,12 @@ class TestPatternMembers:
             ("BUNDLE_BUILD__", ""),
             ("CMAKE_", "_COMPILER_LAUNCHER"),
             ("CMAKE_", "_LINKER_LAUNCHER"),
+            ("COMPILE.", ""),
+            ("LINK.", ""),
+            ("LEX.", ""),
+            ("LINT.", ""),
+            ("PREPROCESS.", ""),
+            ("YACC.", ""),
         }
 
     @pytest.mark.parametrize("name", [
@@ -451,6 +457,18 @@ class TestPatternMembers:
         "CMAKE_C_COMPILER_LAUNCHER",
         "CMAKE_CXX_COMPILER_LAUNCHER",
         "CMAKE_CUDA_LINKER_LAUNCHER",
+        # make dot-named recipe variables — env-overridable full
+        # recipe replacement (COMPILE.c=<cmd> runs <cmd> instead of
+        # the compiler); case-folded like every pattern, so the
+        # case-significant sibling spellings (COMPILE.C) match too.
+        "COMPILE.c",
+        "COMPILE.C",
+        "compile.cc",  # case-folded
+        "LINK.o",
+        "LEX.l",
+        "LINT.c",
+        "PREPROCESS.F",
+        "YACC.y",
     ])
     def test_pattern_positives(self, name):
         assert is_credential_env_pattern_member(name), name
@@ -465,6 +483,10 @@ class TestPatternMembers:
         "CARGO_BUILD_TARGET",      # documented plain knob
         "CMAKE__COMPILER_LAUNCHER",  # empty language segment
         "CMAKE_GENERATOR",         # documented plain knob
+        "COMPILE.",                # bare prefix, no suffix segment
+        "COMPILE",                 # undotted name is not the family
+        "COMPILER_FLAGS",          # dotless lookalike prefix
+        "LINKER",                  # ditto for LINK.
         "PATH",
     ])
     def test_pattern_negatives(self, name):
@@ -485,10 +507,12 @@ class TestMakeDefaultDatabaseCrossCheck:
     default-rule database. Prose stamps can drift; this oracle runs
     the citation: it extracts every ``$(VAR)`` reference from
     ``make -p -f /dev/null`` (the variables the built-in rules
-    interpolate into executed command lines — programs and flags
-    alike) and asserts each is either an exec-tier family member or a
-    name adjudicated out below WITH a rationale. A make release that
-    adds a rule variable fails here and gets adjudicated instead of
+    interpolate into executed command lines — programs, flags, and
+    the dot-named recipe variables alike) and asserts each is either
+    an exec-tier family member (exact row or declared name pattern —
+    the COMPILE./LINK./… dot families are pattern members), or a name
+    adjudicated out below WITH a rationale. A make release that adds
+    a rule variable fails here and gets adjudicated instead of
     silently escaping the belts. Skips hermetically where make is not
     installed.
     """
@@ -500,7 +524,13 @@ class TestMakeDefaultDatabaseCrossCheck:
     # references; the surface's completeness note adjudicates them.)
     _ADJUDICATED_OUT: dict = {}
 
-    _REF_RE = re.compile(r"\$[({]([A-Z][A-Z0-9_]*)[)}]")
+    # Dot-named recipe variables (``COMPILE.c``, ``LINK.o``, ``LEX.l``
+    # …) are first-class database references, env-overridable at the
+    # SAME precedence as CC (environment origin beats default origin —
+    # ``COMPILE.c=<cmd>`` replaces the entire compile recipe). An
+    # ``[A-Z_]``-only extraction silently dropped the whole class out
+    # of this oracle's universe.
+    _REF_RE = re.compile(r"\$[({]([A-Za-z][A-Za-z0-9_.]*)[)}]")
 
     def test_every_referenced_rule_variable_is_covered(self):
         import shutil
@@ -526,6 +556,7 @@ class TestMakeDefaultDatabaseCrossCheck:
         uncovered = {
             name for name in referenced
             if name not in CREDENTIAL_EXEC_REDIRECT_ENV_VARS
+            and not is_credential_env_pattern_member(name)
             and name not in self._ADJUDICATED_OUT
         }
         assert uncovered == set(), (

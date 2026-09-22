@@ -334,6 +334,14 @@ class TestFilterBuildEnvVars:
             # Pattern members ride the redirect shape rule.
             "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER": "./evil",
             "BUNDLE_BUILD__NOKOGIRI": "--with-cflags=-fplugin=./e.so",
+            # make dot-named recipe variables: env origin beats the
+            # default database, so each value REPLACES the whole
+            # recipe of the matching built-in rule — a stronger
+            # primitive than CC, which the gate already refused while
+            # admitting these.
+            "COMPILE.c": "echo pwned #",
+            "LINK.o": "echo pwned #",
+            "LEX.l": "echo pwned #",
         })
         assert admitted == {}
 

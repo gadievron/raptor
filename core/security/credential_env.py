@@ -693,8 +693,36 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
                 "CMAKE_", "_LINKER_LAUNCHER",
                 "CMAKE_C_LINKER_LAUNCHER",
             ),
+            # make's dot-named RECIPE variables: the default database
+            # defines the entire command line of every built-in rule
+            # as ``COMPILE.<suffix>`` / ``LINK.<suffix>`` / … and the
+            # rules interpolate them directly into executed recipes —
+            # env origin beats default origin, so ``COMPILE.c=<cmd>``
+            # replaces the whole compile step (a strictly stronger
+            # primitive than CC, which only names the program). The
+            # language suffix varies per make release (``.c`` ``.cc``
+            # ``.mod`` ``.def`` …, case-significant), so these are
+            # name families; matching is case-folded like every other
+            # pattern, which covers both ``COMPILE.c`` and
+            # ``COMPILE.C``. The unit suite's executable database
+            # cross-check derives the concrete member list from
+            # ``make -p`` and asserts every referenced dotted name is
+            # pattern-covered.
+            EnvNamePattern("COMPILE.", "", "COMPILE.c"),
+            EnvNamePattern("LINK.", "", "LINK.o"),
+            EnvNamePattern("LEX.", "", "LEX.l"),
+            EnvNamePattern("LINT.", "", "LINT.c"),
+            EnvNamePattern("PREPROCESS.", "", "PREPROCESS.F"),
+            EnvNamePattern("YACC.", "", "YACC.y"),
         ),
         completeness=(
+            "Dot-named recipe variables (COMPILE.c / LINK.o / LEX.l "
+            "class): pattern members via the COMPILE./LINK./LEX./"
+            "LINT./PREPROCESS./YACC. prefix families above — exact "
+            "rows would chase make releases (and case-significant "
+            "suffix spellings) by hand; the executable database "
+            "cross-check keeps the family honest against the "
+            "installed make. "
             "Loader-redirect names (LD_PRELOAD family) and locale/"
             "temp-dir names are homed in DANGEROUS_ENV_VARS. "
             "F77 / F77FLAGS: default-database entries defined via "
