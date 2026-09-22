@@ -2572,10 +2572,20 @@ def _make_request_handler(
                     # UPSTREAM — from here on, the generation is
                     # processed (and billed) upstream, and the
                     # worker's retry gate must treat any subsequent
-                    # transport death as consumed spend.
-                    self.send_header(
-                        _UPSTREAM_STATE_HEADER, _UPSTREAM_STATE_STARTED,
-                    )
+                    # transport death as consumed spend. 2xx heads
+                    # only: an error head (429/5xx) is never a billed
+                    # generation, and rate-limit storms — exactly when
+                    # retry matters most — are when its body read is
+                    # likeliest to die on the wire; stamping it would
+                    # turn that wire death into a false terminal veto
+                    # with a false "billed" claim. Unstamped = "no
+                    # signal", so the worker's status-code retry
+                    # policy stays in force for relayed errors.
+                    if 200 <= up.status_code < 300:
+                        self.send_header(
+                            _UPSTREAM_STATE_HEADER,
+                            _UPSTREAM_STATE_STARTED,
+                        )
                     for k, v in up.headers.items():
                         # Strip hop-by-hop headers only. ``content-
                         # encoding`` is response-scoped and MUST be

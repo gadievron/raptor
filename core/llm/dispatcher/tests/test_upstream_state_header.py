@@ -76,11 +76,12 @@ def _post(d: LLMDispatcher, token: str) -> httpx.Response:
         )
 
 
-class _SpoofingUpstream:
-    """Captive upstream that answers 200 WITH its own copy of the
-    attempt-state header — the value the relay must not forward."""
+class _CannedUpstream:
+    """Captive upstream answering a fixed status, optionally with its
+    own copy of the attempt-state header — the value the relay must
+    never forward."""
 
-    def __init__(self) -> None:
+    def __init__(self, status: int = 200, *, spoof: bool = False) -> None:
         class _H(http.server.BaseHTTPRequestHandler):
             def log_message(self, *_a, **_kw):
                 return
@@ -90,10 +91,13 @@ class _SpoofingUpstream:
                 if length:
                     self.rfile.read(length)
                 body = b'{"ok":true}'
-                self.send_response(200)
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
-                self.send_header(_UPSTREAM_STATE_HEADER, "pre-response")
+                if spoof:
+                    self.send_header(
+                        _UPSTREAM_STATE_HEADER, "pre-response",
+                    )
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -155,13 +159,47 @@ class TestUpstreamStateHeader:
         compromised) upstream must not be able to mark its completed
         response ``pre-response`` and steer the worker into blind
         re-sends of consumed generations."""
-        upstream = _SpoofingUpstream()
+        upstream = _CannedUpstream(200, spoof=True)
         d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
         try:
             resp = _post(d, _worker_token(d))
             assert resp.status_code == 200
             values = resp.headers.get_list(_UPSTREAM_STATE_HEADER)
             assert values == ["response-started"]
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_relayed_error_head_carries_no_stamp(
+        self, fake_creds, tmp_path,
+    ):
+        """A relayed NON-2xx head (here: 429) is never a billed
+        generation, so it must NOT carry ``response-started`` — a wire
+        death while its body relays (likeliest during the rate-limit
+        storms where retry matters most) must keep the worker's
+        status-code retry policy, not trip a false billed-spend veto.
+        Two-direction with the relayed-200 test above."""
+        upstream = _CannedUpstream(429)
+        d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
+        try:
+            resp = _post(d, _worker_token(d))
+            assert resp.status_code == 429
+            assert _UPSTREAM_STATE_HEADER not in resp.headers
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_spoofed_stamp_on_error_head_is_stripped(
+        self, fake_creds, tmp_path,
+    ):
+        """An error head gets no dispatcher stamp AND loses any
+        upstream-supplied copy — unstamped, not upstream-controlled."""
+        upstream = _CannedUpstream(429, spoof=True)
+        d = _make_dispatcher(fake_creds, tmp_path, upstream.base_url)
+        try:
+            resp = _post(d, _worker_token(d))
+            assert resp.status_code == 429
+            assert _UPSTREAM_STATE_HEADER not in resp.headers
         finally:
             upstream.shutdown()
             d.shutdown()
