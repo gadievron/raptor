@@ -129,6 +129,11 @@ _RECORD_LINE_MARKERS = (
     "JOERN_SINK_ARG:", "METHOD_SUMMARY:", "JOERN_GUARD_SUMMARY:",
     "JOERN_FLOWS_START", "JOERN_FLOWS_END", "JOERN_EXISTS:",
     "JOERN_CALLERS_DONE", "JOERN_DARK:", "JOERN_DIAG:",
+    # The audit verify channels' sentinel protocol (joern_verify):
+    # sentinel payloads quote scanned-repo source — a payload
+    # containing a "path:N: error:"-shaped string literal must never
+    # veto the query's own evidence via the diagnostic scan.
+    "RAPTOR_GD_", "RAPTOR_FLOW_", "RAPTOR_VERIFY_",
 )
 
 # Line-anchored compiler-diagnostic shapes: Scala 3 diagnostic headers

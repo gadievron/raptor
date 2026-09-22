@@ -139,6 +139,30 @@ _FLOW_COUNT = "RAPTOR_FLOW_COUNT:"
 # BEYOND the engine's maxCallDepth — the depth-bound witness for the
 # refutation lane. -1 = probe failed (Try fallback).
 _FLOW_DEEP = "RAPTOR_FLOW_DEEP:"
+# UNCAPPED count of unguarded sink sites, emitted alongside the
+# evidence lines (which ARE capped). The refutation is a universal
+# quantifier over every sink — it must key on the full-set count, or
+# a cap on evidence emission silently truncates the quantifier and a
+# genuinely unguarded 51st sink books a false refutation. Name is
+# deliberately not a prefix-extension of _GD_UNGUARDED: the parsers
+# anchor by startswith.
+_GD_UNG_TOTAL = "RAPTOR_GD_UNG_TOTAL:"
+
+
+# Scala expression template flattening a payload before it joins a
+# sentinel line. Payloads quote hostile source, and the parse is
+# line-anchored, so every code point Python's splitlines() treats as a
+# line break must flatten (\\n alone left \\r/\\v/\\f and the Unicode
+# separators able to push payload bytes to line-anchored positions);
+# '|' is the field separator; 'JOERN_' is neutralised so hostile text
+# cannot mint record-marker lines that the server-side flow parser
+# tries (and fails) to decode.
+_PAYLOAD_FLATTEN_SCALA = (
+    '{expr}.take(200)'
+    '.replaceAll("[\\\\r\\\\n\\\\u000B\\\\f\\\\u0085\\\\u2028\\\\u2029]",'
+    ' " ")'
+    '.replace("|", "/").replace("JOERN_", "JOERN-")'
+)
 
 
 def _mint_nonce() -> str:
@@ -385,9 +409,13 @@ def build_guard_dominance_query(
     with the caller's per-invocation *nonce*; parsed by
     :func:`_parse_guard_output` with the same nonce (anchored parse —
     marker text inside quoted target code cannot mint facts).  All
-    three name inputs must already have passed identifier validation
-    (bare identifiers are regex-safe, so the ``\b<ident>\b``
-    interpolation cannot change the regex shape).
+    sentinel lines ride the query's FINAL EXPRESSION string echo:
+    println output does not come back through the server's query-sync
+    transport, so a println-emitting query answers with an empty
+    protocol stream on a real server and the channel reads
+    structurally dead.  All three name inputs must already have
+    passed identifier validation (bare identifiers are regex-safe, so
+    the ``\b<ident>\b`` interpolation cannot change the regex shape).
     """
     fn = _escape(function_name)
     sink = _escape(sink_call)
@@ -396,37 +424,64 @@ def build_guard_dominance_query(
     gd_sinks = _anchored(_GD_SINKS, nonce)
     gd_unguarded = _anchored(_GD_UNGUARDED, nonce)
     gd_guarded = _anchored(_GD_GUARDED, nonce)
+    gd_ung_total = _anchored(_GD_UNG_TOTAL, nonce)
     ident_pat = f"(?s).*\\\\b{ident}\\\\b.*"
+    # Transport discipline (same REPL facts the batch taint builder
+    # documents, plus one it does not): println output does NOT come
+    # back through the server's query-sync transport — every sentinel
+    # must ride the FINAL EXPRESSION's string echo; intermediate vals
+    # AND the buffer itself live inside locally{} — a top-level
+    # binder echoes its POPULATED final state, and quote-bearing
+    # elements echo with raw inner quotes that the marker parser
+    # tokenises into broken fragments; so the locally block IS the
+    # final expression, returning the framed string.
     return (
         'import io.shiftleft.semanticcpg.language._\n'
-        f'val raptorFn = cpg.method.nameExact("{fn}").l\n'
-        'if (raptorFn.isEmpty) {\n'
-        f'  println("{gd_func}missing")\n'
-        '} else {\n'
-        f'  println("{gd_func}found")\n'
-        '  val raptorSinks = raptorFn.flatMap(\n'
-        f'    _.call.nameExact("{sink}")'
+        'locally {\n'
+        '  val raptorOut = '
+        'scala.collection.mutable.ListBuffer.empty[String]\n'
+        f'  val raptorFn = cpg.method.nameExact("{fn}").l\n'
+        '  if (raptorFn.isEmpty) {\n'
+        f'    raptorOut += ("{gd_func}missing")\n'
+        '  } else {\n'
+        f'    raptorOut += ("{gd_func}found")\n'
+        '    val raptorSinks = raptorFn.flatMap(\n'
+        f'      _.call.nameExact("{sink}")'
         f'.where(_.argument.code("{ident_pat}")).l)\n'
-        f'  println("{gd_sinks}" + raptorSinks.size)\n'
-        '  val raptorConds = raptorFn.flatMap(\n'
-        f'    _.controlStructure.condition.code("{ident_pat}").l)\n'
-        '  raptorSinks.foreach { s =>\n'
-        '    val doms = s.dominatedBy.id.toSet\n'
-        '    val guards = raptorConds.filter(c => doms.contains(c.id))\n'
-        '    val sCode = s.code.take(200)'
-        '.replace("\\n", " ").replace("|", "/")\n'
-        '    if (guards.isEmpty) {\n'
-        f'      println("{gd_unguarded}" + '
+        f'    raptorOut += ("{gd_sinks}" + raptorSinks.size)\n'
+        '    val raptorConds = raptorFn.flatMap(\n'
+        f'      _.controlStructure.condition.code("{ident_pat}").l)\n'
+        '    var raptorUngN = 0\n'
+        '    var raptorGrdN = 0\n'
+        '    raptorSinks.foreach { s =>\n'
+        '      val doms = s.dominatedBy.id.toSet\n'
+        '      val guards = raptorConds.filter(c => doms.contains(c.id))\n'
+        '      if (guards.isEmpty) {\n'
+        '        raptorUngN += 1\n'
+        '        if (raptorUngN <= 50) {\n'
+        f'          val sCode = '
+        f'{_PAYLOAD_FLATTEN_SCALA.format(expr="s.code")}\n'
+        f'          raptorOut += ("{gd_unguarded}" + '
         's.lineNumber.getOrElse(0) + "|" + sCode)\n'
-        '    } else {\n'
-        '      val g = guards.head\n'
-        '      val gCode = g.code.take(200)'
-        '.replace("\\n", " ").replace("|", "/")\n'
-        f'      println("{gd_guarded}" + '
+        '        }\n'
+        '      } else {\n'
+        '        raptorGrdN += 1\n'
+        '        if (raptorGrdN <= 50) {\n'
+        '          val g = guards.head\n'
+        f'          val sCode = '
+        f'{_PAYLOAD_FLATTEN_SCALA.format(expr="s.code")}\n'
+        f'          val gCode = '
+        f'{_PAYLOAD_FLATTEN_SCALA.format(expr="g.code")}\n'
+        f'          raptorOut += ("{gd_guarded}" + '
         's.lineNumber.getOrElse(0) + "|" + '
         'g.lineNumber.getOrElse(0) + "|" + gCode + "|" + sCode)\n'
+        '        }\n'
+        '      }\n'
         '    }\n'
+        f'    raptorOut += ("{gd_ung_total}" + raptorUngN)\n'
         '  }\n'
+        '  "RAPTOR_VERIFY_START\\n" + raptorOut.mkString("\\n") + '
+        '"\\nRAPTOR_VERIFY_END"\n'
         '}\n'
     )
 
@@ -448,7 +503,10 @@ def build_flow_query(
     caller's per-invocation *nonce* — see :func:`_parse_flow_facts`)
     plus standard ``JOERN_FLOW:`` lines (the server's parser turns
     those into :class:`packages.joern.models.TaintFlow` objects for
-    us).
+    us).  Everything rides the query's FINAL EXPRESSION string echo —
+    println output does not come back through the query-sync
+    transport (the server's echo-tolerant marker parsing handles the
+    echoed shape, same as the batch taint lane).
     """
     from packages.joern.runner import SCALA_JSON_ESC_DEF
 
@@ -465,24 +523,33 @@ def build_flow_query(
     # BEFORE escaping — escape-then-truncate can bisect an injected \"
     # and leave a dangling backslash.
     flow_print = (
-        '  raptorFlows.foreach { flow =>\n'
-        '    val steps = flow.elements.map { e =>\n'
-        '      val ln = e.lineNumber.getOrElse(0)\n'
-        '      val cd = jsonEsc(e.code.take(200))\n'
-        '      val (fnName, fl) = e match {\n'
-        '        case n: CfgNode =>\n'
-        '          (Try(n.method.name).getOrElse(""), '
+        '    raptorFlows.foreach { flow =>\n'
+        '      val steps = flow.elements.map { e =>\n'
+        '        val ln = e.lineNumber.getOrElse(0)\n'
+        '        val cd = jsonEsc(e.code.take(200))\n'
+        '        val (fnName, fl) = e match {\n'
+        '          case n: CfgNode =>\n'
+        '            (Try(n.method.name).getOrElse(""), '
         'Try(n.method.filename).getOrElse(""))\n'
-        '        case _ => ("", "")\n'
-        '      }\n'
-        '      val fnEsc = jsonEsc(fnName)\n'
-        '      val flEsc = jsonEsc(fl)\n'
-        '      s"""{"line":$ln,"code":"$cd",'
+        '          case _ => ("", "")\n'
+        '        }\n'
+        '        val fnEsc = jsonEsc(fnName)\n'
+        '        val flEsc = jsonEsc(fl)\n'
+        '        s"""{"line":$ln,"code":"$cd",'
         '"function":"$fnEsc","file":"$flEsc"}"""\n'
-        '    }.mkString(",")\n'
-        '    println("JOERN_FLOW:[" + steps + "]")\n'
-        '  }\n'
+        '      }.mkString(",")\n'
+        '      raptorOut += ("JOERN_FLOW:[" + steps + "]")\n'
+        '    }\n'
     )
+    # Same transport discipline as build_guard_dominance_query: every
+    # sentinel AND every JOERN_FLOW record rides the final
+    # expression's string echo (println does not return through the
+    # query-sync transport); the buffer and all work live inside
+    # locally{}, whose value IS the framed string — a top-level
+    # binder would echo its populated final state and break the
+    # marker parser on quote-bearing elements. The implicit
+    # EngineContext stays at top level — it must be in implicit
+    # scope for reachableByFlows.
     return (
         'import io.joern.dataflowengineoss.queryengine._\n'
         'import io.joern.dataflowengineoss.language._\n'
@@ -492,28 +559,34 @@ def build_flow_query(
         f'{SCALA_JSON_ESC_DEF}\n'
         'implicit val raptorCtx: EngineContext = EngineContext('
         f'config = EngineConfig(maxCallDepth = {int(max_call_depth)}))\n'
-        f'val raptorFn = {meth}.l\n'
-        'if (raptorFn.isEmpty) {\n'
-        f'  println("{flow_func}missing")\n'
-        '} else {\n'
-        f'  println("{flow_func}found")\n'
-        f'  val raptorSrcCount = {meth}.parameter.nameExact("{src}").size + '
-        f'{meth}.ast.isIdentifier.nameExact("{src}").size\n'
-        f'  println("{flow_src}" + raptorSrcCount)\n'
-        f'  val raptorSnkCount = '
+        'locally {\n'
+        '  val raptorOut = '
+        'scala.collection.mutable.ListBuffer.empty[String]\n'
+        f'  val raptorFn = {meth}.l\n'
+        '  if (raptorFn.isEmpty) {\n'
+        f'    raptorOut += ("{flow_func}missing")\n'
+        '  } else {\n'
+        f'    raptorOut += ("{flow_func}found")\n'
+        f'    val raptorSrcCount = {meth}.parameter.nameExact("{src}").size'
+        f' + {meth}.ast.isIdentifier.nameExact("{src}").size\n'
+        f'    raptorOut += ("{flow_src}" + raptorSrcCount)\n'
+        f'    val raptorSnkCount = '
         f'{meth}.call.nameExact("{sink}").argument.size\n'
-        f'  println("{flow_snk}" + raptorSnkCount)\n'
-        '  val raptorSources = ('
+        f'    raptorOut += ("{flow_snk}" + raptorSnkCount)\n'
+        '    val raptorSources = ('
         f'{meth}.parameter.nameExact("{src}") ++ '
         f'{meth}.ast.isIdentifier.nameExact("{src}")'
         ').collectAll[CfgNode]\n'
-        f'  val raptorSinkArgs = '
+        f'    val raptorSinkArgs = '
         f'{meth}.call.nameExact("{sink}").argument\n'
-        '  val raptorFlows = '
+        '    val raptorFlows = '
         'raptorSinkArgs.reachableByFlows(raptorSources).take(20).l\n'
         f'{flow_print}'
-        f'  println("{flow_count}" + raptorFlows.size)\n'
+        f'    raptorOut += ("{flow_count}" + raptorFlows.size)\n'
         f'{_depth_probe_scala(int(max_call_depth), nonce=nonce)}'
+        '  }\n'
+        '  "RAPTOR_VERIFY_START\\n" + raptorOut.mkString("\\n") + '
+        '"\\nRAPTOR_VERIFY_END"\n'
         '}\n'
     )
 
@@ -537,13 +610,14 @@ def _depth_probe_scala(max_call_depth: int, *, nonce: str) -> str:
         "_.call.callee.filterNot(_.isExternal).dedup.l).distinct\n"
     )
     return (
-        "  val raptorDeepCount = scala.util.Try {\n"
-        "    var raptorLvl = raptorFn.flatMap("
+        "    val raptorDeepCount = scala.util.Try {\n"
+        "      var raptorLvl = raptorFn.flatMap("
         "_.call.callee.filterNot(_.isExternal).dedup.l).distinct\n"
-        + ("    " + hop) * max_call_depth
-        + "    raptorLvl.size\n"
-        "  }.getOrElse(-1)\n"
-        f'  println("{_anchored(_FLOW_DEEP, nonce)}" + raptorDeepCount)\n'
+        + ("      " + hop) * max_call_depth
+        + "      raptorLvl.size\n"
+        "    }.getOrElse(-1)\n"
+        f'    raptorOut += ("{_anchored(_FLOW_DEEP, nonce)}"'
+        ' + raptorDeepCount)\n'
     )
 
 
@@ -572,12 +646,23 @@ def _parse_guard_output(raw: str, nonce: str) -> dict[str, Any]:
         "sink_count": None,
         "unguarded": [],
         "guarded": [],
+        "unguarded_total": None,
     }
     gd_func = _anchored(_GD_FUNC, nonce)
+    gd_ung_total = _anchored(_GD_UNG_TOTAL, nonce)
     gd_sinks = _anchored(_GD_SINKS, nonce)
     gd_unguarded = _anchored(_GD_UNGUARDED, nonce)
     gd_guarded = _anchored(_GD_GUARDED, nonce)
     for line in _sentinel_lines(raw):
+        if line.startswith(gd_ung_total):
+            try:
+                facts["unguarded_total"] = int(
+                    line[len(gd_ung_total):].split("|")[0].strip()
+                    .strip('"')
+                )
+            except ValueError:
+                pass
+            continue
         if line.startswith(gd_func):
             val = line[len(gd_func):].strip()
             if val.startswith("found"):
@@ -855,6 +940,19 @@ def run_guard_dominance_check(
             rule_id=tool_stamp,
             raw_output=(result.raw_output or "")[:2000],
             details={"guarded": facts["guarded"]},
+        )
+
+    if facts["unguarded_total"] != 0:
+        # Evidence lines are emission-capped; the refutation is a
+        # universal quantifier over EVERY sink, so it may only book
+        # when the uncapped count says zero. A missing count (partial
+        # protocol) refuses to refute rather than trusting the capped
+        # evidence view.
+        return _inconclusive(
+            tool_stamp, file_path, function_name,
+            "guard protocol did not establish a zero unguarded-sink "
+            "count — refusing to refute on capped evidence",
+            details={"unguarded_total": facts["unguarded_total"]},
         )
 
     # Every matched sink is dominated by a check on the identifier:

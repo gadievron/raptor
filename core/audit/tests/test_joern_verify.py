@@ -41,7 +41,7 @@ NONCE = "0123456789abcdef"
 
 def _n(raw: str) -> str:
     """Stamp the fixed test nonce into bare sentinel markers."""
-    return re.sub(r"(RAPTOR_(?:GD|FLOW)_[A-Z]+:)", rf"\g<1>{NONCE}:", raw)
+    return re.sub(r"(RAPTOR_(?:GD|FLOW)_[A-Z_]+:)", rf"\g<1>{NONCE}:", raw)
 
 
 @pytest.fixture(autouse=True)
@@ -447,10 +447,46 @@ class TestRunGuardDominance:
                 "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
                 "RAPTOR_GD_GUARDED:57|55|len < sizeof(dst)|"
                 "memcpy(dst, s, len)\n"
+                "RAPTOR_GD_UNG_TOTAL:0\n"
             ),
         )
         assert r.outcome == "refuted"
         assert r.details["dominators"][0]["guard_code"] == "len < sizeof(dst)"
+
+    def test_refutation_requires_the_uncapped_zero_count(
+            self, tmp_path: Path):
+        # Evidence lines are emission-capped; a refutation is a
+        # universal quantifier and may only book when the uncapped
+        # count says zero. A stream without the count (partial
+        # protocol) must refuse to refute.
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+                "RAPTOR_GD_GUARDED:57|55|len < sizeof(dst)|"
+                "memcpy(dst, s, len)\n"
+            ),
+        )
+        assert r.outcome == "inconclusive"
+
+    def test_capped_evidence_with_nonzero_count_never_refutes(
+            self, tmp_path: Path):
+        # 51st-sink shape: every EMITTED sink is guarded (the one
+        # unguarded site fell past the emission cap) but the uncapped
+        # count says one exists — refutation must not book. Without
+        # emitted unguarded evidence the confirm path cannot run its
+        # identifier-consistency control either, so inconclusive is
+        # the honest answer.
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:51\n"
+                "RAPTOR_GD_GUARDED:57|55|len < sizeof(dst)|"
+                "memcpy(dst, s, len)\n"
+                "RAPTOR_GD_UNG_TOTAL:1\n"
+            ),
+        )
+        assert r.outcome == "inconclusive"
 
     def test_unguarded_sink_confirms_with_evidence(self, tmp_path: Path):
         r = self._run(
