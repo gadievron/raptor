@@ -571,9 +571,14 @@ class TestDirectCallerValidation:
             "trace_id": "EP-001",
             "entry": Path("/some/path"),  # not JSON-native
         }]
-        result = default_trace_dispatch(
-            fake_model_config, bad_traces, str(repo),
-        )
+        # Provider construction precedes serialization in the
+        # dispatch; stub it (like every other test here) so the
+        # assertion reaches the serialization guard on hosts without
+        # the full provider SDK stack installed.
+        with _patch_provider([]):
+            result = default_trace_dispatch(
+                fake_model_config, bad_traces, str(repo),
+            )
         assert len(result) == 1
         assert "error" in result[0]
         assert "serialize" in result[0]["error"]
