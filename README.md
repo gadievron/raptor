@@ -74,9 +74,9 @@ git clone https://github.com/gadievron/raptor.git
 cd raptor
 
 # Install Python dependencies
-poetry install --only main
+uv sync --locked
 
-# Compatibility path during the Poetry migration
+# Compatibility path during the uv migration
 # pip install -r requirements.txt
 
 # Install Claude Code (if you don't already have it)
@@ -629,17 +629,17 @@ See LICENSE for the full text. Review the licences for all dependencies before c
 
 ## Python Dependencies
 
-RAPTOR uses `pyproject.toml` and `poetry.lock` as the source of truth for
+RAPTOR uses `pyproject.toml` and `uv.lock` as the source of truth for
 Python dependencies. The checked-in `requirements.txt` files remain as
 compatibility exports for one transition window.
 
 Useful installs:
 
 ```bash
-poetry install --only main                  # core runtime
-poetry install --with dev                   # tests + linting
-poetry install --extras web                 # /web scanner support
-poetry install --extras "web smt llm sage"  # optional stacks
+uv sync --locked                            # core runtime
+uv sync --locked --group dev                # tests + linting
+uv sync --locked --extra web                # /web scanner support
+uv sync --locked --extra "web smt llm sage" # optional stacks
 ```
 
 Keeping `/web`, Z3, SAGE and cloud provider SDKs as optional extras avoids

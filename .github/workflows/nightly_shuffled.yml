@@ -61,7 +61,7 @@ jobs:
           cache-dependency-glob: "uv.lock"
 
       - name: Create venv and install deps
-        run: uv sync --locked
+        run: uv sync --locked --extra grammars
 
       # Parallelism: ``-n auto --dist loadfile`` (4 workers on
       # ubuntu-latest). The tier's purpose is ORDER-DEPENDENCE

@@ -35,8 +35,15 @@ if [ "${SXV_REQHASH_MATCH:-0}" = "1" ] && [ -x "$WORK/.venv/bin/python" ]; then
     echo "[inner] venv: image-baked (lockfile hash match)"
 else
     echo "[inner] venv: lockfile drift -> building fresh (see uv.log)"
+    if command -v uv >/dev/null 2>&1; then
+        _UV=uv
+    else
+        echo "[inner] uv not on PATH, installing via pip"
+        "${MATRIX_PY:?}" -m pip install --no-cache-dir "uv==0.12.6"
+        _UV="${MATRIX_PY:?} -m uv"
+    fi
     UV_PROJECT_ENVIRONMENT="$HOME/venv-fresh" \
-        uv sync --locked --python "${MATRIX_PY:?}" \
+        $_UV sync --locked --python "${MATRIX_PY:?}" \
         > "$RES/uv.log" 2>&1 || { echo "[inner] FATAL: uv sync failed" >&2; exit 4; }
     VENV="$HOME/venv-fresh"
 fi

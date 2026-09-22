@@ -11,22 +11,34 @@ _SCRIPT = (
     Path(__file__).resolve().parents[1] / "check_optional_dep_imports.py"
 )
 
-_REQUIREMENTS = """\
-requests==2.34.2
-# anthropic==0.103.1
-# botocore==1.43.16
-# tree-sitter==0.25.2
-# tree-sitter-go==0.25.0
-# z3-solver==4.15.4.0
-# openai==2.30.0
-# beautifulsoup4==4.15.0
-"""
+_PYPROJECT_TOML = """\
+[project]
+name = "test-project"
+version = "0.1.0"
+dependencies = [
+    "requests==2.34.2",
+]
 
-_REQUIREMENTS_DEV = """\
--r requirements.txt
-pytest==9.1.1
-beautifulsoup4==4.15.0
-z3-solver==4.15.4.0
+[project.optional-dependencies]
+llm = [
+    "anthropic==0.103.1",
+    "botocore==1.43.16",
+    "openai==2.30.0",
+]
+grammars = [
+    "tree-sitter==0.25.2",
+    "tree-sitter-go==0.25.0",
+]
+
+[dependency-groups]
+test = [
+    "pytest==9.1.1",
+    "beautifulsoup4==4.15.0",
+    "z3-solver==4.15.4.0",
+]
+dev = [
+    {include-group = "test"},
+]
 """
 
 
@@ -41,8 +53,7 @@ def det():
 
 
 def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
-    (tmp_path / "requirements.txt").write_text(_REQUIREMENTS)
-    (tmp_path / "requirements-dev.txt").write_text(_REQUIREMENTS_DEV)
+    (tmp_path / "pyproject.toml").write_text(_PYPROJECT_TOML)
     for rel, body in files.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
