@@ -17,13 +17,26 @@ attach per-entry payloads to each. Degradation therefore sheds the
 machine-recoverable synthesized payloads first and never touches
 LLM-authored (narrative) entries — those cannot be regenerated from the
 inventory.
+
+Compact serialization is the FIRST budget lever, and it is lossless:
+indented serialization of a large map can exceed both the producer
+budget and the consumer read cap while the compact encoding of the
+same data fits. Consumers cap on FILE bytes, so budget enforcement
+measures the compact encoding and :func:`save_context_map` writes
+exactly that encoding — measurement and on-disk artifact can never
+disagree. The artifact is machine-consumed (every reader parses it;
+diagram and review surfaces re-render from the parsed data), so
+nothing needs the indented form and the map is always written compact.
+Lossy degradation runs only when even the compact form is over budget.
 """
 
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_text_atomically
 from core.json import dumps_artifact
 
 logger = logging.getLogger(__name__)
@@ -61,7 +74,16 @@ def _is_machine_sink(entry: Any) -> bool:
 
 
 def _serialized_size(data: Any) -> int:
-    return len(dumps_artifact(data).encode("utf-8"))
+    """Size of *data* in the compact artifact encoding.
+
+    Must match what :func:`save_context_map` writes: measuring a
+    prettier encoding overstates the artifact and triggers lossy
+    drops a lossless compact re-encoding would have avoided (the
+    pre-fix failure mode — indented measurement degraded maps whose
+    compact form fit both caps). Key order does not change compact
+    length, so the measurement is exact regardless of ``sort_keys``.
+    """
+    return len(dumps_artifact(data, indent=None).encode("utf-8"))
 
 
 def _entries(context_map: dict[str, Any], key: str) -> list[Any]:
@@ -115,8 +137,8 @@ def _cap_list_entries(
         if shed >= overshoot:
             break
         # Per-entry serialized size understates the true saving (list
-        # separators, indentation) — acceptable: the caller re-checks
-        # the real size and the budget already carries headroom.
+        # separators) — acceptable: the caller re-checks the real size
+        # and the budget already carries headroom.
         shed += _serialized_size(entries[i])
         removed.append(i)
     for i in removed:  # already in descending index order
@@ -171,6 +193,12 @@ def enforce_context_map_budget(
 ) -> list[str]:
     """Degrade ``context_map`` in place until it serializes within budget.
 
+    Sizes are of the COMPACT artifact encoding — the form
+    :func:`save_context_map` puts on disk. A map whose indented
+    serialization is over budget but whose compact form fits is
+    therefore NOT degraded: compact re-encoding is the first, lossless
+    lever, and these lossy steps apply only past it.
+
     Progressive, cheapest-loss first — each step only runs when the map
     is still over budget after the previous one:
 
@@ -222,8 +250,9 @@ def enforce_context_map_budget(
 
     if applied:
         logger.info(
-            "context-map size budget: %d bytes exceeded the %d-byte "
-            "producer budget (consumer read cap %d) — %s; now %d bytes",
+            "context-map size budget: %d compact-encoded bytes exceeded "
+            "the %d-byte producer budget (consumer read cap %d) — %s; "
+            "now %d bytes",
             original_size, budget_bytes, CONTEXT_MAP_CONSUMER_MAX_BYTES,
             "; ".join(applied), size,
         )
@@ -234,11 +263,49 @@ def enforce_context_map_budget(
         # dropped here. Consumers bounded at the read cap may refuse
         # the artifact; say so rather than silently shipping it.
         logger.warning(
-            "context-map size budget: still %d bytes after degradation "
-            "(budget %d) — remaining content carries no machine "
-            "provenance stamp (treated as LLM-authored) and is never "
-            "dropped here", size, budget_bytes,
+            "context-map size budget: still %d compact-encoded bytes "
+            "after degradation (budget %d) — remaining content carries "
+            "no machine provenance stamp (treated as LLM-authored) and "
+            "is never dropped here", size, budget_bytes,
         )
+    return applied
+
+
+def save_context_map(
+    path: str | Path,
+    context_map: dict[str, Any],
+    *,
+    sort_keys: bool = False,
+    budget_bytes: int = CONTEXT_MAP_PRODUCER_BUDGET_BYTES,
+    mode: int | None = None,
+) -> list[str]:
+    """Write ``context_map`` to ``path`` in the compact producer
+    encoding, budget-enforcing (in place) first.
+
+    THE write chokepoint for ``context-map.json`` (and its
+    binary-analysis twin): producers must not route the map through a
+    pretty-printing writer, because consumers cap on FILE bytes and
+    indented serialization can exceed budgets a compact encoding of
+    the same data fits — the enforcement measurement and the artifact
+    must use the same encoding. Always compact: the artifact is
+    machine-consumed (readers parse it; diagram / review surfaces
+    re-render from the parsed data), so no consumer needs indentation,
+    and a single encoding keeps measurement equal to disk bytes by
+    construction.
+
+    Atomic write (tempfile + rename) like ``save_json``. Returns the
+    list of lossy degradation descriptions applied — empty when the
+    compact encoding alone fit the budget.
+    """
+    applied = enforce_context_map_budget(
+        context_map, budget_bytes=budget_bytes,
+    )
+    write_text_atomically(
+        path,
+        dumps_artifact(context_map, indent=None, sort_keys=sort_keys) + "\n",
+        tmp_prefix=".~savejson-",
+        mode=mode,
+    )
     return applied
 
 
@@ -246,4 +313,5 @@ __all__ = [
     "CONTEXT_MAP_CONSUMER_MAX_BYTES",
     "CONTEXT_MAP_PRODUCER_BUDGET_BYTES",
     "enforce_context_map_budget",
+    "save_context_map",
 ]

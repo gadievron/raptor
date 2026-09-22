@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 from typing import Any
 
 from core.artifacts import context_map_budget as cmb
+from core.json import dumps_artifact, load_json
 
 
 def _llm_entry(i: int) -> dict[str, Any]:
@@ -224,6 +227,89 @@ def test_stamped_flat_sinks_are_capped():
     assert any("machine-generated sink" in a for a in applied)
     assert any(s.get("id") == "SINK-N-000" for s in m["sinks"])
     assert cmb._serialized_size(m) <= budget
+
+
+def _independent_sizes(m: dict[str, Any]) -> tuple[int, int]:
+    """(compact, indented) byte sizes measured WITHOUT the module under
+    test — stdlib json only — so the fixture shape cannot drift with
+    the governor's own encoder choices."""
+    compact = len(json.dumps(m, separators=(",", ":")).encode("utf-8"))
+    indented = len(json.dumps(m, indent=2).encode("utf-8"))
+    return compact, indented
+
+
+def test_indented_overage_compact_fit_is_lossless() -> None:
+    """Compact serialization is the first, lossless lever: a map whose
+    INDENTED serialization exceeds the budget must not be degraded when
+    its compact encoding fits — the compact form is what reaches disk."""
+    m = _context_map(n_llm=2, n_synth=40)
+    compact, indented = _independent_sizes(m)
+    budget = (compact + indented) // 2
+    assert compact <= budget < indented  # the defect's shape
+
+    before = copy.deepcopy(m)
+    applied = cmb.enforce_context_map_budget(m, budget_bytes=budget)
+    assert applied == []
+    assert m == before
+
+
+def test_save_context_map_round_trip(tmp_path: Path) -> None:
+    """The written artifact is compact, consumer-loadable under the
+    read cap, and parses back to exactly the enforced data."""
+    m = _context_map()
+    path = tmp_path / "context-map.json"
+    applied = cmb.save_context_map(path, m)
+    assert applied == []
+
+    raw = path.read_text(encoding="utf-8")
+    assert raw == dumps_artifact(m, indent=None) + "\n"
+    assert "\n" not in raw.rstrip("\n")  # single compact line
+
+    loaded = load_json(path, max_bytes=cmb.CONTEXT_MAP_CONSUMER_MAX_BYTES)
+    assert loaded == m
+
+
+def test_save_context_map_within_indented_overage(tmp_path: Path) -> None:
+    """End-to-end defect shape: indented size over budget, compact
+    fits — nothing dropped, on-disk size within budget, loadable."""
+    m = _context_map(n_llm=2, n_synth=40)
+    compact, indented = _independent_sizes(m)
+    budget = (compact + indented) // 2
+    before = copy.deepcopy(m)
+
+    path = tmp_path / "context-map.json"
+    applied = cmb.save_context_map(path, m, budget_bytes=budget)
+    assert applied == []
+    assert m == before
+    # +1 for the trailing newline; the producer budget carries far
+    # more headroom below the consumer cap than that.
+    assert path.stat().st_size <= budget + 1
+    assert load_json(path, max_bytes=budget + 1) == before
+
+
+def test_save_context_map_degrades_when_compact_over(tmp_path: Path) -> None:
+    """When even the compact encoding exceeds the budget, lossy
+    degradation proceeds as before and the result is written."""
+    m = _context_map(n_llm=2, n_synth=6)
+    sim = copy.deepcopy(m)
+    cmb._drop_synth_ast_views(sim)
+    budget = cmb._serialized_size(sim)
+
+    path = tmp_path / "context-map.json"
+    applied = cmb.save_context_map(path, m, budget_bytes=budget)
+    assert len(applied) == 1
+    assert applied[0].startswith("dropped ast_view")
+    assert path.stat().st_size <= budget + 1
+    assert load_json(path, max_bytes=budget + 1) == m  # enforced in place
+
+
+def test_save_context_map_sort_keys(tmp_path: Path) -> None:
+    m = {"z": 1, "a": {"c": 2, "b": 3}}
+    path = tmp_path / "context-map.json"
+    cmb.save_context_map(path, m, sort_keys=True)
+    raw = path.read_text(encoding="utf-8")
+    assert raw.index('"a"') < raw.index('"z"')
+    assert load_json(path) == m
 
 
 def test_llm_sinks_never_dropped():
