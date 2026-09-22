@@ -113,6 +113,18 @@ _SEMGREP_LANG_BY_EXT: dict[str, str] = {
     ".go": "go",
     ".rs": "rust",
     ".php": "php",
+    # .phtml is in semgrep's own target selection for language:php —
+    # without this row the CWE-dispatch semgrep leg dropped on
+    # templating trees. The other legacy suffixes (.php5/.php4/.php3)
+    # are deliberately ABSENT: semgrep skips them for php-language
+    # rules (paths.scanned stays empty), so mapping them here would
+    # (a) regress the dynamic per-hypothesis rules, whose generic key
+    # DOES scan those files today, and (b) record a semgrep dispatch
+    # for a scan that examined nothing — which the pre-existing
+    # CWE-88/327 coverage rows would convert to clean-when-silent.
+    # A live test pins semgrep's actual selection; re-add a suffix
+    # only when that pin shows the engine scanning it.
+    ".phtml": "php",
     ".rb": "ruby",
     ".cs": "csharp",
     ".kt": "kotlin",

@@ -134,6 +134,22 @@ class TestLanguageGate:
         for other in ("main.c", "app.py", "lib.js", "pkg/mod.go", ""):
             assert resolve_semgrep_rule_for_cwe(cwe, other) is None
 
+    def test_phtml_resolves_but_skipped_legacy_suffixes_do_not(self):
+        """.phtml is in semgrep's php target selection, so the leg
+        must dispatch there. .php5/.php4/.php3 are NOT (the installed
+        engine skips them for php-language rules — see the live pin
+        below), so they must stay generic: a php mapping would both
+        regress the generic-keyed dynamic rules that DO scan those
+        files and record a semgrep dispatch for a scan that examined
+        nothing."""
+        from core.audit.hypothesis_mapping import semgrep_language_for
+
+        assert semgrep_language_for("view.phtml") == "php"
+        assert resolve_semgrep_rule_for_cwe("CWE-93", "view.phtml")
+        for path in ("admin.php5", "old.php4", "lib.php3"):
+            assert semgrep_language_for(path) == "generic"
+            assert resolve_semgrep_rule_for_cwe("CWE-93", path) is None
+
     @pytest.mark.parametrize("cwe", sorted(_PHP_FAMILIES))
     def test_php_chain_has_curated_semgrep_leg(self, cwe: str):
         chain = _cwe_fallback_chain(cwe, "", "src/index.php")
@@ -276,3 +292,41 @@ class TestLiveAdjudication:
         assert result.outcome == "refuted", (
             f"{cwe}: {result.outcome} {result.errors}"
         )
+
+    def test_semgrep_php_target_selection_pin(self, tmp_path: Path):
+        """Live pin of the engine's ACTUAL selection for language:php
+        rules: .phtml is scanned, .php5/.php4/.php3 are not — the
+        extension map's php rows depend on this. If a future semgrep
+        starts scanning a legacy suffix, this fails and the suffix
+        can be promoted to the php mapping."""
+        import json
+        import subprocess
+
+        rule = tmp_path / "probe.yaml"
+        rule.write_text(
+            "rules:\n"
+            "  - id: probe\n"
+            "    languages: [php]\n"
+            "    severity: INFO\n"
+            "    message: probe\n"
+            "    pattern: mt_rand()\n",
+        )
+        targets = []
+        for ext in ("phtml", "php5", "php4", "php3"):
+            target = tmp_path / f"f.{ext}"
+            target.write_text("<?php\n$x = mt_rand();\n")
+            targets.append(str(target))
+        proc = subprocess.run(
+            ["semgrep", "scan", "--config", str(rule), "--metrics",
+             "off", "--json", "--quiet", *targets],
+            capture_output=True, text=True, timeout=180, check=False,
+        )
+        assert proc.returncode == 0, proc.stderr[:500]
+        scanned = {
+            Path(p).name
+            for p in json.loads(proc.stdout).get("paths", {}).get(
+                "scanned", [],
+            )
+        }
+        assert "f.phtml" in scanned
+        assert not scanned & {"f.php5", "f.php4", "f.php3"}, scanned
