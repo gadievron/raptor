@@ -63,13 +63,28 @@ _PINNED = {
 }
 
 
+def _is_python_shebang(path: Path) -> bool:
+    try:
+        with path.open("rb") as fh:
+            first = fh.readline(96)
+    except OSError:
+        return False
+    return first.startswith(b"#!") and b"python" in first
+
+
 def _runtime_sources() -> list[Path]:
+    """Runtime Python under the scan roots: *.py plus extensionless
+    python-shebang scripts (subsystem scripts/ harnesses invoke codeql
+    too and must not escape the fence)."""
     out: list[Path] = []
     for root in _SCAN_ROOTS:
-        out.extend(
-            p for p in sorted(root.rglob("*.py"))
-            if "tests" not in p.parts and "__pycache__" not in p.parts
-        )
+        for p in sorted(root.rglob("*")):
+            if not p.is_file() or p.is_symlink():
+                continue
+            if "tests" in p.parts or "__pycache__" in p.parts:
+                continue
+            if p.suffix == ".py" or (not p.suffix and _is_python_shebang(p)):
+                out.append(p)
     return out
 
 
