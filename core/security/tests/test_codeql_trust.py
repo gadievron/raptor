@@ -86,6 +86,90 @@ class TestUnexaminableTarget:
         assert "\x1b" not in out and "\x07" not in out
 
 
+class TestIncompleteEnumeration:
+    """An enumeration that skipped subtrees is not a verdict: os.walk's
+    default skips unlistable dirs silently, so unreadable (or mid-walk
+    vanished) subtrees previously yielded "clean" over pack files the
+    gate never saw — and modes can flip readable again before
+    `codeql database create` runs (the mode-flip TOCTOU variant)."""
+
+    def test_unlistable_subdir_blocks(self, tmp_path, capsys):
+        import os as _os
+        if _os.geteuid() == 0:
+            pytest.skip("root ignores directory mode bits")
+        hidden = tmp_path / "vendor"
+        hidden.mkdir()
+        (hidden / "qlpack.yml").write_text("name: x\n")
+        hidden.chmod(0)
+        try:
+            blocked = _check(str(tmp_path))
+        finally:
+            hidden.chmod(0o700)
+        assert blocked is True
+        assert "scan_incomplete" in capsys.readouterr().out
+
+    def test_symlinked_github_to_unreadable_blocks(self, tmp_path, capsys):
+        """The one hiding shape the walk lane cannot see: `.github` as
+        a SYMLINK (symlinked dirs are listed, never entered — no walk
+        error fires) to an unreadable tree holding codeql-config.yml.
+        Only the os.lstat presence probe reaches it; the pathlib-based
+        probe swallowed the EACCES on 3.13+ and scanned nothing."""
+        import os as _os
+        if _os.geteuid() == 0:
+            pytest.skip("root ignores directory mode bits")
+        hidden = tmp_path / "hidden"
+        (hidden / "codeql").mkdir(parents=True)
+        (hidden / "codeql" / "codeql-config.yml").write_text("packs: [x]\n")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".github").symlink_to(hidden)
+        hidden.chmod(0)
+        try:
+            blocked = _check(str(repo))
+        finally:
+            hidden.chmod(0o700)
+        assert blocked is True
+        assert "oversized/unreadable" in capsys.readouterr().out
+
+    def test_path_present_probe_error_reports_present(self, monkeypatch):
+        """Version-stable probe semantics: pathlib's exists()/is_symlink()
+        raise on probe errors on ≤3.12 and swallow to False on 3.13+ —
+        both wrong here. The os.lstat probe reports EACCES-class errors
+        as present (scanned → blocked) and only ENOENT/ENOTDIR as
+        absent."""
+        from core.security.codeql_trust import _path_present
+        import os as _os
+
+        def _raise(err):
+            def _l(_p):
+                raise OSError(err, _os.strerror(err))
+            return _l
+
+        import errno as _errno
+        monkeypatch.setattr(_os, "lstat", _raise(_errno.EACCES))
+        assert _path_present(Path("/probe/denied")) is True
+        monkeypatch.setattr(_os, "lstat", _raise(_errno.ENOENT))
+        assert _path_present(Path("/probe/gone")) is False
+        monkeypatch.setattr(_os, "lstat", _raise(_errno.ENOTDIR))
+        assert _path_present(Path("/probe/notdir")) is False
+
+    def test_unlistable_target_root_blocks(self, tmp_path, capsys):
+        import os as _os
+        if _os.geteuid() == 0:
+            pytest.skip("root ignores directory mode bits")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        # stat needs only traversal to the dir (parent +x); listing
+        # needs the dir's own read bit — mode 0 is stat-able, unlistable
+        repo.chmod(0)
+        try:
+            blocked = _check(str(repo))
+        finally:
+            repo.chmod(0o700)
+        assert blocked is True
+        assert "scan_incomplete" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # codeql-pack.yml / qlpack.yml scanning
 # ---------------------------------------------------------------------------

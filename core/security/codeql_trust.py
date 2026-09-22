@@ -42,6 +42,7 @@ system; trust must come from explicit operator intent).
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 import re
@@ -196,10 +197,21 @@ def _mask(s: str, keep: int = 8) -> str:
 
 
 def _path_present(p: Path) -> bool:
+    # os.lstat, not pathlib exists()/is_symlink(): their OSError
+    # behavior is version-dependent (≤3.12 raises, 3.13+ swallows to
+    # False), and False on a probe error waved an uninspectable
+    # config file through as absent.
     try:
-        return p.is_symlink() or p.exists()
-    except OSError:
-        return False
+        os.lstat(p)
+        return True
+    except OSError as e:
+        if e.errno in (errno.ENOENT, errno.ENOTDIR):
+            return False
+        # EACCES/EIO/...: something is there in a form the probe
+        # cannot see. Report present — the per-file scanner then
+        # reads it, and an unreadable file is a blocking
+        # "oversized/unreadable" finding.
+        return True
 
 
 def _read_capped(path: Path) -> bytes | None:
@@ -426,11 +438,31 @@ def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
     # one filename cannot starve enumeration of the other.
     pack_files: list[Path] = []
     capped = False
+    # Walk errors are collected, never swallowed: os.walk's default is
+    # to skip an unlistable directory silently, so an unreadable (or
+    # mid-walk vanishing) subtree yielded a verdict computed from a
+    # knowably-incomplete enumeration — the same shape the pack-file
+    # cap already treats as blocking below.
+    walk_errors = 0
+
+    def _on_walk_error(e: OSError) -> None:
+        nonlocal walk_errors
+        walk_errors += 1
+        # Debug-tier locator (first few only): helps an operator find
+        # root-owned or damaged leftovers without a manual find. The
+        # blocking finding itself stays a count + fixed text — dir
+        # names from the walk are repo-controlled bytes.
+        if walk_errors <= 5:
+            _logger.debug(
+                "codeql trust: pack enumeration error: %s",
+                _safe(_truncate(str(getattr(e, "filename", None) or e),
+                                200)))
+
     pattern_names = ("codeql-pack.yml", "qlpack.yml")
     counts = dict.fromkeys(pattern_names, 0)
     try:
         for dirpath, dirnames, filenames in os.walk(
-            target, followlinks=False,
+            target, followlinks=False, onerror=_on_walk_error,
         ):
             dirnames[:] = sorted(
                 d for d in dirnames
@@ -446,7 +478,7 @@ def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
                 pack_files.append(Path(dirpath) / name)
                 counts[name] += 1
     except OSError:
-        pass
+        walk_errors += 1
 
     if capped:
         _logger.warning(
@@ -460,12 +492,19 @@ def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
     if _path_present(config_path):
         pack_files.append(config_path)
 
-    if not pack_files and not capped:
+    if not pack_files and not capped and not walk_errors:
         return ((), False)
 
     scans: list[FileScan] = []
     for path in pack_files:
-        if path.is_symlink():
+        # Guarded: pathlib is_symlink() raises on probe errors on
+        # ≤3.12. Unprobeable → not a symlink here; the per-file scan
+        # below then blocks on the unreadable content.
+        try:
+            _is_link = path.is_symlink()
+        except OSError:
+            _is_link = False
+        if _is_link:
             fs = FileScan(path=path)
             try:
                 tgt = str(path.readlink())
@@ -499,6 +538,22 @@ def _scan_repo(resolved_path: str) -> tuple[tuple[FileScan, ...], bool]:
             True,
         ))
         scans.append(capped_scan)
+
+    if walk_errors:
+        # Same fail-closed shape as scan_capped: an enumeration that
+        # skipped subtrees is not a verdict. Unreadable dirs can flip
+        # readable between this check and `codeql database create`
+        # (the mode-flip variant of the TOCTOU the no-cache docstring
+        # describes), so "couldn't look" must not read as "clean".
+        err_scan = FileScan(path=target)
+        err_scan.findings.append(Finding(
+            "scan_incomplete",
+            f"{walk_errors} directory error(s) during pack-file "
+            "enumeration (unreadable or vanished dirs) — uninspected "
+            "subtrees remain",
+            True,
+        ))
+        scans.append(err_scan)
 
     any_blocking = any(s.has_blocking() for s in scans)
     return (tuple(scans), any_blocking)
