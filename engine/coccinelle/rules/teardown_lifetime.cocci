@@ -33,7 +33,10 @@ position p;
  v = container_of(...);
 )
 ...
-// @vocab: callback_cancels_async
+// seed-only alternation (no @vocab marker): the vocabulary's
+// callback_cancels bucket has no async/sync split — learned names
+// include waiting _sync cancels, and splicing those into this
+// ASYNC-only trigger would fire on the correct teardown idiom.
 \(timer_delete\|del_timer\|cancel_work\|cancel_delayed_work\|hrtimer_try_to_cancel\)(&v->fld);
 ...
 // @vocab: deallocators
@@ -53,7 +56,10 @@ identifier fld;
 position p;
 @@
 
-// @vocab: callback_cancels_async
+// seed-only alternation (no @vocab marker): the vocabulary's
+// callback_cancels bucket has no async/sync split — learned names
+// include waiting _sync cancels, and splicing those into this
+// ASYNC-only trigger would fire on the correct teardown idiom.
 \(timer_delete\|del_timer\|cancel_work\|cancel_delayed_work\|hrtimer_try_to_cancel\)(&E->fld);
 // @vocab: callback_cancels
 ... when != \(timer_delete_sync\|del_timer_sync\|timer_shutdown\|timer_shutdown_sync\|hrtimer_cancel\|cancel_work_sync\|cancel_delayed_work_sync\|flush_work\|flush_delayed_work\)(&E->fld)
@@ -86,7 +92,10 @@ position p;
  priv = E;
 )
 ...
-// @vocab: callback_cancels_async
+// seed-only alternation (no @vocab marker): the vocabulary's
+// callback_cancels bucket has no async/sync split — learned names
+// include waiting _sync cancels, and splicing those into this
+// ASYNC-only trigger would fire on the correct teardown idiom.
 \(timer_delete\|del_timer\|cancel_work\|cancel_delayed_work\|hrtimer_try_to_cancel\)(&priv->fld);
 // @vocab: callback_cancels
 ... when != \(timer_delete_sync\|del_timer_sync\|timer_shutdown\|timer_shutdown_sync\|hrtimer_cancel\|cancel_work_sync\|cancel_delayed_work_sync\|flush_work\|flush_delayed_work\)(&priv->fld)

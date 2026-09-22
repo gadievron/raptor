@@ -38,10 +38,13 @@ _BUCKET_MAP = {
     "refcount_gets": "refcount_gets",
     "refcount_puts": "refcount_puts",
     "callback_cancels": "callback_cancels",
-    # teardown_lifetime.cocci also marks ``callback_cancels_async``
-    # slots; DomainVocabulary carries no async/sync split, so those
-    # markers stay seed-only — _get_bucket warns instead of silently
-    # yielding the empty set (U12-F265).
+    # DomainVocabulary carries no async/sync split for callback
+    # cancels, so async-only splice slots (teardown_lifetime.cocci's
+    # trigger alternations) carry plain seed-only comments instead of
+    # @vocab markers. An unmapped bucket name is an authoring error:
+    # _get_bucket warns instead of silently yielding the empty set,
+    # and the render-validity oracle turns that warning into a
+    # failure.
 }
 
 # Strict identifier grammar for spliced names — same expression as
