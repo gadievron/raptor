@@ -173,5 +173,21 @@ class TestSandboxIntegration(unittest.TestCase):
         assert "subprocess.run(" not in src.split("sandbox_run(", 1)[1]
 
 
+class TestPythonpathNotReinjected(unittest.TestCase):
+    """PYTHONPATH is on DANGEROUS_ENV_VARS — get_safe_env() drops it by
+    design. The child env must carry exactly the validated openant-core
+    path, never the ambient PYTHONPATH tail (env-poisoning lane: the
+    subprocess runs with network and ANTHROPIC_API_KEY)."""
+
+    def test_ambient_pythonpath_never_reaches_child(self):
+        with tempfile.TemporaryDirectory() as td:
+            core = _make_fake_core(Path(td))
+            hostile = str(Path(td) / "attacker-site-packages")
+            with patch.dict(os.environ, {"PYTHONPATH": hostile}, clear=False):
+                env = _build_subprocess_env(OpenAntConfig(core_path=core))
+            self.assertEqual(env["PYTHONPATH"], str(core.resolve()))
+            self.assertNotIn(hostile, env["PYTHONPATH"])
+
+
 if __name__ == "__main__":
     unittest.main()

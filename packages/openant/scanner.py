@@ -18,7 +18,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core.config import RaptorConfig
+from core.json import load_json
 from core.logging import get_logger
+
+# Budget for OpenAnt's pipeline_output.json (produced over a hostile
+# repo) — same ceiling as the run-artifact readers.
+from core.coverage.record import RUN_ARTIFACT_MAX_BYTES as _OUTPUT_MAX_BYTES
 
 # Maximum bytes to persist from OpenAnt subprocess stderr. Generous upper bound
 # for any reasonable error trace; bounded so a misbehaving OpenAnt that spams
@@ -200,22 +205,22 @@ def _build_subprocess_env(config: OpenAntConfig) -> dict[str, str]:
         ) from e
     if not (resolved / "core" / "scanner.py").exists():
         raise RuntimeError(f"PYTHONPATH target {resolved} is not an openant-core directory")
-    existing_pythonpath = os.environ.get("PYTHONPATH", "")
-    core_str = str(resolved)
-    if existing_pythonpath:
-        safe["PYTHONPATH"] = f"{core_str}{os.pathsep}{existing_pythonpath}"
-    else:
-        safe["PYTHONPATH"] = core_str
+    # Exactly the validated core path — never the ambient PYTHONPATH
+    # tail. PYTHONPATH is on DANGEROUS_ENV_VARS (redirects Python
+    # module imports); get_safe_env() drops it by design, and
+    # re-appending the raw os.environ value re-opened the exact
+    # env-poisoning lane the allowlist exists to close (the child runs
+    # with network and ANTHROPIC_API_KEY). OpenAnt needs only its own
+    # core directory on the path.
+    safe["PYTHONPATH"] = str(resolved)
     return safe
 
 
 def _load_json(path: Path) -> dict:
-    try:
-        with path.open(encoding="utf-8") as fh:
-            return json.load(fh)
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        logger.warning(f"Cannot load OpenAnt output {path}: {exc}")
-        return {}
+    """Bounded read of an OpenAnt output document (core.json.load_json
+    already warns on parse failure / over-budget files)."""
+    data = load_json(path, max_bytes=_OUTPUT_MAX_BYTES)
+    return data if isinstance(data, dict) else {}
 
 
 def _extract_usage(stdout: str, pipeline_output: dict) -> dict[str, Any]:
