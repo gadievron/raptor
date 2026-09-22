@@ -169,12 +169,19 @@ _INC_ASM_RE = re.compile(
 )
 _INC_C_RE = re.compile(
     # Both branches horizontal-only: indent, and the signature
-    # token span [\w* \t] — the old [\w*\s] crossed newlines, so a
-    # line-broken signature no longer routes .inc content to C (a
+    # token span [\w* \t] — a [\w*\s] span would cross newlines, and
+    # a line-broken signature must NOT route .inc content to C (a
     # real C fragment virtually always carries an #include/#define
     # or a same-line signature).
+    # The signature branch spells "indent, then a token span of >=2
+    # chars ending in a word char" deterministically: the indent span
+    # hands over at the first \w/*, and only the two-char minimum tail
+    # may still sit in blank space. The naive spelling
+    # [^\S\n]*[\w* \t]+\w+ makes three unbounded spans compete over
+    # the same space/tab run — quadratic on a planted horizontal run
+    # (seconds at 16K spaces even inside the sniff head).
     r'(?m)^[^\S\n]*#\s*(?:include|define|ifn?def|pragma)\b'
-    r'|^[^\S\n]*[\w* \t]+\w+\s*\([^;{)]*\)\s*\{'
+    r'|^[^\S\n]*(?:[\w*][\w* \t]*)?[\w* \t]\w\s*\([^;{)]*\)\s*\{'
 )
 
 

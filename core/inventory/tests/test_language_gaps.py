@@ -179,6 +179,32 @@ def test_inc_fragment_routing():
     assert refine_language("inc", "f.inc", "just text\n") == "inc"
 
 
+def test_inc_space_run_is_fast():
+    """Hostile .inc content that is one long horizontal SPACE run: in
+    the C-signature branch a naive ``[^\\S\\n]*[\\w* \\t]+\\w+``
+    spelling lets the indent span and the token span compete over the
+    same run — quadratic on a single anchor (seconds at the 16K sniff
+    head alone). The deterministic token-span spelling is linear.
+    Both-direction bound: fast AND a real same-line signature still
+    routes to C, while a line-broken signature still does not."""
+    import time
+
+    from core.inventory.languages import _INC_C_RE
+
+    run = " " * (1 << 17)
+    start = time.monotonic()
+    assert _INC_C_RE.search(run) is None
+    assert refine_language("inc", "f.inc", run) == "inc"
+    assert time.monotonic() - start < 5.0
+    # The real C signal still routes.
+    assert refine_language(
+        "inc", "f.inc", "static int frag_fn(int a, char *b) {\n") == "c"
+    # Token span stays line-bound: a line-broken signature alone is
+    # not a C signal.
+    assert refine_language(
+        "inc", "f.inc", "static int\nf(int x) {\n}\n") == "inc"
+
+
 # ---------------------------------------------------------------------
 # End-to-end: checklist admission + recorded exclusions
 # ---------------------------------------------------------------------
