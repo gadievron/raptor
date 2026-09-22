@@ -56,6 +56,7 @@ Informational (no block):
     .mcp.json: url-only servers (sse/http transport)
 """
 
+import errno
 import json
 import logging
 import os
@@ -709,8 +710,18 @@ def _read_config_state(target: Path) -> tuple:
     for _kind, p in _config_candidates(target):
         try:
             st = os.lstat(p)
-        except OSError:
-            entries.append(("absent",))
+        except OSError as e:
+            # Only "nothing there" means absent. Any other lstat
+            # failure (EACCES, EIO, ELOOP, ...) means a candidate
+            # EXISTS in some form the checker cannot see — and the CC
+            # session (same uid, a later moment, possibly changed
+            # modes) might read it fine. "absent" would wave that
+            # through; classify unreadable, which the scanner already
+            # treats as dangerous.
+            if e.errno in (errno.ENOENT, errno.ENOTDIR):
+                entries.append(("absent",))
+            else:
+                entries.append(("unreadable",))
             continue
         if stat.S_ISLNK(st.st_mode):
             try:

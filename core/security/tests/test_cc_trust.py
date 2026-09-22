@@ -126,6 +126,34 @@ class TestUnexaminableTarget:
         assert capsys.readouterr().out == ""
 
 
+class TestUninspectableCandidate:
+    """A config candidate whose lstat fails for any reason other than
+    "nothing there" (ENOENT/ENOTDIR) exists in a form the checker
+    cannot see — the CC session might still read it. That is
+    "unreadable" (blocking), never "absent"."""
+
+    def test_unsearchable_claude_dir_blocks(self, tmp_path, capsys):
+        if os.geteuid() == 0:
+            pytest.skip("root ignores directory mode bits")
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        (claude / "settings.json").write_text("{}")
+        claude.chmod(0)
+        try:
+            blocked = _check(str(tmp_path))
+        finally:
+            claude.chmod(0o700)
+        assert blocked is True
+        assert "(malformed)" in capsys.readouterr().out
+
+    def test_file_shaped_claude_entry_stays_absent(self, tmp_path, capsys):
+        """.claude as a regular FILE gives ENOTDIR on the settings
+        candidates: genuinely nothing at those paths — silent clean."""
+        (tmp_path / ".claude").write_text("not a dir")
+        assert _check(str(tmp_path)) is False
+        assert capsys.readouterr().out == ""
+
+
 class TestInnocuousSettings:
     """Files present but containing no dangerous or informational fields
     we care about — silent, not a block."""
