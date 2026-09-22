@@ -68,6 +68,7 @@ def _drive(
     keepalive_s: float | None,
     request_bytes: int,
     retry_transport: str = "pool",
+    spend_aware: bool = False,
 ) -> dict:
     """Run one scenario; return the measurement record."""
     env_backup = os.environ.get("RAPTOR_HTTP_KEEPALIVE_S")
@@ -101,7 +102,29 @@ def _drive(
                 t0 = time.monotonic()
                 attempt = 0
                 while True:
+                    # Spend-aware retry policy (mirrors the worker
+                    # gate in core.llm.client): once the response HEAD
+                    # has arrived, the upstream has processed — and
+                    # billed — the generation, so a failure after that
+                    # point is terminal, never re-sent. The stream API
+                    # separates head receipt from body read exactly
+                    # where the policy needs the boundary.
+                    head_received = False
                     try:
+                        if spend_aware:
+                            with client.stream(
+                                "POST",
+                                upstream.base_url + "/v1/messages",
+                                content=payload,
+                                headers={
+                                    "Content-Type": "application/json",
+                                },
+                            ) as resp:
+                                head_received = True
+                                resp.raise_for_status()
+                                resp.read()
+                            out.attempts.append("ok")
+                            break
                         if attempt > 0 and retry_transport == "fresh":
                             # Retry on a dedicated one-shot client:
                             # a guaranteed fresh connection instead
@@ -130,6 +153,11 @@ def _drive(
                         break
                     except httpx.HTTPError as exc:
                         out.attempts.append(type(exc).__name__)
+                        if spend_aware and head_received:
+                            # Mid-response death: attempt consumed
+                            # upstream — the whole point of the mode
+                            # is to NOT chase it with re-sends.
+                            break
                         attempt += 1
                         if attempt > retries:
                             break
@@ -213,6 +241,15 @@ def _scenarios(args: argparse.Namespace) -> list[dict]:
              gap_s=t * 2.0, retries=0, keepalive_s=t * 0.5, **common),
         dict(name="mid-response-rst-blind-retry", mode="rst-mid-response",
              gap_s=t * 0.3, retries=2, keepalive_s=None, **common),
+        # Paired with the blind scenario above: same teardown, same
+        # retry budget, but retries stop once the response head has
+        # arrived (the worker gate's policy). The before/after
+        # multiplier is the two scenarios' ``processed`` ratio —
+        # blind re-buys the generation once per retry, spend-aware
+        # holds upstream processing at one per logical call.
+        dict(name="mid-response-rst-spend-aware", mode="rst-mid-response",
+             gap_s=t * 0.3, retries=2, keepalive_s=None,
+             spend_aware=True, **common),
         dict(name="close-after-response", mode="close-after-response",
              gap_s=t * 0.3, retries=0, keepalive_s=None, **common),
     ]
@@ -247,9 +284,11 @@ def main() -> int:
                      rounds=spec["rounds"], retries=spec["retries"],
                      keepalive_s=spec["keepalive_s"],
                      request_bytes=spec["request_bytes"],
-                     retry_transport=spec.get("retry_transport", "pool"))
+                     retry_transport=spec.get("retry_transport", "pool"),
+                     spend_aware=spec.get("spend_aware", False))
         rec["name"] = name
         rec["retry_transport"] = spec.get("retry_transport", "pool")
+        rec["spend_aware"] = spec.get("spend_aware", False)
         records.append(rec)
         if args.json:
             print(json.dumps(rec))
