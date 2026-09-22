@@ -244,13 +244,20 @@ def _apply_inherited_view(
         if not inherited:
             continue
         # Resolve any ${...} in the inherited value against the
-        # combined property set. (Most inherited versions are
-        # already concrete; this handles cases like
-        # ``spring-boot-dependencies`` declaring
-        # ``${jackson.version}``.)
+        # MERGED child-wins property set built above — parent-chain
+        # managed versions arrive RAW from the resolver precisely so
+        # a child's property override applies here (Maven's
+        # effective-POM precedence); resolving against the view's
+        # ancestor-only properties reported the parent's stale pin.
         from . import pom_inheritance as _inh
-        resolved = _inh._resolve_property(inherited, view)
-        if not resolved:
+        resolved = _inh._resolve_property(inherited, properties)
+        if not resolved or (
+            resolved.startswith("${") and resolved.endswith("}")
+        ):
+            # No scope defines the property: ``${jackson.version}``
+            # is not a version — letting it flow verbatim into
+            # ``dep.version`` / purl poisons CVE matching. Leave the
+            # dep unpinned instead.
             continue
         dep.version = resolved
         dep.pin_style = _classify_version(resolved)[0]

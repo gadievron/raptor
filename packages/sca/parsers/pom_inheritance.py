@@ -80,6 +80,7 @@ import re
 from pathlib import Path
 
 from . import _safe_read
+from collections.abc import Mapping
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -323,7 +324,7 @@ class PomInheritanceResolver:
             self._parent_path(parent_el, pom_path),
             parent_root, parent_view, visited, depth=depth + 1,
         )
-        _absorb_self(parent_root, parent_view)
+        _absorb_self(parent_root, parent_view, resolve_versions=False)
         self._absorb_boms(parent_root, parent_view, visited, depth + 1)
 
         # Stash for reuse; merge into the caller's view.
@@ -551,7 +552,7 @@ class PomInheritanceResolver:
             group = _text(entry, "groupId")
             artifact = _text(entry, "artifactId")
             version = _resolve_property(
-                _text(entry, "version"), resolve_view)
+                _text(entry, "version"), resolve_view.properties)
             if not (group and artifact and version):
                 continue
             coord_key = (group, artifact, version)
@@ -575,7 +576,7 @@ class PomInheritanceResolver:
             self._walk_parents(
                 None, bom_root, bom_view, visited, depth=depth + 1,
             )
-            _absorb_self(bom_root, bom_view)
+            _absorb_self(bom_root, bom_view, resolve_versions=True)
             self._absorb_boms(bom_root, bom_view, visited, depth + 1)
             self._cache[coord_key] = bom_view
             _merge_into(view, bom_view)
@@ -648,11 +649,31 @@ def _own_properties(root: Any) -> dict[str, str]:
     return out
 
 
-def _absorb_self(root: Any, view: InheritanceView) -> None:
+def _absorb_self(
+    root: Any, view: InheritanceView, *, resolve_versions: bool,
+) -> None:
     """Add the POM's OWN top-level ``<properties>`` and
     ``<dependencyManagement>`` (excluding BOM imports) to ``view``.
     Called once per ancestor after its parent chain has been merged
-    so the ancestor's own values override its grandparents'."""
+    so the ancestor's own values override its grandparents'.
+
+    ``resolve_versions`` picks the ``${...}`` resolution scope for
+    managed versions, following Maven's effective-POM semantics:
+
+      * ``False`` — parent-chain walk. A managed
+        ``<version>${jackson.version}</version>`` stays RAW in
+        ``view.managed``; the child-side apply pass resolves it
+        against the merged child-wins property set. Eager resolution
+        here baked the ANCESTOR-scope value into the per-coordinate
+        cache, so a child's property override never applied (the
+        canonical corporate pattern: parent pins 2.9.0, child
+        overrides to 2.17.1, Maven yields 2.17.1).
+      * ``True`` — BOM absorption. An imported BOM resolves at its
+        OWN scope; the importing POM's properties never rewrite an
+        imported BOM's ``${...}`` (unresolvable references stay raw
+        and are refused at apply time rather than mis-resolved
+        against the importer's scope).
+    """
     # Properties
     view.properties.update(_own_properties(root))
 
@@ -667,12 +688,10 @@ def _absorb_self(root: Any, view: InheritanceView) -> None:
         version = _text(entry, "version")
         if not (group and artifact and version):
             continue
-        # Property resolution against the in-progress view, so a
-        # version like ``${spring.version}`` picks up the parent
-        # chain's properties.
-        version = _resolve_property(version, view)
-        if not version:
-            continue
+        if resolve_versions:
+            version = _resolve_property(version, view.properties)
+            if not version:
+                continue
         view.managed[(group, artifact)] = version
 
 
@@ -687,19 +706,25 @@ def _merge_into(dst: InheritanceView, src: InheritanceView) -> None:
 
 
 def _resolve_property(
-    value: str | None, view: InheritanceView,
+    value: str | None, properties: Mapping[str, str],
 ) -> str | None:
-    """Resolve a single ``${prop}`` reference using ``view.properties``.
+    """Resolve a single ``${prop}`` reference against ``properties``.
     Returns ``value`` unchanged when it's not a property reference,
     or when the property is undefined. Does not recurse on chained
     property references — Maven supports it but the cases are
-    vanishingly rare in real POMs."""
+    vanishingly rare in real POMs.
+
+    Takes the property MAPPING (not a view) so callers choose the
+    resolution scope explicitly: the child-side apply pass resolves
+    against the merged child-wins set, while the BOM arms resolve at
+    the BOM's own scope (Maven semantics — an importing POM's
+    properties never rewrite an imported BOM's ``${...}``)."""
     if value is None:
         return None
     if not (value.startswith("${") and value.endswith("}")):
         return value
     key = value[2:-1]
-    return view.properties.get(key, value)
+    return properties.get(key, value)
 
 
 def _coord_matches(parent_el: Any, candidate_root: Any) -> bool:

@@ -186,6 +186,215 @@ def test_phase1_local_parent_properties_inherited(tmp_path: Path):
     assert db.version == "2.16.1"
 
 
+_CORPORATE_PARENT_XML = '''\
+<project>
+  <groupId>com.example</groupId>
+  <artifactId>corp-parent</artifactId>
+  <version>1.0</version>
+  <properties>
+    <jackson.version>2.9.0</jackson.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>${jackson.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+'''
+
+_CHILD_WITH_OVERRIDE_XML = '''\
+<project>
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>corp-parent</artifactId>
+    <version>1.0</version>
+  </parent>
+  <artifactId>service</artifactId>
+  <properties>
+    <jackson.version>2.17.1</jackson.version>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+'''
+
+_CHILD_NO_OVERRIDE_XML = '''\
+<project>
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>corp-parent</artifactId>
+    <version>1.0</version>
+  </parent>
+  <artifactId>plain</artifactId>
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+'''
+
+
+def _jackson(deps):
+    return next(
+        (d for d in deps
+         if d.name == "com.fasterxml.jackson.core:jackson-databind"),
+        None,
+    )
+
+
+def test_child_property_override_wins_over_parent_scope(tmp_path: Path):
+    """The canonical corporate pattern: parent pins
+    ``<jackson.version>2.9.0</jackson.version>`` and manages
+    ``jackson-databind ${jackson.version}``; the child OVERRIDES the
+    property. Maven's effective POM resolves managed ``${...}``
+    versions with child-wins property precedence — reporting the
+    parent's stale 2.9.0 mints false CVE findings against a version
+    the build never uses (and hides real ones when a child
+    DOWNGRADES)."""
+    _write(tmp_path, "pom.xml", _CORPORATE_PARENT_XML)
+    child = _write(tmp_path, "service/pom.xml", _CHILD_WITH_OVERRIDE_XML)
+    deps = _parse_with_resolver(child, client=None)
+    db = _jackson(deps)
+    assert db is not None
+    assert db.version == "2.17.1"
+    assert db.purl is not None and db.purl.endswith("@2.17.1")
+
+
+def test_parent_scope_resolution_without_override_unchanged(
+    tmp_path: Path,
+) -> None:
+    """Counter-direction pin: a child with NO override still gets the
+    parent-resolved value (deferring resolution must not lose the
+    ancestor-only case)."""
+    _write(tmp_path, "pom.xml", _CORPORATE_PARENT_XML)
+    child = _write(tmp_path, "plain/pom.xml", _CHILD_NO_OVERRIDE_XML)
+    deps = _parse_with_resolver(child, client=None)
+    db = _jackson(deps)
+    assert db is not None
+    assert db.version == "2.9.0"
+
+
+def test_shared_parent_cache_serves_each_child_its_own_view(
+    tmp_path: Path,
+) -> None:
+    """The per-coordinate view cache used to bake the FIRST child's
+    resolution into the shared entry — sibling modules of one
+    corporate parent then all inherited whichever property scope was
+    walked first. Each child must resolve against its own merged
+    property set."""
+    _write(tmp_path, "pom.xml", _CORPORATE_PARENT_XML)
+    plain = _write(tmp_path, "plain/pom.xml", _CHILD_NO_OVERRIDE_XML)
+    service = _write(tmp_path, "service/pom.xml", _CHILD_WITH_OVERRIDE_XML)
+    resolver = pom_inheritance.PomInheritanceResolver(None)
+    pom_inheritance.set_inheritance_resolver(resolver)
+    try:
+        deps_plain = pom_parser.parse(plain)      # caches the parent
+        deps_service = pom_parser.parse(service)  # cache hit
+    finally:
+        pom_inheritance.set_inheritance_resolver(None)
+    assert _jackson(deps_plain).version == "2.9.0"
+    assert _jackson(deps_service).version == "2.17.1"
+
+
+def test_child_override_does_not_rewrite_imported_bom(tmp_path: Path):
+    """The other direction of the resolution-scope split: an imported
+    BOM resolves ``${...}`` at its OWN scope (Maven semantics — the
+    importing POM's properties never rewrite an imported BOM's
+    managed versions). The child's override must NOT leak into the
+    BOM-pinned version."""
+    bom_xml = '''\
+<project>
+  <groupId>com.fasterxml.jackson</groupId>
+  <artifactId>jackson-bom</artifactId>
+  <version>2.16.0</version>
+  <properties>
+    <jackson.version>2.16.0</jackson.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>${jackson.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+'''
+    child = _write(tmp_path, "pom.xml", '''\
+<project>
+  <groupId>com.example</groupId>
+  <artifactId>bom-consumer</artifactId>
+  <version>1.0</version>
+  <properties>
+    <jackson.version>9.9.9</jackson.version>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson</groupId>
+        <artifactId>jackson-bom</artifactId>
+        <version>2.16.0</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+  </dependencies>
+</project>
+''')
+    client = _StubMavenClient({
+        "com.fasterxml.jackson:jackson-bom:2.16.0": bom_xml,
+    })
+    deps = _parse_with_resolver(child, client=client)
+    db = _jackson(deps)
+    assert db is not None
+    assert db.version == "2.16.0"
+
+
+def test_unresolvable_inherited_property_refused(tmp_path: Path):
+    """An inherited managed version whose ``${prop}`` no scope
+    defines must NOT flow verbatim into ``dep.version`` / purl —
+    ``${jackson.version}`` is not a version and poisons CVE
+    matching downstream. The dep stays unpinned."""
+    _write(tmp_path, "pom.xml", '''\
+<project>
+  <groupId>com.example</groupId>
+  <artifactId>corp-parent</artifactId>
+  <version>1.0</version>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>${undefined.version}</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>
+''')
+    child = _write(tmp_path, "plain/pom.xml", _CHILD_NO_OVERRIDE_XML)
+    deps = _parse_with_resolver(child, client=None)
+    db = _jackson(deps)
+    assert db is not None
+    assert db.version is None
+
+
 def test_phase1_explicit_relativepath(tmp_path: Path):
     """``<parent><relativePath>../../shared/pom.xml</relativePath>``
     is honoured."""
