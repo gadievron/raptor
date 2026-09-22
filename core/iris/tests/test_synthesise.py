@@ -682,3 +682,95 @@ class TestBudgetTerminal:
         warnings = _budget_warnings(caplog)
         assert len(warnings) == 1
         assert "3 batch(es)" in warnings[0].getMessage()
+
+
+class TestSkipSentinelLogging:
+    """Budget/auth skip sentinels must not be presented as LLM errors.
+
+    A cost-capped run used to emit one WARNING per skipped batch with
+    an EMPTY error slot ("dropped after LLM error: ") — the sentinel
+    exceptions carried no message — burying the single honest
+    aggregate line. Skips now log at DEBUG with an explicit message;
+    genuine LLM errors keep the WARNING verbatim.
+    """
+
+    class _ExhaustedClient:
+        calls = 0
+
+        def is_budget_exhausted(self, estimated_cost: float = 0.1) -> bool:
+            return True
+
+        def chat(self, system: str, user: str) -> str:
+            type(self).calls += 1
+            return "[]"
+
+    def test_budget_skip_emits_no_llm_error_warning(self, caplog) -> None:
+        client = self._ExhaustedClient()
+        type(client).calls = 0
+        # 45 sink specs -> three batches (_MAX_BATCH = 20), all skipped
+        # by the pre-call budget probe.
+        specs = [_spec(fn=f"sink_{i:02d}") for i in range(45)]
+        with caplog.at_level(
+            logging.WARNING, logger="core.iris.synthesise",
+        ):
+            result = synthesise_assumptions(specs, client)
+
+        assert type(client).calls == 0
+        assert result == []
+        assert not [
+            r for r in caplog.records
+            if "dropped after LLM error" in r.getMessage()
+        ]
+        # The honest aggregate line is unchanged: once, with the count.
+        warnings = _budget_warnings(caplog)
+        assert len(warnings) == 1
+        assert "3 batch(es)" in warnings[0].getMessage()
+
+    def test_budget_skip_logged_at_debug_with_message(self, caplog) -> None:
+        client = self._ExhaustedClient()
+        type(client).calls = 0
+        specs = [_spec(fn=f"sink_{i:02d}") for i in range(21)]
+        with caplog.at_level(
+            logging.DEBUG, logger="core.iris.synthesise",
+        ):
+            synthesise_assumptions(specs, client)
+
+        skipped = [
+            r for r in caplog.records
+            if "skipped without an LLM call" in r.getMessage()
+        ]
+        assert len(skipped) == 2
+        for rec in skipped:
+            assert rec.levelno == logging.DEBUG
+            assert "budget already exhausted" in rec.getMessage()
+
+    def test_genuine_error_warning_carries_message(self, caplog) -> None:
+        def failing_llm(system: str, user: str) -> str:
+            raise RuntimeError("API error 503")
+
+        with caplog.at_level(
+            logging.WARNING, logger="core.iris.synthesise",
+        ):
+            result = synthesise_assumptions([_spec()], failing_llm)
+
+        assert result == []
+        dropped = [
+            r for r in caplog.records
+            if "dropped after LLM error" in r.getMessage()
+        ]
+        assert len(dropped) == 1
+        assert dropped[0].levelno == logging.WARNING
+        assert "API error 503" in dropped[0].getMessage()
+
+    def test_skip_sentinels_stringify_nonblank(self) -> None:
+        from core.iris.synthesise import (
+            _AuthAbortSkip,
+            _BatchSkip,
+            _BudgetExhaustedSkip,
+        )
+
+        for cls in (_BudgetExhaustedSkip, _AuthAbortSkip):
+            exc = cls()
+            assert isinstance(exc, _BatchSkip)
+            assert str(exc).strip()
+            assert "no LLM call" in str(exc)

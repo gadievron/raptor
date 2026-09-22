@@ -90,16 +90,42 @@ class _Batch:
     sources: list[str]
 
 
-class _BudgetExhaustedSkip(Exception):
+class _BatchSkip(Exception):
+    """Base for internal skip markers: the batch was dropped WITHOUT
+    an LLM call ever being made.
+
+    These still flow into the caller's ``on_error`` so per-batch
+    fallback results keep applying (spec synthesis degrades skipped
+    batches to the name heuristic), but consumers must not present
+    them as LLM failures: budget skips are reported once by the
+    aggregate line in ``_run_batches`` and auth skips end in
+    ``LLMAuthPersistentError``.  Subclasses carry an explicit message
+    so a stringified skip is never a blank error.
+    """
+
+
+class _BudgetExhaustedSkip(_BatchSkip):
     """Internal marker: batch skipped without an LLM call because the
     run budget is already exhausted (terminal — see
     ``core.llm.client.LLMBudgetExceededError``)."""
 
+    def __init__(self) -> None:
+        super().__init__(
+            "batch skipped: run budget already exhausted "
+            "(no LLM call made)"
+        )
 
-class _AuthAbortSkip(Exception):
+
+class _AuthAbortSkip(_BatchSkip):
     """Internal marker: batch skipped without an LLM call because the
     auth-failure tracker already tripped (terminal — see
     ``core.llm.client.LLMAuthPersistentError``)."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "batch skipped: persistent auth refusal already detected "
+            "(no LLM call made)"
+        )
 
 
 def _run_batches(
@@ -559,6 +585,19 @@ def synthesise_assumptions(
     def _on_error(
         batch: _Batch, exc: Exception,
     ) -> list[SafetyAssumption]:
+        # Skip sentinels are not LLM failures — the batch never made a
+        # call.  Budget skips are already reported ONCE by the
+        # aggregate "budget exhausted, dropping remaining N batch(es)"
+        # line and auth skips end in LLMAuthPersistentError, so a
+        # per-batch WARNING here would only bury those honest lines
+        # under one blank "LLM error" per skipped batch.
+        if isinstance(exc, _BatchSkip):
+            logger.debug(
+                "iris.synthesise: assumption batch of %d function(s) "
+                "skipped without an LLM call: %s",
+                len(batch.candidates), exc,
+            )
+            return []
         # Unlike spec synthesis there is no heuristic fallback here —
         # the name heuristics produce TaintSpecs, not SafetyAssumptions
         # — so a failed batch degrades to no assumptions.  Log loudly:
