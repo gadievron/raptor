@@ -396,6 +396,14 @@ def _strip_python_like(
             i = end
         elif ch in ('"', "'"):
             interp = _interp_kind(source, i, ch, lang)
+            if interp == "fstring":
+                # Full f-string grammar walk — needed even under
+                # keep_strings, because only the walk finds the TRUE
+                # closing quote once PEP 701 lets the outer quote
+                # char reappear inside {…} expressions.
+                i = _python_fstring_end(
+                    chars, source, i, keep_strings=keep_strings)
+                continue
             triple = source[i:i + 3] in ('"""', "'''")
             if triple:
                 close = source.find(source[i:i + 3], i + 3)
@@ -439,21 +447,16 @@ def _interp_kind(
     without the ``@{[…]}`` block idiom, whose grammar is the unmodeled
     perl quote-construct class), ruby ``%``-literals, heredocs, and
     plain multi-line double-quoted strings (single-line stop — a
-    continuation line reads as a comment), shell heredocs, and two
-    python nesting shapes that blank as plain literals: same-quote
-    nesting inside an expression (3.12+, the outer quote closes at
-    the first inner quote) and a nested f-string literal inside a
-    kept expression. All pinned known-direction.
+    continuation line reads as a comment), and shell heredocs. All
+    pinned known-direction. Python f-strings get the full nesting
+    grammar (:func:`_python_fstring_end`): same-quote nested literals
+    (PEP 701) and nested f-strings inside ``{…}`` at any compile-
+    reachable depth, multi-line replacement fields in every quote
+    form, conversion tags, and format specs.
     """
     if lang == "python":
-        # f-string prefix: 1-2 letters immediately before the quote
-        # containing f/F (f, rf, fR, …), not the tail of an identifier.
-        j = i - 1
-        prefix = ""
-        while j >= 0 and source[j] in "fFrRbBuU" and len(prefix) < 2:
-            prefix += source[j]
-            j -= 1
-        if j >= 0 and (source[j].isalnum() or source[j] == "_"):
+        prefix = _py_string_prefix(source, i)
+        if prefix is None:
             return None
         return "fstring" if "f" in prefix.lower() else None
     if lang == "ruby" and quote == '"':
@@ -469,14 +472,15 @@ def _blank_interpolated(
 ) -> None:
     """Blank the string body ``chars[start:end]``, keeping
     interpolation EXPRESSIONS visible as code (``interp`` from
-    :func:`_interp_kind`; None blanks the whole body).
+    :func:`_interp_kind`; None blanks the whole body). Ruby and
+    shell grammars only — python f-strings route through
+    :func:`_python_fstring_end`, which models their full nesting
+    grammar.
 
     Nested string literals inside a kept expression blank their own
     contents (they are string data again — mirroring the template
-    arm; a nested f-string blanks with them, a declared pinned
-    residual — see :func:`_interp_kind`). An unterminated expression
-    keeps the rest of the body visible (over-inclusion — costs a
-    review, never a swallow).
+    arm). An unterminated expression keeps the rest of the body
+    visible (over-inclusion — costs a review, never a swallow).
     """
     if interp is None:
         _blank(chars, start, end)
@@ -485,37 +489,15 @@ def _blank_interpolated(
     while j < end:
         ch = source[j]
         if ch == "\\":
-            if (interp == "fstring" and j + 1 < end
-                    and source[j + 1] in "{}"):
-                # There is no brace escape in f-strings: the backslash
-                # is string DATA and the brace stays live (CPython
-                # f'\{1+1}' == '\2'; f'a\}}b' == 'a\}b'). Blank the
-                # backslash alone so the brace is judged by the brace
-                # rules below — consuming the pair swallowed a whole
-                # executable interpolation as string data. Ruby and
-                # shell keep the pair-blank: their escapes genuinely
-                # suppress interpolation ("\#{…}", "\$(", "\`" are
-                # literal data in the running language).
-                chars[j] = " "
-                j += 1
-                continue
+            # Pair-blank: ruby and shell escapes genuinely suppress
+            # interpolation ("\#{…}", "\$(", "\`" are literal data
+            # in the running language).
             for k in range(j, min(j + 2, end)):
                 if chars[k] != "\n":
                     chars[k] = " "
             j += 2
             continue
-        if interp == "fstring":
-            if source.startswith("{{", j) or source.startswith("}}", j):
-                # Doubled braces are literal brace DATA, not an
-                # interpolation opener.
-                for k in range(j, min(j + 2, end)):
-                    chars[k] = " "
-                j += 2
-                continue
-            if ch == "{":
-                j = _keep_expr(chars, source, j + 1, end, "{", "}")
-                continue
-        elif interp == "ruby":
+        if interp == "ruby":
             if source.startswith("#{", j):
                 # The `#` sigil blanks (a line-leading `#` in the
                 # view would read as a comment/directive to textual
@@ -569,6 +551,225 @@ def _keep_expr(
         else:
             j += 1
     return j
+
+
+def _py_string_prefix(source: str, i: int) -> str | None:
+    """The string-prefix letters immediately before the quote at
+    ``i`` (``f``/``r``/``b``/``u`` combinations, at most two), or
+    None when those letters are the tail of a longer identifier
+    (``shelf"…"`` — not a prefix)."""
+    j = i - 1
+    prefix = ""
+    while j >= 0 and source[j] in "fFrRbBuU" and len(prefix) < 2:
+        prefix += source[j]
+        j -= 1
+    if j >= 0 and (source[j].isalnum() or source[j] == "_"):
+        return None
+    return prefix
+
+
+#: Nesting bound for the f-string walk (levels of nested f-string /
+#: format-spec recursion). CPython itself refuses deeper nesting at
+#: compile time (measured: 149 nested f-strings, 2 spec levels), so
+#: no compile-valid source ever reaches the cap; only non-compiling
+#: input (a planted `f"{`*N bomb) can, and it degrades to the
+#: unterminated-field direction — remainder visible, never blanked.
+#: Raising the cap costs stack frames (~2 per level against the
+#: interpreter recursion limit); lowering it toward CPython's 149
+#: leaves no headroom for future CPython limits.
+_PY_FSTRING_MAX_DEPTH = 200
+
+
+def _python_fstring_end(
+    chars: list[str], source: str, i: int, *, keep_strings: bool,
+    depth: int = 0,
+) -> int:
+    """Consume the python f-string opened at the quote at ``i``,
+    blanking literal text while replacement-field expressions stay
+    visible as code (under ``keep_strings`` nothing blanks, but the
+    walk still lexes the full grammar — only the walk finds the true
+    closing quote once nested literals may reuse the outer quote).
+
+    Models the PEP 701 (3.12+) grammar: a ``{…}`` field may contain
+    string literals of ANY quote — including the outer quote — and
+    nested f-strings, recursed up to ``_PY_FSTRING_MAX_DEPTH``
+    (deeper nesting cannot compile; past the cap the walk stops and
+    the remainder stays visible — the over-inclusion direction).
+    Returns the index just past the closing quote; LITERAL text in a
+    single-quoted form stops at a newline (only replacement fields
+    may span lines), an unterminated triple runs to end of input.
+    """
+    n = len(source)
+    if depth >= _PY_FSTRING_MAX_DEPTH:
+        return n
+    q = source[i]
+    triple = source.startswith(q * 3, i)
+    raw = "r" in (_py_string_prefix(source, i) or "").lower()
+    j = i + (3 if triple else 1)
+
+    def blank1(k: int) -> None:
+        if not keep_strings and chars[k] != "\n":
+            chars[k] = " "
+
+    while j < n:
+        ch = source[j]
+        if ch == "\\":
+            if not raw and source.startswith("\\N{", j):
+                # Named-character escape: these braces are escape
+                # syntax, not a replacement field — the whole unit
+                # is string DATA. Raw f-strings disable the escape
+                # (rf"\N{x}" DOES interpolate x), so raw skips this
+                # arm and the brace is judged below.
+                close = source.find("}", j + 3)
+                nl = source.find("\n", j + 3)
+                if close != -1 and (nl == -1 or close < nl):
+                    for k in range(j, close + 1):
+                        blank1(k)
+                    j = close + 1
+                    continue
+            if j + 1 < n and source[j + 1] in "{}":
+                # There is no brace escape in f-strings: the
+                # backslash is string DATA and the brace stays live
+                # (CPython f'\{1+1}' == '\2'). Blank the backslash
+                # alone so the brace is judged by the brace arms —
+                # consuming the pair swallowed a whole executable
+                # interpolation as string data.
+                blank1(j)
+                j += 1
+                continue
+            blank1(j)
+            if j + 1 < n:
+                blank1(j + 1)
+            j += 2
+            continue
+        if source.startswith("{{", j) or source.startswith("}}", j):
+            # Doubled braces are literal brace DATA, not a field.
+            blank1(j)
+            blank1(j + 1)
+            j += 2
+            continue
+        if ch == "{":
+            j = _python_field(
+                chars, source, j + 1,
+                keep_strings=keep_strings, depth=depth)
+            continue
+        if triple:
+            if source.startswith(q * 3, j):
+                return j + 3
+        else:
+            if ch == q or ch == "\n":
+                return j + 1
+        blank1(j)
+        j += 1
+    return n
+
+
+def _python_field(
+    chars: list[str], source: str, j: int, *,
+    keep_strings: bool, depth: int = 0,
+) -> int:
+    """Scan the f-string replacement field whose ``{`` precedes ``j``,
+    keeping the expression visible as code. What executes, per
+    CPython: the expression (visible), nested string literals' own
+    fields if f-prefixed (recursed — their literal text blanks as
+    data), and the format spec's nested ``{…}`` fields (visible);
+    what is data: nested plain-literal contents and the format
+    spec's literal text (both blank). A ``:`` at bracket depth 0
+    always starts the format spec (even ``{x:=…}`` — CPython reads
+    the spec, not a walrus). Conversion tags (``!r``/``!s``/``!a``)
+    and the ``=`` self-documenting marker are field syntax, left
+    visible as code. ``#`` comments (legal in 3.12+ multi-line
+    fields) blank to end of line in both view modes. A field may
+    span lines in EVERY quote form (PEP 701 allows it in
+    single-quoted f-strings too — stopping at the newline made the
+    true closing quote re-open string state and blank live code
+    after it). Returns the index just past the closing ``}``;
+    unterminated fields — including nesting past
+    ``_PY_FSTRING_MAX_DEPTH``, which cannot compile — keep the
+    remainder visible (over-inclusion, never a swallow).
+    """
+    n = len(source)
+    if depth >= _PY_FSTRING_MAX_DEPTH:
+        return n
+    depth += 1
+    bracket = 0
+    in_spec = False
+    while j < n:
+        ch = source[j]
+        if ch == "\n":
+            j += 1
+            continue
+        if in_spec:
+            if ch == "{":
+                j = _python_field(
+                    chars, source, j + 1,
+                    keep_strings=keep_strings, depth=depth)
+                continue
+            if ch == "}":
+                return j + 1
+            if not keep_strings:
+                chars[j] = " "
+            j += 1
+            continue
+        if ch in "([{":
+            bracket += 1
+            j += 1
+            continue
+        if ch in ")]}":
+            if ch == "}" and bracket == 0:
+                return j + 1
+            bracket = max(0, bracket - 1)
+            j += 1
+            continue
+        if ch == ":" and bracket == 0:
+            in_spec = True
+            j += 1
+            continue
+        if ch == "#":
+            # Comment inside a multi-line field — comment prose
+            # blanks in BOTH view modes, like any other comment.
+            end = source.find("\n", j)
+            end = n if end < 0 else end
+            _blank(chars, j, end)
+            j = end
+            continue
+        if ch in ('"', "'"):
+            prefix = _py_string_prefix(source, j)
+            if prefix and "f" in prefix.lower():
+                j = _python_fstring_end(
+                    chars, source, j, keep_strings=keep_strings,
+                    depth=depth)
+                continue
+            if source.startswith(ch * 3, j):
+                close = _py_triple_close(source, j, ch)
+                if not keep_strings:
+                    _blank(chars, j + 3, close)
+                j = min(close + 3, n)
+                continue
+            e = _string_end(source, j, ch)
+            if not keep_strings:
+                _blank(chars, j + 1, min(e, n) - 1 if e <= n else n)
+            j = e
+            continue
+        j += 1
+    return n
+
+
+def _py_triple_close(source: str, j: int, quote: str) -> int:
+    """Index of the ``quote*3`` closing the triple-quoted literal
+    opened at ``j`` (escapes honoured), or end of input when
+    unterminated."""
+    n = len(source)
+    closer = quote * 3
+    k = j + 3
+    while k < n:
+        if source[k] == "\\":
+            k += 2
+            continue
+        if source.startswith(closer, k):
+            return k
+        k += 1
+    return n
 
 
 def _char_literal_end(source: str, start: int) -> int | None:

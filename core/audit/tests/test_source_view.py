@@ -474,22 +474,148 @@ class TestHashLangInterpolation:
         view = sanitized_view(src, "a.py")
         assert "popen" not in view
 
-    def test_python_pep701_same_quote_nesting_residual(self):
-        # DECLARED residual: 3.12+ allows the outer quote char inside
-        # the expression; the scanner's string end stops at the first
-        # inner quote, so code after a nested same-quote literal
-        # blanks — pinned so a change is visible.
+    def test_python_pep701_same_quote_nesting_visible(self):
+        # PEP 701 (3.12+) allows the outer quote char inside the
+        # expression: the nested literal is string data (blanks) and
+        # the code AFTER it stays visible — ending the outer string
+        # at the first inner quote swallowed the sink call.
         src = 'x = f"{"cmd" + run(c)}"\n'
         view = sanitized_view(src, "a.py")
-        assert "run(c)" not in view
+        assert "run(c)" in view
+        assert "cmd" not in view
+        assert len(view) == len(src)
 
-    def test_python_nested_fstring_in_expression_residual(self):
-        # DECLARED residual: a nested f-string literal inside a kept
-        # expression blanks as a plain literal, its own interpolation
-        # included — pinned so a change is visible.
-        src = 'x = f"{f\'{run(c)}\' + y}"\n'
+    def test_python_nested_fstring_in_expression_visible(self):
+        # A nested f-string inside a kept expression executes its own
+        # interpolations: its literal text blanks as data, its {…}
+        # fields stay visible as code.
+        src = 'x = f"{f\'pre popen( {run(c)} post\' + y}"\n'
         view = sanitized_view(src, "a.py")
-        assert "run(c)" not in view
+        assert "run(c)" in view
+        assert "+ y" in view
+        assert "popen" not in view
+        assert "post" not in view
+        assert len(view) == len(src)
+
+    def test_python_pep701_nested_samequote_fstring_visible(self):
+        # Both PEP 701 shapes at once: a same-quote NESTED F-STRING
+        # inside the expression.
+        src = 'x = f"{f"{run(c)}" + go(y)}"\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(c)" in view
+        assert "go(y)" in view
+
+    def test_python_nested_triple_string_in_field_blanks(self):
+        # A nested triple-quoted literal inside a field is data across
+        # its whole (multi-line) body; code after it stays visible.
+        src = 'x = f"""{ """da popen( ta""" + run(c) }"""\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(c)" in view
+        assert "popen" not in view
+
+    def test_python_format_spec_text_blanks_nested_field_visible(self):
+        # Format-spec literal text is DATA handed to __format__; the
+        # spec's own nested {…} fields are code and execute.
+        src = 'x = f"{v:memcpy( {width}.{prec}f}"\n'
+        view = sanitized_view(src, "a.py")
+        assert "width" in view
+        assert "prec" in view
+        assert "memcpy" not in view
+        assert len(view) == len(src)
+
+    def test_python_conversion_tag_then_spec(self):
+        # !r is field syntax (visible as code); the spec after the
+        # depth-0 colon is data except its nested field.
+        src = 'x = f"{user!r:>{pad}} tail"\n'
+        view = sanitized_view(src, "a.py")
+        assert "user!r" in view
+        assert "pad" in view
+        assert "tail" not in view
+
+    def test_python_depth_colon_is_not_a_spec(self):
+        # A colon inside brackets (dict display, slice) does not open
+        # the format spec — only a depth-0 colon does.
+        src = 'x = f"{ {"k": run(c)}["k"] } tail"\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(c)" in view
+        assert "tail" not in view
+
+    def test_python_comment_in_multiline_field_blanks(self):
+        # 3.12+ allows comments inside multi-line fields; comment
+        # prose blanks like any other comment, the code stays.
+        src = 'x = f"""{run( # note memcpy( lives here\n c)} data"""\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(" in view
+        assert "c)" in view
+        assert "memcpy" not in view
+        assert "data" not in view
+        assert view.count("\n") == src.count("\n")
+
+    def test_python_named_escape_is_data(self):
+        # \N{…} is a named-character escape, not a field: data. In a
+        # raw f-string the escape is disabled and the braces DO
+        # interpolate.
+        src = 'x = f"\\N{GREEK SMALL LETTER ALPHA}" + rf"\\N{run(c)}"\n'
+        view = sanitized_view(src, "a.py")
+        assert "GREEK" not in view
+        assert "run(c)" in view
+
+    def test_python_singlequote_multiline_field(self):
+        # PEP 701 lets a field span lines in a SINGLE-quoted f-string
+        # too: the field stays visible across the newline, trailing
+        # literal data blanks, and code after the string survives.
+        src = 'x = f"{run(\n c)} prose memcpy( here"\ny = go(z)\n'
+        view = sanitized_view(src, "a.py")
+        assert "run(" in view
+        assert "go(z)" in view
+        assert "memcpy" not in view
+        assert view.count("\n") == src.count("\n")
+
+    def test_python_singlequote_multiline_field_no_swallow(self):
+        # Stopping the walk at the newline made the TRUE closing
+        # quote re-open string state, blanking live code after the
+        # string to end of line — the swallow direction on
+        # compile-valid 3.12+ input.
+        src = 'x = f"{a +\n b}" + os.system(cmd)\nq = 1\n'
+        view = sanitized_view(src, "a.py")
+        assert "os.system(cmd)" in view
+        assert "q = 1" in view
+
+    def test_python_fstring_nesting_bomb_no_recursion_error(self):
+        # Non-compiling attacker shape: deep f"{ nesting must not
+        # exhaust the interpreter stack; past the cap the walk stops
+        # and the remainder stays VISIBLE (over-inclusion direction,
+        # never a swallow).
+        src = "x = " + 'f"{' * 3000 + "os.system(c)" + '}"' * 3000
+        view = sanitized_view(src, "a.py")
+        assert "os.system(c)" in view
+
+    def test_python_spec_nesting_bomb_no_recursion_error(self):
+        # Same bound through the format-spec recursion.
+        src = 'x = f"{a' + ":{a" * 3000 + " os.system(c)"
+        view = sanitized_view(src, "a.py")
+        assert "os.system(c)" in view
+
+    def test_python_compile_valid_max_depth_unaffected(self):
+        # The cap sits above CPython's own compile-time nesting
+        # limit: the deepest nesting that still compiles walks
+        # normally (innermost expression visible, literal data
+        # blanked).
+        depth = 1
+        while True:
+            probe = 'f"{' * (depth + 1) + "1" + '}"' * (depth + 1)
+            try:
+                compile("x = " + probe, "<t>", "exec")
+                depth += 1
+            except (SyntaxError, RecursionError, MemoryError):
+                break
+        src = ('x = ' + 'f"data{' * depth
+               + "os.system(c)" + '}tail"' * depth + "\n")
+        compile(src, "<t>", "exec")
+        view = sanitized_view(src, "a.py")
+        assert "os.system(c)" in view
+        assert "data" not in view
+        assert "tail" not in view
 
     def test_ruby_interpolation_visible(self):
         src = 'log("x: #{system(cmd)} y")\n'
