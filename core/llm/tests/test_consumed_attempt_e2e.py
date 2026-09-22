@@ -35,8 +35,11 @@ from core.llm.dispatcher.auth import (  # noqa: E402
 from core.llm.dispatcher.server import LLMDispatcher  # noqa: E402
 from core.llm.tests.mock_upstream import MockUpstream  # noqa: E402
 
-# Real dispatcher UDS + real SDK per test.
-pytestmark = pytest.mark.integration
+# Deliberately NOT marked ``integration``: that marker means live
+# network and is deselected by default, while everything here is a
+# captive loopback upstream behind a real dispatcher UDS — hermetic
+# and fast enough for the default tier, where the series' strongest
+# pin belongs.
 
 
 @pytest.fixture
