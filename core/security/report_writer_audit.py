@@ -548,6 +548,19 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         ),
     ),
     AllowlistEntry(
+        file="core/sage/hooks.py",
+        func_name="store_study_concepts",
+        kind="unsanitised_llm_value",
+        detail="composite",
+        audit_note=(
+            "composite is stamped_evidence_composite output — a "
+            "SHA-256 hexdigest or the empty string, inert by "
+            "construction; the fold helper is outside the audit's "
+            "sanitiser vocabulary, so its assignment from the "
+            "LLM-derived row content still reads as taint"
+        ),
+    ),
+    AllowlistEntry(
         file="libexec/raptor-audit",
         func_name="cmd_rules",
         kind="unsanitised_llm_value",

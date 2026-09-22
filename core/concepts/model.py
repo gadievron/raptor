@@ -9,9 +9,12 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from core.hash import sha256_string
 
 
 def _filter_fields(cls: type, raw: dict) -> dict:
@@ -102,6 +105,37 @@ def sage_evidence_row(ev: Evidence) -> str:
     loc = f"{file}:{ev.line}" if ev.line else file
     h_tag = f" [h={raw_hash}]" if raw_hash else ""
     return f"  Evidence ({kind}): {loc}{h_tag} — {obs}"
+
+
+def evidence_hash_composite(hashes: Iterable[str]) -> str:
+    """Fold per-evidence hashes into a row's composite source hash.
+
+    THE single formula behind the ``Source hash:`` value of a SAGE
+    study-concept row: order-independent (sorted), duplicate-preserving
+    (one entry per evidence line, so two evidence lines sharing a hash
+    fold differently from one), full SHA-256 hex. No hashes → ``""``
+    (a concept whose evidence carries no parseable hashes stores an
+    empty composite).
+
+    Two callers, one formula: the writer
+    (``core.sage.hooks.store_study_concepts``) folds the hashes parsed
+    back out of the row content it is about to store and binds the
+    result into the row MAC; the recall-side verifier
+    (``core.concepts.study.stamped_evidence_composite``) re-folds the
+    same extraction and requires equality with the MAC-bound value. A
+    formula drift between the two would silently demote every stored
+    concept row from the mechanical skip/seed path, so both sides must
+    compute through here.
+
+    Rows minted before this formula existed carry a 12-hex-char prefix
+    of the same fold; the recall gate prefix-compares for exactly that
+    src length so they keep verifying (the length is trustworthy there
+    because src is MAC-bound).
+    """
+    hash_list = sorted(hashes)
+    if not hash_list:
+        return ""
+    return sha256_string("|".join(hash_list))
 
 
 # ------------------------------------------------------------------

@@ -1797,8 +1797,11 @@ def store_study_concepts(
 
     # Shared evidence-row grammar: the core.concepts.study parsers
     # re-derive file/line/hash from this exact shape (drift = silent
-    # loss of the cross-run study skip).
+    # loss of the cross-run study skip). The composite src is minted
+    # by the parser side itself (see below), so the two can never
+    # disagree. Call-time imports in both directions — no load cycle.
     from core.concepts.model import fold_ws, sage_evidence_row
+    from core.concepts.study import stamped_evidence_composite
 
     stored = 0
     repo_name = Path(repo_path).name
@@ -1845,13 +1848,10 @@ def store_study_concepts(
             ]
 
             evidence_files = set()
-            evidence_hashes = []
             for ev in concept.evidence:
                 parts.append(sage_evidence_row(ev))
                 if ev.file:
                     evidence_files.add(fold_ws(ev.file))
-                if getattr(ev, "hash", None):
-                    evidence_hashes.append(ev.hash)
 
             invs = concept_invariants.get(concept.id, [])
             for inv in invs:
@@ -1881,11 +1881,15 @@ def store_study_concepts(
                 parts.append(
                     f"  Evidence files: {', '.join(sorted(evidence_files))}"
                 )
-            composite = ""
-            if evidence_hashes:
-                composite = sha256_string(
-                    "|".join(sorted(evidence_hashes))
-                )[:12]
+            # Mint src THROUGH THE PARSER: fold the hashes as the
+            # grammar's own extraction reads them back from the
+            # rendered content, not from the Evidence objects. Whatever
+            # the recall-side recomputation will extract from this row
+            # is by construction what gets MAC-bound here — a rendering
+            # a parser reads differently can shift WHICH hashes fold,
+            # but never make writer and verifier fold different sets.
+            composite = stamped_evidence_composite("\n".join(parts))
+            if composite:
                 parts.append(f"  Source hash: {composite}")
 
             content = "\n".join(parts)

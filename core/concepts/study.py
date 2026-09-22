@@ -34,6 +34,7 @@ from .model import (
     Invariant,
     SecurityContext,
     StudyItem,
+    evidence_hash_composite,
 )
 
 logger = logging.getLogger(__name__)
@@ -4185,6 +4186,30 @@ def _iter_evidence_matches(content: str) -> Iterator[re.Match[str]]:
 def _extract_evidence_hashes(content: str) -> set[str]:
     """Extract per-evidence [h=...] hashes from SAGE content."""
     return {m.group(4) for m in _iter_evidence_matches(content) if m.group(4)}
+
+
+def stamped_evidence_composite(content: str) -> str:
+    """Fold a concept row's evidence hashes into its composite.
+
+    The hash of every evidence line the shared per-line extraction
+    sees — i.e. exactly the lines the staleness verifier checks and
+    the reconstruction parser mints — folded with the one formula
+    (:func:`core.concepts.model.evidence_hash_composite`). The store
+    hook computes the ``Source hash:`` value it binds into the row MAC
+    by running THIS function over the rendered row content, and the
+    recall gate in ``core.sage.hooks`` recomputes it over the recalled
+    content and requires equality with the MAC-bound value — writer
+    and verifier cannot disagree on a row's evidence-hash multiset
+    because both run the same extraction and fold.
+
+    Duplicates are preserved (one fold entry per evidence line):
+    collapsing to a set would let a line whose hash another line
+    shares be added or dropped without moving the composite.
+    """
+    hashes = [
+        m.group(4) for m in _iter_evidence_matches(content) if m.group(4)
+    ]
+    return evidence_hash_composite(hashes)
 
 
 def _verify_evidence_hashes(

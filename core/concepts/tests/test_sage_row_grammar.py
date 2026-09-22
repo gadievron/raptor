@@ -5,21 +5,28 @@ The writer (``core.sage.hooks.store_study_concepts`` via
 per-line iteration over ``core.concepts.study._SAGE_EVIDENCE_RE`` and
 the staleness verifier / reconstruction built on it) share one
 grammar; a drift silently disables the cross-run study skip (parse
-fails closed to the seed path). These tests pin the round trip on both
-the regex level and the hash-verification level.
+fails closed to the seed path). These tests pin the round trip on the
+regex level, the hash-verification level, and the composite-fold
+level.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from core.concepts.model import Evidence, StudyItem, sage_evidence_row
+from core.concepts.model import (
+    Evidence,
+    StudyItem,
+    evidence_hash_composite,
+    sage_evidence_row,
+)
 from core.concepts.study import (
     _SAGE_EVIDENCE_RE,
     _extract_evidence_hashes,
     _iter_evidence_matches,
     _reconstruct_from_sage,
     _verify_evidence_hashes,
+    stamped_evidence_composite,
 )
 
 
@@ -324,6 +331,97 @@ def test_mid_line_evidence_text_is_not_an_evidence_line():
         "Evidence (code_path): q.c:9 [h=abcdefabcdef] — from a prior run"
     )
     assert _extract_evidence_hashes(content) == {"deadbeef1234"}
+
+
+def test_composite_formula_shape():
+    # The formula the writer binds into the row MAC: sorted fold, full
+    # SHA-256 hex, empty in -> empty out.
+    from core.hash import sha256_string
+
+    hashes = ["bb22", "aa11"]
+    assert evidence_hash_composite(hashes) == sha256_string("aa11|bb22")
+    assert evidence_hash_composite([]) == ""
+
+
+def test_composite_order_independent_duplicate_sensitive():
+    # Order never matters (sorted fold); multiplicity does (one entry
+    # per evidence line, so a duplicated hash folds differently from a
+    # single occurrence).
+    assert (evidence_hash_composite(["a1", "b2"])
+            == evidence_hash_composite(["b2", "a1"]))
+    assert (evidence_hash_composite(["a1", "a1"])
+            != evidence_hash_composite(["a1"]))
+
+
+def test_stamped_composite_folds_extracted_lines():
+    # Fold over rendered rows == fold over the hashes the per-line
+    # extraction reads back (hashless lines contribute nothing).
+    evs = [
+        Evidence(type="code_path", file="a.c", line=1,
+                 observation="x", hash="deadbeef1234"),
+        Evidence(type="api_pattern", file="b.c", line=2,
+                 observation="y", hash="cafef00d5678"),
+        Evidence(type="doc", file="README.md", observation="no hash"),
+    ]
+    content = "Concept [c.x] in scope: d\n" + "\n".join(
+        sage_evidence_row(ev) for ev in evs
+    )
+    assert stamped_evidence_composite(content) == evidence_hash_composite(
+        ["deadbeef1234", "cafef00d5678"]
+    )
+
+
+def test_stamped_composite_preserves_duplicate_lines():
+    # Two evidence lines sharing a hash fold as two entries — a set
+    # here would let one be added or dropped without moving the value.
+    ev = Evidence(type="code_path", file="a.c", line=1,
+                  observation="x", hash="deadbeef1234")
+    content = "\n".join([sage_evidence_row(ev), sage_evidence_row(ev)])
+    assert stamped_evidence_composite(content) == evidence_hash_composite(
+        ["deadbeef1234", "deadbeef1234"]
+    )
+
+
+def test_stamped_composite_empty_without_hashes():
+    ev = Evidence(type="doc", file="README.md", observation="prose only")
+    content = "Concept [c.x] in scope: d\n" + sage_evidence_row(ev)
+    assert stamped_evidence_composite(content) == ""
+
+
+def test_stamped_composite_ignores_hash_tokens_outside_evidence_lines():
+    # Hash-shaped tokens in observation prose or on non-evidence lines
+    # never fold: extraction is the per-line evidence grammar, and the
+    # tag slot is the only fold source.
+    ev = Evidence(type="code_path", file="a.c", line=1,
+                  observation="see [h=ffffffffffff] upstream",
+                  hash="deadbeef1234")
+    content = "\n".join([
+        "Concept [c.x] in scope: d",
+        sage_evidence_row(ev),
+        "  Invariant [c.x.i1]: token [h=abcdefabcdef] shape (negation: n)",
+    ])
+    assert stamped_evidence_composite(content) == evidence_hash_composite(
+        ["deadbeef1234"]
+    )
+
+
+def test_writer_fold_matches_gate_fold_on_awkward_values():
+    # Mint-through-parser property at the grammar level: for value
+    # shapes whose rendering the parser reads differently than the
+    # Evidence objects suggest (a file path containing the spaced dash
+    # separator — the parse then takes the FIRST dash and the hash tag
+    # lands in the observation), folding the rendered content is the
+    # same computation the recall gate will run, so the two always
+    # agree. What such a row loses is only the mis-rendered hash's
+    # contribution to freshness — never its mechanical reach.
+    ev = Evidence(type="doc", file="notes — draft.md", line=3,
+                  observation="x", hash="deadbeef1234")
+    content = "Concept [c.x] in scope: d\n" + sage_evidence_row(ev)
+    fold = stamped_evidence_composite(content)
+    assert fold == stamped_evidence_composite(content)  # deterministic
+    # adjudicated parse: first spaced dash wins, hash not extracted
+    assert _extract_evidence_hashes(content) == set()
+    assert fold == ""
 
 
 def test_hash_grammar_matches_stamped_hash_alphabet(tmp_path: Path):
