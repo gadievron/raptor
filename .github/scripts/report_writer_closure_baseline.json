@@ -734,7 +734,7 @@
       "note": "openant report writer: function name from scan inventory (source-tree symbol, not LLM text)"
     },
     "raptor_openant.py::main::unsanitised_llm_value::error": {
-      "note": "openant main: error message from internal pipeline exceptions, not raw LLM output"
+      "note": "openant main: error carries the bounded OpenAnt stderr snippet \u2014 tool output produced over a hostile repo, not merely internal exception text (mechanism residual); triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     }
   },
   "bash_manual_audit": {

@@ -485,8 +485,10 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         detail="e",
         audit_note=(
             "broad-handler exception relay at the top-level entry "
-            "point; exception text is from internal library calls, "
-            "not raw LLM output"
+            "point (mechanism residual): _main_body drives the "
+            "multi-model hunt/trace dispatch, so exception text can "
+            "quote provider/tool content; triaged as a burn-down "
+            "residual — sanitise + register on next functional touch"
         ),
     ),
     AllowlistEntry(

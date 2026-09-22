@@ -143,7 +143,7 @@
       "note": "salvage-file reader: the writer emits trajectory-<hex>.json via a computed name on run_id collision (_write_atomic fallback), so the literal glob has no textual writer; reader and writer are pinned together by the store round-trip tests"
     },
     "artifacts:orphan_reader::understand-graph-diff.json": {
-      "note": "runtime pipeline artifact: alias of graph-diff.json (different naming convention), consumed by diagram renderer (renderer.py:292) for diff visualisation"
+      "note": "reader-without-writer: the diagram renderer accepts this alternate spelling of graph-diff.json, but no in-repo writer or documented recipe produces a file under this name today \u2014 wiring pending (either document the raptor-graph-query --diff redirect or drop the alias)"
     },
     "artifacts:orphan_reader::validation-outcomes.json": {
       "note": "runtime pipeline artifact: produced by /validate (validation_report.py save_json), consumed by graph ingest (ingest.py:412) to promote exploitability verdicts into graph nodes"
