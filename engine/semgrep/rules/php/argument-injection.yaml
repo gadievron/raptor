@@ -15,6 +15,15 @@ rules:
   #   - Overlaps CWE-78 command injection on purpose: an unquoted
   #     tainted value is both; reviews emitting either class get a
   #     verifying chain.
+  # Known FN modes:
+  #   - escapeshellarg clears taint, but a quoted standalone value in
+  #     OPTION position ("-oProxyCommand=...") is still argument
+  #     injection when the program treats leading-dash words as
+  #     options — the sanitizer neutralizes word splitting, not the
+  #     callee's option parsing. Stated residual, not expressible
+  #     without knowing the callee's argv contract.
+  #   - Taint through helper indirection (a getter function wrapping
+  #     the superglobal read) is invisible to single-function taint.
   - id: raptor.php.argument-injection.exec-family
     mode: taint
     languages: [php]
@@ -43,6 +52,14 @@ rules:
       - pattern: passthru(...)
       - pattern: shell_exec(...)
       - pattern: popen(...)
-      - pattern: proc_open(...)
+      # proc_open with an argv ARRAY bypasses the shell entirely (no
+      # word splitting, no metacharacters) — it is this rule's own
+      # recommended remediation and must not fire. Only the
+      # string-command form is a sink; the other sink functions are
+      # string-only by signature.
+      - patterns:
+          - pattern: proc_open($CMD, ...)
+          - pattern-not: proc_open([...], ...)
+          - pattern-not: proc_open(array(...), ...)
     metadata:
       cwe: ["CWE-88"]

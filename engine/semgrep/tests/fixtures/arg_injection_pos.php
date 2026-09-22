@@ -16,3 +16,9 @@ function backup_dir() {
     $dir = $_GET['dir'];
     return shell_exec("tar czf /tmp/backup.tgz " . $dir);
 }
+function mixed_escape() {
+    // One operand quoted, the other raw — the raw one still injects.
+    $in = escapeshellarg($_GET['in']);
+    $out = $_GET['out'];
+    exec("convert " . $in . " " . $out);
+}
