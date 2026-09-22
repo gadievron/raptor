@@ -17486,8 +17486,11 @@ def _record_invariant_receipt(
 
 # Whether the codeql-tier degradation skip was already announced (log
 # once per process, then debug — every CWE-seeded chain would
-# otherwise repeat the same line).
+# otherwise repeat the same line). The list stays the reset unit
+# (tests swap in a fresh [False]); the lock closes the check-then-set
+# window, since parallel review workers hit the first skip together.
 _CODEQL_DEGRADED_LOGGED: list[bool] = [False]
+_CODEQL_DEGRADED_LOCK = _threading.Lock()
 
 
 def _note_codeql_degraded_skip(
@@ -17501,8 +17504,10 @@ def _note_codeql_degraded_skip(
     whose database(s) simply do not cover this file's language — the
     old fixed wording blamed startup degradation for router misses.
     """
-    if not _CODEQL_DEGRADED_LOGGED[0]:
+    with _CODEQL_DEGRADED_LOCK:
+        first = not _CODEQL_DEGRADED_LOGGED[0]
         _CODEQL_DEGRADED_LOGGED[0] = True
+    if first:
         logger.info(
             "codeql chain steps skipped (%s) — fallback channels "
             "(semgrep/joern/smt) cover their claims",

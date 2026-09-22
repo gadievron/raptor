@@ -290,6 +290,71 @@ def _cleanup_chain_rules(chain):
             _P(rule).unlink(missing_ok=True)
 
 
+class TestDegradedBannerThreadSafety:
+    """The once-per-process banner flag is shared by parallel review
+    workers: the naked check-then-set double-logged under contention
+    and raced the reset tests rely on."""
+
+    def _capture_infos(self, monkeypatch):
+        import core.audit.orchestrator as _orch
+
+        infos: list[str] = []
+
+        def _info(msg, *args, **kwargs):
+            infos.append(str(msg) % args if args else str(msg))
+
+        monkeypatch.setattr(_orch.logger, "info", _info)
+        return infos
+
+    def test_parallel_first_skips_announce_once(self, monkeypatch):
+        import threading
+
+        import core.audit.orchestrator as _orch
+
+        monkeypatch.setattr(_orch, "_CODEQL_DEGRADED_LOGGED", [False])
+        infos = self._capture_infos(monkeypatch)
+
+        n_threads = 8
+        barrier = threading.Barrier(n_threads)
+
+        def hammer() -> None:
+            barrier.wait()
+            for _ in range(50):
+                _orch._note_codeql_degraded_skip("a.c", "f")
+
+        threads = [
+            threading.Thread(target=hammer) for _ in range(n_threads)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        loud = [m for m in infos if "codeql chain steps skipped" in m]
+        assert len(loud) == 1, (
+            f"concurrent first skips must announce exactly once, "
+            f"got {len(loud)}"
+        )
+
+    def test_reset_by_swapping_flag_still_rearms(self, monkeypatch):
+        # The reset unit stays the module-level list: tests monkeypatch
+        # a fresh [False] and the banner must fire again.
+        import core.audit.orchestrator as _orch
+
+        infos = self._capture_infos(monkeypatch)
+
+        monkeypatch.setattr(_orch, "_CODEQL_DEGRADED_LOGGED", [False])
+        _orch._note_codeql_degraded_skip("a.c", "f")
+        _orch._note_codeql_degraded_skip("a.c", "g")
+        monkeypatch.setattr(_orch, "_CODEQL_DEGRADED_LOGGED", [False])
+        _orch._note_codeql_degraded_skip("b.c", "h")
+
+        loud = [m for m in infos if "codeql chain steps skipped" in m]
+        assert len(loud) == 2, (
+            f"one announcement per reset epoch expected, got {len(loud)}"
+        )
+
+
 class TestRouterMissBannerWording:
     def test_language_miss_names_the_real_reason(self, tmp_path, monkeypatch):
         """A database EXISTS but does not cover this file's language —
