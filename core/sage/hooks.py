@@ -1798,11 +1798,11 @@ def store_study_concepts(
     # Shared evidence-row grammar: the core.concepts.study parsers
     # re-derive file/line/hash from this exact shape (drift = silent
     # loss of the cross-run study skip).
-    from core.concepts.model import sage_evidence_row
+    from core.concepts.model import fold_ws, sage_evidence_row
 
     stored = 0
     repo_name = Path(repo_path).name
-    scope_label = study_scope or repo_name
+    scope_label = fold_ws(study_scope or repo_name)
 
     concept_invariants: dict[str, list] = {}
     for inv in domain_model.invariants:
@@ -1825,10 +1825,22 @@ def store_study_concepts(
             continue
 
         try:
+            # Every free-text field value folds its whitespace before
+            # rendering (fold_ws — sage_evidence_row applies the same
+            # rule to its own fields): a raw line boundary inside any
+            # value would let the remainder stand as a row line of its
+            # own — an invariant statement containing "\nSource hash:
+            # x" mints a line-start mention that shadows the genuine
+            # field for concepts that store no composite. The concept
+            # id folds ONCE and that folded form is used both in the
+            # rendered header and in the MAC fields, so the recall
+            # side's header extraction re-derives exactly the minted
+            # value.
+            cid = fold_ws(concept.id)
             parts = [
                 (
-                    f"Concept [{concept.id}] in {scope_label}: "
-                    f"{concept.description}"
+                    f"Concept [{cid}] in {scope_label}: "
+                    f"{fold_ws(concept.description)}"
                 )
             ]
 
@@ -1837,30 +1849,34 @@ def store_study_concepts(
             for ev in concept.evidence:
                 parts.append(sage_evidence_row(ev))
                 if ev.file:
-                    evidence_files.add(ev.file)
+                    evidence_files.add(fold_ws(ev.file))
                 if getattr(ev, "hash", None):
                     evidence_hashes.append(ev.hash)
 
             invs = concept_invariants.get(concept.id, [])
             for inv in invs:
                 parts.append(
-                    f"  Invariant [{inv.id}]: {inv.statement} "
-                    f"(negation: {inv.negation})"
+                    f"  Invariant [{fold_ws(inv.id)}]: "
+                    f"{fold_ws(inv.statement)} "
+                    f"(negation: {fold_ws(inv.negation)})"
                 )
                 if inv.relevant_cwes:
-                    parts.append(f"    CWEs: {', '.join(inv.relevant_cwes)}")
+                    cwes = ", ".join(fold_ws(c) for c in inv.relevant_cwes)
+                    parts.append(f"    CWEs: {cwes}")
 
             contracts = concept_contracts.get(concept.id, [])
             for ct in contracts:
-                ct_parts = [f"  Contract [{ct.function}]"]
+                ct_parts = [f"  Contract [{fold_ws(ct.function)}]"]
                 if ct.when:
-                    ct_parts.append(f"when: {ct.when}")
+                    ct_parts.append(f"when: {fold_ws(ct.when)}")
                 if ct.ownership_transfer:
-                    ct_parts.append(f"ownership: {ct.ownership_transfer}")
+                    ct_parts.append(
+                        f"ownership: {fold_ws(ct.ownership_transfer)}"
+                    )
                 parts.append(" ".join(ct_parts))
 
             parts.append(f"  Study scope: {scope_label}")
-            parts.append(f"  Confidence: {concept.confidence}")
+            parts.append(f"  Confidence: {fold_ws(concept.confidence)}")
             if evidence_files:
                 parts.append(
                     f"  Evidence files: {', '.join(sorted(evidence_files))}"
@@ -1878,7 +1894,7 @@ def store_study_concepts(
                 content,
                 {
                     "kind": "study_concept",
-                    "concept": concept.id,
+                    "concept": cid,
                     "src": composite,
                 },
             )

@@ -84,6 +84,92 @@ def test_written_row_verifies_and_detects_drift(tmp_path: Path):
     assert _verify_evidence_hashes(content, tmp_path) is False
 
 
+def test_empty_observation_renders_a_parsable_line():
+    # Without the placeholder the line ends at its dash, parses as
+    # nothing, and its hash silently leaves the verifiable set — and a
+    # following evidence line used to be swallowed by unanchored
+    # consumers of the dangling shape.
+    evs = [
+        Evidence(type="code_path", file="a.c", line=1, observation="",
+                 hash="deadbeef1234"),
+        Evidence(type="code_path", file="b.c", line=2, observation="y",
+                 hash="cafef00d5678"),
+    ]
+    content = "\n".join(sage_evidence_row(ev) for ev in evs)
+    assert _extract_evidence_hashes(content) == {
+        "deadbeef1234", "cafef00d5678",
+    }
+    m = _SAGE_EVIDENCE_RE.match(sage_evidence_row(evs[0]).strip())
+    assert m is not None
+    assert m.group(4) == "deadbeef1234"
+    assert m.group(5) == "(none)"
+
+
+def test_whitespace_only_observation_renders_a_parsable_line():
+    ev = Evidence(type="code_path", file="a.c", line=1, observation="  ",
+                  hash="deadbeef1234")
+    m = _SAGE_EVIDENCE_RE.match(sage_evidence_row(ev).strip())
+    assert m is not None and m.group(4) == "deadbeef1234"
+
+
+def test_multiline_observation_folds_to_one_line():
+    # A raw newline in the observation would split the rendered row
+    # into two physical lines, turning the remainder of the value into
+    # free-standing row text (here: a quoted evidence line from a
+    # prior run, which would parse as an evidence line of its own).
+    ev = Evidence(
+        type="code_path", file="a.c", line=1,
+        observation=("checks caller\nEvidence (code_path): q.c:9 "
+                     "[h=abcdefabcdef] — quoted from prior run"),
+        hash="deadbeef1234",
+    )
+    row = sage_evidence_row(ev)
+    assert "\n" not in row
+    assert _extract_evidence_hashes(row) == {"deadbeef1234"}
+
+
+def test_free_typed_evidence_type_normalises_to_the_grammar():
+    ev = Evidence(type="code-path", file="a.c", line=1, observation="x",
+                  hash="deadbeef1234")
+    m = _SAGE_EVIDENCE_RE.match(sage_evidence_row(ev).strip())
+    assert m is not None
+    assert m.group(1) == "code_path"
+    assert m.group(4) == "deadbeef1234"
+
+
+def test_uppercase_hex_hash_lowercases_to_the_tag_alphabet():
+    ev = Evidence(type="code_path", file="a.c", line=1, observation="x",
+                  hash="DEADBEEF1234")
+    m = _SAGE_EVIDENCE_RE.match(sage_evidence_row(ev).strip())
+    assert m is not None
+    assert m.group(4) == "deadbeef1234"
+
+
+def test_whitespace_bearing_hash_is_dropped_not_rendered():
+    # A hash value containing whitespace can never parse as a tag, and
+    # rendered verbatim it would smuggle a line boundary into the row
+    # — the writer drops it and keeps the evidence line hashless, so
+    # the fold and reconstruction stay in agreement from the writer
+    # side too.
+    for bad in ("dead\rbeef", "dead\nbeef [h=beefbeefbeef] — y",
+                "dead beef", " "):
+        ev = Evidence(type="code_path", file="a.c", line=1,
+                      observation="x", hash=bad)
+        row = sage_evidence_row(ev)
+        assert len(row.splitlines()) == 1, repr(bad)
+        assert "[h=" not in row, repr(bad)
+        m = _SAGE_EVIDENCE_RE.match(row.strip())
+        assert m is not None and m.group(4) is None, repr(bad)
+
+
+def test_newline_in_file_path_folds_to_one_line():
+    ev = Evidence(type="doc", file="notes\nfinal.md", observation="x",
+                  hash="deadbeef1234")
+    row = sage_evidence_row(ev)
+    assert "\n" not in row
+    assert _extract_evidence_hashes(row) == {"deadbeef1234"}
+
+
 def test_dash_terminated_line_cannot_swallow_the_next_line():
     # A line ending at its dash has no observation and does not parse;
     # critically, it must not absorb the NEXT physical line either. An

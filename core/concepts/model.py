@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,22 +37,71 @@ class Evidence:
     quote: str | None = None
 
 
+def fold_ws(value: object) -> str:
+    """Collapse whitespace runs — including every line-boundary
+    character — to a single space, trimmed.
+
+    THE writer-side normalisation for every free-text field value
+    rendered into a SAGE concept-row line (evidence fields here;
+    descriptions, invariants, contracts in
+    ``core.sage.hooks.store_study_concepts``). A raw line boundary
+    inside a value would let the remainder of the value stand as a row
+    line of its own — e.g. an invariant statement containing
+    ``\\nSource hash: x`` mints a line-start mention that shadows the
+    genuine field for concepts that store no composite.
+    """
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
 def sage_evidence_row(ev: Evidence) -> str:
     """Render one evidence line of a SAGE study-concept row.
 
     THE writer half of the SAGE evidence grammar. The parsers in
-    ``core.concepts.study`` (``_SAGE_EVIDENCE_RE``,
-    ``_EVIDENCE_HASH_RE`` and the staleness verifier built on them)
-    re-derive ``(type, file, line, hash, observation)`` from exactly
-    this shape, so the writer (``core.sage.hooks.store_study_concepts``)
-    must render through here: a writer/parser drift silently disables
-    the cross-run study skip optimisation (the parse fails closed to
-    the seed path). Round-trip covered by
+    ``core.concepts.study`` (the shared per-line extraction over
+    ``_SAGE_EVIDENCE_RE`` and the staleness verifier / reconstruction
+    parser built on it) re-derive ``(type, file, line, hash,
+    observation)`` from exactly this shape, so the writer
+    (``core.sage.hooks.store_study_concepts``) must render through
+    here: a writer/parser drift silently disables the cross-run study
+    skip optimisation (the parse fails closed to the seed path).
+    Round-trip covered by
     ``core/concepts/tests/test_sage_row_grammar.py``.
+
+    Field values come from an LLM and are not grammar-aware, so they
+    are normalised until the rendered text re-parses as ONE evidence
+    line whose parsed hash is this evidence's hash (or none — a value
+    the grammar cannot carry, e.g. a file path containing the spaced
+    dash separator, degrades to a hashless parse rather than a
+    divergent one):
+
+    - the type collapses to the grammar's ``\\w+`` token (a free-typed
+      ``code-path`` otherwise shifts the whole parse);
+    - newlines and other whitespace runs in file/observation fold to a
+      single space (a raw line boundary splits the line, and the
+      remainder of the value then reads as further row lines);
+    - a hex hash is lowercased to the tag alphabet; a hash containing
+      whitespace is dropped entirely (rendered verbatim it would
+      smuggle a line boundary into the row), and any other non-hex
+      value renders as given and simply never parses as a hash tag;
+    - an empty observation becomes ``(none)`` — a line ending at its
+      dash does not re-parse, silently dropping its hash from the
+      verifiable set.
     """
-    loc = f"{ev.file}:{ev.line}" if ev.line else ev.file
-    h_tag = f" [h={ev.hash}]" if ev.hash else ""
-    return f"  Evidence ({ev.type}): {loc}{h_tag} — {ev.observation}"
+    kind = re.sub(r"\W", "_", str(ev.type or "")) or "unknown"
+    file = fold_ws(ev.file)
+    obs = fold_ws(ev.observation) or "(none)"
+    raw_hash = str(ev.hash or "")
+    if not re.fullmatch(r"\S+", raw_hash):
+        # A hash containing whitespace (or empty) can never parse as a
+        # tag, and folding it would render junk; rendering it verbatim
+        # would smuggle a line boundary into the row. Dropped — the
+        # evidence line stays, hashless.
+        raw_hash = ""
+    elif re.fullmatch(r"[0-9a-fA-F]+", raw_hash):
+        raw_hash = raw_hash.lower()
+    loc = f"{file}:{ev.line}" if ev.line else file
+    h_tag = f" [h={raw_hash}]" if raw_hash else ""
+    return f"  Evidence ({kind}): {loc}{h_tag} — {obs}"
 
 
 # ------------------------------------------------------------------
