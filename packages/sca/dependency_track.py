@@ -318,15 +318,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         auto_create=not args.no_auto_create,
         timeout=args.timeout,
     )
+    # Both prints relay REMOTE SERVER bytes to the operator terminal:
+    # ``token`` is parsed from the DT JSON response (arbitrary string
+    # content via \u escapes), and the error lane can quote HTTP
+    # error bodies through exception text. Escape non-printables and
+    # bound length at the print chokepoint. Real DT tokens are UUIDs,
+    # so 64 chars is generous.
+    from core.security.log_sanitisation import (
+        sanitise_for_terminal as _sft,
+    )
     if result["status"] == "uploaded":
         print(
             f"raptor-sca dt-push: SBOM uploaded to "
             f"{_redact_url(args.url)} for project "
-            f"{args.project} {args.version}; token={result['token']}"
+            f"{args.project} {args.version}; "
+            f"token={_sft(str(result['token']), max_len=64)}"
         )
         return 0
     print(
-        f"raptor-sca dt-push: {result['error']}", file=sys.stderr,
+        f"raptor-sca dt-push: {_sft(str(result['error']))}",
+        file=sys.stderr,
     )
     return 1
 

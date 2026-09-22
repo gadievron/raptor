@@ -336,6 +336,53 @@ def test_cli_dispatch_routes_dt_push(tmp_path: Path, monkeypatch,
     assert "token=tok" in out
 
 
+def test_hostile_token_escaped_on_success_print(tmp_path: Path,
+                                                monkeypatch, capsys):
+    """The success-lane ``token=`` print relays a REMOTE SERVER's
+    bytes (the token is parsed from the DT JSON response — arbitrary
+    content via \\u escapes). Terminal escapes must be neutralised
+    and length bounded before the operator's TTY sees them."""
+    bom = _make_bom(tmp_path)
+    hostile = "\x1b]0;pwned\x07tok\n" + "A" * 500
+
+    monkeypatch.setattr(
+        "packages.sca.dependency_track.push_bom",
+        lambda **kw: {"status": "uploaded", "token": hostile,
+                      "error": None},
+    )
+    from packages.sca.dependency_track import main
+    rc = main([
+        "--url", "https://dt.example.com", "--api-key", "k",
+        "--bom", str(bom), "--project", "p", "--version", "1",
+    ])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "\x1b" not in out and "\x07" not in out
+    assert "token=\\x1b" in out          # escaped, not stripped
+    assert "A" * 100 not in out          # length bounded (UUID-sized)
+
+
+def test_hostile_error_text_escaped_on_stderr(tmp_path: Path,
+                                              monkeypatch, capsys):
+    """The error lane can quote server bytes (HTTP error bodies via
+    exception text) — same neutralisation on the stderr print."""
+    bom = _make_bom(tmp_path)
+    monkeypatch.setattr(
+        "packages.sca.dependency_track.push_bom",
+        lambda **kw: {"status": "error", "token": None,
+                      "error": "DT upload failed: \x1b[2J\x1b[H boom"},
+    )
+    from packages.sca.dependency_track import main
+    rc = main([
+        "--url", "https://dt.example.com", "--api-key", "k",
+        "--bom", str(bom), "--project", "p", "--version", "1",
+    ])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "\x1b" not in err
+    assert "boom" in err
+
+
 def test_cli_api_key_falls_back_to_env(tmp_path: Path, monkeypatch):
     """Operator can set $DT_API_KEY instead of passing --api-key
     on the command line (avoids leaking the key into ps / shell

@@ -598,9 +598,6 @@
     "packages/sca/clean_cache.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
-    "packages/sca/dependency_track.py::main::unsanitised_llm_value::error": {
-      "note": "registry/server error text on a config-driven admin lane \u2014 unit-filed to the sca owner (campaign row U05)"
-    },
     "packages/sca/findings.py::write_findings_json::unsanitised_llm_value::_hygiene_finding_to_row": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
     },
