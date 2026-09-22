@@ -1512,6 +1512,44 @@ class TestCorrelation:
         assert "Correlation request" not in prompts_seen[0]
 
 
+class TestConceptMatchesIdentifier:
+    """The prior-matching rule shared by _apply_sage_prior and the
+    recall-side addressee gate in core.sage.hooks."""
+
+    def test_exact_and_normalised_match(self):
+        from core.concepts.study import concept_matches_identifier
+        assert concept_matches_identifier("get_page", "get_page")
+        assert concept_matches_identifier("Get-Page", "get_page")
+
+    def test_semantic_name_segment_containment(self):
+        # Concept ids come from the LLM's semantic naming; the study
+        # identifier must still claim its own concept.
+        from core.concepts.study import concept_matches_identifier
+        assert concept_matches_identifier(
+            "scatter_walk_state_machine", "scatter_walk",
+        )
+
+    def test_cross_identifier_never_matches(self):
+        from core.concepts.study import concept_matches_identifier
+        assert not concept_matches_identifier("get_page", "put_page")
+
+    def test_short_identifier_below_floor_refused(self):
+        # 'walk' segment-matches inside many unrelated ids — the
+        # length floor refuses it (both directions: raising the floor
+        # orphans real short identifiers, lowering it re-opens the
+        # wrong-prior injection).
+        from core.concepts.study import concept_matches_identifier
+        assert not concept_matches_identifier(
+            "scatter_walk_state_machine", "walk",
+        )
+
+    def test_non_segment_substring_refused(self):
+        from core.concepts.study import concept_matches_identifier
+        assert not concept_matches_identifier(
+            "scatter_walkers", "ter_walk",
+        )
+
+
 class TestApplySagePrior:
     """Tests for _apply_sage_prior (N1 skip/seed/cross-pollinate)."""
 

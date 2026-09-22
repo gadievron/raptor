@@ -1692,11 +1692,15 @@ class TestRecallConceptsForStudy(unittest.TestCase):
 
     @patch("core.sage.hooks._get_client")
     def test_returns_per_identifier(self, mock_gc):
+        # Recall fans out over a thread pool, so the mock keys replies
+        # on the query text — never on call order.
+        def _q(text="", **kw):
+            if "get_page" in text:
+                return [_stamped_concept_row("get_page", confidence=0.8)]
+            return []
+
         mock_client = MagicMock()
-        mock_client.query.side_effect = [
-            [_stamped_concept_row("get_page", confidence=0.8)],
-            [],
-        ]
+        mock_client.query.side_effect = _q
         mock_gc.return_value = mock_client
 
         from core.sage.hooks import recall_concepts_for_study
@@ -1706,17 +1710,75 @@ class TestRecallConceptsForStudy(unittest.TestCase):
 
     @patch("core.sage.hooks._get_client")
     def test_handles_partial_errors(self, mock_gc):
+        # Text-keyed mock: order-independent under threaded fan-out.
+        def _q(text="", **kw):
+            if "get_page" in text:
+                raise ConnectionError("boom")
+            return [_stamped_concept_row("put_page", confidence=0.8)]
+
         mock_client = MagicMock()
-        mock_client.query.side_effect = [
-            ConnectionError("boom"),
-            [_stamped_concept_row("put_page", confidence=0.8)],
-        ]
+        mock_client.query.side_effect = _q
         mock_gc.return_value = mock_client
 
         from core.sage.hooks import recall_concepts_for_study
         result = recall_concepts_for_study("/repo", ["get_page", "put_page"])
         self.assertNotIn("get_page", result)
         self.assertIn("put_page", result)
+
+    @patch("core.sage.hooks._get_client")
+    def test_neighbor_concept_rows_are_dropped(self, mock_gc):
+        """A validly stamped row for another concept never keys this one.
+
+        Semantic search over similar names routinely returns a
+        neighbor's row (get_page for a put_page query); its MAC proves
+        authorship, not addressee, so it must not drive put_page's
+        skip/seed decision.
+        """
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            _stamped_concept_row("get_page", confidence=0.8)
+        ]
+        mock_gc.return_value = mock_client
+
+        from core.sage.hooks import recall_concepts_for_study
+        result = recall_concepts_for_study("/repo", ["put_page"])
+        self.assertEqual(result, {})
+
+    @patch("core.sage.hooks._get_client")
+    def test_semantic_named_self_row_survives_the_gate(self, mock_gc):
+        """A concept stored under its semantic name still keys its
+        identifier — the routine store shape, since concept ids come
+        from the LLM ('scatter_walk_state_machine'), not from the
+        study list ('scatter_walk'). The gate applies the consumer's
+        segment-boundary rule, so this row must reach skip/seed.
+        """
+        row = _stamped_concept_row(
+            "scatter_walk_state_machine", confidence=0.8,
+        )
+        mock_client = MagicMock()
+        mock_client.query.return_value = [row]
+        mock_gc.return_value = mock_client
+
+        from core.sage.hooks import recall_concepts_for_study
+        result = recall_concepts_for_study("/repo", ["scatter_walk"])
+        self.assertEqual(result, {"scatter_walk": [row]})
+
+    @patch("core.sage.hooks._get_client")
+    def test_short_identifier_never_claims_a_long_concept(self, mock_gc):
+        """Parity with the consumer's minimum-length guard: a short
+        identifier ('walk') segment-matches inside many unrelated
+        concept ids, so the rule refuses it below the length floor.
+        """
+        mock_client = MagicMock()
+        mock_client.query.return_value = [
+            _stamped_concept_row("scatter_walk_state_machine",
+                                 confidence=0.8)
+        ]
+        mock_gc.return_value = mock_client
+
+        from core.sage.hooks import recall_concepts_for_study
+        result = recall_concepts_for_study("/repo", ["walk"])
+        self.assertEqual(result, {})
 
     @patch("core.sage.hooks._get_client")
     def test_unstamped_rows_are_dropped(self, mock_gc):

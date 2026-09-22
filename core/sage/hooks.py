@@ -1711,6 +1711,7 @@ def _concepts_domain(repo_path: str) -> str:
 def _verified_concept_rows(
     rows: list[dict[str, Any]],
     hook: str,
+    expected_concept: str | None = None,
 ) -> list[dict[str, Any]]:
     """Keep only concept rows whose MAC verifies (recall side).
 
@@ -1719,19 +1720,44 @@ def _verified_concept_rows(
     authorship — both are required before a row has mechanical effect.
     Rows without a valid token (legacy, foreign, tampered) are dropped
     from the mechanical path, exactly as if no memory existed.
+
+    The MAC proves AUTHORSHIP, not ADDRESSEE: a validly stamped row for
+    a semantic neighbor (get_page returned for a put_page query) still
+    verifies. When the caller keys results per identifier, it must pass
+    *expected_concept* so rows the consumer's matching rule would not
+    associate with that identifier are dropped before they drive its
+    skip/seed decision. The gate applies the consumer's own rule
+    (core.concepts.study.concept_matches_identifier) — stored concept
+    ids are routinely semantic names ('scatter_walk_state_machine' for
+    identifier 'scatter_walk'), so anything stricter drops legitimate
+    self rows.
     """
+    if expected_concept is not None:
+        # Lazy: only the study pipeline passes expected_concept, and it
+        # has already imported the module.
+        from core.concepts.study import concept_matches_identifier
     out: list[dict[str, Any]] = []
     for row in rows or []:
         clean, token = rowmac.strip(str(row.get("content") or ""))
         m_id = re.search(r"Concept \[([^\]]+)\]", clean)
         m_src = re.search(r"Source hash: (\S+)", clean)
+        concept = m_id.group(1) if m_id else ""
         fields = {
             "kind": "study_concept",
-            "concept": m_id.group(1) if m_id else "",
+            "concept": concept,
             "src": m_src.group(1) if m_src else "",
         }
-        if _row_mac_ok(hook, fields, token):
-            out.append(row)
+        if not _row_mac_ok(hook, fields, token):
+            continue
+        if expected_concept is not None and not concept_matches_identifier(
+            concept, expected_concept,
+        ):
+            logger.debug(
+                "SAGE %s: recall row is for concept %r, not %r — dropped from mechanical path",
+                hook, concept, expected_concept,
+            )
+            continue
+        out.append(row)
     return out
 
 
@@ -2086,7 +2112,12 @@ def recall_concepts_for_study(
                 top_k=3,
                 min_confidence=min_confidence,
             )
-            return (name, _verified_concept_rows(rows, "concepts_for_study"))
+            return (
+                name,
+                _verified_concept_rows(
+                    rows, "concepts_for_study", expected_concept=name
+                ),
+            )
         except Exception as e:  # noqa: BLE001 — SAGE is best-effort; a hook failure must never break the pipeline
             logger.debug("SAGE study recall failed for %s: %s", name, e)
             return (name, None)

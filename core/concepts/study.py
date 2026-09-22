@@ -4099,6 +4099,39 @@ _EVIDENCE_HASH_RE = re.compile(r"\[h=([a-f0-9]+)\]")
 _SAGE_PRIOR_MIN_MATCH_LEN = 6
 
 
+def _normalise_concept_id(name: str) -> str:
+    """Case/punctuation-insensitive form used for concept-id matching."""
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def concept_matches_identifier(concept_id: str, identifier: str) -> bool:
+    """Whether the SAGE-prior matching rule associates *concept_id*
+    with study *identifier*.
+
+    Exact normalised match always counts. Anything looser needs
+    segment boundaries AND a minimum length: a bare substring test
+    let a short item name ('walk') claim an unrelated concept
+    ('scatter_walk_state_machine'), skipping the item from study
+    while injecting the wrong prior.
+
+    ONE rule, two callers: the local-model prior match in
+    _apply_sage_prior and the recall-side addressee gate in
+    core.sage.hooks. Stored concept ids are routinely the LLM's
+    semantic names ('scatter_walk_state_machine'), not the study
+    identifier ('scatter_walk') — a stricter gate than this rule
+    drops legitimately-recalled self rows and silently disables
+    skip/seed for semantic-named concepts; a looser one re-opens the
+    cross-identifier mis-key ('get_page' driving 'put_page').
+    """
+    norm = _normalise_concept_id(identifier)
+    c_norm = _normalise_concept_id(concept_id)
+    if c_norm == norm:
+        return True
+    if len(norm) < _SAGE_PRIOR_MIN_MATCH_LEN:
+        return False
+    return re.search(rf"(?:^|_){re.escape(norm)}(?:_|$)", c_norm) is not None
+
+
 def _extract_evidence_hashes(content: str) -> set[str]:
     """Extract per-evidence [h=...] hashes from SAGE content."""
     return set(_EVIDENCE_HASH_RE.findall(content))
@@ -4314,25 +4347,10 @@ def _apply_sage_prior(
             if local_model:
                 concept = local_model.get_concept(item.name)
                 if concept is None:
-                    norm = re.sub(r"[^a-z0-9]+", "_", item.name.lower()).strip("_")
-                    # Exact match always counts. Anything looser needs
-                    # segment boundaries AND a minimum length: a bare
-                    # substring test let a short item name ('walk')
-                    # claim an unrelated concept
-                    # ('scatter_walk_state_machine'), skipping the item
-                    # from study while injecting the wrong prior.
-                    seg_re = (
-                        re.compile(
-                            rf"(?:^|_){re.escape(norm)}(?:_|$)",
-                        )
-                        if len(norm) >= _SAGE_PRIOR_MIN_MATCH_LEN
-                        else None
-                    )
+                    # Match rule shared with the recall-side addressee
+                    # gate — see concept_matches_identifier.
                     for c in local_model.concepts:
-                        c_norm = re.sub(r"[^a-z0-9]+", "_", c.id.lower()).strip("_")
-                        if c_norm == norm or (
-                            seg_re is not None and seg_re.search(c_norm)
-                        ):
+                        if concept_matches_identifier(c.id, item.name):
                             concept = c
                             break
                 if concept is not None:
