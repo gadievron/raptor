@@ -110,6 +110,9 @@ _WORKFLOWS_EXEMPT_FROM_CONTROLS_DOC = {
 
 
 def test_every_workflow_is_referenced_in_ci_controls_doc() -> None:
+    # Anchored on the doc's link form, not bare-name substring
+    # presence: `wf.name in doc` would also be satisfied by a future
+    # workflow whose name is a substring of existing doc text.
     doc = _read("docs/ci-controls.md")
     missing = sorted(
         wf.name
@@ -118,12 +121,102 @@ def test_every_workflow_is_referenced_in_ci_controls_doc() -> None:
         # token/checkout gates below).
         for wf in (REPO / ".github/workflows").glob("*.y*ml")
         if wf.name not in _WORKFLOWS_EXEMPT_FROM_CONTROLS_DOC
-        and wf.name not in doc
+        and f"(../.github/workflows/{wf.name})" not in doc
     )
     assert not missing, (
-        "workflows missing from docs/ci-controls.md (document them or, "
-        "for publish/infra surfaces only, add them to "
+        "workflows missing from docs/ci-controls.md (document them "
+        "with a (../.github/workflows/<name>) link or, for "
+        "publish/infra surfaces only, add them to "
         f"_WORKFLOWS_EXEMPT_FROM_CONTROLS_DOC): {missing}"
+    )
+
+
+import re as _re
+
+# Scheduled workflows whose cadence is documented in PR-gate prose
+# (a bullet naming the cron) rather than a scheduled-table row —
+# their schedule is a secondary re-run of a control whose primary
+# documentation home is the gates list. Each row needs a rationale;
+# liveness is asserted (the prose line must still carry the link AND
+# a cadence word), so a stale row cannot outlive its bullet.
+_SCHEDULED_CADENCE_PROSE_DOCUMENTED = {
+    # "Full-tree Python lint audit" bullet: the weekly cron re-runs
+    # the same ruff audit the push-time job runs.
+    "lint.yml": "full-tree lint audit bullet names the weekly cron",
+    # "Code scanning" bullet: the weekly cron is a re-run of the
+    # PR/push CodeQL control.
+    "codeql.yml": "code-scanning bullet names the weekly cron",
+}
+
+_CADENCE_WORD_RE = _re.compile(
+    r"\b(daily|weekly|monthly|nightly|cron)\b", _re.IGNORECASE
+)
+
+
+def test_scheduled_workflows_keep_a_cadence_documented_reference() -> None:
+    """Every workflow with a ``schedule:`` trigger must hold a doc
+    reference IN CADENCE CONTEXT — a scheduled-table row (a ``|``
+    table line carrying its link and a cadence word), or an
+    adjudicated prose bullet with the same content. The whole-doc
+    substring gate above is vacuous against row-stripping for
+    multiply-referenced workflows (tests.yml carries 15 references;
+    deleting its scheduled-table row passed), so the row/cadence
+    grain is pinned separately here.
+
+    Grain bound, stated honestly: only the SCHEDULED reference is
+    pinned to its context. A multiply-referenced workflow's
+    non-cadence rows (hardening-practices table, PR-gate bullets)
+    can still be stripped with this gate green — pinning every
+    reference's row membership would freeze the doc's prose. The
+    cadence-word match strips the workflow's own filename first so
+    nightly*/weekly_* names cannot self-satisfy it.
+    """
+    doc = _read("docs/ci-controls.md")
+    lines = doc.splitlines()
+    offenders: list[str] = []
+    checked = 0
+    for wf in sorted((REPO / ".github/workflows").glob("*.y*ml")):
+        if wf.name in _WORKFLOWS_EXEMPT_FROM_CONTROLS_DOC:
+            continue
+        if not _re.search(
+            r"(?m)^\s{0,4}schedule:\s*(#.*)?$",
+            wf.read_text(encoding="utf-8"),
+        ):
+            continue
+        checked += 1
+        link = f"(../.github/workflows/{wf.name})"
+
+        def _cadence_line(ln: str) -> bool:
+            return link in ln and bool(
+                _CADENCE_WORD_RE.search(ln.replace(wf.name, ""))
+            )
+
+        if wf.name in _SCHEDULED_CADENCE_PROSE_DOCUMENTED:
+            if not any(
+                _cadence_line(ln) for ln in lines
+                if not ln.lstrip().startswith("|")
+            ):
+                offenders.append(
+                    f"{wf.name}: prose-documented adjudication went "
+                    "stale (no non-table doc line carries its link + "
+                    "a cadence word)"
+                )
+            continue
+        if not any(
+            _cadence_line(ln) for ln in lines
+            if ln.lstrip().startswith("|")
+        ):
+            offenders.append(
+                f"{wf.name}: scheduled workflow without a scheduled-"
+                "table row (a | table line carrying its link and its "
+                "cadence)"
+            )
+    assert checked >= 10, (
+        f"scheduled-workflow enumeration broke (found {checked})"
+    )
+    assert not offenders, (
+        "scheduled workflows lost their cadence-context doc row:\n"
+        + "\n".join(offenders)
     )
 
 
@@ -164,8 +257,6 @@ def test_nightly_toolchain_installs_carry_refuse_backstops() -> None:
         assert "command -v r2" in text, wf
         assert "if: ${{ !cancelled() }}" in text, wf
 
-
-import re as _re
 
 # Write-capable default-token permission scopes. Universe ENTRY is
 # shape-derived, never enumerated: ANY ``<scope>: write`` grant
