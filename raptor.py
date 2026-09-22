@@ -24,7 +24,7 @@ Available Modes:
     describe    - Pre-flight inspection: target type, tool readiness, cost estimate
     doctor      - Status report for local setup (no claude needed)
     frida       - Dynamic instrumentation via Frida (alpha)
-  openant     - OpenAnt AST+LLM source-code vulnerability scan
+    openant     - OpenAnt AST+LLM source-code vulnerability scan
 
 Examples:
     # Full autonomous workflow
