@@ -1,4 +1,4 @@
-"""pyproject.toml parser — PEP 621, Poetry, PDM, and build-system requires.
+"""pyproject.toml parser — PEP 621/735, Poetry, PDM, and build-system requires.
 
 Reads (in this order, since a single file may declare deps under several
 schemes — Poetry projects often add ``[build-system].requires``, and a
@@ -6,6 +6,7 @@ PEP 621 project may also list a few PDM dev groups):
 
 - ``[project.dependencies]``                    → PEP 621, main scope
 - ``[project.optional-dependencies][<extra>]``  → PEP 621, "optional" scope
+- ``[dependency-groups][<group>]``              → PEP 735, dev scope
 - ``[tool.poetry.dependencies]``                → main
 - ``[tool.poetry.dev-dependencies]``            → dev   (legacy Poetry)
 - ``[tool.poetry.group.<name>.dependencies]``   → dev   (modern Poetry)
@@ -96,6 +97,15 @@ def parse(path: Path) -> list[Dependency]:
                     d = _from_pep508(spec, path, scope="optional")
                     if d is not None:
                         deps.append(d)
+
+    # --- PEP 735 dependency groups -------------------------------------
+    dependency_groups = data.get("dependency-groups") or {}
+    if isinstance(dependency_groups, dict):
+        for items in dependency_groups.values():
+            for spec in _str_items(items):
+                d = _from_pep508(spec, path, scope="dev")
+                if d is not None:
+                    deps.append(d)
 
     # --- Poetry ----------------------------------------------------------
     tool = data.get("tool") or {}

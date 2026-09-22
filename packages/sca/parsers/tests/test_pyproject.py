@@ -324,3 +324,30 @@ def test_list_dependencies_still_parse(tmp_path: Path) -> None:
 def test_string_build_requires_not_iterated_charwise(tmp_path: Path) -> None:
     body = '[build-system]\nrequires = "setuptools"\n'
     assert parse(_write(tmp_path, body)) == []
+
+
+def test_pep735_dependency_groups(tmp_path: Path) -> None:
+    body = """\
+[project]
+name = "demo"
+version = "0.1.0"
+dependencies = ["requests==2.31.0"]
+
+[dependency-groups]
+test = [
+    "pytest==8.0.0",
+    "z3-solver>=4.13.0.0,<4.15.5.0",
+]
+dev = [
+    { include-group = "test" },
+    "ruff==0.15.12",
+]
+"""
+    deps = {(d.name, d.scope): d for d in parse(_write(tmp_path, body))}
+    assert deps[("requests", "main")].version == "2.31.0"
+    assert deps[("pytest", "dev")].version == "8.0.0"
+    assert deps[("pytest", "dev")].pin_style is PinStyle.EXACT
+    assert deps[("z3-solver", "dev")].pin_style is PinStyle.RANGE
+    assert deps[("ruff", "dev")].version == "0.15.12"
+    # include-group tables are not concrete deps — no phantom entry
+    assert not any(d.name == "test" for d in deps.values())
