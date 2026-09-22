@@ -87,6 +87,67 @@ class TestKevCaching:
         assert kev2.contains("CVE-2021-44228") is True
         assert http2.gets == []
 
+    @staticmethod
+    def _warp_cache_clock(monkeypatch, days: float) -> None:
+        """Advance the clock the cache's freshness check reads —
+        confined to ``core.json.cache``'s namespace."""
+        import types
+
+        import core.json.cache as cache_mod
+        real_time = cache_mod.time.time
+        monkeypatch.setattr(
+            cache_mod, "time",
+            types.SimpleNamespace(time=lambda: real_time() + days * 86400),
+        )
+
+    def test_offline_stale_cache_still_serves_kev(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """Docstring contract: stale cache + offline → load the cache
+        anyway (the KEV list rarely changes day-to-day). Silently
+        answering False for everything means --fail-on-kev can never
+        fire on an offline scan."""
+        cache = JsonCache(root=tmp_path)
+        KevClient(FakeHttp(payload=_PAYLOAD), cache).contains(
+            "CVE-2021-44228",
+        )  # seed the cache online
+        self._warp_cache_clock(monkeypatch, days=3)
+        http = FakeHttp(error=HttpError("must not be called"))
+        kev = KevClient(http, JsonCache(root=tmp_path), offline=True)
+        assert kev.contains("CVE-2021-44228") is True
+        assert kev.contains("CVE-9999-99999") is False
+        assert http.gets == []
+
+    def test_fetch_failure_serves_stale_cache(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """Network down at refresh time is the same epistemic state as
+        offline: a stale catalog beats silently losing the KEV signal."""
+        cache = JsonCache(root=tmp_path)
+        KevClient(FakeHttp(payload=_PAYLOAD), cache).contains(
+            "CVE-2021-44228",
+        )
+        self._warp_cache_clock(monkeypatch, days=3)
+        kev = KevClient(
+            FakeHttp(error=HttpError("boom")), JsonCache(root=tmp_path),
+        )
+        assert kev.contains("CVE-2021-44228") is True
+        assert kev.is_loaded() is True
+
+    def test_fresh_cache_still_preferred_over_stale_arm(
+        self, tmp_path: Path,
+    ) -> None:
+        """Within the TTL the ordinary load path serves the cache
+        without any stale-arm warning or network call."""
+        cache = JsonCache(root=tmp_path)
+        KevClient(FakeHttp(payload=_PAYLOAD), cache).contains(
+            "CVE-2021-44228",
+        )
+        http = FakeHttp(error=HttpError("must not be called"))
+        kev = KevClient(http, JsonCache(root=tmp_path), offline=True)
+        assert kev.contains("CVE-2021-44228") is True
+        assert http.gets == []
+
     def test_offline_cold_cache_returns_false(
         self, tmp_path: Path,
     ) -> None:
