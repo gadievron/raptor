@@ -19370,6 +19370,27 @@ def _run_tool_chain(
                     confirmed.append(f"codeql:{Path(tool_cfg['query']).stem}")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "codeql", "confirmed")
+                elif codeql_result.outcome == "skipped":
+                    # The database never ingested this file (source-
+                    # archive membership gate in run_codeql_sweep) —
+                    # the channel could not look. Same phantom-
+                    # coverage rule as the router miss above: left in
+                    # the dispatch record, the gate-resolution pass
+                    # would demote suspicious → clean on a channel
+                    # that saw nothing.
+                    _note_codeql_degraded_skip(
+                        file_path, function_name,
+                        reason=(
+                            (codeql_result.details or {}).get("reason")
+                            or "file not in this database"
+                        ),
+                    )
+                    if skipped_types is not None:
+                        skipped_types.add(tool_type)
+                    if tier_counters:
+                        _increment_tier_dict(
+                            tier_counters, "codeql", "skipped",
+                        )
                 elif codeql_result.outcome == "error":
                     logger.debug(
                         "tool_chain codeql error %s:%s: %s",

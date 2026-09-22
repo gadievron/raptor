@@ -1,8 +1,11 @@
 """Language-aware CodeQL database routing (multi-language targets)."""
 
+import zipfile
+
 from core.audit.codeql_dbs import (
     CodeqlDbRouter,
     database_language,
+    db_contains_source,
     normalise_language,
 )
 
@@ -158,6 +161,55 @@ class TestRouterLanguageHint:
         # php-routed .inc: no CodeQL extractor, no database, no serve.
         assert router.for_file(
             "web/header.inc", language_hint="php") is None
+
+
+def _make_src_db(tmp_path, name: str, entries: list[str]):
+    db = tmp_path / name
+    db.mkdir()
+    with zipfile.ZipFile(db / "src.zip", "w") as zf:
+        for entry in entries:
+            zf.writestr(entry, "int x;\n")
+    return db
+
+
+class TestDbContainsSource:
+    """src.zip membership: True/False when provable, None (fail-open)
+    when the archive cannot answer."""
+
+    def test_present_absent_and_suffix_anchoring(self, tmp_path):
+        db = _make_src_db(tmp_path, "cpp-db", [
+            "work/repo/src/table.inc",
+            "usr/include/string.h",
+        ])
+        assert db_contains_source(db, "src/table.inc") is True
+        assert db_contains_source(db, "src/orphan.inc") is False
+        # Same basename, different parent: the match is /-anchored on
+        # the whole relative path (mirrors the sweep's URI match).
+        assert db_contains_source(db, "other/table.inc") is False
+
+    def test_missing_or_corrupt_archive_is_unknown(self, tmp_path):
+        no_src = tmp_path / "no-src-db"
+        no_src.mkdir()
+        assert db_contains_source(no_src, "src/a.c") is None
+        bad = tmp_path / "bad-src-db"
+        bad.mkdir()
+        (bad / "src.zip").write_bytes(b"this is not a zip archive")
+        assert db_contains_source(bad, "src/a.c") is None
+
+    def test_index_served_from_cache_on_unchanged_archive(
+            self, tmp_path, monkeypatch):
+        import zipfile as zipfile_mod
+        db = _make_src_db(tmp_path, "cached-db", ["work/repo/src/a.c"])
+        assert db_contains_source(db, "src/a.c") is True
+
+        def boom(*args, **kwargs):
+            raise AssertionError(
+                "unchanged archive must be served from the cache",
+            )
+
+        monkeypatch.setattr(zipfile_mod, "ZipFile", boom)
+        assert db_contains_source(db, "src/a.c") is True
+        assert db_contains_source(db, "src/b.c") is False
 
 
 class TestOrchestratorDbForHint:

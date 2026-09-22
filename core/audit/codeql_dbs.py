@@ -16,6 +16,8 @@ serve-every-file behaviour (metadata-less stand-ins).
 from __future__ import annotations
 
 import logging
+import threading
+from collections import OrderedDict
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,109 @@ def database_language(db_path: Path) -> str | None:
     elif name.startswith("codeql-db-"):
         name = name[len("codeql-db-"):]
     return normalise_language(name) if name else None
+
+
+#: Source-archive membership indexes: ``src.zip`` path → (stat
+#: signature, basename → archive entries). A database's archive is
+#: read once per run in practice; the stat signature catches a
+#: rebuilt archive. Bounded because an entry pins one archive's full
+#: name list in memory.
+_SRC_INDEX_MAX = 8
+_SRC_INDEX_CACHE: OrderedDict[
+    str, tuple[tuple[int, int], dict[str, tuple[str, ...]]],
+] = OrderedDict()
+_SRC_INDEX_LOCK = threading.Lock()
+
+#: Entry-count cap for the membership pre-flight. Deliberately far
+#: above core.zip's DEFAULT_MAX_ENTRIES (10k): a legitimate CodeQL
+#: ``src.zip`` carries one entry per extracted source file (system
+#: headers included) and big targets clear 10k easily. Construction-
+#: time RSS stays bounded by the central-directory BYTE caps, which
+#: keep their defaults.
+_SRC_INDEX_MAX_ENTRIES = 500_000
+
+
+def _src_zip_index(src_zip: Path) -> dict[str, tuple[str, ...]] | None:
+    """``basename → archive entries`` for a database source archive,
+    or None when membership cannot be established (missing,
+    unreadable, or bomb-shaped archive)."""
+    try:
+        st = src_zip.stat()
+    except OSError:
+        return None
+    sig = (st.st_mtime_ns, st.st_size)
+    key = str(src_zip)
+    with _SRC_INDEX_LOCK:
+        cached = _SRC_INDEX_CACHE.get(key)
+        if cached is not None and cached[0] == sig:
+            _SRC_INDEX_CACHE.move_to_end(key)
+            return cached[1]
+    # Built outside the lock (archive IO); racing builders store
+    # identical indexes and the last store wins.
+    try:
+        from core.zip import bomb_shaped_reason, peek_eocd
+        summary = peek_eocd(src_zip)
+        if summary is not None:
+            reason = bomb_shaped_reason(
+                summary, max_entries=_SRC_INDEX_MAX_ENTRIES,
+            )
+            if reason is not None:
+                logger.debug(
+                    "codeql src.zip membership: %s — %s", src_zip, reason,
+                )
+                return None
+        import zipfile
+        with zipfile.ZipFile(src_zip) as zf:
+            names = zf.namelist()
+    except Exception:  # noqa: BLE001 — unreadable archive ⇒ no index
+        logger.debug(
+            "codeql src.zip membership index failed for %s",
+            src_zip, exc_info=True,
+        )
+        return None
+    buckets: dict[str, list[str]] = {}
+    for name in names:
+        if not name or name.endswith("/"):
+            continue
+        buckets.setdefault(name.rsplit("/", 1)[-1], []).append(name)
+    index = {base: tuple(entries) for base, entries in buckets.items()}
+    with _SRC_INDEX_LOCK:
+        _SRC_INDEX_CACHE[key] = (sig, index)
+        _SRC_INDEX_CACHE.move_to_end(key)
+        while len(_SRC_INDEX_CACHE) > _SRC_INDEX_MAX:
+            _SRC_INDEX_CACHE.popitem(last=False)
+    return index
+
+
+def db_contains_source(
+    db_path: str | Path, file_path: str,
+) -> bool | None:
+    """Whether the database's source archive ingested ``file_path``.
+
+    Tri-state: True (present in ``src.zip``'s name list), False
+    (provably absent — the extractor never saw the file, so no query
+    on this database can return a row for it), None (unknown — no,
+    unreadable, or bomb-shaped archive). Trade-off, stated for
+    callers: None fails OPEN to the pre-gate behaviour, because an
+    unreadable archive must not kill the channel for every file; the
+    price is that vacuous zero-row runs keep classifying as they did
+    before in that degraded case.
+
+    Matching mirrors run_codeql_sweep's SARIF URI match (exact or
+    ``/``-anchored suffix), so presence here and result attribution
+    there agree. False-negative direction: an unrelated archive entry
+    sharing the relative-path suffix reads as present — the dispatch
+    proceeds and behaves exactly as without this gate.
+    """
+    if not file_path:
+        return None
+    index = _src_zip_index(Path(db_path) / "src.zip")
+    if index is None:
+        return None
+    for entry in index.get(file_path.rsplit("/", 1)[-1], ()):
+        if entry == file_path or entry.endswith("/" + file_path):
+            return True
+    return False
 
 
 class CodeqlDbRouter:

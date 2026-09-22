@@ -538,7 +538,7 @@ class SweepResult:
     tool: str
     file_path: str
     function_name: str
-    outcome: str  # confirmed | refuted | error | inconclusive
+    outcome: str  # confirmed | refuted | error | inconclusive | skipped
     matches: list[dict[str, Any]] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     rule_id: str | None = None
@@ -2945,6 +2945,42 @@ def run_codeql_sweep(
                     "auto-discovery is disabled (untrusted provenance) "
                     "— build one and pass database_path",
                 ],
+            )
+
+        # Source-archive membership gate: a file the extractor never
+        # ingested (a computed include the buildless extraction could
+        # not follow, an orphan fragment no extracted TU pulls in)
+        # cannot appear in ANY result row, so zero rows from this
+        # database say nothing about the hypothesis — classifying
+        # them as refuted turned "the channel could not look" into
+        # refutation-grade silence, and the vacuous whole-DB analyze
+        # still burned its full run first. The gate sits HERE at the
+        # sweep layer, not in the orchestrator leg, so every dispatch
+        # path (chain legs, replay, direct callers) crosses one
+        # chokepoint. Unknown membership (no src.zip, unreadable or
+        # bomb-shaped archive) fails OPEN to the historic behaviour
+        # with a debug line — an unreadable archive must not kill the
+        # channel for every file; the price is that vacuous
+        # refutations survive in that degraded case. Side benefit:
+        # SweepMemo.put refuses to store error outcomes, so a
+        # mismatched (db, query) pair re-runs a full analyze on every
+        # dispatch — skipping before analyze removes most of those
+        # dispatches.
+        from .codeql_dbs import db_contains_source
+        _membership = db_contains_source(db, file_path)
+        if _membership is None:
+            logger.debug(
+                "codeql sweep: source membership unknown for %s in %s "
+                "— proceeding (fail-open)", file_path, db,
+            )
+        elif _membership is False:
+            return SweepResult(
+                tool="codeql",
+                file_path=file_path,
+                function_name=function_name,
+                outcome="skipped",
+                rule_id=query_path,
+                details={"reason": "file not in this database"},
             )
 
         def _analyze_whole_db() -> list[dict[str, Any]]:
