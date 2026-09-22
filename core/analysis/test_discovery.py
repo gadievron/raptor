@@ -389,7 +389,8 @@ def _find_test_files(target: Path) -> tuple[List[Path], int]:
     summary on a large native suite is attributable to the language
     boundary rather than looking like a discovery bug.
     """
-    test_files: List[Path] = []
+    in_tree_files: List[Path] = []
+    loose_files: List[Path] = []
     skipped_unsupported = 0
 
     for root, dirs, files in os.walk(str(target)):
@@ -427,9 +428,16 @@ def _find_test_files(target: Path) -> tuple[List[Path], int]:
                     # (ALL test evidence for the target lost).
                     continue
                 if size < 500_000:
-                    test_files.append(fpath)
+                    if is_test_dir:
+                        in_tree_files.append(fpath)
+                    else:
+                        loose_files.append(fpath)
 
-    return test_files[:500], skipped_unsupported
+    # The result cap must not be walk-ordered: enough planted loose
+    # test files sorting ahead of tests/ in the walk would evict the
+    # entire curated suite from the capped set. Recognized test trees
+    # take the cap first; loose files fill the remainder.
+    return (in_tree_files + loose_files)[:500], skipped_unsupported
 
 
 def _extract_test_functions(source: str, suffix: str = "") -> List[tuple]:

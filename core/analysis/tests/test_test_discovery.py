@@ -676,6 +676,44 @@ class TestLocationProvenance:
         assert result["alpha"][0].in_test_tree is True
 
 
+class TestFileCapOrdering:
+    """The 500-file result cap used to be walk-ordered: a flood of
+    planted loose test files that the walk visits before tests/ would
+    evict the entire curated suite from the capped set — defeating any
+    downstream trust grading at the file level. In-tree files take the
+    cap first."""
+
+    def test_loose_flood_cannot_evict_the_curated_suite(self, tmp_path):
+        src = tmp_path / "aaa_src"  # sorts (and walks) before tests/
+        src.mkdir()
+        for i in range(600):
+            (src / f"test_planted_{i:03d}.py").write_text(
+                f"def test_planted_{i:03d}():\n    assert True\n",
+            )
+        tests = tmp_path / "tests"
+        tests.mkdir()
+        (tests / "test_real.py").write_text(
+            "def test_alpha():\n    assert alpha(1) == 2\n",
+        )
+
+        files, _skipped = _find_test_files(tmp_path)
+        assert len(files) == 500
+        assert files[0].name == "test_real.py"
+
+        result = discover_tests(tmp_path)
+        assert result["alpha"][0].in_test_tree is True
+
+    def test_loose_files_still_fill_the_cap_when_alone(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        for i in range(3):
+            (src / f"test_loose_{i}.py").write_text(
+                f"def test_loose_{i}():\n    assert True\n",
+            )
+        files, _skipped = _find_test_files(tmp_path)
+        assert len(files) == 3
+
+
 class TestDirPatternBoundaries:
     def test_lookalike_dirs_are_not_test_trees(self):
         from core.analysis.test_discovery import _dir_matches_test_pattern
