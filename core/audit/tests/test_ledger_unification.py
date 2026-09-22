@@ -118,3 +118,63 @@ class TestReviewOutcomeTokenPlumbing:
         )
         assert outcome.tokens_in == 0
         assert outcome.cache_read_tokens == 0
+
+
+class TestRefinementDispatchRecordCarry:
+    """The mechanical dispatch record survives the merge whichever
+    verdict wins — both rounds describe the same function, and a
+    dropped record makes gate resolution read \"no covering channel
+    ever ran\" (and erases the did-not-look skips)."""
+
+    def test_refined_winner_inherits_original_records(self):
+        original = _outcome(status="suspicious")
+        original.tools_dispatched = {"smt", "semgrep"}
+        original.tools_errored = {"compiler"}
+        original.tools_skipped = {"coccinelle"}
+        refined = _outcome(status="suspicious")
+        merged = merge_outcomes(original, refined)
+        assert merged is refined
+        assert merged.tools_dispatched == {"smt", "semgrep"}
+        assert merged.tools_errored == {"compiler"}
+        assert merged.tools_skipped == {"coccinelle"}
+
+    def test_records_union_across_rounds(self):
+        original = _outcome(status="suspicious")
+        original.tools_dispatched = {"smt"}
+        original.tools_skipped = {"coccinelle"}
+        refined = _outcome(status="suspicious")
+        refined.tools_dispatched = {"semgrep"}
+        merged = merge_outcomes(original, refined)
+        assert merged.tools_dispatched == {"smt", "semgrep"}
+        assert merged.tools_skipped == {"coccinelle"}
+
+    def test_dispatched_in_any_round_leaves_the_skip_set(self):
+        # A channel that looked in either round did look: it must not
+        # simultaneously read as did-not-look.
+        original = _outcome(status="suspicious")
+        original.tools_skipped = {"coccinelle"}
+        refined = _outcome(status="suspicious")
+        refined.tools_dispatched = {"coccinelle"}
+        merged = merge_outcomes(original, refined)
+        assert merged.tools_dispatched == {"coccinelle"}
+        assert merged.tools_skipped is None or (
+            "coccinelle" not in merged.tools_skipped
+        )
+
+    def test_original_winner_keeps_its_records(self):
+        # finding → clean regression path: original wins.
+        original = _outcome(status="finding")
+        original.tools_dispatched = {"smt"}
+        refined = _outcome(status="clean")
+        refined.tools_skipped = {"coccinelle"}
+        merged = merge_outcomes(original, refined)
+        assert merged is original
+        assert merged.tools_dispatched == {"smt"}
+        assert merged.tools_skipped == {"coccinelle"}
+
+    def test_no_records_stays_none(self):
+        original = _outcome(status="suspicious")
+        refined = _outcome(status="suspicious")
+        merged = merge_outcomes(original, refined)
+        assert merged.tools_dispatched is None
+        assert merged.tools_skipped is None

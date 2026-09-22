@@ -151,6 +151,15 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
     every earlier refinement round's spend from the journal and
     cost-breakdown (one measured run under-reported by $5.27, which
     then surfaced as an unexplained budget death).
+
+    The mechanical dispatch record (tools_dispatched / tools_errored /
+    tools_skipped) survives the merge the same way: both rounds
+    describe the SAME function, so the union is true whichever verdict
+    wins. Dropping it made gate resolution read "no covering channel
+    ever ran" (dark) for a function whose tools demonstrably looked —
+    and erased the did-not-look skips that keep phantom coverage out
+    of class-coverage credit. A channel dispatched in either round did
+    look, so it leaves the merged skip set.
     """
     from .evidence_grade import is_tool_evidence
     refined_tool = getattr(refined, "evidence_tool", "") or ""
@@ -169,6 +178,19 @@ def merge_outcomes(original: Any, refined: Any) -> Any:
                 setattr(winner, attr, total)
             except AttributeError:
                 pass  # duck-typed outcome without the field
+        merged: dict[str, set] = {}
+        for attr in ("tools_dispatched", "tools_errored", "tools_skipped"):
+            merged[attr] = (
+                set(getattr(original, attr, None) or set())
+                | set(getattr(refined, attr, None) or set())
+            )
+        merged["tools_skipped"] -= merged["tools_dispatched"]
+        for attr, value in merged.items():
+            if value:
+                try:
+                    setattr(winner, attr, value)
+                except AttributeError:
+                    pass  # duck-typed outcome without the field
         return winner
 
     if is_tool_evidence(refined_tool):
