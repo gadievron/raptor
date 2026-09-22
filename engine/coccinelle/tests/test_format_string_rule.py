@@ -2,15 +2,19 @@
 
 This is a verification-role rule — a false positive mints a false
 "confirmed" CWE-134 verdict — so the negatives pin the safe idioms the
-rule used to flag: a gettext-family translation of a string literal,
-a const local initialized from a literal, and the file-scope
-``static const char *fmt = "..."`` idiom (the shape of the repo's own
-negative control, engine/negative_controls/format_string.c).
+rule used to flag: a gettext-family translation of a string literal
+(inline at the call OR assigned to a local first), a ternary whose
+both arms are string literals, a const local initialized from a
+literal, and the file-scope ``static const char *fmt = "..."`` idiom
+(the shape of the repo's own negative control,
+engine/negative_controls/format_string.c).
 
 The reassignment shapes keep the true-positive side honest: a format
-variable that WAS constant but got reassigned from a parameter before
-the call must still fire, and taking the variable's address voids the
-safe marking.
+variable that WAS constant (literal- or gettext-of-literal-
+initialized) but got reassigned from a parameter before the call must
+still fire, taking the variable's address voids the safe marking, a
+ternary with any non-literal arm fires, and gettext of NON-constant
+data marks nothing safe.
 
 TestDocumentedMisses witnesses the ACCEPTED false negatives the rule
 header documents (exists-path reassignment guard, any-scope identifier
@@ -130,6 +134,62 @@ class TestPositives:
         assert len(results) == 1
         assert results[0]["line"] == 6
 
+    def test_ternary_with_non_literal_arm_fires(self, tmp_path):
+        # The ternary safe shape covers literal/literal ONLY — one
+        # non-literal arm hands the attacker a path to the format.
+        results = _run_rule(tmp_path, """\
+            void tern(int x, char *fmt, char *user, char *other, int n)
+            {
+                printf(x ? fmt : "b %d", n);
+                printf(x ? user : other);
+                fprintf((void *)0, x ? user : "b %d", n);
+            }
+        """)
+        assert sorted(r["line"] for r in results) == [3, 4, 5]
+
+    def test_gettext_of_user_local_fires(self, tmp_path):
+        # Only a gettext of a string CONSTANT marks the local safe —
+        # translating attacker data returns attacker data.
+        results = _run_rule(tmp_path, """\
+            void log_user(char *user, int n)
+            {
+                char *m = gettext(user);
+                printf(m, n);
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["line"] == 4
+
+    def test_gettext_local_reassigned_from_parameter_fires(self, tmp_path):
+        # Same dominating-reassignment semantics as the literal-init
+        # local: the gettext-of-literal init must not mark later uses
+        # safe once the variable was reassigned from a non-constant.
+        results = _run_rule(tmp_path, """\
+            void log_user(char *user, int n)
+            {
+                const char *m = gettext("hi %d");
+                m = user;
+                printf(m, n);
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["line"] == 5
+
+    def test_gettext_local_address_taken_fires(self, tmp_path):
+        # Taking the local's address voids the gettext-init safe
+        # marking, same as the literal-init discipline.
+        results = _run_rule(tmp_path, """\
+            void alias_write(char *user, int n)
+            {
+                const char *m = gettext("hi %d");
+                const char **slot = &m;
+                *slot = user;
+                printf(m, n);
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["line"] == 6
+
 
 class TestNegatives:
     def test_string_literal_format_does_not_fire(self, tmp_path):
@@ -179,6 +239,36 @@ class TestNegatives:
         """)
         assert results == []
 
+    def test_ternary_of_literals_does_not_fire(self, tmp_path):
+        # Whichever way the condition goes, the format is a string
+        # literal — the choice between two literals is not
+        # attacker-controlled format data.
+        results = _run_rule(tmp_path, """\
+            void pick(int x, int n, void *fp, char *buf)
+            {
+                printf(x ? "a %d" : "b %d", n);
+                fprintf(fp, x ? "a %d" : "b %d", n);
+                snprintf(buf, 9, x ? "a %d" : "b %d", n);
+            }
+        """)
+        assert results == []
+
+    def test_gettext_literal_local_does_not_fire(self, tmp_path):
+        # gettext-family translation of a LITERAL assigned to a local:
+        # the catalog ships with the installation, so the local is the
+        # same trust tier as a literal-initialized one.
+        results = _run_rule(tmp_path, """\
+            void greet(int n, void *fp, char *buf)
+            {
+                const char *m = gettext("hi %d");
+                const char *u = _("bye %d");
+                printf(m, n);
+                fprintf(fp, m, n);
+                snprintf(buf, 9, u, n);
+            }
+        """)
+        assert results == []
+
 
 class TestDocumentedMisses:
     """Witnesses for the header's accepted false negatives — asserting
@@ -195,6 +285,25 @@ class TestDocumentedMisses:
                 if (custom)
                     fmt = user_fmt;
                 printf(fmt, n);
+            }
+        """)
+        assert results == []
+
+    def test_gettext_init_conditional_reassignment_is_a_documented_miss(
+        self, tmp_path
+    ):
+        # The gettext-initialized local shares the exists-path guard
+        # semantics of the literal-initialized one: a conditional
+        # reassignment from a parameter does not dominate the call, so
+        # the position stays in the safe set even though the custom
+        # path carries user data into the format.
+        results = _run_rule(tmp_path, """\
+            void cond(char *user_fmt, int custom, int n)
+            {
+                const char *m = gettext("hi %d");
+                if (custom)
+                    m = user_fmt;
+                printf(m, n);
             }
         """)
         assert results == []
