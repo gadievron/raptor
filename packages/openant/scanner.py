@@ -827,22 +827,54 @@ def _run_subprocess(
     except Exception as exc:  # noqa: BLE001
         return _empty_result(f"OpenAnt launch failed: {exc}", hard_error=True)
 
-    # Persist stderr so debugging isn't capped at the 600-char snippet
-    # we surface to the caller. (Adversarial-audit finding: long warnings
-    # could push the actual error past the truncation point.)
-    # Cap at STDERR_MAX_BYTES (1 MiB) so a misbehaving subprocess cannot
-    # fill the disk by spamming stderr in a tight loop.
-    if proc.stderr:
+    # Persist BOTH streams so debugging isn't capped at the truncated
+    # snippet we surface to the caller (long warnings can push the
+    # actual error past the truncation point). stdout matters as much
+    # as stderr: the pinned CLI reports its errors as a
+    # machine-readable JSON document on STDOUT ({"status": "error",
+    # "errors": [...]}) with only progress lines on stderr — a
+    # stderr-only capture loses the actual failure. Capped byte-true
+    # at STDERR_MAX_BYTES (1 MiB) so a misbehaving subprocess cannot
+    # fill the disk by spamming a stream in a tight loop (see
+    # _persist_capped, which also owns the no-follow hardening: the
+    # CHILD owns the writable out_dir while it runs, and a pre-planted
+    # openant.*.log symlink would otherwise steer this UNSANDBOXED
+    # parent into writing child-controlled bytes at a child-chosen
+    # host path).
+    def _persist_stream(content: str | None, name: str) -> None:
+        if not content:
+            return
         try:
-            _persist_stderr(out_dir, proc.stderr)
+            _persist_capped(out_dir / name, content)
         except OSError:
             pass
 
+    _persist_stream(proc.stderr, "openant.stderr.log")
+
     if proc.returncode not in (0, 1):
-        snippet = (proc.stderr or "")[:600].strip()
+        _persist_stream(proc.stdout, "openant.stdout.log")
+        # Surface the cause, not just progress lines: stderr leads, and
+        # the stdout tail JOINS whenever it parses as the upstream
+        # error document — regardless of how chatty stderr was, since a
+        # long progress line must not crowd the actual error out of the
+        # snippet (pre-fix the snippet showed operators "[Scan] LLM
+        # config: ..." while the real error sat in discarded stdout).
+        snippet = (proc.stderr or "").strip()[:600]
+        stdout_text = (proc.stdout or "").strip()
+        join_stdout = len(snippet) < 40
+        if not join_stdout and stdout_text:
+            try:
+                doc = json.loads(stdout_text)
+                join_stdout = (isinstance(doc, dict)
+                               and doc.get("status") == "error")
+            except ValueError:
+                pass
+        if join_stdout and stdout_text:
+            snippet = f"{snippet} | stdout: {stdout_text[-600:]}".strip(" |")
         return _empty_result(
             f"OpenAnt exited {proc.returncode}: {snippet} "
-            f"(full stderr in {out_dir}/openant.stderr.log)",
+            f"(full streams in {out_dir}/openant.stderr.log and "
+            f"openant.stdout.log)",
             hard_error=True,
         )
 
@@ -865,22 +897,42 @@ def _run_subprocess(
 
 
 def _persist_stderr(out_dir: Path, stderr: str) -> None:
-    """Write the subprocess stderr to ``openant.stderr.log``,
-    byte-true capped at :data:`STDERR_MAX_BYTES` with the truncation
-    notice INSIDE the cap (the old char-count slice admitted up to 4x
-    the budget in UTF-8 and appended the notice past it). Explicit
-    encoding: the content quotes hostile target text — an
-    encoding-less write crashed under a C locale exactly when the
-    content was non-ASCII."""
-    raw = stderr.encode("utf-8", "replace")
+    """Write the subprocess stderr to ``openant.stderr.log`` —
+    byte-true capped, hardened; see :func:`_persist_capped`, which
+    the stdout error-document persist shares."""
+    _persist_capped(out_dir / "openant.stderr.log", stderr)
+
+
+def _persist_capped(path: Path, content: str) -> None:
+    """Persist one subprocess stream, byte-true capped at
+    :data:`STDERR_MAX_BYTES` with the truncation notice INSIDE the
+    cap (a char-count slice admitted up to 4x the budget in UTF-8 and
+    appended the notice past it). Explicit encoding: the content
+    quotes hostile target text — an encoding-less write crashed under
+    a C locale exactly when the content was non-ASCII. Written
+    no-follow with the pre-existing name unlinked first: the CHILD
+    owns the writable out_dir while it runs, and a pre-planted log
+    symlink would otherwise steer this UNSANDBOXED parent into
+    writing child-controlled bytes at a child-chosen host path."""
+    raw = content.encode("utf-8", "replace")
     if len(raw) > STDERR_MAX_BYTES:
         notice = (
             f"\n\n[truncated — original was {len(raw)} bytes, "
             f"capped at {STDERR_MAX_BYTES}]\n"
         )
         keep = max(0, STDERR_MAX_BYTES - len(notice.encode("utf-8")))
-        stderr = raw[:keep].decode("utf-8", "ignore") + notice
-    (out_dir / "openant.stderr.log").write_text(stderr, encoding="utf-8")
+        content = raw[:keep].decode("utf-8", "ignore") + notice
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    fd = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o644,
+    )
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(content)
 
 
 def _find_venv_python(core_path: Path) -> str:
