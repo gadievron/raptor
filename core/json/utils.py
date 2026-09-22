@@ -570,9 +570,13 @@ def dumps_artifact(
 
     Args:
         indent: 2 (default — the repo's artifact form) or ``None``
-            (compact) or any other stdlib indent. orjson only
-            accelerates ``indent=2``; every other indent takes the
-            stdlib branch.
+            (compact — no inter-token whitespace; both encoder arms
+            agree on ``(",", ":")`` separators) or any other stdlib
+            indent. orjson accelerates ``2`` and ``None``; every other
+            indent takes the stdlib branch. Compact matters wherever a
+            byte-budgeted reader caps the artifact: indented
+            serialization can exceed budgets a compact encoding of the
+            same data fits.
         sort_keys: sort object keys. Cosmetic on this surface (stable
             operator diffs) — never a byte contract. Only supported
             for str-keyed objects: with non-str keys the sort order
@@ -583,9 +587,11 @@ def dumps_artifact(
             escape non-ASCII) — for writers that pin ASCII-safe output
             by intent, e.g. the sandbox security-telemetry files.
     """
-    if _orjson is not None and indent == 2 and not ensure_ascii:
+    if _orjson is not None and indent in (2, None) and not ensure_ascii:
         _reject_non_finite_floats(data)
-        opt = _orjson.OPT_INDENT_2 | _orjson.OPT_NON_STR_KEYS
+        opt = _orjson.OPT_NON_STR_KEYS
+        if indent == 2:
+            opt |= _orjson.OPT_INDENT_2
         if sort_keys:
             opt |= _orjson.OPT_SORT_KEYS
         try:
@@ -599,6 +605,13 @@ def dumps_artifact(
     return json.dumps(
         data,
         indent=indent,
+        # indent=None means COMPACT. The stdlib's indent=None default
+        # separators are (", ", ": ") — spaced, not compact, and
+        # disagreeing with orjson's compact form. Pin (",", ":") so
+        # both arms emit whitespace-free output: byte-budgeted readers
+        # cap on serialized size, and a spaced encoding wastes budget
+        # a compact encoding of the same data does not.
+        separators=(",", ":") if indent is None else None,
         sort_keys=sort_keys,
         ensure_ascii=ensure_ascii,
         cls=_RaptorEncoder,

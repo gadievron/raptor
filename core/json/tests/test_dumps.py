@@ -252,6 +252,31 @@ class TestDumpsArtifact:
         assert ' "a"' in dumps_artifact({"a": 1}, indent=1)
         assert '    "a"' in dumps_artifact({"a": 1}, indent=4)
 
+    def test_indent_none_is_compact(self) -> None:
+        """indent=None emits no inter-token whitespace on either
+        encoder arm — byte-budgeted readers cap on serialized size,
+        so the compact form must actually be compact."""
+        payload = {"a": 1, "b": [1, 2], "c": {"d": "x y"}}
+        out = dumps_artifact(payload, indent=None)
+        assert json.loads(out) == payload
+        # Whitespace survives only inside string values.
+        assert out == '{"a":1,"b":[1,2],"c":{"d":"x y"}}'
+
+    def test_indent_none_compact_on_stdlib_branch(self) -> None:
+        """ensure_ascii=True forces the stdlib branch — its compact
+        separators must agree with orjson's."""
+        out = dumps_artifact({"a": 1, "b": 2}, indent=None,
+                             ensure_ascii=True)
+        assert out == '{"a":1,"b":2}'
+
+    def test_indent_none_never_longer_than_indented(self) -> None:
+        payload = {"entries": [
+            {"id": i, "names": [f"n{j}" for j in range(5)]}
+            for i in range(20)
+        ]}
+        assert (len(dumps_artifact(payload, indent=None))
+                < len(dumps_artifact(payload)))
+
     def test_path_and_datetime_stringify(self) -> None:
         parsed = json.loads(dumps_artifact({
             "p": Path("/tmp/x"), "d": datetime(2026, 1, 2, 3, 4, 5),
