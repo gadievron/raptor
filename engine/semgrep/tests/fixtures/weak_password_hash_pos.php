@@ -10,6 +10,9 @@ function check_login($db, $user, $password) {
 function legacy_digest($passwd) {
     return hash("md5", $passwd, false);
 }
+function uppercase_algo($passwd) {
+    return hash("MD5", $passwd);
+}
 function underscore_name($user_password) {
     return md5($user_password);
 }

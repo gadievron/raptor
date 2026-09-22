@@ -16,3 +16,14 @@ function file_checksum($path) {
 function passthrough_digest($passthrough) {
     return md5($passthrough);
 }
+function strong_algo($password) {
+    return hash("sha256", $password);
+}
+function neutral_name_launder() {
+    // Documented FN: the password hops to a neutral name before the
+    // digest — invisible to the name-anchored pattern, silent by
+    // design (one of the narrow-shape gaps recorded on the
+    // pre-existing CWE-327 coverage row in core/audit/tool_coverage.py).
+    $p = $_POST['password'];
+    return md5($p);
+}
