@@ -521,7 +521,17 @@ fi
 # names the stripped path) falls back to resolving another.
 CHECK_TARGET=""
 if [ -n "$_target_clean" ] && [ -d "$_target_clean" ]; then
-    CHECK_TARGET="$(cd "$_target_clean" && pwd)"
+    # `-d` passes on a readable dir the user cannot traverse (no
+    # execute bit) and the dir can vanish between test and cd; either
+    # way the substitution's failure would abort under set -e with
+    # only cd's terse stderr. Refuse loudly instead — an unresolvable
+    # target cannot be vetted or scanned. Strip + bound the echoed
+    # path: TARGET is operator-supplied argv.
+    if ! CHECK_TARGET="$(cd "$_target_clean" 2>/dev/null && pwd)"; then
+        _shown_t="${_target_clean//[![:print:]]/}"
+        echo "raptor: cannot resolve target directory (permission denied, or removed mid-launch): ${_shown_t:0:200}" >&2
+        exit 1
+    fi
 elif [ -d "$RAPTOR_CALLER_DIR" ]; then
     CHECK_TARGET="$RAPTOR_CALLER_DIR"
 fi
