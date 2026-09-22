@@ -182,3 +182,22 @@ def test_registry_dispatch_routes_arg_edits_through_combined(
     results = rewrite(dockerfile, edits)
     assert len(results) == 1
     assert results[0].applied
+
+
+def test_blank_line_run_is_fast(tmp_path: Path) -> None:
+    """Sibling of the helm rewriter's blank-run quadratic — the
+    MULTILINE ``^\\s*`` indent idiom on a trailing blank run;
+    horizontal-only indent is linear and the FROM still bumps."""
+    import time
+
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text("FROM python:3.11\n" + "\n" * (1 << 17))
+    edits = [RewriteEdit(
+        locator="docker.io/library/python",
+        old_value="3.11", new_value="3.12",
+    )]
+    start = time.monotonic()
+    results = rewrite_dockerfile_from(dockerfile, edits)
+    assert time.monotonic() - start < 5.0
+    assert results[0].applied
+    assert "FROM python:3.12" in dockerfile.read_text()

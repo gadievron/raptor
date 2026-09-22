@@ -73,9 +73,12 @@ def _apply_one(
     # whitespace / comment / EOL. Multi-line mode so each line
     # is tested independently — Dockerfile ARGs are always
     # one-per-line.
+    # Leading indent is HORIZONTAL-only ([^\S\n]) — the MULTILINE
+    # ``^\s*`` idiom is quadratic on blank-line runs (see the helm
+    # rewriter's fixed anchor; same sibling idiom).
     name = re.escape(edit.locator)
     pattern = re.compile(
-        rf"^(\s*ARG\s+{name}\s*=\s*)(\S+)",
+        rf"^([^\S\n]*ARG\s+{name}\s*=\s*)(\S+)",
         re.MULTILINE,
     )
     # Multi-stage Dockerfiles redeclare the same ARG per stage, so the

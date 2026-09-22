@@ -89,8 +89,11 @@ def parse_manifest(path: Path) -> list[Dependency]:
 
     out: list[Dependency] = []
     seen_keys: set = set()
+    # Leading indent is HORIZONTAL-only ([^\S\n]): under MULTILINE the
+    # ``^\s*`` spelling re-scans a run of blank lines from every line
+    # start inside it — quadratic on a hostile Gemfile.
     has_control_flow = bool(
-        re.search(r"(?:^\s*(?:if|unless|case|while|for|until)\b|\b(?:if|unless)\s+\S)", text, re.MULTILINE))
+        re.search(r"(?:^[^\S\n]*(?:if|unless|case|while|for|until)\b|\b(?:if|unless)\s+\S)", text, re.MULTILINE))
     confidence_level = "medium" if has_control_flow else "high"
     reason = ("Gemfile DSL — heuristic regex" if has_control_flow
               else "Gemfile DSL — straight-line script")

@@ -136,8 +136,11 @@ def _apply_one_from(
     # Match: optional ``FROM`` + whitespace + image + ``:`` +
     # captured tag + (optional ``@digest`` + optional ``AS
     # <stage>`` + optional comment / EOL).
+    # Leading indent is HORIZONTAL-only ([^\S\n]) — the MULTILINE
+    # ``^\s*`` idiom is quadratic on blank-line runs (see the helm
+    # rewriter's fixed anchor; same sibling idiom).
     pattern = re.compile(
-        rf"^(\s*FROM\s+(?:--platform=\S+\s+)?(?:{image_alternates}):)"
+        rf"^([^\S\n]*FROM\s+(?:--platform=\S+\s+)?(?:{image_alternates}):)"
         rf"(\S+?)"                  # tag (non-greedy)
         rf"(\s|$|@|#)",              # boundary
         re.MULTILINE,

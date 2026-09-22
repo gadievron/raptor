@@ -65,13 +65,24 @@ def _version_key_pattern(key: str) -> re.Pattern:
     """
     k = re.escape(key)
     return re.compile(
+        # Leading indent in every anchored line (header, lookahead,
+        # key line) is HORIZONTAL-only ([^\S\n]): under MULTILINE
+        # the ``^\s*`` spelling re-scans a run of blank lines from
+        # every line start inside it — quadratic on a hostile
+        # catalog file. The header TAIL is horizontal too: a
+        # ``\s*$`` tail swallows a blank run placed directly after
+        # the header, and when the mandatory key line then fails
+        # (missing key), backtracking re-runs the lazy ``inter``
+        # scan from every ``$`` stop inside the run — the same
+        # quadratic through the back door. TOML headers never span
+        # lines. Same spellings in all five builders below.
         # ``[versions]`` header (anchor)
-        r"(?P<hdr>^\s*\[versions\]\s*$)"
+        r"(?P<hdr>^[^\S\n]*\[versions\][^\S\n]*$)"
         # everything up to the key line (non-greedy, no other
         # section headers in between)
-        r"(?P<inter>(?:(?!^\s*\[)[\s\S])*?)"
+        r"(?P<inter>(?:(?!^[^\S\n]*\[)[\s\S])*?)"
         # the key line itself
-        rf"(?P<lead>^\s*{k}\s*=\s*['\"])"
+        rf"(?P<lead>^[^\S\n]*{k}\s*=\s*['\"])"
         r"(?P<version>[^'\"]*)"
         r"(?P<tail>['\"])",
         re.MULTILINE,
@@ -96,9 +107,9 @@ def _inline_library_version_pattern(alias: str) -> re.Pattern:
     # as TWO ``}}`` chars — never matched a single-``}`` inline
     # table close.
     return re.compile(
-        r"(?P<hdr>^\s*\[libraries\]\s*$)"
-        r"(?P<inter>(?:(?!^\s*\[)[\s\S])*?)"
-        rf"(?P<lead>^\s*{a}\s*=\s*\{{[^}}\n]*?version\s*=\s*['\"])"
+        r"(?P<hdr>^[^\S\n]*\[libraries\][^\S\n]*$)"
+        r"(?P<inter>(?:(?!^[^\S\n]*\[)[\s\S])*?)"
+        rf"(?P<lead>^[^\S\n]*{a}\s*=\s*\{{[^}}\n]*?version\s*=\s*['\"])"
         r"(?P<version>[^'\"]*)"
         r"(?P<tail>['\"][^}\n]*\})",
         re.MULTILINE,
@@ -111,9 +122,9 @@ def _inline_library_string_pattern(alias: str) -> re.Pattern:
     version segment."""
     a = re.escape(alias)
     return re.compile(
-        r"(?P<hdr>^\s*\[libraries\]\s*$)"
-        r"(?P<inter>(?:(?!^\s*\[)[\s\S])*?)"
-        rf"(?P<lead>^\s*{a}\s*=\s*['\"][^'\":]+:[^'\":]+:)"
+        r"(?P<hdr>^[^\S\n]*\[libraries\][^\S\n]*$)"
+        r"(?P<inter>(?:(?!^[^\S\n]*\[)[\s\S])*?)"
+        rf"(?P<lead>^[^\S\n]*{a}\s*=\s*['\"][^'\":]+:[^'\":]+:)"
         r"(?P<version>[^'\"]+)"
         r"(?P<tail>['\"])",
         re.MULTILINE,
@@ -126,9 +137,9 @@ def _inline_plugin_version_pattern(alias: str) -> re.Pattern:
     ``_inline_library_version_pattern``."""
     a = re.escape(alias)
     return re.compile(
-        r"(?P<hdr>^\s*\[plugins\]\s*$)"
-        r"(?P<inter>(?:(?!^\s*\[)[\s\S])*?)"
-        rf"(?P<lead>^\s*{a}\s*=\s*\{{[^}}\n]*?version\s*=\s*['\"])"
+        r"(?P<hdr>^[^\S\n]*\[plugins\][^\S\n]*$)"
+        r"(?P<inter>(?:(?!^[^\S\n]*\[)[\s\S])*?)"
+        rf"(?P<lead>^[^\S\n]*{a}\s*=\s*\{{[^}}\n]*?version\s*=\s*['\"])"
         r"(?P<version>[^'\"]*)"
         r"(?P<tail>['\"][^}\n]*\})",
         re.MULTILINE,
@@ -141,9 +152,9 @@ def _inline_plugin_string_pattern(alias: str) -> re.Pattern:
     version segment."""
     a = re.escape(alias)
     return re.compile(
-        r"(?P<hdr>^\s*\[plugins\]\s*$)"
-        r"(?P<inter>(?:(?!^\s*\[)[\s\S])*?)"
-        rf"(?P<lead>^\s*{a}\s*=\s*['\"][^'\":]+:)"
+        r"(?P<hdr>^[^\S\n]*\[plugins\][^\S\n]*$)"
+        r"(?P<inter>(?:(?!^[^\S\n]*\[)[\s\S])*?)"
+        rf"(?P<lead>^[^\S\n]*{a}\s*=\s*['\"][^'\":]+:)"
         r"(?P<version>[^'\"]+)"
         r"(?P<tail>['\"])",
         re.MULTILINE,

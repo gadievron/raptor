@@ -233,3 +233,70 @@ class TestMultilineStringBlindness:
         assert 'junit = "5.9.0"\n' in text
         # The string content is untouched.
         assert 'junit = "1.0.0"\n' in text
+
+
+def test_blank_line_run_is_fast(tmp_path: Path) -> None:
+    """Sibling of the helm rewriter's blank-run quadratic — the
+    MULTILINE ``^\\s*`` idiom on the header / lookahead / key-line
+    anchors. The firing shape is a MISSING key over a trailing blank
+    run: the search walks every anchor of the run looking for the key
+    line and re-scanned the remainder from each — quadratic.
+    Horizontal-only indent is linear. Both-direction bound: the miss
+    is fast AND a present key still bumps."""
+    import time
+
+    p = _write(tmp_path,
+               '[versions]\njunit = "1.0"\n'
+               + "\n" * (1 << 17) + "# end\n")
+    start = time.monotonic()
+    results = rewrite_libs_versions_toml(p, [RewriteEdit(
+        locator="version:spring-boot",
+        old_value="3.1.0", new_value="3.2.0",
+    )])
+    assert time.monotonic() - start < 5.0
+    assert results[0].applied is False
+    assert results[0].reason == "not_found"
+
+    p2 = _write(tmp_path,
+                '[versions]\nspring-boot = "3.1.0"\n'
+                + "\n" * (1 << 17))
+    start = time.monotonic()
+    results = rewrite_libs_versions_toml(p2, [RewriteEdit(
+        locator="version:spring-boot",
+        old_value="3.1.0", new_value="3.2.0",
+    )])
+    assert time.monotonic() - start < 5.0
+    assert results[0].applied is True
+    assert 'spring-boot = "3.2.0"' in p2.read_text()
+
+
+def test_blank_run_directly_after_header_is_fast(tmp_path: Path) -> None:
+    """Adversarial sibling of the trailing-run shape above: the blank
+    run sits DIRECTLY after the section header and the requested key
+    is missing. A ``\\s*$`` header TAIL swallows the run; when the
+    mandatory key line then fails, backtracking re-runs the lazy
+    ``inter`` scan from every ``$`` stop inside the run — quadratic
+    (tens of seconds at 32K lines). A horizontal tail ([^\\S\\n]*$)
+    is linear. Both-direction bound: the miss is fast AND a key
+    placed after the run still bumps."""
+    import time
+
+    p = _write(tmp_path,
+               '[versions]\n' + "\n" * (1 << 17) + 'junit = "1.0"\n')
+    start = time.monotonic()
+    results = rewrite_libs_versions_toml(p, [RewriteEdit(
+        locator="version:spring-boot",
+        old_value="3.1.0", new_value="3.2.0",
+    )])
+    assert time.monotonic() - start < 5.0
+    assert results[0].applied is False
+    assert results[0].reason == "not_found"
+
+    start = time.monotonic()
+    results = rewrite_libs_versions_toml(p, [RewriteEdit(
+        locator="version:junit",
+        old_value="1.0", new_value="1.1",
+    )])
+    assert time.monotonic() - start < 5.0
+    assert results[0].applied is True
+    assert 'junit = "1.1"' in p.read_text()
