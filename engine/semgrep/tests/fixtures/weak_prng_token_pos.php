@@ -18,3 +18,14 @@ function make_otp() {
     $otp = rand(100000, 999999);
     return $otp;
 }
+function session_csrf() {
+    $_SESSION['csrf_token'] = md5(mt_rand());
+}
+function one_time_pad() {
+    $pad = str_shuffle("0123456789abcdef");
+    return $pad;
+}
+function underscore_name() {
+    $reset_token = uniqid();
+    return $reset_token;
+}

@@ -9,13 +9,20 @@ rules:
   # (md5(uniqid(rand(), true))) does not add entropy; the deep
   # expression match (<... ...>) sees through those wrappers.
   #
-  # Known FP modes:
-  #   - Name-anchored: a security token stored under a neutral name
-  #     ($val, $id) is missed (FN), and a non-security variable that
-  #     happens to carry an anchor substring (e.g. $keypad_layout via
-  #     "pad") fires (FP). Bare "key" is deliberately NOT an anchor —
-  #     $cache_key/$array_key would swamp the signal; api_key/apikey
-  #     carry the security sense.
+  # Anchors use letter-run lookarounds, not \b: underscores are word
+  # chars so \b never fires inside $reset_token, while a bare
+  # substring test fires inside $preset/$notepad. (?<![a-z])reset
+  # matches $reset_token but not $preset; pad(?![a-z]) matches
+  # $pad_bytes but not $keypad_layout.
+  #
+  # Known FP/FN modes:
+  #   - Name-anchored: security material stored under a neutral name
+  #     ($val, $r), returned directly without assignment, or hopped
+  #     through an intermediate variable before the named store is
+  #     missed (FN, executable examples in the negative fixture).
+  #     Bare "key" is deliberately NOT an anchor — $cache_key/
+  #     $array_key would swamp the signal; apikey/api_key carry the
+  #     security sense.
   - id: raptor.php.weak-prng-token.var
     languages: [php]
     severity: HIGH
@@ -30,9 +37,14 @@ rules:
       - metavariable-regex:
           metavariable: $RAND
           regex: ^(mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
+      # Fully anchored to the plain-variable shape ($name only): the
+      # $VAR metavariable also binds property/array lvalues, and an
+      # unanchored regex would double-report the shapes the property
+      # and array-store rules own — and defeat the property rule's
+      # deliberate 'pad' exclusion via $obj->pad.
       - metavariable-regex:
           metavariable: $VAR
-          regex: (?i)\$\w*(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset|pad)\w*
+          regex: (?i)^\$[a-z0-9_]*(?<![a-z])(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset|pad)(?![a-z])[a-z0-9_]*$
     metadata:
       cwe: ["CWE-338"]
   - id: raptor.php.weak-prng-token.property
@@ -51,6 +63,28 @@ rules:
           regex: ^(mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
       - metavariable-regex:
           metavariable: $PROP
-          regex: (?i)\w*(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)\w*
+          regex: (?i).*(?<![a-z])(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z]).*
+    metadata:
+      cwe: ["CWE-338"]
+  # The canonical CSRF shape stores into an array slot, not a
+  # variable: $_SESSION['csrf_token'] = md5(mt_rand()). The key
+  # literal carries the anchor.
+  - id: raptor.php.weak-prng-token.array-store
+    languages: [php]
+    severity: HIGH
+    message: >
+      Security material is derived from a non-cryptographic PRNG
+      (mt_rand/rand/uniqid/lcg_value/str_shuffle/array_rand). These
+      sequences are predictable from a small number of outputs or a
+      guessable seed, so the token/secret is forgeable. Use
+      random_bytes()/random_int() (CSPRNG).
+    patterns:
+      - pattern: $ARR[$KEY] = <... $RAND(...) ...>;
+      - metavariable-regex:
+          metavariable: $RAND
+          regex: ^(mt_rand|rand|uniqid|lcg_value|str_shuffle|array_rand)$
+      - metavariable-regex:
+          metavariable: $KEY
+          regex: (?i).*(?<![a-z])(token|secret|nonce|otp|csrf|apikey|api_key|sessid|session_id|activation|reset)(?![a-z]).*
     metadata:
       cwe: ["CWE-338"]
