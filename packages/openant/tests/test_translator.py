@@ -218,3 +218,34 @@ class TestUnknownVerdictsStayVisible(unittest.TestCase):
     def test_known_verdicts_unchanged(self):
         out = translate_pipeline_output(self._pipeline("vulnerable"), "/repo")
         self.assertEqual(out[0]["level"], "warning")
+
+
+class TestDedupKeyRelativisation(unittest.TestCase):
+    """SARIF findings carry absolute resolved URIs (CodeQL %SRCROOT%),
+    OpenAnt findings carry repo-relative paths — the dedup key must
+    relativise both sides or the join is vacuous (duplicates
+    double-reported)."""
+
+    def test_absolute_sarif_path_matches_relative_openant_path(self):
+        oa = [{"tool": "openant", "file": "src/app.py", "cwe_id": "CWE-78"}]
+        sarif = [{"tool": "codeql", "file": "/work/repo/src/app.py",
+                  "cwe_id": "CWE-78"}]
+        merged, dropped = deduplicate_with_sarif(oa, sarif,
+                                                 repo_path="/work/repo")
+        self.assertEqual(dropped, 1)
+        self.assertEqual([f["tool"] for f in merged], ["codeql"])
+
+    def test_outside_repo_sarif_path_never_matches(self):
+        oa = [{"tool": "openant", "file": "src/app.py", "cwe_id": "CWE-78"}]
+        sarif = [{"tool": "codeql", "file": "/elsewhere/src/app.py",
+                  "cwe_id": "CWE-78"}]
+        merged, dropped = deduplicate_with_sarif(oa, sarif,
+                                                 repo_path="/work/repo")
+        self.assertEqual(dropped, 0)
+        self.assertEqual(len(merged), 2)
+
+    def test_no_repo_path_keeps_relative_matching(self):
+        oa = [{"tool": "openant", "file": "src/app.py", "cwe_id": "CWE-78"}]
+        sarif = [{"tool": "codeql", "file": "src/app.py", "cwe_id": "CWE-78"}]
+        merged, dropped = deduplicate_with_sarif(oa, sarif)
+        self.assertEqual(dropped, 1)

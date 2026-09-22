@@ -161,32 +161,55 @@ def _make_finding_id(
     return f"openant:VULN-{index+1:03d}"
 
 
-def _normalize_path(file_path: str) -> str:
-    return os.path.normpath(file_path).lstrip(os.sep)
+def _normalize_path(file_path: str, repo_root: Optional[Path] = None) -> str:
+    """Repo-relative spelling for the dedup join key.
+
+    SARIF findings carry base-joined resolved URIs (absolute for
+    CodeQL's %SRCROOT%), OpenAnt findings carry repo-relative paths —
+    without relativising the absolute side the two key populations
+    could never be equal and the dedup was vacuous (every duplicate
+    double-reported). Lexical relpath only; paths need not exist.
+    """
+    norm = os.path.normpath(str(file_path))
+    if repo_root is not None and os.path.isabs(norm):
+        try:
+            rel = os.path.relpath(norm, os.path.normpath(str(repo_root)))
+        except ValueError:
+            rel = norm  # different drive (Windows) — keep absolute
+        if not rel.startswith(".."):
+            norm = rel
+    return norm.lstrip(os.sep)
 
 
 def deduplicate_with_sarif(
     openant_findings: list[dict],
     sarif_findings: list[dict],
+    repo_path: Optional[str | Path] = None,
 ) -> tuple[list[dict], int]:
     """Remove OpenAnt findings that duplicate SARIF findings.
 
-    Deduplication key: (normalized_file, line_bucket_of_5, cwe_id_str).
-    When the same issue is in both, keep the SARIF finding.
+    Deduplication key: (repo_relative_file, cwe_id) — no line numbers
+    (OpenAnt findings are function-granularity and carry none) and no
+    function name (SARIF results don't reliably carry one), so two
+    DISTINCT same-file same-CWE findings do collapse; the SARIF side
+    is kept as the richer record. Pass ``repo_path`` so absolute SARIF
+    URIs and repo-relative OpenAnt paths land in the same key
+    population.
 
     Returns:
         (merged_unique_list, count_of_openant_dropped)
     """
+    repo_root = Path(repo_path) if repo_path else None
     sarif_keys: set[tuple] = set()
     for f in sarif_findings:
-        key = _sarif_key(f)
+        key = _finding_key(f, repo_root)
         if key:
             sarif_keys.add(key)
 
     kept = []
     dropped = 0
     for f in openant_findings:
-        key = _openant_key(f)
+        key = _finding_key(f, repo_root)
         if key and key in sarif_keys:
             dropped += 1
         else:
@@ -195,18 +218,10 @@ def deduplicate_with_sarif(
     return sarif_findings + kept, dropped
 
 
-def _sarif_key(f: dict) -> Optional[tuple]:
-    """Dedup key: (file, cwe).  Line number excluded — OpenAnt has none."""
+def _finding_key(f: dict, repo_root: Optional[Path] = None) -> Optional[tuple]:
+    """Dedup key: (repo-relative file, cwe). Shared by both sides."""
     file_ = f.get("file") or ""
     cwe = f.get("cwe_id") or ""
     if not file_:
         return None
-    return (_normalize_path(file_), str(cwe).upper())
-
-
-def _openant_key(f: dict) -> Optional[tuple]:
-    file_ = f.get("file") or ""
-    cwe = f.get("cwe_id") or ""
-    if not file_:
-        return None
-    return (_normalize_path(file_), str(cwe).upper())
+    return (_normalize_path(file_, repo_root), str(cwe).upper())

@@ -3596,7 +3596,8 @@ def main() -> int:
                     sarif_flist = []
                     for sf in all_sarif_files:
                         sarif_flist.extend(parse_sarif_findings(str(sf)))
-                    merged, dropped = deduplicate_with_sarif(raw, sarif_flist)
+                    merged, dropped = deduplicate_with_sarif(
+                        raw, sarif_flist, repo_path=original_repo_path)
                     openant_findings = [f for f in merged if f.get("tool") == "openant"]
                     if dropped:
                         print(f"  Deduped {dropped} OpenAnt finding(s) already in SARIF")
