@@ -366,10 +366,14 @@ state. Each entry carries a `priority_hint` combining primitive
 availability with the sink's CWE.
 
 ```bash
-libexec/raptor-enrich-context-map-mitigation "$WORKDIR"
+libexec/raptor-enrich-context-map-mitigation "$WORKDIR" --binary /path/to/binary
 ```
 
-Opt-in — no-op when no binary path is available. Additive — sinks are
+Opt-in — `--binary` is required, so SKIP this step entirely when no
+binary path is available (the script argparse-errors without it; it has
+no no-op mode). Optional `--source <dir>` points at the source root so
+`extract_flags()` can override the ELF-derived FORTIFY heuristic.
+Additive — sinks are
 never dropped, only enriched. Namespaced under `source:
 "exploit_feasibility.analyze_binary"` so parallel enrichers can coexist.
 Tri-state honest — `format_n_write: null` means CONDITIONAL, distinct
