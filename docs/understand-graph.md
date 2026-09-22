@@ -28,6 +28,16 @@ The graph stores snapshots of:
 - trace steps from `flow-trace-*.json`
 - variant/finding candidates from `variants.json` or model-backed
   `/understand --hunt`
+- scan findings from `findings-deduped.json` (preferred) or
+  `findings.json`, linked to function nodes via `AFFECTS` edges
+- CodeQL SARIF results from `*.sarif` / `*.sarif.json` files in the run
+  directory
+- validation outcomes from `validation-outcomes.json`, linked to the
+  findings they validate via `VALIDATES` edges
+- `/audit` journal entries from `review-journal.jsonl` (hypothesis and
+  tool-verdict nodes)
+- annotations from the `annotations/` subtree, linked to function nodes
+  via `ANNOTATED` edges
 
 Rows keep flexible JSON properties, so the public contract stays the JSON
 artefacts rather than raw SQL table shapes.
@@ -86,7 +96,17 @@ libexec/raptor-graph-query --project myapp --paths --by-cwe CWE-22 --json
 libexec/raptor-graph-query --project myapp --diff
 libexec/raptor-graph-query --project myapp --threat-context
 libexec/raptor-graph-query --project myapp --context-map --json
+libexec/raptor-graph-query --project myapp --hypothesis-seeds
+libexec/raptor-graph-query --project myapp --fuzz-targets
+libexec/raptor-graph-query --project myapp --dedup-chains
+libexec/raptor-graph-query --project myapp --coverage-residual
+libexec/raptor-graph-query --project myapp --dashboard
 ```
+
+`--db <path>` or `--run-dir <dir>` select a graph in place of
+`--project` for projectless runs. `--paths` returns at most 50 paths by
+default — raise with `--limit`. `--target <path>` pins snapshot
+selection and staleness checks to a target path.
 
 These queries are not read-only at the SQLite level: opening the graph
 takes the shared connection path, which runs the schema migration (a
