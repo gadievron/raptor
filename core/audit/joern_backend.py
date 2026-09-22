@@ -201,6 +201,12 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None,
         except Exception:
             logger.debug("joern server stop failed", exc_info=True)
         return None
+    try:
+        # Fresh coverage memo for the graph just loaded — entries from
+        # a previously loaded CPG describe a different graph.
+        setattr(srv, _FN_COVERAGE_CACHE_ATTR, {})
+    except AttributeError:
+        logger.debug("joern server rejects coverage cache attribute")
     install_flow_semantics(srv, target_path, out_dir=out_dir)
     return srv
 
@@ -326,6 +332,79 @@ def _flow_sort_key(flow: Any) -> tuple:
         getattr(first, "line", 0) or 0,
         len(steps),
     )
+
+
+#: Attribute holding the per-server function-coverage memo. Reset by
+#: :func:`start_joern_server` whenever a CPG is (re)loaded, because the
+#: entries describe the graph that was live when they were computed.
+_FN_COVERAGE_CACHE_ATTR = "_raptor_fn_in_cpg_cache"
+
+
+def joern_function_in_cpg(
+    server: Any,
+    function_name: str,
+    timeout: int = 10,
+) -> bool | None:
+    """Whether the loaded CPG contains *function_name* at all.
+
+    Verdict-bearing callers treat query silence as "looked and found
+    nothing". That is only true when the CPG actually models the
+    function: on a target whose dominant language has no Joern
+    frontend, the graph holds a sliver of the tree, every query is
+    vacuously silent, and silence-as-refutation steers verdicts toward
+    clean at scale. Returns None when the probe itself cannot answer
+    (no query API, transport error, unparseable output) — callers must
+    treat None as "did not look", never as absence.
+    """
+    try:
+        from packages.joern.runner import _validate_substitution_value
+    except ImportError:
+        return None
+    if not _validate_substitution_value(function_name):
+        return None
+    query_fn = getattr(server, "query", None)
+    if query_fn is None:
+        return None
+
+    cache = getattr(server, _FN_COVERAGE_CACHE_ATTR, None)
+    if cache is not None and function_name in cache:
+        return cache[function_name]
+
+    nonce = hashlib.sha256(
+        f"fncov:{function_name}:{time.monotonic_ns()}".encode(),
+    ).hexdigest()[:12]
+    # The sentinel must ride the FINAL EXPRESSION's string echo:
+    # println output does not come back through the server's
+    # query-sync transport (see packages/joern/server.py — flows ride
+    # the final expression for the same reason). A println-shaped
+    # probe answers None on every real server, which silently demotes
+    # every silent live query to skipped — abolishing the refutation
+    # lane instead of gating it.
+    query = (
+        'import io.shiftleft.semanticcpg.language._\n'
+        f'"{nonce}:" + cpg.method.nameExact("{function_name}").nonEmpty\n'
+    )
+    try:
+        result = query_fn(query, timeout=timeout, check_length=False)
+    except Exception:  # noqa: BLE001 — degrade to "unanswered", never crash
+        logger.debug("joern coverage probe failed for %s",
+                     function_name, exc_info=True)
+        answer: bool | None = None
+    else:
+        raw = str(getattr(result, "raw_output", "") or "")
+        if f"{nonce}:true" in raw:
+            answer = True
+        elif f"{nonce}:false" in raw:
+            answer = False
+        else:
+            answer = None
+    if cache is not None:
+        # None is memoised too: an unanswerable transport does not
+        # heal within one CPG load, and re-probing pays a full REPL
+        # round trip per silent hypothesis on the shared
+        # single-threaded server. The memo dies with the CPG (re)load.
+        cache[function_name] = answer
+    return answer
 
 
 def joern_live_query(

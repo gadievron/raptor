@@ -131,6 +131,9 @@ from .joern_backend import (
     import_sibling_joern_flows as _import_sibling_joern_flows_raw,
 )
 from .joern_backend import (
+    joern_function_in_cpg as _joern_function_in_cpg,
+)
+from .joern_backend import (
     joern_live_query as _joern_live_query,
 )
 from .joern_backend import (
@@ -19095,6 +19098,18 @@ def _run_tool_chain(
                     and not _joern_dispatch_blocked(config)
                 ):
                     sinks = tool_cfg.get("sinks", [])
+                    if not sinks:
+                        # Nothing to ask: an empty sink menu makes the
+                        # live query vacuously silent, and vacuous
+                        # silence must not book a refutation even for
+                        # a CPG-covered function.
+                        if skipped_types is not None:
+                            skipped_types.add(tool_type)
+                        if tier_counters:
+                            _increment_tier_dict(
+                                tier_counters, "joern", "skipped",
+                            )
+                        continue
                     _live_errors: list = []
                     _live_timeout = _joern_live_timeout_s(
                         config, joern_server,
@@ -19138,10 +19153,38 @@ def _run_tool_chain(
                             errored_types.add(tool_type)
                         if tier_counters:
                             _increment_tier_dict(tier_counters, "joern", "errors")
-                    else:
+                    elif (_cov := _joern_function_in_cpg(
+                        joern_server, function_name,
+                    )):
                         _record_joern_outcome(config, error=False)
                         if tier_counters:
                             _increment_tier_dict(tier_counters, "joern", "refuted")
+                    else:
+                        # Silence from a CPG that does not model the
+                        # function (no frontend for the file's
+                        # language, extraction miss, unanswerable
+                        # probe) is vacuous — the channel did NOT
+                        # look. Same phantom-coverage rule as the
+                        # gated skips below: keep it out of the
+                        # dispatch record so gate resolution cannot
+                        # demote suspicious → clean on it.
+                        if _cov is False:
+                            # The probe ANSWERED — a healthy round
+                            # trip for the channel-health gate, same
+                            # as pre-gate silence accounting.
+                            _record_joern_outcome(config, error=False)
+                        else:
+                            _record_joern_outcome(
+                                config, error=True,
+                                detail="coverage probe unanswerable",
+                                key=f"{file_path}:{function_name}",
+                            )
+                        if skipped_types is not None:
+                            skipped_types.add(tool_type)
+                        if tier_counters:
+                            _increment_tier_dict(
+                                tier_counters, "joern", "skipped",
+                            )
                 elif not pre_hit:
                     # No server, or the channel-health gate tripped —
                     # the channel did NOT look. Record it in
