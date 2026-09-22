@@ -54,6 +54,12 @@ Caveats the operator should know:
   variant that was previously v1-authorized may need one more review
   the next time the server serves it — that single re-review upgrades
   it to the stronger whole-content authorization.
+- Stamps recorded before the ``tools.list`` surface existed carry no
+  tools baseline: every live tool definition shows as pending on the
+  first review after upgrading. Approving them IS the migration — the
+  merged stamp gains the baseline and the guard starts enforcing
+  tools/list (until then it forwards the list with an unverified
+  notice).
 """
 
 from __future__ import annotations
@@ -74,12 +80,21 @@ SURFACE_INIT = "initialize.instructions"
 SURFACE_INIT_JSON = "initialize.instructions.json"
 SURFACE_INCEPTION = "sage_inception.message"
 SURFACE_INCEPTION_CONTENT = "sage_inception.content"
+SURFACE_TOOLS = "tools.list"
 SURFACE_INIT_DENIED = "initialize.instructions.denied.json"
 SURFACE_INCEPTION_DENIED = "sage_inception.content.denied"
+SURFACE_TOOLS_DENIED = "tools.list.denied"
 
 AUTHORIZED = "authorized"
 DENIED = "denied"
 NEW = "new"
+# The tools surface has no authorized baseline AND the live capture
+# returned no tool definitions to decide on: the guard is forwarding
+# real sessions' tools/list with only a notice, and there is nothing
+# an approve could merge. Counted as pending (exit 4) — reporting this
+# state as "nothing pending" would let a probe-evading server keep the
+# surface permanently unverified while review/status say clean.
+UNBASELINED = "unbaselined"
 
 
 def _load_guard():
@@ -278,7 +293,7 @@ def compare(guard, auth: dict | None, live: dict) -> dict:
 
     auth_init = _init_variants(guard, auth)
     denied_init = _init_denied(guard, auth)
-    rows = []
+    rows: list[tuple] = []
     for v in _init_variants(guard, live):
         if any(v.strip() == a.strip() for a in auth_init):
             rows.append((v, AUTHORIZED))
@@ -307,6 +322,32 @@ def compare(guard, auth: dict | None, live: dict) -> dict:
         else:
             rows.append((v, NEW))
     report[SURFACE_INCEPTION_CONTENT] = rows
+
+    # tools/list baseline: one whole tool object per variant, matched
+    # by object equality — exactly the guard's _check_tools_list rule
+    # (dict variants only; a non-dict live entry can never authorize,
+    # mirroring the guard's dropped-outright lane, so it stays NEW).
+    auth_tools = [
+        v for v in guard._variant_objects(auth, SURFACE_TOOLS)
+        if isinstance(v, dict)
+    ]
+    denied_tools = [
+        v for v in guard._variant_objects(auth, SURFACE_TOOLS_DENIED)
+        if isinstance(v, dict)
+    ]
+    rows = []
+    for v in _json_lines((live or {}).get(SURFACE_TOOLS)):
+        if any(v == a for a in auth_tools):
+            rows.append((v, AUTHORIZED))
+        elif any(v == d for d in denied_tools):
+            rows.append((v, DENIED))
+        else:
+            rows.append((v, NEW))
+    if not rows and not auth_tools:
+        # See UNBASELINED: no baseline and no live capture to decide
+        # on — never report this surface as clean.
+        rows = [(None, UNBASELINED)]
+    report[SURFACE_TOOLS] = rows
     return report
 
 
@@ -340,16 +381,26 @@ def _print_compare(guard, auth: dict | None, report: dict) -> None:
                 print(f"  {label}: ✗ Rejected by operator — the guard "
                       "strips it; nothing pending")
                 continue
+            if status == UNBASELINED:
+                print("  ⚠ Unbaselined: no operator-authorized tools "
+                      "baseline exists and the live capture returned "
+                      "no tool definitions. The guard forwards real "
+                      "sessions' tools/list with only an unverified "
+                      "notice. Investigate why the capture saw no "
+                      "tools, then re-run review to approve a baseline.")
+                continue
             print(f"  {label}: ⚠ Not Authorized — diff against closest "
                   "recorded variant:")
             print()
             if surface == SURFACE_INIT:
                 live_txt, auth_txt = variant, _closest(variant, auth_init)
             else:
+                json_surface = (SURFACE_TOOLS if surface == SURFACE_TOOLS
+                                else SURFACE_INCEPTION_CONTENT)
                 live_txt = json.dumps(variant, indent=2)
                 recorded = [
                     json.dumps(v, indent=2) for v in
-                    guard._variant_objects(auth, SURFACE_INCEPTION_CONTENT)
+                    guard._variant_objects(auth, json_surface)
                 ]
                 auth_txt = _closest(live_txt, recorded)
             diff = difflib.unified_diff(
@@ -367,11 +418,16 @@ def _print_summary(report: dict) -> None:
             continue
         new = sum(1 for _, s in rows if s == NEW)
         denied = sum(1 for _, s in rows if s == DENIED)
+        unbaselined = any(s == UNBASELINED for _, s in rows)
         parts = []
         if new:
             parts.append(f"{new} not authorized (pending review)")
         if denied:
             parts.append(f"{denied} rejected by operator")
+        if unbaselined:
+            parts.append("UNBASELINED — no authorized baseline and no "
+                         "live capture; the guard forwards this surface "
+                         "with an unverified notice")
         if not parts:
             parts.append(f"{len(rows)} live variant(s) authorized")
         print(f"  {surface}: " + ", ".join(parts))
@@ -396,7 +452,9 @@ def _neutralize_headers(text: str) -> str:
 
 def _render_body(init_text: str, msg_text: str,
                  init_variants: list, content_variants: list,
-                 init_denied: list, content_denied: list) -> str:
+                 tools_variants: list,
+                 init_denied: list, content_denied: list,
+                 tools_denied: list) -> str:
     init_text = _neutralize_headers(init_text)
     msg_text = _neutralize_headers(msg_text)
     lines = [f"### {SURFACE_INIT}", init_text, f"### {SURFACE_INIT_JSON}"]
@@ -404,12 +462,21 @@ def _render_body(init_text: str, msg_text: str,
     lines += [f"### {SURFACE_INCEPTION}", msg_text,
               f"### {SURFACE_INCEPTION_CONTENT}"]
     lines += [json.dumps(v) for v in content_variants]
+    # Emitted only when populated (like the denied sections below): an
+    # absent tools.list section means "no tools baseline" to the guard
+    # — the honest state, never an empty section that looks recorded.
+    if tools_variants:
+        lines.append(f"### {SURFACE_TOOLS}")
+        lines += [json.dumps(v) for v in tools_variants]
     if init_denied:
         lines.append(f"### {SURFACE_INIT_DENIED}")
         lines += [json.dumps(v) for v in init_denied]
     if content_denied:
         lines.append(f"### {SURFACE_INCEPTION_DENIED}")
         lines += [json.dumps(v) for v in content_denied]
+    if tools_denied:
+        lines.append(f"### {SURFACE_TOOLS_DENIED}")
+        lines += [json.dumps(v) for v in tools_denied]
     return "\n".join(lines) + "\n"
 
 
@@ -423,6 +490,17 @@ def _stamp_parts(guard, auth: dict | None, live: dict):
     live_content = _json_lines((live or {}).get(SURFACE_INCEPTION_CONTENT))
     denied_content = list(
         guard._variant_objects(auth, SURFACE_INCEPTION_DENIED))
+    # dict-only on the recorded side, mirroring the guard (a non-dict
+    # record can never authorize a live tool).
+    auth_tools = [
+        v for v in guard._variant_objects(auth, SURFACE_TOOLS)
+        if isinstance(v, dict)
+    ]
+    live_tools = _json_lines((live or {}).get(SURFACE_TOOLS))
+    denied_tools = [
+        v for v in guard._variant_objects(auth, SURFACE_TOOLS_DENIED)
+        if isinstance(v, dict)
+    ]
     init_text = (auth or {}).get(SURFACE_INIT)
     if init_text is None:
         init_text = live_init[0] if live_init else ""
@@ -431,6 +509,7 @@ def _stamp_parts(guard, auth: dict | None, live: dict):
         msg_text = (live or {}).get(SURFACE_INCEPTION) or ""
     return (auth_init, live_init, denied_init,
             auth_content, live_content, denied_content,
+            auth_tools, live_tools, denied_tools,
             init_text, msg_text)
 
 
@@ -457,6 +536,7 @@ def merge(guard, auth: dict | None, live: dict) -> str:
     """
     (auth_init, live_init, denied_init,
      auth_content, live_content, denied_content,
+     auth_tools, live_tools, denied_tools,
      init_text, msg_text) = _stamp_parts(guard, auth, live)
 
     init_variants = list(auth_init)
@@ -473,8 +553,16 @@ def merge(guard, auth: dict | None, live: dict) -> str:
         if not any(v == a for a in content_variants):
             content_variants.append(v)
 
+    tools_variants = list(auth_tools)
+    for v in live_tools:
+        if any(v == d for d in denied_tools):
+            continue  # rejected stays rejected — decided, not pending
+        if not any(v == a for a in tools_variants):
+            tools_variants.append(v)
+
     return _render_body(init_text, msg_text, init_variants,
-                        content_variants, denied_init, denied_content)
+                        content_variants, tools_variants,
+                        denied_init, denied_content, denied_tools)
 
 
 def deny(guard, auth: dict | None, live: dict) -> str:
@@ -486,6 +574,7 @@ def deny(guard, auth: dict | None, live: dict) -> str:
     """
     (auth_init, live_init, denied_init,
      auth_content, live_content, denied_content,
+     auth_tools, live_tools, denied_tools,
      init_text, msg_text) = _stamp_parts(guard, auth, live)
     auth_msg = (auth or {}).get(SURFACE_INCEPTION) or ""
 
@@ -507,8 +596,16 @@ def deny(guard, auth: dict | None, live: dict) -> str:
         if not any(v == d for d in new_denied_content):
             new_denied_content.append(v)
 
+    new_denied_tools = list(denied_tools)
+    for v in live_tools:
+        if any(v == a for a in auth_tools):
+            continue
+        if not any(v == d for d in new_denied_tools):
+            new_denied_tools.append(v)
+
     return _render_body(init_text, msg_text, auth_init, auth_content,
-                        new_denied_init, new_denied_content)
+                        auth_tools, new_denied_init, new_denied_content,
+                        new_denied_tools)
 
 
 def main(argv: list[str]) -> int:
@@ -551,7 +648,10 @@ def main(argv: list[str]) -> int:
         _print_compare(guard, auth, report)
     else:
         _print_summary(report)
-    pending = any(s == NEW for rows in report.values() for _, s in rows)
+    pending = any(
+        s in (NEW, UNBASELINED)
+        for rows in report.values() for _, s in rows
+    )
     return 4 if pending else 0
 
 
