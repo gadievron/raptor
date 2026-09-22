@@ -158,8 +158,12 @@ def _canonical_arch(arch_ref: str) -> str:
 # Dockerfile FROM parsing
 # ---------------------------------------------------------------------------
 
+# Leading indent is HORIZONTAL-only ([^\S\n]): under MULTILINE the
+# ``^\s*`` spelling re-scans a run of blank lines from every line
+# start inside it — quadratic on a hostile Dockerfile (this walk
+# runs on every discovered Dockerfile, no timeout).
 _FROM_RE = re.compile(
-    r"^\s*FROM\s+"                   # FROM keyword
+    r"^[^\S\n]*FROM\s+"              # FROM keyword
     r"(?:--platform=(\S+)\s+)?"       # optional --platform=...
     r"(\S+)"                          # image[:tag][@digest]
     r"(?:\s+AS\s+\S+)?\s*$",          # optional AS stage
@@ -493,9 +497,16 @@ def _walk_gha_workflows(
     if not workflows_dir.is_dir():
         return
 
-    runs_on_re = re.compile(r"^\s*runs-on:\s*([^\n#]+)", re.MULTILINE)
+    # Leading indent is HORIZONTAL-only ([^\S\n]) — the MULTILINE
+    # ``^\s*`` spelling is quadratic on blank-line runs (see
+    # _FROM_RE). The bracket body keeps its surrounding whitespace
+    # inside the capture (consumers strip each item): the old
+    # ``\[\s*([^\]]+)\s*\]`` spelling made ``\s*`` and ``[^\]]+``
+    # compete over the same whitespace — a hostile unclosed
+    # ``os: [`` + spaces hung the walk outright.
+    runs_on_re = re.compile(r"^[^\S\n]*runs-on:\s*([^\n#]+)", re.MULTILINE)
     matrix_os_re = re.compile(
-        r"^\s*(?:os|platform):\s*\[\s*([^\]]+)\s*\]", re.MULTILINE,
+        r"^[^\S\n]*(?:os|platform):\s*\[([^\]]+)\]", re.MULTILINE,
     )
 
     for wf in sorted(workflows_dir.glob("*.yml")) + sorted(workflows_dir.glob("*.yaml")):
@@ -537,15 +548,22 @@ def _walk_gha_workflows(
 # Same regex-tolerant approach the ``runs-on:`` parser uses — a
 # grammar-incomplete workflow (in-flight edit, typo) doesn't take
 # down discovery.
+# Leading indent is HORIZONTAL-only ([^\S\n]) — the MULTILINE ``^\s*``
+# spelling is quadratic on blank-line runs (see _FROM_RE), and the
+# uses-line's ADJACENT pair (``^\s*-?\s*``) was worse still: the two
+# unbounded spans split a run every possible way per anchor. The
+# second span therefore only exists behind the literal ``-`` — two
+# adjacent unbounded spans stay quadratic on a hostile single-line
+# space run even spelled horizontally.
 _BUILD_PUSH_USES_RE = re.compile(
-    r"^\s*-?\s*uses:\s*docker/build-push-action@[^\s\n]+",
+    r"^[^\S\n]*(?:-[^\S\n]*)?uses:\s*docker/build-push-action@[^\s\n]+",
     re.MULTILINE,
 )
 _NEXT_STEP_BOUNDARY_RE = re.compile(
-    r"^\s*-\s*(?:uses|run|name):", re.MULTILINE,
+    r"^[^\S\n]*-\s*(?:uses|run|name):", re.MULTILINE,
 )
 _PLATFORMS_INPUT_RE = re.compile(
-    r"^\s*platforms:\s*([^\n#]+)", re.MULTILINE,
+    r"^[^\S\n]*platforms:\s*([^\n#]+)", re.MULTILINE,
 )
 
 

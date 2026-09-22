@@ -602,3 +602,78 @@ def test_walk_gha_refuses_symlinked_workflow(tmp_path: Path) -> None:
     matrix = ProjectPlatformMatrix()
     _walk_gha_workflows(target, matrix)
     assert len(matrix) == 0
+
+
+def test_blank_line_run_is_fast(tmp_path: Path) -> None:
+    """Hostile Dockerfile + workflow carrying blank-line RUNS the
+    greedy span cannot hand to a match: under the MULTILINE ``^``
+    anchor a ``\\s*`` indent matched at every line start inside a run
+    and re-scanned the remainder per anchor — quadratic (and the
+    build-push uses-line's adjacent ``^\\s*-?\\s*`` pair hung outright
+    on 16KB). Horizontal-only indent is linear. Both-direction bound:
+    fast AND the files' real signals still discover."""
+    import time
+
+    run = "\n" * (1 << 17)
+    (tmp_path / "Dockerfile").write_text(
+        "FROM python:3.13-bookworm\nRUN echo hi\n" + run + "# end\n")
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    # The single-line SPACE run guards the uses-line pattern's other
+    # hostile shape: two adjacent unbounded spans backtrack
+    # quadratically on horizontal runs too, so the optional ``-``
+    # span must live behind the literal ``-``.
+    (wf_dir / "ci.yml").write_text(
+        "jobs:\n  build:\n"
+        "    runs-on: ubuntu-22.04\n"
+        "    steps:\n"
+        "      - uses: docker/build-push-action@v5\n"
+        "        with:\n"
+        "          platforms: linux/amd64,linux/arm64\n"
+        + " " * (1 << 16) + "\n"
+        + run + "# end\n")
+    start = time.monotonic()
+    matrix = discover_platform_matrix(tmp_path)
+    assert time.monotonic() - start < 5.0
+    pairs = _arch_libc(matrix)
+    assert ("x86_64", LibcVersion("glibc", (2, 36))) in pairs
+    assert any(arch == "aarch64" for arch, _ in pairs)
+
+
+def test_unclosed_matrix_os_bracket_is_fast(tmp_path: Path) -> None:
+    """A hostile ``os: [`` with no closing bracket and a long
+    whitespace tail: the old ``\\[\\s*([^\\]]+)\\s*\\]`` spelling made
+    ``\\s*`` and ``[^\\]]+`` compete over the same whitespace —
+    quadratic on a SINGLE anchor (16KB hung the walk). The capture now
+    owns the body and consumers strip the items."""
+    import time
+
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "ci.yml").write_text(
+        "jobs:\n  build:\n"
+        "    runs-on: ${{ matrix.os }}\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        "        os: [" + " " * (1 << 17) + "\n")
+    start = time.monotonic()
+    discover_platform_matrix(tmp_path)
+    assert time.monotonic() - start < 5.0
+
+
+def test_matrix_os_list_items_with_padding_still_parse(tmp_path: Path) -> None:
+    """The bracket-body capture keeps surrounding whitespace; item
+    parsing strips it — padded lists resolve the same runners."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "ci.yml").write_text(
+        "jobs:\n  build:\n"
+        "    runs-on: ${{ matrix.os }}\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        "        os: [  'ubuntu-22.04' ,  ubuntu-24.04  ]\n")
+    matrix = discover_platform_matrix(tmp_path)
+    pairs = _arch_libc(matrix)
+    # ubuntu-22.04 → glibc 2.35; the 24.04 item must resolve too.
+    assert ("x86_64", LibcVersion("glibc", (2, 35))) in pairs
+    assert ("x86_64", LibcVersion("glibc", (2, 39))) in pairs
