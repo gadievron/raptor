@@ -90,14 +90,104 @@ class TestBugR015StderrPersistence(unittest.TestCase):
         scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
         exit_block = scanner_src.split("proc.returncode not in (0, 1)")[1]
         exit_block = exit_block.split("hard_error=True")[0]
-        self.assertIn("full stderr in", exit_block)
+        self.assertIn("full streams in", exit_block)
+        self.assertIn("openant.stdout.log", exit_block)
         self.assertIn("openant.stderr.log", exit_block)
 
     def test_stderr_persistence_block_present(self):
-        """Static check: scanner.py contains the stderr-persist block."""
+        """Static check: scanner.py contains the stream-persist block,
+        written no-follow (the child owns the writable out_dir)."""
         scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
         self.assertIn("openant.stderr.log", scanner_src)
-        self.assertIn("write_text", scanner_src)
+        self.assertIn("openant.stdout.log", scanner_src)
+        self.assertIn("O_NOFOLLOW", scanner_src)
+
+
+class TestStdoutErrorSurfaced(unittest.TestCase):
+    """The pinned CLI reports errors as a JSON document on STDOUT
+    (progress lines only on stderr) — a failing scan must persist
+    stdout and surface it in the error when stderr is uninformative."""
+
+    def _run_with_fake_proc(self, tmp: Path, *, stdout: str, stderr: str):
+        import subprocess
+        from unittest.mock import patch as _patch
+
+        from packages.openant import scanner
+        core = _make_fake_core(tmp)
+        out = tmp / "out"
+        out.mkdir()
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(
+                cmd, returncode=2, stdout=stdout, stderr=stderr)
+
+        with _patch("core.sandbox.context.run", fake_run):
+            result = scanner.run_openant_scan(
+                tmp, out, OpenAntConfig(core_path=core))
+        return result, out
+
+    def test_stdout_persisted_and_in_snippet_when_stderr_thin(self):
+        err_doc = '{"status": "error", "errors": ["auth method missing"]}'
+        with tempfile.TemporaryDirectory() as td:
+            result, out = self._run_with_fake_proc(
+                Path(td), stdout=err_doc, stderr="[Scan] progress\n")
+            self.assertTrue(result["hard_error"])
+            self.assertIn("auth method missing", result["error"])
+            self.assertEqual(
+                (out / "openant.stdout.log").read_text(), err_doc)
+
+    def test_error_doc_joins_even_when_stderr_is_chatty(self):
+        """A long stderr progress line must not crowd the actual error
+        (the stdout error document) out of the snippet."""
+        err_doc = '{"status": "error", "errors": ["auth method missing"]}'
+        with tempfile.TemporaryDirectory() as td:
+            result, _ = self._run_with_fake_proc(
+                Path(td), stdout=err_doc,
+                stderr="[Scan] LLM config: raptor-sonnet — resolving "
+                       "providers and building phase adapters")
+            self.assertIn("LLM config", result["error"])
+            self.assertIn("auth method missing", result["error"])
+
+    def test_meaningful_stderr_leads_without_error_doc(self):
+        with tempfile.TemporaryDirectory() as td:
+            result, _ = self._run_with_fake_proc(
+                Path(td),
+                stdout="plain progress output, not an error document",
+                stderr="openant: error: unrecognized arguments: --model x")
+            self.assertIn("unrecognized arguments", result["error"])
+            self.assertNotIn("plain progress output", result["error"])
+
+    def test_stream_persist_refuses_planted_symlink(self):
+        """The child owns the writable out_dir while it runs — a
+        pre-planted openant.*.log symlink must not steer the
+        unsandboxed parent into writing at a child-chosen path."""
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            victim = base / "victim.txt"
+            victim.write_text("untouched")
+            out_pre = base / "out"
+            out_pre.mkdir()
+            for name in ("openant.stdout.log", "openant.stderr.log"):
+                (out_pre / name).symlink_to(victim)
+            import subprocess as _sp
+            from unittest.mock import patch as _patch
+
+            from packages.openant import scanner
+            core = _make_fake_core(base)
+
+            def fake_run(cmd, **kwargs):
+                return _sp.CompletedProcess(
+                    cmd, returncode=2,
+                    stdout='{"status": "error", "errors": ["x"]}',
+                    stderr="some stderr")
+
+            with _patch("core.sandbox.context.run", fake_run):
+                scanner.run_openant_scan(
+                    base, out_pre, OpenAntConfig(core_path=core))
+            self.assertEqual(victim.read_text(), "untouched")
+            for name in ("openant.stdout.log", "openant.stderr.log"):
+                self.assertFalse((out_pre / name).is_symlink(),
+                                 f"{name} still a symlink")
 
 
 class TestCleanupC1FileNotFoundHandling(unittest.TestCase):
