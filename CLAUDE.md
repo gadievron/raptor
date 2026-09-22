@@ -98,6 +98,10 @@ Activate with `/project use <name>` in-session, or at launch with `-p <name>` (a
 /project ghidra add <path.gpr> # register a Ghidra project (then `raptor-ghidra attach` imports the cache that context injection + finding sync read)
 /project ghidra list           # list attached Ghidra projects
 /project ghidra remove <path>  # detach one; `clear` detaches all
+/project graph status          # /understand graph store summary (size, schema, nodes/edges)
+/project graph stats           # per-type node/edge counts
+/project graph clear           # delete the graph store
+/project graph rebuild         # re-ingest from the project's run artefacts
 /project trust                 # list trust assertions (markers + binaries count)
 /project trust <marker>        # set a trust marker: config | build | dynamic
 /project untrust <marker>      # remove a trust marker

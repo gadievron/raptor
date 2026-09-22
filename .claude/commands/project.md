@@ -25,6 +25,7 @@ Manage projects — named workspaces that corral analysis runs into one director
 | `coverage [<name>] [--detailed] [--fail-under <pct>]` | Show tool coverage summary (or per-file table; `--fail-under` gates CI) |
 | `binary <add\|remove\|list\|clear> [<path>]` | Manage persisted debug binaries for binary-oracle enrichment |
 | `ghidra <add\|remove\|list\|clear> [<path.gpr>]` | Manage attached Ghidra projects (registration; `raptor-ghidra attach` imports the cache) |
+| `graph <status\|stats\|clear\|rebuild> [<name>]` | Manage the persistent /understand graph store (`status` = size/schema/node+edge summary, `stats` = per-type counts, `clear` = delete the store, `rebuild` = re-ingest from the project's run artefacts) |
 | `provenance [<name>]` | Provenance rollup across all runs |
 | `show <run>` | One run's provenance detail |
 | `threat-model <action> [args]` | Manage the project threat-model artefact |

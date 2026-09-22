@@ -115,6 +115,18 @@ brief retry, and a genuinely corrupt store is quarantined (renamed
 aside together with its WAL `-wal`/`-shm` sidecars), never silently
 deleted. Code should use `core.understand_graph`, not direct SQL.
 
+## Maintenance
+
+`raptor project graph` manages the store on the active project (or a
+named one, passed as a trailing argument):
+
+```bash
+raptor project graph status    # store path, size, schema version, node/edge totals, latest snapshot
+raptor project graph stats     # node and edge counts by type
+raptor project graph clear     # delete the store (with its WAL sidecars)
+raptor project graph rebuild   # delete, then re-ingest from the project's run artefacts
+```
+
 ## Snapshot Diff
 
 Project graphs keep node rows per snapshot, using `stable_key` only for
