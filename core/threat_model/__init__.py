@@ -31,6 +31,8 @@ from core.security.redaction import (
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
+    from core.security.prompt_envelope import UntrustedBlock
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 2
@@ -1025,22 +1027,34 @@ def threat_model_prompt_block(target: Path) -> str:
     model = load_for_target(target)
     if not model and not graph_context:
         return ""
+    blocks: list[str] = []
     if model:
         content = prompt_context(model)
         source = str(model.source or "operator").lower()
-    else:
-        content = graph_context
-        source = "understand_graph"
-    if model and graph_context:
-        content = f"{content}\n{graph_context}"
-    source = __import__("re").sub(r"[^a-z0-9_-]", "", source) or "operator"
-    if source not in ("operator", "manual"):
-        from core.security.prompt_envelope import neutralize_tag_forgery
-        content = neutralize_tag_forgery(content)
+        source = re.sub(r"[^a-z0-9_-]", "", source) or "operator"
+        if source not in ("operator", "manual"):
+            from core.security.prompt_envelope import neutralize_tag_forgery
+            content = neutralize_tag_forgery(content)
+        blocks.append(
+            f"\n[threat-model-context source={source}]\n"
+            f"{content}\n"
+            f"[/threat-model-context]\n"
+        )
+    if graph_context:
+        # Graph risks are rebuilt from /understand memory: node labels
+        # quote target-repo symbols and LLM output. They are never
+        # operator prose, so they always ride their own block under the
+        # target-derived source label — concatenating them into an
+        # operator-attributed block would upgrade hostile-derived text
+        # to operator provenance.
+        blocks.append(
+            "\n[threat-model-context source=understand_graph]\n"
+            f"{graph_context}\n"
+            "[/threat-model-context]\n"
+        )
     return (
-        f"\n[threat-model-context source={source}]\n"
-        f"{content}\n"
-        f"[/threat-model-context]\n\n"
+        "".join(blocks)
+        + "\n"
         "Use this as operator-owned context, not source-code evidence. Prioritise the\n"
         "focus areas and verification expectations, respect explicit out-of-scope\n"
         "classes, and still prove claims from code or oracle-backed validation.\n"
@@ -1049,11 +1063,15 @@ def threat_model_prompt_block(target: Path) -> str:
     )
 
 
-def threat_model_untrusted_block(target: Path):
-    """Load the project threat model and return an ``UntrustedBlock``
-    suitable for appending to a prompt envelope's block list.
+def threat_model_untrusted_blocks(target: Path) -> list[UntrustedBlock]:
+    """Load the project threat model and return ``UntrustedBlock``s
+    suitable for extending a prompt envelope's block list.
 
-    Returns None when no model exists.
+    The operator/manual model (when present) rides its own block; graph-
+    derived risk context always rides a SEPARATE block labelled
+    ``untrusted-derived-threat-model`` — graph text quotes target-repo
+    symbols and /understand LLM output, so it must never be attributed
+    to the operator. Returns an empty list when neither exists.
     """
     model = load_for_target(target)
     graph_context = graph_risk_context_for_target(target)
@@ -1061,22 +1079,28 @@ def threat_model_untrusted_block(target: Path):
         from core.security.prompt_envelope import neutralize_tag_forgery
         graph_context = neutralize_tag_forgery(graph_context)
     if not model and not graph_context:
-        return None
+        return []
     from core.security.prompt_envelope import UntrustedBlock
-    source = str(model.source or "operator").lower() if model else "understand_graph"
-    kind_label = (
-        "operator-threat-model"
-        if source in ("operator", "manual")
-        else "untrusted-derived-threat-model"
-    )
-    content = prompt_context(model) if model else ""
+    blocks: list[UntrustedBlock] = []
+    if model:
+        source = str(model.source or "operator").lower()
+        kind_label = (
+            "operator-threat-model"
+            if source in ("operator", "manual")
+            else "untrusted-derived-threat-model"
+        )
+        blocks.append(UntrustedBlock(
+            content=prompt_context(model),
+            kind=kind_label,
+            origin="project-threat-model",
+        ))
     if graph_context:
-        content = f"{content}\n{graph_context}".strip()
-    return UntrustedBlock(
-        content=content,
-        kind=kind_label,
-        origin="project-threat-model",
-    )
+        blocks.append(UntrustedBlock(
+            content=graph_context,
+            kind="untrusted-derived-threat-model",
+            origin="understand-graph",
+        ))
+    return blocks
 
 
 def graph_risk_context_for_target(target: Path, *, limit: int = 8) -> str:

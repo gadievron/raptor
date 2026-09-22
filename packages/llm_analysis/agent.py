@@ -1233,12 +1233,10 @@ class AutonomousSecurityAgentV2:
         })
         extra_blocks = list(si_blocks)
         try:
-            from core.threat_model import threat_model_untrusted_block
-            tm_block = threat_model_untrusted_block(Path(vuln.repo_path))
-            if tm_block:
-                extra_blocks.append(tm_block)
+            from core.threat_model import threat_model_untrusted_blocks
+            extra_blocks.extend(threat_model_untrusted_blocks(Path(vuln.repo_path)))
         except Exception as exc:  # noqa: BLE001
-            logger.debug("threat_model_untrusted_block failed: %s", exc)
+            logger.debug("threat_model_untrusted_blocks failed: %s", exc)
         # Flow-trace + caller call-site context (cached per repo by
         # flow_context_inject.prepare_flow_context). () when the
         # finding is off every traced flow and has no caller data.

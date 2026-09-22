@@ -872,36 +872,92 @@ def test_threat_model_prompt_block_returns_context_for_existing_model(tmp_path):
     assert "focus areas" in result.lower() or "Focus areas" in result
 
 
-def test_threat_model_untrusted_block_returns_none_for_no_model():
-    from core.threat_model import threat_model_untrusted_block
-    result = threat_model_untrusted_block(Path("/nonexistent/target/xyz"))
-    assert result is None
+def test_threat_model_untrusted_blocks_returns_empty_for_no_model():
+    from core.threat_model import threat_model_untrusted_blocks
+    result = threat_model_untrusted_blocks(Path("/nonexistent/target/xyz"))
+    assert result == []
 
 
-def test_threat_model_untrusted_block_labels_operator_model(tmp_path):
-    from core.threat_model import threat_model_untrusted_block
+def test_threat_model_untrusted_blocks_label_operator_model(tmp_path):
+    from core.threat_model import threat_model_untrusted_blocks
     model = blank_for_project(SimpleNamespace(
         name="test-block", target=str(tmp_path), output_dir=str(tmp_path),
     ))
     model.source = "operator"
 
-    with patch("core.threat_model.load_for_target", return_value=model):
-        block = threat_model_untrusted_block(tmp_path)
-    assert block is not None
-    assert block.kind == "operator-threat-model"
+    with patch("core.threat_model.load_for_target", return_value=model), \
+         patch("core.threat_model.graph_risk_context_for_target", return_value=""):
+        blocks = threat_model_untrusted_blocks(tmp_path)
+    assert len(blocks) == 1
+    assert blocks[0].kind == "operator-threat-model"
 
 
-def test_threat_model_untrusted_block_labels_derived_model(tmp_path):
-    from core.threat_model import threat_model_untrusted_block
+def test_threat_model_untrusted_blocks_label_derived_model(tmp_path):
+    from core.threat_model import threat_model_untrusted_blocks
     model = blank_for_project(SimpleNamespace(
         name="test-block", target=str(tmp_path), output_dir=str(tmp_path),
     ))
     model.source = "context-map"
 
-    with patch("core.threat_model.load_for_target", return_value=model):
-        block = threat_model_untrusted_block(tmp_path)
-    assert block is not None
-    assert block.kind == "untrusted-derived-threat-model"
+    with patch("core.threat_model.load_for_target", return_value=model), \
+         patch("core.threat_model.graph_risk_context_for_target", return_value=""):
+        blocks = threat_model_untrusted_blocks(tmp_path)
+    assert len(blocks) == 1
+    assert blocks[0].kind == "untrusted-derived-threat-model"
+
+
+HOSTILE_GRAPH_CONTEXT = (
+    "Graph-backed risks from /understand memory:\n"
+    "- EP-001 handle_req__EVIL_TARGET_SYMBOL -> SINK-002 exec: no check (high)"
+)
+
+
+def test_untrusted_blocks_graph_context_never_rides_operator_block(tmp_path):
+    """Graph risk text is target-derived (node labels quote target
+    symbols and /understand LLM output). With an operator model present
+    it must ride its OWN untrusted-derived block, never the
+    operator-attributed one."""
+    from core.threat_model import threat_model_untrusted_blocks
+    model = blank_for_project(SimpleNamespace(
+        name="test-block", target=str(tmp_path), output_dir=str(tmp_path),
+    ))
+    model.source = "operator"
+
+    with patch("core.threat_model.load_for_target", return_value=model), \
+         patch("core.threat_model.graph_risk_context_for_target",
+               return_value=HOSTILE_GRAPH_CONTEXT):
+        blocks = threat_model_untrusted_blocks(tmp_path)
+    assert len(blocks) == 2
+    for block in blocks:
+        if "EVIL_TARGET_SYMBOL" in block.content:
+            assert block.kind == "untrusted-derived-threat-model"
+        else:
+            assert block.kind == "operator-threat-model"
+    assert any("EVIL_TARGET_SYMBOL" in b.content for b in blocks)
+
+
+def test_prompt_block_graph_context_never_under_operator_source(tmp_path):
+    """The prose twin: with an operator model AND graph context, the
+    graph text must appear only inside a source=understand_graph
+    envelope, never inside the source=operator one."""
+    from core.threat_model import threat_model_prompt_block
+    model = blank_for_project(SimpleNamespace(
+        name="test-prompt", target=str(tmp_path), output_dir=str(tmp_path),
+    ))
+    model.source = "operator"
+
+    with patch("core.threat_model.load_for_target", return_value=model), \
+         patch("core.threat_model.graph_risk_context_for_target",
+               return_value=HOSTILE_GRAPH_CONTEXT):
+        block = threat_model_prompt_block(tmp_path)
+    assert "[threat-model-context source=operator]" in block
+    assert "[threat-model-context source=understand_graph]" in block
+    operator_body = block.split("[threat-model-context source=operator]", 1)[1]
+    operator_body = operator_body.split("[/threat-model-context]", 1)[0]
+    assert "EVIL_TARGET_SYMBOL" not in operator_body
+    graph_body = block.split("[threat-model-context source=understand_graph]", 1)[1]
+    graph_body = graph_body.split("[/threat-model-context]", 1)[0]
+    assert "EVIL_TARGET_SYMBOL" in graph_body
 
 
 def test_prompt_block_sanitises_source_injection(tmp_path):
@@ -931,18 +987,19 @@ def test_prompt_block_handles_non_string_source(tmp_path):
     assert "source=42" in block
 
 
-def test_untrusted_block_handles_non_string_source(tmp_path):
-    """Non-string source doesn't crash untrusted_block either."""
-    from core.threat_model import threat_model_untrusted_block
+def test_untrusted_blocks_handle_non_string_source(tmp_path):
+    """Non-string source doesn't crash untrusted_blocks either."""
+    from core.threat_model import threat_model_untrusted_blocks
     model = blank_for_project(SimpleNamespace(
         name="test", target=str(tmp_path), output_dir=str(tmp_path),
     ))
     model.source = 99
 
-    with patch("core.threat_model.load_for_target", return_value=model):
-        block = threat_model_untrusted_block(tmp_path)
-    assert block is not None
-    assert block.kind == "untrusted-derived-threat-model"
+    with patch("core.threat_model.load_for_target", return_value=model), \
+         patch("core.threat_model.graph_risk_context_for_target", return_value=""):
+        blocks = threat_model_untrusted_blocks(tmp_path)
+    assert len(blocks) == 1
+    assert blocks[0].kind == "untrusted-derived-threat-model"
 
 
 def test_cli_remove_matches_sanitised_value(tmp_path):

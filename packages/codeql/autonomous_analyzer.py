@@ -799,12 +799,10 @@ class AutonomousCodeQLAnalyzer:
 
         if repo_path is not None:
             try:
-                from core.threat_model import threat_model_untrusted_block
-                tm_block = threat_model_untrusted_block(repo_path)
-                if tm_block:
-                    blocks.append(tm_block)
+                from core.threat_model import threat_model_untrusted_blocks
+                blocks.extend(threat_model_untrusted_blocks(repo_path))
             except Exception as exc:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
-                logger.debug("threat_model_untrusted_block failed: %s", exc)
+                logger.debug("threat_model_untrusted_blocks failed: %s", exc)
 
         slots = {
             "rule_id": TaintedString(value=finding.rule_id, trust="untrusted"),
