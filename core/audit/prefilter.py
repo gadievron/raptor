@@ -1384,10 +1384,10 @@ def _is_trivial_wrapper(
     # there and the AST escape leg supplies the reference judgment.
     code_lines: list[str] = []
     ref_lines: list[str] = []
-    if lang in ("python", "perl", "lua"):
+    if lang == "python":
         raw_lines = [ln.strip() for ln in source.strip().splitlines()]
-        kept = [
-            idx for idx, ln in enumerate(raw_lines)
+        code_lines = [
+            ln for ln in raw_lines
             if ln
             and not ln.startswith("//")
             and not ln.startswith("/*")
@@ -1395,15 +1395,47 @@ def _is_trivial_wrapper(
             and not ln.startswith("#")
             and ln not in ("{", "}")
         ]
+    elif lang in ("perl", "lua"):
+        # No prefix-based line drops here. The scanner does not model
+        # every perl quote construct (plain `"…"` spans lines, q//,
+        # qq{}, heredocs), so neither the raw text nor the blanked
+        # twin can DECIDE that a `#`-prefixed line is a comment: a
+        # multi-line string's continuation line can start with `#`
+        # (string data) and carry live code after the closing quote —
+        # dropping it removed a `system(` call from every judged view
+        # (the one-planted-line suppression class the C-family branch
+        # closed by judging drops on its fully-modeled blanked twin).
+        # Perl typeglob aliases (`*glob = \&system;`) start with `*`
+        # and were dropped as block-comment continuations — live
+        # sink-aliasing code. Lua comment lines (`--`) never matched
+        # the old filter and have always been kept, so keeping
+        # `#`-prefixed lines merely aligns perl with the branch's
+        # existing lua behavior. Cost is refusal-direction only: a
+        # genuine comment line counts toward the 5-line cap, and
+        # comment prose spelling `name(…)` reads as a call and
+        # refuses the skip — one LLM review, the documented safe
+        # direction (over-inclusion costs a review).
+        #
+        # Exotic line terminators normalised before the two views
+        # split (same rationale as the C-family branch below): a lone
+        # \r or U+2028/9 in string data splits raw_lines but survives
+        # blanked-to-space in the ref view, pairing ref lines with
+        # the wrong source line and weakening the escape/argument
+        # refusal layers.
+        src = source.strip()
+        for _term in ("\r\n", "\r", "\u2028", "\u2029"):
+            src = src.replace(_term, "\n")
+        raw_lines = [ln.strip() for ln in src.splitlines()]
+        kept = [
+            idx for idx, ln in enumerate(raw_lines)
+            if ln and ln not in ("{", "}")
+        ]
         code_lines = [raw_lines[i] for i in kept]
-        if lang != "python":
-            sview = sanitized_view(
-                source.strip(), language=lang,
-            ).splitlines()
-            ref_lines = [
-                sview[i].strip() if i < len(sview) else ""
-                for i in kept
-            ]
+        sview = sanitized_view(src, language=lang).splitlines()
+        ref_lines = [
+            sview[i].strip() if i < len(sview) else ""
+            for i in kept
+        ]
     else:
         # Exotic line terminators normalised first so the two views
         # split onto the SAME indices: a lone \r or U+2028/9 survives

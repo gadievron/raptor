@@ -316,6 +316,94 @@ class TestJsRegexCommentMint:
         assert _refused(src, "javascript")
 
 
+class TestPerlLuaLineFilter:
+    """The perl/lua branch must not drop lines by raw text prefix:
+    the scanner does not model every perl quote construct (plain
+    ``"…"`` spans lines, q//, qq{}, heredocs), so no view can DECIDE
+    that a ``#``-prefixed line is a comment — a multi-line string's
+    continuation line can start with ``#`` (string data) and carry
+    live code after the closing quote. Comment-looking lines stay in
+    the judged view (over-inclusion — costs a review, never a
+    swallow); only blank lines and lone braces drop."""
+
+    def test_perl_string_continuation_hash_does_not_drop_sink(self):
+        # The line `# b"; system($cmd);` is string data + live code
+        # (perl double-quoted strings are multi-line). The raw `#`
+        # prefix filter dropped it from BOTH judged views — `system(`
+        # was invisible to the call-count, callee, and escape layers
+        # and the delegate journalled mechanically clean.
+        src = (
+            'sub wrap {\n'
+            ' my $t = "a\n'
+            '# b"; system($cmd);\n'
+            ' return helper(@_);\n'
+            '}'
+        )
+        assert _refused(src, "perl")
+
+    def test_lua_long_string_continuation_hash_does_not_drop_sink(self):
+        # Lua long strings ARE modeled, but the raw filter dropped a
+        # continuation line starting with `#` regardless — string
+        # data spelled a droppable prefix in an unblanked view.
+        src = (
+            'function wrap(c)\n'
+            ' local t = [[a\n'
+            '# b]] os.execute(c)\n'
+            ' return helper(c)\n'
+            'end'
+        )
+        assert _refused(src, "lua")
+
+    def test_perl_typeglob_alias_not_dropped_as_comment(self):
+        # `*alias = \\&CORE::system;` is live sink-aliasing code; the
+        # `*` prefix arm dropped it as a block-comment continuation.
+        src = (
+            'sub wrap {\n'
+            '*alias = \\&CORE::system;\n'
+            ' return helper(@_);\n'
+            '}'
+        )
+        assert _refused(src, "perl")
+
+    def test_benign_perl_wrapper_keeps_skip(self):
+        skip, reason = _is_trivial_wrapper(
+            'sub wrap {\n return helper(@_);\n}', "perl", None)
+        assert skip and "helper" in reason
+
+    def test_prose_comment_keeps_skip(self):
+        # A genuine comment WITHOUT a call shape stays skip-eligible:
+        # kept lines only cost the skip when they add call-shaped or
+        # dangerous text, or push the wrapper over the line cap.
+        skip, reason = _is_trivial_wrapper(
+            'sub wrap {\n # forwards to the helper\n'
+            ' return helper(@_);\n}', "perl", None)
+        assert skip and "helper" in reason
+
+    def test_call_shaped_comment_refuses_documented_direction(self):
+        # A comment spelling `name(…)` reads as a second call and
+        # refuses the skip — over-inclusion costs one review, the
+        # documented safe direction. Two-direction pin (see
+        # test_prose_comment_keeps_skip for the keep side) so a
+        # future re-tightening of the drop filter is visible here.
+        assert _refused(
+            'sub wrap {\n # calls helper() twice\n'
+            ' return helper(@_);\n}', "perl")
+
+    def test_perl_exotic_terminator_does_not_desync_ref_view(self):
+        # A lone \r inside string data used to split raw_lines one
+        # ahead of the ref view, pairing the escape scan with the
+        # wrong source lines. Normalised before the views split (the
+        # C-family branch discipline); the sink-bearing wrapper must
+        # refuse with the terminator present exactly as without it.
+        src = (
+            'sub wrap {\n'
+            ' my $t = "a\rb";\n'
+            ' dispatch($c, \\&system);\n'
+            '}'
+        )
+        assert _refused(src, "perl")
+
+
 class TestPerlSigilHash:
     """``$#`` is code (array last-index), not a comment opener —
     blanking from it swallowed a sink-as-argument reference out of
