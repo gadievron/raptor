@@ -716,3 +716,54 @@ class TestCallGraphWiringClosure:
             f"dispatch: {sorted(missing)} — their languages get empty "
             f"call_graph records"
         )
+
+
+# ── fn-pointer-field defense keyed on language, not suffix ──────────
+
+class TestIndirectFieldCallLanguageKey:
+    """A .h header routes to the C grammar and gets a C call graph;
+    the fn-pointer-field guard filtered on the .c suffix, so identical
+    ctx->cb(...) code earned sink_unreachable scope-narrowing in a
+    header but was blocked in a .c file — the exact triage-skip the
+    guard was landed to close, one file-extension outside it."""
+
+    @staticmethod
+    def _cb_graph():
+        return FileCallGraph(calls=[
+            CallSite(caller="run_cb", chain=["o", "cb"], line=2),
+        ])
+
+    def test_header_field_call_blocked_like_c_file(self):
+        res = discover_sinks({
+            "lib/helper.h": self._cb_graph(),
+            "lib/helper.c": self._cb_graph(),
+        })
+        for key in (("lib/helper.h", "run_cb"), ("lib/helper.c", "run_cb")):
+            v = res.unreachable_eligible[key]
+            assert not v.eligible
+            assert "function-pointer field" in v.reason
+
+    def test_resolved_language_map_wins_over_suffix(self):
+        # A header content-refined to cpp keeps the documented C++
+        # member-call decline (a.b() is an ordinary method call).
+        res = discover_sinks(
+            {"lib/helper.h": self._cb_graph()},
+            file_languages={"lib/helper.h": "cpp"},
+        )
+        v = res.unreachable_eligible[("lib/helper.h", "run_cb")]
+        assert v.eligible
+
+    def test_c_language_map_blocks(self):
+        res = discover_sinks(
+            {"lib/helper.h": self._cb_graph()},
+            file_languages={"lib/helper.h": "c"},
+        )
+        v = res.unreachable_eligible[("lib/helper.h", "run_cb")]
+        assert not v.eligible
+
+    def test_python_method_chain_still_eligible(self):
+        res = discover_sinks({"pkg/mod.py": FileCallGraph(calls=[
+            CallSite(caller="wrapper", chain=["self", "helper"], line=3),
+        ])})
+        v = res.unreachable_eligible[("pkg/mod.py", "wrapper")]
+        assert v.eligible

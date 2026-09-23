@@ -594,6 +594,7 @@ def discover_sinks(
     max_depth: int = 10,
     framework_threshold: int = 5,
     framework_min_files: int = 3,
+    file_languages: dict[str, str] | None = None,
 ) -> SinkDiscoveryResult:
     """Run mechanical sink discovery over a set of per-file call graphs.
 
@@ -610,6 +611,12 @@ def discover_sinks(
         Minimum number of distinct files containing callers for a
         target to be considered a framework API (filters out
         file-local helper patterns).
+    file_languages
+        Optional relative path → RESOLVED language map (content
+        refinement included). Drives the C fn-pointer-field defense so
+        headers routed to the C grammar get the same guard as .c files;
+        without it the defense falls back to the .c suffix (legacy
+        callers keep their behavior).
 
     Returns
     -------
@@ -798,11 +805,29 @@ def discover_sinks(
     # (L1) only cover ``(*fp)(...)`` and local fn-ptr variables; the
     # field-call form was the blind spot that triage-skipped a real
     # callback-invoking function. Consumes the existing call-graph
-    # chains — no new parsing. Scoped to ``.c`` files: in C++/Python/JS
-    # an ``a.b(...)`` chain is an ordinary method call.
+    # chains — no new parsing. Scoped to the C LANGUAGE: in
+    # C++/Python/JS an ``a.b(...)`` chain is an ordinary method call.
+    # Keyed on the resolved language when the caller provides it — a
+    # ``.h`` header routes to the C grammar and gets a C call graph
+    # (kernel-style ``static inline`` helpers with ``ctx->cb(...)``
+    # calls are the idiomatic carrier), so a suffix key left exactly
+    # the triage-skip this guard closed open one file-extension away.
+    # Headers content-refined to cpp stay excluded — the C++
+    # member-call decline is deliberate.
+    from core.inventory.languages import detect_language
+
+    def _is_c_file(fp: str) -> bool:
+        if file_languages is not None:
+            return file_languages.get(fp) == "c"
+        # No resolved map (direct callers): extension routing — .h
+        # defaults to C exactly as LANGUAGE_MAP routes it. A
+        # C++-marker header lands under the guard here too; that only
+        # BLOCKS scope-narrowing (eligible=False), the safe direction.
+        return detect_language(fp) == "c"
+
     c_indirect_callers: set[FuncKey] = set()
     for filepath, graph in call_graphs.items():
-        if not filepath.endswith(".c"):
+        if not _is_c_file(filepath):
             continue
         for call in graph.calls:
             if call.chain and len(call.chain) > 1:
@@ -898,9 +923,12 @@ def discover_sinks_for_target(
         return SinkDiscoveryResult([], [], [], {})
 
     call_graphs: dict[str, FileCallGraph] = {}
+    file_languages: dict[str, str] = {}
 
     # Language → extractor function
     extractors = _get_call_graph_extractors()
+
+    from core.inventory.languages import refine_language
 
     for source_file, rel, lang in iter_discovery_source_files(
         target, languages=languages, scope_dirs=scope_dirs,
@@ -912,6 +940,12 @@ def discover_sinks_for_target(
             graph = extractor(content)
             if graph.calls:
                 call_graphs[rel] = graph
+                # Resolved language for the fn-pointer-field defense:
+                # content refinement routes C++-marker headers to cpp
+                # (deliberately outside the C guard) and keeps plain-C
+                # headers under it.
+                file_languages[rel] = refine_language(
+                    lang, str(source_file), content) or lang
         except Exception:
             logger.debug("sink discovery: callgraph extraction failed for %s", rel, exc_info=True)
             continue
@@ -927,6 +961,7 @@ def discover_sinks_for_target(
         max_depth=max_depth,
         framework_threshold=framework_threshold,
         framework_min_files=framework_min_files,
+        file_languages=file_languages,
     )
 
 
