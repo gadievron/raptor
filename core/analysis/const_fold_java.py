@@ -751,7 +751,9 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
     if any(a is TAINT_FREE for a in folded_args):
         return TAINT_FREE if method == "concat" else _REFUSE
     if method == "length":
-        return len(receiver) if not folded_args else _REFUSE
+        if folded_args or not _utf16_faithful(receiver):
+            return _REFUSE
+        return len(receiver)
     if method == "trim":
         # Java trim strips <= U+0020 specifically; refuse non-ASCII
         # receivers rather than model the difference from str.strip.
@@ -774,6 +776,8 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
             return _REFUSE
         if not all(_is_int(a) for a in folded_args):
             return _REFUSE
+        if not _utf16_faithful(receiver):
+            return _REFUSE
         lo = folded_args[0]
         hi = folded_args[1] if len(folded_args) == 2 else len(receiver)
         if not (0 <= lo <= hi <= len(receiver)):
@@ -785,6 +789,8 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
         idx = folded_args[0]
         if isinstance(idx, bool) or not isinstance(idx, int):
             return _REFUSE
+        if not _utf16_faithful(receiver):
+            return _REFUSE
         if not (0 <= idx < len(receiver)):
             return _REFUSE
         return receiver[idx]
@@ -793,6 +799,17 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
 
 def _is_int(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _utf16_faithful(s: str) -> bool:
+    """True when every code point is BMP (<= U+FFFF): Python's
+    per-code-point ``len``/indexing then agrees exactly with Java's
+    UTF-16 code-unit ``length()``/``charAt()``/``substring()``. An
+    astral character occupies TWO Java code units but ONE Python code
+    point, so folding those methods on such a receiver yields wrong
+    VALUES in branch-selection position — the same wrong-branch hazard
+    the trim/case ops already refuse non-ASCII for."""
+    return all(ord(c) <= 0xFFFF for c in s)
 
 
 def _paren_unwrap(n: Node | None) -> Node | None:
