@@ -492,3 +492,48 @@ class TestScorecardAuditJsonLane:
         assert "\x9b" not in out
         assert "\x9d" not in out
         json.loads(out)
+
+
+class TestMarkdownStructureScrub:
+    """Cell provenance is attacker-choosable (same-user forger; the
+    key-unusable clamp keeps unverified content readable) — beyond
+    control BYTES, markdown STRUCTURE must not survive either: an
+    in-cell pipe splits the table row and shifts forged numbers under
+    honest column headers in the operator-pasted report; an in-cell
+    backtick closes the wrapping code span."""
+
+    EVIL_DC = "x` | 999 | 0 | `y"
+
+    def test_audit_table_structure_not_injectable(self, tmp_path):
+        from core.llm.scorecard.scorecard import ModelScorecard
+
+        sidecar = tmp_path / "llm_scorecard.json"
+        sc = ModelScorecard(sidecar)
+        sc.record_event(self.EVIL_DC, "model-a",
+                        "cheap_short_circuit", "correct")
+        sc.record_event("honest-dc", "model-a",
+                        "cheap_short_circuit", "correct")
+        md = render_markdown(audit(sidecar))
+        table_rows = [
+            line for line in md.splitlines()
+            if line.startswith("| `") and "---" not in line
+        ]
+        assert table_rows, "expected rendered table rows"
+        # Every rendered row must carry the same column count as its
+        # table's honest rows — grouped per table by trailing shape.
+        assert len({r.count("|") for r in table_rows
+                    if "999" in r or "honest-dc" in r
+                    if "distinct" not in r}) <= 2
+        # The raw injected fragment must not survive into any row.
+        assert "` | 999 | 0 | `" not in md
+        assert "&#124;" in md  # pipes entity-escaped, value preserved
+
+    def test_cli_table_structure_not_injectable(self):
+        rendered = _render_table([_stat(self.EVIL_DC, "model-a")])
+        assert "` | 999 | 0 | `" not in rendered
+        assert "&#124;" in rendered
+
+    def test_cli_compare_structure_not_injectable(self):
+        stats = [_stat(self.EVIL_DC, "a"), _stat(self.EVIL_DC, "b")]
+        rendered = _render_compare(stats, stats, model_a="a", model_b="b")
+        assert "` | 999 | 0 | `" not in rendered

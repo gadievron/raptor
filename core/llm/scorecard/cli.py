@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from core.security.log_sanitisation import sanitise_for_terminal
+from core.llm.scorecard._render import scrub_cell
 
 from .paths import default_scorecard_path
 from .scorecard import (
@@ -303,8 +303,12 @@ def _scrub_cell(value: object) -> str:
     """Escape + bound a sidecar-derived cell value (decision_class,
     model, event_type) before terminal rendering — the sidecar is
     same-user writable and readable without HMAC verification under
-    the key-unusable clamp, so these strings are attacker-choosable."""
-    return sanitise_for_terminal(str(value), max_len=64)
+    the key-unusable clamp, so these strings are attacker-choosable.
+    Routes through the shared ``scrub_cell`` (md_inline projection):
+    control bytes escaped AND in-slot markdown structure (pipes,
+    backticks) entity-escaped, so a forged cell cannot mint table
+    columns in the pasted report."""
+    return scrub_cell(value)
 
 
 def _dumps_json_lane(data: Any) -> str:

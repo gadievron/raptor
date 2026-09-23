@@ -256,9 +256,12 @@ _SANITISERS = frozenset({
     # arm enforces that every local definition builds on a canonical
     # sanitiser.
     "_esc",
-    # scorecard render helpers: sanitise_for_terminal-based cell scrub
-    # and the ensure_ascii JSON terminal lane (the shadow arm accepts
+    # scorecard render helpers: the shared md_inline-based cell scrub
+    # (core.llm.scorecard._render.scrub_cell — the converged home the
+    # per-module _cell/_scrub_cell wrappers chain to) and the
+    # ensure_ascii JSON terminal lane (the shadow arm accepts
     # ensure_ascii json.dumps bodies).
+    "scrub_cell",
     "_scrub_cell",
     "_dumps_json_lane",
     # Per-module single-line / cell / prose helpers built on the above.
