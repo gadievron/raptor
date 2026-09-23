@@ -55,6 +55,18 @@ class TestPositives:
         assert len(results) == 1
         assert results[0]["rule"] == "double_free"
 
+    def test_same_line_double_free_fires(self, tmp_path):
+        # The self-pairing guard must compare positions, not lines:
+        # the identical two-free sequence on ONE line is the same bug.
+        results = _run_rule(tmp_path, """\
+            void bug(char *p)
+            {
+                free(p); free(p);
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["rule"] == "double_free"
+
     def test_kfree_double_free_fires(self, tmp_path):
         results = _run_rule(tmp_path, """\
             void bug(struct s *p)
