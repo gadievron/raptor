@@ -161,20 +161,45 @@ def _normalize_path(file_path: str, repo_root: Optional[Path] = None) -> str:
     """Repo-relative spelling for the dedup join key.
 
     SARIF findings carry base-joined resolved URIs (absolute for
-    CodeQL's %SRCROOT%), OpenAnt findings carry repo-relative paths —
-    without relativising the absolute side the two key populations
-    could never be equal and the dedup was vacuous (every duplicate
-    double-reported). Lexical relpath only; paths need not exist.
+    CodeQL's %SRCROOT%, and SCHEME-CARRYING when the base was a
+    ``file://`` URI — the shape the repo's own CodeQL SARIF tests
+    model), OpenAnt findings carry repo-relative paths — without
+    normalising the URI side the two key populations could never be
+    equal and the dedup was vacuous (every duplicate
+    double-reported). The scheme strip reuses
+    ``core.sarif.import_normalizer._strip_file_scheme`` (one home for
+    the spelling), and percent-encoding is unquoted to match the
+    import normalizer's own semantics — a filename containing a
+    LITERAL ``%XX`` run collapses with its decoded spelling, an
+    accepted residual shared with that normalizer. Lexical relpath
+    only; paths need not exist. Paths outside ``repo_root``
+    (``..``-relative) keep their absolute spelling — both key
+    populations flow through this one function, so the keys stay
+    consistent, and stripping the leading separator (as this used to
+    do) only manufactured collisions with genuinely relative names.
     """
-    norm = os.path.normpath(str(file_path))
+    from urllib.parse import unquote
+
+    s = str(file_path)
+    if s.startswith("file://"):
+        from core.sarif.import_normalizer import _strip_file_scheme
+        stripped = _strip_file_scheme(s)
+        # RFC 8089: a file-scheme URI path is absolute. The shared
+        # stripper drops the leading slash of file:/// (its caller
+        # re-roots); restore it so the relpath arm below fires.
+        s = stripped if stripped.startswith("/") else "/" + stripped
+    s = unquote(s)
+    norm = os.path.normpath(s)
     if repo_root is not None and os.path.isabs(norm):
         try:
             rel = os.path.relpath(norm, os.path.normpath(str(repo_root)))
         except ValueError:
-            rel = norm  # different drive (Windows) — keep absolute
-        if not rel.startswith(".."):
-            norm = rel
-    return norm.lstrip(os.sep)
+            return norm  # different drive (Windows) — keep absolute
+        # `..`-PREFIXED NAMES (`..data/x.py`) are inside the root;
+        # only a genuine parent traversal keeps the absolute spelling.
+        if rel != ".." and not rel.startswith(".." + os.sep):
+            return rel
+    return norm
 
 
 def deduplicate_with_sarif(

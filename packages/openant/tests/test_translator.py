@@ -249,3 +249,66 @@ class TestDedupKeyRelativisation(unittest.TestCase):
         sarif = [{"tool": "codeql", "file": "src/app.py", "cwe_id": "CWE-78"}]
         merged, dropped = deduplicate_with_sarif(oa, sarif)
         self.assertEqual(dropped, 1)
+
+
+class TestDedupKeyUriNormalization(unittest.TestCase):
+    """CodeQL SARIF resolved against a file:// originalUriBaseIds base
+    (%SRCROOT% — the shape core/sarif's own tests model) keeps the
+    scheme in the finding's file field; the join must strip it (and
+    unquote percent-encoding) or the key populations never meet and
+    every CodeQL duplicate double-enters openant_findings.json and
+    /validate."""
+
+    def test_file_scheme_sarif_uri_matches_relative_openant_path(self):
+        oa = [{"tool": "openant", "file": "src/app.py", "cwe_id": "CWE-78"}]
+        sarif = [{"tool": "codeql",
+                  "file": "file:///work/repo/src/app.py",
+                  "cwe_id": "CWE-78"}]
+        merged, dropped = deduplicate_with_sarif(oa, sarif,
+                                                 repo_path="/work/repo")
+        self.assertEqual(dropped, 1)
+        self.assertEqual([f["tool"] for f in merged], ["codeql"])
+
+    def test_percent_encoded_sarif_uri_matches_decoded_path(self):
+        oa = [{"tool": "openant", "file": "src/my app.py",
+               "cwe_id": "CWE-78"}]
+        sarif = [{"tool": "codeql",
+                  "file": "file:///work/repo/src/my%20app.py",
+                  "cwe_id": "CWE-78"}]
+        merged, dropped = deduplicate_with_sarif(oa, sarif,
+                                                 repo_path="/work/repo")
+        self.assertEqual(dropped, 1)
+
+    def test_file_scheme_outside_repo_never_matches(self):
+        oa = [{"tool": "openant", "file": "src/app.py", "cwe_id": "CWE-78"}]
+        sarif = [{"tool": "codeql",
+                  "file": "file:///elsewhere/src/app.py",
+                  "cwe_id": "CWE-78"}]
+        merged, dropped = deduplicate_with_sarif(oa, sarif,
+                                                 repo_path="/work/repo")
+        self.assertEqual(dropped, 0)
+        self.assertEqual(len(merged), 2)
+
+    def test_dotdot_prefixed_name_is_inside_root(self):
+        """`..data/x.py` is a NAME, not a parent traversal — the old
+        startswith('..') test kept it absolute and then lstrip-mangled
+        it, voiding the join for that file both ways."""
+        from packages.openant.translator import _normalize_path
+        self.assertEqual(
+            _normalize_path("/repo/..data/x.py", Path("/repo")),
+            "..data/x.py")
+        oa = [{"tool": "openant", "file": "..data/x.py",
+               "cwe_id": "CWE-78"}]
+        sarif = [{"tool": "codeql", "file": "/repo/..data/x.py",
+                  "cwe_id": "CWE-78"}]
+        merged, dropped = deduplicate_with_sarif(oa, sarif,
+                                                 repo_path="/repo")
+        self.assertEqual(dropped, 1)
+
+    def test_genuine_parent_traversal_keeps_absolute_spelling(self):
+        """An outside-root path keeps its absolute spelling — the old
+        lstrip(os.sep) rewrote `/other/x.py` to `other/x.py`, a
+        manufactured collision with a genuinely relative name."""
+        from packages.openant.translator import _normalize_path
+        self.assertEqual(
+            _normalize_path("/other/x.py", Path("/repo")), "/other/x.py")
