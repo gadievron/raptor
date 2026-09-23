@@ -807,6 +807,65 @@ class TestPhp:
         assert "run($c);" in view
 
 
+class TestPhpInterpolation:
+    """PHP double-quoted strings and heredocs execute complex-syntax
+    interpolation — `{$obj->method($arg)}` CALLS the method — so
+    those expressions stay visible in both views (the template-arm
+    direction contract). Simple $ident interpolation stays data
+    (declared residual: a bare variable mention cannot spell a
+    call)."""
+
+    def test_dq_complex_interpolation_visible(self):
+        src = '<?php $q = "prefix {$db->query($x)} suffix";'
+        view = sanitized_view(src, "a.php")
+        assert "$db->query($x)" in view
+        assert "prefix" not in view
+
+    def test_heredoc_complex_interpolation_visible(self):
+        src = '<?php $q = <<<EOT\nbody {$db->query($x)} tail\nEOT;'
+        view = sanitized_view(src, "a.php")
+        assert "$db->query($x)" in view
+        assert "body" not in view
+
+    def test_nowdoc_never_interpolates(self):
+        src = "<?php $q = <<<'EOT'\nbody {$db->query($x)} tail\nEOT;"
+        view = sanitized_view(src, "a.php")
+        assert "query" not in view
+
+    def test_simple_variable_stays_data(self):
+        src = '<?php $q = "hello $name world";'
+        view = sanitized_view(src, "a.php")
+        assert "$name" not in view
+
+    def test_backslash_brace_dollar_still_executes(self):
+        # PHP defines no \{ escape in double-quoted strings: the
+        # backslash is data and {$...} interpolates anyway — the call
+        # must stay visible (consuming the pair swallowed it).
+        src = '<?php $q = "a \\{$db->run($t)} b";'
+        view = sanitized_view(src, "a.php")
+        assert "$db->run($t)" in view
+
+    def test_escaped_dollar_in_brace_is_data(self):
+        # "{\$x}" is the PHP spelling for a LITERAL {$x} — no
+        # interpolation, whole body blanks.
+        src = '<?php $q = "a {\\$db} b";'
+        view = sanitized_view(src, "a.php")
+        assert "$db" not in view
+
+    def test_nested_string_in_expression_is_data(self):
+        # The kept expression's own string argument blanks, and the
+        # nested quote must not desync the outer close.
+        src = '<?php $q = "x {$db->query("del")} y"; run($c);'
+        view = sanitized_view(src, "a.php")
+        assert "run($c)" in view
+        assert "del" not in view
+        assert "$db->query(" in view
+
+    def test_keep_strings_view_verbatim(self):
+        src = '<?php $q = "prefix {$db->query($x)} suffix";'
+        assert sanitized_view(src, "a.php", keep_strings=True) == src
+
+
 class TestLua:
     def test_line_comment_blanked(self):
         view = sanitized_view("local x = 1 -- os.execute prose\nrun(c)\n",
