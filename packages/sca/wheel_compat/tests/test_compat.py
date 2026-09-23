@@ -703,3 +703,51 @@ def test_windows_pair_rejects_linux_wheel_and_accepts_win() -> None:
     verdicts = check_compat(matrix, wm)
     assert [v.verdict for v in verdicts] == ["ok"]
     assert "win_amd64" in verdicts[0].matching_wheel
+
+
+class _CountingPyPI(_StubPyPI):
+    def __init__(self, packages: dict):
+        super().__init__(packages)
+        self.calls = 0
+
+    def get_metadata(self, name: str):
+        self.calls += 1
+        return super().get_metadata(name)
+
+
+def test_version_walk_fetches_metadata_once() -> None:
+    """find_compatible_version already holds the releases dict; the
+    per-version matrix must build from it instead of re-fetching the
+    same metadata once per walked version (up to 20 identical
+    fetches, masked only when the client happens to cache)."""
+    from packages.sca.wheel_compat.compat import (
+        clear_recommendation_cache, find_compatible_version,
+    )
+
+    clear_recommendation_cache()
+    releases = {
+        v: [{"filename": f"pkg-{v}-cp312-cp312-win_amd64.whl"}]
+        for v in ("1.0", "1.1", "1.2", "1.3")
+    }
+    pypi = _CountingPyPI({"pkg": {"releases": releases}})
+    matrix = ProjectPlatformMatrix()
+    matrix.add(PlatformPair(
+        arch="x86_64", libc=LibcVersion("glibc", (2, 36)), os="linux",
+        source="test",
+    ))
+    rec = find_compatible_version(pypi, "pkg", matrix)
+    assert rec is None            # Windows-only wheels never fit.
+    assert pypi.calls == 1
+    clear_recommendation_cache()
+
+
+def test_post_release_ranks_above_its_base_version() -> None:
+    """``1.2.3.post1`` supersedes ``1.2.3`` (PEP 440); a sort tie let
+    the walk recommend the superseded base build."""
+    from packages.sca.wheel_compat.compat import _version_key
+
+    assert _version_key("1.2.3.post1") > _version_key("1.2.3")
+    assert _version_key("1.2.3.4") > _version_key("1.2.3.post1")
+    assert sorted(
+        ["1.2.3", "1.2.3.post2", "1.2.3.post1"], key=_version_key,
+    ) == ["1.2.3", "1.2.3.post1", "1.2.3.post2"]
