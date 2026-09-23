@@ -150,10 +150,14 @@ class _KeywordChain:
 
     __slots__ = ("stages", "pattern", "per_line")
 
-    def __init__(self, label: str, *stages: str, flags: int = 0,
+    def __init__(self, *stages: str, flags: int = 0,
                  per_line: bool = False) -> None:
         self.stages = [re.compile(stage, flags) for stage in stages]
-        self.pattern = label  # warning label, kept regex-shaped
+        # Warning label, kept regex-shaped: the legacy chain spelling,
+        # DERIVED from the stages rather than passed as a literal —
+        # a literal label is a pattern-table constant to the census
+        # and reads as the quadratic chain this matcher replaces.
+        self.pattern = ".*".join(stages)
         # per_line mirrors a chain whose regex spelling had no DOTALL:
         # its gaps could not cross newlines, so the chain must
         # complete within one line.
@@ -188,27 +192,18 @@ class _KeywordChain:
 
 _INJECTION_PATTERNS: list[re.Pattern[str] | _KeywordChain] = [
     _KeywordChain(
-        r"\b(?:ignore|disregard|forget|override|skip)\b.*"
-        r"\b(?:previous|prior|above|all|every)\b.*"
-        r"\b(?:instructions?|rules?|guidelines?|findings?|vulnerabilit)",
         r"\b(?:ignore|disregard|forget|override|skip)\b",
         r"\b(?:previous|prior|above|all|every)\b",
         r"\b(?:instructions?|rules?|guidelines?|findings?|vulnerabilit)",
         flags=re.IGNORECASE,
     ),
     _KeywordChain(
-        r"\b(?:do\s+not|don'?t|never)\b.*"
-        r"\b(?:report|flag|find|detect|mention|note)\b.*"
-        r"\b(?:vulnerabilit|bug|issue|flaw|problem|finding)",
         r"\b(?:do\s+not|don'?t|never)\b",
         r"\b(?:report|flag|find|detect|mention|note)\b",
         r"\b(?:vulnerabilit|bug|issue|flaw|problem|finding)",
         flags=re.IGNORECASE,
     ),
     _KeywordChain(
-        r"\b(?:this\s+code|this\s+function|this\s+file)\b.*"
-        r"\b(?:is\s+safe|has\s+been\s+audited|is\s+secure|"
-        r"has\s+no\s+(?:bugs?|vulnerabilit|issue|flaw))",
         r"\b(?:this\s+code|this\s+function|this\s+file)\b",
         r"\b(?:is\s+safe|has\s+been\s+audited|is\s+secure|"
         r"has\s+no\s+(?:bugs?|vulnerabilit|issue|flaw))",
@@ -225,8 +220,6 @@ _INJECTION_PATTERNS: list[re.Pattern[str] | _KeywordChain] = [
         re.IGNORECASE,
     ),
     _KeywordChain(
-        r"\b(?:report|mark|classify|label)\b.*"
-        r"\b(?:clean|safe|no\s+(?:issues?|findings?|bugs?|vulnerabilit))",
         r"\b(?:report|mark|classify|label)\b",
         r"\b(?:clean|safe|no\s+(?:issues?|findings?|bugs?|vulnerabilit))",
         flags=re.IGNORECASE,

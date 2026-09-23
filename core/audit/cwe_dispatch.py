@@ -834,24 +834,33 @@ def lookup(cwe: str) -> dict[str, Any] | None:
     return CWE_TO_TOOL_DISPATCH.get(normalized)
 
 
+# Every gap and word-suffix run in these rows is BOUNDED: the rows
+# are compiled through a loop and searched unanchored over
+# hypothesis text, where an unbounded gap re-scans the tail from
+# every planted keyword — quadratic-to-quartic on hostile text. A
+# real hypothesis phrase separates its keywords by a few words
+# (bounds of 200 chars per gap, 32 per suffix run are generous);
+# beyond a bound the row stops matching and inference falls through
+# to later rows or returns no CWE — the conservative direction for
+# a fallback used only when the review omitted the CWE field.
 _HYPOTHESIS_CWE_MAP = [
-    (r"race\s+condition|data\s+race|concurrent.*(?:write|access|modif)", "CWE-362"),
-    (r"toctou|time.of.check.*time.of.use|check.*then.*use.*race", "CWE-367"),
-    (r"deadlock|livelock|lock.*order|double.*lock", "CWE-667"),
-    (r"use.after.free|dangling.*pointer|freed.*(?:object|memory|buffer)", "CWE-416"),
-    (r"double.free|free.*twice", "CWE-415"),
-    (r"(?:integer|arithmetic).*overflow|integer.*wrap", "CWE-190"),
-    (r"(?:integer|arithmetic).*underflow", "CWE-191"),
-    (r"null.*(?:pointer|deref)|nullptr.*deref|deref.*null", "CWE-476"),
-    (r"(?:buffer|heap|stack).*overflow|out.of.bounds.*(?:write|access)", "CWE-787"),
-    (r"out.of.bounds.*read|oob.*read", "CWE-125"),
-    (r"format.*string.*(?:vuln|inject|attack)", "CWE-134"),
-    (r"(?:command|os|shell).*inject", "CWE-78"),
-    (r"sql.*inject", "CWE-89"),
-    (r"(?:auth|permission|privilege).*bypass", "CWE-863"),
-    (r"missing.*auth|no.*auth.*check", "CWE-862"),
-    (r"resource.*leak|memory.*leak|missing.*free", "CWE-401"),
-    (r"(?:integer|type).*(?:truncat|narrow)", "CWE-681"),
+    (r"race\s+condition|data\s+race|concurrent.{0,200}(?:write|access|modif)", "CWE-362"),
+    (r"toctou|time.of.check.{0,100}time.of.use|check.{0,100}then.{0,100}use.{0,100}race", "CWE-367"),
+    (r"deadlock|livelock|lock.{0,200}order|double.{0,200}lock", "CWE-667"),
+    (r"use.after.free|dangling.{0,200}pointer|freed.{0,200}(?:object|memory|buffer)", "CWE-416"),
+    (r"double.free|free.{0,200}twice", "CWE-415"),
+    (r"(?:integer|arithmetic).{0,200}overflow|integer.{0,200}wrap", "CWE-190"),
+    (r"(?:integer|arithmetic).{0,200}underflow", "CWE-191"),
+    (r"null.{0,200}(?:pointer|deref)|nullptr.{0,200}deref|deref.{0,200}null", "CWE-476"),
+    (r"(?:buffer|heap|stack).{0,200}overflow|out.of.bounds.{0,200}(?:write|access)", "CWE-787"),
+    (r"out.of.bounds.{0,200}read|oob.{0,200}read", "CWE-125"),
+    (r"format.{0,200}string.{0,200}(?:vuln|inject|attack)", "CWE-134"),
+    (r"(?:command|os|shell).{0,200}inject", "CWE-78"),
+    (r"sql.{0,200}inject", "CWE-89"),
+    (r"(?:auth|permission|privilege).{0,200}bypass", "CWE-863"),
+    (r"missing.{0,200}auth|no.{0,200}auth.{0,200}check", "CWE-862"),
+    (r"resource.{0,200}leak|memory.{0,200}leak|missing.{0,200}free", "CWE-401"),
+    (r"(?:integer|type).{0,200}(?:truncat|narrow)", "CWE-681"),
     (r"uninitiali[sz]ed", "CWE-457"),
     # Web-facing families (P10). Appended after the memory/injection
     # entries so pre-existing first-match behaviour is unchanged.
@@ -860,31 +869,31 @@ _HYPOTHESIS_CWE_MAP = [
     ((r"deseriali[sz]|unpickl|pickle\.loads?|unseriali[sz]e|"
       r"marshal\.load|yaml\.load"), "CWE-502"),
     ((r"\bssrf\b|server.side.request.forgery|"
-      r"forged.*(?:server|internal).*request"), "CWE-918"),
+      r"forged.{0,200}(?:server|internal).{0,200}request"), "CWE-918"),
     (r"\bxxe\b|xml.external.entit|external.entity.(?:inject|expan)", "CWE-611"),
     ((r"open.redirect|unvalidated.redirect|"
-      r"redirect.*attacker.(?:controlled|supplied)"), "CWE-601"),
+      r"redirect.{0,200}attacker.(?:controlled|supplied)"), "CWE-601"),
     (r"prototype.pollution|__proto__", "CWE-1321"),
-    (r"(?:code|eval).*inject", "CWE-94"),
+    (r"(?:code|eval).{0,200}inject", "CWE-94"),
     # Appended after all earlier entries (first match wins, so
     # pre-existing behaviour is unchanged).
-    (r"type.confus|strict.alias|type.punn|punned.*pointer", "CWE-843"),
-    ((r"length.*(?:field|parameter|header|prefix).*"
+    (r"type.confus|strict.alias|type.punn|punned.{0,200}pointer", "CWE-843"),
+    ((r"length.{0,100}(?:field|parameter|header|prefix).{0,100}"
       r"(?:inconsisten|mismatch|truncat|exceed|larger|shorter)"),
      "CWE-130"),
-    (r"sign(?:ed)?.to.unsign|unsigned.conversion|negative.*(?:length|size|count).*(?:unsigned|size_t)", "CWE-195"),
+    (r"sign(?:ed)?.to.unsign|unsigned.conversion|negative.{0,200}(?:length|size|count).{0,200}(?:unsigned|size_t)", "CWE-195"),
     # Fail-open family. Appended after all existing entries
     # (first-match-wins, so pre-existing behaviour is unchanged).
-    (r"fail[s\-]?.?open|swallow\w*.{0,20}(?:exception|error)", "CWE-703"),
+    (r"fail[s\-]?.?open|swallow\w{0,32}.{0,20}(?:exception|error)", "CWE-703"),
     (r"empty.{0,10}catch|except.{0,10}pass", "CWE-703"),
-    ((r"(?:ignor|discard|unchecked)\w*.{0,20}"
+    ((r"(?:ignor|discard|unchecked)\w{0,32}.{0,20}"
       r"(?:error|return value|\berr\b)"), "CWE-252"),
     ((r"(?:return\s+value|result|\berr\b).{0,40}"
       r"(?:ignor|discard|not\s+checked|unchecked)"), "CWE-252"),
     # Go recover()-to-continue phrasings (the fail_open channel's
     # recover leg). Appended: first-match-wins, pre-existing behaviour
     # unchanged.
-    ((r"panic\w*.{0,40}recover|recover\w*.{0,40}"
+    ((r"panic\w{0,32}.{0,40}recover|recover\w{0,32}.{0,40}"
       r"(?:continue|proceed|swallow)"), "CWE-703"),
     # Midpoint-D1 long-tail families (appended: first-match-wins, so
     # pre-existing behaviour is unchanged). No CWE-908 keyword row:
@@ -896,13 +905,13 @@ _HYPOTHESIS_CWE_MAP = [
     ((r"infinite\s+loop|loop.{0,30}(?:never|unreachable|cannot)"
       r".{0,15}(?:exit|terminat)|unbounded\s+loop|endless\s+loop"),
      "CWE-835"),
-    ((r"(?:v?snprintf).{0,80}truncat|truncat\w*.{0,40}"
+    ((r"(?:v?snprintf).{0,80}truncat|truncat\w{0,32}.{0,40}"
       r"(?:boundary|exact.fit|off.by.one)|"
       r"exact.fit.{0,30}truncat"), "CWE-193"),
-    ((r"authentic(?:ity)?.{0,40}(?:not|un|insufficient|missing|no)\w*"
+    ((r"authentic(?:ity)?.{0,40}(?:not|un|insufficient|missing|no)\w{0,16}"
       r".{0,15}(?:verif|check|validat)|(?:unverified|unauthenticated)"
       r".{0,25}(?:data|origin|source|message|payload|signature)|"
-      r"signature.{0,25}(?:not|never|un)\w*.{0,10}(?:verif|check)"),
+      r"signature.{0,25}(?:not|never|un)\w{0,16}.{0,10}(?:verif|check)"),
      "CWE-345"),
     # Five-channel programme families (appended: first-match-wins, so
     # pre-existing behaviour is unchanged).
@@ -913,10 +922,10 @@ _HYPOTHESIS_CWE_MAP = [
     # Untrusted-inclusion family (appended: first-match-wins, so
     # pre-existing behaviour is unchanged; "...inject" phrasings keep
     # routing to the earlier CWE-78/94 rows).
-    ((r"(?:includ|inclusion|import|load)\w*.{0,40}untrusted"
+    ((r"(?:includ|inclusion|import|load)\w{0,16}.{0,40}untrusted"
       r".{0,25}(?:content|code|source|sphere|url|librar|module)|"
       r"untrusted.{0,40}(?:inclusion|functionality)|"
-      r"(?:remote|untrusted).{0,25}(?:code|script|librar\w+|module)"
+      r"(?:remote|untrusted).{0,25}(?:code|script|librar\w{1,32}|module)"
       r".{0,30}(?:includ|import|load)"), "CWE-829"),
     # Straggler families (appended: first-match-wins, so pre-existing
     # behaviour is unchanged). Temp-file races phrased as TOCTOU keep
@@ -929,13 +938,13 @@ _HYPOTHESIS_CWE_MAP = [
       r"insecure|hijack)"), "CWE-377"),
     ((r"terminal\s+escape|escape.sequence.{0,25}inject|"
       r"ansi\s+escape.{0,25}(?:inject|spoof)|"
-      r"control.(?:byte|char|sequence)\w*.{0,60}"
+      r"control.(?:byte|char|sequence)\w{0,32}.{0,60}"
       r"(?:terminal|console|inject|spoof)"), "CWE-150"),
     # PHP web-audit families (appended: first-match-wins, so
     # pre-existing behaviour is unchanged — "shell/command ...
     # injection" phrasings keep routing to the earlier CWE-78 row,
     # "sql injection" to CWE-89).
-    (r"crlf.{0,40}inject|inject\w*.{0,30}crlf", "CWE-93"),
+    (r"crlf.{0,40}inject|inject\w{0,32}.{0,30}crlf", "CWE-93"),
     (r"argument.{0,12}inject|option.{0,12}inject", "CWE-88"),
     ((r"unsafe.{0,8}reflection|reflection.{0,20}inject|"
       r"variable.{0,8}(?:function|method).{0,30}"
@@ -944,7 +953,7 @@ _HYPOTHESIS_CWE_MAP = [
     (r"ent_quotes", "CWE-116"),
     ((r"(?:md5|sha1).{0,40}password|password.{0,40}(?:md5|sha1)"),
      "CWE-327"),
-    ((r"(?:mt_rand|uniqid|lcg_value)\w*.{0,60}"
+    ((r"(?:mt_rand|uniqid|lcg_value)\w{0,16}.{0,60}"
       r"(?:token|secret|nonce|session)|"
       r"predictable.{0,20}(?:token|nonce|session)"), "CWE-338"),
     # Output-encoding residual phrasings (appended: first-match-wins,

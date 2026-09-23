@@ -64,17 +64,29 @@ _ESCAPE_INJECTION_PATTERN = (
     "\\s*,\\s*[\\w.>\\[\\]-]+\\s*[,)]"
 )
 
+# Same-line gaps and the snprintf argument span are bounded: these
+# strings run as semgrep pattern-regex over the hostile target file,
+# and an unbounded gap re-scans the rest of a planted line from
+# every keyword occurrence — quadratic there and at this table's
+# worst-case census judgment alike.  Real co-occurrences sit well
+# inside 200 chars (500 for an argument list); longer spans stop
+# matching.
+_XSS_WRITE_PATTERN = (
+    "(snprintf|sprintf)\\s*\\([^)]{0,500}\"%s|write\\s*\\(.{0,200}\\+|"
+    "response\\.write|res\\.send"
+)
+
 _HYPOTHESIS_SEMGREP_PATTERNS: dict[str, str] = {
     "buffer overflow": "strcpy|sprintf|gets\\s*\\(|strcat",
-    "sql injection": "SELECT.*%|INSERT.*%|UPDATE.*%|DELETE.*%",
+    "sql injection": "SELECT.{0,200}%|INSERT.{0,200}%|UPDATE.{0,200}%|DELETE.{0,200}%",
     "command injection": "system\\s*\\(|popen\\s*\\(|exec[lv]p?e?\\s*\\(",
     "path traversal": "os\\.path\\.join|open\\s*\\(",
-    "format string": "%s.*printf|printf\\s*\\(\\s*[a-zA-Z_]",
+    "format string": "%s.{0,200}printf|printf\\s*\\(\\s*[a-zA-Z_]",
     "use after free": "free\\s*\\(",
     "double free": "free\\s*\\(",
-    "xss": "(snprintf|sprintf)\\s*\\([^)]*\"%s|write\\s*\\(.*\\+|response\\.write|res\\.send",
-    "reflected": "(snprintf|sprintf)\\s*\\([^)]*\"%s|write\\s*\\(.*\\+|response\\.write|res\\.send",
-    "cross-site": "(snprintf|sprintf)\\s*\\([^)]*\"%s|write\\s*\\(.*\\+|response\\.write|res\\.send",
+    "xss": _XSS_WRITE_PATTERN,
+    "reflected": _XSS_WRITE_PATTERN,
+    "cross-site": _XSS_WRITE_PATTERN,
     "deserialization": _DESERIALIZATION_PATTERN,
     "deserialisation": _DESERIALIZATION_PATTERN,
     "unpickle": _DESERIALIZATION_PATTERN,
