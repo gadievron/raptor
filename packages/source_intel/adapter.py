@@ -639,8 +639,12 @@ def _function_is_static(file_path: str, function_name: str) -> bool:
     # the ``^\s*`` spelling re-scans a run of blank lines from every
     # line start inside it — quadratic on scanned source.
     import re as _re
+    # Bounded type-token loop ({0,24}): the unbounded loop let every
+    # line anchor consume arbitrarily many following token lines
+    # before failing at the name — quadratic over planted
+    # static-shaped lines. 24 tokens sits far above real signatures.
     pat = _re.compile(
-        r"^[^\S\n]*static\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+|\*\s*)*"
+        r"^[^\S\n]*static\s+(?:[A-Za-z_][A-Za-z0-9_]*\s+|\*\s*){0,24}"
         + _re.escape(function_name) + r"\s*\(",
         _re.MULTILINE,
     )
@@ -713,8 +717,12 @@ def _unchecked_alloc_supports_finding(
     return False
 
 
+# Bounded type window (same discipline as _FN_DEF_OPEN_RE): the
+# unbounded window overlapped its whitespace separator — quadratic
+# even at the anchored match call. 256 chars sits far above real
+# declarations.
 _LOCAL_ASSIGN_RE = re.compile(
-    r"^\s*(?:[A-Za-z_][A-Za-z0-9_*\s]*\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*="
+    r"^\s*(?:[A-Za-z_][A-Za-z0-9_*\s]{0,256}\s)?([A-Za-z_][A-Za-z0-9_]*)\s*="
 )
 
 

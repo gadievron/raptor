@@ -240,8 +240,15 @@ def _extract_target_signature(header_text: str, function_name: str) -> str | Non
     # anchor position scans a bounded window rather than the whole
     # remaining text — the old `[^;]*` prefix was quadratic on large
     # semicolon-free headers.
+    # The optional attribute word gates its own trailing whitespace
+    # and the parameter window is bounded: the naive
+    # ``\)\s*[a-zA-Z_]*\s*;`` chained whitespace spans around the
+    # optional word (quadratic on a signature ending in a whitespace
+    # run), and an unbounded ``[^)]*`` let every anchor re-scan a
+    # paren-less tail. 4096 chars sits far above real headers.
     pattern = re.compile(
-        rf"^[^;\n]{{0,500}}\b{safe_name}\s*\([^)]*\)\s*[a-zA-Z_]*\s*;",
+        rf"^[^;\n]{{0,500}}\b{safe_name}\s*\([^)]{{0,4096}}\)"
+        rf"\s*(?:[a-zA-Z_]+\s*)?;",
         re.MULTILINE | re.DOTALL,
     )
     match = pattern.search(header_text)

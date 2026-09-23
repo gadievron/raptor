@@ -82,7 +82,9 @@ def _version_from_dist(joern: str) -> str | None:
     lib = Path(joern).resolve().parent / "lib"
     try:
         for jar in lib.glob("io.joern.joern-cli-*.jar"):
-            m = re.match(r"io\.joern\.joern-cli-(\d+\S*)\.jar", jar.name)
+            # \d\S* — \S subsumes the digit run (same language, no
+            # overlapping repeats)
+            m = re.match(r"io\.joern\.joern-cli-(\d\S*)\.jar", jar.name)
             if m:
                 return m.group(1)
     except OSError:

@@ -2514,11 +2514,14 @@ def _line_has_c_source_call(line: str, name: str) -> bool:
     # This intentionally stays conservative: calls embedded in assignment
     # statements (``n = read(...)``) do not match this declaration shape.
     return not bool(
+        # Bounded qualifier loop and parameter window (the loop
+        # overlapped the star/whitespace span and the window let the
+        # anchored call re-scan a paren-less tail — quadratic).
         re.match(
             r"^\s*(?:extern\s+|static\s+|inline\s+|"
-            r"[A-Za-z_][\w_]*\s+)+[*\s]*"
+            r"[A-Za-z_][\w_]*\s+){1,24}[*\s]*"
             + re.escape(name)
-            + r"\s*\([^;{}]*\)\s*;\s*$",
+            + r"\s*\([^;{}]{0,4096}\)\s*;\s*$",
             line,
         )
     )
