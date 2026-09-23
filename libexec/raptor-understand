@@ -467,26 +467,41 @@ def _hunt_pattern_with_seeds(pattern: str,
     )
 
 
-def _sanitise_graph_seed_values(value: Any, *, max_chars: int = 200) -> Any:
+# Traversal ceiling for graph-derived seed structures. The ingest
+# readers admit nesting up to core.json's depth gate (1024), which
+# sits ABOVE Python's default recursion budget as consumed by this
+# walker — an ingest-admitted deep prop must truncate here, never
+# RecursionError the --trace dispatch. Real seed payloads are a few
+# levels deep; 64 is generous headroom.
+_SEED_SANITISE_MAX_DEPTH = 64
+
+
+def _sanitise_graph_seed_values(value: Any, *, max_chars: int = 200,
+                                _depth: int = 0) -> Any:
     """Recursively defang strings in graph-derived seed structures.
 
     known_paths / reachable_sinks carry props ingested from prior LLM
     artifacts — both keys and string values are hostile-derived, so
     both go through sanitise_string before injection into trace
-    payloads. Non-string scalars pass through unchanged.
+    payloads. Non-string scalars pass through unchanged. Containers
+    below ``_SEED_SANITISE_MAX_DEPTH`` truncate to an explicit marker.
     """
     from core.security.prompt_output_sanitise import sanitise_string
 
     if isinstance(value, str):
         return sanitise_string(value, max_chars=max_chars)
+    if isinstance(value, (dict, list)) and _depth >= _SEED_SANITISE_MAX_DEPTH:
+        return "[graph seed truncated: max depth reached]"
     if isinstance(value, dict):
         return {
             sanitise_string(str(k), max_chars=100):
-                _sanitise_graph_seed_values(v, max_chars=max_chars)
+                _sanitise_graph_seed_values(v, max_chars=max_chars,
+                                            _depth=_depth + 1)
             for k, v in value.items()
         }
     if isinstance(value, list):
-        return [_sanitise_graph_seed_values(v, max_chars=max_chars)
+        return [_sanitise_graph_seed_values(v, max_chars=max_chars,
+                                            _depth=_depth + 1)
                 for v in value]
     return value
 
