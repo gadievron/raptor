@@ -380,14 +380,23 @@ def smt_conditions_hash(conditions: Any) -> str:
     if not isinstance(conditions, list) or not conditions:
         # No conditions → the sweep never produced a record for this
         # path; any record present is foreign. A non-matchable
-        # sentinel (not a hex prefix) guarantees inequality.
+        # sentinel (not a hex digest) guarantees inequality.
         return "<no-conditions>"
     import json as _json
     try:
         payload = _json.dumps(conditions, sort_keys=True, default=str)
     except (TypeError, ValueError):
         payload = repr(conditions)
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+    # Full digest, deliberately: this equality is the verifier's
+    # suppression-direction path binding, and BOTH condition sets in
+    # a transplant are attacker-influenceable (path_conditions are
+    # LLM-extracted over a hostile target). A truncated 64-bit prefix
+    # left a ~2^32-work offline birthday collision as the transplant
+    # margin; 48 extra JSON bytes buy the full 256-bit margin.
+    # Records stamped under the old truncated form fail the equality
+    # against a full recompute — fail CLOSED: the refutation demotes
+    # to unverified, never verifies wrongly.
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def smt_feasibility_fields(
