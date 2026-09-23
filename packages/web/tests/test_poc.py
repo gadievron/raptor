@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from packages.web.models import WebFinding
 from packages.web.poc import (
     build_nuclei_template,
@@ -81,7 +83,7 @@ def test_nuclei_template_mirrors_marker_regex():
 
     assert template is not None
     assert "id: raptor-replay-web-0001" in template
-    assert "tags: sqli,raptor-replay" in template
+    assert 'tags: "sqli,raptor-replay"' in template
     # Single source: the matcher regex is generated from markers.py.
     assert MARKER_RES["sqli"].pattern.replace("\\", "\\\\") in template
     assert re.search(r'regex:\n\s+- "\(\?i\)', template)
@@ -202,3 +204,31 @@ def test_oob_findings_get_no_fabricated_nuclei_matcher():
     assert build_nuclei_template(
         _oob_finding("oob_callback_header", "Referer"),
     ) is None
+
+
+def test_every_interpolated_template_value_is_yaml_contained():
+    """The docstring claims totality ("All interpolated values are
+    JSON-encoded"): a target-controlled method carrying an entity-
+    decoded newline must stay a contained scalar — never a line at
+    column 0 — and the template must remain parseable YAML."""
+    yaml = pytest.importorskip("yaml")
+
+    hostile = _proven(method="post\nx-injected: y")
+    template = build_nuclei_template(hostile)
+
+    assert template is not None
+    assert "\nx-injected" not in template  # no raw newline escaped the scalar
+    parsed = yaml.safe_load(template)
+    assert "x-injected" not in parsed
+    request = parsed["http"][0]
+    assert request["method"] == "POST\nX-INJECTED: Y"
+    assert parsed["info"]["severity"] == "high"
+    assert parsed["info"]["tags"] == "sqli,raptor-replay"
+
+
+def test_normal_template_round_trips_through_yaml():
+    yaml = pytest.importorskip("yaml")
+
+    parsed = yaml.safe_load(build_nuclei_template(_proven()))
+    assert parsed["http"][0]["method"] == "GET"
+    assert parsed["info"]["severity"] == "high"
