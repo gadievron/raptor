@@ -94,9 +94,15 @@ jobs:
           packages/sca/scripts/raptor-sca-validate-corpus
           # Re-read the committed report to extract the verdict for gating.
           python <<'EOF' >> "$GITHUB_OUTPUT"
-          import json, glob, os, sys
+          import glob, json, os, re, sys
+          # Strictly date-shaped snapshots only — a stray
+          # late-sorting .json must not shadow the dated history
+          # (same shape the writer/pruner and risk.py apply).
+          dated = re.compile(r"^\d{4}-\d{2}-\d{2}\.json$")
           paths = sorted(
-              glob.glob('packages/sca/data/calibration/validation/*.json'),
+              (p for p in
+               glob.glob('packages/sca/data/calibration/validation/*.json')
+               if dated.match(os.path.basename(p))),
               reverse=True,
           )
           verdict = "unverified"

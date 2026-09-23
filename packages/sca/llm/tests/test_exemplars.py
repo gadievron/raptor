@@ -22,6 +22,30 @@ def test_popular_names_block_pypi():
     assert "PyPI" in block.content
 
 
+def test_popular_names_block_tolerates_non_string_elements(
+    tmp_path, monkeypatch,
+):
+    """The popular/<eco>.json lists are machine-refreshed and
+    unvalidated at load — one non-string element must not TypeError
+    the join (lru_cache would pin the failure for the process)."""
+    import json as _json
+
+    from packages.sca.llm import exemplars
+
+    (tmp_path / "popular").mkdir()
+    (tmp_path / "popular" / "weird.json").write_text(
+        _json.dumps(["react", 12345, None, "lodash"]),
+    )
+    monkeypatch.setattr(exemplars, "_DATA_DIR", tmp_path)
+    exemplars.popular_names_block.cache_clear()
+    try:
+        block = exemplars.popular_names_block("weird")
+    finally:
+        exemplars.popular_names_block.cache_clear()
+    assert block is not None
+    assert "react, lodash" in block.content
+
+
 def test_popular_names_block_unknown_ecosystem():
     block = popular_names_block("FortranPM")
     assert block is None

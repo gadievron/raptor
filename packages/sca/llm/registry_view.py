@@ -107,7 +107,17 @@ def build_registry_view(
         )
         return {}
     unexpected = set(view) - RENDERED_KEYS
-    assert not unexpected, f"view produced unrendered keys: {unexpected}"
+    if unexpected:
+        # Contract enforcement, not a debug assert (which -O strips):
+        # a key the renderers don't know about must never ride the
+        # projection into the prompt. Strip it and flag the
+        # projection bug loudly.
+        logger.warning(
+            "registry_view: %s projection produced unrendered keys "
+            "%s — dropped (projection bug)", eco, sorted(unexpected),
+        )
+        for key in unexpected:
+            view.pop(key)
     return view
 
 

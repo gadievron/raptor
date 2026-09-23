@@ -482,6 +482,19 @@ _MSF_INDEX = {
 }
 
 
+def test_msf_ref_to_cve_tolerates_integer_refs() -> None:
+    """Feed rows have shipped {"type": "CVE", "ref": 12345} — a
+    non-str ref used to AttributeError on .startswith and abort the
+    whole metasploit source build for the run."""
+    assert _msf_ref_to_cve({"type": "CVE", "ref": 12345}) == "CVE-12345"
+    assert _msf_ref_to_cve({"type": "CVE", "ref": "2021-44228"}) == (
+        "CVE-2021-44228"
+    )
+    assert _msf_ref_to_cve({"type": "CVE", "ref": None}) is None
+    # Container shapes must not stringify into garbage signal keys.
+    assert _msf_ref_to_cve({"type": "CVE", "ref": {"x": 1}}) is None
+
+
 def test_build_metasploit_extracts_cve_to_module_mapping(tmp_path: Path) -> None:
     http = _StubHttp({
         "https://raw.githubusercontent.com/rapid7/metasploit-framework/"

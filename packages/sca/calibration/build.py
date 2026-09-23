@@ -510,7 +510,16 @@ def _msf_ref_to_cve(ref: Any) -> str | None:
             return ref
         return None
     if isinstance(ref, dict) and ref.get("type") == "CVE":
-        cve_num = ref.get("ref") or ""
+        raw = ref.get("ref")
+        # Feed rows have shipped integer refs; a non-str here used
+        # to AttributeError on .startswith and abort the WHOLE
+        # metasploit source build for the run (caught upstream as
+        # source-skipped, prior file silently retained).
+        if not isinstance(raw, (str, int)):
+            # None, and container shapes that would stringify into
+            # garbage signal keys.
+            return None
+        cve_num = raw if isinstance(raw, str) else str(raw)
         if cve_num and not cve_num.startswith("CVE-"):
             cve_num = f"CVE-{cve_num}"
         return cve_num or None
