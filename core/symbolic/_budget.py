@@ -28,8 +28,14 @@ from __future__ import annotations
 import contextlib
 import time
 
-#: z3's "no timeout" sentinel (uint32 max) — what we restore when the
-#: previous value cannot be read.
+#: z3's "no timeout" sentinel (uint32 max). Restored UNCONDITIONALLY
+#: after every budgeted call: z3 exposes no getter for the global
+#: parameter, so the pre-call value is unknowable and the no-timeout
+#: default is the only safe restore target. A caller that had set its
+#: own tighter global before entering a primitive gets the default
+#: back, not its value — acceptable because core/smt_solver builds
+#: every solver with a per-solver timeout (globals are only z3
+#: DEFAULTS) and no other in-repo caller sets the global.
 _Z3_NO_TIMEOUT = 4294967295
 
 

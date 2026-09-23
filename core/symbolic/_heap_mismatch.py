@@ -63,7 +63,24 @@ def find_heap_mismatch_witness(
 ) -> SymbolicResult:
     """Isolated entry point — runs in a spawned child with hard-kill
     via :func:`core.symbolic._engine.dispatch_isolated`; when angr is
-    unavailable the availability guard answers directly."""
+    unavailable the availability guard answers directly.
+
+    SUCCESS CONTRACT — read before treating a witness as proof of a
+    specific finding: ``target_address`` steers only the mapped-check
+    and the result metadata. Exploration accepts the FIRST state
+    whose copy hook recorded ANY satisfiable ``count > alloc_size``,
+    at ANY call site — a binary with a second symbolically
+    overflowable copy can return ``succeeded=True`` whose
+    ``metadata.call_addr`` points somewhere other than the
+    hypothesised site. Success therefore proves "SOME heap-copy
+    mismatch is reachable", and a consumer certifying a specific
+    static candidate MUST join ``metadata.call_addr`` against the
+    hypothesised site before attributing the witness to it.
+
+    Wiring status: not exported from ``core.symbolic`` — consumers
+    import this module directly; the package ``__all__`` surface
+    lists only the general-purpose solvers.
+    """
     return _engine.dispatch_isolated(
         _find_heap_mismatch_impl,
         {"binary_path": binary_path, "target_address": target_address,
