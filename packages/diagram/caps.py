@@ -21,6 +21,9 @@ Truncation is NEVER silent — every cap that fires emits a marker.
 
 from __future__ import annotations
 
+from .sanitize import sanitize as _sanitize
+from .sanitize import sanitize_id as _sid
+
 #: Default per-list element cap (flow_trace's measured Mermaid limit).
 DEFAULT_CAP = 200
 
@@ -37,9 +40,20 @@ def truncation_marker_lines(
 ) -> list[str]:
     """Mermaid lines announcing a truncation — the loud half of the
     cap. Empty when nothing was dropped. Same node text/style as
-    flow_trace's original marker so operators see one idiom."""
+    flow_trace's original marker so operators see one idiom.
+
+    Self-sanitising chokepoint (registered in
+    ``core.security.report_writer_audit._SANITISERS``): callers pass
+    literals and lengths today, but the emitted lines land in
+    diagrams.md, so every slot is coerced/defanged here rather than
+    trusted per call site.
+    """
     if dropped <= 0:
         return []
+    node_id = _sid(str(node_id))
+    what = _sanitize(str(what), 40)
+    dropped = int(dropped)
+    cap = int(cap)
     return [
         "",
         f'    {node_id}["⚠ Diagram truncated: '
