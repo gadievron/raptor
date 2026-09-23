@@ -182,6 +182,23 @@ def test_bare_bedrock_id_resolves_catalog_limits():
     assert mc.max_tokens == expected
 
 
+def test_dated_prefixed_bedrock_id_resolves_catalog_limits():
+    """Dated AND prefixed ids (``us.anthropic.<model>-<yyyymmdd>``, the
+    compliance-pinned inference-profile form) resolve the real catalog
+    row — every single-strip probe misses them, so the entry builder
+    must use the canonical resolver chain, not a hand-rolled ladder."""
+    from core.llm.model_data import resolve_model_costs, resolve_model_limits
+    model_id = "us.anthropic.claude-opus-4-7-20260115"
+    limits = resolve_model_limits(model_id)
+    costs = resolve_model_costs(model_id)
+    assert limits and costs, "catalog row must exist for this pin"
+    mc = _entry_config({"provider": "bedrock", "model": model_id})
+    assert mc.max_tokens == limits["max_output"]
+    assert mc.max_context == limits["max_context"]
+    assert mc.cost_per_1k_tokens == (
+        costs["input"] + costs["output"]) / 2
+
+
 # ---------------------------------------------------------------------------
 # Builder inheritance (env opt-in path)
 # ---------------------------------------------------------------------------

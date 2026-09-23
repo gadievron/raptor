@@ -198,16 +198,20 @@ def _get_best_thinking_model() -> Optional['ModelConfig']:
                                 if env_key:
                                     api_key = os.getenv(env_key)
 
-                            # Determine cost (dated ids resolve their
-                            # undated catalog entry, same ladder as
-                            # _model_config_from_entry)
-                            cost_info = (MODEL_COSTS.get(entry_model, {})
-                                         or MODEL_COSTS.get(entry_model_undated, {}))
+                            # Determine cost/limits via the canonical
+                            # resolver chain — the same one
+                            # _model_config_from_entry uses (dated,
+                            # prefixed, and combined id forms all
+                            # resolve their catalog row).
+                            from core.llm.model_data import (
+                                resolve_model_costs,
+                                resolve_model_limits,
+                            )
+                            cost_info = resolve_model_costs(entry_model) or {}
                             cost_per_1k = (cost_info.get('input', 0.005) + cost_info.get('output', 0.005)) / 2
 
                             # Determine max_tokens and max_context from config or limits
-                            limits = (MODEL_LIMITS.get(entry_model, {})
-                                      or MODEL_LIMITS.get(entry_model_undated, {}))
+                            limits = resolve_model_limits(entry_model) or {}
                             max_tokens = model_entry.get(
                                 'max_output',
                                 limits.get('max_output', _DEFAULT_MAX_OUTPUT_USER_CONFIGURED),
@@ -953,19 +957,15 @@ def _model_config_from_entry(entry: dict) -> 'ModelConfig':
     if not api_key and provider == "bedrock":
         api_key = os.getenv("AWS_BEARER_TOKEN_BEDROCK")
 
-    from core.llm.model_data import _strip_dated_alias
-    from core.security.llm_family import bare_model_id as _bare_model_id
-    undated = _strip_dated_alias(model_name)
-    # Peel Bedrock prefixes too (``anthropic.claude-x`` /
-    # ``us.anthropic.claude-x``) so prefixed entries resolve real
-    # catalog limits/costs instead of the 0.005 fallback rate.
-    bare = _bare_model_id(model_name)
-    limits = (MODEL_LIMITS.get(model_name, {})
-              or MODEL_LIMITS.get(undated, {})
-              or MODEL_LIMITS.get(bare, {}))
-    costs = (MODEL_COSTS.get(model_name, {})
-             or MODEL_COSTS.get(undated, {})
-             or MODEL_COSTS.get(bare, {}))
+    # The canonical resolver chain (exact → dated → bedrock-prefix →
+    # both), not a hand-rolled probe ladder: a dated AND prefixed id
+    # (``us.anthropic.claude-x-20260101``) misses every single-strip
+    # probe and silently runs with the generic fallback limits — an 8K
+    # output ceiling and 32K context on a 128K/1M catalog model, the
+    # truncation failure mode _resolve_model_entry's docstring records.
+    from core.llm.model_data import resolve_model_costs, resolve_model_limits
+    limits = resolve_model_limits(model_name) or {}
+    costs = resolve_model_costs(model_name) or {}
     cost_per_1k = (costs.get("input", 0.005) + costs.get("output", 0.005)) / 2
 
     # Honour the operator-configured remote Ollama host (see
@@ -1736,7 +1736,10 @@ class LLMConfig:
           4. otherwise a bare config (api_key=None) so the SDK / dispatcher /
              provider env var supplies the credential at call time.
         """
-        from core.llm.model_data import _strip_dated_alias
+        from core.llm.model_data import (
+            _strip_dated_alias,
+            resolve_model_limits,
+        )
         from core.security.llm_family import (
             bare_model_id,
             provider_of,
@@ -1806,9 +1809,9 @@ class LLMConfig:
                     target, bare_model_id(mc.model_name)
                 ),
             )
-            limits = MODEL_LIMITS.get(bare) or MODEL_LIMITS.get(
-                _strip_dated_alias(bare), {},
-            )
+            # Canonical resolver chain — covers dated/prefixed forms
+            # the two-step probe missed.
+            limits = resolve_model_limits(bare) or {}
             return ModelConfig(
                 provider=provider,
                 # Wire-form name: Bedrock ids need the vendor-dotted
