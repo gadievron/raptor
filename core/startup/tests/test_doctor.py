@@ -612,6 +612,7 @@ def _write_note(base, source_file, function, metadata):
 _HUMAN_GRADE_META = {
     "status": "clean", "source": "human",
     "tty": "stdin", "provenance": "interactive-tty",
+    "sid": "inherited", "envm": "trusted", "parents": "bash",
 }
 
 
@@ -700,6 +701,7 @@ class TestImportedAnnotationAdvisories:
         _write_note(out_dir / "annotations", "src/e.py", "l", {
             "status": "clean", "source": "agent",
             "tty": "stdin", "provenance": "interactive-tty",
+    "sid": "inherited", "envm": "trusted", "parents": "bash",
         })
         assert doctor._imported_annotation_advisories(
             projects_dir=tmp_path / "registry",

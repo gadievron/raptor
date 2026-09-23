@@ -31,7 +31,9 @@ def _ann(base, file, function, status, source="human"):
     # below and the provenance date fence).
     meta = {"status": status, "source": source}
     if source == "human":
-        meta.update({"provenance": "interactive-tty", "tty": "stdin"})
+        meta.update({"provenance": "interactive-tty", "tty": "stdin",
+             "sid": "inherited", "envm": "trusted",
+             "parents": "bash"})
     write_annotation(
         base,
         Annotation(file=file, function=function, body="note",
@@ -73,7 +75,9 @@ def test_lines_metadata_fallback(tmp_path):
         Annotation(file="c.c", function="h", body="",
                    metadata={"status": "clean", "source": "human",
                              "provenance": "interactive-tty",
-                             "tty": "stdin", "lines": "5-9"}),
+                             "tty": "stdin", "sid": "inherited",
+                             "envm": "trusted", "parents": "bash",
+                             "lines": "5-9"}),
     )
     s = _store(tmp_path)
     assert import_annotations(s, base, _CHECKLIST) == 1
@@ -135,7 +139,8 @@ def test_stamped_interactive_human_is_operator_evidence(tmp_path):
     base = tmp_path / "annotations"
     _ann_meta(base, "a.c", "f2", "finding", {
         "source": "human", "provenance": "interactive-tty",
-        "tty": "stdin",
+        "tty": "stdin", "sid": "inherited", "envm": "trusted",
+        "parents": "bash",
     })
     s = _store(tmp_path)
     assert import_annotations(s, base, _CHECKLIST) == 1

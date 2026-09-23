@@ -198,6 +198,8 @@ class TestPrepassIntegration:
             body="Executes raw SQL — every caller must escape first.",
             metadata={"status": "sink", "source": "human",
                       "provenance": "interactive-tty", "tty": "stdin",
+             "sid": "inherited", "envm": "trusted",
+             "parents": "bash",
                       "cwe": "CWE-89"},
         ))
         save_specs(out, [TaintSpec(

@@ -334,7 +334,7 @@ class TestProvenanceTiering:
         self._write(
             ann_dir,
             "source=human status=clean cwe=CWE-89 "
-            "provenance=interactive-tty tty=stdin",
+            "provenance=interactive-tty tty=stdin sid=inherited envm=trusted parents=bash",
         )
         patterns = scan_fp_patterns(ann_dir)
         assert len(patterns) == 1

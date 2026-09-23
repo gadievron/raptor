@@ -52,11 +52,19 @@ import logging
 
 from .models import Annotation
 from .provenance import (
+    CORROBORATION_KEY,
+    CORROBORATION_PRE_ERA,
+    ENV_MARKERS_KEY,
     IMPORTED,
     INTERACTIVE_TTY,
     NON_TTY,
+    PARENTS_KEY,
     PROVENANCE_KEY,
+    SID_KEY,
+    SID_VALUES,
     TTY_KEY,
+    valid_env_markers_value,
+    valid_parents_value,
     valid_tty_value,
 )
 from typing import TYPE_CHECKING
@@ -271,6 +279,27 @@ def _validate_metadata(metadata) -> None:
             msg = (
                 f"invalid tty stamp {v_str!r}; expected 'none' or a "
                 f"comma-joined subset of stdin,stdout,stderr"
+            )
+            raise ValueError(msg)
+        if k == SID_KEY and v_str not in SID_VALUES:
+            msg = (
+                f"invalid sid stamp {v_str!r}; expected one of "
+                f"{SID_VALUES}"
+            )
+            raise ValueError(msg)
+        if k == ENV_MARKERS_KEY and not valid_env_markers_value(v_str):
+            msg = (
+                f"invalid envm stamp {v_str!r}; expected 'none' or a "
+                f"comma-joined subset of the known marker names"
+            )
+            raise ValueError(msg)
+        if k == PARENTS_KEY and not valid_parents_value(v_str):
+            msg = f"invalid parents stamp {v_str!r}"
+            raise ValueError(msg)
+        if k == CORROBORATION_KEY and v_str != CORROBORATION_PRE_ERA:
+            msg = (
+                f"invalid corroboration marker {v_str!r}; expected "
+                f"{CORROBORATION_PRE_ERA!r}"
             )
             raise ValueError(msg)
 

@@ -654,7 +654,8 @@ class TestFunctionNameEdgeWhitespace:
         write_annotation(tmp_path, Annotation(
             file="x.py", function="victim", body="operator note",
             metadata={"source": "human", "provenance": "interactive-tty",
-                      "tty": "stdin"},
+                      "tty": "stdin", "sid": "inherited",
+                      "envm": "trusted", "parents": "bash"},
         ))
         with pytest.raises(ValueError, match="whitespace"):
             write_annotation(tmp_path, Annotation(

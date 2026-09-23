@@ -1138,9 +1138,14 @@ exploitable), `finding` (exploitable), `dormant` (unreachable / dead code),
 
 Annotations are human-only for new writes: no pipeline writes them, and
 operators add them via `/annotate add`.  Every add/edit stamps the
-invocation context (which std fds were TTYs); only `source=human` notes
-with an interactive-TTY stamp (or legacy pre-stamp notes) earn
-human-grade weight in readers.  LLM review outcomes are recorded in the
+invocation context (which std fds were TTYs, plus corroborating context:
+session-leader shape, environment markers, and a parent-chain summary —
+a pty wrapper makes `isatty` true by design, so the fd stamp alone is
+not sufficient); only `source=human` notes with a corroborated
+interactive-TTY stamp (or legacy pre-stamp notes) earn human-grade
+weight in readers.  Adds made under `script -c` or from inside an agent
+session record demoting corroboration; re-run from a plain interactive
+shell to earn human grade.  LLM review outcomes are recorded in the
 review journal instead.
 
 **Imported archives and human-grade notes.**  `/project import` demotes
