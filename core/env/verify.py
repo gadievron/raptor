@@ -487,16 +487,28 @@ def check_logs(
     # own quantifier (incl. bounded {m,n} — "(a|a)+" and "(a{1,9}){1,9}"
     # both blow up). Unquantified groups like "(ERROR|FATAL)" stay
     # regex, so the guard does not degrade ordinary log asserts.
+    # Group spans bounded at 500 = the length gate below: identical
+    # verdicts on every input the scan can see (the third
+    # alternative's first span additionally stops at the first
+    # marker — the first-marker split is the only one that matters,
+    # so the language is unchanged and the backtracking fan-out is
+    # gone), and the scan itself
+    # stays linear if it is ever reused on longer text (an unbounded
+    # [^)]* re-scans a hostile pattern from every "(" — quadratic).
     _dangerous_re = re.compile(
         r"[+*]{2,}"
-        r"|\(\?[^)]*\+"
-        r"|\([^)]*[|+*{][^)]*\)\s*[+*{]"
-        r"|\([^)]*\)[+*{][^)]*\)\s*[+*{]"
+        r"|\(\?[^)]{0,500}\+"
+        r"|\([^)|+*{]{0,500}[|+*{][^)]{0,500}\)\s*[+*{]"
+        r"|\([^)]{0,500}\)[+*{][^)]{0,500}\)\s*[+*{]"
     )
     missing: list[str] = []
     for pattern in expected_patterns:
         try:
-            if _dangerous_re.search(pattern) or len(pattern) > 500:
+            # Length gate FIRST: the shape scan then only ever runs
+            # on <=500-char inputs, so its own cost is bounded by
+            # construction (same boolean either way — both operands
+            # are pure).
+            if len(pattern) > 500 or _dangerous_re.search(pattern):
                 # Literal fallback for risky or excessively long patterns.
                 matched = pattern in combined
             else:
@@ -1350,7 +1362,7 @@ def inject_version_assertion(
     if (
         command_pattern is None
         or not version_literal
-        or not re.search(r"\d+\.\d+", version_literal)
+        or not re.search(r"(?<!\d)\d+\.\d+", version_literal)
     ):
         return plan, injected
     new_plan: list[dict[str, Any]] = []
@@ -1364,7 +1376,11 @@ def inject_version_assertion(
             continue
         existing = step.get("expected_stdout_contains")
         already_has_version = (
-            isinstance(existing, str) and re.search(r"\d+\.\d+", existing) is not None
+            isinstance(existing, str)
+            # (?<!\d) pins the scan to digit-run starts (identical
+            # first match; unpinned, a hostile digit run is re-read
+            # from every offset — quadratic).
+            and re.search(r"(?<!\d)\d+\.\d+", existing) is not None
         )
         if already_has_version:
             new_plan.append(step)

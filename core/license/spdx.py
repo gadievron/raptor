@@ -52,7 +52,12 @@ _SPDX_EXPR_RE_CI = re.compile(_SPDX_EXPR_RE.pattern, re.IGNORECASE)
 # means GPL-3.0 + the Classpath exception clause); callers
 # typically want the principal license id, which is the FIRST
 # operand of a ``X WITH Y`` form.
-_OPERATOR_SPLIT_RE = re.compile(r"\s+(?:AND|OR|WITH)\s+")
+# (?<!\s) pins the operator match to the start of its whitespace
+# run: a bare leading \s+ re-consumes a hostile whitespace run from
+# every scan position — quadratic in the expression length. The
+# earliest match always starts at the run start, so the split is
+# unchanged.
+_OPERATOR_SPLIT_RE = re.compile(r"(?<!\s)\s+(?:AND|OR|WITH)\s+")
 _OPERATOR_SPLIT_RE_CI = re.compile(_OPERATOR_SPLIT_RE.pattern, re.IGNORECASE)
 
 

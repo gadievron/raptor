@@ -47,7 +47,7 @@ _C_STRUCT_KEYWORD_RE = re.compile(
 # far above real C field types.
 _C_FIELD_RE = re.compile(
     r"\b(?:const\s+)?(?:unsigned\s+|signed\s+)?(?:struct\s+)?"
-    r"(\w[\w\s*]{0,256}?)\s{1,256}(?:\*\s*)?(\w+)\s*(?:\[.*?\]\s*)?;",
+    r"(\w[\w\s*]{0,256}?)\s{1,256}(?:\*\s*)?(\w+)\s*(?:\[.{0,1000}?\]\s*)?;",
 )
 
 # \b pins the name group to the full word (identical capture — the

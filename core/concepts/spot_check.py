@@ -51,7 +51,12 @@ def _value_patterns(name: str) -> list[re.Pattern]:
         # read as NAME=0 and ``buf[NAME]; int other = 42;`` read as
         # NAME=42, and those wrong values were trusted unconditionally
         # as mechanical answers.
-        re.compile(rf"\b{esc}\b\s*(?::[^=;\n]*)?=(?!=)\s*{_VALUE}"),
+        # The annotation span is bounded: unbounded, every NAME occurrence
+        # planted in a hostile line re-scans the rest of the line —
+        # quadratic. Real type annotations sit far below 500 chars
+        # (beyond it the definition is not extracted, versus an
+        # unbounded scan).
+        re.compile(rf"\b{esc}\b\s*(?::[^=;\n]{{0,500}})?=(?!=)\s*{_VALUE}"),
         # enum member: NAME = value or bare position not decidable
         re.compile(rf"\b{esc}\s*=\s*{_VALUE}\s*[,;}}]"),
     ]
@@ -135,8 +140,12 @@ _FALLBACK_STOPWORDS = frozenset({
 # The optional verb gates its own trailing whitespace — the naive
 # ``\s*(?:VERB)?\s*`` put two whitespace spans around it, quadratic
 # on a claim ending in a whitespace run.
+# The identifier is pinned to the start of its token run
+# ((?<![\w.:])): an unanchored scan otherwise restarts inside every
+# identifier suffix — quadratic on a long token run — and a
+# mid-token start is never a real identifier claim.
 _QUESTION_VALUE_RE = re.compile(
-    r"[`'\"]?([A-Za-z_][\w.:]*)[`'\"]?\s*"
+    r"[`'\"]?(?<![\w.:])([A-Za-z_][\w.:]*)[`'\"]?\s*"
     r"(?:(?:is|==|equals?|equal to|set to|defined as)\s*)?"
     rf"[`'\"]?{_VALUE}[`'\"]?",
     re.IGNORECASE,

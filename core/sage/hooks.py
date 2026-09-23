@@ -376,7 +376,13 @@ def infer_afl_fuzz_flags_from_sage_recall_row(
     flags = _afl_flags_from_text(clean)
     if not flags:
         return []
-    match = re.search(r": strategy (.+?), binary fingerprint (.+?), duration", clean)
+    # Gaps bounded: unbounded, every planted head phrase re-scans the
+    # rest of a hostile row — quadratic (two gaps: cubic). Writer
+    # values sit far below the bounds.
+    match = re.search(
+        r": strategy (.{1,500}?), binary fingerprint (.{1,500}?), duration",
+        clean,
+    )
     fields = {
         "kind": "afl_flags",
         "strategy": match.group(1) if match else "",
@@ -581,11 +587,15 @@ def infer_codeql_build_from_sage_recall_row(
     if m_outcome:
         out["outcome"] = m_outcome.group(1)
 
-    m_lang = re.search(r"languages ([^,]+(?:, [^,]+)*), outcome", text)
+    # List bounded (element length and count): unbounded, every
+    # planted "languages " head re-scans the rest of a hostile row —
+    # quadratic. Writer rows hold a handful of short names.
+    m_lang = re.search(
+        r"languages ([^,]{1,100}(?:, [^,]{1,100}){0,32}), outcome", text)
     if m_lang:
         out["languages"] = m_lang.group(1).strip()
 
-    m_cmd = re.search(r"build command (.+?), analyses completed", text)
+    m_cmd = re.search(r"build command (.{1,1000}?), analyses completed", text)
     if m_cmd and out.get("outcome") == "success":
         cmd = m_cmd.group(1).strip()
         if cmd and cmd != "auto":
@@ -957,7 +967,7 @@ def recall_prior_fp_verdicts(
             if binding not in content:
                 continue
             src_match = re.search(r"\|\|src=([^|]+)\|\|", content)
-            rule_match = re.search(r" rule=(.*?) file=", content)
+            rule_match = re.search(r" rule=(.{0,500}?) file=", content)
             ts_match = re.search(r"\|\|ts=(\d+)\|\|", content)
             if not src_match or rule_match is None or not ts_match:
                 # Pre-TTL / malformed rows demote to hint — re-test.
@@ -1766,7 +1776,9 @@ def _verified_concept_rows(
     out: list[dict[str, Any]] = []
     for row in rows or []:
         clean, token = rowmac.strip(str(row.get("content") or ""))
-        m_id = re.search(r"Concept \[([^\]]+)\]", clean)
+        # Bounded id: an unbounded bracket body re-scans a hostile row
+        # from every planted head — quadratic; writer ids are short.
+        m_id = re.search(r"Concept \[([^\]]{1,500})\]", clean)
         # The genuine 'Source hash:' line is the LAST one the writer
         # emits, and it starts its line; take the last line-anchored
         # occurrence so a row whose earlier prose merely mentions

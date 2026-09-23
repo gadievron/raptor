@@ -37,7 +37,10 @@ logger = logging.getLogger(__name__)
 # before ``mod`` are tolerated by anchoring only on the ``mod NAME ;`` shape.
 _MOD_DECL = re.compile(
     r'(?:#\[\s*path\s*=\s*"([^"]*)"\s*\]\s*)?'      # optional #[path="..."]
-    r'(?:pub\s*(?:\([^)]*\)\s*)?)?'                  # optional pub / pub(...)
+    # (visibility span bounded: unbounded, every planted "pub(" re-scans
+    # the rest of hostile source — quadratic; real visibility paths are
+    # tiny)
+    r'(?:pub\s*(?:\([^)]{0,200}\)\s*)?)?'            # optional pub / pub(...)
     r'\bmod\s+([A-Za-z_]\w*)\s*;',
 )
 _SPECIAL_ROOT_NAMES = frozenset({"lib.rs", "main.rs", "mod.rs"})

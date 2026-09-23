@@ -429,7 +429,11 @@ def _find_arglist_open(name: str) -> int:
 # argument types inside ``{lambda(...)#N}`` but ``gcov -m`` emits the
 # bare placeholder ``{lambda()#N}``. Normalise to the gcov form so the
 # two name sources can match.
-_LAMBDA_ARGS_RE = re.compile(r"\{lambda\([^)]*\)(#\d+)\}")
+# The argument span is bounded: unbounded, every "{lambda(" planted
+# in a hostile name re-scans the rest of it — quadratic. Demangled
+# lambda argument lists sit far below 4000 chars (beyond it the
+# name is left unnormalised, versus an unbounded scan).
+_LAMBDA_ARGS_RE = re.compile(r"\{lambda\([^)]{0,4000}\)(#\d+)\}")
 
 
 def _normalise_lambda_args(name: str) -> str:
@@ -634,8 +638,9 @@ def _parse_dwarf(binary_path: Path) -> tuple[dict[int, _SubprogramDIE], list[int
     # ``DecompressBranchless<long``), which then mis-classified as absent
     # because the qualified-name lookup couldn't find them (snappy Inc 3c
     # followup).
+    # (qualifier span bounded, same trade-off as _LAMBDA_ARGS_RE)
     name_indirect_re = re.compile(
-        r"\(in(?:direct|dexed) string[^)]*\):\s*(.+?)\s*$")
+        r"\(in(?:direct|dexed) string[^)]{0,4000}\):\s*(.+?)\s*$")
     # DW_AT_abstract_origin emits an offset that may be ``<0xNN>`` or bare hex.
     aorig_re = re.compile(r"<0x([0-9a-fA-F]+)>")
     # DW_AT_low_pc is an address.

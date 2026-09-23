@@ -81,7 +81,11 @@ def _resolves_within(path: Path, root: Path) -> bool:
 # ``\w+Test.php`` is the PHPUnit file convention (class-per-file,
 # suffix mandatory for the default phpunit.xml discovery); the
 # prefix/suffix ``test`` shapes cover the rest of the ecosystems.
-_TEST_FILE_PATTERNS = re.compile(r"(?:test_\w+|_test)\.\w+$|\w+Test\.php$")
+# Name stems bounded at 256: an unbounded \w+ re-scans a hostile
+# name run from every position — quadratic — and real filesystem
+# components cap at 255 bytes anyway.
+_TEST_FILE_PATTERNS = re.compile(
+    r"(?:test_\w{1,256}|_test)\.\w+$|\w{1,256}Test\.php$")
 # Languages the extraction heuristics below understand. Test-tree files
 # in other languages are counted and reported as skipped, not silently
 # dropped — a huge native test suite used to surface as "found 0 test
@@ -514,7 +518,11 @@ def _infer_target_functions(
         targets.append(stripped)
 
     php = file_suffix == ".php"
-    calls = re.findall(r"(\w{2,})\s*\(", test_body)
+    # \b pins the callee name to a word start: without it an
+    # unanchored scan restarts inside every identifier suffix —
+    # quadratic on a long token — and the dropped mid-word starts
+    # were never real callee names.
+    calls = re.findall(r"\b(\w{2,})\s*\(", test_body)
     for call in calls:
         if (
             call != test_name  # the definition line matches too
