@@ -83,3 +83,17 @@ class TestGeminiNativeStructuredUsage:
         result = provider.generate_structured("p", self.SCHEMA)
         assert result.cost == pytest.approx(provider.total_cost - cost_before)
         assert result.tokens_used == provider.total_tokens - tokens_before
+
+    def test_truncation_carries_typed_marker(self):
+        """The native guard's message says neither "output token
+        limit" nor the instructor leg's wording — consumers that
+        matched phrases missed it entirely. The typed
+        ``llm_truncation`` marker is the classification contract."""
+        pytest.importorskip("pydantic")
+        mock = _mock_response('{"verdict": "tr', out_tokens=1024)
+        mock.candidates[0].finish_reason.name = "MAX_TOKENS"
+        provider = _gemini_provider(mock)
+        with pytest.raises(RuntimeError) as excinfo:
+            provider.generate_structured("p", self.SCHEMA)
+        assert "truncated" in str(excinfo.value)
+        assert getattr(excinfo.value, "llm_truncation", False) is True
