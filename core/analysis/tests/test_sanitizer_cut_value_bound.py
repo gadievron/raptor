@@ -655,3 +655,110 @@ class TestCatalogModuleShadowDegraded:
             sink_arg="y",
         )
         assert result.verdict == VERDICT_SUPPRESS
+
+
+class TestModuleLevelCatalogRootDistrust:
+    """The catalog guard must also see MODULE-level identity rebinds
+    — a local-defs-only derivation missed ``import fakelib as html``
+    in both local and module positions."""
+
+    def _evaluate(self, src):
+        cfg = build_python_cfg(src, "handle")
+        assert cfg is not None
+        sink = _node_with_call(cfg, "render")
+        return evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"}, sink_arg="y",
+        )
+
+    def test_module_import_alias_degrades(self):
+        src = (
+            "import fakelib as html\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        assert self._evaluate(src).verdict == VERDICT_NO_SUPPRESS
+
+    def test_local_import_alias_degrades(self):
+        src = (
+            "def handle(x):\n"
+            "    import fakelib as html\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        assert self._evaluate(src).verdict == VERDICT_NO_SUPPRESS
+
+    def test_module_assign_root_degrades(self):
+        src = (
+            "html = object()\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        assert self._evaluate(src).verdict == VERDICT_NO_SUPPRESS
+
+    def test_global_sibling_root_degrades(self):
+        src = (
+            "import html\n"
+            "def evil():\n"
+            "    global html\n"
+            "    html = object()\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        assert self._evaluate(src).verdict == VERDICT_NO_SUPPRESS
+
+    def test_self_import_stays_trusted(self):
+        src = (
+            "import html\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        assert self._evaluate(src).verdict == VERDICT_SUPPRESS
+
+
+class TestNestedNonlocalWriteBackGate:
+    def test_nonlocal_writeback_never_suppresses(self):
+        src = (
+            "import html\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    def fixup():\n"
+            "        nonlocal y\n"
+            "        y = x\n"
+            "    fixup()\n"
+            "    render(y)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        assert cfg is not None
+        sink = _node_with_call(cfg, "render")
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"}, sink_arg="y",
+        )
+        assert result.verdict != VERDICT_SUPPRESS
+
+    def test_nested_def_without_nonlocal_unaffected(self):
+        src = (
+            "import html\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    def helper():\n"
+            "        return 1\n"
+            "    helper()\n"
+            "    render(y)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        assert cfg is not None
+        sink = _node_with_call(cfg, "render")
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"}, sink_arg="y",
+        )
+        assert result.verdict == VERDICT_SUPPRESS

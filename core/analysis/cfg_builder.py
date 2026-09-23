@@ -208,6 +208,16 @@ class PythonCFG:
     _nodes: tuple[PyCFGNode, ...]
     _adjacency: dict[PyCFGNode, tuple[PyCFGNode, ...]]
     params: tuple[str, ...] = ()
+    # Names whose WRITTEN identity a consumer must not trust: the
+    # function's own bound names (params, assignments, local imports,
+    # nested defs, …) plus the module's repo-controlled roots
+    # (module-scope defs/assignments/globals and import aliases that
+    # bind a different source — ``import fakelib as html``). The
+    # sanitizer-cut catalog matcher degrades any binding whose
+    # callable root is in this set: the runtime callee is the repo's
+    # object, not the catalog identity the spelling suggests. Empty
+    # for hand-built CFGs (consumers treat absence as no distrust).
+    shadowed_roots: frozenset[str] = frozenset()
 
     @property
     def entry(self) -> PyCFGNode:
@@ -1071,14 +1081,27 @@ def _function_params(
 def _scope_escape_names(
     func: ast.FunctionDef | ast.AsyncFunctionDef,
 ) -> frozenset[str]:
-    """Names ``func`` declares ``global`` or ``nonlocal``.
+    """Names whose local bindings in ``func`` are rewritable from
+    outside straight-line reaching-defs.
 
-    The declarations are compile-time properties of the WHOLE scope
-    (a ``global x`` inside an ``if`` branch still binds every ``x``
-    store in the function), so the walk covers the entire body but
-    stops at nested scopes — a nested def's own ``global``/
-    ``nonlocal`` declarations bind names in the NESTED frame, not
-    this one. Lambdas and comprehensions cannot contain statements.
+    Two channels:
+
+    * ``func``'s own ``global`` / ``nonlocal`` declarations —
+      compile-time properties of the WHOLE scope (a ``global x``
+      inside an ``if`` branch still binds every ``x`` store in the
+      function). The walk covers the body but stops at nested scopes
+      for THIS channel: a nested def's ``global`` binds the module
+      frame, not this one.
+    * ``nonlocal`` declarations in defs NESTED under ``func`` (any
+      depth): ``nonlocal t`` targets an ENCLOSING function frame, so
+      calling the closure rewrites ``func``'s ``t`` behind
+      reaching-defs' back — ``t = escape(x); def f(): nonlocal t;
+      t = x; f(); sink(t)`` kills the sanitized def invisibly.
+      Over-approximate (the nonlocal may target an intermediate
+      nested frame): an extra escape name only ever breaks an
+      exclusivity proof, never grants one.
+
+    Lambdas and comprehensions cannot contain statements.
     """
     out: set[str] = set()
     stack: list[ast.AST] = list(func.body)
@@ -1091,6 +1114,12 @@ def _scope_escape_names(
             out.update(node.names)
             continue
         stack.extend(ast.iter_child_nodes(node))
+    # Nested-scope channel: every Nonlocal anywhere under func (the
+    # boundary walk above already covered func's own statements; this
+    # full walk adds the nested defs').
+    for node in ast.walk(func):
+        if isinstance(node, ast.Nonlocal):
+            out.update(node.names)
     return frozenset(out)
 
 
@@ -1130,7 +1159,25 @@ def build_python_cfg(
         function_name, file_path,
         escape_names=_scope_escape_names(func),  # type: ignore[arg-type]
     )
-    return builder.build(func)  # type: ignore[arg-type]
+    cfg = builder.build(func)  # type: ignore[arg-type]
+    if cfg is None:
+        return None
+    # Stamp the untrusted-identity roots (see PythonCFG.shadowed_roots)
+    # — computed here because only this entry point sees the whole
+    # module tree. Local import so the callgraph substrate module
+    # never becomes an import-time dependency of CFG construction for
+    # non-Python callers.
+    from core.analysis.python_module_callgraph import (
+        local_binding_names,
+        module_shadowed_identity_roots,
+    )
+    return replace(
+        cfg,
+        shadowed_roots=(
+            local_binding_names(func)
+            | module_shadowed_identity_roots(tree)
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
