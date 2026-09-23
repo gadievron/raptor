@@ -1512,3 +1512,16 @@ class TestBracketBoundaryTagRegistry:
         assert "[/threat-model-context]" not in tm, (
             "threat_model regressed to hand-spelling its boundary tag"
         )
+
+
+class TestCssFetchFunctionArm:
+    def test_style_body_url_target_never_survives(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        out = _strip_autofetch_markup(
+            "<style>body{background:url(https://evil.example/px)}</style>")
+        assert "evil.example" not in out
+
+    def test_relative_css_urls_untouched(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for p in ("background:url(local/img.png)", "url(../rel.png)"):
+            assert _strip_autofetch_markup(p) == p, p
