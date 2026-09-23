@@ -1,0 +1,148 @@
+# raptor: confirm-only
+# (silence from this rule never refutes: it adjudicates a sub-shape
+# narrower than the dispatched class — see run_semgrep_sweep's
+# confirm-only role handling in core/audit/sweep.py.)
+rules:
+  # CWE-93: CRLF residual on a protocol line — a single bare variable
+  # formatted into a line-oriented protocol command (SMTP/IMAP/NNTP/
+  # FTP/HTTP lines) without an intervening CR/LF strip/reject. The
+  # anchor is the FORMAT LITERAL: exactly one conversion, a string
+  # one (%s, flags/width/precision allowed), with a trailing literal
+  # "\r\n" — a protocol-line template; embedded CR/LF in the value
+  # terminates the command and injects attacker-chosen commands.
+  #
+  # Anchor trade-offs (both directions, at the check site):
+  #   - Single-conversion templates only ("USER %s\r\n" but not
+  #     "%d %s\r\n"): semgrep cannot bind an argument to its
+  #     conversion position, so a multi-arg pattern would attribute
+  #     the match to WHATEVER bare argument it finds (an int status
+  #     code next to an escaped string). Multi-conversion protocol
+  #     lines are a documented miss (FN); attributing the wrong
+  #     argument would confirm through correct escaping (FP) — the
+  #     single-conversion anchor stays. This also drops "%.*s" (its
+  #     width is a second argument).
+  #   - The argument must be a bare identifier / member / indexed
+  #     expression (no calls, no literals, no arithmetic/ternary/
+  #     comma forms): a call result may be an escaper, a literal is
+  #     not variable data, and a compound expression cannot be
+  #     tracked by the strip/reject exclusions below.
+  #
+  # Guard exclusions are polarity-aware. The strpbrk idiom is
+  # discriminated by shape:
+  #   - reject-then-emit (`if (strpbrk(v, ...)) return/goto; ...`)
+  #     and emit-inside-negated-detect (`if (!strpbrk(v, ...)) {...}`)
+  #     are CORRECT and silence the rule;
+  #   - emit-INSIDE-the-detect-branch (`if (strpbrk(v, ...)) {...}`)
+  #     is the vulnerable inverse and still FIRES — a polarity-blind
+  #     exclusion here would silence exactly the bug the class names.
+  # Char-literal CR/LF handling (strchr rejects, manual strip loops:
+  # any `if` mentioning a '\r' or '\n' character literal anywhere in
+  # the function) silences REGARDLESS of polarity — the literal forms
+  # are too varied to discriminate honestly, so they trade FN for
+  # zero FP (confirm-only direction).
+  # Remaining exclusions, all FN-direction by design:
+  #   - $V reassigned from ANY call before the sink (after a
+  #     rebinding the rule cannot honestly claim unmodified variable
+  #     data reaches the line; deliberately not name-anchored);
+  #   - a preceding single-argument statement call on $V (the
+  #     in-place sanitizer idiom, `sanitize(v);` — multi-argument
+  #     in-place sanitizers are a documented miss).
+  #
+  # Known FP mode: a wrapper whose caller sanitized (the rule sees
+  # one function). Bounded by dispatch context — this rule runs only
+  # when a CWE-93/CRLF hypothesis names the file/function; it is not
+  # a blanket scanner. Windows-style "%s\r\n" log lines share the
+  # template shape, bounded the same way.
+  # Known FN modes (documented misses — silence keeps the class dark,
+  # never clean): PROJECT PRINTF-WRAPPERS — the dominant real-world
+  # miss: mature codebases emit protocol lines through their own
+  # format wrappers (curl_maprintf / curlx_dyn_addf /
+  # apr_brigade_printf / BIO_printf-class), which the libc
+  # sprintf/snprintf/fprintf/dprintf anchor never sees; extending the
+  # sink set per target from learned vocabulary is a follow-up, and
+  # hardcoding project API names here is against doctrine. Also:
+  # strcat/multi-call line assembly; adjacent string literal
+  # concatenation ("USER " "%s\r\n" fails the single-literal
+  # template anchor); multi-conversion templates and "%.*s"; %ls wide
+  # conversions; guards phrased through helper predicates the
+  # exclusions cannot bind to $V.
+  - id: raptor.c.crlf-protocol-line.format
+    languages: [c, cpp]
+    severity: MEDIUM
+    message: >
+      A bare variable is formatted into a protocol line (format
+      literal ends with "\r\n") with no CR/LF strip or reject between
+      the variable's last binding and the emit. Embedded "\r\n" in
+      the value terminates the current protocol command and injects
+      attacker-chosen commands into the stream. Strip or reject CR
+      and LF from the value before formatting it into the line.
+    patterns:
+      - pattern-either:
+          - pattern: sprintf($BUF, $FMT, $V)
+          - pattern: snprintf($BUF, $N, $FMT, $V)
+          - pattern: fprintf($STREAM, $FMT, $V)
+          - pattern: dprintf($FD, $FMT, $V)
+      # Protocol-line template: exactly one conversion, a %s one
+      # (flags/width/precision allowed), trailing literal CRLF. The
+      # matched text includes the literal's quotes.
+      - metavariable-regex:
+          metavariable: $FMT
+          regex: ^"[^%]*%[-0-9.*]*s[^%]*\\r\\n"$
+      # Bare identifier / member / indexed expression only.
+      - metavariable-regex:
+          metavariable: $V
+          regex: ^[A-Za-z_][A-Za-z0-9_]*((\.|->)[A-Za-z_][A-Za-z0-9_]*|\[[A-Za-z0-9_]+\])*$
+      # Rebinding of the same variable from any call.
+      - pattern-not-inside: |
+          $V = $TRANSFORM(...);
+          ...
+      # In-place sanitizer idiom (single-argument statement call).
+      - pattern-not-inside: |
+          $SAN($V);
+          ...
+      # strpbrk reject-then-emit (return/goto bodies, braced or not).
+      - pattern-not-inside: |
+          if (strpbrk($V, $C)) return ...;
+          ...
+      - pattern-not-inside: |
+          if (strpbrk($V, $C)) { return ...; }
+          ...
+      - pattern-not-inside: |
+          if (strpbrk($V, $C)) goto $L;
+          ...
+      - pattern-not-inside: |
+          if (strpbrk($V, $C)) { goto $L; }
+          ...
+      # strpbrk emit-inside-negated-detect. (The positive-polarity
+      # inverse — emit inside the detect branch — deliberately has NO
+      # exclusion: that shape is the vulnerability.)
+      - pattern-not-inside: |
+          if (!strpbrk($V, $C)) { ... }
+      # Char-literal CR/LF handling anywhere in the function (strchr
+      # rejects, manual strip loops) — any polarity, FN over FP.
+      - pattern-not-inside: |
+          $RT $FN(...) {
+            ...
+            if (<... '\r' ...>) $S;
+            ...
+          }
+      - pattern-not-inside: |
+          $RT $FN(...) {
+            ...
+            if (<... '\r' ...>) { ... }
+            ...
+          }
+      - pattern-not-inside: |
+          $RT $FN(...) {
+            ...
+            if (<... '\n' ...>) $S;
+            ...
+          }
+      - pattern-not-inside: |
+          $RT $FN(...) {
+            ...
+            if (<... '\n' ...>) { ... }
+            ...
+          }
+    metadata:
+      cwe: ["CWE-93"]
