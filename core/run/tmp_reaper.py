@@ -595,6 +595,81 @@ def _reap(now: float | None) -> list[Path]:
     return reaped
 
 
+def reap_dead_pid_dirs(root: Path, prefix: str, *, keep: int = 0) -> list[Path]:
+    """Remove ``<prefix><pid>`` dirs under *root* whose pid is dead.
+
+    For scratch families whose name embeds the owning pid as THE
+    liveness contract (the root conftest's darwin-emulation basetemp
+    roots, ``raptor-pytest-emu-<pid>``): per-pid roots defeat both
+    pytest's keep-last-N retention (it prunes numbered runs under one
+    shared basetemp, never sibling per-pid roots) and the age-floor
+    sweep's cadence, so dead sessions accreted tens of thousands of
+    inodes each. A dead owning pid is proof positive the session is
+    gone — no age floor needed.
+
+    ``keep`` retains that many of the most-recently-modified DEAD dirs
+    for post-mortem inspection, mirroring pytest's own retention
+    semantics at the per-pid level.
+
+    Safety posture matches the launcher's dead-session sweep: lstat
+    only (a symlink squatting on the name is never followed), dirs
+    only, same-euid only, exact ``prefix + digits`` names, live pids
+    always kept (EPERM reads as live; pid reuse merely delays
+    reclamation one cycle — the safe direction). Best-effort by
+    contract — never raises.
+    """
+    try:
+        return _reap_dead_pid_dirs(root, prefix, keep)
+    except Exception as exc:  # noqa: BLE001 — sweep must never block a run
+        logger.debug("dead-pid dir sweep aborted: %s", exc)
+        return []
+
+
+def _reap_dead_pid_dirs(root: Path, prefix: str, keep: int) -> list[Path]:
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return []
+    euid = os.geteuid()
+    dead: list[tuple[float, Path]] = []
+    for name in names:
+        rest = name[len(prefix):]
+        if not (name.startswith(prefix) and rest.isdigit()):
+            continue
+        pid = int(rest)
+        if pid == os.getpid():
+            continue
+        path = root / name
+        try:
+            st = path.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != euid:
+            continue
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, OverflowError):
+            # Dead — or a pid beyond pid_t (a planted huge-digit name),
+            # which no live process can hold.
+            dead.append((st.st_mtime, path))
+        except OSError:
+            continue  # EPERM etc.: someone lives there; keep
+        else:
+            continue  # alive; keep
+    dead.sort(reverse=True)
+    reaped: list[Path] = []
+    for _, path in dead[max(keep, 0):]:
+        shutil.rmtree(path, ignore_errors=True)
+        if not path.exists():
+            reaped.append(path)
+    if reaped:
+        logger.info(
+            "reaped %d dead-owner %s* dir(s) under %s",
+            len(reaped), prefix, root,
+        )
+    return reaped
+
+
 def reap_stale_runs(parent: Path, now: float | None = None) -> list[Path]:
     """Remove aged-out failed/cancelled run dirs under *parent*.
 

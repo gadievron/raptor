@@ -690,3 +690,80 @@ class TestLiveOwnerKeepalive:
             os.utime(d, (_OLD, _OLD))
             assert reap_stale_tmp() == [d], prefix
             assert not d.exists(), prefix
+
+
+class TestDeadPidDirReaping:
+    """reap_dead_pid_dirs — per-pid scratch roots whose embedded pid is
+    the liveness contract (darwin-emu basetemp roots)."""
+
+    @staticmethod
+    def _pid_dir(root, pid, mtime=None):
+        d = root / f"raptor-pytest-emu-{pid}"
+        d.mkdir()
+        (d / "litter").write_text("x")
+        if mtime is not None:
+            os.utime(d, (mtime, mtime))
+        return d
+
+    def _dead_pid(self):
+        # A pid that provably cannot be alive: spawn+reap our own child.
+        proc = subprocess.Popen(["true"])
+        proc.wait(timeout=10)
+        return proc.pid
+
+    def test_dead_pid_dir_reaped_live_and_own_kept(self, tmp_path):
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        dead = self._pid_dir(tmp_path, self._dead_pid())
+        live = self._pid_dir(tmp_path, os.getppid())  # provably alive
+        own = self._pid_dir(tmp_path, os.getpid())
+        assert reap_dead_pid_dirs(tmp_path, "raptor-pytest-emu-") == [dead]
+        assert not dead.exists()
+        assert live.is_dir() and own.is_dir()
+
+    def test_keep_retains_newest_dead_roots(self, tmp_path):
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        now = time.time()
+        # Three dead roots with distinct ages; keep=2 must retain the
+        # two newest (pytest's keep-last-N retention, per-pid level).
+        pids = [self._dead_pid() for _ in range(3)]
+        oldest = self._pid_dir(tmp_path, pids[0], mtime=now - 3000)
+        mid = self._pid_dir(tmp_path, pids[1], mtime=now - 2000)
+        newest = self._pid_dir(tmp_path, pids[2], mtime=now - 1000)
+        reaped = reap_dead_pid_dirs(tmp_path, "raptor-pytest-emu-", keep=2)
+        assert reaped == [oldest]
+        assert mid.is_dir() and newest.is_dir()
+
+    def test_non_matching_names_and_symlinks_kept(self, tmp_path):
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        dead_pid = self._dead_pid()
+        notes = tmp_path / "raptor-pytest-emu-notes"
+        notes.mkdir()
+        victim = tmp_path / "victim"
+        victim.mkdir()
+        (victim / "data").write_text("precious")
+        link = tmp_path / f"raptor-pytest-emu-{dead_pid}"
+        link.symlink_to(victim)
+        assert reap_dead_pid_dirs(tmp_path, "raptor-pytest-emu-") == []
+        assert notes.is_dir()
+        assert link.is_symlink()
+        assert (victim / "data").read_text() == "precious"
+
+    def test_foreign_owner_kept(self, tmp_path, monkeypatch):
+        from core.run import tmp_reaper
+        d = self._pid_dir(tmp_path, self._dead_pid())
+        monkeypatch.setattr(
+            tmp_reaper.os, "geteuid", lambda: os.getuid() + 1,
+        )
+        assert tmp_reaper.reap_dead_pid_dirs(
+            tmp_path, "raptor-pytest-emu-") == []
+        assert d.is_dir()
+
+    def test_never_raises(self, tmp_path, monkeypatch):
+        from core.run import tmp_reaper
+
+        def _boom(*a, **kw):
+            raise RuntimeError("listdir exploded")
+
+        monkeypatch.setattr(tmp_reaper.os, "listdir", _boom)
+        assert tmp_reaper.reap_dead_pid_dirs(
+            tmp_path, "raptor-pytest-emu-") == []
