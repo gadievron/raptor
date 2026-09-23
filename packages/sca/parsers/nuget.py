@@ -34,7 +34,7 @@ import re
 from xml.etree import ElementTree as _ET
 
 from ..models import Confidence, Dependency, PinStyle
-from ._base import build_purl
+from ._base import PARSE_ESCAPE_ERRORS, build_purl
 from . import _safe_read, register
 from typing import TYPE_CHECKING
 
@@ -603,7 +603,7 @@ def parse_lockfile(path: Path) -> list[Dependency]:
         return []
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.parsers.nuget: JSON parse failed for %s: %s", path, e)
         return []

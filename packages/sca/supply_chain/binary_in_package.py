@@ -78,6 +78,7 @@ from ..discovery import EXCLUDED_DIR_NAMES
 from ..models import Confidence, Dependency, Manifest
 from ..parsers import _safe_read
 from . import _own_host
+from ..parsers._base import PARSE_ESCAPE_ERRORS
 
 # Subset of EXCLUDED_DIR_NAMES that's safe to skip during binary
 # scanning.  We DELIBERATELY recurse into ``dist/``, ``build/``,
@@ -287,7 +288,7 @@ def _manifest_own_name(manifest: Manifest) -> str | None:
         return None
     try:
         data = json.loads(text)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
         return None
     if not isinstance(data, dict):
         return None
@@ -318,7 +319,7 @@ def _manifest_declares_native(manifest: Manifest) -> bool:
         return False
     try:
         data = json.loads(text)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
         return False
     if not isinstance(data, dict):
         return False
