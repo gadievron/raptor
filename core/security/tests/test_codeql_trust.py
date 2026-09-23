@@ -825,3 +825,113 @@ class TestWalkNeverFollowsDirectorySymlinks:
             outside, target_is_directory=True)
         assert _check(str(repo)) is True
         assert "symlink" in capsys.readouterr().out
+
+
+class TestHostileYamlBounded:
+    """Hostile YAML must yield a blocking finding (Untrusted verdict,
+    loud reason) — never a crash of the operator process the gate
+    runs in. The alias-amplification shape (`aN: &aN [*a(N-1),*a(N-1)]`
+    + `extractor: *aN`) turned ~600 bytes into a 2^depth expansion at
+    the scanner's ``str()``; flow/block deep nesting abuses the loader
+    stack instead."""
+
+    @staticmethod
+    def _alias_bomb(depth: int) -> str:
+        lines = ['a0: &a0 ["xxxxxxxx","xxxxxxxx"]']
+        for i in range(1, depth + 1):
+            lines.append(f"a{i}: &a{i} [*a{i - 1},*a{i - 1}]")
+        lines.append(f"extractor: *a{depth}")
+        return "\n".join(lines) + "\n"
+
+    def test_alias_refused_in_process(self, tmp_path):
+        from core.security.codeql_trust import _scan_pack_file
+        p = tmp_path / "qlpack.yml"
+        p.write_text(self._alias_bomb(3))
+        fs = _scan_pack_file(p)
+        assert fs.has_blocking()
+        labels = {f.label for f in fs.findings}
+        assert "malformed YAML" in labels
+        assert any("alias" in f.value for f in fs.findings)
+
+    def test_alias_bomb_bounded_under_memory_cap(self, tmp_path):
+        """Depth-30 bomb (~660 bytes → tens of GiB if expanded) under
+        a 2 GiB address-space cap: must exit cleanly with a blocking
+        malformed-YAML finding, not die on memory exhaustion."""
+        import subprocess
+        p = tmp_path / "qlpack.yml"
+        p.write_text(self._alias_bomb(30))
+        code = (
+            "import resource, sys\n"
+            "resource.setrlimit(resource.RLIMIT_AS,"
+            " (2 << 30, 2 << 30))\n"
+            "from core.security.codeql_trust import _scan_pack_file\n"
+            "fs = _scan_pack_file(__import__('pathlib').Path(sys.argv[1]))\n"
+            "assert fs.has_blocking()\n"
+            "assert any(f.label == 'malformed YAML' for f in fs.findings)\n"
+            "print('BLOCKED-CLEANLY')\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(p)],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(Path(__file__).resolve().parents[3]),
+        )
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        assert "BLOCKED-CLEANLY" in proc.stdout
+
+    def test_deep_flow_nesting_refused(self, tmp_path):
+        from core.security.codeql_trust import _scan_pack_file
+        p = tmp_path / "qlpack.yml"
+        p.write_text("extractor: " + "[" * 5000 + "]" * 5000 + "\n")
+        fs = _scan_pack_file(p)
+        assert fs.has_blocking()
+        assert any("flow nesting" in f.value for f in fs.findings)
+
+    def test_deep_block_nesting_refused_not_crash(self, tmp_path):
+        """Second stack-abuse encoding: block-mapping depth (no flow
+        brackets, so the pre-bound never fires) must surface as the
+        blocking malformed-YAML finding via the escape-error catch."""
+        from core.security.codeql_trust import _scan_pack_file
+        depth = 20_000
+        p = tmp_path / "qlpack.yml"
+        p.write_text("".join(f"{' ' * i}k:\n" for i in range(depth)))
+        fs = _scan_pack_file(p)
+        assert fs.has_blocking()
+
+    def test_container_extractor_flagged_without_stringify(self, tmp_path):
+        from core.security.codeql_trust import _scan_pack_file
+        p = tmp_path / "qlpack.yml"
+        p.write_text("extractor:\n  - a\n  - b\n")
+        fs = _scan_pack_file(p)
+        assert any(f.label == "extractor (unrecognised shape)"
+                   and f.blocking for f in fs.findings)
+
+    def test_container_dep_flagged_without_stringify(self, tmp_path):
+        from core.security.codeql_trust import _scan_pack_file
+        p = tmp_path / "qlpack.yml"
+        p.write_text("dependencies:\n  codeql/cpp-all:\n    nested: {a: 1}\n")
+        fs = _scan_pack_file(p)
+        assert fs.has_blocking()
+        assert any("unrecognised shape" in f.label for f in fs.findings)
+
+    def test_config_yaml_alias_refused(self, tmp_path):
+        from core.security.codeql_trust import _scan_codeql_config
+        cfg = tmp_path / "codeql-config.yml"
+        cfg.write_text(self._alias_bomb(3))
+        fs = _scan_codeql_config(cfg)
+        assert fs.has_blocking()
+
+    def test_benign_pack_shapes_unchanged(self, tmp_path):
+        """Two-direction pin: the fix must not reclassify legitimate
+        pack files — canonical deps (dict and null-version forms) stay
+        silent, a string extractor still blocks under its own label."""
+        from core.security.codeql_trust import _scan_pack_file
+        p = tmp_path / "qlpack.yml"
+        p.write_text(
+            "name: my/pack\nversion: 0.0.1\n"
+            "dependencies:\n  codeql/cpp-all: '*'\n  codeql/ssa:\n"
+        )
+        assert _scan_pack_file(p).findings == []
+        p.write_text("extractor: cpp\n")
+        fs = _scan_pack_file(p)
+        assert [f.label for f in fs.findings] == ["extractor"]
+        assert fs.has_blocking()
