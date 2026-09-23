@@ -1053,11 +1053,12 @@ class TestJoernServerAuth:
         srv = self._authed_server()
         stub_httpx = MagicMock()
         client = stub_httpx.Client.return_value
-        client.post.return_value.json.return_value = {"success": True}
+        stream_resp = client.stream.return_value.__enter__.return_value
+        stream_resp.iter_bytes.return_value = iter([b'{"success": true}'])
         with patch("packages.joern.server._httpx", stub_httpx):
             data = srv._post_sync("1+1", timeout=5)
         assert data == {"success": True}
-        headers = client.post.call_args.kwargs["headers"]
+        headers = client.stream.call_args.kwargs["headers"]
         assert headers["Authorization"] == self._expected_header(srv)
 
     def test_post_async_sends_authorization_header(self):

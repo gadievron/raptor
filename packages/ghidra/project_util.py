@@ -98,6 +98,17 @@ def prepare_working_copy(gpr_path: Path, work_dir: Path) -> Path:
     if dst_gpr.exists():
         dst_gpr.unlink()
 
+    # The .gpr rides the same byte ceiling as the .rep tree: it is a
+    # small XML pointer file in any real project, and a hostile
+    # multi-GB one would otherwise bypass the tempdir-fill defence the
+    # .rep copy already has.
+    gpr_size = gpr_path.stat().st_size
+    if gpr_size > MAX_REP_COPY_BYTES:
+        msg = (
+            f"refusing to copy {gpr_path.name}: {gpr_size} bytes "
+            f"exceeds the {MAX_REP_COPY_BYTES}-byte project-copy ceiling"
+        )
+        raise ValueError(msg)
     shutil.copy2(gpr_path, dst_gpr)
     if src_rep.is_dir() and not src_rep.is_symlink():
         _copy_rep_tree(src_rep, dst_rep)

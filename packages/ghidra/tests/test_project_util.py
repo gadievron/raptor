@@ -62,3 +62,28 @@ class TestHostileRepCopy:
         prepare_working_copy(gpr, work)
         copied = sorted(x.name for x in (work / "p.rep").rglob("*"))
         assert copied == ["real.txt"]
+
+    def test_oversize_gpr_refused(self, tmp_path, monkeypatch):
+        # The .gpr rides the same ceiling as the .rep tree — a hostile
+        # multi-GB pointer file must not bypass the tempdir-fill
+        # defence.
+        import pytest
+        from packages.ghidra import project_util
+        from packages.ghidra.project_util import prepare_working_copy
+        gpr, _rep = self._project(tmp_path)
+        gpr.write_bytes(b"A" * 4096)
+        monkeypatch.setattr(project_util, "MAX_REP_COPY_BYTES", 1024)
+        work = tmp_path / "work"
+        work.mkdir()
+        with pytest.raises(ValueError, match="project-copy ceiling"):
+            prepare_working_copy(gpr, work)
+
+    def test_gpr_within_ceiling_copies(self, tmp_path, monkeypatch):
+        from packages.ghidra import project_util
+        from packages.ghidra.project_util import prepare_working_copy
+        gpr, _rep = self._project(tmp_path)
+        monkeypatch.setattr(project_util, "MAX_REP_COPY_BYTES", 1024)
+        work = tmp_path / "work"
+        work.mkdir()
+        out = prepare_working_copy(gpr, work)
+        assert out.is_file()

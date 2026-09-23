@@ -28,7 +28,9 @@ val callsInMethod = targetMethod.call.l
 val summaryLines = params.flatMap { param =>
   callsInMethod.flatMap { call =>
     Try {
-      val flows = call.argument.reachableByFlows(param).l
+      // .take(500) BEFORE .l — flow-cap doctrine (see
+      // standard_sinks.sc); this runs params x calls times.
+      val flows = call.argument.reachableByFlows(param).take(500).l
       flows.map { flow =>
         val argIdx = Try(flow.elements.last.asInstanceOf[io.shiftleft.codepropertygraph.generated.nodes.Call].argumentIndex).getOrElse(-1)
         s"""SUMMARY_TAINT: {"source_param": "${jsonEsc(param.name)}", "source_index": ${param.index}, "sink_call": "${jsonEsc(call.name)}", "sink_arg_index": $argIdx, "hop_count": ${flow.elements.size}}"""

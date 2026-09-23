@@ -34,7 +34,11 @@ val results = sinkNames.flatMap { sinkName =>
   val source = cpg.method.name(methodName).parameter
   val sinkArgs = cpg.call.name(sinkName).argument
 
-  val flows = sinkArgs.reachableByFlows(source).l
+  // .take(500) BEFORE .l bounds materialisation per sink (the
+  // in-tree flow-cap doctrine: standard_sinks.sc /
+  // tiered_taint.sc) — a hostile CPG can otherwise make the
+  // traversal materialise unbounded flow objects in the JVM.
+  val flows = sinkArgs.reachableByFlows(source).take(500).l
 
   flows.flatMap { flow =>
     flow.elements.lastOption.map { lastElem =>
