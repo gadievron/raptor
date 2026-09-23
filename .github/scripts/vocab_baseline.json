@@ -1484,6 +1484,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/sage/boot_payload_review.py::_DESCRIPTION_FLAGS": {
+    "count": 17,
+    "kind": "alternation",
+    "note": "English-imperative red-flag heuristic for the SAGE tools review digest \u2014 common English words in display-lane lead generation (URLs/base64/agent-directed imperatives that have no business in a tool description), not a learned API vocabulary; hits only steer the operator to drill-down, never a mechanical decision, and the shared injection corpus deliberately excludes these shapes because its other consumers would false-positive"
+  },
   "core/sage/hooks.py::content": {
     "count": 11,
     "kind": "literal"

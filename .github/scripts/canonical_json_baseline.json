@@ -5,6 +5,9 @@
   "dumps_flows_to_hash:core/project/report.py:_finding_fingerprint": {
    "note": "sha256[:12] finding ids persisted in manifest.json/findings.jsonl; pinned form uses ensure_ascii=False, so dumps_canonical would change every id — frozen"
   },
+  "dumps_flows_to_hash:core/sage/boot_payload_review.py:_schema_summary": {
+   "note": "display-only schema fingerprint in the tools review digest (sha256[:12] shown to the operator for drift eyeballing/drill-down correlation, never persisted or MAC'd); module runs standalone with no repo root on sys.path, so core.json (which imports core.atomic_fs) cannot load — byte form pins sort_keys + compact separators, matching dumps_canonical on the parsed-JSON input it receives"
+  },
   "dumps_flows_to_hash:core/sandbox/summary.py:_assemble_and_write_summary": {
    "note": "mint-side _denials_sha + _refusals_sha provenance stamps (sort_keys, ensure_ascii=True) feeding telemetry_mac.mint — the summarize_and_write assembly moved here so the deleted-evidence path shares it; byte form frozen to keep existing MACs verifying (triage._denials_sha256 is the verify twin)"
   },

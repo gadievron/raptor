@@ -67,9 +67,11 @@ from __future__ import annotations
 import argparse
 import difflib
 import functools
+import hashlib
 import importlib.machinery
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -144,6 +146,27 @@ def _load_sanitiser():
     path = _REPO_ROOT / "core" / "security" / "log_sanitisation.py"
     spec = importlib.util.spec_from_file_location("log_sanitisation", path)
     mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@functools.lru_cache(maxsize=1)
+def _load_preflight():
+    """Import ``core.security.prompt_input_preflight`` by file location.
+
+    Same standalone-invocation constraint as :func:`_load_sanitiser`
+    (stdlib-only module, no repo root on ``sys.path``). Lends the
+    detection program's injection-pattern corpus to the tools-digest
+    red-flag scan instead of re-inventing detectors here.
+    """
+    path = _REPO_ROOT / "core" / "security" / "prompt_input_preflight.py"
+    name = "raptor_prompt_input_preflight"
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    # dataclasses resolves the defining module through sys.modules at
+    # class-creation time; a file-location load that skips the
+    # registration breaks that lookup.
+    sys.modules[name] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -381,6 +404,248 @@ def _closest(text: str, candidates: list[str]) -> str:
     )
 
 
+def _tool_name(v) -> str | None:
+    """The live tool's self-declared name, or None for a nameless /
+    non-object entry (which the guard can never authorize)."""
+    if isinstance(v, dict):
+        name = v.get("name")
+        if isinstance(name, str) and name:
+            return name
+    return None
+
+
+def _name_disp(v, idx: int) -> str:
+    """Escaped, length-bounded display label for one live tool entry.
+
+    The name is server-controlled text on an authorization display —
+    same escaping rationale as :func:`_line`, with a tighter cap so a
+    flooding name cannot bury the digest table."""
+    name = _tool_name(v)
+    if name is None:
+        return f"#{idx} (unnamed/non-object entry)"
+    return _load_sanitiser().sanitise_for_terminal(name, max_len=48)
+
+
+def _schema_summary(v: dict) -> str:
+    """Byte-size + short hash of the tool's inputSchema.
+
+    The guard compares schemas mechanically (whole-object equality);
+    they are not human-reviewable content, so the digest shows only
+    enough to notice drift and to correlate with a drill-down — never
+    the schema body itself."""
+    if "inputSchema" not in v:
+        return "no inputSchema"
+    blob = json.dumps(v["inputSchema"], sort_keys=True,
+                      separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(blob).hexdigest()[:12]
+    return f"schema {len(blob)} B sha256:{digest}"
+
+
+# Description red-flag heuristics local to this review surface —
+# deliberately NOT added to the shared injection_patterns corpus:
+# URLs and base64-shaped blobs are legitimate in most preflight
+# consumers' inputs (scanned source code, findings, commit text), and
+# agent-directed run/approve imperatives would false-positive on
+# RAPTOR's own reports. None of them belong in a SAGE tool
+# description, so HERE they are review leads. Advisory only: a hit is
+# something to drill into, never a verdict.
+_DESCRIPTION_FLAGS: tuple[tuple[str, "re.Pattern[str]"], ...] = (
+    ("url", re.compile(r"(?:https?|ftps?|wss?)://\S+", re.IGNORECASE)),
+    ("base64-blob", re.compile(r"[A-Za-z0-9+/]{40,}={0,2}")),
+    ("agent-imperative", re.compile(
+        r"(?:approve|authorize|baseline)[^\S\n]+(?:this|the|it)\b"
+        r"|\brun[^\S\n]+(?:this|the)[^\S\n]+(?:command|tool|script)"
+        r"|without[^\S\n]+(?:asking|review|confirmation|telling)"
+        r"|do[^\S\n]+not[^\S\n]+(?:tell|inform|ask|mention)",
+        re.IGNORECASE)),
+)
+
+_EXCERPT_CONTEXT = 24
+
+
+def _description_red_flags(desc: str) -> list[tuple[str, str]]:
+    """(label, raw excerpt) red-flag hits for one tool description.
+
+    Reuses the framework's existing detection surfaces: the
+    injection-pattern corpus (``core/security/prompt_input_preflight``)
+    and the non-printable classifier
+    (``core/security/log_sanitisation``), plus the review-local
+    heuristics above. Raises on scanner malfunction (including an
+    empty pattern corpus) — the CALLER renders that as "scan
+    unavailable", so a broken scanner can never present as a clean
+    result. Excerpts are raw; display goes through :func:`_line`.
+    """
+    hits: list[tuple[str, str]] = []
+    san = _load_sanitiser()
+    if san.has_nonprintable(desc):
+        first = next(
+            i for i, c in enumerate(desc) if not c.isprintable())
+        lo = max(0, first - _EXCERPT_CONTEXT)
+        hi = min(len(desc), first + _EXCERPT_CONTEXT)
+        hits.append(("control/invisible-chars", desc[lo:hi]))
+    preflight = _load_preflight()
+    if not preflight.loaded_corpora():
+        raise RuntimeError("injection-pattern corpus failed to load")
+    hits.extend(
+        (f"injection-pattern:{stem}", excerpt)
+        for stem, excerpt in preflight.preflight_excerpts(
+            desc, context=_EXCERPT_CONTEXT)
+    )
+    for label, pattern in _DESCRIPTION_FLAGS:
+        match = pattern.search(desc)
+        if match:
+            lo = max(0, match.start() - _EXCERPT_CONTEXT)
+            hi = min(len(desc), match.end() + _EXCERPT_CONTEXT)
+            hits.append((label, desc[lo:hi]))
+    return hits
+
+
+def _print_red_flag_scan(entries: list[tuple[int, dict]]) -> None:
+    """Description red-flag section for the digest.
+
+    Fail direction is LOUD toward showing more: any scanner error
+    renders as "scan unavailable — drill down manually", never as a
+    silently clean section (a broken scanner presenting as green would
+    weaken the one aggregate consent signal bulk mode offers).
+    """
+    print("  Description red-flag scan (injection-pattern corpus + review")
+    print("  heuristics — a hit is a lead to drill into; a clean result is")
+    print("  NOT proof of safety):")
+    try:
+        flagged = 0
+        for idx, v in entries:
+            desc = v.get("description") if isinstance(v, dict) else None
+            if isinstance(v, dict) and not isinstance(desc, str):
+                flagged += 1
+                kind = ("missing" if "description" not in v
+                        else "non-string")
+                print(f"    {_name_disp(v, idx)}: [malformed-description] "
+                      f"{kind} — drill down before deciding")
+                continue
+            if not isinstance(v, dict):
+                flagged += 1
+                print(f"    {_name_disp(v, idx)}: [non-object-entry] "
+                      f"cannot be authorized; drill down (`d #{idx}`)")
+                continue
+            for label, excerpt in _description_red_flags(desc):
+                flagged += 1
+                print(f"    {_name_disp(v, idx)}: [{_line(label)}] "
+                      f'"{_line(excerpt)}"')
+        if not flagged:
+            print("    no red flags in any description")
+    except Exception as exc:  # loud, never silently green
+        print(f"    ⚠ scan unavailable ({type(exc).__name__}: "
+              f"{_line(str(exc))}) — treat every description as")
+        print("    unreviewed and drill down on each tool before approving")
+
+
+def _print_tools_digest(rows: list, *, decision_hint: str) -> None:
+    """First-baseline bulk lane: ONE digest screen for the whole live
+    tool surface instead of one full-JSON wall per tool.
+
+    There is no recorded variant to diff against on a first capture —
+    a per-item "diff against closest recorded variant" degenerates
+    into N walls of pure additions, which nobody can meaningfully
+    review item by item (serial consent theater). The digest gives the
+    operator aggregate evidence that IS reviewable: the full sorted
+    name list, per-tool description length, schema size+hash (schema
+    mechanics are guard-compared, not human-readable — never printed
+    in bulk), and a red-flag scan over ALL description text (the
+    descriptions are the instruction/injection surface). Full
+    definitions stay one drill-down away; the approve/reject act is a
+    single decision over the digest.
+    """
+    pending = [(i, v) for i, (v, s) in enumerate(rows, 1) if s == NEW]
+    denied = sum(1 for _, s in rows if s == DENIED)
+    print(f"  {len(pending)} live tool definition(s): ⚠ Not Authorized — "
+          "no operator tools")
+    print("  baseline exists yet (first capture). Approving baselines the "
+          "CURRENT live")
+    print("  surface: trust-on-first-use, with this digest as the evidence "
+          "reviewed.")
+    if denied:
+        print(f"  {denied} further live definition(s): ✗ Rejected by "
+              "operator — the guard")
+        print("  strips them; nothing pending for those.")
+    if not pending:
+        return
+    print()
+    ordered = sorted(
+        pending,
+        key=lambda iv: (_tool_name(iv[1]) is None,
+                        _tool_name(iv[1]) or "", iv[0]),
+    )
+    labels = [_name_disp(v, i) for i, v in ordered]
+    width = max(len(lbl) for lbl in labels)
+    for lbl, (idx, v) in zip(labels, ordered):
+        # The capture position drives `d #<n>` drill-down — the only
+        # reliable handle when a hostile name is elided or duplicated.
+        pos = f"#{idx}"
+        if isinstance(v, dict):
+            desc = v.get("description")
+            if isinstance(desc, str):
+                desc_part = f"descr {len(desc)} ch"
+            else:
+                desc_part = ("no description" if "description" not in v
+                             else "malformed description")
+            schema_part = _schema_summary(v)
+        else:
+            desc_part = "non-object entry"
+            schema_part = "cannot be authorized"
+        print(f"    {pos:<4} {lbl:<{width}}  {desc_part:<16}  "
+              f"{schema_part}")
+    print()
+    _print_red_flag_scan(ordered)
+    print()
+    print("  Full definition drill-down: " + decision_hint)
+
+
+# Drill-down hints: the interactive review/install prompts accept
+# `d <name>` / `d #<n>`; a non-interactive run has no prompt, so its
+# hint routes the operator to the review at their own terminal
+# instead of describing a prompt that is not there.
+_HINT_PROMPT = ("enter `d <tool-name>` (or `d #<n>`) at the\n"
+                "  prompt below to see one full definition before "
+                "deciding.")
+_HINT_STANDALONE = ("run libexec/raptor-sage-setup review at your\n"
+                    "  own terminal, then `d <tool-name>` (or `d #<n>`) "
+                    "at its prompt.")
+
+
+def _drilldown_hint() -> str:
+    """Prompt-shaped hint only when a prompt can actually follow —
+    stdin is the same fd the caller's prompt would read."""
+    return _HINT_PROMPT if sys.stdin.isatty() else _HINT_STANDALONE
+
+
+def show_tool(live: dict, name: str) -> int:
+    """Print the full (escaped) definition of one live tool.
+
+    Matches by declared tool name or by ``#<n>`` digest position. ALL
+    matches print — a hostile duplicate name cannot hide one variant
+    behind another during drill-down. Unknown name is a loud error
+    (exit 3), never an empty success.
+    """
+    tools = _json_lines((live or {}).get(SURFACE_TOOLS))
+    matches = [
+        (i, v) for i, v in enumerate(tools, 1)
+        if _tool_name(v) == name or name == f"#{i}"
+    ]
+    if not matches:
+        print("show-tool: no live tool definition named "
+              f"{_line(name)!r}", file=sys.stderr)
+        return 3
+    for n, (i, v) in enumerate(matches):
+        if n:
+            print()
+        label = f"live tool #{i}"
+        bar = "─" * max(4, 58 - len(label))
+        print(f"── {label} {bar}")
+        for line in json.dumps(v, indent=2).splitlines():
+            print(f"  {_line(line)}")
+    return 0
+
+
 def _print_compare(guard, auth: dict | None, report: dict) -> None:
     auth_init = _init_variants(guard, auth)
     for n, (surface, rows) in enumerate(report.items()):
@@ -390,6 +655,20 @@ def _print_compare(guard, auth: dict | None, report: dict) -> None:
         print(f"── {surface} {bar}")
         if not rows:
             print("  no live variant captured")
+            continue
+        if (surface == SURFACE_TOOLS
+                and not any(s == UNBASELINED for _, s in rows)
+                and not [
+                    v for v in guard._variant_objects(auth, SURFACE_TOOLS)
+                    if isinstance(v, dict)
+                ]):
+            # First-baseline bulk lane: no authorized tools baseline
+            # exists, so every live definition is a first capture —
+            # render ONE digest, not a full-JSON wall per tool. The
+            # drift lane (baseline exists) keeps the per-item diff
+            # below, where a diff against a recorded variant is real
+            # evidence. The boot surfaces are untouched either way.
+            _print_tools_digest(rows, decision_hint=_drilldown_hint())
             continue
         for i, (variant, status) in enumerate(rows):
             if i:
@@ -639,13 +918,21 @@ def deny(guard, auth: dict | None, live: dict) -> str:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="boot_payload_review")
     parser.add_argument("mode",
-                        choices=("compare", "summary", "merge", "deny"))
-    parser.add_argument("--authorized", required=True)
+                        choices=("compare", "summary", "merge", "deny",
+                                 "show-tool"))
+    # Required for the stamp-comparing modes only: show-tool renders
+    # one LIVE definition (a drill-down, no comparison), so demanding
+    # a stamp path there would be a lie about what it reads.
+    parser.add_argument("--authorized")
     parser.add_argument("--live", required=True)
+    parser.add_argument("--name",
+                        help="tool name (or #<n>) for show-tool")
     args = parser.parse_args(argv)
+    if args.mode != "show-tool" and not args.authorized:
+        parser.error(f"--authorized is required for {args.mode}")
+    if args.mode == "show-tool" and not args.name:
+        parser.error("show-tool requires --name")
 
-    guard = _load_guard()
-    auth = guard._parse_authorized(args.authorized)
     try:
         # newline="" — no universal-newline translation (a raw \r in
         # the capture must not become a line break before the \n-only
@@ -673,6 +960,16 @@ def main(argv: list[str]) -> int:
         print("boot_payload_review: live capture has no surfaces",
               file=sys.stderr)
         return 3
+
+    if args.mode == "show-tool":
+        return show_tool(live, args.name)
+
+    # The comparing modes import the guard (its semantics are the
+    # single source of truth); the drill-down above stays guard-free —
+    # it renders live text only, and the guard's import-time trust
+    # gate must not block a pure display helper.
+    guard = _load_guard()
+    auth = guard._parse_authorized(args.authorized)
 
     if args.mode == "merge":
         sys.stdout.write(merge(guard, auth, live))
