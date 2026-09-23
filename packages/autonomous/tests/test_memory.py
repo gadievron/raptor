@@ -238,3 +238,67 @@ def test_parallel_flush_threads_keep_all_entries(tmp_path: Path):
             assert reloaded.recall("strategy", f"{tag}_{i}") is not None, (
                 f"lost {tag}_{i}"
             )
+
+
+def test_save_survives_wedged_lock_holder(tmp_path: Path, monkeypatch):
+    """A wedged flock holder must not stall the campaign: acquisition
+    is deadline-bounded and save() degrades to a logged skip (the
+    store is additive best-effort — the next flush retries)."""
+    import fcntl
+
+    memory_file = tmp_path / "fuzzing_memory.json"
+    mem = FuzzingMemory(memory_file=memory_file)
+    mem.remember(_k("held"))
+
+    monkeypatch.setattr(FuzzingMemory, "_LOCK_TIMEOUT_S", 0.2)
+    lock_path = memory_file.with_name(memory_file.name + ".lock")
+    with open(lock_path, "w", encoding="utf-8") as holder:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+        start = time.monotonic()
+        mem.save()  # must return, not hang
+        assert time.monotonic() - start < 5.0
+
+
+def test_malformed_shared_crash_pattern_reads_as_no_data(tmp_path: Path):
+    """Shared-file entries are other processes' writes: a non-dict
+    value or non-int counters must read as no-data, never raise into
+    the crash-analysis path."""
+    mem = FuzzingMemory(memory_file=tmp_path / "m.json")
+    mem.remember(FuzzingKnowledge(
+        knowledge_type="crash_pattern",
+        key="SIGSEGV_f",
+        value="junk-not-a-dict",
+        # Intentionally ill-typed: a non-numeric confidence is exactly
+        # the hostile shared-file shape under test.
+        confidence="high",  # type: ignore[arg-type]
+    ))
+    prob = mem.is_crash_likely_exploitable("SIGSEGV", "f")
+    assert isinstance(prob, float)
+    assert 0.0 <= prob <= 1.0
+
+    mem.remember(FuzzingKnowledge(
+        knowledge_type="crash_pattern",
+        key="SIGSEGV_g",
+        value={"total_count": "NaN", "exploitable_count": None},
+    ))
+    # Both directions: recording over the malformed entry repairs it…
+    mem.record_crash_pattern("SIGSEGV", "g", "hash", exploitable=True)
+    prob = mem.is_crash_likely_exploitable("SIGSEGV", "g")
+    assert 0.0 <= prob <= 1.0
+    # …and recording over the non-dict entry does not raise either.
+    mem.record_crash_pattern("SIGSEGV", "f", "hash", exploitable=False)
+
+
+def test_campaign_merge_dedupes_identical_records(tmp_path: Path):
+    """Pin the union semantics across the canonical-key rewrite:
+    identical campaign dicts collapse, distinct ones survive."""
+    memory_file = tmp_path / "m.json"
+    first = FuzzingMemory(memory_file=memory_file)
+    first.record_campaign({"binary": "a", "runs": 1})
+    second = FuzzingMemory(memory_file=memory_file)
+    second.campaigns = list(first.campaigns)  # identical records
+    second.campaigns.append({"binary": "b", "runs": 2})
+    second.save()
+    reloaded = FuzzingMemory(memory_file=memory_file)
+    binaries = sorted(str(c.get("binary")) for c in reloaded.campaigns)
+    assert binaries == ["a", "b"]
