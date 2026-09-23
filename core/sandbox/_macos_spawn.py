@@ -203,12 +203,27 @@ def is_available() -> bool:
 # ppid/pgid universe (children of launchd); the hardened profiles'
 # mach-lookup allowlist-deny closes that submission vector instead.
 
-# Candidate absolute paths first (macOS pins ps at /bin/ps); bare "ps"
-# as a last resort for unusual PATH layouts.
-_PS_CANDIDATES = ("/bin/ps", "/usr/bin/ps", "ps")
+# Absolute paths ONLY (macOS pins ps at /bin/ps). No bare-name
+# PATH fallback: these helpers run in the UNSANDBOXED parent, and a
+# PATH-planted stub would execute with the operator's ambient
+# authority — the exact shape the sandbox binary-resolution doctrine
+# names (the Linux arm hard-fails the same way). A macOS install
+# without /bin/ps is broken beyond this helper's remit; the callers
+# degrade best-effort on None.
+_PS_CANDIDATES = ("/bin/ps", "/usr/bin/ps")
 _PS_ARGS = ["-axo", "pid=,ppid=,pgid="]
 _SWEEP_MAX_PASSES = 3
 _PS_TIMEOUT_S = 10
+
+
+
+def _safe_probe_env() -> dict:
+    """Scrubbed allowlist env for the parent-side ps/sysctl probes —
+    binaries are invoked by absolute path, but env steering
+    (DYLD_INSERT_LIBRARIES-class variables) reaches even a pinned
+    binary; the doctrine the Linux probe helpers already follow."""
+    from core.config import RaptorConfig
+    return RaptorConfig.get_safe_env()
 
 
 def _parse_ps_table(text: str) -> list:
@@ -283,6 +298,7 @@ def _ps_snapshot():
             proc = subprocess.run(
                 [ps, *_PS_ARGS], capture_output=True, text=True,
                 timeout=_PS_TIMEOUT_S, check=False,
+                env=_safe_probe_env(),
             )
         except (OSError, subprocess.SubprocessError):
             continue
@@ -314,6 +330,7 @@ def _same_uid_process_count() -> int | None:
                 [ps, "-xo", "pid=", "-U", uid],
                 capture_output=True, text=True,
                 timeout=_PS_TIMEOUT_S, check=False,
+                env=_safe_probe_env(),
             )
         except (OSError, subprocess.SubprocessError):
             continue
@@ -335,12 +352,15 @@ def _darwin_nproc_kernel_clamp() -> int | None:
     request so reads, logs, and tests see the enforced truth."""
     if sys.platform != "darwin":
         return None
-    for sysctl in ("/usr/sbin/sysctl", "/sbin/sysctl", "sysctl"):
+    # Absolute paths only + scrubbed env — same doctrine as
+    # _PS_CANDIDATES above.
+    for sysctl in ("/usr/sbin/sysctl", "/sbin/sysctl"):
         try:
             proc = subprocess.run(
                 [sysctl, "-n", "kern.maxprocperuid"],
                 capture_output=True, text=True,
                 timeout=_PS_TIMEOUT_S, check=False,
+                env=_safe_probe_env(),
             )
         except (OSError, subprocess.SubprocessError):
             continue
