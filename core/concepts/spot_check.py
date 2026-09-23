@@ -124,8 +124,13 @@ _FALLBACK_STOPWORDS = frozenset({
 # "Is MAX_FRAME 4096?", "Does MAX_FRAME equal 4096?",
 # "Is the value of MAX_FRAME == 0x1000?"  The verb is optional so
 # both "MAX_FRAME equals 4096" and the fronted "Is MAX_FRAME 4096"
-# shapes parse; a false identifier match is harmless because the
-# corpus lookup gates the result.
+# shapes parse.  The corpus lookup gates candidates to exact symbol
+# names, but that is NOT sufficient on its own: stopword-named
+# globals (size, count, state, version, ...) are ubiquitous, so a
+# plain-lowercase stopword capture falls back to the identifier
+# scan below instead of asserting a value match against an unrelated
+# same-named global (spot_check_question applies the same stopword
+# test both paths).
 _QUESTION_VALUE_RE = re.compile(
     r"[`'\"]?([A-Za-z_][\w.:]*)[`'\"]?\s*"
     r"(?:is|==|equals?|equal to|set to|defined as)?\s*"
@@ -166,8 +171,20 @@ def spot_check_question(
     candidates: list[str] = []
     m = _QUESTION_VALUE_RE.search(question)
     if m:
-        candidates.append(m.group(1))
-        expected = m.group(2)
+        ident = m.group(1)
+        if (ident.isalpha() and ident.islower()
+                and ident in _FALLBACK_STOPWORDS):
+            # Same gate as the fallback loop below: a plain-lowercase
+            # stopword ("Does size equal 100 ...") is prose, not an
+            # identifier — trusting the value assertion against a
+            # same-named corpus global produced a confidently wrong
+            # mechanical matches=False that fed the contradiction
+            # machinery against the review's assumption. Fall back to
+            # fallback semantics: no asserted-value comparison.
+            pass
+        else:
+            candidates.append(ident)
+            expected = m.group(2)
     # Fall back to identifier-shaped tokens that name a corpus item —
     # excluding common English / generic-programming words, which
     # would otherwise match same-named corpus globals and answer the
