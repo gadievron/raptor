@@ -206,8 +206,14 @@ class WebClient:
         # checks run sequentially over this client (they do: both check
         # phases iterate one check at a time); concurrent client use
         # elsewhere (the discovery thread pool) happens outside any
-        # check window.
+        # check window. Increments go through note_transport_error()
+        # under _transport_error_lock: the discovery pool's concurrent
+        # `+= 1` lost increments, under-counting degraded coverage.
         self.transport_errors = 0
+        self._transport_error_lock = threading.Lock()
+        # Guards request_history: get_stats() iterating the deque while
+        # a pool thread appends raised "deque mutated during iteration".
+        self._history_lock = threading.Lock()
         self.verify_ssl = verify_ssl
         self.reveal_secrets = reveal_secrets
         self.block_private_ips = block_private_ips
@@ -404,7 +410,10 @@ class WebClient:
         threads therefore space out at the configured rate instead of
         all reading a stale ``last_request_time`` and bursting.
         """
-        now = time.time()
+        # Monotonic clock: reservations on time.time() stretched or
+        # stalled the limiter across NTP steps (a backward step parked
+        # last_request_time in the future).
+        now = time.monotonic()
         with self._rate_lock:
             scheduled = max(now, self.last_request_time + self.rate_limit)
             self.last_request_time = scheduled
@@ -419,14 +428,15 @@ class WebClient:
                      duration: float) -> None:
         """Log request details."""
         log_url = self._redact_for_logging(url)
-        self.request_history.append({
-            'method': method,
-            'url': log_url,
-            'status_code': response.status_code,
-            'duration': duration,
-            'content_length': len(response.content),
-            'timestamp': time.time(),
-        })
+        with self._history_lock:
+            self.request_history.append({
+                'method': method,
+                'url': log_url,
+                'status_code': response.status_code,
+                'duration': duration,
+                'content_length': len(response.content),
+                'timestamp': time.time(),
+            })
 
         logger.debug("%s %s -> %s (%.2fs)", method, log_url, response.status_code, duration)
 
@@ -622,11 +632,11 @@ class WebClient:
             return response
 
         except requests.exceptions.Timeout:
-            self.transport_errors += 1
+            self.note_transport_error()
             logger.warning("Timeout on GET %s", self._redact_for_logging(url))
             raise
         except requests.exceptions.RequestException as e:
-            self.transport_errors += 1
+            self.note_transport_error()
             logger.error("Request failed: %s", self._redact_for_logging(e))
             raise
 
@@ -656,7 +666,7 @@ class WebClient:
             return response
 
         except requests.exceptions.RequestException as e:
-            self.transport_errors += 1
+            self.note_transport_error()
             logger.error("POST request failed: %s", self._redact_for_logging(e))
             raise
 
@@ -682,16 +692,28 @@ class WebClient:
         """Set session cookies."""
         self.session.cookies.update(cookies)
 
+    def note_transport_error(self, count: int = 1) -> None:
+        """Atomically count transport-level failures (see
+        ``transport_errors``): the discovery thread pool's concurrent
+        bare ``+= 1`` lost increments and under-counted degraded
+        coverage."""
+        with self._transport_error_lock:
+            self.transport_errors += count
+
     def get_stats(self) -> dict[str, Any]:
         """Get request statistics."""
-        if not self.request_history:
+        with self._history_lock:
+            # Snapshot under the append lock — iterating the live
+            # deque while a pool thread appends raised RuntimeError.
+            history = list(self.request_history)
+        if not history:
             return {}
 
-        total_requests = len(self.request_history)
-        total_duration = sum(r['duration'] for r in self.request_history)
+        total_requests = len(history)
+        total_duration = sum(r['duration'] for r in history)
         status_codes: dict[int, int] = {}
 
-        for req in self.request_history:
+        for req in history:
             code = req['status_code']
             status_codes[code] = status_codes.get(code, 0) + 1
 

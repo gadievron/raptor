@@ -81,3 +81,30 @@ def test_client_records_authorized_requests_in_policy_audit(tmp_path):
     assert report["summary"]["allowed_actions"] == 1
     assert report["recent_decisions"][0]["action"] == "http_request"
     assert report["recent_decisions"][0]["tool_id"] == "raptor-http"
+
+
+def test_audit_recording_is_atomic_under_concurrent_authorizers():
+    # The common-paths thread pool authorizes concurrently; unlocked
+    # Counter/deque mutation in _record lost audit-telemetry counts.
+    import threading
+
+    policy = WebExecutionPolicy.for_target(
+        "https://t.example", approval_level="active",
+    )
+
+    def _authorize_many():
+        for _ in range(500):
+            policy.authorize(
+                tool_id="raptor-http",
+                url="https://t.example/x",
+                risk="passive",
+                action="http_request",
+            )
+
+    threads = [threading.Thread(target=_authorize_many) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert policy.report()["summary"]["total_actions"] == 4000

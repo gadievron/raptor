@@ -7,6 +7,7 @@ guardrail as the built-in HTTP client.
 
 from __future__ import annotations
 
+import threading
 from collections import Counter, deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -92,6 +93,10 @@ class WebExecutionPolicy:
         self._approved_tools = set(receipt.approved_tools)
         self._audit: deque[dict[str, str]] = deque(maxlen=audit_limit)
         self._counts: Counter[str] = Counter()
+        # _record mutates counter + audit deque from whatever thread
+        # authorizes (the common-paths pool authorizes concurrently);
+        # unlocked mutation lost audit-telemetry counts.
+        self._record_lock = threading.Lock()
 
     @classmethod
     def for_target(
@@ -157,16 +162,17 @@ class WebExecutionPolicy:
             logged_target = _origin_text(_origin(url))
         except WebPolicyError:
             logged_target = "<invalid-url>"
-        self._counts[f"{decision}:{tool_id}"] += 1
-        self._audit.append({
-            "at": datetime.now(timezone.utc).isoformat(),
-            "tool_id": tool_id,
-            "target_origin": logged_target,
-            "risk": risk,
-            "action": action,
-            "decision": decision,
-            "reason": reason,
-        })
+        with self._record_lock:
+            self._counts[f"{decision}:{tool_id}"] += 1
+            self._audit.append({
+                "at": datetime.now(timezone.utc).isoformat(),
+                "tool_id": tool_id,
+                "target_origin": logged_target,
+                "risk": risk,
+                "action": action,
+                "decision": decision,
+                "reason": reason,
+            })
 
     def report(self) -> dict:
         return {

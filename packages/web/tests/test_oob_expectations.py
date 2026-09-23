@@ -51,7 +51,7 @@ class TestExpectationRegistry(unittest.TestCase):
         expectation = self.listener.expect(
             OobContext(url="https://t", param="Host", kind="host_header"),
         )
-        expectation.expires_at = time.time() - 1
+        expectation.expires_at = time.monotonic() - 1
         _fetch(f"{self.listener.callback_base}/late")
         self.assertEqual(self.listener.correlated_expectations(), [])
 
@@ -63,6 +63,20 @@ class TestExpectationRegistry(unittest.TestCase):
             for i in range(6):
                 _fetch(f"{self.listener.callback_base}/p{i}")
         self.assertEqual(len(expectation.hits), 3)
+
+    def test_window_is_immune_to_wall_clock_steps(self):
+        """Expiry rides time.monotonic(): a forward NTP step used to
+        expire every open window instantly (and a backward one to
+        stretch them)."""
+        self.listener.expect(
+            OobContext(url="https://t", param="Host", kind="host_header"),
+            window_s=300.0,
+        )
+        real_time = time.time
+        with patch("packages.web.oob.time.time",
+                   lambda: real_time() + 10_000):
+            _fetch(f"{self.listener.callback_base}/inside-window")
+        self.assertEqual(len(self.listener.correlated_expectations()), 1)
 
     def test_expectation_budget_enforced(self):
         with patch("packages.web.oob._MAX_EXPECTATIONS", 1):
