@@ -1493,7 +1493,13 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
     # rewritten too — the NAME is the leak regardless of who minted
     # it); unbranded operator TMPDIRs pass through so nested test
     # harnesses that share temp files with the child keep working.
-    for _tv in ("TMPDIR", "TEMP", "TMP"):
+    # Gated on the disabled state (resolved above): the --sandbox none
+    # contract is "rlimits only", and a disabled run's child is a
+    # bare subprocess a bisecting operator compares against exactly
+    # that — the anti-fingerprint overlay is enforcement-lane
+    # polish and must not survive the disable as the run's one
+    # residual env mutation.
+    for _tv in () if _effectively_disabled else ("TMPDIR", "TEMP", "TMP"):
         _tval = os.environ.get(_tv, "")
         if (_tval.startswith(("/tmp/", "/var/tmp/"))
                 and _BRANDED_TMP_RE.search(_tval)):
@@ -1909,6 +1915,11 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                 ("allowed_tcp_ports", allowed_tcp_ports),
                 ("writable_paths", writable_paths),
                 ("restrict_reads", restrict_reads),
+                # tool_paths is a read-grant loosener — inert without
+                # Landlock, but a caller that passed it deserves the
+                # same "this kwarg does nothing under this profile"
+                # attribution as the tightening kwargs.
+                ("tool_paths", tool_paths),
             ) if val]
             if readable_paths is not None:
                 discarded.append("readable_paths")
