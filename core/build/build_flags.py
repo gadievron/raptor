@@ -43,6 +43,8 @@ from pathlib import Path
 # path would otherwise hang the read), size gate before read. These
 # files live inside the scanned repo — never read them unbounded.
 from core.build.macro_config import (
+    _KCONFIG_NOT_SET_RE,
+    _KCONFIG_SET_RE,
     _MAX_COMPILE_COMMANDS_BYTES,
     _MAX_KCONFIG_BYTES,
     _compile_commands_candidates,
@@ -365,20 +367,14 @@ def _from_kconfig(path: Path) -> BuildFlagsContext:
     text = _read_bounded(path, _MAX_KCONFIG_BYTES)
     configs: dict[str, bool] = {}
 
-    for m in re.finditer(
-        r"^(CONFIG_[A-Z0-9_]+)=([ym])\s*$",
-        text,
-        re.MULTILINE,
-    ):
+    # Shared line grammar (one home in macro_config — this file
+    # carried a byte-identical duplicate of the pair).
+    for m in _KCONFIG_SET_RE.finditer(text):
         key = m.group(1)
         if key in _HARDENING_CONFIGS:
             configs[key] = True
 
-    for m in re.finditer(
-        r"^#\s*(CONFIG_[A-Z0-9_]+)\s+is\s+not\s+set\s*$",
-        text,
-        re.MULTILINE,
-    ):
+    for m in _KCONFIG_NOT_SET_RE.finditer(text):
         key = m.group(1)
         if key in _HARDENING_CONFIGS:
             configs[key] = False
