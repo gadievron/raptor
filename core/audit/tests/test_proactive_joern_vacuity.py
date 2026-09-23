@@ -113,6 +113,68 @@ class TestCweDispatchVacuityGate:
         assert tiers["joern"].skipped == 0
 
 
+class _NamesakeServer(_Server):
+    """A same-named non-external definition exists in the CPG — in a
+    DIFFERENT file.  Faithful to the real probe's three-way echo
+    (joern_backend.joern_function_in_cpg): a file-bound query answers
+    ``otherfile``; a name-only query answers ``true`` off the
+    cross-file namesake."""
+
+    def __init__(self):
+        super().__init__(covers=True)
+
+    def query(self, query: str, timeout: int = 0,
+              check_length: bool = False) -> _QueryResult:
+        self.queries.append(query)
+        if "println" in query:
+            return _QueryResult("")
+        last = query.strip().rsplit("\n", 1)[-1]
+        nonce = last.split('"')[1]
+        answer = "otherfile" if "endsWith(" in query else "true"
+        return _QueryResult(f'res0: String = "{nonce}{answer}"')
+
+
+class TestCweDispatchProbeFileBinding:
+    """The CWE-dispatch coverage probe must bind to the item's OWN
+    file, exactly like its tool-chain twin: a cross-file namesake
+    (common-name C static helpers across TUs) is not coverage of this
+    item and must never license refutation-grade silence."""
+
+    def test_cross_file_namesake_does_not_license_refutation(
+        self, tmp_path, monkeypatch,
+    ):
+        server = _NamesakeServer()
+        oc, tiers = _run(tmp_path, server, monkeypatch, None)
+        assert "joern" not in (oc.tools_dispatched or set())
+        assert "joern" in (oc.tools_skipped or set())
+        assert tiers["joern"].refuted == 0
+
+    def test_coverage_probe_query_names_the_items_file(
+        self, tmp_path, monkeypatch,
+    ):
+        server = _NamesakeServer()
+        _run(tmp_path, server, monkeypatch, None)
+        cov_queries = [q for q in server.queries if "raptorCov" in q]
+        assert cov_queries, "coverage probe never dispatched"
+        assert all("ghost.py" in q for q in cov_queries)
+
+    def test_probe_call_sites_are_single_homed(self):
+        # Drift-proof pin: every orchestrator coverage probe routes
+        # through _joern_coverage_probe (whose file_path parameter is
+        # required) — the twin legs asserted the file binding
+        # per-site once, and one site lost it.
+        import inspect
+
+        import core.audit.orchestrator as orch
+
+        src = inspect.getsource(orch)
+        direct = src.count("_joern_function_in_cpg(")
+        assert direct == 1, (
+            "call _joern_coverage_probe (file-bound builder), never "
+            "_joern_function_in_cpg directly"
+        )
+
+
 class TestCrossFunctionDispatchRecord:
     def test_inconclusive_none_stays_out_of_dispatch_record(
         self, tmp_path, monkeypatch,
