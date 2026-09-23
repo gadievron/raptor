@@ -389,3 +389,40 @@ class TestVendoredProvenanceBanner:
     def test_pin_word_without_from_phrase_is_not_vendored(self):
         text = "/* bump the revision 3 counter on rekey */\nint k(void);\n"
         assert classify_file("kex.c", text) is None
+
+
+# ── Table-row pattern: hostile whitespace-run rows ───────────────────
+
+
+class TestTableLineWhitespaceRun:
+    def test_table_row_lookalike_with_whitespace_run_is_fast(self):
+        """Hostile row that opens like a table line and ends in a long
+        whitespace run with NO line end: with the tail spelled
+        ``\\s*,?\\s*\\}*\\s*,?\\s*$`` four unbounded whitespace spans
+        border optional atoms and the engine tries every split of the
+        run between them — worse than quadratic (seconds at a few
+        hundred bytes, unbounded growth with row length). Folding each
+        span behind its gating atom is linear. Both-direction bound:
+        fast AND real table rows still classify."""
+        from core.audit.vendored_detector import _TABLE_LINE_RE
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "0x1f" + " " * (1 << 18) + "x"
+        with cpu_budget(1.0, what="table-row whitespace-run scan"):
+            assert _TABLE_LINE_RE.match(hostile) is None
+
+    def test_table_row_forms_still_match(self):
+        from core.audit.vendored_detector import _TABLE_LINE_RE
+
+        for row in (
+            "{ 0x1, 0x2, }",
+            "0x1f,",
+            "  '\\n', 42, 0x0 },",
+            "1, 2, 3",
+            "{0}",
+            "  { 0x1 , 0x2 } ,  ",
+            "0x00, 0x01, 0x02,",
+        ):
+            assert _TABLE_LINE_RE.match(row), row
+        for non_row in ("int x = 5;", "0x1f )", "case 3:"):
+            assert _TABLE_LINE_RE.match(non_row) is None, non_row
