@@ -38,7 +38,10 @@ from core.json import load_json, save_json
 
 logger = logging.getLogger(__name__)
 
-_CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$")
+# re.ASCII: unicode \d admits non-ASCII digit spellings (e.g.
+# Arabic-Indic), which mint {cve_id}.osv.json artifact names that
+# never join the ASCII-keyed consumers — refuse them at the id gate.
+_CVE_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.ASCII)
 
 
 @dataclass(frozen=True)
@@ -283,6 +286,13 @@ def _load_artifact(path: Path, tier: int) -> _Candidate | None:
     if isinstance(consensus, dict):
         verdict = str(consensus.get("verdict") or "")
     shape = str(dbs.get("diff_shape") or "")
+    # Junk-typed metadata degrades this ONE candidate to a harmless
+    # default, matching the documented degrade-to-None discovery
+    # contract — a bare int() here raised out of discovery entirely.
+    try:
+        files_changed = int(dbs.get("files_changed") or 0)
+    except (TypeError, ValueError):
+        files_changed = 0
     pointer = FixPointer(
         cve_id=cve_id,
         repository_url=repo,
@@ -290,7 +300,7 @@ def _load_artifact(path: Path, tier: int) -> _Candidate | None:
         commit_before=commit_before,
         diff_shape=shape,
         consensus_verdict=verdict,
-        files_changed=int(dbs.get("files_changed") or 0),
+        files_changed=files_changed,
         source_run=str(path.parent),
     )
     clean = (shape in ("", "source")) and verdict != "disagree"

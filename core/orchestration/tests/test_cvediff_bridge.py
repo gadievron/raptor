@@ -235,3 +235,20 @@ class TestWriterRoundTrip:
             tmp_path)
         data = _json.loads(path.read_text())
         assert data["database_specific"]["synthesized_by"] == "cvefix-spec"
+
+
+class TestIdAndFieldRobustness:
+    def test_unicode_digit_cve_id_rejected(self):
+        from core.orchestration.cvediff_bridge import _CVE_RE
+        # Arabic-Indic digits fullmatch unicode \d but mint artifact
+        # names that never join the ASCII-keyed consumers.
+        assert _CVE_RE.match("CVE-٢٠٢٤-1234") is None
+        assert _CVE_RE.match("CVE-2024-1234") is not None
+
+    def test_junk_files_changed_degrades_not_raises(self, tmp_path):
+        osv = _osv()
+        osv["database_specific"]["files_changed"] = "lots"
+        _write(tmp_path, osv)
+        ptr = find_fix_pointer(CVE, out_dir=tmp_path)
+        assert ptr is not None
+        assert ptr.files_changed == 0
