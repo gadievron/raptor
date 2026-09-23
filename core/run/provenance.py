@@ -161,30 +161,21 @@ def tool_version(name: str) -> str | None:
     tool is unknown, not installed, times out, or reports nothing. Never raises
     — engine provenance is best-effort and must not break run finalisation.
     """
-    probe = _VERSION_PROBES.get(name)
-    if not probe:
+    probe_argv = _VERSION_PROBES.get(name)
+    if not probe_argv:
         return None
-    try:
-        from core.config import RaptorConfig
-        env = RaptorConfig.get_safe_env()
-    except Exception:  # noqa: BLE001
-        logger.warning("get_safe_env unavailable; using inherited env")
-        env = os.environ.copy()
-    try:
-        result = subprocess.run(
-            probe,
-            capture_output=True,
-            text=True,
-            timeout=_PROBE_TIMEOUT_S,
-            env=env,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired, UnicodeDecodeError):
+    # Thin wrapper over the toolprobe chokepoint — this module was one
+    # of the exec-the-BARE-name drifts toolprobe's docstring names as
+    # consolidated: probe() resolves via which() and execs the
+    # RESOLVED path under the sanitised env, and first_line implements
+    # the stdout-else-stderr convention this loop hand-rolled.
+    from core.run.toolprobe import probe
+    info = probe(probe_argv[0], args=tuple(probe_argv[1:]),
+                 timeout=_PROBE_TIMEOUT_S)
+    if info is None:
         return None
-    out = (result.stdout or result.stderr or "").strip()
-    if not out:
-        return None
-    return out.splitlines()[0].strip() or None
+    first = info.first_line
+    return first.strip() or None if isinstance(first, str) else None
 
 
 def target_snapshot(target_path: Any | None) -> dict[str, Any] | None:

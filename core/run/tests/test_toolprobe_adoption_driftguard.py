@@ -30,6 +30,10 @@ _PROBE_ADOPTERS = [
     "core/inventory/binary_oracle_corpora/toolchain.py",
     "packages/joern/prereqs.py",
     "packages/binary_analysis/crash_analyser.py",
+    # tool_version: the engine-version stamps in every completed
+    # run's provenance manifest — was an exec-the-bare-name drift in
+    # the chokepoint's OWN package.
+    "core/run/provenance.py",
 ]
 
 # A version-probe re-growth: subprocess/run_trusted invoked with a
