@@ -572,8 +572,22 @@ def configure_cli_logging(
 
 
 def configure_run_logging(log_level: str | None, verbose: bool) -> None:
-    """Apply run-level console logging flags."""
+    """Apply run-level console logging flags.
+
+    ``log_level`` must name a member of :data:`CONSOLE_LOG_LEVELS`
+    (case-insensitive). Validated HERE rather than getattr-resolved on
+    the logging module: an unknown name crashed with AttributeError,
+    and a colliding module attribute (``"basicConfig"``) resolved to a
+    callable that rode into ``setLevel``.
+    """
     if log_level:
-        set_console_log_level(getattr(logging, log_level.upper()), include_root=True)
+        name = log_level.upper()
+        if name not in CONSOLE_LOG_LEVELS:
+            msg = (
+                f"unknown log level {log_level!r} — expected one of "
+                f"{', '.join(CONSOLE_LOG_LEVELS)}"
+            )
+            raise ValueError(msg)
+        set_console_log_level(getattr(logging, name), include_root=True)
     elif verbose:
         set_console_log_level(logging.DEBUG, include_root=True)
