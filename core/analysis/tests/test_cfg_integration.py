@@ -66,10 +66,13 @@ class TestGuardBypassWithRealCFG:
                 if user_input.isalnum():
                     eval(user_input)
         """)
+        # source_line names the first body statement: the def line
+        # itself is outside the CFG's statement span and node lookup
+        # refuses out-of-span lines rather than nearest-matching.
         result = query(
             cfg,
             source_var="user_input",
-            source_line=1,
+            source_line=2,
             sink_line=3,
         )
         assert not result.is_bypassed()
@@ -83,7 +86,7 @@ class TestGuardBypassWithRealCFG:
         result = query(
             cfg,
             source_var="user_input",
-            source_line=1,
+            source_line=2,
             sink_line=2,
         )
         assert len(result.constraining_guards) == 0

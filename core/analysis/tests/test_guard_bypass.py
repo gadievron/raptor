@@ -371,3 +371,84 @@ class TestPathCapTruncationIsNotCoverage:
             },
         )
         assert check_guard_coverage(cfg, 4, "task->mm != NULL")
+
+
+class TestGuardCoveragePolarity:
+    """Line membership can never distinguish branches — the condition
+    node's line lies on BOTH branch paths by construction. Coverage
+    demands the guard's TRUE-polarity edge on every path; a read
+    reachable via the false edge (else branch, post-merge join) is
+    NOT covered, and the consumer drops missing-guard findings on
+    True."""
+
+    def _diamond(self):
+        n_entry = _FakeNode(1, "entry")
+        n_guard = _FakeNode(3, "If (task != NULL)")
+        n_then = _FakeNode(4, "then work")
+        n_else = _FakeNode(6, "else work")
+        n_merge = _FakeNode(8, "read = task->mm")
+        n_exit = _FakeNode(9, "exit")
+        cfg = _FakeCFG(
+            [n_entry, n_guard, n_then, n_else, n_merge, n_exit],
+            {
+                id(n_entry): [n_guard],
+                id(n_guard): [n_then, n_else],
+                id(n_then): [n_merge],
+                id(n_else): [n_merge],
+                id(n_merge): [n_exit],
+            },
+        )
+        return cfg
+
+    def test_else_branch_read_not_covered(self):
+        n_entry = _FakeNode(1, "entry")
+        n_guard = _FakeNode(3, "If (x != NULL)")
+        n_then = _FakeNode(4, "then work")
+        n_else = _FakeNode(6, "use(x)")
+        n_exit = _FakeNode(7, "exit")
+        cfg = _FakeCFG(
+            [n_entry, n_guard, n_then, n_else, n_exit],
+            {
+                id(n_entry): [n_guard],
+                id(n_guard): [n_then, n_else],
+                id(n_then): [n_exit],
+                id(n_else): [n_exit],
+            },
+        )
+        assert not check_guard_coverage(cfg, 6, "x != NULL")
+
+    def test_post_merge_read_not_covered(self):
+        cfg = self._diamond()
+        assert not check_guard_coverage(cfg, 8, "task != NULL")
+
+    def test_true_branch_read_still_covered(self):
+        # Control: a read dominated by the TRUE edge keeps coverage.
+        cfg = self._diamond()
+        assert check_guard_coverage(cfg, 4, "task != NULL")
+
+
+class TestNodeAtLineBounds:
+    def test_line_outside_cfg_span_returns_none(self):
+        # Unbounded nearest-match silently attributed the nearest
+        # node's guards/facts to a line the graph never modelled.
+        from core.analysis.cfg_utils import find_node_at_line
+        n_a = _FakeNode(3, "a")
+        n_b = _FakeNode(5, "b")
+        cfg = _FakeCFG([n_a, n_b], {id(n_a): [n_b]})
+        assert find_node_at_line(cfg, 400) is None
+        assert find_node_at_line(cfg, 1) is None
+
+    def test_in_span_nearest_still_matches(self):
+        from core.analysis.cfg_utils import find_node_at_line
+        n_a = _FakeNode(3, "a")
+        n_b = _FakeNode(7, "b")
+        cfg = _FakeCFG([n_a, n_b], {id(n_a): [n_b]})
+        assert find_node_at_line(cfg, 4) is n_a
+
+    def test_sentinel_linenos_are_ignored(self):
+        from core.analysis.cfg_utils import find_node_at_line
+        n_entry = _FakeNode(-1, "ENTRY:f")
+        n_a = _FakeNode(3, "a")
+        cfg = _FakeCFG([n_entry, n_a], {id(n_entry): [n_a]})
+        assert find_node_at_line(cfg, 1) is None
+        assert find_node_at_line(cfg, 3) is n_a
