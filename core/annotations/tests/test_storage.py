@@ -486,6 +486,72 @@ class TestAdversarialInputs:
         assert all_ == []
 
 
+class TestNitSweep:
+    def test_remove_surfaces_unlink_failure(self, tmp_path):
+        """remove_annotation swallowed the unlink OSError and still
+        returned True — CLI printed 'removed' while every reader kept
+        seeing the note."""
+        import os
+        from core.annotations import AnnotationFileError
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="x",
+        ))
+        path = annotation_path(tmp_path, "a.py")
+        os.chmod(path.parent, 0o500)
+        try:
+            if os.geteuid() == 0:
+                pytest.skip("root bypasses file permissions")
+            with pytest.raises(AnnotationFileError, match="still on disk"):
+                remove_annotation(tmp_path, "a.py", "f")
+        finally:
+            os.chmod(path.parent, 0o755)
+        assert path.exists()
+
+    def test_status_enum_validated_at_write(self, tmp_path):
+        with pytest.raises(ValueError, match="invalid annotation status"):
+            write_annotation(tmp_path, Annotation(
+                file="a.py", function="f", body="x",
+                metadata={"status": "cleaan"},
+            ))
+        for status in ("clean", "suspicious", "finding", "dormant",
+                       "error", "sink", "entry_point",
+                       "trust_boundary"):
+            assert write_annotation(tmp_path, Annotation(
+                file="a.py", function=f"f_{status}", body="x",
+                metadata={"status": status},
+            )) is not None
+
+    def test_trailing_slash_and_dot_segments_rejected(self, tmp_path):
+        """'a/b/' concatenated to 'a/b/.md' — a suffix-less hidden
+        file iter_all_annotations skips: written yet invisible to
+        every cross-run reader."""
+        for bad in ("a/b/", "a//b", "a/./b", "./a"):
+            with pytest.raises(ValueError, match="segments"):
+                write_annotation(tmp_path, Annotation(
+                    file=bad, function="f", body="x",
+                ))
+
+    def test_control_bytes_rejected_at_write(self, tmp_path):
+        esc = "\x1b"
+        with pytest.raises(ValueError, match="control"):
+            write_annotation(tmp_path, Annotation(
+                file="a.py", function=f"fn{esc}[2Jx", body="x",
+            ))
+        with pytest.raises(ValueError, match="control"):
+            write_annotation(tmp_path, Annotation(
+                file="a.py", function="f", body=f"note {esc}[31mred",
+            ))
+        with pytest.raises(ValueError, match="control"):
+            write_annotation(tmp_path, Annotation(
+                file="a.py", function="f", body="x",
+                metadata={"note": f"{esc}]0;title\x07"},
+            ))
+        # \t and \n stay legal where the field rules allow them.
+        assert write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="line one\n\tindented",
+        )) is not None
+
+
 class TestSizeBudgets:
     """Two-direction pins for the churn-prone limits: at/below the
     cap is accepted, above is refused/skipped."""

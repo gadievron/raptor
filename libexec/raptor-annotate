@@ -28,8 +28,10 @@ Add options:
                         staleness detection.
   --target REPO_ROOT    Where to find the source file for hash
                         computation. Defaults to current directory.
-  --meta KEY=VALUE      Extra metadata (repeatable). ``tty`` and
-                        ``provenance`` are reserved (recorded
+  --meta KEY=VALUE      Extra metadata (repeatable). The invocation-
+                        context stamp keys (``tty``, ``provenance``,
+                        ``sid``, ``envm``, ``parents``,
+                        ``corroboration``) are reserved (recorded
                         automatically); ``source`` here may not
                         conflict with an explicit ``--source``.
   --source VALUE        ``human`` / ``llm`` / ``agent``. Default is
@@ -228,8 +230,10 @@ def _read_body(opts: argparse.Namespace) -> str:
     return ""
 
 
-def _parse_meta(items: list[str]) -> dict:
-    """Parse ``--meta KEY=VALUE`` pairs."""
+def _parse_meta_args(items: list[str]) -> dict:
+    """Parse ``--meta KEY=VALUE`` argv pairs. (Named distinctly from
+    the on-disk comment parser ``storage._parse_meta`` — same
+    subsystem, different grammar.)"""
     out = {}
     for item in items:
         if "=" not in item:
@@ -264,7 +268,7 @@ def cmd_add(opts: argparse.Namespace) -> int:
     except ValueError as e:
         sys.stderr.write(f"raptor-annotate: {e}\n")
         return 2
-    metadata = _parse_meta(opts.meta or [])
+    metadata = _parse_meta_args(opts.meta or [])
     for reserved in PROVENANCE_KEYS:
         if reserved in metadata:
             sys.stderr.write(
@@ -654,10 +658,10 @@ def _build_parser() -> argparse.ArgumentParser:
     pa.add_argument(
         "--status",
         choices=("clean", "suspicious", "finding", "dormant", "error",
-                 "sink", "entry_point"),
+                 "sink", "entry_point", "trust_boundary"),
         help="review status (see docstring for the enum semantics); "
-             "sink/entry_point are role markers consumed by IRIS "
-             "spec promotion",
+             "sink/entry_point/trust_boundary are role markers "
+             "consumed by IRIS spec promotion and role binding",
     )
     pa.add_argument("--cwe")
     pa.add_argument("-m", "--body")

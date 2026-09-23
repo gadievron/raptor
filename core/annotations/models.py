@@ -36,7 +36,10 @@ class Annotation:
     frontmatter (``<!-- meta: status=clean cwe=CWE-78 -->``).
     Conventional keys:
       * ``status``: ``clean`` / ``suspicious`` / ``finding`` /
-        ``error`` (matches the audit coverage status enum)
+        ``dormant`` / ``error``, plus the ``sink`` / ``entry_point``
+        / ``trust_boundary`` role markers consumed by IRIS spec
+        promotion and audit role binding (enum-validated at write
+        time; matches the CLI's --status choices)
       * ``cwe``: e.g. ``CWE-78``
       * ``source``: ``human`` / ``agent`` / ``llm`` — who claims to
         have written the annotation (caller-asserted; readers grade
