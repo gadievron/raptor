@@ -30,6 +30,11 @@ def saturated_pipe(monkeypatch):
     and os.read always returns data (never EOF)."""
     monkeypatch.setattr(mod.select, "select", lambda r, w, x, t: (list(r), [], []))
     monkeypatch.setattr(os, "read", lambda fd, n: b"x" * n)
+    # Pin the target ALIVE: the liveness probe runs on every wake
+    # (waitid WNOWAIT), and the fake target_pid=1 would probe as
+    # "exited" (ECHILD), routing the loop into the bounded final
+    # sweep instead of the deadline path these tests exist to pin.
+    monkeypatch.setattr(os, "waitid", lambda *a, **k: None)
     # A large per-fd cap would still be hit, but the loop keeps draining
     # past it ("still draining to keep the child unblocked") — that is the
     # unbounded path the deadline must cut.

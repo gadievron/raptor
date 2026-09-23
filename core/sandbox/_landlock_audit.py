@@ -278,12 +278,16 @@ def _drain_pipes_until_eof(
     We instead check whether the target is still alive via
     ``waitid(..., WNOWAIT)`` — which does NOT reap, so the caller's
     own ``waitpid`` still observes the exit status. The liveness probe
-    runs on a TIME schedule (every ``_DRAIN_IDLE_POLL_S``), not only
-    on idle ticks: a grandchild that inherited the write end and
-    writes continuously keeps ``select()`` non-empty forever, so an
+    runs on EVERY loop wake, not only on idle ticks and not on a time
+    schedule: a grandchild that inherited the write end and writes
+    continuously keeps ``select()`` non-empty forever, so an
     idle-branch-only probe never noticed the target's exit and a
     ``timeout=None`` run (legitimate callers exist — host.py) never
-    finished draining. Draining stops when:
+    finished draining; and a scheduled probe (one per poll interval)
+    never fired at all when the caller's ``deadline`` was shorter
+    than the interval, so a target that exited 0 immediately — its
+    stdio held open by a backgrounded grandchild — broke out of the
+    drain with its exit undetected. Draining stops when:
 
       * EOF is seen on every fd (normal case), or
       * ``deadline`` expires (caller kills the child and raises), or
@@ -306,9 +310,6 @@ def _drain_pipes_until_eof(
     fds_open = set(bufs)
     target_exited = False
     sweep_deadline: float | None = None
-    # First liveness probe fires one poll interval in; a chattering
-    # pipe must not defer it past that (see the docstring).
-    next_exit_probe = time.monotonic() + _DRAIN_IDLE_POLL_S
 
     def _probe_target_exited() -> bool:
         try:
@@ -321,6 +322,21 @@ def _drain_pipes_until_eof(
         return res is not None
 
     while fds_open:
+        # Liveness probe on EVERY wake (WNOWAIT — non-reaping and
+        # cheap), not on a time schedule. The schedule (one probe per
+        # _DRAIN_IDLE_POLL_S) had two starvation shapes: a
+        # continuously-readable pipe starves the idle branch (the
+        # 14d5c87c lesson — with timeout=None the idle probe was the
+        # ONLY exit condition, so a chattering grandchild hung the
+        # run forever after the target exited), and a caller deadline
+        # SHORTER than the poll interval expired before the first
+        # scheduled probe ever ran — the drain broke with the
+        # target's exit unknown and a target that exited 0
+        # immediately was reported as TimeoutExpired (its stdio held
+        # open by a backgrounded grandchild). Probing per wake keeps
+        # exit detection ahead of both the deadline and the chatter.
+        if not target_exited and _probe_target_exited():
+            target_exited = True
         # Enforce the caller's deadline on EVERY iteration, not only when
         # select() returns idle: a hostile target that keeps a pipe
         # continuously readable makes select() return non-empty each tick,
@@ -334,15 +350,6 @@ def _drain_pipes_until_eof(
             and time.monotonic() >= deadline
         ):
             break
-        # Liveness probe on a TIME schedule (same 14d5c87c lesson as the
-        # deadline above): a continuously-readable pipe starves the idle
-        # branch, and with timeout=None the probe there was the ONLY
-        # exit condition — a chattering grandchild made the drain (and
-        # the run) hang forever after the target exited.
-        if not target_exited and time.monotonic() >= next_exit_probe:
-            next_exit_probe = time.monotonic() + _DRAIN_IDLE_POLL_S
-            if _probe_target_exited():
-                target_exited = True
         if target_exited and sweep_deadline is None:
             # Bounded final sweep: consume what the pipes still hold,
             # but a grandchild that KEEPS writing must not extend the
@@ -361,18 +368,22 @@ def _drain_pipes_until_eof(
             # the pipes, but don't block for more.
             wait = 0.0
         else:
-            wait = min(_DRAIN_IDLE_POLL_S,
-                       max(0.0, next_exit_probe - time.monotonic()))
+            wait = _DRAIN_IDLE_POLL_S
             if deadline is not None:
                 wait = min(wait, max(0.0, deadline - time.monotonic()))
         ready, _, _ = select.select(list(fds_open), [], [], wait)
         if not ready:
             if target_exited:
                 break
+            if _probe_target_exited():
+                # Probe BEFORE the deadline check: a target that
+                # exited by the caller's deadline is an exit (drain
+                # what's buffered, report its real status), not a
+                # timeout.
+                target_exited = True
+                continue
             if deadline is not None and time.monotonic() >= deadline:
                 break
-            if _probe_target_exited():
-                target_exited = True
             continue
         for fd in ready:
             try:
@@ -859,10 +870,17 @@ def run_landlock_audit(
             _close_safely(err_r)
             err_r = -1
 
-        # waitpid the target.
+        # waitpid the target. The reap attempt comes FIRST on every
+        # iteration — deadline expiry is only checked after a WNOHANG
+        # found the target still running, so a target that already
+        # exited is NEVER reported as a timeout even when the drain
+        # above consumed the whole budget (grandchild-held stdio kept
+        # the pipes open past the deadline while the target itself
+        # exited 0 long before). Mirrors _spawn's exited-target
+        # exemption ("never call an exited-0 target a timeout").
         target_rc = -1
         if deadline is not None:
-            while time.monotonic() < deadline:
+            while True:
                 try:
                     done, status = os.waitpid(target_pid, os.WNOHANG)
                 except (ChildProcessError, OSError):
@@ -876,24 +894,25 @@ def run_landlock_audit(
                         target_rc = -os.WTERMSIG(status)
                     target_pid = -1
                     break
+                if time.monotonic() >= deadline:
+                    # Genuinely still running past the deadline —
+                    # kill, then re-wait, then raise.
+                    _kill_and_reap(target_pid)
+                    target_pid = -1
+                    # Tracer is PTRACE_O_EXITKILL'd — should die soon.
+                    if tracer_pid > 0:
+                        _kill_and_reap(tracer_pid)
+                        tracer_pid = -1
+                    raise subprocess.TimeoutExpired(
+                        cmd=list(cmd), timeout=timeout,
+                        output=stdout_bytes if text is False else (
+                            stdout_bytes.decode(errors="replace")
+                        ),
+                        stderr=stderr_bytes if text is False else (
+                            stderr_bytes.decode(errors="replace")
+                        ),
+                    )
                 time.sleep(0.02)
-            else:
-                # Timed out — kill, then re-wait, then raise.
-                _kill_and_reap(target_pid)
-                target_pid = -1
-                # Tracer is PTRACE_O_EXITKILL'd — should die soon.
-                if tracer_pid > 0:
-                    _kill_and_reap(tracer_pid)
-                    tracer_pid = -1
-                raise subprocess.TimeoutExpired(
-                    cmd=list(cmd), timeout=timeout,
-                    output=stdout_bytes if text is False else (
-                        stdout_bytes.decode(errors="replace")
-                    ),
-                    stderr=stderr_bytes if text is False else (
-                        stderr_bytes.decode(errors="replace")
-                    ),
-                )
         else:
             try:
                 _, status = os.waitpid(target_pid, 0)
