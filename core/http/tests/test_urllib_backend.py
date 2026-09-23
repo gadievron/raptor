@@ -296,13 +296,15 @@ class TestTotalTimeout:
         with pytest.raises(HttpError):
             client.get_json("https://example.com/api", total_timeout=1)
         elapsed = _time.monotonic() - t0
-        # Cap is 1s; allow generous slop for sleep granularity but well
-        # under 5s (which is where the previous bug would have led with
-        # default per-attempt timeout=30). The pre-fix max() would have
-        # let this run through the full backoff schedule.
-        assert elapsed < 5, (
-            f"total_timeout=1 took {elapsed:.1f}s — "
-            f"deadline computation may have regressed to max(total, timeout)"
+        # Cap is 1s; the assert bound carries seconds of load headroom
+        # while the code-side bound a regression would serve (the full
+        # backoff schedule under the default per-attempt timeout=30)
+        # sits far past it — the separation contract the wallclock
+        # chokepoint enforces.
+        from core.testing.wallclock import check_wall_deadline
+        check_wall_deadline(
+            elapsed, 5, code_bound_s=30,
+            what="get_json with total_timeout=1",
         )
 
 
