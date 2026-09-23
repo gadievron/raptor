@@ -281,10 +281,42 @@ def load_baseline(path: Path) -> dict:
 
 
 def write_baseline(path: Path, findings: list[_Finding]) -> None:
-    entries = {
-        f.key: {"kind": f.kind, "count": f.count}
-        for f in findings
-    }
+    """Write the current findings as the new baseline, ROUND-TRIPPING
+    the existing rows' review provenance: for every key that survives
+    the refresh, each field other than the regenerated ``kind`` and
+    ``count`` — the ``note`` a reviewer attached, and any field a
+    future schema adds — is carried over from the existing baseline.
+    The baseline doctrine admits entries only WITH a review note, so
+    a count refresh that rewrote rows bare erased every note in one
+    keystroke behind a diff that read as churn. Keys that no longer
+    fire drop; new keys start bare, awaiting their note.
+
+    A present-but-unreadable baseline REFUSES the rewrite: treating
+    it as empty would be the same one-keystroke erasure.
+    """
+    old_entries: dict[str, dict] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(
+                f"[vocab] refusing --write-baseline: cannot parse the "
+                f"existing baseline at {path} ({exc}); fix or remove it "
+                f"first — overwriting would erase every review note",
+                file=sys.stderr,
+            )
+            raise SystemExit(2) from exc
+        if isinstance(loaded, dict):
+            old_entries = {
+                k: v for k, v in loaded.items() if isinstance(v, dict)
+            }
+    entries: dict[str, dict] = {}
+    for f in findings:
+        carried = {
+            k: v for k, v in old_entries.get(f.key, {}).items()
+            if k not in ("kind", "count")
+        }
+        entries[f.key] = {**carried, "kind": f.kind, "count": f.count}
     path.write_text(
         json.dumps(entries, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
