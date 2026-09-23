@@ -732,8 +732,6 @@ class _FileState:
     rewrite that dropped it would silently destroy operator notes.
     """
 
-    exists: bool
-    has_marker: bool
     extra: str
     annotations: list[Annotation]
 
@@ -788,7 +786,7 @@ def _load_file_state(
         logger.warning(
             "annotation file %s is a symlink — skipping", path,
         )
-        return _FileState(False, False, "", [])
+        return _FileState("", [])
     try:
         size = path.stat().st_size
     except OSError:
@@ -806,12 +804,12 @@ def _load_file_state(
             "annotation file %s is %s bytes (budget %s) — skipping",
             path, size, _MAX_FILE_BYTES,
         )
-        return _FileState(False, False, "", [])
+        return _FileState("", [])
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         # Genuinely absent — the legitimate new-file path.
-        return _FileState(False, False, "", [])
+        return _FileState("", [])
     except (OSError, UnicodeDecodeError) as e:
         if strict:
             msg = (
@@ -824,7 +822,7 @@ def _load_file_state(
             "annotation file %s unreadable (%s) — treating as empty",
             path, e,
         )
-        return _FileState(False, False, "", [])
+        return _FileState("", [])
     # Detect format version. Files without a marker are legacy v1 —
     # parse permissively. Files with a future version emit a warning
     # but still try (partial-results-better-than-nothing). In strict
@@ -855,8 +853,7 @@ def _load_file_state(
     sections = _split_sections(text)
     preamble = text[: sections[0][1]] if sections else text
     extra = _preamble_extra(preamble, source_file)
-    has_marker = version_match is not None
-    if strict and not sections and extra and not has_marker:
+    if strict and not sections and extra and version_match is None:
         # Zero sections AND no version marker: not a file this writer
         # produced (a rewrite always emits the marker, and preserved
         # preamble rides under it), so the content is unattributable
@@ -879,7 +876,7 @@ def _load_file_state(
             body=body,
             metadata=meta,
         ))
-    return _FileState(True, has_marker, extra, out)
+    return _FileState(extra, out)
 
 
 def read_file_annotations(
