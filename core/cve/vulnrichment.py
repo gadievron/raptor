@@ -85,6 +85,11 @@ _DEFAULT_TTL = 7 * 24 * 3600   # SSVC drifts slowly; weekly refresh is fine
 _CACHE_KEY_PREFIX = "vulnrichment"
 _NEGATIVE_TTL = 24 * 3600      # 404s cache for 1 day so we re-probe
 
+# Sentinel distinguishing "record decoded to no SSVC signal" (a valid
+# outcome, memoisable) from "the decoder itself failed on this record"
+# (per-id degrade + cache eviction; see ``_decode_guarded``).
+_DECODE_FAILED = object()
+
 
 @dataclass(frozen=True)
 class SSVCDecision:
@@ -169,8 +174,23 @@ class VulnrichmentClient:
         if key in self._memo:
             return self._memo[key]
 
-        record = self._fetch_record(key)
-        decision = _decode_ssvc(record) if record is not None else None
+        hit, record = self._cached_record(key)
+        if hit:
+            decision = self._decode_guarded(key, record)
+            if decision is not _DECODE_FAILED:
+                self._memo[key] = decision
+                return decision
+            # Poisoned cache entry (written before the validate-
+            # before-cache gate, or by decoder drift): already
+            # evicted by _decode_guarded — fall through to a fresh
+            # fetch instead of serving the poison for its TTL.
+        if self._offline:
+            self._memo[key] = None
+            return None
+        record = self._fetch_remote(key)
+        decision = self._decode_guarded(key, record)
+        if decision is _DECODE_FAILED:
+            decision = None
         self._memo[key] = decision
         return decision
 
@@ -232,9 +252,12 @@ class VulnrichmentClient:
                 continue
             hit, record = self._cached_record(key)
             if hit:
-                decision = (
-                    _decode_ssvc(record) if record is not None else None
-                )
+                decision = self._decode_guarded(key, record)
+                if decision is _DECODE_FAILED:
+                    # Poisoned entry evicted — requeue for a fresh
+                    # fetch under the normal budget rules.
+                    uncached.append(key)
+                    continue
                 self._memo[key] = decision
                 if decision is not None:
                     out[key] = decision
@@ -261,7 +284,8 @@ class VulnrichmentClient:
                     key, e,
                 )
                 return key, None
-            return key, _decode_ssvc(record) if record is not None else None
+            decision = self._decode_guarded(key, record)
+            return key, None if decision is _DECODE_FAILED else decision
 
         # Same small-input cutoff as the SCA license-enrichment pass:
         # below a handful of ids the pool spin-up costs more than the
@@ -297,24 +321,33 @@ class VulnrichmentClient:
     # Internals
     # ------------------------------------------------------------------
 
-    def _fetch_record(self, cve_id: str) -> dict | None:
-        """Disk-cached fetch of one Vulnrichment entry. Returns
-        the decoded JSON document, ``None`` on miss / failure.
+    def _decode_guarded(self, cve_id: str, record: dict | None) -> SSVCDecision | None | object:
+        """Per-id decode boundary. Returns the decision (or ``None``
+        for a signal-less record) — or the ``_DECODE_FAILED`` sentinel
+        when :func:`_decode_ssvc` raised on this record.
 
-        Cache shape distinguishes three states so we don't
-        re-probe the upstream needlessly:
-          * ``None`` cache entry: never fetched / TTL expired
-          * ``{"_status": "missing"}``: 404 seen at upstream
-            (cached for the shorter ``_NEGATIVE_TTL`` so a
-            backfill from CISA gets picked up in ≤1 day)
-          * dict: the actual CVE-JSON-5 record
+        ``_decode_ssvc`` is itself written to tolerate any shape, so a
+        raise here means decoder drift or a record class it has never
+        seen — exactly the case that must degrade ONE id (structured,
+        log-visible) rather than sink a scan. On failure the disk
+        entry is evicted so an already-poisoned cache (written before
+        the validate-before-cache gate below) isn't served for the
+        rest of its 7-day TTL.
         """
-        hit, record = self._cached_record(cve_id)
-        if hit:
-            return record
-        if self._offline:
+        if record is None:
             return None
-        return self._fetch_remote(cve_id)
+        try:
+            return _decode_ssvc(record)
+        except Exception as e:  # noqa: BLE001 — decode failure degrades
+            # per id; the record shape is upstream-controlled.
+            logger.warning(
+                "core.cve.vulnrichment: undecodable record for %s "
+                "(%s: %s) — degrading to no-signal and evicting the "
+                "cached entry",
+                cve_id, type(e).__name__, e,
+            )
+            self._cache.invalidate(f"{_CACHE_KEY_PREFIX}/{cve_id}")
+            return _DECODE_FAILED
 
     def _cached_record(self, cve_id: str) -> tuple[bool, dict | None]:
         """Disk-cache read half of :meth:`_fetch_record`.
@@ -370,6 +403,19 @@ class VulnrichmentClient:
             )
             return None
         if not isinstance(record, dict):
+            return None
+        # Validate decodability BEFORE the positive cache write: a
+        # record the decoder cannot walk must never become a sticky
+        # 7-day entry (it would replay the failure — offline runs
+        # included — until the TTL expired).
+        try:
+            _decode_ssvc(record)
+        except Exception as e:  # noqa: BLE001 — upstream-controlled shape
+            logger.warning(
+                "core.cve.vulnrichment: undecodable record for %s "
+                "(%s: %s) — not caching; id degrades to no-signal",
+                cve_id, type(e).__name__, e,
+            )
             return None
         self._cache.put(cache_key, record, ttl_seconds=self._ttl)
         return record
@@ -427,15 +473,27 @@ def _decode_ssvc(record: object) -> SSVCDecision | None:
     for entry in adp:
         if not isinstance(entry, dict):
             continue
-        provider = (
-            (entry.get("providerMetadata") or {}).get("shortName") or ""
-        )
-        if "CISA-ADP" not in provider:
+        # ``or {}`` is not shape tolerance: a truthy non-dict (e.g.
+        # ``"providerMetadata": "CISA-ADP"``) survives it and crashes
+        # the attribute walk. isinstance-gate every lane instead.
+        provider_meta = entry.get("providerMetadata")
+        if not isinstance(provider_meta, dict):
             continue
-        for metric in entry.get("metrics") or []:
+        provider = provider_meta.get("shortName")
+        if not isinstance(provider, str) or "CISA-ADP" not in provider:
+            continue
+        metrics = entry.get("metrics")
+        if not isinstance(metrics, list):
+            continue
+        for metric in metrics:
             if not isinstance(metric, dict):
                 continue
-            content = (metric.get("other") or {}).get("content") or {}
+            other = metric.get("other")
+            if not isinstance(other, dict):
+                continue
+            content = other.get("content")
+            if not isinstance(content, dict):
+                continue
             options = content.get("options")
             if not isinstance(options, list):
                 continue

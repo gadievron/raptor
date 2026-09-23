@@ -372,6 +372,161 @@ class TestVulnrichmentClient:
 
 
 # ---------------------------------------------------------------------------
+# Hostile / undecodable records — per-id decode boundary
+# ---------------------------------------------------------------------------
+
+def _hostile_record() -> dict:
+    """CVE-JSON-5 shaped record whose ADP entry carries a truthy
+    non-dict where a dict is expected — the class of shape drift a
+    hostile upstream (or a CDN error page mimicking the schema) can
+    ship inside an otherwise well-formed 200 body."""
+    return {"containers": {"adp": [
+        {"providerMetadata": "CISA-ADP", "metrics": []},
+    ]}}
+
+
+class TestDecodeBoundary:
+    URL = (
+        "https://raw.githubusercontent.com/cisagov/vulnrichment/"
+        "HEAD/2024/12xxx/CVE-2024-12345.json"
+    )
+
+    def test_hostile_subshapes_return_none(self):
+        """A truthy non-dict one level down must not escape the
+        "any unexpected shape returns None" contract."""
+        shapes = [
+            _hostile_record(),
+            {"containers": {"adp": [
+                {"providerMetadata": {"shortName": "CISA-ADP"},
+                 "metrics": [{"other": "junk"}]}]}},
+            {"containers": {"adp": [
+                {"providerMetadata": {"shortName": "CISA-ADP"},
+                 "metrics": [{"other": {"content": [1, 2]}}]}]}},
+            {"containers": {"adp": [
+                {"providerMetadata": {"shortName": 42},
+                 "metrics": "junk"}]}},
+        ]
+        for record in shapes:
+            assert _decode_ssvc(record) is None
+
+    def test_hostile_record_degrades_and_never_enters_cache(
+        self, tmp_path: Path,
+    ):
+        """One hostile 200 body degrades that id to no-signal AND
+        never becomes a disk-cache entry — a record that can't
+        decode must not stick for the positive TTL."""
+        http = FakeHttp(responses={self.URL: _hostile_record()})
+        cache = JsonCache(root=tmp_path)
+        assert VulnrichmentClient(http, cache).lookup(
+            "CVE-2024-12345",
+        ) is None
+        # An offline second client must see a cold cache, not a
+        # poisoned entry replaying for 7 days.
+        offline = VulnrichmentClient(FakeHttp(), cache, offline=True)
+        assert offline.lookup("CVE-2024-12345") is None
+
+    def test_poisoned_cache_entry_is_evicted_not_served(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A pre-existing poisoned entry (written before the
+        validate-before-cache gate existed, or by a future decoder
+        drift) is evicted on decode failure — never replayed for the
+        rest of its TTL."""
+        import core.cve.vulnrichment as vr
+
+        cache = JsonCache(root=tmp_path)
+        cache.put(
+            "vulnrichment/CVE-2024-12345",
+            _vulnrichment_record(),
+            ttl_seconds=7 * 24 * 3600,
+        )
+
+        def _boom(record):
+            raise AttributeError("decoder drift")
+
+        with monkeypatch.context() as m:
+            m.setattr(vr, "_decode_ssvc", _boom)
+            http = FakeHttp(
+                responses={self.URL: _vulnrichment_record()},
+            )
+            # Must degrade, not raise — and evict the poison.
+            assert VulnrichmentClient(http, cache).lookup(
+                "CVE-2024-12345",
+            ) is None
+        assert cache.get(
+            "vulnrichment/CVE-2024-12345", ttl_seconds=7 * 24 * 3600,
+        ) is None, "poisoned entry must be evicted, not served"
+
+        # With the decoder healthy again, a fresh client recovers.
+        http2 = FakeHttp(responses={self.URL: _vulnrichment_record()})
+        d = VulnrichmentClient(http2, cache).lookup("CVE-2024-12345")
+        assert d is not None
+        assert http2.gets == [self.URL]
+
+    def test_lookup_many_one_undecodable_id_degrades_only_that_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The decode sits inside the per-id boundary: one hostile
+        record must not sink the whole batch (pool path, >4 ids)."""
+        import core.cve.vulnrichment as vr
+
+        cves = [f"CVE-2024-{90101 + i}" for i in range(6)]
+        bad = cves[3]
+        responses = {_url(c): _vulnrichment_record() for c in cves}
+        responses[_url(bad)] = {"_marker": bad, **_vulnrichment_record()}
+
+        real_decode = _decode_ssvc
+
+        def _selective(record):
+            if isinstance(record, dict) and record.get("_marker") == bad:
+                raise AttributeError("hostile record")
+            return real_decode(record)
+
+        monkeypatch.setattr(vr, "_decode_ssvc", _selective)
+        client = VulnrichmentClient(
+            FakeHttp(responses=responses), JsonCache(root=tmp_path),
+        )
+        out = client.lookup_many(cves, max_workers=2)
+        assert set(out) == set(cves) - {bad}
+
+    def test_lookup_many_cached_hit_decode_is_guarded(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The cached-hit decode lane in ``lookup_many`` is equally
+        per-id guarded: a poisoned disk entry degrades that id (and
+        is evicted), the rest of the batch resolves."""
+        import core.cve.vulnrichment as vr
+
+        cves = ["CVE-2024-91201", "CVE-2024-91202"]
+        bad = cves[0]
+        cache = JsonCache(root=tmp_path)
+        cache.put(
+            f"vulnrichment/{bad}",
+            {"_marker": bad, **_vulnrichment_record()},
+            ttl_seconds=7 * 24 * 3600,
+        )
+
+        real_decode = _decode_ssvc
+
+        def _selective(record):
+            if isinstance(record, dict) and record.get("_marker") == bad:
+                raise AttributeError("hostile record")
+            return real_decode(record)
+
+        monkeypatch.setattr(vr, "_decode_ssvc", _selective)
+        responses = {_url(c): _vulnrichment_record() for c in cves}
+        responses[_url(bad)] = {"_marker": bad, **_vulnrichment_record()}
+        client = VulnrichmentClient(
+            FakeHttp(responses=responses), cache,
+        )
+        out = client.lookup_many(cves)
+        assert set(out) == {cves[1]}
+        assert cache.get(
+            f"vulnrichment/{bad}", ttl_seconds=7 * 24 * 3600,
+        ) is None, "poisoned entry must be evicted"
+
+
+# ---------------------------------------------------------------------------
 # SSVCDecision properties
 # ---------------------------------------------------------------------------
 
