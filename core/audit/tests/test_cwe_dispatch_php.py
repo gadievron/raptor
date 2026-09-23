@@ -105,11 +105,27 @@ class TestDispatchEntries:
         assert entry["semgrep"] == _PHP_FAMILIES[cwe][0]
         assert entry["semgrep_langs"] == ("php",)
         # Pure semgrep families: no other channel claims to
-        # adjudicate them.
+        # adjudicate them. Exception: CWE-116 carries joern legs for
+        # its C/C++ sub-shapes, language-gated to c/cpp (joern_langs)
+        # — the PHP chain shape stays semgrep-only, pinned in
+        # test_php_chain_shape_unchanged below.
         assert entry["smt"] is None
         assert entry["cocci"] is None
-        assert entry["joern"] is False
+        if cwe == "CWE-116":
+            assert entry["joern"] is True
+            assert entry["joern_langs"] == ("c", "cpp")
+        else:
+            assert entry["joern"] is False
         assert entry["codeql"] is None
+
+    def test_php_chain_shape_unchanged(self):
+        """The PHP chain for every family keeps its original shape —
+        exactly one semgrep leg, nothing else. The C/C++ legs the
+        encoding families gained are language-gated and must never
+        leak into PHP dispatch."""
+        for cwe in sorted(_PHP_FAMILIES):
+            chain = _cwe_fallback_chain(cwe, "", "src/index.php")
+            assert [e["type"] for e in chain] == ["semgrep"], cwe
 
     @pytest.mark.parametrize("cwe", sorted(_PHP_FAMILIES))
     def test_rule_file_exists_on_disk(self, cwe: str):
@@ -131,7 +147,13 @@ class TestLanguageGate:
         assert resolved is not None
         assert Path(resolved).is_file()
         assert resolved.endswith(_PHP_FAMILIES[cwe][0])
-        for other in ("main.c", "app.py", "lib.js", "pkg/mod.go", ""):
+        # CWE-93/116 route C/C++ targets to their own curated rules
+        # (semgrep_by_lang, pinned in test_cwe_dispatch_encoding);
+        # every other language stays leg-free for all families.
+        others = ("app.py", "lib.js", "pkg/mod.go", "")
+        if cwe not in ("CWE-93", "CWE-116"):
+            others = ("main.c", *others)
+        for other in others:
             assert resolve_semgrep_rule_for_cwe(cwe, other) is None
 
     def test_phtml_resolves_but_skipped_legacy_suffixes_do_not(self):
@@ -176,22 +198,24 @@ class TestLanguageGate:
         assert warned == []
 
     def test_c_targets_keep_pre_entry_behaviour(self, monkeypatch):
-        """Non-PHP dispatch for these classes must stay exactly as it
-        was before the entries existed: empty chain, loud warning —
-        whose message keeps suspicious verdicts eligible for on-demand
-        checker synthesis."""
+        """Non-PHP dispatch for the php-only classes must stay exactly
+        as it was before the entries existed: empty chain, loud
+        warning — whose message keeps suspicious verdicts eligible for
+        on-demand checker synthesis. CWE-93/116 carry their own C/C++
+        legs now and are pinned in test_cwe_dispatch_encoding."""
         import core.audit.orchestrator as _orch
 
+        php_only = sorted(set(_PHP_FAMILIES) - {"CWE-93", "CWE-116"})
         warned: list[str] = []
         monkeypatch.setattr(
             _orch, "_warn_unmapped_cwe", lambda cwe: warned.append(cwe),
         )
-        for cwe in sorted(_PHP_FAMILIES):
+        for cwe in php_only:
             assert _cwe_fallback_chain(cwe, "", "main.c") == []
             assert _hypothesis_to_tool_chain("", "main.c", cwe=cwe) == []
         # Both empty-chain builds warn (the monkeypatched stub skips
         # the real once-per-process dedup) — the set is what matters.
-        assert sorted(set(warned)) == sorted(_PHP_FAMILIES)
+        assert sorted(set(warned)) == php_only
 
     def test_missing_rule_file_drops_leg(self, monkeypatch):
         monkeypatch.setitem(

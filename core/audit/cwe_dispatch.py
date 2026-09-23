@@ -632,7 +632,11 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
     # of dispatching a rule that scans nothing.
     #
     # CRLF injection into protocol streams: request data reaching a
-    # socket write / protocol command string with CR/LF intact.
+    # socket write / protocol command string with CR/LF intact. The
+    # C/C++ leg is the protocol-line residual rule (format literal
+    # with a trailing "\r\n" passing a bare variable, no strip) —
+    # per-language routing via semgrep_by_lang; the php keys keep
+    # their original single-rule form.
     "CWE-93": {
         "smt": None,
         "cocci": None,
@@ -641,6 +645,10 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
         "sinks": [],
         "semgrep": "php/crlf-injection.yaml",
         "semgrep_langs": ("php",),
+        "semgrep_by_lang": {
+            "c": "c/crlf-protocol-line.yaml",
+            "cpp": "c/crlf-protocol-line.yaml",
+        },
     },
     # Unsafe reflection: tainted variable function / callable /
     # class-name / method-name selection.
@@ -665,17 +673,35 @@ CWE_TO_TOOL_DISPATCH: dict[str, dict[str, Any]] = {
         "semgrep": "php/argument-injection.yaml",
         "semgrep_langs": ("php",),
     },
-    # Improper encoding for the output context: the
-    # htmlspecialchars-without-ENT_QUOTES attribute residual only —
-    # the honestly expressible subset.
+    # Improper encoding for the output context — the honestly
+    # expressible sub-shapes only. PHP: the htmlspecialchars-without-
+    # ENT_QUOTES attribute residual (semgrep leg only — the PHP chain
+    # shape is unchanged from before the C legs existed). C/C++: the
+    # quoted-string escape residual (escapes one of quote/backslash
+    # but not the other) plus the joern legs (generic taint +
+    # flow-reachability, see joern_verify.FLOW_CWES) for taint-
+    # reaches-emitter-unsanitized hypotheses. The joern legs are
+    # language-gated to c/cpp (joern_langs): the seed sinks are libc
+    # emitters and the lane's fixtures are C — exposing other
+    # languages needs its own fixture evidence first. Sinks are
+    # SEED-tier, used only to bind hypothesis prose — the per-target
+    # vocabulary arrives via the IRIS-synthesised specs at runtime,
+    # and the flow lane's confirms are detection-grade
+    # (joern:flow-encoding).
     "CWE-116": {
         "smt": None,
         "cocci": None,
-        "joern": False,
+        "joern": True,
+        "joern_langs": ("c", "cpp"),
         "codeql": None,
-        "sinks": [],
+        "sinks": ["fwrite", "fputs", "send", "write", "fprintf",
+                  "dprintf"],
         "semgrep": "php/attr-encoding.yaml",
         "semgrep_langs": ("php",),
+        "semgrep_by_lang": {
+            "c": "c/quoted-string-escape.yaml",
+            "cpp": "c/quoted-string-escape.yaml",
+        },
     },
     # Weak crypto in a security context: md5/sha1 password digests
     # (name-anchored — a checksum/etag md5 never fires).
@@ -921,6 +947,15 @@ _HYPOTHESIS_CWE_MAP = [
     ((r"(?:mt_rand|uniqid|lcg_value)\w*.{0,60}"
       r"(?:token|secret|nonce|session)|"
       r"predictable.{0,20}(?:token|nonce|session)"), "CWE-338"),
+    # Output-encoding residual phrasings (appended: first-match-wins,
+    # so pre-existing behaviour is unchanged — "... injection"
+    # phrasings keep routing to their earlier class rows). Narrow by
+    # design: bare "without escaping" is claimed by many injection
+    # hypotheses and stays unmapped, and the phrase set stays
+    # seed-sized (the vocab-list policy).
+    ((r"(?:improper|missing)\s+(?:output\s+)?encoding|"
+      r"missing\s+escap\w*|escapes?\s+only\b|"
+      r"unescaped\s+(?:backslash|quote)"), "CWE-116"),
 ]
 
 _HYPOTHESIS_CWE_RE = None
@@ -1070,24 +1105,43 @@ def resolve_semgrep_rule_for_cwe(
     this way is actually scanned — the gate stays honest in both
     directions (a probed non-matching language still drops the leg,
     and mapped extensions never consult the hint).
+
+    Per-language routing: an entry may additionally carry
+    ``semgrep_by_lang`` ({semgrep language: rule name}), consulted
+    FIRST — languages not in the map fall through to the original
+    ``semgrep`` + ``semgrep_langs`` pair, so existing entries and the
+    php legs behave exactly as before. One rule file per (CWE,
+    language): the chain builder emits a single semgrep leg, so
+    multiple sub-shape rules for one language live as multiple rule
+    ids in one file. The by-lang lookup keys on the extension-mapped
+    language only; the content-probe hint participates solely in the
+    ``semgrep_langs`` gate below (the probe-hint x by-lang
+    cross-product is deliberately not implied by either surface).
     """
     entry = lookup(cwe)
     if entry is None:
         return None
-    name = entry.get("semgrep")
-    if not name:
-        return None
-    langs = entry.get("semgrep_langs") or ()
-    if langs:
-        from .hypothesis_mapping import (
-            semgrep_language_for,
-            semgrep_probed_language,
-        )
+    by_lang = entry.get("semgrep_by_lang") or {}
+    name: str | None = None
+    if by_lang:
+        from .hypothesis_mapping import semgrep_language_for
 
-        if semgrep_language_for(file_path or "") not in langs:
-            probed = semgrep_probed_language(file_path or "", language)
-            if probed is None or probed not in langs:
-                return None
+        name = by_lang.get(semgrep_language_for(file_path or ""))
+    if not name:
+        name = entry.get("semgrep")
+        if not name:
+            return None
+        langs = entry.get("semgrep_langs") or ()
+        if langs:
+            from .hypothesis_mapping import (
+                semgrep_language_for,
+                semgrep_probed_language,
+            )
+
+            if semgrep_language_for(file_path or "") not in langs:
+                probed = semgrep_probed_language(file_path or "", language)
+                if probed is None or probed not in langs:
+                    return None
     path = Path(name)
     if not path.is_absolute():
         path = _SEMGREP_RULES_DIR / name
@@ -1129,12 +1183,43 @@ def codeql_query_ids_by_pack() -> dict[str, list[str]]:
     return {pack: sorted(ids) for pack, ids in sorted(by_pack.items())}
 
 
-def joern_applicable(cwe: str) -> bool:
-    """Return whether Joern taint tracking is useful for a CWE."""
+def joern_language_permitted(cwe: str, file_path: str | None) -> bool:
+    """Language gate for a CWE's joern legs.
+
+    True unless the dispatch entry declares ``joern_langs`` and the
+    target's semgrep language is not among them. Entries without the
+    key keep their ungated behaviour exactly. Fail-closed when the
+    entry declares languages and the caller has no file context — a
+    leg whose fixtures cover only the declared languages must not
+    dispatch blind.
+    """
+    entry = lookup(cwe)
+    if entry is None:
+        return True
+    langs = entry.get("joern_langs") or ()
+    if not langs:
+        return True
+    if not file_path:
+        return False
+    from .hypothesis_mapping import semgrep_language_for
+
+    return semgrep_language_for(file_path) in langs
+
+
+def joern_applicable(cwe: str, file_path: str | None = None) -> bool:
+    """Return whether Joern taint tracking is useful for a CWE.
+
+    ``file_path`` feeds the ``joern_langs`` language gate; entries
+    without that key behave as before regardless of the argument.
+    """
     entry = lookup(cwe)
     if entry is None:
         return False
-    return bool(entry.get("joern")) and bool(entry.get("sinks"))
+    return (
+        bool(entry.get("joern"))
+        and bool(entry.get("sinks"))
+        and joern_language_permitted(cwe, file_path)
+    )
 
 
 def dark_verify_applicable(cwe: str) -> bool:
