@@ -1,9 +1,22 @@
 """Fixture-coverage closure gate for promotion-capable rules.
 
-The rule universe is derived mechanically — glob ``rules/*.cocci``,
-read each rule's role through ``core.audit.sweep.get_rule_role`` (the
-exact routine that grants direct status promotion) — never from a
-hand-typed list. Every ``@role: verification`` rule must ship a
+The rule universe is derived mechanically — glob ``rules/*.cocci``
+and scan each rule's FULL text for its ``@role:`` declaration —
+never from a hand-typed list, and deliberately NOT through
+``core.audit.sweep.get_rule_role``: the gate's universe must not
+depend on the reader whose failure it exists to catch.  When the
+universe derived through the runtime reader, a reader regression
+(a byte-capped read that lost a directive to header growth) shrank
+the universe and dropped the demoted rule's fixture requirement in
+the same stroke — a self-referential blind spot the gate greened
+right through.  ``test_declared_role_matches_runtime_reader`` now
+cross-checks the independent scan against ``get_rule_role`` for
+every rule, so a reader/declaration divergence fails CI loudly.
+A rule whose role cannot be determined from its text (no directive,
+conflicting directives, or an unknown role token) FAILS the gate —
+it never silently drops out of the universe.
+
+Every ``@role: verification`` rule must ship a
 ``tests/test_<stem>_rule.py`` carrying at least one positive (fires)
 and one negative (stays silent) fixture: a false positive in a
 verification rule mints a false "confirmed" verdict, so an untested
@@ -46,11 +59,48 @@ _UNCOVERED_ALLOWLIST: set[str] = set()
 _POSITIVE_RE = re.compile(r'\[0\]|len\(.*\)\s*==\s*[1-9]|==\s*\[\s*"')
 _NEGATIVE_RE = re.compile(r'==\s*\[\]|assert not \w|len\(.*\)\s*==\s*0')
 
+# Independent full-file directive scan. Same directive shape as the
+# runtime reader's regex, applied to the WHOLE file — kept separate
+# from core.audit.sweep._ROLE_RE on purpose (sharing the reader's
+# machinery would re-create the self-reference this scan breaks).
+_DECLARED_ROLE_RE = re.compile(r"^//\s*@role:\s*(\w+)", re.MULTILINE)
+
+
+def _declared_role(rule: Path) -> str:
+    """Reader-independent role: full-file scan of the declaration.
+
+    Condemn-toward-visibility: a rule whose role cannot be determined
+    fails here (which fails every gate that derives through this),
+    never silently defaults — a silent default is exactly how a
+    promotion-capable rule drops out of the fixture universe unseen.
+    """
+    tokens = {
+        m.group(1).lower()
+        for m in _DECLARED_ROLE_RE.finditer(
+            rule.read_text(encoding="utf-8")
+        )
+    }
+    assert tokens, (
+        f"{rule.name}: no // @role: directive found in the full file — "
+        f"every stock rule must declare its role explicitly; an "
+        f"undeclarable rule must not silently drop out of the "
+        f"promotion-gate universe"
+    )
+    assert len(tokens) == 1, (
+        f"{rule.name}: conflicting @role directives {sorted(tokens)}"
+    )
+    (role,) = tokens
+    assert role in ("detection", "verification"), (
+        f"{rule.name}: unknown @role token {role!r} — the role cannot "
+        f"be determined, fix the directive"
+    )
+    return role
+
 
 def _verification_rules() -> list[Path]:
     rules = [
         p for p in sorted(_RULES_DIR.glob("*.cocci"))
-        if get_rule_role(str(p)) == "verification"
+        if _declared_role(p) == "verification"
     ]
     # Guard the derivation itself — an empty glob or a role-parse
     # regression must not turn this gate into a vacuous pass.
@@ -59,6 +109,29 @@ def _verification_rules() -> list[Path]:
         f"derivation looks broken"
     )
     return rules
+
+
+def test_declared_role_matches_runtime_reader():
+    """Declared-vs-runtime cross-check over the whole library.
+
+    ``get_rule_role`` is the routine that actually grants promotion at
+    run time; ``_declared_role`` is what the rule's text says.  Any
+    divergence means the runtime reader cannot see a declaration (the
+    2048-byte-prefix regression demoted format_string this way and
+    simultaneously hid it from this gate's universe) — fail loudly,
+    naming the rule and both answers.
+    """
+    diverged = [
+        f"{p.name}: declared {_declared_role(p)!r} but get_rule_role "
+        f"returns {get_rule_role(str(p))!r}"
+        for p in sorted(_RULES_DIR.glob("*.cocci"))
+        if _declared_role(p) != get_rule_role(str(p))
+    ]
+    assert not diverged, (
+        "runtime role reader diverges from the rules' declared roles "
+        "(promotion authority and fixture-universe membership are "
+        "silently wrong for these rules):\n  " + "\n  ".join(diverged)
+    )
 
 
 def test_every_verification_rule_has_fixture_pair():
