@@ -170,3 +170,20 @@ def test_devcontainer_dict_of_arrays_extracted(tmp_path: Path) -> None:
     got = {(d.name, d.version) for d in deps}
     assert ("flask", "3.0.3") in got
     assert ("lodash", "4.17.21") in got
+
+
+def test_value_taking_pip_flags_do_not_mint_phantom_values(
+    tmp_path: Path,
+) -> None:
+    """``--root-user-action ignore`` and ``--group dev`` take values;
+    unlisted, their values parsed as positionals and emitted phantom
+    packages ``ignore`` and ``dev``."""
+    sh = tmp_path / "setup.sh"
+    sh.write_text(
+        "pip install --root-user-action ignore requests==2.31.0\n"
+        "pip install --group dev flask==3.0.3\n",
+        encoding="utf-8",
+    )
+    deps = parse_shell_script(sh)
+    names = {d.name for d in deps}
+    assert names == {"requests", "flask"}, names
