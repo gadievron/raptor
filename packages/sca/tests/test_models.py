@@ -122,3 +122,83 @@ class TestCveIds:
         from packages.sca.models import cve_ids
         adv = self._adv("GHSA-x", ["CVE-2024-0001", "OSV-2024-1"])
         assert cve_ids(adv) == ["CVE-2024-0001"]
+
+    def test_distro_primary_id_resolves_to_embedded_cve(self):
+        """Debian / Ubuntu / Alpine secdb records ship
+        ``<DISTRO>-CVE-*`` as the PRIMARY id with an EMPTY alias
+        list — the embedded CVE must drive every enrichment join."""
+        from packages.sca.models import cve_ids
+        for primary in (
+            "DEBIAN-CVE-2026-54369",
+            "UBUNTU-CVE-2017-18018",
+            "ALPINE-CVE-2024-0001",
+        ):
+            adv = self._adv(primary, [])
+            expected = primary.split("-", 1)[1]
+            assert cve_ids(adv) == [expected], primary
+
+    def test_distro_primary_deduplicates_against_cve_alias(self):
+        from packages.sca.models import cve_ids
+        adv = self._adv("UBUNTU-CVE-2017-18018", ["CVE-2017-18018"])
+        assert cve_ids(adv) == ["CVE-2017-18018"]
+
+
+class TestCanonicalCveId:
+    """``canonical_cve_id`` is the single owner of the CVE-join-key
+    shape — corpus label joins (calibration validate / refit) and
+    live enrichment joins both resolve through it."""
+
+    def test_cve_passthrough_and_case_fold(self):
+        from packages.sca.models import canonical_cve_id
+        assert canonical_cve_id("CVE-2024-0001") == "CVE-2024-0001"
+        assert canonical_cve_id("cve-2024-0001") == "CVE-2024-0001"
+
+    def test_distro_prefix_resolves(self):
+        from packages.sca.models import canonical_cve_id
+        assert (
+            canonical_cve_id("DEBIAN-CVE-2026-54369")
+            == "CVE-2026-54369"
+        )
+        # Case-folded before matching, like every other spelling.
+        assert (
+            canonical_cve_id("debian-cve-2026-54369")
+            == "CVE-2026-54369"
+        )
+
+    def test_non_cve_ids_yield_none(self):
+        from packages.sca.models import canonical_cve_id
+        for cand in (
+            "GHSA-jfh8-c2jp-5v3q",
+            "PYSEC-2024-1",
+            "RUSTSEC-2024-0001",
+            "OSV-2024-1",
+            None,
+            12345,
+        ):
+            assert canonical_cve_id(cand) is None, cand
+
+    def test_distro_shape_is_anchored(self):
+        """Trailing garbage, multi-segment prefixes, and short CVE
+        numbers must NOT join — the prefix-strip only recognises the
+        exact one-token distro-primary family."""
+        from packages.sca.models import canonical_cve_id
+        for cand in (
+            "DEBIAN-CVE-2026-54369-1",       # trailing segment
+            "BIT-APACHE-CVE-2024-1234",       # multi-segment prefix
+            "DEBIAN-CVE-2026-123",            # sub-spec number
+            "DEBIAN-CVE-26-1234",             # 2-digit year
+            "-CVE-2024-0001",                 # empty prefix
+            "DEBIAN-CVE-2026-5436\uff19",    # fullwidth digit (not [0-9])
+            "DEBIAN-CVE-2026-54369\n",       # trailing newline ($ tolerates, \Z must not)
+        ):
+            assert canonical_cve_id(cand) is None, cand
+
+    def test_hostile_prefix_gains_no_new_authority(self):
+        """Any ``[A-Z]+`` prefix resolves — a hostile ``EVIL-CVE-*``
+        primary joins its embedded CVE, which is exactly the power
+        the (attacker-writable) alias list already grants. Pinned so
+        a future tightening is a deliberate decision, not drift."""
+        from packages.sca.models import canonical_cve_id
+        assert (
+            canonical_cve_id("EVIL-CVE-2021-44228") == "CVE-2021-44228"
+        )

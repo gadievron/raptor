@@ -97,6 +97,15 @@ def test_advisory_in_kev_via_alias() -> None:
     assert _advisory_in_kev(adv, kev) is True
 
 
+def test_advisory_in_kev_via_distro_primary_id() -> None:
+    """Distro secdb records (``UBUNTU-CVE-*`` primary, empty alias
+    list) must still join KEV via the embedded CVE — pre-fix every
+    image-source distro finding rendered ``in_kev=False``."""
+    kev = _FakeKev(["CVE-2017-18018"])
+    adv = _Advisory("UBUNTU-CVE-2017-18018", [], None)
+    assert _advisory_in_kev(adv, kev) is True
+
+
 def test_advisory_in_kev_no_match() -> None:
     kev = _FakeKev(["CVE-2021-44228"])
     adv = _Advisory("CVE-2099-99999", ["GHSA-zzzz-zzzz-zzzz"], None)

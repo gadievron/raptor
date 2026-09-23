@@ -103,6 +103,13 @@ def validate_corpus(
     # ecosystem breakdown separately.
     all_findings: list[tuple[str, float, bool]] = []   # (eco, score, exploited)
     by_eco: dict[str, list[tuple[float, bool]]] = {}
+    # Per-ecosystem count of findings whose advisory yields ≥1 CVE
+    # join key. ``with_signal`` alone can't distinguish "nothing in
+    # this ecosystem is exploited" from "nothing in this ecosystem
+    # can even JOIN the ground truth" — the latter is a label-
+    # coverage collapse (the distro-primary-id family spent months
+    # at with_cve=0 while the report only showed with_signal=0).
+    with_cve_by_eco: dict[str, int] = {}
     for sample in samples:
         for f in sample["findings"]:
             if not isinstance(f, dict):
@@ -116,6 +123,8 @@ def validate_corpus(
             exploited = any(c in signals for c in cve_ids)
             all_findings.append((eco, float(score), exploited))
             by_eco.setdefault(eco, []).append((float(score), exploited))
+            if cve_ids:
+                with_cve_by_eco[eco] = with_cve_by_eco.get(eco, 0) + 1
 
     # Counts.
     total = sum(len(s["findings"]) for s in samples)
@@ -139,6 +148,7 @@ def validate_corpus(
         sorted_rows = sorted(rows, key=lambda t: -t[0])
         eco_breakdown[eco] = {
             "total": len(rows),
+            "with_cve": with_cve_by_eco.get(eco, 0),
             "with_signal": sum(1 for _, ex in rows if ex),
             "top_20_precision": _top_n_precision_2(sorted_rows, n=20),
             "spearman_rho": _spearman_rho(
@@ -249,8 +259,19 @@ def _extract_cve_ids(advisory: dict[str, Any]) -> list[str]:
     vulnerabilities — including their CVE aliases in the
     ground-truth ``signals`` set would mark hundreds of
     non-security findings as ``exploited`` and depress
-    Spearman ρ. Validator (and refit) skip them entirely so the
-    metric measures actual exploitation signal only."""
+    Spearman ρ. The rows themselves stay in the metric population
+    as negatives (only their CVE ids are excluded from the
+    exploited join); see :func:`validate_corpus`.
+
+    Every id resolves through ``models.canonical_cve_id`` — the
+    single owner of the CVE-join key shape — so the corpus label
+    join and the live KEV / EPSS / SSVC enrichment join can never
+    drift: distro-namespaced ``<DISTRO>-CVE-*`` primary ids
+    (Debian / Ubuntu / Alpine secdb, empty alias lists) and
+    lowercase feed spellings both land on the canonical uppercase
+    CVE key here exactly as they do at scan time."""
+    from ..models import canonical_cve_id
+
     out: list[str] = []
     if not isinstance(advisory, dict):
         return out
@@ -258,15 +279,19 @@ def _extract_cve_ids(advisory: dict[str, Any]) -> list[str]:
         return out
     aliases = advisory.get("aliases") or []
     if isinstance(aliases, list):
-        out.extend(a for a in aliases if isinstance(a, str) and a.startswith("CVE-"))
+        for a in aliases:
+            canonical = canonical_cve_id(a)
+            if canonical is not None and canonical not in out:
+                out.append(canonical)
     # ``findings.py::_advisory_summary`` archives the primary OSV
     # record id under ``id``; ``osv_id`` is kept as a fallback for
     # rows/fixtures written before the key settled. Without the
     # ``id`` read, a CVE-primary OSV record with no CVE alias lost
     # its exploited label entirely.
     primary = advisory.get("id") or advisory.get("osv_id") or ""
-    if isinstance(primary, str) and primary.startswith("CVE-"):
-        out.append(primary)
+    canonical = canonical_cve_id(primary)
+    if canonical is not None and canonical not in out:
+        out.append(canonical)
     return out
 
 

@@ -11,6 +11,7 @@ findings.json layers handle that wrapping.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, TYPE_CHECKING
@@ -276,15 +277,56 @@ class Advisory:
     severity_fallback: str | None = None
 
 
+# Distro-namespaced CVE-primary ids: Debian / Ubuntu / Alpine secdb
+# OSV records ship ``<DISTRO>-CVE-<year>-<number>`` as the PRIMARY id
+# with an EMPTY alias list — the CVE is embedded in the id, never
+# aliased. Anchored both ends: exactly one uppercase prefix token,
+# then a spec-shaped CVE tail (4-digit year, ≥4-digit number), and
+# nothing after it — ``DEBIAN-CVE-2026-1234-1`` or a multi-segment
+# prefix does NOT match. Prefix-stripping grants no authority the
+# alias list doesn't already grant: any advisory can list arbitrary
+# CVE aliases, so a hostile ``EVIL-CVE-…`` primary can only point at
+# a real CVE's public enrichment the same way a planted alias could.
+# ASCII digits only (``\d`` would admit Unicode digits) and ``\Z``
+# (``$`` tolerates a trailing newline) — the id must be exactly the
+# canonical shape, byte for byte.
+_DISTRO_CVE_PRIMARY_RE = re.compile(r"^[A-Z]+-(CVE-[0-9]{4}-[0-9]{4,})\Z")
+
+
+def canonical_cve_id(candidate: object) -> str | None:
+    """Normalise one advisory id to its canonical CVE id, or ``None``
+    when the id carries no CVE.
+
+    Uppercases first (the KEV / EPSS / SSVC enrichment maps are keyed
+    uppercase), passes ``CVE-*`` ids through, and resolves the
+    distro-namespaced ``<DISTRO>-CVE-*`` primary-id family to its
+    embedded CVE. The distro id itself stays untouched on the advisory
+    (``osv_id`` is the provenance record); only the JOIN key is
+    canonicalised.
+    """
+    if not isinstance(candidate, str):
+        return None
+    candidate = candidate.upper()
+    if candidate.startswith("CVE-"):
+        return candidate
+    m = _DISTRO_CVE_PRIMARY_RE.match(candidate)
+    if m:
+        return m.group(1)
+    return None
+
+
 def cve_ids(advisory: Advisory) -> list[str]:
     """All CVE-shaped ids for ``advisory`` — primary ``osv_id`` first,
     then aliases, first-seen order, deduplicated.
 
-    OSV serves records whose PRIMARY id IS the CVE with no self-alias
-    (distro secdb and kernel-CNA records — exactly the rows image-source
-    scans inject). A consumer that keys KEV / EPSS / SSVC enrichment off
-    the alias list alone silently loses those signals for CVE-primary
-    advisories, so every CVE-list consumer routes through here.
+    OSV serves records whose PRIMARY id carries the CVE with no
+    self-alias — either the CVE itself (kernel-CNA records) or a
+    distro-namespaced ``<DISTRO>-CVE-*`` id (Debian / Ubuntu / Alpine
+    secdb — exactly the rows image-source scans inject). A consumer
+    that keys KEV / EPSS / SSVC enrichment off the alias list alone
+    silently loses those signals for CVE-primary advisories, so every
+    CVE-list consumer routes through here, and every id resolves
+    through :func:`canonical_cve_id` so the distro family joins too.
 
     Ids are normalised to UPPERCASE: the EPSS / SSVC enrichment maps
     are keyed uppercase, so a lowercase feed spelling appended raw
@@ -294,11 +336,9 @@ def cve_ids(advisory: Advisory) -> list[str]:
     """
     out: list[str] = []
     for cand in (advisory.osv_id, *(advisory.aliases or [])):
-        if not isinstance(cand, str):
-            continue
-        cand = cand.upper()
-        if cand.startswith("CVE-") and cand not in out:
-            out.append(cand)
+        canonical = canonical_cve_id(cand)
+        if canonical is not None and canonical not in out:
+            out.append(canonical)
     return out
 
 
