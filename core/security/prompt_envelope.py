@@ -31,6 +31,7 @@ capability isolation for full coverage.
 from __future__ import annotations
 
 import base64
+import html as _html
 import re
 import secrets
 from dataclasses import dataclass
@@ -509,6 +510,52 @@ _BYPASS_CHAR_RE = re.compile(
 )
 
 
+# Decode-then-match for markdown LINK destinations. Renderers apply
+# two decode axes to a parsed destination before building the href —
+# HTML entities (named and numeric, up to 8 dec/hex digits in
+# markdown-it) and CommonMark backslash-escapes — so any encoded
+# spelling of a scheme, a colon, or the `//` scheme-relative head
+# (`https&colon;//e`, `https&#0000058;//e`, `https\://e`,
+# `&#47;&#47;e`, `\/\/e`, `j&#97;vascript&#x3a;…`) renders live
+# while matching NONE of the raw-text arms. Enumerated spellings
+# lose this race by construction; instead the destination is decoded
+# ONCE with the renderer's own two axes and the SAME scheme /
+# scheme-relative vocabulary the raw arms model is re-checked on the
+# decoded form — the normalisation-chokepoint discipline the
+# env-name fold uses. Only destinations the decode actually CHANGED
+# are judged (raw spellings stay owned by the raw arms), so benign
+# entities in prose and undecoded destinations render exactly as
+# before.
+_MD_LINK_DEST_RE = re.compile(r'!?\[[^\]]{0,8192}\]\(\s{0,8}([^)]{1,8192})\)')
+# CommonMark: a backslash before ASCII punctuation escapes it (the
+# backslash is dropped); before anything else it stays literal.
+_BACKSLASH_ESCAPE_RE = re.compile(r'\\([!-/:-@\[-`{-~])')
+# Decoded-form vocabulary — the raw scheme arms' alternation plus the
+# scheme-relative head, anchored at the decoded destination start.
+_DECODED_SCHEME_RE = re.compile(
+    r'(?:https?|data|javascript|vbscript|file|ftp):|//',
+    re.IGNORECASE,
+)
+
+
+def _decode_link_destination(dest: str) -> str:
+    """Apply the renderer's two decode axes: CommonMark
+    backslash-escapes, then HTML entities (``html.unescape`` is at
+    least as lenient as any renderer's entity parser — the safe
+    direction: leniency here can only widen what gets stripped)."""
+    return _html.unescape(_BACKSLASH_ESCAPE_RE.sub(r'\1', dest))
+
+
+def _strip_encoded_scheme_links(text: str) -> str:
+    def _sub(m: re.Match) -> str:
+        dest = m.group(1)
+        decoded = _decode_link_destination(dest)
+        if decoded != dest and _DECODED_SCHEME_RE.match(decoded):
+            return '[REDACTED-AUTOFETCH-MARKUP]'
+        return m.group(0)
+    return _MD_LINK_DEST_RE.sub(_sub, text)
+
+
 def _strip_autofetch_markup(content: str) -> str:
     # Strip parser-invisible characters first. Pre-fix this only
     # stripped \x00; the zero-width and bidi-control characters above
@@ -519,6 +566,7 @@ def _strip_autofetch_markup(content: str) -> str:
     # `<im​g src=evil>` renders as a real `<img>` tag while our
     # regex doesn't match it as `img`.
     cleaned = _BYPASS_CHAR_RE.sub('', content)
+    cleaned = _strip_encoded_scheme_links(cleaned)
     return _AUTOFETCH_MARKUP_RE.sub('[REDACTED-AUTOFETCH-MARKUP]', cleaned)
 
 

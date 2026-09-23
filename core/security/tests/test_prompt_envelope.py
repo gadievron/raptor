@@ -1525,3 +1525,91 @@ class TestCssFetchFunctionArm:
         from core.security.prompt_envelope import _strip_autofetch_markup
         for p in ("background:url(local/img.png)", "url(../rel.png)"):
             assert _strip_autofetch_markup(p) == p, p
+
+
+class TestEntityColonSchemes:
+    """Every raw scheme arm needs a literal ':'; renderers decode
+    entities AND CommonMark backslash-escapes in link destinations
+    before building the href, so encoded spellings smuggle live
+    scheme links past all of them. The destination is decoded once
+    with the renderer's own two axes and re-checked against the same
+    vocabulary — never another round of enumerated spellings."""
+
+    HOSTILE = (
+        # entity colon, named + numeric with renderer-max padding
+        "[c](https&colon;//evil.example/leak)",
+        "[c](https&#58;//evil.example/leak)",
+        "[c](https&#x3A;//evil.example/leak)",
+        "[c](https&#0058;//evil.example/leak)",
+        "[c](https&#0000058;//evil.example/leak)",   # 7 dec digits
+        "[c](https&#00000058;//evil.example/leak)",  # 8 dec digits
+        "[c](https&#x000003A;//evil.example/leak)",  # 7 hex digits
+        # backslash-escaped colon / slashes
+        "[c](https\\://evil.example/leak)",
+        "[c](\\/\\/evil.example/leak)",
+        # entity slashes (scheme-relative smuggle)
+        "[c](&#47;&#47;evil.example/leak)",
+        # entity scheme + entity colon combined
+        "[c](javascript&#58;alert(1))",
+        "[c](j&#97;vascript&#x3a;alert(1))",
+    )
+
+    def test_encoded_destinations_stripped(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for p in self.HOSTILE:
+            out = _strip_autofetch_markup(p)
+            assert "evil" not in out and "alert" not in out, (p, out)
+
+    def test_encoded_destinations_stripped_on_output_lanes_too(self):
+        from core.security.prompt_output_sanitise import (
+            sanitise_inline,
+            sanitise_string,
+        )
+        for p in self.HOSTILE:
+            for fn in (sanitise_string, sanitise_inline):
+                out = fn(p)
+                assert "evil" not in out and "alert" not in out, (
+                    fn.__name__, p, out)
+
+    def test_decode_normalisation_parity(self):
+        """The property, both directions: an ENCODED destination is
+        treated exactly as its decoded form — hostile decoded forms
+        strip, benign decoded forms render."""
+        from core.security.prompt_envelope import (
+            _decode_link_destination,
+            _strip_autofetch_markup,
+        )
+        encodings = (
+            lambda d: d.replace(":", "&colon;"),
+            lambda d: d.replace(":", "&#0000058;"),
+            lambda d: d.replace(":", "\\:").replace("/", "\\/"),
+            lambda d: d.replace("/", "&#47;"),
+        )
+        for raw in ("https://evil/x", "//evil/x", "javascript:alert(1)"):
+            for enc in encodings:
+                e = enc(raw)
+                assert _decode_link_destination(e) == raw, (raw, e)
+                assert "evil" not in _strip_autofetch_markup(f"[c]({e})")                     and "alert" not in _strip_autofetch_markup(f"[c]({e})"), e
+        for raw in ("docs/page", "#anchor", "relative/p"):
+            for enc in encodings:
+                e = enc(raw)
+                out = _strip_autofetch_markup(f"[c]({e})")
+                assert "REDACTED" not in out, (raw, e, out)
+
+    def test_benign_entities_in_prose_stay_rendered(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for p in ("[a &amp; b label](docs/page)",
+                  "[x](a&amp;b)",
+                  "[q](q?a=1&amp;b=2)",
+                  "prose with a&b: something",
+                  "code: x &= y; s = 'a&colon' + t",
+                  "[note](\\#anchor)",
+                  "[docs](relative/path%20with%20space)"):
+            assert _strip_autofetch_markup(p) == p, p
+
+    def test_entity_flood_linear(self):
+        import time
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        start = time.monotonic()
+        _strip_autofetch_markup("[c](" + "&#58;" * 20_000 + ")")
+        assert time.monotonic() - start < 5.0
