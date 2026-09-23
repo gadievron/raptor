@@ -308,6 +308,20 @@ class TestBindingSynthesis:
         assert b.output_symbols == frozenset({"y"})
         assert b.callable.startswith("wrapper:T.esc->")
 
+    def test_class_name_shadowing_local_never_binds(self):
+        # A local variable named like the summarised class must not
+        # earn the static form: dispatch goes to the LOCAL's runtime
+        # type (JLS 6.4.2 obscuring), whose esc() can be arbitrary.
+        src = _src(
+            "    private static String esc(String s) "
+            "{ return Encode.forHtml(s); }\n"
+            "    static class Evil { String esc(String s) "
+            "{ return s; } }\n",
+            "        Evil T = new Evil();\n"
+            "        String y = T.esc(x);\n"
+            "        out.println(y);\n")
+        assert not self._bindings(src)
+
     def test_this_qualified_call_never_binds(self):
         # The b13 builder emits no CallSite for a ``this``-qualified
         # call (the receiver is not an identifier node), so nothing

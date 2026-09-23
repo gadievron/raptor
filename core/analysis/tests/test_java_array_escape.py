@@ -207,6 +207,17 @@ class TestWriteIsCatalogCall:
         (w,) = idx.element_writes("a", 0)
         assert idx.write_is_catalog_call(w, self.CATALOG)
 
+    def test_shadowing_local_receiver_rhs_refuses(self):
+        # A local named like the imported catalog class must not
+        # forge the catalog callable on the write's RHS.
+        idx = _index(
+            "        FakeEncoder Encode = new FakeEncoder();\n"
+            "        String[] a = new String[2];\n"
+            "        a[0] = Encode.forHtml(x);\n"
+        )
+        (w,) = idx.element_writes("a", 0)
+        assert not idx.write_is_catalog_call(w, self.CATALOG)
+
     def test_wrapped_sanitizer_rhs_refuses(self):
         # The OUTERMOST call decides: wrap(Encode.forHtml(x)) could
         # re-taint the sanitizer's output.

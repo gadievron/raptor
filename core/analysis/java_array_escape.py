@@ -225,7 +225,9 @@ def build_local_array_index(
 
     idx = LocalArrayIndex(ok=True)
     types, statics = build_import_map(tree.root_node)
-    idx._resolver = _NameResolver(types, statics)
+    from core.analysis.cfg_builder_java import _FileLocalScopes
+    idx._resolver = _NameResolver(
+        types, statics, local_scopes=_FileLocalScopes(tree.root_node))
     lo, hi = line_span
     # Byte ranges of identifier nodes consumed by a permitted
     # appearance (declarator names, tracked-access bases).

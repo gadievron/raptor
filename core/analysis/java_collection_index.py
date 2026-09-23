@@ -305,7 +305,9 @@ def build_local_collection_index(
     idx._list_ops = {}
     idx._decl_block = {}
     types, statics = build_import_map(tree.root_node)
-    idx._resolver = _NameResolver(types, statics)
+    from core.analysis.cfg_builder_java import _FileLocalScopes
+    idx._resolver = _NameResolver(
+        types, statics, local_scopes=_FileLocalScopes(tree.root_node))
     lo, hi = line_span
     consumed: set[tuple[int, int]] = set()
 

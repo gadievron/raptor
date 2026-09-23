@@ -320,15 +320,36 @@ def _dotted_chain(n: Node) -> str | None:
 
 
 class _NameResolver:
-    """FQN-resolves callable names against the file's imports."""
+    """FQN-resolves callable names against the file's imports.
+
+    ``local_scopes`` (optional; any object with
+    ``vouches(name, byte) -> bool`` — a :class:`_LocalNameScopes` or
+    :class:`_FileLocalScopes`) is the positional identity gate: Java
+    permits variables named like imported classes (JLS 6.4.2
+    obscuring), so a chain head vouched as a local/param AT THE USE
+    SITE must never resolve through the import map — the receiver is
+    a value of unknown runtime type, and resolving it forged the
+    catalog class's static identity for an arbitrary instance call.
+    ``None`` keeps the historical (import-map-only) behavior for
+    callers with no scope information."""
 
     def __init__(self, type_imports: Mapping[str, str],
-                 static_imports: Mapping[str, str]) -> None:
+                 static_imports: Mapping[str, str],
+                 local_scopes=None) -> None:
         self.types = dict(type_imports)
         self.statics = dict(static_imports)
+        self.local_scopes = local_scopes
 
-    def _resolve_chain(self, chain: str) -> str:
+    def vouches_local(self, name: str, byte: int) -> bool:
+        return self.local_scopes is not None \
+            and self.local_scopes.vouches(name, byte)
+
+    def _resolve_chain(self, chain: str, head_byte: int | None = None) -> str:
         head, _, rest = chain.partition(".")
+        if head_byte is not None and self.vouches_local(head, head_byte):
+            # Obscured by a local — stays an unresolved instance
+            # chain (simple names never match catalog FQN keys).
+            return chain
         fqn = self.types.get(head)
         if fqn is not None:
             return f"{fqn}.{rest}" if rest else fqn
@@ -373,7 +394,7 @@ class _NameResolver:
         chain = _dotted_chain(obj)
         if chain is None:
             return None
-        return f"{self._resolve_chain(chain)}.{simple}"
+        return f"{self._resolve_chain(chain, obj.start_byte)}.{simple}"
 
 
 def _arg_surface_names(invocation: Node) -> frozenset[str]:
@@ -429,8 +450,13 @@ def _walk_uses(n, resolver, *, exclude: set | None = None) -> frozenset[str]:
                 obj_u = _unwrap_value_expr(obj)
                 # A static-class receiver (import-resolved or dotted
                 # package chain) is a namespace, not a value use; a
-                # plain-variable / chained receiver is a value use.
-                if obj_u.type == _IDENT and _node_text(obj_u) not in resolver.types:
+                # plain-variable / chained receiver is a value use —
+                # including a local that OBSCURES an imported type
+                # name (positional vouch wins over the import map).
+                if obj_u.type == _IDENT and (
+                        _node_text(obj_u) not in resolver.types
+                        or resolver.vouches_local(
+                            _node_text(obj_u), obj_u.start_byte)):
                     out.add(_node_text(obj_u))
                 elif obj_u.type in (_METHOD_INVOCATION, _OBJECT_CREATION):
                     # A chained-call or instance-creation receiver can
@@ -449,7 +475,9 @@ def _walk_uses(n, resolver, *, exclude: set | None = None) -> frozenset[str]:
             continue
         if t == _FIELD_ACCESS:
             base = _base_ident(cur)
-            if base is not None and base not in resolver.types:
+            if base is not None and (
+                    base not in resolver.types
+                    or resolver.vouches_local(base, cur.start_byte)):
                 out.add(base)
             continue
         stack.extend(c for c in cur.children if c.is_named)
@@ -751,6 +779,50 @@ class _LocalNameScopes:
 
 
 _EMPTY_LOCAL_SCOPES = _LocalNameScopes({})
+
+# Scope shapes whose bodies bind their own locals. Lambdas are their
+# own scope too: a bare-name store inside one is either a lambda
+# local (its params/declarators) or a field — never an enclosing-
+# method local (Java's effectively-final rule forbids that write).
+# Single-homed here; the const-fold index imports it.
+METHOD_SCOPE_TYPES = frozenset({
+    "method_declaration",
+    "constructor_declaration",
+    "compact_constructor_declaration",
+    "static_initializer",
+    "lambda_expression",
+})
+
+
+class _FileLocalScopes:
+    """File-wide positional vouch oracle: for a (name, byte) query the
+    INNERMOST method-like scope containing the byte decides, via its
+    :class:`_LocalNameScopes`. Built once per file for consumers that
+    walk whole files (wrapper-summary call indexing, the array /
+    collection element indexes) and therefore have no single method's
+    oracle at hand."""
+
+    __slots__ = ("_scopes",)
+
+    def __init__(self, root: Node) -> None:
+        self._scopes: list[tuple[int, int, _LocalNameScopes]] = []
+        stack = [root]
+        while stack:
+            n = stack.pop()
+            if n.type in METHOD_SCOPE_TYPES:
+                self._scopes.append(
+                    (n.start_byte, n.end_byte, _declared_local_scopes(n)))
+            stack.extend(c for c in n.children if c.is_named)
+
+    def vouches(self, name: str, byte: int) -> bool:
+        innermost: tuple[int, int, _LocalNameScopes] | None = None
+        for s, e, oracle in self._scopes:
+            if s <= byte <= e and (
+                    innermost is None
+                    or (e - s) < (innermost[1] - innermost[0])):
+                innermost = (s, e, oracle)
+        return innermost is not None \
+            and innermost[2].vouches(name, byte)
 
 
 def _declared_local_scopes(decl: Node) -> _LocalNameScopes:
@@ -1511,9 +1583,11 @@ def build_java_intraproc_cfg(
         return None
 
     type_imports, static_imports = build_import_map(root)
-    resolver = _NameResolver(type_imports, static_imports)
+    method_scopes = _declared_local_scopes(decl)
+    resolver = _NameResolver(type_imports, static_imports,
+                             local_scopes=method_scopes)
     builder = _JavaCFGBuilder(function_name, "<memory>", resolver,
-                              local_scopes=_declared_local_scopes(decl))
+                              local_scopes=method_scopes)
     try:
         tails = builder._build_stmts(body, [builder.entry])
     except _RefusedConstruct as rc:

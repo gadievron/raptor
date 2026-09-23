@@ -141,6 +141,58 @@ class TestScale:
         assert elapsed < 5.0, f"CFG build took {elapsed:.1f}s at n={n}"
 
 
+class TestShadowedImportIdentity:
+    """Java permits variables named like imported classes (JLS 6.4.2
+    obscuring) — a local receiver must never resolve through the
+    import map to a catalog class's static identity."""
+
+    SHADOW_BODY = (
+        "        FakeEncoder Encode = new FakeEncoder();\n"
+        "        String y = Encode.forHtml(x);\n"
+        "        out.println(y);\n"
+    )
+
+    def test_local_shadowing_import_never_resolves_to_fqn(self):
+        cfg, _ = _cfg(self.SHADOW_BODY)
+        assert cfg is not None
+        calls = {cs.name for n in cfg.nodes() for cs in n.call_sites}
+        assert "org.owasp.encoder.Encode.forHtml" not in calls, (
+            "instance call through a shadowing local forged the "
+            "catalog FQN"
+        )
+
+    def test_shadowing_receiver_is_a_value_use(self):
+        # The receiver is a live value, not a namespace — hiding it
+        # from the uses walk hid the tainted object from the gate.
+        cfg, _ = _cfg(self.SHADOW_BODY)
+        uses = set()
+        for n in cfg.nodes():
+            uses |= set(n.uses)
+        assert "Encode" in uses
+
+    def test_shadow_mints_no_sanitizer_binding(self):
+        from core.dataflow.sanitizer_catalog import (
+            match_sanitizers_in_cfg,
+        )
+        cfg, _ = _cfg(self.SHADOW_BODY)
+        bindings = match_sanitizers_in_cfg(cfg, "cwe-079", "java")
+        assert not bindings, bindings
+
+    def test_true_static_call_still_binds(self):
+        # Control: the genuine import-resolved static call keeps its
+        # catalog identity and full-strength binding.
+        from core.dataflow.sanitizer_catalog import (
+            match_sanitizers_in_cfg,
+        )
+        cfg, _ = _cfg(
+            "        String y = Encode.forHtml(x);\n"
+            "        out.println(y);\n")
+        bindings = match_sanitizers_in_cfg(cfg, "cwe-079", "java")
+        assert any(
+            b.callable == "org.owasp.encoder.Encode.forHtml"
+            for b in bindings)
+
+
 class TestControlFlowSoundness:
     def test_do_while_second_iteration_path_exists(self):
         # ``y = clean(x); do { out.println(y); y = x; } while (c);``
