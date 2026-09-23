@@ -219,7 +219,7 @@ def _is_detection_variant(part: str) -> bool:
     # String-heuristic fallback for hosts where a channel module is
     # unavailable — mirrors each channel's DETECTION_VARIANT_SUFFIX
     # contract.
-    if part in ("joern:live", "joern:pre_sweep"):
+    if part in ("joern:live", "joern:pre_sweep", "joern:flow-encoding"):
         return True
     if part.startswith("consistency:") and part.endswith("-majority"):
         return True
@@ -238,8 +238,17 @@ def _is_detection_variant(part: str) -> bool:
         )
     # smt: mirrors sweep._SMT_VERB_ROLES detection entries (":witness"
     # keeps its receipt — a concrete solver model discriminates).
-    if part.startswith("smt:") and not part.endswith(":witness"):
-        return part.split(":", 2)[1] in (
+    # Exception: check-encoding-residual stays detection even with
+    # ":witness" — its model ranges over a supplied transfer
+    # description the verb never verifies against the source (mirrors
+    # sweep.is_detection_rule_id's carve-out).
+    if part.startswith("smt:"):
+        verb = part.split(":", 2)[1]
+        if verb == "check-encoding-residual":
+            return True
+        if part.endswith(":witness"):
+            return False
+        return verb in (
             "invariant-preservation", "check-overflow-to-oob",
             "check-negative-bypass", "check-auth-bypass",
             "check-resource-leak", "check-null-propagation",
