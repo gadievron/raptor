@@ -472,15 +472,18 @@ def run_all_tests(verbose: bool = False, skip_optional: bool = False) -> List[Te
             used_by=used_by
         ))
 
-    # Check rr kernel configuration
+    # Check rr kernel configuration. rr RECORDING is the opt-in
+    # --privileged profile (documented in devcontainer.json); the
+    # default container is unprivileged, where perf counters are
+    # unavailable and this check legitimately reports not-configured.
     passed, msg = check_rr_kernel()
     results.append(TestResult(
         name="rr kernel config",
         category=Category.DEBUGGER,
         passed=passed,
-        required=True,  # Required when using --privileged devcontainer
+        required=False,  # opt-in rr recording profile only
         message=msg,
-        used_by=["rr-debugger skill (requires --privileged devcontainer)"]
+        used_by=["rr-debugger skill (opt-in --privileged rr profile)"]
     ))
 
     # =========================================================================

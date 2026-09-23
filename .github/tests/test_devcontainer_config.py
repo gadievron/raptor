@@ -77,6 +77,23 @@ def test_home_mounts_target_the_remote_users_home():
     )
 
 
+def test_default_run_args_are_not_privileged():
+    """RAPTOR's own threat model treats scanned repos as hostile
+    (SECURITY: UNTRUSTED REPOS; the sandbox machinery). Under
+    ``--privileged`` + passwordless sudo + host-secret bind mounts, a
+    single in-container escalation is host-equivalent BY CONFIGURATION
+    — the sandbox layers defend the host only because the container
+    boundary they back onto exists. --privileged is the documented
+    OPT-IN rr recording profile (a local runArgs edit), never the
+    default posture."""
+    cfg = _load_devcontainer()
+    run_args = cfg.get("runArgs", [])
+    assert "--privileged" not in run_args, (
+        "the default devcontainer posture regressed to --privileged; "
+        "rr recording is an opt-in local edit, not the default"
+    )
+
+
 def test_claude_mount_serves_the_cli_user():
     """Direction pin for the fix itself: the ~/.claude mount exists
     and lands where the claude CLI (running as remoteUser) resolves
