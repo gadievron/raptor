@@ -29,6 +29,9 @@ class _FakeResponse:
             return self._payload
         return self._payload[:amt]
 
+    def close(self) -> None:
+        pass
+
 
 def test_fetch_pack_normal_response_normalised(
     monkeypatch: pytest.MonkeyPatch,
@@ -53,6 +56,9 @@ def test_fetch_pack_socket_error_reported_per_pack(
         def read(self, amt: int | None = None) -> bytes:
             raise TimeoutError("timed out")
 
+        def close(self) -> None:
+            pass
+
     monkeypatch.setattr(mod, "urlopen", lambda req, timeout: _Resets())
     with pytest.raises(SystemExit, match=r"FAILED: security-audit"):
         mod.fetch_pack("security-audit")
@@ -71,6 +77,9 @@ def test_fetch_pack_oversize_response_refused(
             assert amt is not None, "unbounded read() reintroduced"
             buffered.append(amt)
             return b"x" * amt
+
+        def close(self) -> None:
+            pass
 
     monkeypatch.setattr(mod, "urlopen", lambda req, timeout: _Huge())
     with pytest.raises(SystemExit, match=rf"{mod.MAX_PACK_BYTES}-byte cap"):
@@ -339,3 +348,86 @@ def test_fetch_partial_failure_writes_bundle_but_exits_nonzero(
         assert "c.p.security-audit.json" in zf.namelist()
         assert "c.p.jwt.json" not in zf.namelist()
     assert "INCOMPLETE" in capsys.readouterr().out
+
+
+# --- resource hygiene: response close, atomic cache writes, bounded list ----
+
+
+def test_fetch_pack_closes_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_tool()
+    closed: list[bool] = []
+
+    class _Tracked(_FakeResponse):
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(
+        mod, "urlopen",
+        lambda req, timeout: _Tracked(b'{"rules": []}'),
+    )
+    mod.fetch_pack("security-audit")
+    assert closed == [True]
+
+
+def test_update_write_is_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cache writes go through tempfile + rename (repo idiom): when
+    the rename step fails, the previous pack content stays intact and
+    no temp file leaks — a concurrent scan never sees a torn pack."""
+    mod = _load_tool()
+    mod.CACHE_DIR = tmp_path / "cache"
+    mod.CACHE_DIR.mkdir(parents=True)
+    dest = mod.CACHE_DIR / mod.cache_filename("jwt")
+    dest.write_bytes(b'{"rules": ["OLD"]}')
+    monkeypatch.setattr(
+        mod, "urlopen",
+        lambda req, timeout: _FakeResponse(b'{"rules": []}'),
+    )
+
+    def _no_replace(src, dst):
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr(mod.os, "replace", _no_replace)
+    with pytest.raises(OSError, match="simulated rename failure"):
+        mod.cmd_update(argparse.Namespace(packs="jwt"))
+    assert dest.read_bytes() == b'{"rules": ["OLD"]}'
+    leftovers = [p for p in mod.CACHE_DIR.iterdir() if p != dest]
+    assert leftovers == []
+
+
+def test_import_write_is_atomic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_tool()
+
+    def _no_replace(src, dst):
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr(mod.os, "replace", _no_replace)
+    with pytest.raises(OSError, match="simulated rename failure"):
+        _run_import(tmp_path, mod, {"c.p.good.json": b'{"rules": []}'})
+    assert not (tmp_path / "cache" / "c.p.good.json").exists()
+    leftovers = list((tmp_path / "cache").iterdir())
+    assert leftovers == []
+
+
+def test_cmd_list_bounds_cache_reads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """cmd_list must not buffer an unbounded cache file — an oversize
+    entry is reported as such, mirroring the fetch/import caps."""
+    mod = _load_tool()
+    monkeypatch.setattr(mod, "MAX_PACK_BYTES", 1024)
+    mod.CACHE_DIR = tmp_path / "cache"
+    mod.CACHE_DIR.mkdir(parents=True)
+    big = b'{"rules": [{"id": "' + b"a" * 4096 + b'"}]}'
+    (mod.CACHE_DIR / mod.cache_filename("jwt")).write_bytes(big)
+    mod.cmd_list(argparse.Namespace())
+    out = capsys.readouterr().out
+    jwt_row = next(line for line in out.splitlines() if "p/jwt" in line)
+    assert "oversize" in jwt_row
+    assert "1 rules" not in jwt_row
