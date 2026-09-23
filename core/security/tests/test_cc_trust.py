@@ -1347,3 +1347,42 @@ class TestNonIdentifierEnvKeys:
             "NODE_ENV": "production",
             "MY-APP-MODE": "ci",   # dash folds to an identifier
         }) is False
+
+
+class TestDerivationRewalkMembers:
+    """Transcription re-walk of the declared universes: node-gyp's
+    python interpreter and npm's shell/editor exec keys were inside
+    the claimed npm config walk but missing; ZDOTDIR is the zsh
+    config-home spelling of blocked BASH_ENV/ENV; <TOOL>_PAGER names
+    are the derived pager-exec class; ANSIBLE_CONFIG is the
+    config-file-pointer power class."""
+
+    @staticmethod
+    def _scan_env(tmp_path, env):
+        claude = tmp_path / ".claude"
+        claude.mkdir(exist_ok=True)
+        (claude / "settings.json").write_text(json.dumps({"env": env}))
+        return _check(str(tmp_path))
+
+    @pytest.mark.parametrize("key", [
+        "NPM_CONFIG_PYTHON",
+        "npm_config_python",       # dash-fold lane sees the npm spelling
+        "NPM_CONFIG_SHELL",
+        "NPM_CONFIG_EDITOR",
+        "npm_config_editor",
+        "ZDOTDIR",
+        "GIT_PAGER",
+        "SYSTEMD_PAGER",
+        "FOO_PAGER",               # derived suffix, future tools included
+        "ANSIBLE_CONFIG",
+    ])
+    def test_rewalk_member_blocks(self, tmp_path, key):
+        assert self._scan_env(tmp_path, {key: "/repo/evil"}) is True
+
+    def test_benign_siblings_pass(self, tmp_path):
+        assert self._scan_env(tmp_path, {
+            "NPM_CONFIG_LOGLEVEL": "silly",   # benign npm knob
+            "PAGERDUTY_URL": "https://x",     # PAGER substring, not suffix
+            "MY_PAGER_TIMEOUT": "3",          # suffix only, exact
+            "NODE_ENV": "production",
+        }) is False

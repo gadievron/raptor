@@ -230,6 +230,11 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # OpenSSL config — .conf files can load ENGINE .so files
     # (arbitrary code in any process that initialises OpenSSL).
     "OPENSSL_CONF",
+    # ansible.cfg pointer — the pointed-to file names plugin dirs and
+    # callback/action plugins ansible EXECUTES; the config-file-
+    # pointer power class (AWS_CONFIG_FILE credential_process twin).
+    # Settings-scan lane only, like every member of this set.
+    "ANSIBLE_CONFIG",
     # TLS trust override — CA bundle / cert dir redirection makes
     # MITM trivial.
     "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
@@ -646,6 +651,12 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
                 # carry one — fail closed on the shape.
                 if (key_upper in dangerous_upper
                         or key_upper.startswith(_DANGEROUS_ENV_PREFIXES)
+                        # Pager-exec class, derived by suffix rather
+                        # than per-tool names: PAGER itself is blocked
+                        # above, and consumers take their override as
+                        # <TOOL>_PAGER (GIT_PAGER, SYSTEMD_PAGER, ...)
+                        # — each one a command the tool executes.
+                        or key_upper.endswith("_PAGER")
                         or is_credential_redirect_shaped(key_upper)
                         or is_model_traffic_redirect_shaped(key_upper)
                         or is_function_injection_shaped(key_upper)):
