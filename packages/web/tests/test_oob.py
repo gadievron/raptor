@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from packages.web.oob import OobContext, OobListener, token_of
 from packages.web.scanner import WebScanner, _parse_oob_listen
@@ -174,6 +174,89 @@ class TestScannerOobFunnel(unittest.TestCase):
             scanner._oob_inject([("https://target.example/api", "url")])
             self.assertEqual(scanner._phase_oob(), [])
 
+
+class TestCanaryReplacesTheOriginalParameter(unittest.TestCase):
+    """Fuzz cells are discovered WITH their parameter in the query
+    (`?u=orig`), and requests APPENDS `params=` to an existing query —
+    so an append-shaped injection leg sends `?u=orig&u=<canary>` and a
+    first-occurrence-wins backend never sees the canary: the OOB
+    pipeline is dark while coverage reports the leg ran. Both legs must
+    REPLACE the original value; a real loopback first-param-wins server
+    is the arbiter."""
+
+    def _serve_first_param_wins(self):
+        import http.server
+        import threading
+        from urllib.parse import parse_qsl
+
+        requests_seen: list[str] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                requests_seen.append(self.path)
+                first_wins: dict[str, str] = {}
+                for name, value in parse_qsl(urlparse(self.path).query):
+                    first_wins.setdefault(name, value)
+                fetch_url = first_wins.get("u", "")
+                if fetch_url.startswith("http://"):
+                    _fetch(fetch_url)
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server, requests_seen
+
+    def test_first_param_wins_backend_sees_the_canary_on_both_legs(self):
+        from packages.web.client import WebClient
+
+        server, requests_seen = self._serve_first_param_wins()
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.server_close)
+        host, port = server.server_address
+        base = f"http://{host}:{port}"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("packages.web.scanner.WebClient"), patch(
+                "packages.web.scanner.WebCrawler"
+            ):
+                scanner = WebScanner(
+                    base, None, Path(tmpdir),
+                    oob_listen="127.0.0.1:0", oob_grace=0.3,
+                )
+            scanner.client = WebClient(
+                base, rate_limit=0, block_private_ips=False,
+            )
+            self.addCleanup(scanner.client.close)
+
+            cell_url = f"{base}/page.php?u=orig&x=1"
+            scanner._oob_inject([(cell_url, "u")])
+            findings = scanner._phase_oob()
+
+        # The backend fetched the canary on the injection leg AND the
+        # fresh-token replay leg — replay-verified, confirmed.
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0].status, "confirmed")
+        self.assertEqual(
+            findings[0].oracle_signal, "oob_callback_replayed",
+        )
+        # Wire-shape pin: a cell URL already carrying `?u=orig` yields
+        # exactly ONE `u` on the wire (replaced, not duplicated), and
+        # the untouched sibling parameter survives.
+        self.assertEqual(len(requests_seen), 2)
+        for path in requests_seen:
+            query = dict()
+            pairs = parse_qs(urlparse(path).query)
+            query.update(pairs)
+            self.assertEqual(len(query.get("u", [])), 1, path)
+            self.assertTrue(
+                query["u"][0].startswith("http://127.0.0.1"), path,
+            )
+            self.assertEqual(query.get("x"), ["1"], path)
 
 
 class TestListenerHardening(unittest.TestCase):

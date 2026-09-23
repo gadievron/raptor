@@ -1461,6 +1461,7 @@ class WebScanner:
         if self.oob_listener is None:
             return
         from packages.web.oob import OobContext
+        from packages.web.oracle import _strip_query_params
         try:
             self.oob_listener.start()
         except OSError as e:
@@ -1476,7 +1477,19 @@ class WebScanner:
                 canary = self.oob_listener.mint(
                     OobContext(url=url, param=param),
                 )
-                self.client.get(url, params={param: canary})
+                # REPLACE the parameter, never append: the cell URL
+                # normally already carries it (`?u=orig`), and requests
+                # APPENDS `params=` to an existing query — first-
+                # occurrence-wins backends (Werkzeug, servlet
+                # getParameter, Go FormValue) would then never see the
+                # canary, leaving the whole blind-SSRF pipeline dark on
+                # the dominant URL shape while coverage reports the leg
+                # ran. Same strip-then-set the oracle's replay/control
+                # legs use.
+                self.client.get(
+                    _strip_query_params(url, {param: canary}),
+                    params={param: canary},
+                )
                 injected += 1
             except Exception:
                 logger.debug("OOB canary injection failed", exc_info=True)
@@ -1504,7 +1517,7 @@ class WebScanner:
             write_web_attempts,
         )
         from packages.web.oob import OobContext, OobHit, token_of
-        from packages.web.oracle import VerificationResult
+        from packages.web.oracle import VerificationResult, _strip_query_params
         findings: list[WebFinding] = []
         attempts = []
         try:
@@ -1528,8 +1541,17 @@ class WebScanner:
                             context.url, headers={context.param: fresh},
                         )
                     else:
+                        # Replace-not-append, mirroring the injection
+                        # leg: an appended fresh token is invisible to
+                        # first-occurrence-wins backends, permanently
+                        # demoting reproducible blind SSRF to
+                        # needs_review ("initial callback not
+                        # reproduced").
                         self.client.get(
-                            context.url, params={context.param: fresh},
+                            _strip_query_params(
+                                context.url, {context.param: fresh},
+                            ),
+                            params={context.param: fresh},
                         )
                     replay_hit = listener.wait_for(
                         token_of(fresh),
