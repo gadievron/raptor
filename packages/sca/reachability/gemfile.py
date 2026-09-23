@@ -20,6 +20,7 @@ import re
 
 from ..models import Confidence, Reachability
 from ._shared import format_evidence as _format_evidence
+from ._shared import iter_matches_with_lines as _iter_matches_with_lines
 from ..parsers import _safe_read
 from typing import TYPE_CHECKING
 
@@ -120,8 +121,11 @@ def resolve_dep(
 # ---------------------------------------------------------------------------
 
 def _requires_in(text: str) -> Iterable[tuple[str, int]]:
-    for m in _REQUIRE_RE.finditer(text):
-        yield m.group(2), text.count("\n", 0, m.start()) + 1
+    # Rolling-cursor line numbers — the naive full-prefix count is
+    # quadratic on dense-require files.
+    for m, line in _iter_matches_with_lines(
+            text, _REQUIRE_RE.finditer(text)):
+        yield m.group(2), line
 
 
 def _walk_ruby_sources(

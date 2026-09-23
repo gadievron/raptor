@@ -21,7 +21,7 @@ import re
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Iterator
     from pathlib import Path
 
 # A name the cross-language resolver can actually bind as a
@@ -305,6 +305,31 @@ def extract_function_names(advisory: Any) -> list[str]:
             if isinstance(v, list):
                 out.extend(s for s in v if isinstance(s, str) and s)
     return out
+
+
+def iter_matches_with_lines(
+    text: str, matches: Iterable[re.Match[str]],
+) -> Iterator[tuple[re.Match[str], int]]:
+    r"""Yield ``(match, 1-based line number)`` for regex matches over
+    ``text`` using a rolling newline cursor.
+
+    The naive per-match ``text.count("\n", 0, m.start()) + 1``
+    re-scans the whole prefix for every match: O(matches x
+    file-bytes), quadratic on attacker-supplied dense-import source
+    files — the per-ecosystem import sweeps run on the default scan
+    path over every file of the ecosystem, so one planted
+    megabyte-scale file dominated the scan. Walking forward from the
+    previous match's offset makes the whole sweep one pass.
+    ``matches`` must arrive in non-decreasing start order (the
+    ``finditer`` contract); use one cursor per pass when a caller
+    runs several patterns over the same text.
+    """
+    last_pos = 0
+    last_line = 1
+    for m in matches:
+        last_line += text.count("\n", last_pos, m.start())
+        last_pos = m.start()
+        yield m, last_line
 
 
 def format_evidence(

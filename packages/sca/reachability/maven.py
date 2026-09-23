@@ -62,6 +62,7 @@ from core.json import load_json_bounded
 
 from ..models import Confidence, Reachability
 from ..parsers import _safe_read
+from ._shared import iter_matches_with_lines as _iter_matches_with_lines
 
 logger = logging.getLogger(__name__)
 
@@ -249,10 +250,10 @@ def _candidate_prefixes(dep_name: str) -> Iterable[str]:
 
 def _imports_in(text: str) -> Iterable[tuple[str, int]]:
     """Yield ``(import_path, line_number)`` for each ``import`` line."""
-    for m in _IMPORT_RE.finditer(text):
-        path = m.group(1)
-        line = text.count("\n", 0, m.start()) + 1
-        yield path, line
+    # Rolling-cursor line numbers — the naive full-prefix count is
+    # quadratic on dense-import files.
+    for m, line in _iter_matches_with_lines(text, _IMPORT_RE.finditer(text)):
+        yield m.group(1), line
 
 
 def _walk_java_sources(
