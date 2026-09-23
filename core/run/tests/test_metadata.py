@@ -1913,3 +1913,96 @@ class UpdateStatusUnreadableMarkerTest(unittest.TestCase):
         with TemporaryDirectory() as d:
             with self.assertRaises(FileNotFoundError):
                 _update_status(Path(d), "failed")
+
+
+class TerminalFinaliserPreCheckTest(unittest.TestCase):
+    """fail_run's already-terminal pre-check, hoisted so ALL the
+    non-complete finalisers share it: a supervisor SIGTERM drain (or
+    sweep) racing a just-completed run must not re-run sandbox
+    summary/triage, manifest conversion, or journal merge against the
+    terminal run dir — and a failed->failed repeat is the same shape."""
+
+    _SIDE_EFFECTS = (
+        "_finalize_sandbox_summary",
+        "_finalize_sandbox_triage",
+        "_convert_reads_manifest",
+        "_merge_run_journal",
+    )
+
+    def _run_dir(self, tmp: Path, status: str) -> Path:
+        import json as _json
+        (tmp / RUN_METADATA_FILE).write_text(_json.dumps({
+            "version": 2, "command": "scan",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "status": status,
+        }), encoding="utf-8")
+        return tmp
+
+    def _record_side_effects(self, stack):
+        from unittest.mock import patch as _patch
+        calls: list[str] = []
+        for name in self._SIDE_EFFECTS:
+            def _mk(n):
+                return lambda *a, **k: calls.append(n) or None
+            stack.enter_context(_patch(
+                f"core.run.metadata.{name}", _mk(name)))
+        return calls
+
+    def test_finalisers_refuse_completed_run_without_side_effects(self):
+        import contextlib as _ctx
+
+        from core.run.metadata import cancel_run, fail_run, interrupt_run
+        for finaliser in (fail_run, cancel_run, interrupt_run):
+            with TemporaryDirectory() as d:
+                run = self._run_dir(Path(d), "completed")
+                with _ctx.ExitStack() as stack:
+                    calls = self._record_side_effects(stack)
+                    finaliser(run)
+                self.assertEqual(
+                    calls, [],
+                    f"{finaliser.__name__} ran side effects against a "
+                    f"completed run")
+                self.assertEqual(
+                    load_json(run / RUN_METADATA_FILE)["status"],
+                    "completed")
+
+    def test_cancel_and_interrupt_refuse_failed_run(self):
+        # Only fail_run keeps the failed->failed lane (the pinned
+        # sweep-consume / idempotent-re-stamp contracts); the other
+        # finalisers refuse every terminal state.
+        import contextlib as _ctx
+
+        from core.run.metadata import cancel_run, interrupt_run
+        for finaliser in (cancel_run, interrupt_run):
+            with TemporaryDirectory() as d:
+                run = self._run_dir(Path(d), "failed")
+                with _ctx.ExitStack() as stack:
+                    calls = self._record_side_effects(stack)
+                    finaliser(run)
+                self.assertEqual(calls, [], finaliser.__name__)
+
+    def test_fail_run_keeps_the_refail_merge_lane(self):
+        # Two-direction: a genuine failed->failed re-stamp still
+        # lands (abandon-marker consumption + error refresh depend
+        # on it — pinned by the abandon-sweep recovery tests).
+        from core.run.metadata import fail_run
+        with TemporaryDirectory() as d:
+            run = self._run_dir(Path(d), "failed")
+            fail_run(run, "retry also failed")
+            meta = load_json(run / RUN_METADATA_FILE)
+            self.assertEqual(meta["extra"]["error"], "retry also failed")
+
+    def test_running_run_still_finalises(self):
+        # Two-direction: the pre-check must not turn the finalisers off.
+        import contextlib as _ctx
+
+        from core.run.metadata import interrupt_run
+        with TemporaryDirectory() as d:
+            run = self._run_dir(Path(d), "running")
+            with _ctx.ExitStack() as stack:
+                calls = self._record_side_effects(stack)
+                interrupt_run(run, "drain")
+            self.assertIn("_finalize_sandbox_summary", calls)
+            self.assertEqual(
+                load_json(run / RUN_METADATA_FILE)["status"],
+                "interrupted")
