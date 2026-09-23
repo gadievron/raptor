@@ -991,18 +991,45 @@ class ModelScorecard:
         # nothing changed. TOCTOU-safe: the write path below re-checks
         # under the exclusive lock; the probe only short-circuits the
         # already-seen case, it never grants the claim.
+        # Trust gate on BOTH seen-set consults below: the seen-set is
+        # suppression authority (membership silently drops a truth
+        # event), and under the key-unusable clamp the sidecar's bytes
+        # are readable-but-unverifiable — finding_ids are deterministic
+        # and pre-seedable, so an unverified seen-set is exactly what a
+        # same-user forger would plant to keep a bad model's
+        # ``incorrect`` outcomes off the ledger. When the read is not
+        # trusted, membership is inert (visible, non-suppressing) and
+        # the event records; a duplicate count in the degraded-key
+        # regime is the safe direction, per the
+        # MAX_TOOL_EVIDENCE_SEEN_IDS rationale.
         with self._with_lock(write=False) as data:
             cell = self._read_cell(data, model, decision_class)
-            if cell and finding_id in (
-                cell.get("tool_evidence_finding_ids") or []
+            # Same in-lock capture rationale as should_short_circuit.
+            trusted = self._last_read_trusted
+            seen_ids = (
+                cell.get("tool_evidence_finding_ids") if cell else None
+            )
+            if (
+                trusted
+                and isinstance(seen_ids, list)
+                and finding_id in seen_ids
             ):
                 return False
         with self._with_lock() as data:
+            trusted = self._last_read_trusted
             cell = self._ensure_cell(data, model, decision_class)
-            seen = cell.setdefault("tool_evidence_finding_ids", [])
+            seen = cell.get("tool_evidence_finding_ids")
+            if not isinstance(seen, list):
+                # Junk shape (str membership would be a substring
+                # test) — normalise on the write path like every
+                # other cell field.
+                seen = []
+                cell["tool_evidence_finding_ids"] = seen
             if finding_id in seen:
-                return False
-            seen.append(finding_id)
+                if trusted:
+                    return False
+            else:
+                seen.append(finding_id)
             # Newest-N eviction — see MAX_TOOL_EVIDENCE_SEEN_IDS for
             # the both-directions trade-off.
             if len(seen) > MAX_TOOL_EVIDENCE_SEEN_IDS:
@@ -1277,6 +1304,14 @@ class ModelScorecard:
                 # hand-edited-history territory, not junk — normalise
                 # (idempotent; already-bucketed cells untouched).
                 _migrate_events_v1_to_v2(cell)
+                # The TOOL_EVIDENCE idempotency seen-set is claim
+                # state, not calibration history: membership silently
+                # suppresses future truth events, finding_ids are
+                # pre-seedable, and no CLI view renders the field —
+                # the docstring-recommended inspect-before-adopt
+                # cannot surface it. Adoption never re-blesses it
+                # into standing suppression authority.
+                cell.pop("tool_evidence_finding_ids", None)
         with self._with_lock() as data:
             data.clear()
             data.update(adopted)
