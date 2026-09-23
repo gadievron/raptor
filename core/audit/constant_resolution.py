@@ -14,6 +14,7 @@ suppress allowlist.  Resolved constants feed INTO the proof chain
 from __future__ import annotations
 
 import ast
+import bisect
 import logging
 import operator
 import re
@@ -216,23 +217,34 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
             _cont_offsets.append(_idx)
             _search_pos = _idx + 2
 
+        # Both mappings are precomputed once per file and bisected per
+        # match. The previous per-match prefix rescan
+        # (text[:orig_pos].count("\n")) made definition mapping
+        # O(file_size × definitions) — quadratic, minutes-scale on
+        # honest 80k-define generated headers (SDK register maps,
+        # unicode tables) and trivially triggerable by a hostile
+        # repo, uninterruptible by the prepass budget which is
+        # checked before the scan, not during.
+        #
+        # The k-th removed continuation (2-char "\\\n" → 1-char " ")
+        # sits at joined-text offset `off_k - k`; the count of those
+        # at or before joined_pos is the shift back to the original
+        # offset. Original line-start offsets then give the 1-based
+        # line by bisection (in-unit exemplar: api_boundary
+        # line_starts).
+        _joined_cont_offsets = [
+            off - k for k, off in enumerate(_cont_offsets)
+        ]
+        _line_starts = [0]
+        _nl = text.find("\n")
+        while _nl >= 0:
+            _line_starts.append(_nl + 1)
+            _nl = text.find("\n", _nl + 1)
+
         def _original_line(joined_pos: int) -> int:
             """Map a position in text_joined to a 1-based line in text."""
-            # Each continuation before joined_pos added one extra newline
-            # that is absent in text_joined.
-            extra = 0
-            orig_pos = joined_pos
-            for off in _cont_offsets:  # noqa: B023 — closure used only within this file's iteration
-                # In the joined text the continuation at original offset
-                # `off` becomes offset `off - extra` (each prior removal
-                # shifted by 1). If joined_pos is past that point, the
-                # original position is one further ahead.
-                if off - extra <= joined_pos:
-                    extra += 1
-                    orig_pos += 1
-                else:
-                    break
-            return text[:orig_pos].count("\n") + 1  # noqa: B023 — closure used only within this file's iteration
+            extra = bisect.bisect_right(_joined_cont_offsets, joined_pos)  # noqa: B023 — closure used only within this file's iteration
+            return bisect.bisect_right(_line_starts, joined_pos + extra)  # noqa: B023 — closure used only within this file's iteration
 
         rel = str(p.relative_to(target_path)) if p.is_relative_to(target_path) else str(p)
 

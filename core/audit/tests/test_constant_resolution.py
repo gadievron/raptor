@@ -357,6 +357,44 @@ class TestMultiDefinition:
         assert "FOO" not in table.unique
 
 
+class TestScanComplexity:
+    """The per-definition line mapping must be a bisect over
+    precomputed offsets, not a prefix rescan — O(file × definitions)
+    stalled minutes-scale on honest 80k-define generated headers and
+    is trivially hostile-triggerable, uninterruptible by the prepass
+    budget (checked before the scan, not during)."""
+
+    def test_many_definition_header_scans_within_budget(self, tmp_path):
+        from core.audit.constant_resolution import _scan_definitions
+
+        n = 20000
+        body = "".join(
+            f"#define K_{i} {i}\n/* {'x' * 80} */\n" for i in range(n)
+        )
+        _write_file(tmp_path, "big.h", body)
+        with cpu_budget(2.5, what="20k-define header scan"):
+            defs = _scan_definitions(tmp_path)
+        assert len(defs) == n
+
+    def test_line_mapping_survives_continuations(self, tmp_path):
+        # Line numbers must stay correct through the "\\\n" joining
+        # the mapping exists for — including a definition whose OWN
+        # body is continued.
+        from core.audit.constant_resolution import _scan_definitions
+
+        _write_file(
+            tmp_path, "a.h",
+            "#define FIRST 1\n"          # line 1
+            "#define LONG_ONE \\\n"      # line 2 (body continues)
+            "    2\n"                    # line 3
+            "#define AFTER 3\n",         # line 4
+        )
+        defs = _scan_definitions(tmp_path)
+        assert defs["FIRST"][0].line == 1
+        assert defs["LONG_ONE"][0].line == 2
+        assert defs["AFTER"][0].line == 4
+
+
 class TestMacroComposition:
     """Safety contract blind spot: macro composition."""
 
