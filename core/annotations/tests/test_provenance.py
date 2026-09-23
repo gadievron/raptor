@@ -36,9 +36,12 @@ from core.annotations.provenance import (
     CORROBORATION_PRE_ERA,
     ENV_MARKERS_KEY,
     PARENTS_KEY,
+    PARENTS_TRUNCATED,
     SID_INHERITED,
     SID_KEY,
     SID_SELF,
+    _comm,
+    _detect_parent_chain,
     valid_env_markers_value,
     valid_parents_value,
     valid_tty_value,
@@ -328,6 +331,64 @@ class TestDeepChainScriptDetection:
         assert "script" in chain.split(","), chain
         # And the verdict keys on it wherever it appears.
         assert not is_human_grade(_human_interactive(parents=chain))
+
+
+class TestAncestryTruncation:
+    """The bounded ancestor scan is fail-open by design (a deep shell
+    stack alone proves nothing), but an exhausted window must be
+    RECORDED, not silent: a fork stack deep enough to outrun the scan
+    otherwise stamps a clean-looking four-name chain."""
+
+    def _deep_chain(self, tmp_path, hops):
+        import stat
+        import subprocess
+        import sys as _sys
+        code = (
+            "import sys; sys.path.insert(0, %r); "
+            "from core.annotations.provenance import _detect_parent_chain; "
+            "print(_detect_parent_chain())" % str(pathlib_root)
+        )
+        pyfile = tmp_path / "leaf.py"
+        pyfile.write_text(code + "\n")
+        nxt = f"{_sys.executable} {pyfile}"
+        for i in range(hops):
+            hop = tmp_path / f"hop{i}.sh"
+            hop.write_text(f"#!/bin/sh\nsh {nxt}\n"
+                           if nxt.endswith(".sh") else
+                           f"#!/bin/sh\n{nxt}\n")
+            hop.chmod(hop.stat().st_mode | stat.S_IXUSR)
+            nxt = str(hop)
+        wrapper = tmp_path / "script"
+        wrapper.write_text(f"#!/bin/sh\nsh {nxt}\n")
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+        out = subprocess.run(
+            [str(wrapper)], capture_output=True, text=True, check=True,
+        )
+        return out.stdout.strip()
+
+    def test_exhausted_scan_records_truncation(self, tmp_path):
+        # 33 fork intermediaries + the 'script'-named wrapper: the
+        # wrapper sits past the 32-deep scan window.
+        chain = self._deep_chain(tmp_path, hops=33)
+        tokens = chain.split(",")
+        assert PARENTS_TRUNCATED in tokens, chain
+        # Fail-open pinned: truncation is recorded, never demoting —
+        # deep-but-legitimate shell stacks exist.
+        assert is_human_grade(_human_interactive(parents=chain))
+        # The recorded value stays inside the stamp grammar.
+        assert valid_parents_value(chain)
+
+    def test_unexhausted_scan_records_no_truncation(self):
+        # Control: the suite process reaches the session root well
+        # inside the window — no marker.
+        chain = _detect_parent_chain()
+        assert PARENTS_TRUNCATED not in chain.split(","), chain
+
+    def test_marker_cannot_collide_with_a_comm_name(self):
+        # Kernel comm names cap at 15 chars (and _comm truncates to
+        # 15), so the token is unforgeable as a process name.
+        assert len(PARENTS_TRUNCATED) > 15
+        assert _comm(1) != PARENTS_TRUNCATED
 
 
 class TestValidCorroborationValues:
