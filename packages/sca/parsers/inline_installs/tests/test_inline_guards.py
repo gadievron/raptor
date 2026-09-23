@@ -139,3 +139,34 @@ def test_post_pipe_install_command_still_scanned(tmp_path: Path) -> None:
     deps = parse_shell_script(sh)
     by = {d.name: d for d in deps}
     assert "uv" in by and by["uv"].version == "0.12.6"
+
+
+def test_devcontainer_array_form_command_extracted(tmp_path: Path) -> None:
+    """The spec's primary lifecycle-command shape is an exec ARGV
+    array — one command, not one command per element. Element-wise
+    scanning never saw verb+args together, so every dep declared in
+    array form was silently lost."""
+    dc = tmp_path / "devcontainer.json"
+    dc.write_text(
+        '{"postCreateCommand": ["pip", "install", "requests==2.31.0"]}',
+        encoding="utf-8",
+    )
+    deps = parse_devcontainer_json(dc)
+    assert [(d.name, d.version) for d in deps] == [("requests", "2.31.0")]
+
+
+def test_devcontainer_dict_of_arrays_extracted(tmp_path: Path) -> None:
+    """The named-parallel-commands object form allows each value to be
+    a string OR an argv array; array values join per-value."""
+    dc = tmp_path / "devcontainer.json"
+    dc.write_text(
+        '{"postCreateCommand": {'
+        '  "py": ["pip", "install", "flask==3.0.3"],'
+        '  "js": "npm install lodash@4.17.21"'
+        "}}",
+        encoding="utf-8",
+    )
+    deps = parse_devcontainer_json(dc)
+    got = {(d.name, d.version) for d in deps}
+    assert ("flask", "3.0.3") in got
+    assert ("lodash", "4.17.21") in got

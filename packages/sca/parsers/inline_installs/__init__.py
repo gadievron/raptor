@@ -555,8 +555,10 @@ def parse_devcontainer_json(path: Path) -> list[Dependency]:
     """Extract installs from devcontainer.json post*Command hooks.
 
     Shell content is grabbed from ``postCreateCommand``, ``onCreateCommand``,
-    ``postStartCommand``, ``updateContentCommand``. Each can be a string or
-    an array of strings.
+    ``postStartCommand``, ``updateContentCommand``. Each can be a string
+    (run via shell), an exec ARGV array (joined into one command line),
+    or an object of named parallel commands whose values are again
+    strings or arrays.
     """
     text = _safe_read(path)
     if text is None:
@@ -974,13 +976,32 @@ def _load_jsonc(text: str) -> dict:
 
 def _flatten_command(val) -> list[str]:
     """devcontainer command fields can be string, list-of-strings, or
-    object (dict of named parallel commands)."""
+    object (dict of named parallel commands, each again a string or
+    array).
+
+    Per the devcontainer spec a STRING runs via the shell but an
+    ARRAY is one argv exec'd directly — so a list joins into a single
+    command line. Yielding each element as its own line meant no
+    manager pattern ever saw verb+args together and every dep in the
+    spec's primary array shape was silently lost. (Joining and
+    scanning with the shell-line machinery is a safe approximation:
+    an exec argv contains no shell operators to misparse.)"""
+    def _join(items: list) -> list[str]:
+        parts = [v for v in items if isinstance(v, str)]
+        return [" ".join(parts)] if parts else []
+
     if isinstance(val, str):
         return [val]
     if isinstance(val, list):
-        return [v for v in val if isinstance(v, str)]
+        return _join(val)
     if isinstance(val, dict):
-        return [v for v in val.values() if isinstance(v, str)]
+        out: list[str] = []
+        for v in val.values():
+            if isinstance(v, str):
+                out.append(v)
+            elif isinstance(v, list):
+                out.extend(_join(v))
+        return out
     return []
 
 
