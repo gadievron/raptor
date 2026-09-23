@@ -865,11 +865,42 @@ def reviewed_set(out_dir: Path) -> set[str]:
     interrupt in that window persists dark entries, and letting them
     suppress re-review left the function at "needs concrete
     verification" across every later segment.
+
+    Edge rows are KEPT here (unlike
+    :func:`entry_earns_function_coverage`): their keys carry the edge
+    suffix, so they suppress re-review of the EDGE subject itself and
+    can never satisfy a lookup for the caller's function key.
     """
     return {
         e.key for e in load_entries(out_dir)
         if e.verdict not in ("error", "dark")
     }
+
+
+def entry_earns_function_coverage(entry: ReviewJournalEntry) -> bool:
+    """True when a journal entry earns FUNCTION-level coverage credit.
+
+    The single screening rule for every lane that projects journal
+    rows into durable coverage marks — the store's journal import and
+    the ``coverage-journal.json`` record builder. Excluded:
+
+    * ``error`` rows — transient failures; the function was never
+      actually reviewed and must be retried, not marked covered;
+    * ``dark`` rows — the unresolved gate-resolution bucket; a
+      durable coverage mark has no re-adjudication route, so an
+      interrupted run's dark rows must stay visible as unreviewed;
+    * edge-contract rows (``edge_callee`` set) — only the CALL EDGE
+      was examined, and ``ReviewJournalEntry.key`` documents the
+      invariant: an edge review must never mark the caller function
+      itself as reviewed.
+
+    Same direction as :func:`reviewed_set`; the two differ only on
+    edge rows (see its docstring).
+    """
+    return (
+        entry.verdict not in ("error", "dark")
+        and not entry.edge_callee
+    )
 
 
 # ── Producer kind ────────────────────────────────────────────────────
