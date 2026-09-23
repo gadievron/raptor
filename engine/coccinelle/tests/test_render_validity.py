@@ -53,7 +53,13 @@ _VIRTUAL_REF_RE = re.compile(
     re.MULTILINE,
 )
 
-pytestmark = pytest.mark.skipif(
+# Scoped to the two parse gates only — the other gates (universe
+# floor, template-terminator, unknown-bucket, dead-splice, both
+# self-checks) are hermetic pure-Python file inspection, and a
+# module-level skip turned ALL of them off on spatch-less runners: a
+# dropped template terminator or an unmapped bucket landed silently
+# wherever coccinelle was not installed.
+_needs_spatch = pytest.mark.skipif(
     shutil.which("spatch") is None, reason="coccinelle not installed",
 )
 
@@ -219,6 +225,7 @@ def test_template_terminator_matches_block_position(rule):
             )
 
 
+@_needs_spatch
 @pytest.mark.parametrize(
     "rule", _ALL_RULES, ids=lambda p: p.stem,
 )
@@ -333,6 +340,7 @@ def test_unknown_bucket_detection_self_check(tmp_path):
     assert unknown and "not_a_real_bucket" in unknown[0]
 
 
+@_needs_spatch
 @pytest.mark.parametrize(
     "rule", _VOCAB_RULES, ids=lambda p: p.stem,
 )
