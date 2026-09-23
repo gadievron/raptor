@@ -206,6 +206,59 @@ def test_build_epss_skips_malformed_scores(tmp_path: Path) -> None:
     assert result.record_count == 1
 
 
+def test_build_epss_rejects_nonfinite_and_out_of_range(
+    tmp_path: Path,
+) -> None:
+    """Float-parseable poison from a hostile / corrupted feed —
+    "NaN", "Infinity", "1e999", out-of-range 7.5 — must be rejected
+    per-row (mirrors the ingest-side core.cve.epss guard), and the
+    written artifact must stay spec-valid strict JSON."""
+    from core.json import load_json
+
+    http = _StubHttp({
+        "https://api.first.org/data/v1/epss?epss-gt=0.05&limit=10000&offset=0": {
+            "data": [
+                {"cve": "CVE-2024-OK", "epss": "0.5",
+                 "percentile": "0.9"},
+                {"cve": "CVE-2024-NAN", "epss": "NaN",
+                 "percentile": "0.9"},
+                {"cve": "CVE-2024-INF", "epss": "Infinity",
+                 "percentile": "0.9"},
+                {"cve": "CVE-2024-RANGE", "epss": "7.5",
+                 "percentile": "0.9"},
+                {"cve": "CVE-2024-PCT", "epss": "0.5",
+                 "percentile": "1e999"},
+            ],
+        },
+    })
+    result = _build_epss(tmp_path, http)
+    assert result.record_count == 1
+    raw = (tmp_path / "epss_signals.json").read_text()
+    assert "NaN" not in raw
+    assert "Infinity" not in raw
+    # The repo's own strict loader (what validate/refit use on the
+    # committed corpus) must accept the artifact whole.
+    data = load_json(tmp_path / "epss_signals.json", strict=True)
+    assert list(data["signals"]) == ["CVE-2024-OK"]
+
+
+def test_write_if_changed_refuses_nonfinite_floats(
+    tmp_path: Path,
+) -> None:
+    """Belt-and-braces: any builder letting a non-finite float
+    through must fail loudly at the writer instead of committing a
+    spec-invalid artifact."""
+    import pytest
+
+    from packages.sca.calibration.build import _write_if_changed
+
+    with pytest.raises(ValueError):
+        _write_if_changed(
+            tmp_path / "x.json", {"signals": {"CVE-1": float("nan")}},
+            source="test", record_count=1,
+        )
+
+
 def test_build_epss_paginates_to_completeness(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

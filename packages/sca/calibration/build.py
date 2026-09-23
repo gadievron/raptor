@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 import weakref
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -539,6 +540,7 @@ def _build_epss(out_dir: Path, http: Any) -> BuildResult:
     offset = 0
     total: int | None = None
     pages = 0
+    rejected = 0
     while pages < _EPSS_MAX_PAGES:
         pages += 1
         url = f"{_EPSS_BASE_URL}&limit={_EPSS_PAGE_SIZE}&offset={offset}"
@@ -557,6 +559,20 @@ def _build_epss(out_dir: Path, http: Any) -> BuildResult:
                 score = float(entry["epss"])
                 percentile = float(entry["percentile"])
             except (TypeError, ValueError):
+                continue
+            # Both fields are probabilities: finite and within
+            # [0, 1] inclusive (mirrors core.cve.epss._valid_score,
+            # the ingest-side guard for the same FIRST.org feed).
+            # Float-parseable poison ("NaN", "Infinity", "1e999",
+            # 7.5) otherwise lands in the repo-committed corpus
+            # artifact: bare NaN/Infinity tokens make the whole
+            # file spec-invalid JSON — every strict consumer drops
+            # the entire label source — and out-of-range scores
+            # corrupt numeric consumers.
+            if not (math.isfinite(score) and 0.0 <= score <= 1.0
+                    and math.isfinite(percentile)
+                    and 0.0 <= percentile <= 1.0):
+                rejected += 1
                 continue
             signals[cve] = {
                 "epss": score,
@@ -579,6 +595,11 @@ def _build_epss(out_dir: Path, http: Any) -> BuildResult:
             "sca.calibration: EPSS fetch hit the %d-page ceiling "
             "(offset=%d, total=%s) — corpus may be truncated",
             _EPSS_MAX_PAGES, offset, total,
+        )
+    if rejected:
+        logger.warning(
+            "sca.calibration: EPSS feed: rejected %d row(s) with "
+            "non-finite or out-of-range epss/percentile", rejected,
         )
     output = {
         "_source": {
@@ -1020,8 +1041,13 @@ def _write_if_changed(
     timestamp churn doesn't trigger spurious diffs). Returns a
     BuildResult with ``written`` reflecting whether disk changed.
     """
+    # allow_nan=False: belt-and-braces against any builder letting a
+    # non-finite float through — a bare NaN/Infinity token would make
+    # the committed artifact spec-invalid JSON and strict consumers
+    # would silently lose the whole label source.
     new_bytes = json.dumps(
         data, indent=2, sort_keys=True, ensure_ascii=False,
+        allow_nan=False,
     ).encode("utf-8") + b"\n"
     if path.exists():
         try:
