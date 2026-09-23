@@ -143,3 +143,45 @@ def test_transitive_skip_line_escapes_resolver_stderr_bytes() -> None:
     assert "\x1b" not in line
     assert "\x9b" not in line
     assert "pip failed" in line
+
+
+# ---------------------------------------------------------------------------
+# fix positional translation — value-flag set derived from update.py
+# ---------------------------------------------------------------------------
+
+
+def test_positional_translation_survives_exclude_orderings() -> None:
+    """--exclude takes a value; a hand-typed value-flag set drifted and
+    mistranslated it. ``fix --exclude GLOB /repo`` must keep the glob
+    as the flag's value and translate the bare path."""
+    from packages.sca.cli import _positional_to_target_flag
+
+    assert _positional_to_target_flag(
+        ["--exclude", "**/tests/**", "/repo"],
+    ) == ["--exclude", "**/tests/**", "--target", "/repo"]
+
+
+def test_positional_translation_never_swallows_a_flag_value() -> None:
+    """``--findings f.json --exclude g``: g is --exclude's VALUE, not a
+    droppable positional — swallowing it left a dangling --exclude."""
+    from packages.sca.cli import _positional_to_target_flag
+
+    assert _positional_to_target_flag(
+        ["--findings", "f.json", "--exclude", "g"],
+    ) == ["--findings", "f.json", "--exclude", "g"]
+
+
+def test_value_flag_set_is_derived_from_the_update_parser() -> None:
+    """Closure: the translation's value-flag universe comes from
+    update.py's own parser (every option that consumes a value), so a
+    new flag can never silently reintroduce the drift."""
+    from packages.sca.update import value_flags
+
+    flags = value_flags()
+    assert "--exclude" in flags
+    assert "--format" in flags
+    assert "--findings" in flags
+    # store_true flags consume nothing and must NOT be here — marking
+    # one as value-taking would swallow the operand after it.
+    assert "--apply" not in flags
+    assert "--allow-major" not in flags
