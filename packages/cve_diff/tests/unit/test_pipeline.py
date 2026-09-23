@@ -744,3 +744,66 @@ def test_pipeline_without_model_id_keeps_agent_config_default(tmp_path):
     with pytest.raises(UnsupportedSource):
         pipeline.run("CVE-2099-0002", tmp_path)
     assert captured["model_id"] == AgentConfig.__dataclass_fields__["model_id"].default
+
+
+# ── DiskBudgetExceeded is terminal, never a paid retry ────────────────
+
+
+def test_disk_budget_exceeded_is_not_retried_and_stays_typed(tmp_path):
+    """A mid-run DiskBudgetExceeded must abort the run typed: the
+    post-submit retry path used to catch it as a bare RuntimeError,
+    trigger a PAID focused agent re-run, then wrap the final attempt
+    into AcquisitionError — which the bench layer classifies as
+    transient and retries again, spending more while the disk stays
+    over its limit."""
+    from cve_diff.infra.disk_budget import DiskBudgetExceeded
+
+    calls = {"agent": 0, "focused": 0, "disk": 0}
+
+    class Probe(Pipeline):
+        def _recall_fix_pointer(self, cve_id):
+            return None
+
+        def _run_agent(self, cve_id):
+            calls["agent"] += 1
+            return AgentOutput(
+                value=PatchTuple(
+                    repository_url="https://github.com/o/r",
+                    fix_commit=CommitSha("a" * 40),
+                    introduced=None,
+                ),
+                rationale="stub",
+            )
+
+        def _focused_retry(self, cve_id, retry_msg):
+            calls["focused"] += 1
+            return AgentOutput(
+                value=PatchTuple(
+                    repository_url="https://github.com/o/r",
+                    fix_commit=CommitSha("b" * 40),
+                    introduced=None,
+                ),
+                rationale="stub-retry",
+            )
+
+        def _record_discovery_outcome(self, *a, **k):
+            pass
+
+        def _assert_disk(self, path):
+            calls["disk"] += 1
+            if calls["disk"] > 1:  # run entry passes; disk fills mid-run
+                raise DiskBudgetExceeded("disk 95% > 80% limit")
+
+    with pytest.raises(DiskBudgetExceeded):
+        Probe().run("CVE-2024-0001", tmp_path)
+    assert calls["focused"] == 0, "disk-over-budget must not buy a paid retry"
+
+
+def test_disk_budget_exceeded_is_not_bench_transient():
+    """The bench retry pass must treat DiskBudgetExceeded as conclusive."""
+    from cve_diff.cli import bench
+
+    assert bench._classify_error("DiskBudgetExceeded: disk 95% > 80% limit") == (
+        "DiskBudgetExceeded"
+    )
+    assert "DiskBudgetExceeded" not in bench._TRANSIENT_CLASSES

@@ -38,6 +38,7 @@ from cve_diff.core.exceptions import (
     UnsupportedSource,
 )
 from cve_diff.infra import api_status
+from cve_diff.infra.disk_budget import DiskBudgetExceeded
 from cve_diff.infra.github_client import warn_if_token_missing
 from cve_diff.llm.client import LLMCallFailed
 from cve_diff.pipeline import Pipeline, PipelineResult
@@ -486,6 +487,25 @@ def run(
                             )
                             continue
                     raise
+        except DiskBudgetExceeded as exc:
+            # Terminal by design: the pipeline re-raises this typed so
+            # no retry layer spends more while the disk stays over its
+            # limit. Own exit code — not an acquisition failure.
+            typer.echo("disk budget exceeded: "
+                       f"{sanitise_for_terminal(str(exc), max_len=300)}",
+                       err=True)
+            typer.echo(
+                "hint: free space on the output filesystem or raise the "
+                "disk limit before re-running.",
+                err=True,
+            )
+            _write_failure_md(output_dir, cve_id, "DiskBudgetExceeded",
+                              f"DiskBudgetExceeded: {exc}")
+            if pipeline_slot[0] is not None:
+                _flow_from_pipeline(output_dir, cve_id, pipeline_slot[0],
+                                    ok=False, error_class="DiskBudgetExceeded")
+            _echo_flow_md(output_dir, cve_id, quiet)
+            raise typer.Exit(code=8) from exc
         except UnsupportedSource as exc:
             typer.echo("unsupported source: "
                        f"{sanitise_for_terminal(str(exc), max_len=300)}",

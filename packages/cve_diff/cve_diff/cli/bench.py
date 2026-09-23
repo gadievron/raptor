@@ -362,6 +362,8 @@ def _classify_error(error_text: str) -> str:
         # The DiscoveryError pattern is "agent surrendered (REASON):"
         if f"({reason})" in error_text:
             return reason
+    if error_text.startswith("DiskBudgetExceeded"):
+        return "DiskBudgetExceeded"
     if error_text.startswith("PerCveTimeout"):
         return "PerCveTimeout"
     if error_text.startswith("UnsupportedSource"):
@@ -916,6 +918,10 @@ def _persist_summary(summary_path: Path, sample: Path) -> None:
 # AcquisitionError covers "git clone died mid-fetch"; client_init_failed
 # covers a transient API auth flake (rate limit, DNS hiccup). Settled
 # outcomes (UnsupportedSource / no_evidence / budget_*) stay in.
+# DiskBudgetExceeded is deliberately NOT transient: a retry spends more
+# disk and more paid LLM turns while the host stays over its limit — the
+# pipeline re-raises it typed so it can never hide inside
+# AcquisitionError here.
 _TRANSIENT_CLASSES = frozenset({
     "llm_error", "PerCveTimeout", "AcquisitionError", "client_init_failed",
 })

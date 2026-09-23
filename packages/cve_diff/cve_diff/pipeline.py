@@ -1,9 +1,15 @@
 """
 The single orchestrator for the agentic-first discover pipeline.
 
-Stages, with a disk-budget gate at every entry:
+Stages:
 
     agent_discover  →  acquire  →  resolve  →  diff  →  render
+
+Disk-budget gates sit at the three points that grow the disk: run
+entry, acquisition entry, and post-acquire (before diffing the clone)
+— not literally at every stage entry. ``DiskBudgetExceeded`` is
+terminal for the run: the post-submit retry re-raises it typed rather
+than spending a focused agent re-run while the disk stays full.
 
 The `agent_discover` stage is an Anthropic-SDK tool-use loop (see
 `cve_diff/agent/`). It replaces the deterministic 7-gate scorer chain
@@ -250,6 +256,16 @@ class Pipeline:
             # a different candidate — is the same as the other
             # transient classes already in the list. `HttpError` is
             # imported at module top.
+            except disk_budget.DiskBudgetExceeded:
+                # Disk over budget is the one failure whose remedy is to
+                # STOP SPENDING: a focused agent re-run (and the bench
+                # layer's whole-CVE retry) consumes more disk and more
+                # paid LLM turns while the condition persists. Re-raise
+                # typed BEFORE the transient tuple below — as a
+                # RuntimeError subclass it would otherwise be retried
+                # here and then wrapped into AcquisitionError, which the
+                # bench classifies as transient and retries again.
+                raise
             except (
                 AcquisitionError,
                 AnalysisError,
