@@ -33,11 +33,7 @@ from __future__ import annotations
 import logging
 import struct
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 from pathlib import Path
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
