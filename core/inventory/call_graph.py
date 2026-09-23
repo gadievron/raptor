@@ -40,10 +40,11 @@ finer granularity buys nothing.
 Pure-AST. We never import / require / eval the target, never look
 at any filesystem outside the source tree. String-shape only.
 
-Languages today: Python (stdlib ``ast``) + JavaScript /
-TypeScript + Go + Java (all tree-sitter-driven for non-Python;
-gracefully empty when the grammar isn't installed). The resolver
-in :mod:`core.analysis.reachability` is language-agnostic.
+Languages today: Python (stdlib ``ast``) plus thirteen
+tree-sitter-driven extractors (JS/TS, Go, Java, Rust, Ruby, C#,
+PHP, C, C++, Lua, Scala, Kotlin, Swift — each gracefully empty
+when its grammar isn't installed). The resolver in
+:mod:`core.analysis.reachability` is language-agnostic.
 """
 
 from __future__ import annotations
