@@ -2170,6 +2170,18 @@
     "count": 11,
     "kind": "literal"
   },
+  "packages/exploit_feasibility/smt_verbs.py::_result_to_dict": {
+    "count": 13,
+    "kind": "literal",
+    "note": "JSON result-shape keys (validate_path's documented dict shape), not a name vocabulary; the key set is pinned to smt_path.validate_path by the shape-parity tests",
+    "reviewed": "2026-09-22"
+  },
+  "packages/exploit_feasibility/smt_verbs.py::_smt_unavailable_result": {
+    "count": 13,
+    "kind": "literal",
+    "note": "same validate_path result-shape keys on the z3-unavailable lane; shape parity is test-enforced against smt_path.validate_path",
+    "reviewed": "2026-09-22"
+  },
   "packages/exploit_feasibility/mechanism_coverage.py::MITIGATION_COVERAGE": {
     "count": 21,
     "kind": "literal"
