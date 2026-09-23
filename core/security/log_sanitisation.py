@@ -22,6 +22,33 @@ Python's `str.isprintable()` is the classifier — True for all ASCII
 0x20-0x7E plus every Unicode codepoint whose general category is not
 Cc/Cf/Cn/Co/Cs/Zl/Zp. ESC (0x1b), NUL, CR, LF, BEL, C1 controls
 (0x80-0x9F), and Unicode line/paragraph separators are all rejected.
+
+The label-preserving excerpting contract
+----------------------------------------
+For MIXED-AUTHORITY text artifacts — a trusted writer's label/marker
+lines interleaved with untrusted quoted content (the dispatch
+child-tail log is the canonical member) — escaping is necessary but
+not sufficient. `escape_nonprintable(preserve_newlines=True)` passes
+printable newlines through, so untrusted content can contain lines
+SHAPED like the writer's own labels, and a windowed excerpt can drop
+the genuine label while keeping the forged one. Three rules:
+
+  1. Authority travels out-of-band. Facts the trusted side knows
+     (exit status, ran/failed, timeout) are structured record fields;
+     consumers re-emit them from parsed state, never recover them
+     from artifact bytes.
+  2. Tail windows re-attach the head. An excerpt of a mixed-authority
+     artifact keeps the writer-authored line 1 plus an explicit
+     elision marker — never a bare ``[-N:]`` over the whole document.
+  3. In-band markers must be forgery-evident: either nonce-stamped
+     (the dark_verify harness sentinel / merge_fence record-nonce
+     precedents) or with untrusted body lines quoted/indented so
+     marker-shaped lines cannot sit at column 0.
+
+Single-field tail slices into structured records (a wholly-untrusted
+``stderr_tail`` value) are NOT the class: there is no co-resident
+authority to drop. Per-record log-line escaping keeps its documented,
+weaker guarantee — only that no control byte reaches the TTY.
 """
 
 

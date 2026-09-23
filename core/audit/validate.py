@@ -51,6 +51,10 @@ class ValidatePostpassResult:
     validate_dir: str | None = None
     skipped_reason: str = ""
     duration_s: float = 0.0
+    #: Parent-observed child exit (numeric status or timeout label) —
+    #: the out-of-band authority for the tail artifact's line-1 label;
+    #: None when no child produced one (launch failure / crash).
+    child_exit: str | None = None
 
 
 # Review-confidence rank for dark-outcome selection ordering: dark
@@ -216,6 +220,12 @@ def _followup_command(target_path: Path, out_dir: Path) -> str:
 #: Bytes read from the end of the tail artifact before escaping.
 _CHILD_TAIL_READ_BYTES = 4096
 
+#: Bytes read from the start of the artifact for the head line.
+_CHILD_TAIL_HEAD_BYTES = 256
+
+#: Escaped-character window applied to the artifact tail.
+_CHILD_TAIL_WINDOW_CHARS = 2000
+
 
 def _read_child_tail_untrusted(path: Path) -> str | None:
     """Bounded, symlink-refusing read of the dispatch tail artifact.
@@ -226,13 +236,29 @@ def _read_child_tail_untrusted(path: Path) -> str | None:
     may still have replaced the name) — whatever sits here can be
     child-controlled. Refuse
     symlinks and specials (O_NOFOLLOW + fstat, the inventory probe's
-    discipline), read only the file's last 4 KiB (a planted sparse
-    giant must not buffer), and escape control bytes AT READ TIME —
-    the writer's escape only covers the paths where the parent wrote.
+    discipline), read only the file's head line and last 4 KiB (a
+    planted sparse giant must not buffer), and escape control bytes
+    AT READ TIME — the writer's escape only covers the paths where
+    the parent wrote.
+
+    Label-preserving window (see the excerpting contract in
+    :mod:`core.security.log_sanitisation`): the excerpt re-attaches
+    the artifact's line 1 with an explicit elision marker whenever
+    the tail window cut anything. A bare tail slice dropped the
+    parent-authored ``exit=<label>`` authority line as soon as the
+    child padded its stdout past the window — the operator-facing
+    excerpt then LED with whatever narrative the child chose to end
+    its stream with. Exit AUTHORITY still never comes from these
+    bytes (``child_exit`` carries it out-of-band); the head line is
+    re-attached so the artifact's own account cannot be silently
+    beheaded.
     """
     import stat as _stat
 
-    from core.security.log_sanitisation import escape_nonprintable
+    from core.security.log_sanitisation import (
+        escape_nonprintable,
+        sanitise_for_terminal,
+    )
 
     try:
         fd = os.open(str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -242,15 +268,42 @@ def _read_child_tail_untrusted(path: Path) -> str | None:
         st = os.fstat(fd)
         if not _stat.S_ISREG(st.st_mode):
             return None
+        head = os.read(fd, _CHILD_TAIL_HEAD_BYTES)
         if st.st_size > _CHILD_TAIL_READ_BYTES:
             os.lseek(fd, st.st_size - _CHILD_TAIL_READ_BYTES, os.SEEK_SET)
+        else:
+            os.lseek(fd, 0, os.SEEK_SET)
         data = os.read(fd, _CHILD_TAIL_READ_BYTES)
     except OSError:
         return None
     finally:
         os.close(fd)
     text = data.decode("utf-8", errors="replace")
-    return escape_nonprintable(text, preserve_newlines=True)[-2000:]
+    escaped = escape_nonprintable(text, preserve_newlines=True)
+    window = escaped[-_CHILD_TAIL_WINDOW_CHARS:]
+    skipped_bytes = max(0, st.st_size - len(data))
+    if skipped_bytes == 0 and len(window) == len(escaped):
+        return window
+    # The cut landed mid-document: resume at a true line boundary so
+    # a boundary-truncated quoted body line (``| XXexit=0`` cut right
+    # before the ``e``) cannot masquerade as a column-0 writer line.
+    # A window with no newline at all is kept whole — the writer's
+    # artifact format always carries newlines, so that case is a
+    # wholesale child-replaced artifact where quoting carries no
+    # authority anyway (``child_exit`` does).
+    nl = window.find("\n")
+    if nl >= 0:
+        window = window[nl + 1:]
+    cut_chars = len(escaped) - len(window)
+    head_line = sanitise_for_terminal(
+        head.split(b"\n", 1)[0].decode("utf-8", errors="replace"),
+        max_len=300,
+    )
+    return (
+        f"{head_line}\n"
+        f"[… ~{skipped_bytes + cut_chars} bytes elided …]\n"
+        f"{window}"
+    )
 
 
 def _write_postpass_record(
@@ -276,6 +329,10 @@ def _write_postpass_record(
     record: dict[str, object] = {
         "ran": postpass.ran,
         "skipped_reason": postpass.skipped_reason,
+        # Out-of-band exit authority: computed from the dispatch
+        # result the parent holds, never recovered from artifact
+        # bytes (the tail artifact is child-controllable).
+        "child_exit": postpass.child_exit,
         "validate_dir": postpass.validate_dir,
         "findings_selected": findings_selected,
         "dark_total": dark_total,
@@ -430,6 +487,7 @@ def _dispatch_validate_unsafe(
         validate_dir=str(dispatch.run_dir) if dispatch.run_dir else None,
         skipped_reason=dispatch.skipped_reason or "",
         duration_s=dispatch.duration_s,
+        child_exit=dispatch.child_exit,
     )
 
 
