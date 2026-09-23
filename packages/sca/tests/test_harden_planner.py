@@ -53,6 +53,9 @@ class _FakeOsv:
             out.append(OsvResult(dep_key=d.key(), advisories=list(advs)))
         return out
 
+    def lookup_failed(self, dep_key: str) -> bool:
+        return False
+
 
 def _adv(osv_id: str, severity: str = "medium") -> Advisory:
     return Advisory(
@@ -1738,3 +1741,83 @@ def test_non_crossing_downgrade_still_applies_with_degraded_only() -> None:
     assert cand.crosses_major is False
     assert _count_actionable([cand], allow_major_without_review=False,
                              allow_degraded=True) == 1
+
+
+# ---------------------------------------------------------------------------
+# OSV-outage slots: a failed lookup is "unknown", never clean
+# ---------------------------------------------------------------------------
+
+@dataclass
+class _OutageOsv(_FakeOsv):
+    """``_FakeOsv`` where lookups for the given versions FAILED
+    transiently. The real client's failed slots still yield empty
+    advisory lists in query results — only ``lookup_failed()``
+    distinguishes "no advisories" from "answer unknown"."""
+
+    failed_versions: frozenset = frozenset()
+
+    def lookup_failed(self, dep_key: str) -> bool:
+        return any(dep_key.endswith(f"@{v}") for v in self.failed_versions)
+
+
+def test_outage_slot_is_never_ranked_clean() -> None:
+    """With every candidate's OSV lookup failed, harden refuses to plan
+    the dep instead of promoting an advisory-invisible version."""
+    dep = _dep(version="1.0")
+    osv = _OutageOsv(failed_versions=frozenset({"1.5", "1.8"}))
+    cand = _plan_one(dep,
+                     registries={"PyPI": _FakeRegistry(["1.8", "1.5"])},
+                     osv=osv, offline=False, allow_major=False)
+    assert cand.status == "error"
+    assert "degraded" in cand.detail
+    assert cand.to_version is None
+    assert cand.candidates_lookup_failed == 2
+
+
+def test_outage_slot_loses_to_known_vulnerable_candidate() -> None:
+    """Mixed batch: 1.8's lookup failed, 1.5 carries a known medium.
+    The known-vulnerable candidate wins the least-worst pick (visible
+    residual advisories) — an unknown slot must never look clean or
+    outrank a candidate whose risk is actually known."""
+    dep = _dep(version="1.0")
+    osv = _OutageOsv(
+        advisories_by_version={"1.5": [_adv("GHSA-m", "medium")]},
+        failed_versions=frozenset({"1.8"}),
+    )
+    cand = _plan_one(dep,
+                     registries={"PyPI": _FakeRegistry(["1.8", "1.5"])},
+                     osv=osv, offline=False, allow_major=False)
+    assert cand.status == "degraded_safety"
+    assert cand.to_version == "1.5"
+    assert cand.cve_remaining == ["GHSA-m"]
+
+
+def test_check_mode_exits_2_when_osv_degraded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    """``--check`` is a CI gate: exit 0 means "project is hardened".
+    Under a degraded OSV run that answer is unavailable — exit 2, never
+    a silent pass."""
+    from packages.sca import harden
+
+    (tmp_path / "requirements.txt").write_text(
+        "requests==2.30.0\n", encoding="utf-8")
+
+    class _DegradedOsv:
+        degraded = True
+        failed_lookups = 3
+        failed_dep_keys = ["PyPI:requests@2.30.0"]
+
+        def lookup_failed(self, dep_key: str) -> bool:
+            return True
+
+        def query_batch(self, deps):
+            return [OsvResult(dep_key=d.key(), advisories=[])
+                    for d in deps]
+
+    monkeypatch.setattr(harden, "_build_lookup_clients",
+                        lambda *a, **k: (_DegradedOsv(), None, None))
+    rc = harden.main([str(tmp_path), "--check", "--offline",
+                      "--out", str(tmp_path / "out")])
+    assert rc == 2
+    assert "degraded" in capsys.readouterr().err

@@ -1119,3 +1119,31 @@ def test_gha_subaction_matches_parent_keyed_advisory() -> None:
     assert _canonical_name(
         "GitHub Actions", "actions/checkout",
     ) == _canonical_name("GitHub Actions", "actions/checkout")
+
+
+def test_lookup_failed_tracks_per_key_and_clears_on_retry(
+    tmp_path: Path,
+) -> None:
+    """``lookup_failed`` distinguishes "no advisories" from "answer
+    unknown" per dep key (uncapped, unlike the display sample), and a
+    later successful lookup for the same key clears it."""
+    deps = [_dep("lodash")]
+    cache = JsonCache(root=tmp_path)
+
+    failing = FakeHttp(post_error=HttpError("boom", status=503))
+    client = OsvClient(failing, cache)
+    client.query_batch(deps)
+    assert client.lookup_failed("npm:lodash@1.0.0") is True
+    assert client.lookup_failed("npm:other@1.0.0") is False
+
+    # Retry on the SAME client with a recovered transport: the key's
+    # failure record clears — "most recent answer wins".
+    client._inner = OsvClient(
+        FakeHttp(batch_results=[["GHSA-jfh8-c2jp-5v3q"]],
+                 vuln_records={"GHSA-jfh8-c2jp-5v3q": _LOG4J_RECORD}),
+        cache,
+    )._inner
+    client.query_batch(deps)
+    assert client.lookup_failed("npm:lodash@1.0.0") is False
+    # The run-level degradation telemetry keeps its history.
+    assert client.failed_lookups == 1

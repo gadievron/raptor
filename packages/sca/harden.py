@@ -150,6 +150,11 @@ class HardenCandidate:
     cve_remaining: list[str] = field(default_factory=list)
     candidates_considered: int = 0
     candidates_rejected_for_cve: int = 0
+    # Candidate versions whose OSV lookup failed transiently this run —
+    # their safety is UNKNOWN, so they are excluded from both the clean
+    # pool and ``candidates_rejected_for_cve`` (which counts versions
+    # with KNOWN advisories only).
+    candidates_lookup_failed: int = 0
     status: str = "error"
     detail: str = ""
     # Version-selection posture. ``highest_safe`` (default, application
@@ -328,6 +333,21 @@ def main(argv: Sequence[str]) -> int:
         _print_summary(candidates, [], out_dir, target_kind=target_kind,
                        excluded_surfaces=excluded_surfaces,
                        exclude_patterns=args.exclude, target=target)
+        if osv.degraded:
+            # Gate contract: exit 0 asserts "project is hardened".
+            # Under a degraded OSV run that assertion is unavailable
+            # — some deps' safety answers are missing, so neither
+            # "hardened" nor an accurate actionable count can be
+            # minted. Exit 2 (the whatif degraded-refusal shape) so a
+            # CI gate fails toward visibility instead of open.
+            print(
+                f"raptor-sca fix --harden --check: OSV lookups "
+                f"degraded ({osv.failed_lookups} query slot(s) failed "
+                f"transiently) — verdict unavailable; re-run when the "
+                f"network/OSV recovers.",
+                file=sys.stderr,
+            )
+            return 2
         if actionable:
             print(f"raptor-sca fix --harden --check: {actionable} candidate(s) would be "
                   f"applied; rerun without --check to apply.")
@@ -384,6 +404,17 @@ def main(argv: Sequence[str]) -> int:
     _print_summary(candidates, changes, out_dir, target_kind=target_kind,
                    excluded_surfaces=excluded_surfaces,
                    exclude_patterns=args.exclude, target=target)
+    if osv.degraded:
+        # Per-candidate refusals already prevent planning/pinning any
+        # version whose advisories are invisible; this banner makes the
+        # run-level degradation operator-visible next to the summary.
+        print(
+            f"raptor-sca fix --harden: OSV lookups degraded "
+            f"({osv.failed_lookups} query slot(s) failed transiently) — "
+            f"affected deps were refused, not treated as clean; re-run "
+            f"when the network/OSV recovers.",
+            file=sys.stderr,
+        )
     return 0
 
 
@@ -588,7 +619,8 @@ def _baseline_is_clean(dep: Dependency, baseline: str | None, *,
             candidates=[baseline], osv=osv, kev=kev, epss=epss)
     except Exception:                                    # noqa: BLE001
         return False
-    return bool(ranked) and not ranked[0].advisory_ids
+    return (bool(ranked) and not ranked[0].advisory_ids
+            and not ranked[0].lookup_failed)
 
 
 def _plan_one(
@@ -771,8 +803,15 @@ def _plan_one(
         ecosystem=dep.ecosystem, name=dep.name,
         candidates=filtered, osv=osv, kev=kev, epss=epss,
     )
-    clean = [r for r in ranked if not r.advisory_ids]
-    cand.candidates_rejected_for_cve = len(ranked) - len(clean)
+    # A candidate whose OSV lookup failed is "unknown", never clean —
+    # its empty advisory list means "no answer", not "no advisories".
+    lookup_failed_n = sum(1 for r in ranked if r.lookup_failed)
+    clean = [r for r in ranked
+             if not r.advisory_ids and not r.lookup_failed]
+    cand.candidates_lookup_failed = lookup_failed_n
+    cand.candidates_rejected_for_cve = (
+        len(ranked) - len(clean) - lookup_failed_n
+    )
 
     if clean:
         # Fully-safe path. Applications pin to the NEWEST clean version
@@ -843,6 +882,21 @@ def _plan_one(
             # EPSS; EPSS outranks raw count; idx breaks ties newest-first.
             ranked_sorted = sorted(enumerate(ranked), key=_rank_key)
             best = ranked_sorted[0][1]
+            if best.lookup_failed:
+                # Sorting demotes failed-lookup slots below every
+                # candidate whose risk is known, so the best pick is a
+                # failed slot only when EVERY candidate's lookup
+                # failed: nothing here has a known safety answer.
+                # Refuse to plan rather than pin a version whose
+                # advisories are invisible behind a transient outage.
+                cand.status = "error"
+                cand.detail = (
+                    f"OSV lookups degraded for all "
+                    f"{len(ranked)} candidate version(s) — safety "
+                    "unknown; refusing to plan. Re-run when the "
+                    "network/OSV recovers."
+                )
+                return cand
             target_version = best.version
             residual_advs = list(best.advisory_ids)
             target_status = "degraded_safety"
@@ -1074,7 +1128,8 @@ def _bounded_downgrade(
         ecosystem=eco, name=dep.name,
         candidates=pool, osv=osv, kev=kev, epss=epss,
     )
-    clean = [r.version for r in ranked if not r.advisory_ids]
+    clean = [r.version for r in ranked
+             if not r.advisory_ids and not r.lookup_failed]
     if not clean:
         return None
     import functools
@@ -1112,6 +1167,12 @@ class _RankedCandidate:
     max_severity: int        # ``_SEVERITY_ORDINAL`` value; 0 if no advs
     any_in_kev: bool         # at least one advisory is KEV-listed
     max_epss: float          # 0.0 if no EPSS data or no advs
+    # True when the candidate's OSV lookup failed transiently: the
+    # advisory list above is UNKNOWN, not empty. Such a candidate is
+    # never "clean" and sorts behind every candidate whose risk is
+    # actually known — otherwise one OSV blip promotes (and
+    # ``--apply`` pins) an advisory-invisible version.
+    lookup_failed: bool = False
 
 
 def _max_severity(advisories) -> int:
@@ -1212,6 +1273,10 @@ def _rank_candidates_by_safety(
             max_severity=_max_severity(advs),
             any_in_kev=any(_advisory_in_kev(a, kev) for a in advs),
             max_epss=_max_epss(advs, epss_scores),
+            # A failed slot yields the same empty advisory list a
+            # genuinely clean version does; carry the distinction so
+            # no consumer reads "lookup failed" as "no advisories".
+            lookup_failed=osv.lookup_failed(d.key()),
         ))
     return out
 
@@ -1517,19 +1582,22 @@ def _run_self_test(
 
 
 
-def _rank_key(kv: tuple[int, Any]) -> tuple[int, int, float, int, int]:
-    """Least-worst candidate ordering: (any_in_kev, max_severity,
-    max_epss, advisory count, original idx). KEV-listed advisories are
-    actively exploited and outrank everything; CVSS severity outranks
-    EPSS; EPSS outranks raw count; idx breaks ties newest-first.
+def _rank_key(kv: tuple[int, Any]) -> tuple[int, int, int, float, int, int]:
+    """Least-worst candidate ordering: (lookup_failed, any_in_kev,
+    max_severity, max_epss, advisory count, original idx). A candidate
+    whose OSV lookup failed sorts behind EVERYTHING — its risk is
+    unknown, and unknown must never look better than a known residual
+    advisory. Then: KEV-listed advisories are actively exploited and
+    outrank everything; CVSS severity outranks EPSS; EPSS outranks raw
+    count; idx breaks ties newest-first.
 
     Named (not an inline lambda) so the ranking-semantics tests sort
     with the PRODUCTION key — a local test copy silently kept passing
     when this ordering drifted.
     """
     idx, c = kv
-    return (int(c.any_in_kev), c.max_severity, c.max_epss,
-            len(c.advisory_ids), idx)
+    return (int(c.lookup_failed), int(c.any_in_kev), c.max_severity,
+            c.max_epss, len(c.advisory_ids), idx)
 
 
 def _safety_lane_appliable(

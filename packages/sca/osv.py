@@ -277,16 +277,30 @@ class OsvClient:
         # ``query_batch`` calls on this client instance.
         self.failed_lookups: int = 0
         self.failed_dep_keys: list[str] = []
+        # Full failed-key set — uncapped, unlike the display sample
+        # above. Consumers that must never read a failed slot as "no
+        # advisories" (harden's candidate-safety ranking) ask
+        # ``lookup_failed()`` per key; a later successful lookup for
+        # the same key clears it.
+        self._failed_keys: set[str] = set()
 
     @property
     def degraded(self) -> bool:
         """True when at least one lookup failed transiently this run."""
         return self.failed_lookups > 0
 
+    def lookup_failed(self, dep_key: str) -> bool:
+        """True when this client's most recent advisory lookup for
+        ``dep_key`` failed transiently — the slot returned no
+        advisories and was left uncached. Lets callers distinguish
+        "no advisories" from "answer unknown"."""
+        return dep_key in self._failed_keys
+
     _FAILED_KEY_SAMPLE_CAP = 20
 
     def _record_failed_lookup(self, dep_key: str) -> None:
         self.failed_lookups += 1
+        self._failed_keys.add(dep_key)
         if len(self.failed_dep_keys) < self._FAILED_KEY_SAMPLE_CAP:
             self.failed_dep_keys.append(dep_key)
 
@@ -311,6 +325,9 @@ class OsvClient:
             )
             if cached is not None and isinstance(cached, list):
                 dep_to_ids[key] = [str(i) for i in cached]
+                # A cached answer (written by this or another process)
+                # supersedes an earlier transient-failure record.
+                self._failed_keys.discard(key)
             else:
                 uncached.append(dep)
 
@@ -435,6 +452,9 @@ class OsvClient:
                         ttl_seconds=self._query_ttl,
                     )
                     dep_to_ids[dep.key()] = ids
+                    # Successful retry clears an earlier batch's
+                    # transient-failure record for this key.
+                    self._failed_keys.discard(dep.key())
             # Empty-ID rows for non-queryable ecosystems so the OSS-Fuzz
             # fallback (next pass) sees them as "primary returned
             # nothing" and engages the retry path. Without this, those
