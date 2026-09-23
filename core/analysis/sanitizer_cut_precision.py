@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import dumps_display, save_json
+from core.source.lines import split_lines
 
 LABEL_MUST_NOT_SUPPRESS = "must_not_suppress"
 LABEL_MAY_SUPPRESS = "may_suppress"
@@ -1003,7 +1004,7 @@ def _marked(name, sink_class, cwe, shape, label, source,
     """b21 fixture constructor: source/sink lines are computed from
     unique substring markers — a hand-miscounted line number turned a
     corpus run into a false-positive hunt once; never again."""
-    lines = source.splitlines()
+    lines = split_lines(source)
     src_ln = next(i for i, ln in enumerate(lines, 1) if src_marker in ln)
     sink_ln = next(i for i, ln in enumerate(lines, 1) if sink_marker in ln)
     return _fx(name, sink_class, cwe, shape, label, source,

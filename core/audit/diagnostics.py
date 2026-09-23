@@ -57,8 +57,11 @@ def read_function_source(
     # Cap BEFORE reading: the oversize refusal used to buffer (and
     # decode) the whole file first, so a planted multi-hundred-MB
     # file cost its full size in peak memory just to be refused.
-    from core.source import read_text_capped
-    got = read_text_capped(full, 500_000)
+    from core.source import read_text_capped, split_lines
+    # newline="": the span pairs with raw-byte-model line numbers, so
+    # a plantable bare \r must reach split_lines un-translated (the
+    # universal-newline default would turn it into a break).
+    got = read_text_capped(full, 500_000, newline="")
     if got is None:
         return ""
     text, truncated = got
@@ -68,7 +71,9 @@ def read_function_source(
         # mis-attribute spans past the cap).
         return ""
     if line_start > 0 and line_end >= line_start:
-        return "\n".join(text.splitlines()[line_start - 1:line_end])
+        # \n-model split (core.source.lines contract): the span comes
+        # from the pinned checklist, whose inventory counts \n.
+        return "\n".join(split_lines(text)[line_start - 1:line_end])
     return text
 
 

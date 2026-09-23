@@ -75,6 +75,7 @@ import ast
 import logging
 import re
 from dataclasses import dataclass
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -784,7 +785,7 @@ def _detect_ruby(content: str) -> ModuleLoadAbort | None:
     if blanked is None:
         return None
     depth = 0
-    for idx, line in enumerate(blanked.splitlines()):
+    for idx, line in enumerate(split_lines(blanked)):
         stripped = line.strip()
         if not stripped:
             continue

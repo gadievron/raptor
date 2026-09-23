@@ -32,6 +32,7 @@ from dataclasses import asdict, dataclass, field
 
 from core.paths import confine
 from typing import TYPE_CHECKING
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -153,7 +154,7 @@ def verify_receipt(
         return receipt
 
     if line is not None and line > 0:
-        lines = content.splitlines()
+        lines = split_lines(content)
         lo = max(0, line - 1 - LINE_WINDOW)
         hi = min(len(lines), line - 1 + LINE_WINDOW + 1)
         window = _normalise("\n".join(lines[lo:hi]))

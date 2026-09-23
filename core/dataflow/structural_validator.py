@@ -40,6 +40,7 @@ from core.inventory.call_graph import (
 )
 from core.inventory.languages import detect_language
 from core.source import read_text_capped
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -399,7 +400,7 @@ def _extract_branch_guards_from_content(
     evidence for SMT Tier 4, not a parse.
     """
     guards: list[str] = []
-    lines = content.splitlines()
+    lines = split_lines(content)
     if line < 1 or line > len(lines):
         return guards
 

@@ -47,6 +47,7 @@ from .callsite_consistency import (
 from .fail_open_roles import RoleContext, bind_role
 from .peer_evidence import PeerEvidence, PeerExhibit, rule_id
 from .return_contracts import bind_return_contract
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -238,7 +239,7 @@ def _snippet(source_texts: dict[str, str] | None,
     source = source_texts.get(file_path)
     if not source:
         return ""
-    lines = source.splitlines()
+    lines = split_lines(source)
     if 1 <= line <= len(lines):
         return lines[line - 1].strip()[:200]
     return ""

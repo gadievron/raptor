@@ -277,3 +277,48 @@ class TestAnchoredContainment:
         from core.source.contained import read_contained
         root, _ = self._swap_tree(tmp_path)
         assert read_contained(root, "mid/leaf.txt") == "benign"
+
+
+class TestReadContainedNewlinePassthrough:
+    r"""The anchored read path preserves raw bytes under newline="".
+
+    read_contained's *newline* kwarg threads through _open_contained's
+    beneath-walk (a DIFFERENT open path than read_text_capped's
+    by-name open_regular) — scanner-paired callers rely on a plantable
+    bare \r staying in-line there, so a kwargs refactor of the
+    anchored open must not silently drop the passthrough.
+    """
+
+    def _tree(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "a.c").write_bytes(b'x = "li\rne"\r\nl2\n')
+        return root
+
+    def test_default_translates_universal(self, tmp_path):
+        from core.source.contained import read_contained
+
+        root = self._tree(tmp_path)
+        assert read_contained(root, "a.c") == 'x = "li\nne"\nl2\n'
+
+    def test_newline_empty_preserves_bare_cr_and_crlf(self, tmp_path):
+        from core.source.contained import read_contained
+        from core.source.lines import split_lines
+
+        root = self._tree(tmp_path)
+        raw = read_contained(root, "a.c", newline="")
+        assert raw == 'x = "li\rne"\r\nl2\n'
+        assert split_lines(raw) == ['x = "li\rne"', "l2"]
+
+    def test_newline_empty_on_the_component_walk_route(
+        self, tmp_path, monkeypatch,
+    ):
+        # Force the non-openat2 anchored route — the passthrough must
+        # survive BOTH open paths.
+        from core.source import beneath
+        from core.source.contained import read_contained
+
+        monkeypatch.setattr(beneath, "_openat2_usable", False)
+        root = self._tree(tmp_path)
+        assert read_contained(root, "a.c", newline="") == \
+            'x = "li\rne"\r\nl2\n'

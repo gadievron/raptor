@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import core.startup.process_init  # noqa: E402,F401
 from core.logging import configure_cli_logging  # noqa: E402
 from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+from core.source.lines import split_lines
 
 
 def _resolve_out_dir(out_arg: str | None,
@@ -128,7 +129,7 @@ def main() -> int:
             if src_file.is_file():
                 text = src_file.read_text(
                     encoding="utf-8", errors="replace")
-                lines = text.splitlines()
+                lines = split_lines(text)
                 snippet = "\n".join(
                     lines[max(0, line_start - 1):line_end]
                 )

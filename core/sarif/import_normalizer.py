@@ -20,6 +20,7 @@ from core.logging import get_logger
 from core.sarif import emit
 from core.sarif.parser import _coerce_line
 from core.security.log_sanitisation import escape_nonprintable
+from core.source.lines import split_lines
 
 logger = get_logger()
 
@@ -483,7 +484,7 @@ def _synthesize_snippet(
             raw = fh.read(_SNIPPET_SOURCE_MAX_BYTES + 1)
         if len(raw) > _SNIPPET_SOURCE_MAX_BYTES:
             return ""  # grew past the cap during the read
-        lines = raw.decode("utf-8", errors="replace").splitlines()
+        lines = split_lines(raw.decode("utf-8", errors="replace"))
         s = max(0, start_line - 1)
         e = min(len(lines), (end_line or start_line) + _SNIPPET_CONTEXT_LINES)
         return "\n".join(lines[s:e])

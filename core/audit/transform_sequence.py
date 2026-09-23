@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, TYPE_CHECKING
 
 from .prompt_defence import sanitise_for_prompt
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -651,7 +652,7 @@ def _extract_sequences_c_regex(
 ) -> list[TransformSequence]:
     """Regex fallback for transform-sequence extraction."""
     all_seqs: list[TransformSequence] = []
-    lines = source.splitlines()
+    lines = split_lines(source)
     current_func = "<module>"
     var_chains: dict[str, list[TransformStep]] = {}
 

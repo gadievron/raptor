@@ -47,6 +47,7 @@ from .models import Dependency, Manifest
 from .naming import parent_join_key as _parent_join_key
 from .parsers._safe_read import read_bounded
 from typing import TYPE_CHECKING
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from core.json import JsonCache
@@ -944,7 +945,7 @@ def _extract_pip_compile_via(blob: bytes) -> dict[str, list[str]]:
         _re.MULTILINE,
     )
     out: dict[str, list[str]] = {}
-    lines = text.splitlines()
+    lines = split_lines(text)
     for i, line in enumerate(lines):
         m = pkg_re.match(line.strip())
         if m is None:

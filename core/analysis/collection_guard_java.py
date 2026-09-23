@@ -156,9 +156,17 @@ def _line_byte_range(source_text: str, line: int) -> tuple[int, int]:
     """(first_byte, end_byte) of ``line`` — used for writer-interval
     bounds. Statement covering is decided by LINE, not byte: the
     line's first byte is indentation, which no statement node spans."""
+    # Split on \n ONLY: *line* is a tree-sitter row (\n-counted), so
+    # a splitlines() view desynced after any in-literal exotic
+    # terminator. Manual split keeps the ORIGINAL bytes (no \r
+    # normalisation) so the returned offsets stay true to the text
+    # tree-sitter parsed; the separator byte is counted explicitly.
     offset = 0
-    for i, chunk in enumerate(source_text.splitlines(keepends=True), 1):
+    chunks = source_text.split("\n")
+    for i, chunk in enumerate(chunks, 1):
         blen = len(chunk.encode("utf-8", errors="replace"))
+        if i < len(chunks):
+            blen += 1  # the terminating \n
         if i == line:
             return offset, offset + blen
         offset += blen

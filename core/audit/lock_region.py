@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -616,7 +617,7 @@ def _adjudicate_function(
     """Adjudicate one function. Returns None when the function has no
     lock shape at all (prepass skip)."""
     source = source_texts.get(file_path, "")
-    lines = source.splitlines()
+    lines = split_lines(source)
     raw_segment = lines[span.start - 1:span.end]
     # Matching runs on the sanitized view only (comments/strings
     # blanked); raw lines feed the human-facing receipt fields.
@@ -918,7 +919,7 @@ def run_lock_region_prepass(
             or re.search(r"\b\w+_lock\s*\(", source)
         ):
             continue
-        lines = source.splitlines()
+        lines = split_lines(source)
         for span in _spans_cached(source, file_path):
             if telemetry["candidates"] >= max_candidates:
                 break

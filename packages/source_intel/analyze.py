@@ -44,6 +44,7 @@ from core.function_taxonomy import (
 from packages.source_intel.aliases import (
     ALL_WUR_ALIASES,
 )
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -2444,10 +2445,12 @@ def _scan_c_level_source_inputs(target: Path) -> list[CLevelSourceEvidence]:
         resolved = confine(target, path)
         if resolved is None:
             continue
-        got = read_text_capped(resolved)
+        # newline="" + split_lines: emitted line_no is a raw-byte-model
+        # coordinate — a plantable bare \r must stay in-line.
+        got = read_text_capped(resolved, newline="")
         if got is None:
             continue
-        lines = got[0].splitlines()
+        lines = split_lines(got[0])
         in_block_comment = False
         for line_no, line in enumerate(lines, start=1):
             if _PREPROC_LINE_RE.match(line):

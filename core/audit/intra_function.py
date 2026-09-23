@@ -22,6 +22,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, TYPE_CHECKING
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -194,7 +195,7 @@ def check_cleanup_consistency(
     segment, and flags paths that omit a cleanup present in the
     majority.
     """
-    lines = source.splitlines()
+    lines = split_lines(source)
     if len(lines) < 4:
         return []
 
@@ -258,7 +259,7 @@ def check_operator_consistency(
     when the operator is inconsistent (e.g. 5 comparisons of ``idx``
     use ``<`` but one uses ``<=``).
     """
-    lines = source.splitlines()
+    lines = split_lines(source)
     if len(lines) < 3:
         return []
 

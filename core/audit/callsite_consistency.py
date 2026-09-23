@@ -41,6 +41,7 @@ from typing import Any
 
 from .prompt_defence import sanitise_for_prompt
 from typing import TYPE_CHECKING
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -1075,7 +1076,7 @@ def _extract_callsites_regex(
     ONLY extractor) is exactly where an unbounded walk would bite.
     """
     sites: list[CallSite] = []
-    lines = source.splitlines()
+    lines = split_lines(source)
     current_func = "<module>"
 
     for lineno_0, line in enumerate(lines):

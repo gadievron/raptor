@@ -101,6 +101,7 @@ from .fail_open_roles import (
     RoleEvidence,
     bind_role,
 )
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +365,7 @@ def _python_function_segment(source: str, function_name: str) -> str:
     except SyntaxError:
         return ""
     tail = _function_tail(function_name)
-    lines = source.splitlines()
+    lines = split_lines(source)
     for node in _ast.walk(tree):
         if isinstance(node, (_ast.FunctionDef, _ast.AsyncFunctionDef)) \
                 and node.name == tail:
@@ -854,7 +855,7 @@ def _same_file_wur(source: str, tail: str) -> bool:
         from packages.source_intel.aliases import wur_alias_in
     except ImportError:
         return False
-    lines = source.splitlines()
+    lines = split_lines(source)
     decl_re = re.compile(rf"\b{re.escape(tail)}\s*\(")
     for idx, line in enumerate(lines):
         if not decl_re.search(line):
@@ -1013,7 +1014,7 @@ def _run_c_check(
     inventory: dict[str, Any] | None,
 ) -> FailOpenResult:
     span = c_function_span(source, function_name, language=language)
-    lines = source.splitlines()
+    lines = split_lines(source)
     if span:
         segment = "\n".join(lines[span[0] - 1:span[1]])
     else:
@@ -1184,7 +1185,7 @@ def _go_segment(source: str, function_name: str) -> str:
     span = go_function_span(source, function_name)
     if span is None:
         return ""
-    lines = source.splitlines()
+    lines = split_lines(source)
     return "\n".join(lines[span[0] - 1:span[1]])
 
 
@@ -1532,7 +1533,7 @@ def _js_segment(source: str, function_name: str, language: str) -> str:
     span = js_function_span(source, function_name, language=language)
     if span is None:
         return ""
-    lines = source.splitlines()
+    lines = split_lines(source)
     return "\n".join(lines[span[0] - 1:span[1]])
 
 
@@ -1994,7 +1995,7 @@ def _run_rust_check(
             "not evidence about this function)",
             language="rust", rule_id=RULE_IGNORED_RETURN,
         )
-    lines = source.splitlines()
+    lines = split_lines(source)
     segment = "\n".join(lines[span[0] - 1:span[1]])
 
     candidates = _candidate_callees(hypothesis, segment)

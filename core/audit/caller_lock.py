@@ -96,6 +96,7 @@ from .api_boundary import (
     _balanced_span,
     _scan_file_for_calls,
 )
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -876,7 +877,7 @@ def check_caller_lock_serialization(
         return _refuse(f"defining file {rel_file} exceeds the byte cap")
 
     view = sanitized_view(def_text, str(def_path))
-    view_lines = view.splitlines()
+    view_lines = split_lines(view)
     name_re = re.compile(rf"(?<![\w.>]){re.escape(function_name)}\b")
 
     if _DIGRAPH_RE.search(view):
@@ -903,7 +904,7 @@ def check_caller_lock_serialization(
             f"be attributed"
         )
     pp_lines = _preprocessor_lines(view_lines)
-    raw_lines = def_text.splitlines()
+    raw_lines = split_lines(def_text)
     for i, raw in enumerate(raw_lines):
         if i not in pp_lines and raw.rstrip().endswith("\\"):
             return _refuse(

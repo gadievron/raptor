@@ -39,6 +39,7 @@ from .synthesise import (
     LLMCallable,
     synthesise_with_refinement,
 )
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -270,7 +271,7 @@ def derive_seeds(
 
     bundles: list[CveSeedBundle] = []
     for count, first, last, f in scored[:max_seeds]:
-        lines = f.before_source.splitlines()
+        lines = split_lines(f.before_source)
         lo = max(0, first - 1 - _SNIPPET_CONTEXT_LINES)
         hi = min(len(lines), last + _SNIPPET_CONTEXT_LINES)
         snippet = "\n".join(lines[lo:hi])

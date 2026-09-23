@@ -24,6 +24,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ def _detect_falsy_coercion(
 ) -> list[SentinelCollapse]:
     results: list[SentinelCollapse] = []
     current_func = "<module>"
-    lines = source.splitlines()
+    lines = split_lines(source)
 
     for lineno_0, line in enumerate(lines):
         lineno = lineno_0 + 1
@@ -177,7 +178,7 @@ def _detect_cache_sentinel(
     source: str,
 ) -> list[SentinelCollapse]:
     results: list[SentinelCollapse] = []
-    lines = source.splitlines()
+    lines = split_lines(source)
     current_func = "<module>"
 
     # Collect per-function evidence: does the function both write None
@@ -268,7 +269,7 @@ def _detect_go_sentinel(
                 ) for fr in ts_returns if fr.sentinel_ambiguous)
 
     # --- regex path for map-without-comma-ok (no tree-sitter equivalent) ---
-    lines = source.splitlines()
+    lines = split_lines(source)
     current_func = "<module>"
 
     for lineno_0, line in enumerate(lines):
@@ -386,7 +387,7 @@ def _detect_js_sentinel(
     except ImportError:
         pass
 
-    lines = source.splitlines()
+    lines = split_lines(source)
     current_func = "<module>"
 
     for lineno_0, line in enumerate(lines):
@@ -646,7 +647,7 @@ def _find_coercion_of_call(
     callee_name: str,
 ) -> int | None:
     """Find a line where the caller coerces the callee's return value."""
-    lines = source.splitlines()
+    lines = split_lines(source)
     in_caller = False
     caller_indent = 0
 

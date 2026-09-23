@@ -31,6 +31,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.coverage.edges import item_spans
 from core.coverage.journal import encode_key_file, make_function_key
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -258,7 +259,7 @@ def _read_span(
     if got is None:
         return "(source not available)"
     text, truncated = got
-    lines = text.splitlines()
+    lines = split_lines(text)
     lo, hi = span
     if truncated and hi >= len(lines):
         # The requested span lies (partly) past the capped prefix, or

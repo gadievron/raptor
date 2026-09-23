@@ -87,7 +87,9 @@ def apply_refit_to_risk_py(
         msg = f"risk.py not found at {risk_py_path}"
         raise RefitApplyError(msg)
     text = risk_py_path.read_text(encoding="utf-8")
-    lines = text.splitlines(keepends=True)
+    # Keepends rewriter of RAPTOR's own risk.py: the rewrite must
+    # reproduce exact bytes; i + 1 feeds error text only.
+    lines = text.splitlines(keepends=True)  # line-model: keepends rewriter, exact-byte reconstruction; i+1 is error-text-only
 
     found: dict[str, int] = {}
     for i, line in enumerate(lines):

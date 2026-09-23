@@ -48,6 +48,7 @@ from .callsite_consistency import (
 from .fail_open_roles import SecurityFlag, security_flag_role
 from .peer_evidence import PeerEvidence, PeerExhibit
 from typing import TYPE_CHECKING
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from tree_sitter import Node
@@ -206,7 +207,7 @@ def _arg_sites_for_file(
     call_types = _CALL_TYPES.get(lang, ())
     if call_types:
         src = source.encode("utf-8", errors="replace")
-        lines = source.splitlines()
+        lines = split_lines(source)
         for node in _walk_descendants(tree.root_node):
             if node.type not in call_types:
                 continue
@@ -656,7 +657,7 @@ def _function_spans_for_file(
     if not func_types:
         return
     src = source.encode("utf-8", errors="replace")
-    lines = source.splitlines()
+    lines = split_lines(source)
     for node in _walk_descendants(tree.root_node):
         if node.type not in func_types:
             continue
@@ -1109,7 +1110,7 @@ def _shape_sites_for_file(
     call_types = _CALL_TYPES.get(lang, ())
     if call_types:
         src = source.encode("utf-8", errors="replace")
-        lines = source.splitlines()
+        lines = split_lines(source)
         for node in _walk_descendants(tree.root_node):
             if node.type not in call_types:
                 continue
@@ -1591,7 +1592,7 @@ def _call_events_for_file(
     if not call_types:
         return
     src = source.encode("utf-8", errors="replace")
-    lines = source.splitlines()
+    lines = split_lines(source)
     # One read index per file: the per-site fallback would rebuild a
     # full scope index for every call site, costing more than the
     # per-site walk it replaced.
@@ -2008,7 +2009,7 @@ def detect_sanitize_sink_deviations(
         exhibits = []
         for (fp, _fn), _ev, dom in conforming[:3]:
             san_name, san_line = dom
-            lines = source_texts.get(fp, "").splitlines()
+            lines = split_lines(source_texts.get(fp, ""))
             snippet = (
                 lines[san_line - 1].strip()[:200]
                 if 1 <= san_line <= len(lines) else ""

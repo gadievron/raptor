@@ -40,6 +40,8 @@ from core.paths import confine
 from core.source import read_text_capped
 from typing import Any
 
+from core.source.lines import split_lines
+
 from .fail_open_roles import (
     _CORROBORATED_SPEC_TIERS,
     _MUST_CHECK_PROSE_RE,
@@ -116,7 +118,7 @@ def harvest_wur_declarations(
     for source in source_texts.values():
         if not wur_alias_in(source):
             continue
-        lines = source.splitlines()
+        lines = split_lines(source)
         for idx, line in enumerate(lines):
             if not wur_alias_in(line):
                 continue

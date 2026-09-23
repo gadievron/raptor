@@ -7,13 +7,12 @@ All classification is deterministic — no LLM calls.
 
 from __future__ import annotations
 
-import io
 import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, TYPE_CHECKING
 
-from core.source import read_text_capped
+from core.source import read_text_capped, split_lines
 
 from ._util import safe_join
 from .vendored_detector import (
@@ -726,10 +725,13 @@ def _read_function_source(gap: dict[str, Any], target_path: Path) -> str:
     # the in-cap prefix — lines past it are missing and the veto
     # simply doesn't fire (the documented fail-open-toward-SKIP
     # direction), instead of the whole file buffering into memory.
-    got = read_text_capped(resolved)
+    # newline="" + split_lines: the gap span is a raw-byte-model line
+    # range, so neither a universal-newline read nor an exotic
+    # terminator may shift the window.
+    got = read_text_capped(resolved, newline="")
     if got is None:
         return ""
-    lines = io.StringIO(got[0]).readlines()
-    return "".join(lines[start - 1:end])
+    lines = split_lines(got[0])
+    return "\n".join(lines[start - 1:end])
 
 
