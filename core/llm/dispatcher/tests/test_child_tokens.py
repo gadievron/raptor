@@ -255,6 +255,27 @@ def _wait_spend(d: LLMDispatcher, token_id: str, timeout: float = 2.0) -> dict:
     return snapshot
 
 
+def _wait_reservation_released(
+    d: LLMDispatcher, token_id: str, timeout: float = 2.0,
+) -> float:
+    """The budget reservation is released in the handler's ``finally``
+    AFTER the forward leg returns, while booking lands inside the leg
+    when the response bytes are flushed — so both the client and a
+    spend poll can observe a booked request whose reservation is
+    still held for one more scheduler beat. Poll like
+    ``_wait_spend``; returns the last observed ``reserved_usd``."""
+    deadline = time.time() + timeout
+    reserved = -1.0
+    while time.time() < deadline:
+        with d._tokens_lock:
+            rec = d._child_by_id_locked(token_id)
+            reserved = rec.reserved_usd
+        if reserved == 0.0:
+            return reserved
+        time.sleep(0.02)
+    return reserved
+
+
 # ---------------------------------------------------------------------------
 # Mint / dispatch / booking
 # ---------------------------------------------------------------------------
@@ -1216,9 +1237,7 @@ class TestAnthropicSDKDialect:
             spend = _wait_spend(d, info["token_id"])
             assert spend["requests_made"] == 1
             assert spend["spent_usd"] == pytest.approx(_expected_cost())
-            with d._tokens_lock:
-                rec = d._child_by_id_locked(info["token_id"])
-                assert rec.reserved_usd == 0.0
+            assert _wait_reservation_released(d, info["token_id"]) == 0.0
             # The forwarded request carries the REAL key, never the
             # child token, and identity encoding for the usage scan.
             sent = upstream.requests[0]["headers"]
