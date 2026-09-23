@@ -156,6 +156,24 @@ def _project_dir_for(args) -> Path | None:
     return _resolve_project_dir(None)
 
 
+def _run_started_key(d: Path) -> str:
+    """Ordering key for "latest run" selection.
+
+    The run's own recorded start timestamp (ISO-8601 UTC in
+    .raptor-run.json, lexicographically ordered), NOT directory
+    mtime: a touched or restored old run directory would otherwise
+    win the selection. Legacy/corrupt metadata falls back to mtime
+    rendered in the same ISO shape so the keys stay comparable.
+    """
+    meta = load_json(d / ".raptor-run.json", max_bytes=_MAX_META_BYTES)
+    ts = meta.get("timestamp") if isinstance(meta, dict) else None
+    if isinstance(ts, str) and ts:
+        return ts
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(
+        d.stat().st_mtime, tz=timezone.utc).isoformat()
+
+
 def _resolve_out_dir(args) -> Path | None:
     """Resolve output directory: explicit --out, or latest in project."""
     if getattr(args, "out", None):
@@ -165,7 +183,7 @@ def _resolve_out_dir(args) -> Path | None:
         return None
     runs = sorted(
         [d for d in project.iterdir() if d.is_dir() and (d / ".raptor-run.json").is_file()],
-        key=lambda d: d.stat().st_mtime,
+        key=_run_started_key,
         reverse=True,
     )
     return runs[0] if runs else None
@@ -990,7 +1008,7 @@ def _resolve_diff_runs(args, project_dir):
         [d for d in project_dir.iterdir()
          if d.is_dir() and (d / ".raptor-run.json").is_file()
          and (d / "review-journal.jsonl").is_file()],
-        key=lambda d: d.stat().st_mtime,
+        key=_run_started_key,
     )
     if len(resolved) == 1:
         others = [r for r in runs if r != resolved[0]]

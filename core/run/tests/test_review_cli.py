@@ -170,3 +170,45 @@ class TestProjectFlagBeforeSubcommand:
             assert e.code == 2
         else:
             raise AssertionError("bad --project accepted")
+
+
+class TestLatestRunSelectionByRecordedStart:
+    """"Latest run" orders by the run's own recorded start timestamp,
+    not directory mtime — a touched/restored old run dir must not win
+    the operator view."""
+
+    def _project(self, tmp_path: Path) -> Path:
+        import json
+        import os
+        import time
+        proj = tmp_path / "proj"
+        for name, ts in (("run_old", "2026-01-01T00:00:00+00:00"),
+                         ("run_new", "2026-09-01T00:00:00+00:00")):
+            d = proj / name
+            d.mkdir(parents=True)
+            (d / ".raptor-run.json").write_text(
+                json.dumps({"timestamp": ts, "status": "completed"}))
+            (d / "review-journal.jsonl").write_text("")
+        # Restore/touch the OLD run so its directory mtime is newest.
+        now = time.time()
+        os.utime(proj / "run_old", (now + 100, now + 100))
+        os.utime(proj / "run_new", (now - 100, now - 100))
+        return proj
+
+    def test_resolve_out_dir_prefers_recorded_start(
+            self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+        mod = _load_review_module()
+        proj = self._project(tmp_path)
+        monkeypatch.setattr(mod, "_project_dir_for", lambda args: proj)
+        picked = mod._resolve_out_dir(SimpleNamespace(out=None))
+        assert picked is not None and picked.name == "run_new"
+
+    def test_legacy_metadata_falls_back_to_mtime(self, tmp_path):
+        mod = _load_review_module()
+        d = tmp_path / "legacy"
+        d.mkdir()
+        (d / ".raptor-run.json").write_text("{}")
+        key = mod._run_started_key(d)
+        # Comparable ISO shape either way.
+        assert key.startswith("20")
