@@ -189,8 +189,15 @@ def attack_paths(
     if not context_map:
         return []
 
-    entries = _index_by_id(context_map.get("entry_points") or context_map.get("sources") or [])
-    sinks = _index_by_id(context_map.get("sink_details") or context_map.get("sinks") or [])
+    # MERGED, never or-chained: the or-idiom ignored sources entirely
+    # whenever entry_points was non-empty, silently dropping any flow
+    # keyed to a source id (same for sinks vs sink_details).
+    entries = _index_by_id(
+        list(context_map.get("entry_points") or [])
+        + list(context_map.get("sources") or []))
+    sinks = _index_by_id(
+        list(context_map.get("sinks") or [])
+        + list(context_map.get("sink_details") or []))
     boundaries = [b for b in context_map.get("boundary_details") or [] if isinstance(b, dict)]
     flows = [f for f in context_map.get("unchecked_flows") or [] if isinstance(f, dict)]
 
@@ -403,7 +410,7 @@ def hypothesis_seeds(
             """
             SELECT n.file, n.name, n.line_start,
                    COUNT(DISTINCT e.id) AS flow_count,
-                   GROUP_CONCAT(DISTINCT sk.name) AS nearby_sinks
+                   GROUP_CONCAT(sk.name, char(31)) AS nearby_sinks
             FROM nodes n
             JOIN nodes ep ON ep.name = n.name AND ep.file = n.file
                          AND ep.kind = 'entry_point'
@@ -426,7 +433,11 @@ def hypothesis_seeds(
                 "function": row["name"],
                 "line": row["line_start"],
                 "flow_count": row["flow_count"],
-                "nearby_sinks": [s for s in (row["nearby_sinks"] or "").split(",") if s],
+                # Unit-separator join (sink names carry commas);
+                # order-preserving dedupe replaces the SQL DISTINCT.
+                "nearby_sinks": list(dict.fromkeys(
+                    s for s in (row["nearby_sinks"] or "").split("\x1f") if s
+                )),
             }
             for row in rows
         ]
@@ -597,8 +608,8 @@ def scan_dedup_chains(
         rows = conn.execute(
             f"""
             SELECT e.src_id, e.dst_id,
-                   GROUP_CONCAT(sf.name) AS finding_names,
-                   GROUP_CONCAT(sf.id) AS finding_ids,
+                   GROUP_CONCAT(sf.name, char(31)) AS finding_names,
+                   GROUP_CONCAT(sf.id, char(31)) AS finding_ids,
                    COUNT(*) AS chain_size,
                    MAX(json_extract(sf.props_json, '$.severity')) AS max_severity
             FROM nodes sf
@@ -621,8 +632,8 @@ def scan_dedup_chains(
             {
                 "entry_id": row["src_id"],
                 "sink_id": row["dst_id"],
-                "finding_ids": [fid for fid in (row["finding_ids"] or "").split(",") if fid],
-                "finding_names": [fn for fn in (row["finding_names"] or "").split(",") if fn],
+                "finding_ids": [fid for fid in (row["finding_ids"] or "").split("\x1f") if fid],
+                "finding_names": [fn for fn in (row["finding_names"] or "").split("\x1f") if fn],
                 "chain_size": row["chain_size"],
                 "max_severity": row["max_severity"],
             }
@@ -695,14 +706,23 @@ def propagate_binary_verdicts(
     if not verdicts or not Path(db_path).exists():
         return 0
 
-    from .schema import snapshot_id as make_snap_id, stable_key as sk
+    from .schema import (
+        short_hash,
+        snapshot_id as make_snap_id,
+        stable_key as sk,
+        utc_now_iso,
+    )
     from .store import open_graph
 
     absent = {fn: v for fn, v in verdicts.items() if v == "absent"}
     if not absent:
         return 0
 
-    snap_id = make_snap_id("binary_oracle", str(len(absent)), binary_path)
+    # Content-hash the verdict-set identity: a len()-based key made
+    # same-size sets for one binary collide (INSERT OR IGNORE then
+    # kept the stale snapshot metadata).
+    snap_id = make_snap_id(
+        "binary_oracle", short_hash(sorted(absent)), binary_path)
     count = 0
     conn = open_graph(db_path)
     conn.isolation_level = None
@@ -715,9 +735,9 @@ def propagate_binary_verdicts(
                 INSERT OR IGNORE INTO snapshots
                 (id, target_path, target_hash, git_sha, checklist_hash,
                  created_at, producer_run, props_json, producer)
-                VALUES (?, '', '', '', '', datetime('now'), ?, '{}', 'binary_oracle')
+                VALUES (?, '', '', '', '', ?, ?, '{}', 'binary_oracle')
                 """,
-                (snap_id, binary_path),
+                (snap_id, utc_now_iso(), binary_path),
             )
         else:
             conn.execute(
@@ -725,9 +745,9 @@ def propagate_binary_verdicts(
                 INSERT OR IGNORE INTO snapshots
                 (id, target_path, target_hash, git_sha, checklist_hash,
                  created_at, producer_run, props_json)
-                VALUES (?, '', '', '', '', datetime('now'), ?, '{}')
+                VALUES (?, '', '', '', '', ?, ?, '{}')
                 """,
-                (snap_id, binary_path),
+                (snap_id, utc_now_iso(), binary_path),
             )
         from .ingest import _upsert_edge, _upsert_node
         for fn_key in absent:
@@ -815,16 +835,19 @@ def dashboard_summary(db_path: Path) -> dict[str, Any]:
         # sides of the ratio count the same population — dividing the
         # validated-findings count by the SINK count produced a
         # incoherent metric that could exceed 1.
+        # Identity grain on BOTH sides: node ids are snapshot-scoped,
+        # so a finding re-ingested across snapshots counted N times in
+        # the denominator while its VALIDATES edge pointed at one row.
         total_findings = conn.execute(
             """
-            SELECT COUNT(DISTINCT id) AS c FROM nodes
+            SELECT COUNT(DISTINCT stable_key) AS c FROM nodes
             WHERE kind IN ('scan_finding', 'codeql_result', 'unchecked_flow')
               AND stale=0
             """
         ).fetchone()["c"]
         validated_findings = conn.execute(
             """
-            SELECT COUNT(DISTINCT e.dst_id) AS c
+            SELECT COUNT(DISTINCT d.stable_key) AS c
             FROM edges e
             JOIN nodes n ON n.id = e.src_id AND n.kind = 'verified_outcome'
             JOIN nodes d ON d.id = e.dst_id
