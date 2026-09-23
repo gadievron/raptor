@@ -1296,6 +1296,47 @@ class TestRuleRole:
         )
         assert get_rule_role(rule) == "verification"
 
+    def test_role_read_covers_the_whole_header(self, tmp_path):
+        # The role directive lives in the leading comment header, whose
+        # length is unbounded — a rule whose documentation grows must
+        # not silently demote to detection because the directive
+        # drifted past a fixed byte prefix.
+        rule = tmp_path / "long_header.cocci"
+        prose = "".join(
+            f"// header prose line {i} padding padding padding\n"
+            for i in range(90)
+        )
+        assert len(prose) > 4096
+        rule.write_text(prose + "// @role: verification\n\n@r@\n")
+        from core.audit.sweep import get_rule_role
+        assert get_rule_role(str(rule)) == "verification"
+
+    def test_role_directive_outside_header_is_ignored(self, tmp_path):
+        # The read is bounded by the header GRAMMAR (the leading
+        # comment block), not a byte count: a directive-shaped line
+        # buried after the first rule block is not the rule's
+        # declaration.
+        rule = tmp_path / "buried.cocci"
+        rule.write_text(
+            "// buried.cocci\n"
+            "@r@\nexpression E;\n@@\n\n"
+            "// @role: verification\n"
+        )
+        from core.audit.sweep import get_rule_role
+        assert get_rule_role(str(rule)) == "detection"
+
+    def test_real_format_string_is_verification(self):
+        # Regression pin: this rule's directive sits past 2048 bytes
+        # of header prose and a byte-capped read silently demoted it.
+        import os
+
+        from core.audit.sweep import get_rule_role
+        rule = os.path.join(
+            os.environ.get("RAPTOR_DIR", "."),
+            "engine", "coccinelle", "rules", "format_string.cocci",
+        )
+        assert get_rule_role(rule) == "verification"
+
 
 class TestBuildOrchestratorConfig:
     """Both pipeline entry points build their OrchestratorConfig via
