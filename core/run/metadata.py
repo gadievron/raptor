@@ -590,10 +590,12 @@ def _foreign_holder_past_ceiling(run_dir: Path, meta: dict) -> bool:
     """True when a foreign-stamped running marker is past the gate's
     contention ceiling AND its run dir shows no recent write activity.
 
-    A missing or unparseable timestamp counts as past the ceiling —
-    a forged marker must not earn a longer hold by omitting the field
-    the ceiling reads; the activity probe still protects a genuinely
-    live run (it keeps writing).
+    A missing, unparseable, or FUTURE-DATED timestamp counts as past
+    the ceiling — a forged marker must not earn a longer (or with a
+    far-future stamp, INFINITE) hold by gaming the field the ceiling
+    reads; the activity probe still protects a genuinely live run (it
+    keeps writing), and modest clock skew is absorbed by the same
+    probe plus a one-hour tolerance.
     """
     if _run_recently_active(run_dir):
         return False
@@ -604,6 +606,8 @@ def _foreign_holder_past_ceiling(run_dir: Path, meta: dict) -> bool:
             if started.tzinfo is None:
                 started = started.replace(tzinfo=timezone.utc)
             age_s = (datetime.now(timezone.utc) - started).total_seconds()
+            if age_s < -3600.0:
+                return True  # future-dated forgery — no extended hold
             return age_s >= _FOREIGN_HOLDER_CONTENTION_CEILING_S
         except ValueError:
             pass

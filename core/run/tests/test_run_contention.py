@@ -399,3 +399,18 @@ class ForeignStampedHolderTest(RunContentionBase):
             self.addCleanup(p.stop)
         self.assertEqual(_session_liveness_for_meta(meta), "foreign")
         self.assertTrue(_session_alive_for_meta(meta))
+
+    def test_future_dated_stamp_does_not_extend_the_hold(self):
+        # Adversarial shape: a forged FAR-FUTURE timestamp would never
+        # age past the ceiling — the exact infinite hold the ceiling
+        # exists to bound.
+        self._write_foreign_sibling(
+            timestamp="9999-01-01T00:00:00+00:00")
+        patches = self._foreign_patches() + [
+            patch("core.run.metadata._run_recently_active",
+                  lambda d: False),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.assertIsNone(self._scan())
