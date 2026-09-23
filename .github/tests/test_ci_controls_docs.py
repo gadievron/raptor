@@ -193,6 +193,38 @@ def test_workflow_pytest_installs_use_the_single_source_pin() -> None:
         )
 
 
+def test_grammar_wheel_pins_match_requirements_comment_block() -> None:
+    """requirements-grammars.txt instructs maintainers to keep its
+    versions in sync with the commented tree-sitter block in
+    requirements.txt — a hand-sync with no oracle (in sync today by
+    luck of review). Exact parity, both directions: same wheel set,
+    same versions."""
+    import re
+
+    grammar_pin = re.compile(r"^(tree-sitter[A-Za-z0-9-]*)==(\S+)$")
+    commented_pin = re.compile(r"^#\s*(tree-sitter[A-Za-z0-9-]*)==(\S+)$")
+    grammars = {
+        m.group(1): m.group(2)
+        for line in _read("requirements-grammars.txt").splitlines()
+        if (m := grammar_pin.match(line.strip()))
+    }
+    commented = {
+        m.group(1): m.group(2)
+        for line in _read("requirements.txt").splitlines()
+        if (m := commented_pin.match(line.strip()))
+    }
+    assert grammars, "grammar pin extraction went vacuous"
+    assert commented, "requirements.txt commented-block extraction went vacuous"
+    assert grammars == commented, (
+        "requirements-grammars.txt and requirements.txt's commented "
+        "tree-sitter block drifted — update both together:\n"
+        f"only in grammars file: {sorted(set(grammars) - set(commented))}\n"
+        f"only in requirements comment: {sorted(set(commented) - set(grammars))}\n"
+        f"version mismatches: "
+        f"{sorted(k for k in grammars.keys() & commented.keys() if grammars[k] != commented[k])}"
+    )
+
+
 def test_readme_links_to_ci_controls_doc() -> None:
     readme = _read("README.md")
     assert "## How RAPTOR checks itself" in readme

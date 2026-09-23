@@ -1,9 +1,12 @@
 """Tests for ``sarif_known_fp_suppressions``.
 
-The script applies SARIF 2.1.0 ``suppressions`` entries to results
-matching a documented ``(rule_id, sink_file_prefix)`` tuple. These
-tests pin the contract so the suppression table can't grow silently
-and the match logic can't regress to over- or under-suppression.
+The script REMOVES results matching a documented
+``(rule_id, sink_file_prefix)`` tuple from the SARIF before upload —
+GitHub does not act on the SARIF 2.1.0 ``suppressions`` property for
+open alerts, so stamping was retired for deletion (see the script
+docstring). These tests pin the contract so the suppression table
+can't grow silently and the match logic can't regress to over- or
+under-suppression.
 """
 
 from __future__ import annotations

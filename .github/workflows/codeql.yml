@@ -166,6 +166,11 @@ jobs:
                 resp=/tmp/compare_response.json
                 gh api --paginate \
                   "repos/${REPO}/compare/${BEFORE}...${AFTER}" > "$resp"
+                # No previous_filename companion here (tests.yml emits
+                # it): deliberate asymmetry — these lists feed
+                # glob-shaped LANGUAGE filters, and a rename's old
+                # path never changes which languages the new tree
+                # contains.
                 jq -r '(.files // [])[]?.filename' "$resp" >> "$out"
                 files_n=$(wc -l < "$out")
                 if (( files_n >= 300 )); then
