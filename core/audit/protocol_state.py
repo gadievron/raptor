@@ -165,8 +165,13 @@ _FIELD_ACCESS_RE = re.compile(
 # a multi-level chain — the terminal field's write was censused as a
 # READ of the middle segment, leaving the written field with zero
 # write sites (vacuous preservation from census blindness).
+# (?<![\w.]) pins the scan to chain starts: an unpinned leading
+# identifier re-reads the same hostile run from every offset —
+# quadratic per line.  Mid-word starts only ever fabricated a token
+# (the "xff" tail of a hex literal); a post-dot start is a chain
+# tail the pinned match from the true head already covers.
 _FIELD_CHAIN_RE = re.compile(
-    r"([A-Za-z_]\w*)((?:\s*(?:->|\.)\s*[A-Za-z_]\w*)+)",
+    r"(?<![\w.])([A-Za-z_]\w*)((?:\s*(?:->|\.)\s*[A-Za-z_]\w*)+)",
 )
 _CHAIN_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 # Write tails: simple/compound assignment (all C compound operators —
