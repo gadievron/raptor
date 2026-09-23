@@ -129,7 +129,13 @@ def verify_receipt(
     anywhere in the file otherwise.  ``sha256`` records the
     normalised quote hash for downstream threading.
     """
-    receipt = Receipt(file=file_path, line=line, quote=quote[:2000])
+    # Hash what is STORED: the receipt keeps quote[:2000], so the
+    # sha256 must cover the same text or the pair is internally
+    # inconsistent (no consumer re-hashes today; the truncated quote
+    # still substring-verifies, but a future hash comparison would
+    # read every long quote as drift).
+    quote = quote[:2000]
+    receipt = Receipt(file=file_path, line=line, quote=quote)
     norm = _normalise(quote)
     if len(norm) < MIN_QUOTE_CHARS:
         receipt.note = "quote too short to verify"
@@ -176,13 +182,16 @@ def mechanical_receipt(
     """Receipt for a mechanically extracted snippet.
 
     The snippet came out of the extractor, so existence is true by
-    construction; the hash still pins the exact text.
+    construction; the hash still pins the exact text — the STORED
+    text (mirrors verify_receipt: hash and quote cover the same
+    2000-char prefix).
     """
+    snippet = snippet[:2000]
     norm = _normalise(snippet)
     return Receipt(
         file=file_path,
         line=line,
-        quote=snippet[:2000],
+        quote=snippet,
         verified=True,
         sha256=hashlib.sha256(norm.encode()).hexdigest()[:16] if norm else "",
         tier=TIER_MECHANICAL,
