@@ -30,6 +30,7 @@ from typing import Any
 # with __all__ below.
 _LAZY_EXPORTS = {
     "CacheEnvelope":          ("core.json.cache", "CacheEnvelope"),
+    "DEFAULT_JSON_MAX_BYTES": ("core.json.utils", "DEFAULT_JSON_MAX_BYTES"),
     # Canonical home is core.json.utils (core.json.bounded re-exports
     # it) — resolving here avoids importing the bounded module for
     # consumers that only catch the error.
@@ -45,6 +46,7 @@ _LAZY_EXPORTS = {
     "dumps_display":          ("core.json.utils", "dumps_display"),
     "load_json":              ("core.json.utils", "load_json"),
     "load_json_bounded":      ("core.json.bounded", "load_json_bounded"),
+    "load_json_unbounded":    ("core.json.utils", "load_json_unbounded"),
     "load_jsonl":             ("core.json.jsonl", "load_jsonl"),
     "loads":                  ("core.json.utils", "loads"),
     "loads_bounded":          ("core.json.bounded", "loads_bounded"),
@@ -82,6 +84,7 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "DEFAULT_JSON_MAX_BYTES",
     "MISSING",
     "TTL_FOREVER",
     "CacheEnvelope",
@@ -93,6 +96,7 @@ __all__ = [
     "dumps_display",
     "load_json",
     "load_json_bounded",
+    "load_json_unbounded",
     "load_json_with_comments",
     "load_jsonl",
     "loads",

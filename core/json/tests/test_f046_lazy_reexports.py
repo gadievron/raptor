@@ -103,11 +103,12 @@ def test_f046_all_unchanged():
     _force_fresh_core_json_import()
     import core.json
     assert set(core.json.__all__) == {
-        "CacheEnvelope", "JsonBudgetExceededError", "JsonCache",
+        "CacheEnvelope", "DEFAULT_JSON_MAX_BYTES",
+        "JsonBudgetExceededError", "JsonCache",
         "MISSING", "TTL_FOREVER",
         "append_jsonl", "dumps_artifact", "dumps_canonical",
         "dumps_display",
-        "load_json", "load_json_bounded",
+        "load_json", "load_json_bounded", "load_json_unbounded",
         "load_json_with_comments", "load_jsonl", "loads",
         "loads_bounded", "save_json",
     }

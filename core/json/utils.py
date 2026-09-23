@@ -58,6 +58,40 @@ def _loads(
     return json.loads(text, parse_constant=parse_constant)
 
 
+#: Default byte budget every ``load_json`` / ``load_json_with_comments``
+#: call pays unless the site sets its own. 256 MiB — the run-artifact
+#: class (``core.coverage.record.RUN_ARTIFACT_MAX_BYTES`` aliases this
+#: constant): generous enough that no legitimate RAPTOR artifact is
+#: refused — the core/sarif chokepoint caps its own SARIF reads
+#: tighter at 100 MiB, the SARIF reads outside that chokepoint take
+#: exactly this default, and checklists, context maps, reports and
+#: caches measure far smaller — while a planted multi-GiB
+#: file — sparse plants cost the attacker no disk — is refused at the
+#: fstat gate without ever being read. Trade-off, both directions:
+#: LOWER would start refusing plausible large artifacts (huge-repo
+#: SARIF/CodeQL exports approach the 100 MiB class) and turn the
+#: default into a per-site tuning exercise; HIGHER stops bounding the
+#: reader's memory in any useful way (a 1 GiB parse OOM-kills the
+#: pipelines this budget exists to keep alive). Sites with a known
+#: smaller artifact class should pass their own tighter ``max_bytes``;
+#: the rare adjudicated huge-trusted-artifact reader uses
+#: :func:`load_json_unbounded` with an inline justification.
+DEFAULT_JSON_MAX_BYTES: int = 256 * 1024 * 1024
+
+
+class _DefaultBudget:
+    """Sentinel type: 'use :data:`DEFAULT_JSON_MAX_BYTES`'.
+
+    A distinct type (not ``None``) so the default budget is resolved
+    at CALL time from the module constant — tests can tighten the
+    default via monkeypatch, and ``max_bytes=None`` keeps its
+    explicit unbounded meaning for adjudicated pass-through plumbing.
+    """
+
+
+_USE_DEFAULT_BUDGET = _DefaultBudget()
+
+
 class JsonBudgetExceededError(ValueError):
     """JSON input exceeds its byte budget.
 
@@ -120,10 +154,12 @@ def _read_text_gated(p: Path, max_bytes: int | None) -> str:
       refused instead of buffered unbounded (``core.json.bounded``
       closed exactly this window; same pattern here).
 
-    Raises ``ValueError`` for non-regular / over-budget files,
-    ``OSError`` for open/read failures, ``UnicodeDecodeError`` (a
-    ``ValueError``) for undecodable bytes — the shapes ``load_json``'s
-    strict/lenient branches already handle.
+    Raises ``ValueError`` for non-regular files,
+    ``JsonBudgetExceededError`` (a ``ValueError``) for over-budget
+    files — so a strict caller can report the refusal distinctly, per
+    that class's contract — ``OSError`` for open/read failures, and
+    ``UnicodeDecodeError`` (a ``ValueError``) for undecodable bytes:
+    all shapes ``load_json``'s strict/lenient branches already handle.
     """
     flags = (
         os.O_RDONLY
@@ -141,7 +177,7 @@ def _read_text_gated(p: Path, max_bytes: int | None) -> str:
                 f"file size {st.st_size} bytes exceeds "
                 f"max_bytes={max_bytes}: {p}"
             )
-            raise ValueError(msg)
+            raise JsonBudgetExceededError(msg)
         with os.fdopen(fd, "rb") as fh:
             fd = -1  # fdopen owns it now
             raw = fh.read(max_bytes + 1 if max_bytes is not None else -1)
@@ -149,7 +185,7 @@ def _read_text_gated(p: Path, max_bytes: int | None) -> str:
             msg = (
                 f"file grew past max_bytes={max_bytes} during read: {p}"
             )
-            raise ValueError(msg)
+            raise JsonBudgetExceededError(msg)
         return raw.decode("utf-8-sig")
     finally:
         if fd >= 0:
@@ -164,7 +200,7 @@ def load_json(
     strict: bool = False,
     *,
     allow_non_finite: bool = False,
-    max_bytes: int | None = None,
+    max_bytes: int | None | _DefaultBudget = _USE_DEFAULT_BUDGET,
 ) -> Any | None:
     r"""Load a JSON file.
 
@@ -197,9 +233,15 @@ def load_json(
     rejected without ever being loaded into memory. An oversize file
     follows the malformed-file contract: ``strict=True`` raises
     ``ValueError``, ``strict=False`` warns and returns ``None``.
-    ``None`` (the default) keeps the historical unbounded behaviour.
-    Use a budget whenever the file lives somewhere another principal
-    can influence (target repos, importable archives, shared tmp).
+    Every call pays :data:`DEFAULT_JSON_MAX_BYTES` by default —
+    run-dir artifacts live beside scanned-tree output, so the
+    unbounded read must be the exception a caller spells out, never
+    the default a caller forgets. Pass a tighter budget where the
+    artifact class is known. ``None`` means unbounded and is reserved
+    for :func:`load_json_unbounded` and adjudicated pass-through
+    plumbing — every runtime spelling of either needs an inline
+    ``json-unbounded:`` justification (enforced by
+    ``.github/tests/test_load_json_budget_closure.py``).
 
     Backend note: parsing prefers orjson when installed; integer
     literals outside ``[-2**63, 2**64 - 1]`` then come back as lossy
@@ -207,6 +249,8 @@ def load_json(
     consume >64-bit integers as identity must use the stdlib-only
     ``core.json.bounded`` helpers instead.
     """
+    if isinstance(max_bytes, _DefaultBudget):
+        max_bytes = DEFAULT_JSON_MAX_BYTES
     p = Path(path)
     if not p.exists():
         return None
@@ -239,6 +283,36 @@ def load_json(
         # path as a JSONDecodeError rather than an uncaught crash.
         logger.warning("load_json: failed to parse %s: %s", p, e)
         return None
+
+
+def load_json_unbounded(
+    path: str | Path,
+    strict: bool = False,
+    *,
+    allow_non_finite: bool = False,
+) -> Any | None:
+    """:func:`load_json` with the byte budget explicitly waived.
+
+    The named opt-out of the capped-by-default read contract, for
+    adjudicated readers of huge TRUSTED artifacts only — a file this
+    process's own trust domain produced, whose legitimate size can
+    exceed :data:`DEFAULT_JSON_MAX_BYTES`. Never for anything another
+    principal can influence (target repos, importable archives,
+    shared tmp): an unbounded read of a plantable file is exactly the
+    OOM lever the default budget exists to remove.
+
+    Every runtime call site must carry an inline justification
+    comment on the call's first line::
+
+        data = load_json_unbounded(path)  # json-unbounded: <why>
+
+    enforced by ``.github/tests/test_load_json_budget_closure.py``
+    over the runtime-source universe. Prefer ``load_json(...,
+    max_bytes=<explicit larger cap>)`` when any bound can be named.
+    """
+    return load_json(  # json-unbounded: this IS the named opt-out
+        path, strict, allow_non_finite=allow_non_finite, max_bytes=None,
+    )
 
 
 def loads(
@@ -329,7 +403,7 @@ def _strip_json_comments(text: str) -> str:
 def load_json_with_comments(
     path: str | Path,
     *,
-    max_bytes: int | None = None,
+    max_bytes: int | None | _DefaultBudget = _USE_DEFAULT_BUDGET,
 ) -> Any | None:
     """Load a JSON file that may contain ``//`` or ``#`` comments.
 
@@ -347,12 +421,16 @@ def load_json_with_comments(
       grant. Symlink-to-regular still resolves (stat follows);
       symlink-to-FIFO is refused with the FIFO.
     - ``max_bytes`` (keyword-only): byte budget; an oversize file is
-      refused without ever being loaded into memory. ``None`` (the
-      default) keeps the historical unbounded behaviour.
+      refused without ever being loaded into memory. Defaults to
+      :data:`DEFAULT_JSON_MAX_BYTES` (same capped-by-default contract
+      as :func:`load_json`); ``None`` means unbounded and needs the
+      same inline ``json-unbounded:`` justification.
 
     Both refusals warn and return ``None`` — the same contract as a
     parse failure, which every caller already tolerates.
     """
+    if isinstance(max_bytes, _DefaultBudget):
+        max_bytes = DEFAULT_JSON_MAX_BYTES
     p = Path(path)
     if not p.exists():
         return None
