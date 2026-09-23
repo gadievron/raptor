@@ -976,3 +976,54 @@ class TestHeadReaderFdGuard:
         link = tmp_path / "COPYING"
         link.symlink_to("LICENSES/MIT.txt")
         assert _read_license_head(link) == "MIT License\n"
+
+
+class TestProprietaryPrecedence:
+    """Proprietary declarations join the earliest-position race.
+
+    A LICENSE that opens with an explicit proprietary statement and
+    later NAMES a bundled third-party license must not classify as OSS
+    — pre-fix, proprietary markers were consulted only after the
+    fingerprint race, so any bundled-license mention won.
+    """
+
+    def test_proprietary_header_naming_bundled_oss_is_not_oss(
+            self, tmp_path):
+        (tmp_path / "LICENSE").write_text(
+            "PROPRIETARY AND CONFIDENTIAL. All use subject to the "
+            "Example Corp master agreement.\n\n"
+            "Third-party components are used under the Apache License, "
+            "Version 2.0.\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "proprietary"
+
+    def test_oss_body_mentioning_proprietary_later_stays_oss(
+            self, tmp_path):
+        # The other direction: a real OSS text whose later prose
+        # mentions the word (e.g. an exception clause) keeps its
+        # fingerprint classification.
+        (tmp_path / "LICENSE").write_text(
+            "Apache License\nVersion 2.0, January 2004\n"
+            "Licensed under the Apache License, Version 2.0; "
+            "you may not use this file except in compliance.\n\n"
+            "Note: linking with proprietary modules is permitted.\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "oss"
+
+    def test_bsd_all_rights_reserved_boilerplate_stays_oss(
+            self, tmp_path):
+        # BSD headers carry "All rights reserved" ABOVE the intro
+        # marker; that boilerplate must not win the race.
+        (tmp_path / "LICENSE").write_text(
+            "Copyright (c) 2020 Example Project.\n"
+            "All rights reserved.\n\n"
+            "Redistribution and use in source and binary forms, with "
+            "or without modification, are permitted provided that the "
+            "following conditions are met:\n"
+            "* Redistributions of source code must retain the above.\n",
+        )
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "oss"
+        assert lic.spdx_id in ("BSD-2-Clause", "BSD-3-Clause")
