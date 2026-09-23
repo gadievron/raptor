@@ -819,9 +819,20 @@ def test_readable_grants_join_the_identity_pin(
     readable path swapped for a different inode between the failed
     mount attempt and the mountless retry is a pin violation
     (fail-closed), not a silent retry against the attacker's swap."""
+    import os
+
     readable = tmp_path / "readable"
     readable.mkdir()
     swap_me = readable
+    # Hold an fd on the original directory across the swap: ext4 hands
+    # the freed inode NUMBER to the very next mkdir (tmpfs allocates
+    # monotonically), and a recycled number is a genuinely identical
+    # (st_dev, st_ino) identity — indistinguishable from no swap, so
+    # the pin correctly stays silent there. The open fd keeps the
+    # stale inode allocated so the swapped-in directory provably
+    # differs on every filesystem and the pin has a real violation
+    # to detect.
+    stale_dir_fd = os.open(readable, os.O_RDONLY)
 
     class _SwappingRecorder(_SpawnRecorder):
         def __call__(self, cmd: Any, **kw: Any):
@@ -840,11 +851,14 @@ def test_readable_grants_join_the_identity_pin(
 
     rec = _SwappingRecorder()
     _Driver(monkeypatch, rec)
-    with pytest.raises(SandboxSetupError, match="pin violation"):
-        with context.sandbox(target=str(tmp_path),
-                             restrict_reads=True,
-                             readable_paths=[str(readable)]) as run:
-            run(["/bin/true"], capture_output=True, timeout=60)
+    try:
+        with pytest.raises(SandboxSetupError, match="pin violation"):
+            with context.sandbox(target=str(tmp_path),
+                                 restrict_reads=True,
+                                 readable_paths=[str(readable)]) as run:
+                run(["/bin/true"], capture_output=True, timeout=60)
+    finally:
+        os.close(stale_dir_fd)
 
 
 # ---------------------------------------------------------------------------

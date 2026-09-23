@@ -330,22 +330,31 @@ class VerifyAfterLockTest(unittest.TestCase):
             lock = op_lock_path(pdir)
             # Simulate the purge+recreate race: swap the inode as the
             # locker acquires (a pre-created stale file the purge
-            # removed mid-acquire).
+            # removed mid-acquire). Hold an fd on the stale file
+            # across the unlink: ext4 hands the freed inode NUMBER to
+            # the very next create (tmpfs allocates monotonically), and
+            # a recycled number makes the swap invisible to any inode
+            # comparison — the open fd keeps the stale inode allocated
+            # so the replacement provably differs on every filesystem.
             lock.write_text("")
-            stale_ino = os.stat(lock).st_ino
-            os.unlink(lock)
-            lock.write_text("")
-            with project_op_lock(pdir, "merge"):
-                held = os.stat(lock)
-                self.assertNotEqual(held.st_ino, stale_ino)
-                # The holder's fd is on the CURRENT path inode.
-                import fcntl
-                fd = os.open(str(lock), os.O_RDWR)
-                try:
-                    with self.assertRaises(BlockingIOError):
-                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                finally:
-                    os.close(fd)
+            stale_fd = os.open(str(lock), os.O_RDONLY)
+            try:
+                stale_ino = os.stat(lock).st_ino
+                os.unlink(lock)
+                lock.write_text("")
+                with project_op_lock(pdir, "merge"):
+                    held = os.stat(lock)
+                    self.assertNotEqual(held.st_ino, stale_ino)
+                    # The holder's fd is on the CURRENT path inode.
+                    import fcntl
+                    fd = os.open(str(lock), os.O_RDWR)
+                    try:
+                        with self.assertRaises(BlockingIOError):
+                            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    finally:
+                        os.close(fd)
+            finally:
+                os.close(stale_fd)
 
     def test_purged_lock_mid_hold_reminted(self):
         import os
