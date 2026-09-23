@@ -654,3 +654,17 @@ def test_run_synthesis_loop_diag_captures_last_error(tmp_path: Path):
                              work_dir=tmp_path / "s", max_attempts=2, diag=diag)
     assert res is None
     assert "proposedGuard" in diag["last_error"] and diag["attempts"] == 2
+
+
+def test_resolve_in_repo_uses_shared_confine_chokepoint(tmp_path, monkeypatch):
+    """Wiring pin: _resolve_in_repo must delegate to core.paths.confine."""
+    from core.dataflow import cvefix_bridge as cb
+    seen: dict = {}
+
+    def fake_confine(base, candidate):
+        seen["args"] = (base, candidate)
+        return None
+
+    monkeypatch.setattr(cb, "confine", fake_confine)
+    assert cb._resolve_in_repo(tmp_path, "src/a.c") is None
+    assert seen["args"] == (tmp_path, "src/a.c")

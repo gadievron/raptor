@@ -46,7 +46,7 @@ from core.dataflow.barrier_synth import (
 from core.dataflow.cvefix_loader import CveFixPair
 from core.git import safe_git_readonly_command
 from core.sarif.parser import SARIF_MAX_BYTES
-from core.paths import strip_file_uri
+from core.paths import confine, strip_file_uri
 from typing import TYPE_CHECKING
 
 # CodeQL SARIF over corpus code — the SARIF budget class shared with
@@ -202,15 +202,10 @@ def _resolve_in_repo(repo_root: Path, uri: str) -> Path | None:
     fetched (untrusted) repository, so a traversal-shaped uri
     (``../../etc/passwd``) or an in-repo symlink pointing outside the
     clone must not let the bridge read host files into an LLM prompt.
-    Returns None when the resolved path escapes ``repo_root``."""
-    try:
-        root = repo_root.resolve()
-        candidate = (repo_root / _norm_uri(uri)).resolve()
-    except OSError:
-        return None
-    if not candidate.is_relative_to(root):
-        return None
-    return candidate
+    Returns None when the resolved path escapes ``repo_root``.
+    Delegates to the shared :func:`core.paths.confine` chokepoint so
+    future containment hardening reaches this site too."""
+    return confine(repo_root, _norm_uri(uri))
 
 
 def _git_diff(repo: Path, parent: str, fix: str, uri: str,

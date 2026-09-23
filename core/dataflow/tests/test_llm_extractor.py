@@ -522,3 +522,38 @@ def test_adversarial_huge_validator_count_still_processes_each():
     )
     assert len(candidates) == 50
     assert errors == []
+
+
+def test_extract_from_files_traversal_refused(tmp_path):
+    """Containment goes through the shared confine() chokepoint —
+    traversal-shaped relative paths are recorded as errors, never
+    read."""
+    from core.dataflow.llm_extractor import extract_from_files
+    (tmp_path / "ok.py").write_text("def escape_x(s):\n    return s\n")
+    candidates, errors = extract_from_files(
+        file_paths=["../outside.py"],
+        repo_root=tmp_path,
+        extractor=lambda **kw: (),
+    )
+    assert candidates == ()
+    assert errors and "escapes repo root" in errors[0]
+
+
+def test_extract_from_files_containment_uses_shared_chokepoint(
+        tmp_path, monkeypatch):
+    """Wiring pin: containment must route through core.paths.confine
+    (a future confine hardening has to reach this site)."""
+    import core.dataflow.llm_extractor as le
+    seen: dict = {}
+
+    def fake_confine(base, candidate):
+        seen["args"] = (base, candidate)
+        return None
+
+    monkeypatch.setattr(le, "confine", fake_confine)
+    candidates, errors = le.extract_from_files(
+        file_paths=["a.py"], repo_root=tmp_path,
+        extractor=lambda **kw: (),
+    )
+    assert seen["args"] == (tmp_path, "a.py")
+    assert errors and "escapes repo root" in errors[0]

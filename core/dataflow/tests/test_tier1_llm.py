@@ -1698,3 +1698,32 @@ def test_first_validate_entry_cannot_bind_non_argument(
     )
     assert r.status is t1.Tier0Status.NOT_APPLICABLE
     assert "does not appear on the claimed source line" in r.reasoning
+
+
+def test_tier1b_containment_uses_shared_confine_chokepoint(
+        tmp_path, monkeypatch):
+    """Wiring pin: try_tier1b's post-fix read must route through
+    core.paths.confine."""
+    import json as _json
+    seen: dict = {}
+
+    def fake_confine(base, candidate):
+        seen["args"] = (base, candidate)
+        return None
+
+    monkeypatch.setattr(t1, "confine", fake_confine)
+    reply = _json.dumps({
+        "kind": "charset",
+        "validator_source_line": "if not re.match(r'^[a-z]+$', x):",
+        "variable_name": "x", "charset": "a-z", "forbidden": "",
+        "library_call": "",
+    })
+    diff = "+    if not re.match(r'^[a-z]+$', x):\n"
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path, sink_uri="app.py",
+        sink_line=3, sink_class="cmdi", language="python",
+        complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "outside the repo root" in r.reasoning
+    assert seen["args"] == (tmp_path, "app.py")
