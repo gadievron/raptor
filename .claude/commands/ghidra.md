@@ -10,16 +10,17 @@ findings back into them. The sandboxed `analyzeHeadless` subprocess is
 the default engine (the JVM parses attacker-controlled project data);
 in-process pyghidra engages only when headless is absent, or with
 `RAPTOR_GHIDRA_IN_PROCESS=1` (operator trust assertion — no sandbox).
-Raw binaries degrade to r2, then objdump.
+Raw binaries get a Ghidra project created for them first; without a
+Ghidra install they degrade to r2, then objdump.
 
 ## Subcommands
 
 ```
-/ghidra attach <project.gpr> [--enrich] [--decompile-all]
+/ghidra attach <project.gpr> [--enrich] [--decompile-all] [--timeout <s>]
 /ghidra detach [<project.gpr>]
 /ghidra status
-/ghidra import <project.gpr | binary> [--out <dir>] [--enrich] [--decompile-all]
-/ghidra diff <old.gpr> <new.gpr> [--matched] [--program <name>] [--decompile-all] [--out <dir>] [--label-old <v1>] [--label-new <v2>] [--json]
+/ghidra import <project.gpr | binary> [--out <dir>] [--enrich] [--decompile-all] [--timeout <s>]
+/ghidra diff <old.gpr> <new.gpr> [--matched] [--program <name>] [--decompile-all] [--out <dir>] [--label-old <v1>] [--label-new <v2>] [--json] [--timeout <s>]
 /ghidra decompile <project.gpr> <function_name_or_addr> [--timeout <s>]
 /ghidra list <project.gpr>
 /ghidra export <out-dir> [--to <project.gpr>] [--target <path>]
@@ -63,13 +64,28 @@ strings, and bookmarks to `re-database.json`.
 
 Engine fallback: a sandboxed `analyzeHeadless` (from `PATH`) is the
 default; with only pyghidra installed the import runs in-process.
-Passing a **raw binary** instead of a `.gpr` — or running without any
-Ghidra install — falls back to the r2 importer, then objdump (reduced
+
+Passing a **raw binary** instead of a `.gpr` first CREATES a Ghidra
+project from it — sandboxed `analyzeHeadless -import` with full
+auto-analysis, written to
+`<out-dir>/ghidra-project/<binary-stem>/raptor.gpr` (a RAPTOR-owned,
+symlink-free location) — then continues through the normal project
+import, so `--decompile-all` and `--enrich` apply. The create step is
+minutes-long on large binaries; an unset `--timeout` defaults to
+3600s for it. An occupied destination (a re-run) is a TERMINAL error
+— pass the existing `.gpr` directly to reuse it, or remove the
+directory; it never degrades, since the fallback would overwrite the
+existing full-fidelity `re-database.json`. Only when no Ghidra
+install is present, or the create itself fails (the reason is
+printed; a failed create removes its own partial project files), does
+the import degrade to the r2 importer, then objdump (reduced
 fidelity: no decompilation or types; noted in the database metadata).
 
 - `--enrich` — also run r2 analysis on the binary and merge results
 - `--decompile-all` — decompile every function (slow on large binaries)
 - `--program <name>` — specific program in a multi-binary project
+- `--timeout <s>` — headless import timeout (default 300, or 3600
+  with `--decompile-all` / for the raw-binary create step)
 
 ### diff
 

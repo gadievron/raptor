@@ -433,8 +433,11 @@ def _import_binary_fallback(binary: Path, out_dir: Path) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     db = None
     if r2_available():
-        print("ghidra unavailable for this input — importing via r2 "
-              "(degraded: no decompiler types)", file=sys.stderr)
+        # The caller has already printed WHY Ghidra is out of the
+        # picture (no install / create failed) — this line only names
+        # the degradation.
+        print("importing via r2 (degraded: no decompiler types)",
+              file=sys.stderr)
         try:
             db = import_binary_r2(binary)
         except (RuntimeError, ImportError) as e:
@@ -459,6 +462,67 @@ def _import_binary_fallback(binary: Path, out_dir: Path) -> int:
     return 0
 
 
+def _import_raw_binary(binary: Path, args: argparse.Namespace,
+                       out_dir: Path) -> int:
+    """Raw-binary onramp: create a Ghidra project from the binary via
+    analyzeHeadless, then continue through the normal .gpr import
+    path (--decompile-all / --enrich / --timeout all apply). Only when
+    no headless install exists — or the create fails — does this
+    degrade to the r2/objdump fallback importers, with the real reason
+    printed (pre-fix the fallback fired even with Ghidra installed)."""
+    from packages.ghidra.detect import ghidra_available
+
+    if not ghidra_available():
+        print("no Ghidra install found (analyzeHeadless not on PATH)",
+              file=sys.stderr)
+        return _import_binary_fallback(binary, out_dir)
+
+    from packages.ghidra.headless import (
+        GhidraError,
+        GhidraProjectExistsError,
+        create_project_from_binary,
+    )
+    project_dir = out_dir / "ghidra-project" / binary.stem
+    print(f"creating Ghidra project from {_safe_line(str(binary))} "
+          "(auto-analysis — minutes on large binaries)",
+          file=sys.stderr)
+    try:
+        # Create + auto-analysis is decompile-scale work, so an unset
+        # --timeout gets the 3600s default, not the 300s metadata cap.
+        gpr = create_project_from_binary(
+            binary, project_dir,
+            timeout=args.timeout if args.timeout is not None else 3600,
+        )
+    except GhidraProjectExistsError as e:
+        # TERMINAL by design, on both horns: silently reusing the
+        # pre-existing project would trust possibly stale or poisoned
+        # analysis nothing this run produced, and degrading to the
+        # r2/objdump fallback would OVERWRITE the existing
+        # full-fidelity re-database.json in this (deterministic)
+        # output dir with a symbols-only one. The message carries the
+        # operator's two options: pass the existing .gpr, or remove
+        # the directory.
+        print(f"error: {_safe_line(str(e), limit=1600)}",
+              file=sys.stderr)
+        return 1
+    except (GhidraError, OSError) as e:
+        # GhidraError embeds analyzeHeadless output tails
+        # (attacker-influenced) — scrub before echoing, like main().
+        print(f"ghidra project create failed: "
+              f"{_safe_line(str(e), limit=1600)}", file=sys.stderr)
+        return _import_binary_fallback(binary, out_dir)
+
+    print(f"created: {_safe_line(str(gpr))}", file=sys.stderr)
+    if args.enrich and args.binary is None:
+        # The operator handed us the raw binary explicitly — feed it
+        # to the r2 enrichment pass directly instead of making the
+        # bridge re-derive it from project metadata.
+        args.binary = binary
+    db = _do_import(gpr, args, out_dir)
+    _print_db_summary(db, out_dir)
+    return 0
+
+
 def _cmd_import(args: argparse.Namespace) -> int:
     gpr = args.gpr.resolve()
     if not gpr.exists():
@@ -471,16 +535,19 @@ def _cmd_import(args: argparse.Namespace) -> int:
         pyghidra_available,
     )
 
-    # Raw-binary input, or Ghidra absent: engine fallback chain.
-    if gpr.suffix != ".gpr" or not (
-            ghidra_available() or pyghidra_available()):
+    # Raw-binary input: create a Ghidra project first (headless
+    # present), else the engine fallback chain.
+    if gpr.suffix != ".gpr":
         out_dir = args.out or Path(f"out/ghidra-import-{gpr.stem}")
-        if gpr.suffix == ".gpr":
-            print("error: analyzeHeadless not on PATH — cannot open a "
-                  ".gpr project; pass the raw binary to use the "
-                  "r2/objdump fallback importers", file=sys.stderr)
-            return 1
-        return _import_binary_fallback(gpr, Path(out_dir).resolve())
+        return _import_raw_binary(gpr, args, Path(out_dir).resolve())
+
+    # .gpr input needs a Ghidra engine — there is no fallback that
+    # can open a project database.
+    if not (ghidra_available() or pyghidra_available()):
+        print("error: analyzeHeadless not on PATH — cannot open a "
+              ".gpr project; pass the raw binary to use the "
+              "r2/objdump fallback importers", file=sys.stderr)
+        return 1
 
     version = get_ghidra_version()
     if version:
