@@ -334,9 +334,19 @@ def test_held_lock_revalidates_unlinked_inode(tmp_path):
     from core.analysis.reach_verdict_log import _held_lock
     lock_path = tmp_path / "v.json.lock"
     lock_path.touch()
-    stale_ino = os.stat(lock_path).st_ino
-    lock_path.unlink()          # simulate reset() racing ahead
-    with _held_lock(lock_path) as fh:
-        held_ino = os.fstat(fh.fileno()).st_ino
-        assert os.stat(lock_path).st_ino == held_ino
-        assert held_ino != stale_ino
+    # Hold an fd on the stale file across the unlink: ext4 hands the
+    # freed inode NUMBER to the very next create (tmpfs allocates
+    # monotonically), and a recycled number would equal stale_ino even
+    # though the helper correctly reacquired on the fresh path — the
+    # open fd keeps the stale inode allocated so the fresh lock file
+    # provably differs on every filesystem.
+    stale_fd = os.open(lock_path, os.O_RDONLY)
+    try:
+        stale_ino = os.stat(lock_path).st_ino
+        lock_path.unlink()      # simulate reset() racing ahead
+        with _held_lock(lock_path) as fh:
+            held_ino = os.fstat(fh.fileno()).st_ino
+            assert os.stat(lock_path).st_ino == held_ino
+            assert held_ino != stale_ino
+    finally:
+        os.close(stale_fd)
