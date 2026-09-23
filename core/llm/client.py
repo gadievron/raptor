@@ -3671,11 +3671,25 @@ class LLMClient:
                         )
                         _safe_e = _esc_np(_redact(str(e)))[:1024]
                         last_safe_e = _safe_e
-                        # DEBUG — collapsed to one WARNING per retry
-                        # sequence (see ``generate`` above).
-                        logger.debug(
-                            "Structured generation attempt %d failed: %s",
-                            attempt + 1, _safe_e,
+                        # Same level selector as the ``generate`` retry
+                        # loop above: timeout-class failures WARN per
+                        # attempt (each burned the full read budget —
+                        # the observed 50-minute silent stall was on
+                        # THIS path: the review/audit calls that
+                        # motivated the carve-out are structured
+                        # calls); everything else stays DEBUG,
+                        # collapsed to one WARNING per retry sequence.
+                        _attempt_log = (
+                            logger.warning if is_timeout_error(e)
+                            else logger.debug
+                        )
+                        _attempt_log(
+                            "Attempt %d/%d failed for %s/%s after "
+                            "%.0fs: %s",
+                            attempt + 1, self.config.max_retries,
+                            _esc_np(model.provider),
+                            _esc_np(model.model_name),
+                            time.monotonic() - attempt_start, _safe_e,
                         )
 
                         # Spend-aware gate BEFORE the generic retry
