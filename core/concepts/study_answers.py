@@ -72,23 +72,33 @@ def load_answers(out_dir: Path) -> list[dict]:
 
 
 def append_answers(out_dir: Path, answers: list[StudyAnswer]) -> int:
-    """Append *answers* to the ledger (atomic write).  A question
-    already present is updated in place (last write wins) rather than
-    duplicated."""
+    """Append *answers* to the ledger (atomic write).  A record with
+    the same (question, source_file, source_function) is updated in
+    place (last write wins) rather than duplicated.
+
+    The key carries the origin, not the question text alone: the same
+    generic question asked from two different functions is two ledger
+    records (the ledger is the traceability spine — a per-function
+    record silently replaced by another function's answer breaks both
+    re-review presentation and receipt threading, and the survivor
+    may state the OPPOSITE contract)."""
     if not answers:
         return 0
     existing = load_answers(out_dir)
-    by_question = {
-        a.get("question"): i for i, a in enumerate(existing)
+    by_key = {
+        (a.get("question"), a.get("source_file", ""),
+         a.get("source_function", "")): i
+        for i, a in enumerate(existing)
         if isinstance(a, dict)
     }
     added = 0
     for ans in answers:
         rec = asdict(ans)
-        idx = by_question.get(ans.question)
+        key = (ans.question, ans.source_file, ans.source_function)
+        idx = by_key.get(key)
         if idx is None:
             existing.append(rec)
-            by_question[ans.question] = len(existing) - 1
+            by_key[key] = len(existing) - 1
             added += 1
         else:
             existing[idx] = rec
