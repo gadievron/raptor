@@ -4462,7 +4462,10 @@ def run_heap_copy_sweep(
             rule_id="heap-copy",
         )
     try:
-        from core.audit.heap_copy_checker import check_decompiled_function
+        from core.audit.heap_copy_checker import (
+            check_decompiled_function,
+            copy_sites_present,
+        )
         findings = check_decompiled_function(
             function_name, source, file=file_path,
         )
@@ -4478,6 +4481,20 @@ def run_heap_copy_sweep(
             tool="heap-copy", file_path=file_path,
             function_name=function_name, outcome="confirmed",
             matches=[f.to_dict() for f in findings],
+            rule_id="heap-copy",
+        )
+    if not copy_sites_present(source):
+        # The _negative_outcome doctrine, applied at the wrapper: no
+        # copy site means the model never matched — an analysis that
+        # did not run cannot refute.
+        return SweepResult(
+            tool="heap-copy", file_path=file_path,
+            function_name=function_name, outcome="inconclusive",
+            errors=[
+                "no copy sites in the analysed source — the checker's "
+                "prerequisites never matched; a model miss cannot "
+                "refute",
+            ],
             rule_id="heap-copy",
         )
     return SweepResult(
@@ -4519,6 +4536,7 @@ def run_integer_truncation_sweep(
     try:
         from core.audit.integer_truncation_checker import (
             check_integer_truncation,
+            narrowing_sites_present,
         )
         findings = check_integer_truncation(
             function_name, source, file=file_path,
@@ -4536,6 +4554,17 @@ def run_integer_truncation_sweep(
             tool="integer-truncation", file_path=file_path,
             function_name=function_name, outcome="confirmed",
             matches=[f.to_dict() for f in findings],
+            rule_id="integer-truncation",
+        )
+    if not narrowing_sites_present(source, xref_source):
+        return SweepResult(
+            tool="integer-truncation", file_path=file_path,
+            function_name=function_name, outcome="inconclusive",
+            errors=[
+                "no narrowing sites in the analysed source — the "
+                "checker's prerequisites never matched; a model miss "
+                "cannot refute",
+            ],
             rule_id="integer-truncation",
         )
     return SweepResult(
@@ -4562,7 +4591,10 @@ def run_proto_length_sweep(
             rule_id="proto-length",
         )
     try:
-        from core.audit.proto_length_checker import check_proto_length
+        from core.audit.proto_length_checker import (
+            check_proto_length,
+            length_sites_present,
+        )
         findings = check_proto_length(
             function_name, source, file=file_path,
             xref_source=xref_source,
@@ -4579,6 +4611,17 @@ def run_proto_length_sweep(
             tool="proto-length", file_path=file_path,
             function_name=function_name, outcome="confirmed",
             matches=[f.to_dict() for f in findings],
+            rule_id="proto-length",
+        )
+    if not length_sites_present(source, xref_source):
+        return SweepResult(
+            tool="proto-length", file_path=file_path,
+            function_name=function_name, outcome="inconclusive",
+            errors=[
+                "no protocol length-candidate sites in the analysed "
+                "source — the checker's prerequisites never matched; "
+                "a model miss cannot refute",
+            ],
             rule_id="proto-length",
         )
     return SweepResult(
@@ -4606,7 +4649,10 @@ def run_struct_field_sweep(
             rule_id="struct-field",
         )
     try:
-        from core.audit.struct_field_checker import check_struct_field_copy
+        from core.audit.struct_field_checker import (
+            check_struct_field_copy,
+            struct_sites_present,
+        )
         findings = check_struct_field_copy(
             function_name, source, file=file_path,
             re_types=re_types, xref_source=xref_source,
@@ -4623,6 +4669,18 @@ def run_struct_field_sweep(
             tool="struct-field", file_path=file_path,
             function_name=function_name, outcome="confirmed",
             matches=[f.to_dict() for f in findings],
+            rule_id="struct-field",
+        )
+    if not struct_sites_present(source, re_types, xref_source):
+        return SweepResult(
+            tool="struct-field", file_path=file_path,
+            function_name=function_name, outcome="inconclusive",
+            errors=[
+                "no struct layouts, offset accesses, or bound RE-typed "
+                "fields in the analysed source — the checker's "
+                "prerequisites never matched; a model miss cannot "
+                "refute",
+            ],
             rule_id="struct-field",
         )
     return SweepResult(

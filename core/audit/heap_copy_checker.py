@@ -181,6 +181,24 @@ def _is_bounds_checked(
     return False
 
 
+def copy_sites_present(source: str) -> bool:
+    """Whether the checker's structural precondition — any copy-call
+    site (checked-copy wrapper, bare memcpy/memmove, strcpy family) —
+    appears in *source* at all.
+
+    The sweep wrapper consults this before booking a refutation: a
+    function with no copy sites was never tested by this model, and
+    recording 'refuted' for that model miss would clear tool
+    confirmations on the strength of an analysis that did not run
+    (the ``_negative_outcome`` doctrine).
+    """
+    return bool(
+        _CHECKED_COPY_RE.search(source)
+        or _STD_COPY_RE.search(source)
+        or _STRCPY_RE.search(source)
+    )
+
+
 def check_decompiled_function(
     function_name: str,
     source: str,
