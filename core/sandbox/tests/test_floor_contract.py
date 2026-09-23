@@ -925,3 +925,21 @@ def test_refused_mx_run_does_not_pollute_the_speculative_cache(
     assert state._speculative_failure_cache == {}, (
         "a refused run polluted the speculative-failure cache and "
         "would demote future trusted runs")
+
+
+def test_waiver_attribution_defaults_off(monkeypatch):
+    """``waiver_active`` defaults to no-waiver: a caller that never
+    read the env var and omits the kwarg must get the default-source
+    attribution on the waived floor. A truthy default would stamp
+    'env' consent nobody gave on every such call site — the consent
+    banner and the waiver-named warning key off that source."""
+    monkeypatch.setattr(_tiers, "sys",
+                        types.SimpleNamespace(platform="linux"))
+    assert _tiers.resolve_call_floor(
+        operator_disabled=False, require_fresh_procfs=False,
+        untrusted_workload=True,
+    ) == (ContainmentTier.LANDLOCK_ONLY, "default")
+    assert _tiers.resolve_call_floor(
+        operator_disabled=False, require_fresh_procfs=None,
+        untrusted_workload=False,
+    ) == (ContainmentTier.BARE, "default")
