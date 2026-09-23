@@ -923,18 +923,27 @@ def run_sca(
     #     an overlay that suppresses its own findings.
     suppressed_total = 0
     if options.enable_suppressions:
-        entries = _suppressions.load(target / _suppressions.SUPPRESS_FILENAME)
-        if entries and not options.trust_repo:
+        overlay_path = target / _suppressions.SUPPRESS_FILENAME
+        # Trust gate BEFORE the read — "ignored when untrusted" must
+        # mean "never read": loading first handed a hostile repo the
+        # full read+parse of an arbitrary committed file with zero
+        # trust granted (mirror of the license-policy lane above).
+        # ``is_symlink() or exists()`` so a dangling-symlink overlay
+        # still triggers the notice instead of silently vanishing.
+        entries: list[_suppressions.SuppressionEntry] = []
+        if ((overlay_path.is_symlink() or overlay_path.exists())
+                and not options.trust_repo):
             logger.warning(
                 "sca.pipeline: suppression overlay present but not "
-                "trusted — %d entries ignored; set the project `config` "
-                "trust marker or pass --trust-repo", len(entries),
+                "trusted — %s ignored (not read); set the project "
+                "`config` trust marker or pass --trust-repo",
+                _suppressions.SUPPRESS_FILENAME,
             )
             progress.flash(
-                "SUPPRESS",
-                f"{len(entries)} untrusted overlay entries ignored",
+                "SUPPRESS", "untrusted overlay ignored (not read)",
             )
-            entries = []
+        else:
+            entries = _suppressions.load(overlay_path)
         if entries:
             finding_sets = (vuln_findings, hygiene_findings,
                              supply_chain_findings, license_findings)

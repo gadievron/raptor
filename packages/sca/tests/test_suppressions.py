@@ -331,3 +331,58 @@ def test_apply_no_entries_no_changes() -> None:
     rows = [_row()]
     assert apply(rows, []) == 0
     assert "suppressed" not in rows[0]
+
+
+# ---------------------------------------------------------------------------
+# Hostile-overlay read substrate: bounded, never symlink-following
+# ---------------------------------------------------------------------------
+
+def test_load_refuses_oversized_overlay_without_reading_it(
+    tmp_path: Path,
+) -> None:
+    """The overlay ships in the scanned tree: a multi-GB committed
+    file (packfile-cheap) must be refused by stat, not slurped —
+    pre-fix a 122 MB overlay allocated ~246 MB before returning."""
+    import tracemalloc
+
+    p = tmp_path / ".raptor-sca-suppress.yml"
+    with p.open("wb") as fh:
+        fh.truncate(60 * 1024 * 1024)       # sparse: cheap to create
+    tracemalloc.start()
+    try:
+        entries = load(p)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert entries == []
+    assert peak < 10 * 1024 * 1024
+
+
+def test_load_refuses_symlinked_overlay(tmp_path: Path) -> None:
+    """A committed symlink (``.raptor-sca-suppress.yml -> <operator
+    file>``) must not be followed — pre-fix the target's bytes were
+    read, parsed, and quoted into warnings."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    real = outside / "operator.yml"
+    real.write_text(
+        "version: 1\n"
+        "suppressions:\n"
+        "  - advisory_id: GHSA-x\n"
+        "    reason: operator file reached through the symlink\n",
+        encoding="utf-8",
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    link = repo / ".raptor-sca-suppress.yml"
+    link.symlink_to(real)
+    assert load(link) == []
+
+
+def test_load_missing_file_is_quiet_empty(tmp_path: Path, caplog) -> None:
+    """No overlay is the common case — no warning noise."""
+    import logging as _logging
+
+    with caplog.at_level(_logging.WARNING, logger="packages.sca.suppressions"):
+        assert load(tmp_path / ".raptor-sca-suppress.yml") == []
+    assert not caplog.records

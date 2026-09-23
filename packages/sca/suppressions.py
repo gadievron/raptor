@@ -43,6 +43,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, TYPE_CHECKING
 
+from .parsers._safe_read import read_bounded
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from pathlib import Path
@@ -143,15 +145,29 @@ def load(path: Path) -> list[SuppressionEntry]:
 
     Missing file → empty list (the common case — no suppressions yet).
     Malformed file or missing PyYAML → warning + empty list.
+
+    The read goes through the parsers' bounded no-follow reader: the
+    overlay ships in the scanned tree, so a symlinked overlay (host
+    file contents surfacing in parse warnings) or a multi-GB committed
+    one (memory exhaustion before any trust decision) is refused like
+    any other hostile manifest — warning + empty list.
     """
     if not _HAS_YAML or _yaml is None:
         return []
-    if not path.exists():
+    try:
+        path.lstat()
+    except OSError:
+        # Missing file — quiet, unlike the refusals below (lstat so a
+        # dangling symlink still reaches the loud no-follow refusal).
+        return []
+    text = read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # read_bounded already logged the refusal (symlink / size /
+        # non-regular / unreadable).
         return []
     try:
-        text = path.read_text(encoding="utf-8")
         data = _safe_load(text)                # type: ignore[misc]
-    except (OSError, _yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[union-attr]  # hostile-input escape classes
+    except (_yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[union-attr]  # hostile-input escape classes
         logger.warning("sca.suppressions: failed to read %s: %s", path, e)
         return []
     if not isinstance(data, dict):

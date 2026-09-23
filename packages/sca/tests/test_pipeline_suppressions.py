@@ -143,9 +143,8 @@ suppressions:
 def test_untrusted_run_ignores_target_suppression_file(
     tmp_path: Path, caplog,
 ) -> None:
-    """Default (untrusted) run: the target-tree overlay is loaded but
-    NOT applied — the finding survives — and a prominent notice with
-    the entry count is logged."""
+    """Default (untrusted) run: the target-tree overlay is never even
+    READ — the finding survives — and a prominent notice is logged."""
     target = _build_target(tmp_path, suppress_yaml="""
 version: 1
 suppressions:
@@ -169,7 +168,7 @@ suppressions:
                if "suppression overlay present but not trusted"
                in r.getMessage()]
     assert len(notices) == 1
-    assert "1 entries ignored" in notices[0].getMessage()
+    assert "ignored (not read)" in notices[0].getMessage()
     assert "--trust-repo" in notices[0].getMessage()
 
 
@@ -238,3 +237,79 @@ def test_trusted_run_loads_target_license_policy(
                 http=StubHttp(), cache=cache)
     assert not any("license policy file present but not trusted"
                    in r.getMessage() for r in caplog.records)
+
+
+def test_untrusted_run_never_reads_the_overlay(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The trust gate orders BEFORE the read: on an untrusted run the
+    overlay file is not opened at all — reading it first handed a
+    hostile repo an unbounded read+parse of a committed file (246 MB
+    peak from one 122 MB YAML in the wild repro) with zero trust
+    granted."""
+    from packages.sca import suppressions as _suppressions
+
+    target = _build_target(tmp_path, suppress_yaml="""
+version: 1
+suppressions:
+  - advisory_id: CVE-2099-FAKE
+    reason: hostile target trying to hide its own CVE
+""")
+
+    calls: list = []
+    real_load = _suppressions.load
+
+    def _spy(path):
+        calls.append(path)
+        return real_load(path)
+
+    monkeypatch.setattr(_suppressions, "load", _spy)
+    out = tmp_path / "out"
+    cache = JsonCache(root=tmp_path / "cache")
+    result = run_sca(target, out,
+                     RunOptions(enable_llm_review=False,
+                                enable_triage=False),
+                     http=StubHttp(), cache=cache)
+    assert result.suppressed_findings == 0
+    assert calls == []
+
+
+def test_untrusted_run_notices_a_symlinked_overlay(
+    tmp_path: Path, caplog,
+) -> None:
+    """A dangling-symlink overlay on an untrusted run still triggers
+    the not-trusted notice instead of silently vanishing (exists()
+    alone follows the link and reports missing)."""
+    target = _build_target(tmp_path)
+    (target / ".raptor-sca-suppress.yml").symlink_to(
+        tmp_path / "nowhere.yml")
+    out = tmp_path / "out"
+    cache = JsonCache(root=tmp_path / "cache")
+    with caplog.at_level("WARNING", logger="packages.sca.pipeline"):
+        result = run_sca(target, out,
+                         RunOptions(enable_llm_review=False,
+                                    enable_triage=False),
+                         http=StubHttp(), cache=cache)
+    assert result.suppressed_findings == 0
+    assert any("suppression overlay present but not trusted"
+               in r.getMessage() for r in caplog.records)
+
+
+def test_raptor_config_files_are_not_manifest_candidates() -> None:
+    """The k8s candidate router (which also feeds the image-ref
+    walker) must skip RAPTOR's own config files — otherwise an
+    "ignored when untrusted" overlay was still read (bounded,
+    no-follow) as a generic .yml manifest candidate. Membership is
+    pinned against the owning constants so a rename cannot silently
+    reopen the read."""
+    from pathlib import Path
+
+    from packages.sca.kinds import RAPTOR_CONFIG_FILENAMES
+    from packages.sca.parsers.kubernetes import _is_k8s_manifest
+    from packages.sca.pipeline import _LICENSE_POLICY_FILENAME
+    from packages.sca.suppressions import SUPPRESS_FILENAME
+
+    assert SUPPRESS_FILENAME in RAPTOR_CONFIG_FILENAMES
+    assert _LICENSE_POLICY_FILENAME in RAPTOR_CONFIG_FILENAMES
+    for name in RAPTOR_CONFIG_FILENAMES:
+        assert _is_k8s_manifest(Path("repo") / name) is False, name
