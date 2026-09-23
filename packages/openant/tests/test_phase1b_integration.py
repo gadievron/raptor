@@ -942,6 +942,48 @@ class TestConsentGateObjectStoreForgery(unittest.TestCase):
                     core, consented=False, target_path=td)
             self.assertIs(prov["worktree_clean"], True)
 
+    def test_forged_object_survives_repack_and_is_refused(self):
+        """git repack PROPAGATES a forged loose object into a pack
+        (observed: repack exits 0 over the hash-mismatched store), so
+        the packed-forgery shape is realizable with plain porcelain —
+        the self-hash must catch the packed read exactly like the
+        loose one."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            hostile = b"hostile = True\n"
+            victim = self._git(repo, "rev-parse",
+                               "HEAD:libs/openant-core/core")
+            forged = self._forge_listing(repo, "scanner.py", hostile)
+            self._substitute_object(repo, victim, forged)
+            self._git(repo, "repack", "-a", "-d", "-q")
+            (core / "core" / "scanner.py").write_bytes(hostile)
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                dev = scanner._pinned_tree_deviations(core)
+                self.assertNotEqual(dev, {"modified": 0, "untracked": 0})
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+
+    def test_oversized_object_fails_closed_unread(self):
+        """A fake object claiming a huge size under a genuine name
+        must fail the survey closed at the size precheck, before any
+        content buffers into the gate process (exercised by dropping
+        the ceiling under the genuine object sizes)."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head), \
+                 mock.patch.object(scanner, "_OBJECT_MAX_BYTES", 4):
+                self.assertIsNone(scanner._pinned_tree_deviations(core))
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+
 
 class TestAgenticOpenantFailureRecordPersisted(unittest.TestCase):
     """Phase 1b failures must leave a PERSISTED record, not just a
