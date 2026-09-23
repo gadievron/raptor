@@ -42,8 +42,14 @@ included, since a matching HEAD is content-blind to on-disk edits).
 Consent deliberately with `--openant-core-unpinned` (this run) or the
 project `config` trust marker (`/project trust config`, standing).
 The clean pinned checkout passes the gate without either. Note: a
-checkout you have RUN OpenAnt from may carry untracked `__pycache__`
-files and be flagged — re-clone at the pin, or consent.
+checkout you have RUN OpenAnt from carries untracked files — the
+`.venv/` its tree-sitter grammars live in, `__pycache__/` — and is
+flagged; a FUNCTIONAL install therefore never passes the gate clean.
+Re-clone at the pin, or consent — and know the trade: a consented run
+executes the untracked venv interpreter the survey cannot verify,
+while a bare re-clone (no `.venv`) falls back to the launching Python
+and loses the c/ruby/php/javascript grammars (the fallback now warns,
+naming the lost languages; recreate the venv to restore them).
 
 When the gate refuses in an interactive session, this is a run
 boundary: run `libexec/raptor-may-ask` first; only if it prints
