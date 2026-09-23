@@ -37,7 +37,7 @@ from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
 from ..naming import pep503_name
-from ._base import build_purl, lockfile_confidence
+from ._base import PARSE_ESCAPE_ERRORS, build_purl, lockfile_confidence
 from . import _safe_read, register
 
 if TYPE_CHECKING:
@@ -74,7 +74,7 @@ def parse(path: Path) -> list[Dependency]:
 
     try:
         data = _tomllib.loads(text)
-    except _tomllib.TOMLDecodeError as e:
+    except (_tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.parsers.poetry_lock: TOML parse failed for %s: %s", path, e
         )

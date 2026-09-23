@@ -18,7 +18,7 @@ import re
 logger = logging.getLogger(__name__)
 
 try:
-    from packaging.version import InvalidVersion, Version
+    from packaging.version import Version
     _HAS_PACKAGING = True
 except ImportError:
     _HAS_PACKAGING = False
@@ -43,7 +43,10 @@ def compare(a: str, b: str) -> int:
         try:
             va = Version(a)
             vb = Version(b)
-        except InvalidVersion as e:
+        except ValueError as e:
+            # ValueError, not just its InvalidVersion subclass:
+            # CPython's int digit limit raises bare ValueError inside
+            # packaging on a crafted huge-digit version component.
             msg = f"invalid PEP 440 version: {e}"
             raise VersionError(msg) from e
         if va == vb:

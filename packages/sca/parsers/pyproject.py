@@ -29,7 +29,7 @@ from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
 from ..naming import pep503_name
-from ._base import build_purl, manifest_confidence
+from ._base import PARSE_ESCAPE_ERRORS, build_purl, manifest_confidence
 from . import _safe_read, register
 from .requirements import _spec_bounds
 
@@ -198,7 +198,7 @@ def _load(path: Path) -> dict[str, Any] | None:
 
     try:
         return _tomllib.loads(text)
-    except _tomllib.TOMLDecodeError as e:
+    except (_tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning("sca.parsers.pyproject: TOML parse failed for %s: %s", path, e)
         return None
 
@@ -241,7 +241,10 @@ def _from_pep508(
         return None
     try:
         req = Requirement(spec)
-    except InvalidRequirement as e:
+    except (InvalidRequirement, ValueError) as e:
+        # Bare ValueError: CPython's int digit limit fires inside
+        # packaging's version normalisation on a crafted 100k-digit
+        # version — not wrapped in InvalidRequirement.
         logger.debug(
             "sca.parsers.pyproject: invalid PEP 508 %r in %s: %s",
             spec, path, e,

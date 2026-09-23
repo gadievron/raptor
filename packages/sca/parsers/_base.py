@@ -14,6 +14,25 @@ from typing import TYPE_CHECKING
 
 from ..models import Confidence, PinStyle
 
+# Exception classes that escape the narrow per-library catches on
+# hostile input, violating the parsers' never-raise contract:
+# - RecursionError: recursive-descent parsers (tomllib, PyYAML) blow
+#   the interpreter recursion limit — or CPython's C-stack guard —
+#   on deeply nested input (e.g. ``"x = " + "[" * 5000``).
+# - ValueError: raised outside the library's own error type, e.g.
+#   CPython's int digit limit (sys.int_max_str_digits) firing inside
+#   packaging's version normalisation on a 100k-digit version.
+# MemoryError is deliberately NOT here: catching it invites
+# corrupted-state continuation; the dispatcher's catch-all owns that
+# terminal case. Catch as ``except (<LibError>, *PARSE_ESCAPE_ERRORS)``
+# at every load site so a crafted manifest degrades to the standard
+# warning + [] instead of reaching the dispatch catch-all as an
+# anomaly with no structured reason.
+PARSE_ESCAPE_ERRORS: tuple[type[Exception], ...] = (
+    RecursionError,
+    ValueError,
+)
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from pathlib import Path
