@@ -133,3 +133,41 @@ def test_run_env_malformed_entries_fail_loudly_at_parse() -> None:
                 [42]):             # not a pair or string
         with pytest.raises(ValueError, match="env entry"):
             RunSpec.from_dict({"env": bad})
+
+
+class _RecordingHandler(__import__("logging").Handler):
+    def __init__(self):
+        super().__init__()
+        self.records = []
+
+    def emit(self, record):
+        self.records.append(record)
+
+
+def _with_store_warnings(fn):
+    import logging
+    logger = logging.getLogger("core.env.store")
+    handler = _RecordingHandler()
+    logger.addHandler(handler)
+    try:
+        fn()
+    finally:
+        logger.removeHandler(handler)
+    return [r.getMessage() for r in handler.records
+            if r.levelno >= logging.WARNING]
+
+
+def test_slug_collision_overwrite_warns(tmp_path) -> None:
+    """Distinct names sharing a slug ("Foo Bar" vs "foo-bar") used to
+    overwrite silently; the second save must say what it clobbers."""
+    store = SpecStore(tmp_path)
+    store.save(_spec("Foo Bar"))
+    msgs = _with_store_warnings(lambda: store.save(_spec("foo-bar")))
+    assert any("overwrites existing spec" in m for m in msgs), msgs
+
+
+def test_same_name_resave_stays_quiet(tmp_path) -> None:
+    store = SpecStore(tmp_path)
+    store.save(_spec("foo-bar"))
+    msgs = _with_store_warnings(lambda: store.save(_spec("foo-bar")))
+    assert not msgs
