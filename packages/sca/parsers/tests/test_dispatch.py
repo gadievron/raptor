@@ -75,3 +75,25 @@ def test_parser_exception_does_not_propagate(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setitem(_REGISTRY, "package.json", boom)
     deps = parse_manifest(_make_manifest(p, "npm"))
     assert deps == []
+
+
+def test_uncaught_escape_names_exception_class(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """The dispatch catch-all names the escaping class so the
+    collector-lifted parse failure states WHICH contract-violation
+    class the parser leaked, not just "unhandled exception"."""
+    from packages.sca.parsers import _REGISTRY, capture_parse_failures
+
+    def boom(_: Path):
+        raise RecursionError("synthetic depth blowup")
+
+    p = tmp_path / "package.json"
+    p.write_text("{}", encoding="utf-8")
+    monkeypatch.setitem(_REGISTRY, "package.json", boom)
+    with capture_parse_failures() as failures:
+        deps = parse_manifest(_make_manifest(p, "npm"))
+    assert deps == []
+    assert len(failures) == 1
+    assert failures[0].path == p
+    assert "RecursionError" in failures[0].reason

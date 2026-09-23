@@ -228,11 +228,17 @@ def parse_manifest(manifest: Manifest) -> list[Dependency]:
         return []
     try:
         return fn(manifest.path)
-    except Exception:  # noqa: BLE001 — parsers must never break the pipeline
+    except Exception as exc:  # noqa: BLE001 — parsers must never break the pipeline
+        # Name the escaping class: the collector lifts this message
+        # into the run report's parse_failures, and an anonymous
+        # "unhandled exception" hides which contract-violation class
+        # the parser leaked (the type name is safe to log; the
+        # message may quote hostile input and stays in exc_info).
         logger.warning(
             "sca.parsers.dispatch: uncaught parse failed for %s: "
-            "parser raised an unhandled exception",
+            "parser raised an unhandled exception (%s)",
             manifest.path,
+            exc.__class__.__name__,
             exc_info=True,
         )
         return []
