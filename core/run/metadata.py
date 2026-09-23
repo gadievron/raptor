@@ -1675,7 +1675,30 @@ def project_run_projections(output_dir: Path,
     as the completion chokepoint: each step no-ops or logs at debug,
     never raises. Idempotent — the index merge is latest-ts keyed and
     the coverage import is interval-union.
+
+    IMPORTED runs are refused wholesale: the import path quarantines
+    the run's trust-bearing artifacts (coverage records, journals,
+    checklist), but ``.reads-manifest`` ships at its canonical path —
+    re-running the projections on such a run would convert a forged
+    manifest into a fresh ``coverage-read.json`` and fold it into the
+    durable store, re-minting exactly the examined-coverage trust the
+    quarantine stripped. The marker is best-effort by design (missing
+    or unreadable reads as not-imported, matching its other
+    consumers); planting one only DEMOTES a run's standing.
     """
+    try:
+        from core.project.findings_utils import run_is_imported
+        if run_is_imported(Path(output_dir)):
+            logger.info(
+                "projections skipped for imported run %s — import "
+                "quarantined its trust artifacts; adopt/add must not "
+                "re-mint them from archive-supplied inputs",
+                Path(output_dir).name,
+            )
+            return
+    except Exception:  # noqa: BLE001 — predicate is an aid, never a crash
+        logger.debug("imported-run check failed for %s",
+                     output_dir, exc_info=True)
     _merge_run_journal(output_dir, project_dir=project_dir)
     _convert_reads_manifest(output_dir)
     _snapshot_run_coverage(output_dir, project_dir=project_dir)

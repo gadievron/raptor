@@ -318,5 +318,103 @@ class TestQuarantineUniverseDerivation(unittest.TestCase):
         self.assertTrue(self._quarantine_covers(name), name)
 
 
+
+
+class TestImportedRunProjectionsRefused(unittest.TestCase):
+    """Adopt/add re-runs the completion projections on a run — but an
+    IMPORTED run's trust artifacts were quarantined, and its
+    ``.reads-manifest`` still ships at the canonical path (only the
+    DERIVED records are quarantined). Pre-fix,
+    ``project_run_projections`` had no imported-run guard: a forged
+    manifest was converted into a fresh ``coverage-read.json`` at the
+    canonical path and the file-level view counted the forged files as
+    examined coverage — re-minting exactly what the quarantine
+    stripped. The direct journal merge in the adopt lane mirrors the
+    same refusal (belt-and-braces: today's quarantine moves journals
+    out of the run dir, but the two lanes must not drift)."""
+
+    @staticmethod
+    def _forged_run(base: Path, imported: bool = True) -> Path:
+        run = base / "scan_20260101-000000"
+        run.mkdir(parents=True)
+        (run / "findings.json").write_text('{"findings": []}')
+        (run / ".reads-manifest").write_text(
+            "src/forged_a.py\nsrc/forged_b.py\n")
+        (run / "review-journal.jsonl").write_text(json.dumps({
+            "ts": "2026-01-01T00:00:00+00:00",
+            "run_id": "scan_20260101-000000",
+            "file": "src/forged_a.py",
+            "function": "check",
+            "verdict": "clean",
+            "source_hash": "0" * 12,
+        }) + "\n")
+        if imported:
+            (run / ".raptor-imported.json").write_text(
+                json.dumps({"imported": True, "source_sha256": "f" * 64}))
+        return run
+
+    def test_projections_refuse_imported_run(self):
+        from core.coverage.store_summary import file_level_view
+        from core.run.metadata import project_run_projections
+
+        with TemporaryDirectory() as td:
+            run = self._forged_run(Path(td))
+            project_run_projections(run)
+            self.assertFalse((run / "coverage-read.json").exists(),
+                             "forged manifest re-minted a coverage record")
+            self.assertEqual(file_level_view([run]).get("tools", {}), {})
+
+    def test_projections_convert_local_run(self):
+        # Two-direction guard: the same inputs WITHOUT the marker keep
+        # the pre-fix behaviour (also proves the forged inputs above
+        # are potent, so the refusal test cannot pass vacuously).
+        from core.run.metadata import project_run_projections
+
+        with TemporaryDirectory() as td:
+            run = self._forged_run(Path(td), imported=False)
+            project_run_projections(run)
+            self.assertTrue((run / "coverage-read.json").is_file())
+
+    def test_add_directory_does_not_remint_imported_trust(self):
+        """E2E through the operator adopt/add lane: neither the
+        chokepoint projections nor the adopt lane's direct journal
+        merge may launder an imported run's forged inputs."""
+        from core.coverage.journal import load_index
+        from core.project.project import ProjectManager
+
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            run = self._forged_run(d / "incoming")
+            target = d / "target"
+            target.mkdir()
+            mgr = ProjectManager(projects_dir=d / "projects")
+            project = mgr.create("p1", str(target),
+                                 output_dir=str(d / "out" / "p1"))
+            added = mgr.add_directory("p1", str(run))
+            self.assertEqual(added, 1)
+            dest = project.output_path / run.name
+            self.assertTrue(dest.is_dir())
+            self.assertFalse((dest / "coverage-read.json").exists())
+            self.assertEqual(load_index(project.output_path), {})
+
+    def test_add_directory_projects_local_run(self):
+        # Two-direction guard for the E2E lane.
+        from core.coverage.journal import load_index
+        from core.project.project import ProjectManager
+
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            run = self._forged_run(d / "incoming", imported=False)
+            target = d / "target"
+            target.mkdir()
+            mgr = ProjectManager(projects_dir=d / "projects")
+            project = mgr.create("p1", str(target),
+                                 output_dir=str(d / "out" / "p1"))
+            self.assertEqual(mgr.add_directory("p1", str(run)), 1)
+            dest = project.output_path / run.name
+            self.assertTrue((dest / "coverage-read.json").is_file())
+            self.assertNotEqual(load_index(project.output_path), {})
+
+
 if __name__ == "__main__":
     unittest.main()
