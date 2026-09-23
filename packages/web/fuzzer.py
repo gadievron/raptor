@@ -78,7 +78,15 @@ def _set_json_field(template: dict, field_path: tuple[str, ...], value: str) -> 
 _DESTRUCTIVE_SQL_RE = re.compile(
     r"\b(?:drop|truncate|alter|delete|update|insert|create|grant|"
     r"shutdown|exec(?:ute)?|merge|replace)\b"
-    r"|\binto(?:\s+|/\*.*?\*/)+(?:out|dump)file\b",
+    # Glue between the two keywords: one char or one bounded comment
+    # per iteration — ``(?:\s+|/\*.*?\*/)+`` split a hostile
+    # whitespace run between its ``\s+`` iterations in O(2^k) ways
+    # and re-scanned an uncloseable comment tail from every planted
+    # opener. Bounds far above real payload glue (trade-off: a
+    # payload padding >64 glue units or a >512-char inline comment
+    # between the keywords slips past the destructive filter, versus
+    # an unbounded scan of every hostile payload).
+    r"|\binto(?:\s|/\*.{0,512}?\*/){1,64}(?:out|dump)file\b",
     re.IGNORECASE,
 )
 

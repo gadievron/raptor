@@ -213,7 +213,11 @@ _TOJSON_SECRETS_RE = re.compile(
 # always had the permissive grammar; the sinks now share it, scoped
 # to ``${{ … }}`` interiors so prose mentioning ``secrets.FOO``
 # outside an expression can't false-positive.
-_EXPR_RE = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
+# The expression body is bounded: a lazy unbounded body re-scans the
+# rest of a hostile workflow from every planted ``${{`` opener with no
+# closer — quadratic. Real GitHub expressions sit far below 2000
+# chars; a longer body simply keeps that decoy span from matching.
+_EXPR_RE = re.compile(r"\$\{\{(.{0,2000}?)\}\}", re.DOTALL)
 _SECRETS_NAME_RE = re.compile(r"\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)")
 _TOJSON_SECRETS_INNER_RE = re.compile(
     r"\btoJSON\s*\(\s*secrets\s*\)", re.IGNORECASE,
@@ -689,8 +693,13 @@ _TARGET_TOKEN_NAMES = ("GITHUB_ENV", "GITHUB_OUTPUT", "GITHUB_PATH")
 # until the bare delimiter is KEY's value. The ``KEY`` sits
 # immediately before ``<<`` (a real shell heredoc is spelled with
 # whitespace before ``<<`` and is handled by the heredoc block arm).
+# The key is pinned to its identifier-run start: unpinned, every
+# position of a hostile identifier run starts a fresh scan for the
+# ``<<`` that never comes — quadratic. The only match-set delta is
+# mid-word starts (a key glued to a preceding word char), which the
+# documented env-file framing never produces.
 _KEY_HEREDOC_OPEN_RE = re.compile(
-    r"([A-Za-z_][A-Za-z0-9_]*)<<-?['\"]?([A-Za-z_][A-Za-z0-9_]*)"
+    r"(?<![A-Za-z0-9_])([A-Za-z_][A-Za-z0-9_]*)<<-?['\"]?([A-Za-z_][A-Za-z0-9_]*)"
 )
 
 
