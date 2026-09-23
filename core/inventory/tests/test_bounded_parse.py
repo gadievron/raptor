@@ -186,3 +186,17 @@ def test_gap_fixture_reproduces_unbudgeted_hang_class():
     parser = _fresh_js_parser(budget_s=0.2)
     with pytest.raises(_ts_cache.ParseBudgetExceeded):
         parser.parse((HOSTILE_JS * 4).encode())
+
+
+def test_budget_signal_survives_gap_record_failure(monkeypatch):
+    """A failing trail write must not replace ParseBudgetExceeded:
+    every degradation path (regex fallback, LexicalRefusal mapping)
+    keys on that exception type."""
+    parser = _fresh_js_parser(budget_s=_TEST_BUDGET_S)
+
+    def boom(*a, **k):
+        raise OSError("trail write refused")
+
+    monkeypatch.setattr(gaps, "record_analysis_gap", boom)
+    with pytest.raises(_ts_cache.ParseBudgetExceeded):
+        parser.parse(HOSTILE_JS.encode())
