@@ -240,11 +240,25 @@ def apply_removal(
         fe.get("path") for fe in iter_file_entries(checklist)
         if isinstance(fe.get("path"), str)
     }
+    # Two batched import calls, split by the retained flag — the
+    # one-call-per-finding shape rebuilt the inventory name index per
+    # row (quadratic on finding-heavy victims, on the /project clean
+    # path that holds the cross-process store lock).
     lost = set(consequence.findings_lost)
+    retained_rows: list[dict[str, Any]] = []
+    lost_rows: list[dict[str, Any]] = []
     for f in load_run_findings(victim):
         if isinstance(f, dict):
-            retained = _finding_key(f) not in lost
-            import_findings(store, [f], retained=retained, inventory_paths=inv_paths)
+            if _finding_key(f) not in lost:
+                retained_rows.append(f)
+            else:
+                lost_rows.append(f)
+    if retained_rows:
+        import_findings(store, retained_rows, retained=True,
+                        inventory_paths=inv_paths)
+    if lost_rows:
+        import_findings(store, lost_rows, retained=False,
+                        inventory_paths=inv_paths)
 
 
 def clean_run(
