@@ -98,7 +98,7 @@ raptor frida --target Safari --script ./my-hook.js --duration 30
 
 `<run-dir>` is resolved by `libexec/raptor-run-lifecycle`:
 - Active `/project`: `out/projects/<name>/frida-<timestamp>/`
-- Otherwise: `out/frida_<timestamp>/`
+- Otherwise: `out/frida_<timestamp>_pid<N>_<tail>/` (uniquified)
 
 ## Failure modes (read `metadata.json` first)
 

@@ -57,7 +57,7 @@ Writes `diagrams.md` into the target directory next to the existing JSON files. 
 libexec/raptor-render-diagrams <out-dir> [--target <name>] [--stdout] [--force]
 ```
 
-Parse `$ARGS` for `<out-dir>` and `--target`, then run the command. Show the output path.
+Parse `$ARGUMENTS` for `<out-dir>` and `--target`, then run the command. Show the output path.
 
 ## When to run
 

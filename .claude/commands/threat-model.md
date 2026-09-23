@@ -65,4 +65,4 @@ Run the command via Bash, then output the result verbatim in a fenced code
 block. Do not summarise, truncate, or paraphrase; the user needs the exact
 model paths and handoff paths.
 
-ARGUMENTS: $ARGS
+ARGUMENTS: $ARGUMENTS

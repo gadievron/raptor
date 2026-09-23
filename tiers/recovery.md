@@ -31,7 +31,7 @@
 - Alternative: Use Semgrep-only (`--no-codeql`)
 
 **Timeout:**
-- Use: `--extended` flag for security-extended suite (faster)
+- Note: `--extended` runs MORE rules and is slower — dropping it (the default suite) is the timeout-friendly direction
 - Alternative: Skip CodeQL, use Semgrep only
 
 **Not installed:**

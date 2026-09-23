@@ -27,6 +27,6 @@ After the groups, on a separate line: `- /create-skill — Save approaches as re
 
 Omit commands flagged as "unavailable" in the most recent startup warnings. Commands flagged as "limited" should still be shown with a note (e.g., `(limited — rr not found)`).
 
-Exclude non-RAPTOR commands (e.g., /help) and internal/duplicate commands (`/commands` itself, `raptor-scan`, `raptor-fuzz`, `raptor-web`).
+Exclude non-RAPTOR commands (e.g., /help) and internal/duplicate commands (`/commands` itself, `raptor`, `raptor-scan`, `raptor-fuzz`, `raptor-web`, `raptor-frida`, `raptor-sca`).
 
 End with: "Commands with missing dependencies are omitted. Check the startup warnings for details."

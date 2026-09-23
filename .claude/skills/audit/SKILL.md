@@ -10,7 +10,7 @@ This skill is the in-session execution path for `/audit`, where Claude Code is t
 
 ## [CONFIG]
 
-- Model: Opus for all code review. Sonnet for orchestration plumbing only.
+- Model: the session's own model — this is the in-session path (Claude Code IS the reviewer); there is no per-step model routing here. Model selection happens on the orchestrator path via `--model`.
 - Unit of review: directory (subsystem), not individual function.
 - Context slice: function source + 1-hop callers + 1-hop callees + checklist metadata.
 - Checklist item fields: `name`, `kind` (`"function"`/`"global"`/`"macro"`/`"class"`), `line_start`, `line_end`, `signature`, `checked_by`, `metadata` (`visibility`, `params`, `return_type`, `attributes`). The field is `kind`, not `type`. Source: `core/inventory/extractors.CodeItem`.

@@ -18,13 +18,14 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 
 ```
 /audit <target_path> [--strategy <name>] [--budget <N>] [--scope <dir>] [--out <dir>]
+       [--pin <file:function>] [--scope-floor | --no-scope-floor] [--pre-scan]
        [--codeql-db <path>] [--max-cost <USD>] [--deepen-reserve <fraction>] [--max-time <seconds>]
        [--review-passes <N>] [--max-workers <N>] [--subsystem-depth <N>] [--batch-sloc-threshold <N>]
        [--include-kinds <list>] [--max-propagation-depth <N>] [--adversarial] [--edges]
        [--no-verdict-reuse] [--schedule {cost,priority}] [--prior-journal <run-dir>]
        [--prior-claims <N>]
        [--dynamic | --no-dynamic]
-       [--binary <path> ...] [--binary-auto] [--no-binary-oracle]
+       [--binary <path> ...] [--binary-auto] [--no-binary-oracle] [--no-vendored-triage]
        [--annotations-dir <path>] [--no-validate] [--model <name> ...]
 ```
 
@@ -51,6 +52,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 - `--prior-claims <N>` — max prior finding-grade claims injected per function, newest first (default: 3; 0 disables the injection)
 - `--dynamic` / `--no-dynamic` — enable/disable dynamic validation (Frida observation / target execution) for confirmed findings; `--no-dynamic` also overrides the project's `dynamic` trust marker. The run also resolves the project's `config` trust marker (the `--trust-repo` umbrella) into `repo_trusted`, which arms the trust-gated refutation witnesses — there is no per-run flag for that; the marker is the control (a banner prints when it affects the run)
 - `--binary <path>` — debug binary for binary-oracle enrichment (repeatable); `--binary-auto` auto-detects under common build dirs; `--no-binary-oracle` disables the oracle for this run
+- `--no-vendored-triage` — disable the vendored/generated-code triage tier (skip/glance decisions; every decision leaves a `suppressions.jsonl` record)
 - `--annotations-dir <path>` — annotations directory for team workflows or cross-run review (default: project-level `annotations/` for lifecycle runs, else `$OUTPUT_DIR/annotations`)
 - `--no-validate` — skip the /validate post-pass (not recommended)
 - `--model <name>` — model ID (repeatable for multi-model consensus; first model used for lifecycle)

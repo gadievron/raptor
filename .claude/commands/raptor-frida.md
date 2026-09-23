@@ -1,6 +1,7 @@
 ---
 description: Dynamic instrumentation via Frida (alpha) - attach or spawn, hook with JS templates, capture runtime events
-dispatch: libexec/raptor-frida
+dispatch: libexec/raptor-frida $ARGUMENTS
+exclude_from_listing: true
 ---
 
 # /raptor-frida - Frida Dynamic Instrumentation (alpha)
@@ -93,7 +94,7 @@ Artefacts:
 - **Host:** `frida` CLI on PATH and the `frida` Python module importable by raptor's Python 3 interpreter.
   - `pipx install frida-tools` puts the CLI on PATH but isolates the Python binding - `raptor frida` will report `FridaUnavailable` until the module is also installed.
   - Add the module with: `python3 -m pip install --user --break-system-packages frida`.
-- **Target:** for remote / mobile targets, run the matching `frida-server`. Bind to `0.0.0.0:27042` (default builds bind to localhost only - `raptor doctor` won't tell you this, but `metadata.json` will record the connect failure).
+- **Target:** for remote / mobile targets, run the matching `frida-server`. Prefer keeping its default localhost-only bind and reaching it over an SSH port-forward (`ssh -L 27042:127.0.0.1:27042 <target>`) — frida-server is an unauthenticated code-execution service, so binding it to `0.0.0.0:27042` exposes it to every host on the network; do that only on an isolated lab segment. Either way, a connect failure is recorded in `metadata.json` (`raptor doctor` won't tell you this).
 
 See `docs/frida.md`.
 
