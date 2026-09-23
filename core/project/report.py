@@ -540,8 +540,13 @@ def generate_project_report(project) -> dict[str, Any]:
     for d in run_dirs:
         raw_meta = load_run_metadata(d)
         meta = raw_meta if isinstance(raw_meta, dict) else {}
-        ts = (meta.get("timestamp") or "")[:19]
-        prov_lines.append(f"## {d.name}")
+        # timestamp is child-writable like `command`, and a run-dir
+        # name is operator/child-chosen on --out runs — both land in
+        # markdown an LLM pass later reads, so heading-sanitise them
+        # (newlines collapsed: a crafted name cannot mint extra
+        # headings below the real one).
+        ts = _md_heading(str(meta.get("timestamp") or "")[:19])
+        prov_lines.append(f"## {_md_heading(d.name)}")
         # `command` is child-writable run metadata restored verbatim by
         # /project import — defang before it lands in provenance.md.
         prov_lines.append(

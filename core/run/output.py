@@ -182,15 +182,23 @@ def resolve_default_target() -> str | None:
     the gate exists precisely for scratch/volatile targets steering
     runs, whichever layer supplies them.
     """
+    from core.security.log_sanitisation import sanitise_for_terminal
+
     active = _resolve_active_project()
     if active is not None:
         _out, project_name, project_target = active
         reason = volatile_target_reason(project_target)
         if reason:
+            # Project name/target can be adopt-inferred from
+            # child-writable run metadata or import-restored — escape
+            # before the raw stderr print (the logger lane escapes at
+            # the console formatter; this bare print does not).
             banner = (
                 f"REFUSING default target: active project "
-                f"'{project_name}' points at {project_target}, which "
-                f"{reason}. Not steering a no-path command at scratch "
+                f"'{sanitise_for_terminal(str(project_name), max_len=120)}' "
+                f"points at "
+                f"{sanitise_for_terminal(str(project_target), max_len=256)}, "
+                f"which {reason}. Not steering a no-path command at scratch "
                 f"space.\n"
                 f"  To proceed anyway: pass the target path explicitly.\n"
                 f"  To fix the session: /project use <real-project> "
@@ -205,9 +213,12 @@ def resolve_default_target() -> str | None:
         return None
     reason = volatile_target_reason(env)
     if reason:
+        # Env-supplied path — same terminal-escape class as the
+        # project arm above.
         banner = (
             f"REFUSING default target: RAPTOR_CALLER_DIR points at "
-            f"{env}, which {reason}. Not steering a no-path command "
+            f"{sanitise_for_terminal(env, max_len=256)}, which {reason}. "
+            f"Not steering a no-path command "
             f"at scratch space.\n"
             f"  To proceed anyway: pass the target path explicitly.\n"
             f"  To fix the session: re-launch from the target "
