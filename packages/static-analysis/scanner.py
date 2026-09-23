@@ -37,8 +37,16 @@ from core.hash import sha256_bytes, sha256_tree
 from core.json import load_json, save_json
 from core.logging import get_logger
 from core.run.output import unique_run_suffix
+from core.run.parent_liveness import maybe_start_orphan_watchdog
 from core.run.safe_io import safe_run_mkdir
-from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError, set_pdeathsig
+
+# Parent-death preexec for detached child spawns, built once at import:
+# the factory primes the libc cache parent-side (find_library may shell
+# out to ldconfig), and the resulting closure is reusable across
+# spawns. Building it per-spawn would re-enter subprocess machinery
+# inside the spawn path itself.
+_PDEATHSIG_PREEXEC = set_pdeathsig()
 from core.sarif import emit as sarif_emit
 from core.sarif.parser import count_results
 from core.sarif.parser import generate_scan_metrics, merge_sarif, validate_sarif
@@ -1648,10 +1656,24 @@ def run_codeql(
         logger.warning("codeql stage aborted before agent spawn; skipping")
         return []
     try:
+        agent_env = RaptorConfig.get_safe_env()
+        # Orphan opt-in for the agent itself (core.run.parent_liveness)
+        # — paired with start_new_session below by contract.
+        agent_env["RAPTOR_PARENT_WATCHDOG"] = str(os.getpid())
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, start_new_session=True,
-            env=RaptorConfig.get_safe_env(),
+            env=agent_env,
+            # Parent-death signaling: without it, a SIGKILLed scanner
+            # leaves the agent (and the codeql grandchildren holding
+            # cache locks + gigabytes) running forever. PDEATHSIG
+            # binds to the spawning THREAD — safe here because the
+            # codeql stage pool's worker outlives this proc by
+            # construction (shutdown joins the running task, and the
+            # abort path killpgs the agent before the pool shuts
+            # down), so the signal can only fire after the agent
+            # already exited, where it is a no-op.
+            preexec_fn=_PDEATHSIG_PREEXEC,
         )
         if stage_handle is not None:
             stage_handle.register(proc)
@@ -2973,6 +2995,15 @@ def main() -> None:
     add_cli_args(ap)
     args = ap.parse_args()
     apply_cli_args(args, parser=ap)
+
+    # Orphan containment: when the spawner opted this scanner in
+    # (raptor_agentic pairs the env var with start_new_session), a
+    # dead parent takes this whole process group down — pre-fix a
+    # SIGKILLed orchestrator left the scanner sleeping in its stage
+    # pool with blocked semgrep children forever. Armed before any
+    # scan work so the whole run is covered; direct operator
+    # invocations (no env var) are untouched.
+    maybe_start_orphan_watchdog("static-analysis-scanner")
 
     if args.project is not None:
         from core.run.pin import set_process_project

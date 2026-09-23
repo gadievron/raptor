@@ -23,6 +23,7 @@ import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
+from collections.abc import Callable
 from typing import NoReturn
 
 # Add the repo root to sys.path. resolve() first: invoked through a
@@ -35,11 +36,42 @@ from core.config import RaptorConfig
 from core.json import load_json, save_json
 from core.logging import CONSOLE_LOG_LEVELS, configure_run_logging, get_logger
 from core.run.safe_io import safe_run_mkdir
-from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
+from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError, set_pdeathsig
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
 
 logger = get_logger()
+
+
+def _parent_death_preexec() -> Callable[[], None] | None:
+    """Guarded PR_SET_PDEATHSIG preexec for the detached child spawns.
+
+    PDEATHSIG binds to the SPAWNING THREAD, not the process: armed
+    from a worker thread, the kernel SIGKILLs the child when THAT
+    THREAD exits — a healthy child shot mid-run while this process
+    lives on (empirically reproduced). Every current spawn site runs
+    on main()'s thread, where thread death IS process death; this
+    guard is the tripwire for a future non-main-thread caller. On
+    violation it refuses the preexec (child spawns without PDEATHSIG)
+    with a loud warning instead of arming a mis-scoped kill: the
+    RAPTOR_PARENT_WATCHDOG opt-in the scanner/codeql envs carry is
+    thread-independent and keeps covering parent death for those
+    children, so the fallback degrades to watchdog-only — never to a
+    spurious SIGKILL, and never silently (the warning names the
+    thread and the fix).
+    """
+    if threading.current_thread() is not threading.main_thread():
+        logger.warning(
+            "parent-death preexec requested from non-main thread %r: "
+            "PR_SET_PDEATHSIG would bind to that thread's lifetime and "
+            "SIGKILL a healthy child when it exits — refusing the "
+            "preexec (child falls back to the RAPTOR_PARENT_WATCHDOG "
+            "layer where opted in). Move the spawn to the main thread "
+            "to restore the instant parent-death layer.",
+            threading.current_thread().name,
+        )
+        return None
+    return set_pdeathsig()
 
 
 def _kill_process_tree(process: "subprocess.Popen") -> None:
@@ -762,6 +794,16 @@ def run_command_streaming(
             # the parent's handler could log a meaningful
             # message.
             start_new_session=True,
+            # Parent-death signaling: the detachment above also means
+            # a SIGKILLed/OOM-killed orchestrator strands the child
+            # tree forever. PR_SET_PDEATHSIG (plus the sacrificial
+            # oom_score_adj the shared preexec sets) closes that; the
+            # child's own sandboxed grandchildren carry their own
+            # death-pipe/pdeathsig against the child, so the kill
+            # cascades. PDEATHSIG binds to the spawning THREAD — the
+            # guarded helper refuses (watchdog-only fallback, loud)
+            # if a future caller ever spawns off the main thread.
+            preexec_fn=_parent_death_preexec(),
         )
         # The child has inherited the FD; close our copy so the
         # pipe's EOF tracks the child's lifetime, not ours. Clear the
@@ -3252,23 +3294,35 @@ def main() -> int:
         # env inherits from RAPTOR's own process (the operator's
         # env). PYTHONUSERBASE inheritance is intentional — see
         # F102 comment below.
+        # F102: semgrep is typically installed via
+        # ``pip install --user``; without PYTHONUSERBASE flowing
+        # through, an operator with a non-default user-base sees
+        # ``ModuleNotFoundError: No module named 'semgrep'`` here.
+        # PYTHONUSERBASE remains stripped by default (it is a real
+        # RCE vector via .pth files); the opt-in restores it only
+        # for this scanner spawn.
+        # preserve_proxy: the scanner fetches registry packs via
+        # its own egress proxy, whose upstream autodetect reads
+        # this child's env.
+        scanner_env = RaptorConfig.get_safe_env(
+            preserve_proxy=True, include_python_user_base=True,
+        )
+        # Orphan opt-in (core.run.parent_liveness): paired with the
+        # start_new_session detachment below by contract — the scanner
+        # leads its own group and must never outlive this process.
+        # Our pid as the value lets the scanner detect a parent lost
+        # inside the spawn window.
+        scanner_env["RAPTOR_PARENT_WATCHDOG"] = str(os.getpid())
         semgrep_proc = subprocess.Popen(
             semgrep_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.
-            # F102: semgrep is typically installed via
-            # ``pip install --user``; without PYTHONUSERBASE flowing
-            # through, an operator with a non-default user-base sees
-            # ``ModuleNotFoundError: No module named 'semgrep'`` here.
-            # PYTHONUSERBASE remains stripped by default (it is a real
-            # RCE vector via .pth files); the opt-in restores it only
-            # for this scanner spawn.
-            # preserve_proxy: the scanner fetches registry packs via
-            # its own egress proxy, whose upstream autodetect reads
-            # this child's env.
-            env=RaptorConfig.get_safe_env(
-                preserve_proxy=True, include_python_user_base=True,
-            ),
+            env=scanner_env,
             start_new_session=True,  # See main-Popen comment.
+            # Parent-death signaling — see the main-Popen comment in
+            # run_command_streaming (the guarded helper enforces the
+            # main-thread constraint; the watchdog env above covers
+            # the cases PDEATHSIG misses).
+            preexec_fn=_parent_death_preexec(),
         )
         # Drain immediately — see _PipeDrainer: without concurrent
         # readers the sibling child deadlocks on a full pipe.
@@ -3325,11 +3379,17 @@ def main() -> int:
         # can't infer that the helper is safety-strip-aware.
         # preserve_proxy: pack downloads inside the CodeQL agent
         # chain through an egress proxy fed from this child's env.
+        codeql_env = RaptorConfig.get_safe_env(preserve_proxy=True)
+        # Orphan opt-in — same contract as the scanner spawn above.
+        codeql_env["RAPTOR_PARENT_WATCHDOG"] = str(os.getpid())
         codeql_proc = subprocess.Popen(
             codeql_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             bufsize=1,  # Line-buffered, see main-Popen comment.
-            env=RaptorConfig.get_safe_env(preserve_proxy=True),
+            env=codeql_env,
             start_new_session=True,  # See main-Popen comment.
+            # Parent-death signaling — see run_command_streaming's
+            # Popen (same guarded helper).
+            preexec_fn=_parent_death_preexec(),
         )
         codeql_drain = _PipeDrainer(codeql_proc)
 
