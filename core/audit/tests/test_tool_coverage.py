@@ -175,21 +175,31 @@ class TestIsClassCovered:
     def test_php_family_mechanisms_name_but_never_cover(self):
         """Mechanism keywords for the unmapped families are
         naming-only (the CWE-480/481 pattern): the class appears in
-        coverage records but never resolves clean-when-silent. No
-        crlf/header-injection keyword at all — response splitting is
-        canonically tagged CWE-93 and must not even be named as
-        semgrep territory."""
+        coverage records but never resolves clean-when-silent. The
+        crlf keyword dual-maps to CWE-93 (canonical CRLF class) and
+        CWE-116 (parent encoding lens) — both unmapped, so both stay
+        dark. No header-injection keyword: response splitting has no
+        dispatched rule on any language, so naming a class for it
+        would put an untested name in records."""
         from core.audit.tool_coverage import _extract_cwes
 
-        assert _extract_cwes(
+        crlf = _extract_cwes(
             "", mechanism="crlf injection into the smtp stream",
-        ) == []
+        )
+        assert "CWE-93" in crlf
+        assert "CWE-116" in crlf
         assert _extract_cwes(
             "", mechanism="header injection via Location value",
         ) == []
         for mech in ("unsafe reflection over request parameter",
                      "variable function call on user input"):
             assert "CWE-470" in _extract_cwes("", mechanism=mech)
+        for mech in ("unsafe reflection over request parameter",
+                     "variable function call on user input",
+                     "crlf injection into the smtp stream",
+                     "improper encoding of the attribute value",
+                     "missing escaping of the backslash",
+                     "output encoding absent for the header"):
             assert is_class_covered(
                 "", mech, "", self.ALL_TOOLS, ran_tools={"semgrep"},
             ) is False
