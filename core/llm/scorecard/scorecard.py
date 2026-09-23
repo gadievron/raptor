@@ -94,6 +94,12 @@ SCHEMA_VERSION = 2
 # full ANALYSE rather than short-circuiting on cheap.
 DEFAULT_MISS_RATE_CEILING = 0.05
 
+# Observations below this leave a cell in LEARNING (Wilson gating
+# needs a minimally-tight CI). ONE definition — the live gate and the
+# CLI's re-derived policy column both default to it, so the display
+# cannot silently hardcode a different gate than the routing applies.
+DEFAULT_SAMPLE_SIZE_FLOOR = 10
+
 # How many disagreement reasoning samples to keep per cell.
 # Trade-off: larger → richer research surface but bigger sidecar
 # and more reasoning text on disk (privacy concern). 5 is plenty
@@ -818,7 +824,7 @@ class ModelScorecard:
         decision_class: str,
         model: str,
         *,
-        sample_size_floor: int = 10,
+        sample_size_floor: int = DEFAULT_SAMPLE_SIZE_FLOOR,
     ) -> str:
         """Return a :class:`Policy` value for whether to trust the
         cheap-tier verdict on this cell.
@@ -890,7 +896,7 @@ class ModelScorecard:
 
     def _measured_policy(
         self, ev: dict, half_life_days: float | None,
-        *, sample_size_floor: int = 10,
+        *, sample_size_floor: int = DEFAULT_SAMPLE_SIZE_FLOOR,
     ) -> str:
         """The measured short-circuit policy for one cell's
         ``cheap_short_circuit`` buckets — SHORT_CIRCUIT / FALL_THROUGH /
@@ -1838,6 +1844,8 @@ class ModelScorecard:
 
 __all__ = [
     "ALL_EVENT_TYPES",
+    "DEFAULT_MISS_RATE_CEILING",
+    "DEFAULT_SAMPLE_SIZE_FLOOR",
     "MAX_DISAGREEMENT_SAMPLES",
     "SCHEMA_VERSION",
     "DecisionClassStats",
