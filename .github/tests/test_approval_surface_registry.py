@@ -276,29 +276,39 @@ REGISTRY: dict[str, Entry] = {
                  "M06-volatile-target-gate"),
         note="provenance-drop consent quotes attacker-chosen binary "
              "paths; volatile-target gate quotes target paths",
+        wire_tokens=("quoting the warning's paths with non-printables "
+                     "escaped",
+                     "render any quoted target path with non-printables "
+                     "escaped"),
     ),
     "core/sage/CLAUDE.md": Entry(
         lane="instruction", status="clean",
         members=("M04-sage-drift-review-ask",),
         note="drift-review approve/reject question filled with "
              "hostile-SAGE-server diff facts",
+        wire_tokens=("rendered inert first",
+                     "(its display lane already escapes non-printables)"),
     ),
     ".claude/skills/exploitability-validation/stage-a-oneshot.md": Entry(
         lane="instruction", status="clean",
         members=("M03-stage-a-sandbox-consent",),
         note="sandbox-removal consent shown the PoC/target's own "
              "stderr — highest-authority instruction member",
+        wire_tokens=("escape non-printable/control bytes before display",
+                     "only with the escaped excerpt"),
     ),
     ".claude/commands/codeql.md": Entry(
         lane="instruction", status="clean",
         members=("M07-codeql-trust-consent",),
         note="trust consent quotes run-output hint text",
+        wire_tokens=("with non-printables escaped",),
     ),
     "tiers/exploit-guidance.md": Entry(
         lane="instruction", status="clean",
         members=("M08-exploit-next-steps-fork",),
         note="next-steps fork quotes chain_breaks/constraints, which "
              "carry raw bytes from executing the hostile binary",
+        wire_tokens=("Escape non-printables when quoting",),
     ),
     ".claude/commands/exploit.md": Entry(
         lane="instruction", status="clean",
@@ -307,6 +317,7 @@ REGISTRY: dict[str, Entry] = {
              "tiers/exploit-guidance.md — options built from "
              "mitigation-analysis output (alternative_targets, chain "
              "breaks) derived from the analysed hostile binary",
+        wire_tokens=("escape non-printables",),
     ),
     ".claude/commands/openant.md": Entry(
         lane="instruction", status="clean",
@@ -316,6 +327,7 @@ REGISTRY: dict[str, Entry] = {
              "carries the unconstrained argv core path, and the "
              "instruction requires non-printables escaped at the "
              "fill site",
+        wire_tokens=("non-printables escaped",),
     ),
     ".claude/commands/create-skill.md": Entry(
         lane="instruction", status="clean",
@@ -326,36 +338,43 @@ REGISTRY: dict[str, Entry] = {
              "the preview shown at the consent moment is LLM-authored "
              "from session content, which in a scan session carries "
              "target-derived text",
+        wire_tokens=("render it with non-printables escaped",),
     ),
     ".claude/skills/code-understanding/map.md": Entry(
         lane="instruction", status="clean",
         members=("M09-map-trace-followup",),
         note="trace follow-up labels options with entry-point "
              "names/paths from the scanned target",
+        wire_tokens=("render them with non-printables escaped",),
     ),
     ".claude/commands/agentic.md": Entry(
         lane="instruction", status="clean",
         members=("M10-completion-forks",),
         note="completion fork fills descriptions with finding "
              "ids/paths",
+        wire_tokens=("render them with non-printables escaped.",),
     ),
     ".claude/commands/validate.md": Entry(
         lane="instruction", status="clean",
         members=("M10-completion-forks",),
         note="completion fork fills descriptions with finding "
              "ids/paths",
+        wire_tokens=("render them with non-printables escaped.",),
     ),
     ".claude/skills/exploitability-validation/stage-1-outputs.md": Entry(
         lane="instruction", status="clean",
         members=("M10-completion-forks",),
         note="post-run fork fills descriptions with finding "
              "ids/files/statuses",
+        wire_tokens=("render them with non-printables escaped",),
     ),
     ".claude/commands/project.md": Entry(
         lane="instruction", status="clean",
         members=("M11-project-destructive-confirms",),
         note="clean/adopt confirms preview arbitrary directory "
              "listings",
+        wire_tokens=("render entries with non-printables escaped and "
+                     "cap the listing length explicitly",),
     ),
     # ── instruction lane: adjudicated clean (no external content) ─
     "tiers/recovery.md": Entry(
@@ -676,6 +695,38 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
                     f"{rel}: adjudicated sanitised but wire token "
                     f"{token!r} is gone — the sanitiser call was "
                     "removed or renamed; re-adjudicate",
+                )
+
+    def test_instruction_member_rows_pin_doctrine_wording(self):
+        """Mirror of the sanitised-lane tripwire for the instruction
+        lane, DERIVED from the registry shape rather than enumerated:
+        every instruction-lane ``clean`` row that carries display-
+        integrity members (external content reaches its prompt) must
+        pin per-surface wording tokens, and each token must still be
+        present in the file. Without this, deleting the
+        display-integrity wording from a fill site (the exact
+        approved-doctrine text the ``clean`` adjudication rests on)
+        kept CI green — the row stayed enumerated and ``clean`` while
+        the doctrine it certified was gone. Presence-only, like the
+        sanitised lane: a file carrying the wording at one of several
+        identical fill sites still passes here; the per-surface
+        adjudication note remains the reviewer's map."""
+        for rel, entry in REGISTRY.items():
+            if entry.lane != "instruction" or not entry.members:
+                continue
+            self.assertTrue(
+                entry.wire_tokens,
+                f"{rel}: instruction row carries display-integrity "
+                "members but pins no wording tokens — a wording revert "
+                "would pass CI; pin the fill-site doctrine text",
+            )
+            text = (REPO_ROOT / rel).read_text(encoding="utf-8")
+            for token in entry.wire_tokens:
+                self.assertIn(
+                    token, text,
+                    f"{rel}: adjudicated clean but display-integrity "
+                    f"wording {token!r} is gone from the fill site — "
+                    "re-adjudicate (clean rows rest on that wording)",
                 )
 
     def test_entries_carry_real_notes(self):
