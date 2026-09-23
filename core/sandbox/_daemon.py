@@ -666,6 +666,31 @@ def _communicate_capped(
             _truncated(out_fd), _truncated(err_fd))
 
 
+def _classify_exit(rc: "int | None", target_stderr: bytes,
+                   timed_out: bool) -> str:
+    """One exit-class vocabulary for BOTH daemon verbs (probe and
+    conversation): clean / exit:N / signal:<NAME> / stack_smashing /
+    timeout. The verbs used to disagree — the probe emitted numeric
+    ``signal:{-rc}`` and had no canary check, so a consumer keying on
+    either spelling missed the other verb's runs and probe runs never
+    classified stack smashing. The canary overrides every other class
+    (a smashed stack is the verdict whether the process was reaped,
+    exited "cleanly" through a handler, or timed out)."""
+    if _CANARY_ABORT_SIGNAL in (target_stderr or b""):
+        return "stack_smashing"
+    if timed_out:
+        return "timeout"
+    if rc == 0:
+        return "clean"
+    if rc is not None and rc < 0:
+        try:
+            name = signal.Signals(-rc).name
+        except (ValueError, AttributeError):
+            name = f"UNKNOWN({-rc})"
+        return f"signal:{name}"
+    return f"exit:{rc}"
+
+
 def _send_capped(
     proc: subprocess.Popen,
     data: bytes,
@@ -1036,16 +1061,8 @@ def _handle_probe(payload: dict) -> dict:
             _drain_target(proc, total_wait_seconds, stdout_budget)
         stdout_trunc = stdout_trunc or pushback_trunc
         stdout_buf += tail_stdout
-        if timed_out:
-            exit_class = "timeout"
-        else:
-            rc = proc.returncode
-            if rc == 0:
-                exit_class = "clean"
-            elif rc is not None and rc < 0:
-                exit_class = f"signal:{-rc}"
-            else:
-                exit_class = f"exit:{rc}"
+        exit_class = _classify_exit(
+            proc.returncode, target_stderr, timed_out)
     finally:
         _kill_request_group(proc)
 
@@ -1223,22 +1240,8 @@ def _handle_conversation(payload: dict) -> dict:
             _drain_target(proc, total_wait_seconds, stdout_budget)
         stdout_trunc = stdout_trunc or pushback_trunc
         stdout_buf += tail_stdout
-        if timed_out:
-            exit_class = "timeout"
-        else:
-            rc = proc.returncode
-            if rc == 0:
-                exit_class = "clean"
-            elif rc is not None and rc < 0:
-                try:
-                    name = signal.Signals(-rc).name
-                except (ValueError, AttributeError):
-                    name = f"UNKNOWN({-rc})"
-                exit_class = f"signal:{name}"
-            else:
-                exit_class = f"exit:{rc}"
-        if _CANARY_ABORT_SIGNAL in (target_stderr or b""):
-            exit_class = "stack_smashing"
+        exit_class = _classify_exit(
+            proc.returncode, target_stderr, timed_out)
     finally:
         _kill_request_group(proc)
 
