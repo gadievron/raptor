@@ -337,3 +337,26 @@ class TestCompileCommandsCandidates:
         (tmp_path / "compile_commands.json").write_text("{not json")
         mc = extract_macro_config(tmp_path)
         assert mc.is_defined("FEATURE_X") is True
+
+
+class TestDefineValueSemantics:
+    def test_explicitly_empty_define_records_empty(self, tmp_path):
+        # -DFOO= defines FOO as the EMPTY string in C; recording "1"
+        # made value_of() misread an explicitly-empty macro as truthy.
+        _write_cc(tmp_path, [
+            {"file": "a.c", "command": "cc -DFOO= -DBAR a.c"},
+        ])
+        mc = extract_macro_config(tmp_path)
+        assert mc.value_of("FOO") == ""
+        assert mc.is_defined("FOO") is True
+        assert mc.value_of("BAR") == "1"
+
+    def test_non_ascii_macro_names_not_accumulated(self, tmp_path):
+        # C preprocessor identifiers are ASCII; a Unicode-wide \w
+        # accumulated names the preprocessor never joins on.
+        _write_cc(tmp_path, [
+            {"file": "a.c", "command": "cc -DFÖÖ=1 -DOK=1 a.c"},
+        ])
+        mc = extract_macro_config(tmp_path)
+        assert mc.is_defined("FÖÖ") is None
+        assert mc.is_defined("OK") is True

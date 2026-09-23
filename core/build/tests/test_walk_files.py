@@ -86,3 +86,33 @@ class TestDetectParamsContainment:
         names = {p.name for p in sources}
         assert "a.c" in names
         assert "host.c" not in names
+
+
+def test_directory_cap_bounds_empty_dir_farms(tmp_path, monkeypatch, caplog):
+    """The file cap bounds files COLLECTED, not directories visited —
+    an empty-directory farm walked unbounded before the dir cap."""
+    import logging
+
+    from core.build import build_detector as bd
+
+    farm = tmp_path / "farm"
+    for i in range(12):
+        d = farm / f"d{i:02d}"
+        d.mkdir(parents=True)
+        # One file per dir: past the cap, files stop being collected
+        # (os.walk order is arbitrary, so assert on the COUNT).
+        (d / "x.c").write_text("")
+    monkeypatch.setattr(bd, "_MAX_WALK_DIRS", 5)
+    with caplog.at_level(logging.WARNING):
+        out = bd._walk_files(farm, (".c",))
+    assert len(out) < 12
+    assert any("dir cap" in r.message for r in caplog.records)
+
+
+def test_directory_cap_generous_for_real_trees(tmp_path):
+    from core.build import build_detector as bd
+
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    (tmp_path / "a" / "b" / "x.c").write_text("")
+    out = bd._walk_files(tmp_path, (".c",))
+    assert len(out) == 1

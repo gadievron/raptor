@@ -84,3 +84,30 @@ class TestCMakeProjectRootReads:
         cml = tmp_path / "CMakeLists.txt"
         cml.write_text("add_library(sub foo.c)\n")
         assert BuildDetector._is_cmake_project_root(cml) is False
+
+
+class TestHeaderCaseDiscipline:
+    """One case rule end to end: _walk_files collects header names
+    case-sensitively, so both the include-grep and the include-dir
+    probe must match case-sensitively too — the IGNORECASE grep
+    reported 'missing' for spellings the collection never tracks."""
+
+    def test_uppercase_include_spelling_not_reported(self, tmp_path):
+        (tmp_path / "a.c").write_text('#include "Foo_Config.h"\n')
+        missing = BuildDetector(tmp_path).detect_missing_config_headers()
+        assert missing == []
+
+    def test_lowercase_include_still_reported(self, tmp_path):
+        (tmp_path / "a.c").write_text('#include "foo_config.h"\n')
+        missing = BuildDetector(tmp_path).detect_missing_config_headers()
+        assert [(h, p.name) for h, p in missing] == [("foo_config.h", "a.c")]
+
+    def test_has_c_header_matches_walkfiles_case_rule(self, tmp_path):
+        upper = tmp_path / "upper"
+        upper.mkdir()
+        (upper / "FOO.H").write_text("")
+        lower = tmp_path / "lower"
+        lower.mkdir()
+        (lower / "foo.h").write_text("")
+        assert BuildDetector._has_c_header(upper) is False
+        assert BuildDetector._has_c_header(lower) is True

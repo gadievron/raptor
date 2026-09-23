@@ -163,8 +163,11 @@ def extract_flags(target: Path) -> BuildFlagsContext:
         except (OSError, ValueError) as exc:
             logger.debug(".config parse failed: %s", exc)
 
-    # 3. Makefile / Kbuild — best-effort CFLAGS regex
-    for mf_name in ("Makefile", "GNUmakefile", "Kbuild"):
+    # 3. Makefile / Kbuild — best-effort CFLAGS regex. Name set
+    # matches make's own lookup (GNUmakefile, makefile, Makefile —
+    # the lowercase spelling had drifted out relative to the
+    # detector's make entry) plus Kbuild.
+    for mf_name in ("GNUmakefile", "makefile", "Makefile", "Kbuild"):
         mf_path = target / mf_name
         if mf_path.is_file():
             try:
@@ -422,14 +425,21 @@ def _from_kconfig(path: Path) -> BuildFlagsContext:
 
 
 # Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
-# on blank-line runs in scanned Makefiles.
+# on blank-line runs in scanned Makefiles. Assignment operators cover
+# the full GNU make family: = += ?= := ::= and the 4.4 immediate
+# :::= (the missing modern spellings dropped whole CFLAGS lines).
 _CFLAGS_LINE_RE = re.compile(
     r"^[^\S\n]*(?:override\s+)?"
     r"(?:CFLAGS|CXXFLAGS|CPPFLAGS|COMMON_FLAGS|EXTRA_CFLAGS|"
     r"KBUILD_CFLAGS|HOSTCFLAGS|HOSTCXXFLAGS|TARGET_CFLAGS|AM_CFLAGS)"
-    r"\s*[+:?]?=\s*(.+?)$",
+    r"\s*(?:\+|\?|:{1,3})?=\s*(.+?)$",
     re.MULTILINE,
 )
+
+# Backslash-newline continuations join before the line scan (make
+# splices them with a single space) — a CFLAGS assignment continued
+# across lines used to contribute only its first physical line.
+_MAKE_CONTINUATION_RE = re.compile(r"\\\n[ \t]*")
 
 
 def _from_makefile(path: Path) -> BuildFlagsContext:
@@ -441,7 +451,8 @@ def _from_makefile(path: Path) -> BuildFlagsContext:
     or follow ``include`` directives — confidence is ``best_effort``
     accordingly.
     """
-    text = _read_bounded(path, _MAX_MAKEFILE_BYTES)
+    text = _MAKE_CONTINUATION_RE.sub(
+        " ", _read_bounded(path, _MAX_MAKEFILE_BYTES))
     pieces = [m.group(1) for m in _CFLAGS_LINE_RE.finditer(text)]
     if not pieces:
         return BuildFlagsContext(
