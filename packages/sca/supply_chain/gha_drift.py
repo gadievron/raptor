@@ -58,9 +58,12 @@ logger = logging.getLogger(__name__)
 # treats the quoted and bare scalars identically, so GitHub runs a
 # quoted mutable ref exactly like a bare one; skipping quoted lines
 # would leave them unchecked for pinning.
+# The optional dash gates its own trailing whitespace — the naive
+# ``\s*-?\s*`` pair was quadratic on an indent run (the same
+# respelling the platform-matrix uses-line took).
 _USES_RE = re.compile(
     r"""
-    ^\s*-?\s*uses\s*:\s*
+    ^\s*(?:-\s*)?uses\s*:\s*
     (?P<quote>["']?)
     (?P<spec>[A-Za-z0-9_./+-]+@[A-Za-z0-9_./+-]+)
     (?P=quote)

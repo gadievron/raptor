@@ -879,9 +879,13 @@ _ENV_DUMP_RE = re.compile(
     """,
     re.VERBOSE,
 )
+# (?=\S) pins the whitespace run before the lazy argument filler
+# (same language — the filler absorbed any remainder): the naive
+# ``\s+[^\n|]*?`` overlapped the run and the filler — quadratic on
+# an echo-opening line ending in a whitespace run.
 _VAR_DUMP_RE_FACTORY = lambda var: re.compile(
     rf"""
-    \b(?:echo|printf)\s+
+    \b(?:echo|printf)\s+(?=\S)
     [^\n|]*?
     \$\{{?{re.escape(var)}\}}?
     [^\n|>]*
@@ -953,7 +957,11 @@ _STDIN_PIPE_RE = re.compile(
     # separators, redirects, backticks or ``$(`` command
     # substitution may appear anywhere in the exempted token stream
     # (plain ``$VAR`` / ``${{ ... }}`` expansions are fine).
-    + r"""\s+(?:[\w.-]+\s+)*login\s+(?:\$(?!\()|[^|;&<>$`])*"""
+    # The subcommand loop is bounded ({0,16}): it overlaps the
+    # ``login`` literal on word chars, so an unbounded loop cost
+    # every split of a subcommand-word run — quadratic. Sixteen
+    # subcommand tokens sits far above real CLI chains.
+    + r"""\s+(?:[\w.-]+\s+){0,16}login\s+(?:\$(?!\()|[^|;&<>$`])*"""
     + r"""--password-stdin(?:\$(?!\()|[^|;&<>$`])*$""",
 )
 
