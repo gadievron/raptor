@@ -18,6 +18,7 @@ _ENV_VARS = (
     "RAPTOR_SANITIZER_CUT",
     "RAPTOR_SANITIZER_CUT_NO_LEXICAL",
     "RAPTOR_SANITIZER_CUT_PARITY_LOG",
+    "RAPTOR_SANITIZER_CUT_AUDIT_DIR",
 )
 
 
@@ -260,3 +261,68 @@ class TestCliPlumbing:
     def test_invalid_choice_rejected(self):
         with pytest.raises(SystemExit):
             self._parse(["--sanitizer-cut", "bogus"])
+
+
+class TestSafeEnvTransport:
+    """The env transport's whole job is crossing the get_safe_env()
+    worker boundary: a name missing from the allowlist dies there and
+    every worker silently resolves mode=off — the opposite of the
+    operator's --sanitizer-cut. Pin the membership and the round-trip."""
+
+    TRANSPORT_VARS = (
+        "RAPTOR_SANITIZER_CUT",
+        "RAPTOR_SANITIZER_CUT_NO_LEXICAL",
+        "RAPTOR_SANITIZER_CUT_PARITY_LOG",
+        "RAPTOR_SANITIZER_CUT_AUDIT_DIR",
+    )
+
+    def test_transport_names_ride_allowlist_and_target_strip(self):
+        from core.config import RaptorConfig
+        for name in self.TRANSPORT_VARS:
+            assert name in RaptorConfig.SAFE_ENV_ALLOWLIST, name
+            # Target-executed code must never see the family (host
+            # paths + framework tell).
+            assert name in RaptorConfig.TARGET_ENV_STRIP_SET, name
+
+    def test_exported_strict_mode_survives_get_safe_env(self, tmp_path):
+        from core.config import RaptorConfig
+        cfg.configure("strict", run_dir=str(tmp_path), export_env=True)
+        env = RaptorConfig.get_safe_env()
+        assert env.get("RAPTOR_SANITIZER_CUT") == "1"
+        assert env.get("RAPTOR_SANITIZER_CUT_NO_LEXICAL") == "1"
+
+    def test_child_reconstructs_exported_config(self, tmp_path, monkeypatch):
+        """Simulate the worker: resolve from exactly the env that
+        survives the scrub — the child must see the parent's mode, not
+        mode=off."""
+        from core.config import RaptorConfig
+        cfg.configure("strict", run_dir=str(tmp_path), export_env=True)
+        survived = RaptorConfig.get_safe_env()
+        cfg.reset()
+        # Clear the direct export FIRST so monkeypatch snapshots the
+        # clean state (it tears down AFTER the module's _clean fixture
+        # and would otherwise restore configure()'s direct writes).
+        for var in self.TRANSPORT_VARS:
+            os.environ.pop(var, None)
+            if var in survived:
+                monkeypatch.setenv(var, survived[var])
+        child = cfg.current()
+        assert child.value_bound_enabled is True
+        assert child.lexical_fallback_enabled is False
+
+    def test_child_reconstructs_shadow_telemetry(self, tmp_path, monkeypatch):
+        from core.config import RaptorConfig
+        cfg.configure("shadow", run_dir=str(tmp_path), export_env=True)
+        survived = RaptorConfig.get_safe_env()
+        cfg.reset()
+        # See the strict variant above for the pop-before-monkeypatch
+        # ordering rationale.
+        for var in self.TRANSPORT_VARS:
+            os.environ.pop(var, None)
+            if var in survived:
+                monkeypatch.setenv(var, survived[var])
+        child = cfg.current()
+        assert child.value_bound_enabled is False
+        assert child.parity_log_path == os.path.join(
+            str(tmp_path), cfg.DEFAULT_PARITY_LOG_NAME,
+        )

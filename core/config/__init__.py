@@ -589,6 +589,24 @@ class RaptorConfig:
         # launcher boundary is not silently lost.  Target-bound envs strip it
         # below, preventing scanned code from changing sandbox policy.
         "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
+        # Sanitizer-cut gate transport: the consuming commands
+        # (/agentic, /codeql, /validate) resolve --sanitizer-cut and
+        # export the result through these vars so scrub-spawned
+        # analysis workers reconstruct the SAME gate configuration
+        # (core.dataflow.sanitizer_cut_config._export_to_env /
+        # _resolve_from_env). Without them here the export died at
+        # this boundary and every safe-env worker silently ran
+        # mode=off — the opposite of the operator's flag, and the
+        # shadow-parity telemetry that gates lexical-fallback removal
+        # under-measured. Values are re-validated on read: the mode
+        # flags parse as booleans (anything non-truthy = off, the
+        # footgun-guarded resolver refuses the dangerous combination),
+        # the two paths are consumed only by RAPTOR's own telemetry
+        # writers — an attacker setting them gains nothing beyond
+        # same-UID file write access (the RAPTOR_OUT_DIR argument).
+        # Target-bound envs strip the family below.
+        "RAPTOR_SANITIZER_CUT", "RAPTOR_SANITIZER_CUT_NO_LEXICAL",
+        "RAPTOR_SANITIZER_CUT_PARITY_LOG", "RAPTOR_SANITIZER_CUT_AUDIT_DIR",
     })
 
     # Variables that must NEVER reach code executed on behalf of a
@@ -615,6 +633,11 @@ class RaptorConfig:
         # by contract.
         "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
         "RAPTOR_SCORECARD_PATH",
+        # Sanitizer-cut transport: framework tell plus two host paths
+        # (parity log, audit dir) that leak the run layout. No target
+        # consumes them.
+        "RAPTOR_SANITIZER_CUT", "RAPTOR_SANITIZER_CUT_NO_LEXICAL",
+        "RAPTOR_SANITIZER_CUT_PARITY_LOG", "RAPTOR_SANITIZER_CUT_AUDIT_DIR",
     })
 
     # Name prefixes that identify RAPTOR to EXECUTED target code even

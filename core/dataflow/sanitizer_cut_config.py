@@ -197,7 +197,16 @@ def _export_to_env(c: SanitizerCutConfig) -> None:
     config through :func:`_resolve_from_env`. Only footgun-safe
     combinations are ever written, so the inherited resolution can't
     trip footgun 1. The flag stays the operator interface; the env vars
-    are an internal transport."""
+    are an internal transport.
+
+    Transport contract: all four names are members of
+    ``RaptorConfig.SAFE_ENV_ALLOWLIST`` — workers are spawned with
+    ``get_safe_env()``, and a name missing from the allowlist dies at
+    that boundary (children then silently resolve mode=off, the
+    opposite of the operator's flag). They are also in
+    ``TARGET_ENV_STRIP_SET``: target-executed code never sees the
+    family. The membership is pinned by a regression test beside this
+    module."""
     os.environ["RAPTOR_SANITIZER_CUT"] = (
         "1" if c.value_bound_enabled else "0"
     )
