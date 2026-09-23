@@ -303,8 +303,10 @@ class TestCLIToolEvidence:
         assert sc.get_stat("agentic:py/sql-injection", "claude-opus") is None
 
     def test_idempotency_reminder_in_output(self, tmp_path):
-        """Operator should see the 'don't double-run' contract every
-        time. Documented in stderr rather than tracked as state."""
+        """Operator guidance must state the LANDED contract: re-runs
+        are idempotent per finding_id (atomic claim-and-record); the
+        stale 'double-records' warning is gone and the real residual
+        (seen-id eviction past the cap) is named instead."""
         analysis_path = tmp_path / "orchestrated.json"
         validation_path = tmp_path / "validation.json"
         sc_path = tmp_path / "sc.json"
@@ -315,7 +317,8 @@ class TestCLIToolEvidence:
             prefix="agentic",
         )
         _, _, err = _capture(cli_mod.cmd_tool_evidence, args)
-        assert "double-records" in err
+        assert "double-records" not in err
+        assert "idempotent" in err
 
     def test_isolation_from_cheap_short_circuit(self, tmp_path):
         """tool-evidence events go to TOOL_EVIDENCE slot only;

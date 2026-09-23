@@ -1,12 +1,13 @@
 """Regression tests for F088.
 
-`record_tool_evidence_outcome` is NOT idempotent: re-invoking the
-producer with the same (model, rule_id, finding_id) doubles the
-event counts and duplicates the disagreement-sample entry. The CLI
-shim acknowledges this with a printed "double-records" reminder,
-making the gap explicit-but-still-present.
+`record_tool_evidence_outcome` IS idempotent when finding_id is
+provided: re-invoking the producer with the same (model, rule_id,
+finding_id) is a no-op — the atomic claim-and-record below closed
+what used to be a double-counting gap (and the CLI's stale
+"double-records" reminder has been replaced by the real residual:
+seen-id eviction past the cap).
 
-Per F088 dossier guidance, mirrors `ec7c14bf` (dict-lock TOCTOU
+The fix mirrors `ec7c14bf` (dict-lock TOCTOU
 dedup-by-key pattern) — gate `record_event` on first-seen of
 (rule_id, model, finding_id). The atomic check-and-mark lives on
 ModelScorecard so the persisted JSON gets the dedup state across

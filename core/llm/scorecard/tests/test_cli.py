@@ -1355,3 +1355,50 @@ def test_list_since_valid_window_still_filters(seeded_scorecard):
         _make_args(path=seeded_scorecard, since="365d"),
     )
     assert rc == 0
+
+
+class TestToolEvidenceReminderAccuracy:
+    """The command's operator guidance must describe landed behaviour:
+    finding_id-keyed records are idempotent (the atomic
+    claim-and-record), so the old 're-running double-records' warning
+    was false and steered operators into building unnecessary external
+    dedup state. The real residual is seen-set eviction: a cell that
+    accumulates more than the id cap between imports can double-count
+    a re-imported finding older than the window."""
+
+    def _run(self, tmp_path):
+        import json as _json
+
+        analysis = tmp_path / "orchestrated_report.json"
+        validation = tmp_path / "validation_report.json"
+        analysis.write_text(_json.dumps({"results": [
+            {"finding_id": "f1", "analysed_by": "m", "rule_id": "r",
+             "is_exploitable": True, "reasoning": "x"},
+        ]}))
+        validation.write_text(_json.dumps({"findings": [
+            {"finding_id": "f1", "is_exploitable": False},
+        ]}))
+        args = _make_args(
+            path=tmp_path / "sc.json", analysis=analysis,
+            validation=validation, prefix="agentic",
+        )
+        return _capture(cli_mod.cmd_tool_evidence, args)
+
+    def test_no_false_double_record_warning(self, tmp_path):
+        rc, _out, err = self._run(tmp_path)
+        assert rc == 0
+        assert "double-records" not in err
+
+    def test_reminder_names_the_eviction_residual(self, tmp_path):
+        rc, _out, err = self._run(tmp_path)
+        assert rc == 0
+        assert "idempotent" in err
+        assert "evict" in err
+
+    def test_rerun_is_actually_idempotent(self, tmp_path):
+        self._run(tmp_path)
+        self._run(tmp_path)
+        sc = ModelScorecard(tmp_path / "sc.json")
+        ev = sc.get_stat("agentic:r", "m").events[
+            EventType.TOOL_EVIDENCE]
+        assert (ev.correct, ev.incorrect) == (0, 1)
