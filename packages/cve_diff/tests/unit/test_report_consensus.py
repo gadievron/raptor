@@ -286,3 +286,32 @@ def test_matches_pipeline_pick_short_pick_against_full_consensus() -> None:
     assert report.matches_pipeline_pick("curl/curl", "b" * 40) is False
     # Degenerate short values never match.
     assert report.matches_pipeline_pick("curl/curl", "a" * 4) is False
+
+
+def test_render_markdown_defangs_hostile_fields():
+    """slug/detail relay OSV/NVD-derived text; the raw twin of
+    _render_consensus must escape like production does."""
+    from cve_diff.report.consensus import (
+        ConsensusReport,
+        MethodResult,
+        render_markdown,
+    )
+
+    report = ConsensusReport(
+        cve_id="CVE-2024-0001",
+        methods=[
+            MethodResult(
+                name="osv",
+                found=True,
+                slug="o/r | EVIL](http://x)",
+                sha="a" * 40,
+                detail="note\r# Injected `x`",
+            ),
+        ],
+        consensus_slug="o/r`tick`",
+        consensus_sha="a" * 40,
+        agreement_count=2,
+    )
+    text = render_markdown(report)
+    assert "| EVIL" not in text     # pipe escaped, cell intact
+    assert "\r# Injected" not in text
