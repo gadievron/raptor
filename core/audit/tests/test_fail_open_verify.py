@@ -416,6 +416,32 @@ class TestVocabPolicy:
         for hook in TIER_B_FRAMEWORK_HOOKS:
             _re.compile(hook.pattern)  # must be a pattern, must compile
 
+    def test_tier_b_signature_shapes_still_match(self):
+        from core.audit.fail_open_roles import _tier_b_role
+
+        for src, framework in (
+            ("func Auth(h http.Handler) http.Handler {", "go-net/http"),
+            ("func(h http.Handler) http.Handler {", "go-net/http"),
+            ("function auth(req, res, next) {", "express"),
+            ("function (req, res, next) {", "express"),
+            ("app.use((req, res, next) => {", "express"),
+        ):
+            ev = _tier_b_role(src)
+            assert ev is not None and framework in ev.provenance, src
+
+    def test_tier_b_whitespace_runs_scan_in_linear_time(self):
+        from core.audit.fail_open_roles import _tier_b_role
+        from core.testing.wallclock import cpu_budget
+
+        # Hostile function source that walks every registered hook
+        # pattern into its longest failing scan.
+        for hostile in (
+            "func" + " " * 65536 + "(x",
+            "function" + " " * 65536 + "(x",
+        ):
+            with cpu_budget(1.0, what="tier-b hook whitespace run"):
+                assert _tier_b_role(hostile) is None
+
 
 # ── leg-2 analyzers (direct) ────────────────────────────────────────
 

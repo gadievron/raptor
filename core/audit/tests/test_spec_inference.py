@@ -512,6 +512,22 @@ class TestChecksReturnValue:
     def test_empty_source(self):
         assert _checks_return_value("", "fn") is False
 
+    def test_bang_spacings_still_match(self):
+        for source in (
+            "if (!validate(t)) { }",
+            "if ( ! validate(t)) { }",
+            "if (  validate(t)) { }",
+            "if(!validate(t)) { }",
+        ):
+            assert _checks_return_value(source, "validate") is True, source
+
+    def test_whitespace_run_scans_in_linear_time(self):
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "if (" + " " * 65536 + "x"
+        with cpu_budget(1.0, what="return-check whitespace run"):
+            assert _checks_return_value(hostile, "validate") is False
+
 
 class TestExtractBaseName:
     def test_strips_version_suffix(self):

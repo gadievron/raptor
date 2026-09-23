@@ -257,6 +257,25 @@ class TestJavaScriptExtractor:
         funcs = JavaScriptExtractor().extract("test.js", code)
         assert all(f.name != "if" for f in funcs)
 
+    def test_object_method_arrow_spacings_still_match(self):
+        for line in (
+            "handler: (req) => {",
+            "handler: (req) =>{",
+            "handler: (req)=> {",
+            "handler: async (req) => {",
+            "handler: function (req) {",
+            "handler: (req) {",
+        ):
+            funcs = JavaScriptExtractor().extract("t.js", line + "\n}\n")
+            assert [f.name for f in funcs] == ["handler"], line
+
+    def test_object_method_whitespace_run_is_linear(self):
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "m: ()" + " " * 8192 + "x\n"
+        with cpu_budget(1.0, what="js object-method whitespace run"):
+            assert JavaScriptExtractor().extract("t.js", hostile) == []
+
 
 class TestCExtractor:
     def test_ansi_style(self):
@@ -275,6 +294,23 @@ class TestCExtractor:
         code = "if (x) {\n}\nint real(void) {\n}\n"
         funcs = CExtractor().extract("test.c", code)
         assert all(f.name != "if" for f in funcs)
+
+    def test_ansi_declaration_prefix_shapes_still_match(self):
+        for line, name in (
+            ("static void *alloc_page(size_t n) {", "alloc_page"),
+            ("unsigned long long wide(void) {", "wide"),
+            ("static  inline  int   spaced(int x) {", "spaced"),
+            ("z_streamp * deref(void) {", "deref"),
+        ):
+            funcs = CExtractor().extract("t.c", line + "\n}\n")
+            assert [f.name for f in funcs] == [name], line
+
+    def test_ansi_word_space_run_scans_in_linear_time(self):
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "a " * 8000 + "\n"
+        with cpu_budget(1.0, what="c extractor word-space run"):
+            assert CExtractor().extract("t.c", hostile) == []
 
 
 class TestJavaExtractor:
@@ -305,6 +341,36 @@ class TestGenericExtractor:
         funcs = GenericExtractor().extract("test.rb", code)
         assert len(funcs) == 1
         assert funcs[0].name == "foo"
+
+    def test_brace_style_modifier_shapes_still_match(self):
+        for line, name in (
+            ("public static int foo(int x) {", "foo"),
+            ("private void bar() {", "bar"),
+            ("static string baz(string s) {", "baz"),
+            ("int qux(void) {", "qux"),
+            ("publicstatic void glued(int x) {", "glued"),
+        ):
+            funcs = GenericExtractor().extract("t.cs", line + "\n}\n")
+            assert [f.name for f in funcs] == [name], line
+
+    def test_whitespace_run_line_scans_in_linear_time(self):
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "public" + " " * 8192 + "(\n"
+        with cpu_budget(1.0, what="generic extractor whitespace run"):
+            assert GenericExtractor().extract("t.cs", hostile) == []
+
+    def test_oversized_line_is_skipped_not_scanned(self):
+        from core.testing.wallclock import cpu_budget
+
+        # Two-direction bound check: a line beyond the cap is skipped
+        # outright (no scan cost), while a normal declaration on the
+        # next line is still extracted.
+        content = ("x" * (GenericExtractor._MAX_LINE + 1) + "\n"
+                   + "public int ok() {\n}\n")
+        with cpu_budget(1.0, what="generic extractor oversized line"):
+            funcs = GenericExtractor().extract("t.cs", content)
+        assert [f.name for f in funcs] == ["ok"]
 
 
 class TestExtractFunctions:
