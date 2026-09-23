@@ -747,6 +747,49 @@ class TestIncludeClosureSuppressionForgery:
             result.details.get("suppression_witness") or ""
         ).lower(), vars(result)
 
+    def test_laundered_attribution_cannot_refute(
+        self, tmp_path, sandbox_spy,
+    ):
+        # Two levels deeper: a plain linemarker in the repo header
+        # re-attributes its own lines to a system path, and the
+        # pragma arrives token-pasted — invisible to raw scans AND
+        # classified system-authored in -E output. Attribution from
+        # an out-of-tree-naming repo linemarker is unverifiable; the
+        # vet must refuse, never refute.
+        result = self._sweep_uaf(
+            tmp_path, "uaf_launder.c", "evil_launder.h",
+        )
+        assert result.outcome != "refuted", vars(result)
+        assert result.outcome == "inconclusive"
+        detail = (
+            result.details.get("suppression_witness")
+            or result.details.get("closure_unvetted")
+            or ""
+        )
+        assert "evil_launder.h" in detail, vars(result)
+
+    def test_in_tree_linemarker_still_refutes(
+        self, tmp_path, sandbox_spy,
+    ):
+        # Generated sources (bison/flex) cite their in-tree grammar
+        # files with plain linemarkers — those must not cost the
+        # refutation.
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "ok.c").write_text(
+            '#line 5 "parser.y"\n'
+            "int f(int y){ return y + 1; }\n",
+        )
+        result = run_compiler_analyzer_sweep(
+            target_path=target,
+            file_path="ok.c",
+            function_name="f",
+            hypothesis="use-after-free of `y` in f",
+            cwe="CWE-416",
+            out_dir=tmp_path / "out",
+        )
+        assert result.outcome == "refuted", vars(result)
+
     def test_clean_include_closure_still_refutes(
         self, tmp_path, sandbox_spy,
     ):
@@ -793,6 +836,9 @@ class TestClosureWitnessParsing:
     """Unit pins for the preprocessed-output walker."""
 
     def _pp(self, target: Path, tu: Path, text: str):
+        # The TU itself is always raw-scanned — make it exist.
+        if not tu.exists():
+            tu.write_text("int t;\n")
         return compiler_sweep._closure_suppression_witness(
             text, target, tu,
         )
