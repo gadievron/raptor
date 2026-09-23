@@ -179,3 +179,79 @@ def test_rate_limit_summary_lists_per_service_per_status() -> None:
     assert "github" in text and "nvd" in text
     assert "429: 2" in text
     assert "429: 1" in text
+
+
+# ── cross-worker counter aggregation (snapshot / delta / absorb) ──────
+
+
+def _child_records_and_ships_delta() -> tuple:
+    """Picklable pool target: record events in the CHILD process and
+    return the delta — module globals never cross the process boundary."""
+    from cve_diff.infra import api_status as st
+
+    before = st.counters_snapshot()
+    st.record_rate_limit("github", 429)
+    st.record_cache_hit("github_client.get_commit")
+    return st.counters_delta(before, st.counters_snapshot())
+
+
+def test_worker_deltas_absorbed_across_processes() -> None:
+    """Per-process counters are invisible to the parent under a
+    ProcessPoolExecutor; shipping the delta and absorb()ing it is what
+    makes the parent's -w>1 summaries non-empty."""
+    from concurrent.futures import ProcessPoolExecutor
+
+    from cve_diff.infra import api_status as st
+
+    st.reset_rate_limit_events()
+    st.reset_cache_stats()
+    try:
+        with ProcessPoolExecutor(max_workers=2) as pool:
+            deltas = [pool.submit(_child_records_and_ships_delta).result()
+                      for _ in range(2)]
+        assert st.rate_limit_events() == {}, "sanity: globals stay per-process"
+        for events_d, cache_d in deltas:
+            st.absorb(events_d, cache_d)
+        assert st.rate_limit_events() == {"github": {429: 2}}
+        assert st.cache_stats()["github_client.get_commit"]["hits"] == 2
+        assert "429" in st.render_rate_limit_summary() or (
+            "github" in st.render_rate_limit_summary()
+        )
+    finally:
+        st.reset_rate_limit_events()
+        st.reset_cache_stats()
+
+
+def test_absorb_coerces_json_roundtripped_status_keys() -> None:
+    from cve_diff.infra import api_status as st
+
+    st.reset_rate_limit_events()
+    try:
+        st.absorb({"nvd": {"503": 3}}, None)
+        assert st.rate_limit_events() == {"nvd": {503: 3}}
+    finally:
+        st.reset_rate_limit_events()
+
+
+def test_run_one_attaches_per_cve_counter_deltas(monkeypatch) -> None:
+    """The bench worker wrapper must ship each CVE's DELTA (a worker
+    serves many CVEs; absolute values would double-count in the parent)."""
+    from cve_diff.cli import bench
+    from cve_diff.infra import api_status as st
+
+    st.reset_rate_limit_events()
+    try:
+        st.record_rate_limit("github", 429)  # pre-existing worker state
+
+        def _stub_inner(cve_id, output_dir, disk_limit_pct=80.0,
+                        max_file_bytes=0):
+            st.record_rate_limit("github", 429)
+            return bench._CveResult(cve_id=cve_id, ok=True, elapsed_s=0.0)
+
+        monkeypatch.setattr(bench, "_run_one_inner", _stub_inner)
+        r = bench._run_one("CVE-2024-0001", "/tmp")
+        assert r.rate_limit_events == {"github": {429: 1}}, (
+            "delta, not the worker's absolute counter"
+        )
+    finally:
+        st.reset_rate_limit_events()

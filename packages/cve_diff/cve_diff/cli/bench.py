@@ -116,6 +116,13 @@ class _CveResult:
     # "disagree" / "single_source") — see DiffBundle.extraction_agreement.
     consensus_agree: int | None = None
     extraction_agree: str = ""
+    # Per-CVE rate-limit / cache counter deltas captured INSIDE the
+    # worker (api_status counters are per-process module globals, so
+    # under -w>1 the parent never sees them otherwise). The parent
+    # absorbs these into its own api_status before rendering the
+    # end-of-run summaries. Keys may be JSON-round-tripped strings.
+    rate_limit_events: dict = field(default_factory=dict)
+    cache_events: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -128,7 +135,23 @@ class _BenchSummary:
 
 def _run_one(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
              max_file_bytes: int = 128 * 1024) -> _CveResult:
-    """Worker entry point — runs pipeline + dumps OSV JSON for a single CVE.
+    """Worker entry point: :func:`_run_one_inner` plus per-CVE counter
+    deltas. api_status counters are per-process globals — a worker
+    serves many CVEs, so the result carries the DELTA for this CVE and
+    the parent absorbs it (absolute values would double-count)."""
+    before = api_status.counters_snapshot()
+    r = _run_one_inner(cve_id, output_dir, disk_limit_pct, max_file_bytes)
+    events_d, cache_d = api_status.counters_delta(
+        before, api_status.counters_snapshot()
+    )
+    r.rate_limit_events = events_d
+    r.cache_events = cache_d
+    return r
+
+
+def _run_one_inner(cve_id: str, output_dir: str, disk_limit_pct: float = 80.0,
+                   max_file_bytes: int = 128 * 1024) -> _CveResult:
+    """Runs pipeline + dumps OSV JSON for a single CVE.
 
     Each worker installs a SIGALRM watchdog so a runaway clone (e.g. a
     multi-GB writeup archive that slipped past the metadata scorer) cannot
@@ -820,6 +843,12 @@ def bench(
                 # error class.
                 try:
                     r = fut.result()
+                    # Worker counters live in the worker process; merge
+                    # this CVE's delta so the parent's end-of-run
+                    # rate-limit / cache summaries stop rendering empty
+                    # under -w>1. (Sequential path needs no merge — the
+                    # counters accumulated in this process directly.)
+                    api_status.absorb(r.rate_limit_events, r.cache_events)
                 except BaseException as worker_exc:
                     cid = futures[fut]
                     r = _CveResult(

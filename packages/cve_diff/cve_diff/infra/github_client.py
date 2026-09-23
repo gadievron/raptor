@@ -305,8 +305,10 @@ def get_commit(slug: str, sha: str) -> dict[str, Any] | None:
 
     Telemetry caveat: under ``ProcessPoolExecutor`` (bench's
     ``-w 4``) each worker has its own per-process ``functools.lru_cache``
-    and counter — totals are aggregated across workers but per-worker
-    counts can race. Within a single process there's also a small
+    and counter — cross-worker totals exist only because the bench
+    ships each CVE's counter delta back on its result record and the
+    parent ``api_status.absorb()``s it (module globals never cross the
+    process boundary). Within a single process there's also a small
     window between the two ``cache_info()`` reads where another thread
     could populate the cache; the resulting hit/miss attribution is
     still approximately correct over many calls and never worse than
