@@ -29,7 +29,7 @@ from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
 from ._base import build_purl
-from . import _safe_read, register
+from . import _safe_read, pom_inheritance as _inh, register
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -55,8 +55,8 @@ ECOSYSTEM = "Maven"
 
 # POMs may carry a namespace (http/https × 4.0.0/4.1.0) or none;
 # ``_strip_namespaces`` flattens every variant so a single XPath works.
-
-_PROPERTY_RE = re.compile(r"\$\{([^}]+)\}")
+# ``${...}`` substitution shares ``pom_inheritance``'s budgeted
+# resolver (one grammar, one size bound) — see ``_resolve``.
 
 # Scope values defined by Maven. ``main`` is the runtime
 # ship-with-the-product set; ``provided`` / ``system`` are
@@ -133,7 +133,6 @@ def parse(path: Path) -> list[Dependency]:
     # managed view. Closes the Spring Boot starter-parent case and
     # the in-house multi-module-monorepo case. No-op when no
     # resolver has been installed (default, tests, --offline).
-    from . import pom_inheritance as _inh
     resolver = _inh.get_inheritance_resolver()
     if resolver is not None:
         try:
@@ -364,25 +363,22 @@ def _collect_properties(root) -> dict[str, str]:
     return props
 
 
-def _resolve(value: str | None, properties: dict[str, str]) -> tuple[str | None, bool]:
-    """Substitute ${...} placeholders. Return (resolved, fully_resolved)."""
+def _resolve(
+    value: str | None, properties: dict[str, str], *, origin: str = "",
+) -> tuple[str | None, bool]:
+    """Substitute ${...} placeholders. Return (resolved, fully_resolved).
+
+    Delegates to the shared budgeted resolver: an unbudgeted
+    substitution pass over an attacker-sized element replicates
+    property values once per reference (file-size-squared growth from
+    one hostile POM). ``(None, False)`` on budget breach — the breach
+    is recorded as a structured parse failure by the shared helper."""
     if value is None:
         return None, True
     text = value.strip()
     if not text:
         return None, True
-    fully = True
-
-    def _sub(match: re.Match[str]) -> str:
-        nonlocal fully
-        key = match.group(1)
-        if key in properties:
-            return properties[key]
-        fully = False
-        return match.group(0)
-
-    out = _PROPERTY_RE.sub(_sub, text)
-    return out, fully
+    return _inh._resolve_property_refs(text, properties, origin=origin)
 
 
 def _build_dep(
@@ -400,9 +396,10 @@ def _build_dep(
     version_text = _text(el, "version")
     scope_text = _text(el, "scope")
 
-    group, group_ok = _resolve(group_text, properties)
-    artifact, artifact_ok = _resolve(artifact_text, properties)
-    version, version_ok = _resolve(version_text, properties)
+    origin = str(path)
+    group, group_ok = _resolve(group_text, properties, origin=origin)
+    artifact, artifact_ok = _resolve(artifact_text, properties, origin=origin)
+    version, version_ok = _resolve(version_text, properties, origin=origin)
 
     if not artifact:
         # Without an artifactId there's nothing to record.
