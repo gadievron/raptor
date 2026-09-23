@@ -5,6 +5,7 @@ Fixture trees are built under tmp_path; no LLM, no subprocess.
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
@@ -1108,3 +1109,48 @@ class TestCappedTargetReads:
         got = _read_capped(big, 512)
         assert got is not None
         assert len(got) <= 512
+
+
+def _sl_race_worker(args):
+    idx, path = args
+    from pathlib import Path as _P
+
+    from core.concepts.lang_resolve import merge_into_study_list
+    from core.concepts.model import StudyItem
+    for k in range(10):
+        merge_into_study_list(_P(path), [StudyItem(
+            id=f"w{idx}_i{k}", kind="macro", name=f"N_{idx}_{k}",
+            file=f"f{idx}.c", line=k + 1,
+        )])
+    return idx
+
+
+class TestStudyListMergeSerialised:
+    """merge_into_study_list holds a cross-process lock over its
+    load->merge->save window (shared-out_dir writers)."""
+
+    def test_lock_sibling_created(self, tmp_path):
+        from core.concepts.lang_resolve import merge_into_study_list
+        from core.concepts.model import StudyItem
+        p = tmp_path / "study-list.json"
+        merge_into_study_list(p, [StudyItem(
+            id="a", kind="macro", name="A", file="a.c", line=1)])
+        assert (tmp_path / "study-list.json.lock").is_file()
+
+    @pytest.mark.slow
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="fork start method")
+    def test_concurrent_mergers_lose_no_items(self, tmp_path):
+        import json as _json
+        import multiprocessing as mp
+
+        p = tmp_path / "study-list.json"
+        n = 6
+        ctx = mp.get_context("fork")
+        with ctx.Pool(n) as pool:
+            pool.map(_sl_race_worker, [(i, str(p)) for i in range(n)])
+        data = _json.loads(p.read_text())
+        ids = {i["id"] for i in data["items"]}
+        expected = {f"w{i}_i{k}" for i in range(n) for k in range(10)}
+        missing = expected - ids
+        assert not missing, f"lost {len(missing)} items"
