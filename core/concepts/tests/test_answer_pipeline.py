@@ -509,3 +509,33 @@ class TestValueAssertionStopwordGate:
                                 self._GLOBALS)
         assert r is not None
         assert r.matches is False
+
+
+class TestLedgerKeyedByOrigin:
+    """The study-answers ledger keys records by (question, file,
+    function): a same-text question from another function must not
+    overwrite the first record."""
+
+    def test_same_question_two_functions_both_recorded(self, tmp_path):
+        n = append_answers(tmp_path, [StudyAnswer(
+            question="can this fail?", source_file="a.c",
+            source_function="foo", answer="yes: returns -1 on EIO",
+            status="resolved")])
+        assert n == 1
+        n = append_answers(tmp_path, [StudyAnswer(
+            question="can this fail?", source_file="b.c",
+            source_function="bar", answer="no: cannot fail",
+            status="resolved")])
+        assert n == 1
+        assert len(load_answers(tmp_path)) == 2
+        foo = answers_for_function(tmp_path, "a.c", "foo")
+        assert [a["answer"] for a in foo] == ["yes: returns -1 on EIO"]
+
+    def test_same_origin_updates_in_place(self, tmp_path):
+        for answer in ("first", "second"):
+            append_answers(tmp_path, [StudyAnswer(
+                question="q?", source_file="a.c",
+                source_function="foo", answer=answer)])
+        recs = load_answers(tmp_path)
+        assert len(recs) == 1
+        assert recs[0]["answer"] == "second"
