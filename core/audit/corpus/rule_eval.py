@@ -644,12 +644,17 @@ def run_cocci_engine(
     *,
     rules_dir: Path | None = None,
     timeout_per_rule: int = DEFAULT_SPATCH_TIMEOUT,
+    allow_scripting: bool = True,
 ) -> EngineOutcome:
     """Run the shipped .cocci rules over the excerpt tree.
 
     Mirrors the production cocci stage: ``--no-includes`` (excerpt
-    trees have no headers anyway) and ``allow_scripting=True`` — the
-    shipped rules are in-repo, code-trust content.
+    trees have no headers anyway) and ``allow_scripting=True`` by
+    default — a rationale that holds only for the SHIPPED rules
+    (in-repo, code-trust content). Graduated-rule callers pass
+    ``allow_scripting=False``: those rules arrive through the
+    synthesis pipeline, and script execution must not rest solely on
+    the synthesis-side persistence gate.
     """
     outcome = EngineOutcome(engine="coccinelle")
     from packages.coccinelle import runner as cocci_runner
@@ -673,7 +678,7 @@ def run_cocci_engine(
         excerpt, rules_dir,
         no_includes=True,
         timeout_per_rule=timeout_per_rule,
-        allow_scripting=True,
+        allow_scripting=allow_scripting,
     )
     for res in results:
         outcome.invocations += 1
@@ -1436,6 +1441,7 @@ def main(argv: list[str] | None = None) -> int:
                         grad = run_cocci_engine(
                             excerpt, rules_dir=grad_cocci,
                             timeout_per_rule=args.spatch_timeout,
+                            allow_scripting=False,
                         )
                         o = (
                             grad if o is None
