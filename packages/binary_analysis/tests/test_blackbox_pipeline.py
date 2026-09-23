@@ -159,6 +159,34 @@ def test_radare2_failure_is_reported_as_unavailable_not_empty_success(tmp_path: 
     assert "radare2 analysis unavailable" in report
 
 
+def test_exported_data_demotion_count_surfaces_in_report(tmp_path: Path) -> None:
+    """The exported_data demotion must stay operator-visible end to
+    end: the type byte that drives it is attacker-controlled, so a
+    demotion that only lives in JSON would still be a quiet
+    surface-hiding lever."""
+    binary = _write_binary(tmp_path / "sample", b"\x7fELF" + b"\x00" * 128)
+    out = tmp_path / "out"
+    ctx = BinaryContextMap(
+        binary_path=binary, arch="x86", bits=64, binary_format="elf",
+    )
+    ctx.exports = ["demo_parse", "demo_limits_table"]
+    ctx.export_types = {"demo_parse": "FUNC", "demo_limits_table": "OBJ"}
+
+    with patch(
+        "packages.binary_analysis.pipeline.analyse_binary_context",
+        return_value=ctx,
+    ):
+        result = analyse_blackbox_binary(binary, out_dir=out)
+
+    demoted = [
+        item for item in result.context_map["external_ingress_candidates"]
+        if item["kind"] == "exported_data"
+    ]
+    assert [item["name"] for item in demoted] == ["demo_limits_table"]
+    report = (out / "binary-analysis-report.md").read_text()
+    assert "- Exported data symbols demoted below API exports: 1" in report
+
+
 def test_input_channels_upgrade_only_when_runtime_observed() -> None:
     channels, static_evidence = recover_static_channels("a" * 64, ["recv", "getenv"])
     assert {channel.kind for channel in channels} == {"network", "environment"}

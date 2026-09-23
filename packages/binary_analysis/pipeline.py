@@ -1163,6 +1163,11 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
         f"- Recovered class methods: {class_summary.get('method_count') or 0}",
         f"- Framework callback candidates: {len(context.get('framework_callback_candidates') or [])}",
         f"- External ingress candidates: {len(context.get('external_ingress_candidates') or [])}",
+        # Demotions must stay operator-visible: the type byte driving
+        # them is attacker-controlled, so a silent demotion would be a
+        # surface-hiding lever.
+        f"- Exported data symbols demoted below API exports: "
+        f"{sum(1 for item in (context.get('external_ingress_candidates') or []) if isinstance(item, dict) and item.get('kind') == 'exported_data')}",
         f"- Parser boundary candidates: {len(context.get('parser_boundary_candidates') or [])}",
         "",
         "## Analysis Scope",
