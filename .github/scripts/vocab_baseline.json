@@ -1856,6 +1856,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "packages/binary_analysis/corpus_profile.py::profile_corpus": {
+    "count": 17,
+    "kind": "literal",
+    "note": "format-profile.json per-family artifact schema keys (id/key/fields/size_field_candidates/entropy/tlv/...) -- a persistence schema literal, not a learned name vocabulary"
+  },
   "packages/binary_analysis/fuzz_suitability.py::assess_fuzz_suitability": {
     "count": 12,
     "kind": "literal"
@@ -1911,7 +1916,7 @@
   "packages/binary_analysis/pipeline.py::_build_string_anchors": {
     "count": 11,
     "kind": "literal",
-    "note": "lead-record field manifest (string_anchor context-map entry JSON keys), not a learned name vocabulary — same class as the sibling _build_entry_points / _build_candidate_flows entries"
+    "note": "lead-record field manifest (string_anchor context-map entry JSON keys), not a learned name vocabulary \u2014 same class as the sibling _build_entry_points / _build_candidate_flows entries"
   },
   "packages/binary_analysis/pipeline.py::_call_graph_edges": {
     "count": 10,
