@@ -61,8 +61,13 @@ _INT_LEN_TYPE_RE = re.compile(
 _LEN_MORPHS = r"len|length|size|sz|cnt|count|nbytes|off|offset"
 _LEN_NAME_RE = re.compile(_LEN_MORPHS, re.IGNORECASE)
 
+# The (?<!\s) pins the optional-star branch to its whitespace-run
+# start: unanchored, a bare `\*?\s*` prefix re-consumes a hostile
+# whitespace run from every scan position — quadratic. The earliest
+# match always starts at the run start, so the match set is
+# unchanged.
 _CURSOR_ADVANCE_RE = re.compile(
-    r"\*?\s*\b[A-Za-z_]\w*\s*\+\+"          # p++ / *p++
+    r"\*?(?<!\s)\s*\b[A-Za-z_]\w*\s*\+\+"   # p++ / *p++
     r"|\b[A-Za-z_]\w*\s*\+=\s*"             # p += n / off += n
     r"|\b[A-Za-z_]\w*\s*\[\s*\w+\s*\+\+\s*\]",  # buf[i++]
 )
@@ -70,7 +75,12 @@ _CURSOR_ADVANCE_RE = re.compile(
 # Bare morphemes match too (`len - 8`), keeping the arithmetic scan
 # on the SAME morpheme set as the parameter-name check — requiring a
 # leading character silently dropped bare `len`/`size` sites.
-_LEN_ID = rf"\w*(?:{_LEN_MORPHS})\w*"
+# The identifier head before the length morpheme is bounded: with an
+# unbounded head, one long morpheme-repeating word costs every
+# head/morpheme split — quadratic on a hostile line. A length-ish
+# name carries its morpheme well inside its first 64 chars (a longer
+# head only shifts the reported start mid-word, never drops a site).
+_LEN_ID = rf"\w{{0,64}}?(?:{_LEN_MORPHS})\w*"
 _LEN_ARITH_RE = re.compile(
     rf"\b(?:{_LEN_ID})\s*(?:[-+*]|<<|>>|[<>]=?|==|!=)"
     rf"|(?:[-+*]|<<|>>)\s*\b(?:{_LEN_ID})\b",

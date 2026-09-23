@@ -315,13 +315,18 @@ _LT_TWO_SITE_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Verb suffixes are bounded (\w{1,32}): unbounded, a claim text
+# made of repeated verb stems inside one word run re-scans the run
+# from every stem — quadratic. No English inflection needs more
+# than 32 chars; mid-word stem hits ('reused', 'misused') still
+# match exactly as before.
 _LT_UAF_RE = re.compile(
     r"use[\s-]?after[\s-]?free|\buaf\b|dangling|"
     r"use\s+of\s+freed|"
-    r"(?:used?|dereferenc\w+|read|accessed)\s[^.;]{0,120}?"
+    r"(?:used?|dereferenc\w{1,32}|read|accessed)\s[^.;]{0,120}?"
     r"\bafter\b[^.;]{0,120}?(?:free|releas|drop|put|deactivat)|"
-    r"(?:free[ds]?|freed|releas\w+|drop\w+)\b[^.;]{0,120}?"
-    r"(?:then|and|later)\s+(?:used?|dereferenc\w+|accessed|read)|"
+    r"(?:free[ds]?|freed|releas\w{1,32}|drop\w{1,32})\b[^.;]{0,120}?"
+    r"(?:then|and|later)\s+(?:used?|dereferenc\w{1,32}|accessed|read)|"
     r"freed?\s+at\s[^.;]{0,80}?used?\s+at",
     re.IGNORECASE,
 )
@@ -345,8 +350,10 @@ _LT_CONCURRENT_ACTOR_RE = re.compile(
 
 # W-DELEG: the double invocation is attributed to the caller /
 # framework — the exactly-once discipline of whoever calls us.
+# Verb suffixes bounded for the same reason as _LT_UAF_RE above.
 _LT_CALLER_TWICE_RE = re.compile(
-    r"(?:call(?:ed|s)?|invok\w+|releas\w+|dispatch\w+|run[s]?)"
+    r"(?:call(?:ed|s)?|invok\w{1,16}|releas\w{1,16}|dispatch\w{1,16}"
+    r"|run[s]?)"
     r"[^.;]{0,80}?\btwice\b|"
     r"\btwice\b[^.;]{0,80}?(?:same|by\s+the|framework|caller|core)|"
     r"(?:framework|caller|upper\s+layer|core)[^.;]{0,80}?"

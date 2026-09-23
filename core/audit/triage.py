@@ -77,8 +77,12 @@ _FIXED_BUF_DECL = re.compile(
     # shape); anything short of a statement boundary counts. VLAs
     # match too: a runtime-sized local array with write evidence is
     # just as review-worthy.
+    # The dimension span is bounded: unbounded, a body repeating the
+    # type head inside the span re-scans the remainder from every
+    # occurrence — quadratic in hostile source length. A real
+    # dimension expression sits far inside 1000 chars.
     r"\b(?:unsigned\s+char|signed\s+char|char|uint8_t|int8_t|u_char|"
-    r"wchar_t|BYTE|WCHAR)\s+(\w+)\s*\[[^\];]*\]",
+    r"wchar_t|BYTE|WCHAR)\s+(\w+)\s*\[[^\];]{0,1000}\]",
 )
 _MEM_WRITERS = (
     "memcpy", "memmove", "memset", "strcpy", "strncpy", "strcat",
@@ -99,8 +103,9 @@ def writes_fixed_stack_buffer(source: str) -> bool:
         return False
     for name in names:
         esc = re.escape(name)
-        # buf[i] = …  (indexed store; excludes == comparisons)
-        if re.search(rf"\b{esc}\s*\[[^\]]+\]\s*=[^=]", source):
+        # buf[i] = …  (indexed store; excludes == comparisons).
+        # Index span bounded — same rationale as _FIXED_BUF_DECL.
+        if re.search(rf"\b{esc}\s*\[[^\]]{{1,1000}}\]\s*=[^=]", source):
             return True
         # memcpy(buf, …) / snprintf(buf, …) / read(fd, buf, …)-style
         # first-or-second-arg destination uses.

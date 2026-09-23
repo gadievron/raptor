@@ -483,19 +483,31 @@ _COPY_CALLS = frozenset({
 # '#pragma'-opening line ending in a long whitespace run. A pragma
 # is one logical line, so the dropped cross-line corner (token on a
 # LATER line than the directive) was never valid C.
+# The pragma body and the attribute-to-keyword gaps below are also
+# BOUNDED: unbounded, a body that repeats the directive head inside
+# the span re-scans the remainder from every occurrence — quadratic
+# in hostile source length. A pragma line fits well inside 1000
+# chars and a real attribute sits within 1000 chars of the keyword
+# it decorates; beyond the bound the site stops matching rather
+# than scanning without bound.
 _STACK_PROTECTOR_DISABLE_RE = re.compile(
-    r"#\s*pragma\s[^\n]*(?:no_stack_protector|optimize\s*\(\s*\"no-stack-protector\"\s*\))"
+    r"#\s*pragma\s[^\n]{0,1000}"
+    r"(?:no_stack_protector|optimize\s*\(\s*\"no-stack-protector\"\s*\))"
     r"|__attribute__\s*\(\s*\(\s*no_stack_protector\s*\)\s*\)"
     r"|__attribute__\s*\(\s*\(\s*optimize\s*\(\s*\"no-stack-protector\"\s*\)\s*\)\s*\)",
 )
 
 _SECURITY_CRITICAL_ATTR_RE = re.compile(
     r"__attribute__\s*\(\s*\(\s*(?:noinline|noreturn)\s*\)\s*\)"
-    r".*?(?:auth|crypt|verify|check_pw|validate_token|hmac|sign|decrypt|encrypt)",
+    r".{0,1000}?(?:auth|crypt|verify|check_pw|validate_token|hmac|sign|decrypt|encrypt)",
 )
 
+# memset args and the memset-to-return gap are bounded for the same
+# reason; memset takes three short arguments (300 chars is
+# generous) and 1500 chars covers a real cleanup tail between the
+# clear and the return.
 _VOLATILE_CLEAR_RE = re.compile(
-    r"\bmemset\s*\([^)]*\)\s*;.*?(?:return\b|}\s*$)",
+    r"\bmemset\s*\([^)]{0,300}\)\s*;.{0,1500}?(?:return\b|}\s*$)",
     re.DOTALL,
 )
 

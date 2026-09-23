@@ -212,10 +212,15 @@ def _event_call_re(names: tuple[str, ...]) -> re.Pattern:
     # The optional '&' gates its own trailing whitespace — the naive
     # ``\s*&?\s*`` pair was quadratic on a release call followed by
     # a whitespace run.
+    # The releaser-name head and the member chain are bounded: with
+    # unbounded spans, one long stem-repeating word (or a hostile
+    # ``a.a.a...`` chain) costs every split of the run — quadratic
+    # in hostile source length. Real identifiers sit far inside 256
+    # chars and real member chains far inside 32 links.
     return re.compile(
-        r"\b(" + alts + r"|\w+_(?:free|destroy|release|put|teardown)\w*"
+        r"\b(" + alts + r"|\w{1,256}?_(?:free|destroy|release|put|teardown)\w*"
         r")\s*\(\s*(?:&\s*)?([A-Za-z_]\w*)"
-        r"((?:\s*(?:->|\.)\s*[A-Za-z_]\w*)*)"
+        r"((?:\s*(?:->|\.)\s*[A-Za-z_]\w*){0,32})"
     )
 
 
@@ -676,8 +681,12 @@ def _local_alias_escapes(
     """A local alias handed to an out-of-census callee between assign
     and event may transfer ownership — mirror of the consistency
     ``ownership-unresolved`` convention."""
+    # The argument span before the alias is bounded: unbounded, a
+    # line repeating the callee head inside the span re-scans the
+    # rest from every occurrence — quadratic. The alias sits within
+    # a real argument list, far inside 500 chars.
     call_re = re.compile(
-        rf"\b([A-Za-z_]\w*)\s*\([^)]*\b{re.escape(edge.name)}\b",
+        rf"\b([A-Za-z_]\w*)\s*\([^)]{{0,500}}\b{re.escape(edge.name)}\b",
     )
     # Clamp both ends: an alias edge recorded OUTSIDE this function's
     # span (the census matches edges to events by field name, so a

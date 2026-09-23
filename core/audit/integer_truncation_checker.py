@@ -109,12 +109,21 @@ _IMPLICIT_NARROW_DECL_RE = re.compile(
     + r')\s+(\w+)\s*=\s*(\w+)\s*;',
 )
 
+# Cast and argument spans are bounded: unbounded, a crafted body
+# that repeats the pattern's own head inside such a span re-scans
+# the remainder from every head occurrence — quadratic in the body
+# length. A cast is a type name (256 chars is generous) and 1000
+# chars sits far above any real argument list; beyond the bound the
+# site stops matching rather than scanning without bound. The
+# leading \b drops mid-word starts (never real assignments).
 _ALLOC_RE = re.compile(
-    r'(\w+)\s*=\s*(?:\([^)]*\)\s*)?(malloc|calloc|realloc)\s*\(([^)]+)\)',
+    r'\b(\w+)\s*=\s*(?:\([^)]{0,256}\)\s*)?'
+    r'(malloc|calloc|realloc)\s*\(([^)]{1,1000})\)',
 )
 
 _COPY_RE = re.compile(
-    r'\b(memcpy|memmove|bcopy)\s*\(([^,]+),([^,]+),([^)]+)\)',
+    r'\b(memcpy|memmove|bcopy)\s*'
+    r'\(([^,]{1,1000}),([^,]{1,1000}),([^)]{1,1000})\)',
 )
 
 _RECV_SOURCES = frozenset({
@@ -123,7 +132,7 @@ _RECV_SOURCES = frozenset({
 })
 
 _NETWORK_PARSE_RE = re.compile(
-    r'\b(\w+)\s*=\s*(?:\([^)]*\)\s*)?(?:'
+    r'\b(\w+)\s*=\s*(?:\([^)]{0,256}\)\s*)?(?:'
     + '|'.join(re.escape(s) for s in sorted(_RECV_SOURCES, key=len, reverse=True))
     + r')\s*\(',
 )
@@ -135,7 +144,8 @@ _PARAM_RE = re.compile(
 )
 
 _BYTE_ORDER_RE = re.compile(
-    r'\b(\w+)\s*=\s*(?:\([^)]*\)\s*)?(?:ntohs|ntohl|ntohll|htons|htonl)\s*\(',
+    r'\b(\w+)\s*=\s*(?:\([^)]{0,256}\)\s*)?'
+    r'(?:ntohs|ntohl|ntohll|htons|htonl)\s*\(',
 )
 
 

@@ -47,15 +47,23 @@ _OPS_TABLE_PATTERNS = [
 # every split of the run — quadratic. Earliest-match captures
 # unchanged; the one dropped corner is a mid-word 'return' suffix
 # ('xxreturn') acting as the keyword, which was never C.
+# The case-to-callee gap is bounded too: unbounded, a body that
+# repeats `case x:` inside the gap re-scans the remainder from
+# every occurrence — quadratic. This binds the FIRST call of the
+# arm, which sits within a few statements of the label; 200 chars
+# is generous for that.
 _IOCTL_CASE_RE = re.compile(
-    r"case\s+\w+\s*:.*?(?:\breturn\s+)?\b(\w+)\s*\(",
+    r"case\s+\w+\s*:.{0,200}?(?:\breturn\s+)?\b(\w+)\s*\(",
 )
 
 _CAPABILITY_PATTERNS = [
     # Linux kernel
     re.compile(r"\bcapable\s*\(\s*(CAP_\w+)\s*\)"),
-    re.compile(r"\bns_capable\s*\([^,]+,\s*(CAP_\w+)\s*\)"),
-    re.compile(r"\bhas_capability\s*\([^,]+,\s*(CAP_\w+)\s*\)"),
+    # First-argument spans bounded: unbounded, a line repeating the
+    # call head inside the span re-scans the rest from every
+    # occurrence — quadratic. Real first arguments are tiny.
+    re.compile(r"\bns_capable\s*\([^,]{1,1000},\s*(CAP_\w+)\s*\)"),
+    re.compile(r"\bhas_capability\s*\([^,]{1,1000},\s*(CAP_\w+)\s*\)"),
     # Generic permission/auth checks
     re.compile(r"\bcheck_permission\s*\(\s*[\"'](\w+)[\"']\s*\)"),
     re.compile(r"\brequire_capability\s*\(\s*([\w.]+)\s*\)"),

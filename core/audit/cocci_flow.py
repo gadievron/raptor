@@ -378,9 +378,14 @@ _VICTIM_PATTERNS = (
         re.IGNORECASE,
     ),
     # "conn->buf is freed / fetched twice"
+    # \b pins each attempt to an identifier start and the member
+    # chain is depth-bounded: unanchored and unbounded, a hostile
+    # `a.a.a...` run retries every suffix and re-walks the chain
+    # from each — quadratic. 32 members is far beyond real chains;
+    # a mid-word start was never a real identifier.
     re.compile(
-        r"[`'\"]?([A-Za-z_][A-Za-z0-9_]*"
-        r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*)*)[`'\"]?\s+is\s+"
+        r"[`'\"]?\b([A-Za-z_][A-Za-z0-9_]*"
+        r"(?:(?:->|\.)[A-Za-z_][A-Za-z0-9_]*){0,32})[`'\"]?\s+is\s+"
         r"(?:freed|fetched|used|read)",
         re.IGNORECASE,
     ),
@@ -400,7 +405,9 @@ _RETURN_FN_PATTERNS = (
         re.IGNORECASE,
     ),
     # "`fopen()` return is not checked"
-    re.compile(r"[`'\"]?([A-Za-z_][A-Za-z0-9_]*)\(\)?[`'\"]?\s+return"),
+    # \b pins attempts to identifier starts (same rationale as the
+    # `is freed` pattern above).
+    re.compile(r"[`'\"]?\b([A-Za-z_][A-Za-z0-9_]*)\(\)?[`'\"]?\s+return"),
 )
 
 _PROSE_VICTIMS = frozenset({
