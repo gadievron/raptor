@@ -382,8 +382,12 @@ def test_release_republishes_dockerhub_image_from_stamped_tag() -> None:
     tag. release.yml force-moves the release tag to its version-stamp
     commit with the workflow GITHUB_TOKEN, and token-initiated pushes
     never trigger workflows — so a tag-push build arm in
-    dockerhub-publish would ship the PRE-stamp tree (the image
-    self-reports the previous version forever). The coupling is:
+    dockerhub-publish would ship the PRE-stamp tree. Today that tree
+    builds an identical image (the Dockerfile COPYs only
+    requirements*.txt, no stamp target); the coupling holds so the
+    versioned image is built from the ref it claims to be, and any
+    future COPY of stamped files inherits correctness instead of
+    silently shipping the previous version. The coupling is:
     release.yml dispatches dockerhub-publish with the tag AFTER the
     re-tag (workflow_dispatch is deliverable by GITHUB_TOKEN), and
     dockerhub-publish validates the tag input before it reaches
