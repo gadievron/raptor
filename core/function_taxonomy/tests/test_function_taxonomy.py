@@ -171,7 +171,8 @@ class TestStreamInputFuncs(unittest.TestCase):
         """read/fread are ubiquitous per module policy — must not
         be in STREAM_INPUT_FUNCS (their presence carries zero
         fuzz-priority signal). Consumers that want them add them
-        explicitly (see exploit_feasibility.constants.INPUT_FUNCTIONS)."""
+        explicitly (see exploit_feasibility.constants.
+        BINARY_SAFE_INPUT_FUNCTIONS)."""
         self.assertNotIn("read", STREAM_INPUT_FUNCS)
         self.assertNotIn("fread", STREAM_INPUT_FUNCS)
 
