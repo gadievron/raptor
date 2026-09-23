@@ -625,3 +625,81 @@ def test_musl_project_glibc_only_dep_gets_actionable_alpine_hint():
     # alternative should appear so the operator has a clear fix.
     assert "apk add build-base" in v.reason
     assert "python:3.X-bookworm" in v.reason
+
+
+# ---------------------------------------------------------------------------
+# Explicit pair OS (bake / build-push / Dockerfile provenance)
+# ---------------------------------------------------------------------------
+
+def test_linux_pair_without_libc_accepts_manylinux_wheel() -> None:
+    """A Linux-provenance pair with undetermined libc (bake /
+    build-push mint these) accepts a standard manylinux wheel —
+    libc=None means "no libc constraint", not "non-Linux". The old
+    overload rejected every Linux wheel for such pairs, so a compiled
+    dep drew sdist_only / variant_mismatch / arch_gap findings per
+    pair and find_compatible_version could never answer "ok"."""
+    pypi = _StubPyPI({
+        "numpy": {
+            "releases": {
+                "2.0.0": [
+                    {"filename":
+                     "numpy-2.0.0-cp312-cp312-manylinux_2_17_x86_64.whl"},
+                ],
+            },
+        },
+    })
+    wm = wheel_matrix_for_version(pypi, "numpy", "2.0.0")
+    matrix = ProjectPlatformMatrix()
+    matrix.add(PlatformPair(
+        arch="x86_64", libc=None, os="linux",
+        source="docker-bake.hcl platforms in docker-bake.hcl",
+    ))
+    verdicts = check_compat(matrix, wm)
+    assert [v.verdict for v in verdicts] == ["ok"]
+
+
+def test_linux_pair_without_libc_rejects_windows_only_wheel() -> None:
+    """The other error direction of the libc=None overload: the same
+    Linux-provenance pair matched a win_amd64-only wheel and reported
+    "ok" for a deployment that cannot install the package."""
+    pypi = _StubPyPI({
+        "wonly": {
+            "releases": {
+                "1.0": [
+                    {"filename": "wonly-1.0-cp312-cp312-win_amd64.whl"},
+                ],
+            },
+        },
+    })
+    wm = wheel_matrix_for_version(pypi, "wonly", "1.0")
+    matrix = ProjectPlatformMatrix()
+    matrix.add(PlatformPair(
+        arch="x86_64", libc=None, os="linux",
+        source="docker-bake.hcl platforms in docker-bake.hcl",
+    ))
+    verdicts = check_compat(matrix, wm)
+    assert [v.verdict for v in verdicts] != ["ok"]
+
+
+def test_windows_pair_rejects_linux_wheel_and_accepts_win() -> None:
+    """Explicit Windows pairs match only Windows wheels."""
+    pypi = _StubPyPI({
+        "both": {
+            "releases": {
+                "1.0": [
+                    {"filename": "both-1.0-cp312-cp312-win_amd64.whl"},
+                    {"filename":
+                     "both-1.0-cp312-cp312-manylinux_2_17_x86_64.whl"},
+                ],
+            },
+        },
+    })
+    wm = wheel_matrix_for_version(pypi, "both", "1.0")
+    matrix = ProjectPlatformMatrix()
+    matrix.add(PlatformPair(
+        arch="x86_64", libc=None, os="windows",
+        source="GHA runs-on: windows-2022 in ci.yml",
+    ))
+    verdicts = check_compat(matrix, wm)
+    assert [v.verdict for v in verdicts] == ["ok"]
+    assert "win_amd64" in verdicts[0].matching_wheel

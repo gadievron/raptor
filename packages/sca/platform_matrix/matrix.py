@@ -86,6 +86,15 @@ class PlatformPair:
 
     arch: str                  # "x86_64" | "aarch64" | "armv7l" | "i686" | …
     libc: LibcVersion | None
+    # OS family the pair runs on: "linux" | "windows" | "macosx" |
+    # None (unknown — e.g. an unrecognised self-hosted runner label).
+    # Carried EXPLICITLY: container-provenance pairs (Dockerfile,
+    # devcontainer, bake, build-push) are Linux by construction even
+    # when their libc is undetermined. Overloading ``libc=None`` as
+    # "non-Linux" made the compat matcher reject every Linux wheel
+    # for such pairs (false incompat findings per compiled dep) AND
+    # accept Windows-only wheels for them (false clean verdicts).
+    os: str | None = None
     # Source-trace for diagnostics ("Dockerfile FROM python:3.13-bookworm",
     # "GHA runs-on: ubuntu-22.04", etc.). Not used by the compat
     # checker; surfaces in operator-facing reports so a flagged
@@ -252,7 +261,7 @@ def _walk_dockerfile(
             archs = ["x86_64", "aarch64"]
         for arch in archs:
             matrix.add(PlatformPair(
-                arch=arch, libc=libc,
+                arch=arch, libc=libc, os="linux",
                 source=f"Dockerfile FROM {image_ref} in {path.name}",
             ))
 
@@ -299,7 +308,7 @@ def _walk_devcontainer(
             # Mirrors the Dockerfile walker.
         for arch in ("x86_64", "aarch64"):
             matrix.add(PlatformPair(
-                arch=arch, libc=libc,
+                arch=arch, libc=libc, os="linux",
                 source=f"devcontainer.json image: {image}",
             ))
 
@@ -433,7 +442,7 @@ def _walk_bake_hcl(
             if not arch:
                 continue
             matrix.add(PlatformPair(
-                arch=arch, libc=None,
+                arch=arch, libc=None, os="linux",
                 source=f"docker-bake.hcl platforms in {path.name}",
             ))
 
@@ -477,7 +486,7 @@ def _walk_bake_json(
             if not arch:
                 continue
             matrix.add(PlatformPair(
-                arch=arch, libc=None,
+                arch=arch, libc=None, os="linux",
                 source=f"docker-bake.json platforms in {path.name}",
             ))
 
@@ -661,7 +670,7 @@ def _extract_gha_build_push_platforms(
             if not arch:
                 continue
             matrix.add(PlatformPair(
-                arch=arch, libc=None,
+                arch=arch, libc=None, os="linux",
                 source=(
                     f"GHA docker/build-push-action platforms in "
                     f"{workflow.name}"
@@ -709,7 +718,7 @@ def _add_runner(
     libc = lookup_runner_libc(runner_ref)
     if runner_ref.startswith("windows-"):
         matrix.add(PlatformPair(
-            arch="x86_64", libc=None,
+            arch="x86_64", libc=None, os="windows",
             source=f"GHA runs-on: {runner_ref} in {workflow.name}",
         ))
         return
@@ -717,7 +726,7 @@ def _add_runner(
         macos_version = _parse_macos_runner_version(runner_ref)
         arch = "aarch64" if macos_version is None or macos_version[0] >= 14 else "x86_64"
         matrix.add(PlatformPair(
-            arch=arch, libc=None,
+            arch=arch, libc=None, os="macosx",
             source=f"GHA runs-on: {runner_ref} in {workflow.name}",
             macos_version=macos_version,
         ))
@@ -729,6 +738,11 @@ def _add_runner(
         )
     matrix.add(PlatformPair(
         arch="x86_64", libc=libc,
+        # A label the runner table KNOWS is a Linux image; an
+        # unrecognised (self-hosted) label stays os=None — unknown,
+        # which the compat matcher treats with the legacy lenient
+        # fall-through rather than asserting an OS it can't know.
+        os="linux" if libc is not None else None,
         source=f"GHA runs-on: {runner_ref} in {workflow.name}",
     ))
 
@@ -784,6 +798,7 @@ def discover_platform_matrix(target: Path) -> ProjectPlatformMatrix:
         matrix.add(PlatformPair(
             arch="x86_64",
             libc=LibcVersion("glibc", (2, 17)),
+            os="linux",
             source="default (no platform signals found)",
         ))
 
