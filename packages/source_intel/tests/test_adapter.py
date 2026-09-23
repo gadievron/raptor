@@ -361,3 +361,30 @@ def test_nonnull_evidence_irrelevant_for_use_after_free(tmp_path):
     ):
         validator = SourceIntelValidator(repo_root=tmp_path)
         assert validator.validate(finding) == ValidatorVerdict.UNCERTAIN
+
+
+class TestReturnValueWhitespaceRun:
+    def test_return_whitespace_run_is_fast(self):
+        """Hostile body line opening 'return' and ending in a long
+        whitespace run with no ';': the previous trim spelling
+        ([^;]+?)\\s*; overlapped three unbounded repeats on
+        whitespace and tried every split of the run between them —
+        cubic in the line length. The \\S-delimited value spelling
+        is linear."""
+        from core.testing.wallclock import cpu_budget
+        from packages.source_intel.adapter import _extract_return_values
+
+        hostile = "return x" + " " * (1 << 16) + "y"
+        with cpu_budget(1.0, what="return-value whitespace-run scan"):
+            assert _extract_return_values([hostile]) == []
+
+    def test_return_value_forms_still_extracted(self):
+        from packages.source_intel.adapter import _extract_return_values
+
+        assert _extract_return_values([
+            "return 0;",
+            "  return  a +  b ;",
+            "return foo(x, y);  // trailing",
+            "return;",       # bare: skipped
+            "return  ;",     # whitespace-only value: skipped
+        ]) == ["0", "a + b", "foo(x, y)"]
