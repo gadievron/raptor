@@ -247,15 +247,26 @@ def _read_span(
     # target_path and ``..`` would escape it — either way arbitrary
     # host file lines would be quoted into the contract-audit prompt.
     from ._util import safe_join
+    from core.source import read_text_capped
     p = safe_join(Path(target_path), file)
     if p is None:
         return "(source not available)"
-    try:
-        lines = p.read_text(
-            encoding="utf-8", errors="replace").splitlines()
-    except OSError:
+    # Capped like every migrated core/audit sibling: the whole file
+    # was buffered to slice one span, so a planted multi-hundred-MB
+    # file cost its full size in peak memory per edge prompt.
+    got = read_text_capped(p, errors="replace")
+    if got is None:
         return "(source not available)"
+    text, truncated = got
+    lines = text.splitlines()
     lo, hi = span
+    if truncated and hi >= len(lines):
+        # The requested span lies (partly) past the capped prefix, or
+        # touches its FINAL line — which can be mid-line-cut by the
+        # char cap when the file has no newline for the reader to
+        # trim back to. An empty/partial quote would misrepresent the
+        # function.
+        return "(source not available)"
     body = "\n".join(lines[max(lo - 1, 0):hi])
     if len(body) > _BODY_CHAR_CAP:
         body = body[:_BODY_CHAR_CAP] + "\n[...truncated for prompt budget]"

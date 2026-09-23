@@ -54,11 +54,18 @@ def read_function_source(
         return ""
     if not full.is_file():
         return ""
-    try:
-        text = full.read_text(errors="replace")
-    except OSError:
+    # Cap BEFORE reading: the oversize refusal used to buffer (and
+    # decode) the whole file first, so a planted multi-hundred-MB
+    # file cost its full size in peak memory just to be refused.
+    from core.source import read_text_capped
+    got = read_text_capped(full, 500_000)
+    if got is None:
         return ""
-    if len(text) > 500_000:
+    text, truncated = got
+    if truncated:
+        # Preserve the documented contract: oversized files return
+        # empty, never a silently truncated prefix (a prefix would
+        # mis-attribute spans past the cap).
         return ""
     if line_start > 0 and line_end >= line_start:
         return "\n".join(text.splitlines()[line_start - 1:line_end])
