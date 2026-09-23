@@ -26,7 +26,8 @@ Module layout:
     optional version pin, optional architecture qualifier, source
     line). Substrate for SCA's Debian deps tier.
 
-Limitations (also captured in :doc:`README`):
+Limitations (also captured in ``core/oci/README.md`` — this package
+has no README of its own; the OCI package documents both):
   * No ``ARG`` / ``ENV`` substitution — instructions carry the
     raw text. Consumers needing substitution (``FROM ${BASE}``)
     do their own ARG-tracking.
