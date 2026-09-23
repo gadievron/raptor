@@ -93,7 +93,16 @@ rules:
           - pattern: $MODEL.findOneAndReplace($FILTER, ...)
           - focus-metavariable: $FILTER
     pattern-sanitizers:
-      # mongo-sanitize strips $ keys from objects
+      # mongo-sanitize strips $ keys from objects.
+      #
+      # Known FN mode: the bare `sanitize($X)` spelling matches ANY
+      # user function named `sanitize`, whatever it actually does —
+      # a no-op or wrong-class sanitizer under that name silences a
+      # real finding. The pattern stays because `sanitize` is the
+      # canonical import name of the mongo-sanitize package
+      # (`const sanitize = require('mongo-sanitize')`), which cannot
+      # be distinguished from a same-named local at pattern level.
+      # Missed-finding direction only, never a false confirmation.
       - pattern: mongoSanitize($X)
       - pattern: sanitize($X)
     metadata:
