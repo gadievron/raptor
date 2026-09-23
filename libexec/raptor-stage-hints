@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Print operator staging commands for an unreadable target path.
+
+Binary targets frequently live in root-owned install trees the
+analysis session cannot read. This helper prints the exact copy +
+chown recipe for the OPERATOR to run — it never executes privilege
+escalation itself and refuses to run any command — and verifies a
+staged copy's completeness best-effort afterwards.
+
+Probing discipline: everything is lstat-classified before any open
+(a FIFO in an unvetted tree blocks an open+read forever; device
+nodes have open side effects); verify refuses symlinked roots.
+Residual: the verify walk is path-based, not fd-anchored — a
+directory swapped mid-walk is not detected.
+
+Usage:
+    libexec/raptor-stage-hints <path> [--dest <dir>]
+    libexec/raptor-stage-hints <path> --verify <staged-copy>
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+import argparse  # noqa: E402
+import shlex  # noqa: E402
+import stat as stat_mod  # noqa: E402
+
+from core.security.log_sanitisation import escape_nonprintable  # noqa: E402
+
+# Walk ceiling for the verify pass. Both directions: uncapped, a
+# hostile staged tree (or a mistakenly staged filesystem root) turns
+# verification into an unbounded walk; capped too low the pass stops
+# being a completeness check for real product trees. 200k entries
+# covers every observed install tree while bounding the walk; hitting
+# the cap is reported, never silent.
+_MAX_ENTRIES = 200_000
+
+# Missing-entry report ceiling — enough to act on, bounded output.
+_MAX_MISSING_LISTED = 50
+
+
+def _esc(value: object) -> str:
+    """Render a path for the terminal: filesystem names under an
+    unreadable (often hostile or at least unvetted) tree are
+    attacker-chosen bytes."""
+    return escape_nonprintable(str(value))
+
+
+def _lstat_kind(path: Path) -> str:
+    """lstat-based classification: 'dir' | 'file' | 'symlink' |
+    'special' | 'missing' | 'error'. Never opens the path — this
+    tool probes unvetted root-owned trees, and open()+read() on a
+    FIFO blocks forever (and on a device node has side effects)."""
+    try:
+        st = path.lstat()
+    except FileNotFoundError:
+        return "missing"
+    except OSError:
+        return "error"
+    if stat_mod.S_ISLNK(st.st_mode):
+        return "symlink"
+    if stat_mod.S_ISDIR(st.st_mode):
+        return "dir"
+    if stat_mod.S_ISREG(st.st_mode):
+        return "file"
+    return "special"
+
+
+def _is_readable(path: Path) -> tuple[bool, str]:
+    """(readable, reason). Directories must be listable, REGULAR
+    files openable — a stat-only probe misses mode-000 content.
+    Only lstat-verified regular files are ever opened: a FIFO in an
+    unvetted tree blocks the open/read forever and a device node
+    open has side effects."""
+    kind = _lstat_kind(path)
+    if kind == "missing":
+        return False, "no such path"
+    if kind == "error":
+        return False, "unreadable"
+    if kind == "special":
+        return False, "not a regular file or directory"
+    try:
+        if kind == "dir":
+            next(iter(os.scandir(path)), None)
+        elif kind == "file":
+            with path.open("rb") as fh:
+                fh.read(1)
+        else:  # symlink: classify the target without opening blind
+            target_kind = "missing"
+            try:
+                st = path.stat()  # follows the link
+                if stat_mod.S_ISDIR(st.st_mode):
+                    target_kind = "dir"
+                elif stat_mod.S_ISREG(st.st_mode):
+                    target_kind = "file"
+                else:
+                    return False, "symlink to a non-regular file"
+            except FileNotFoundError:
+                return False, "dangling symlink"
+            if target_kind == "dir":
+                next(iter(os.scandir(path)), None)
+            else:
+                with path.open("rb") as fh:
+                    fh.read(1)
+    except PermissionError:
+        return False, "permission denied"
+    except FileNotFoundError:
+        return False, "no such path"
+    except OSError as exc:
+        return False, exc.strerror or "unreadable"
+    return True, ""
+
+
+def _walk_stats(root: Path) -> tuple[dict[str, int], int, bool, bool]:
+    """(relpath -> size, unreadable_count, truncated, root_readable).
+
+    lstat-based (symlinks counted by name, never followed — a
+    staged copy of a hostile tree must not steer the walk off the
+    tree), best-effort: unreadable entries are counted, not fatal.
+    """
+    stats: dict[str, int] = {}
+    unreadable = 0
+    truncated = False
+    if not root.is_dir():
+        try:
+            stats[root.name] = root.lstat().st_size
+        except OSError:
+            unreadable += 1
+        return stats, unreadable, False, unreadable == 0
+    root_readable = True
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = sorted(os.scandir(current), key=lambda e: e.name)
+        except OSError:
+            unreadable += 1
+            if current == root:
+                root_readable = False
+            continue
+        for entry in entries:
+            if len(stats) >= _MAX_ENTRIES:
+                truncated = True
+                return stats, unreadable, truncated, root_readable
+            rel = os.path.relpath(entry.path, root)
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(Path(entry.path))
+                    stats[rel] = 0
+                else:
+                    stats[rel] = entry.stat(follow_symlinks=False).st_size
+            except OSError:
+                unreadable += 1
+    return stats, unreadable, truncated, root_readable
+
+
+def _print_recipe(path: Path, dest: str | None) -> None:
+    dest_display = dest if dest else "<durable-dir>"
+    staged = f"{dest_display.rstrip('/')}/{path.name}"
+    print("This tool only PRINTS commands — it never executes")
+    print("privilege escalation and refuses to run commands itself.")
+    print()
+    print(f"Target is not readable by this session: {_esc(path)}")
+    print()
+    if _lstat_kind(path) == "symlink":
+        try:
+            resolved = os.path.realpath(str(path))
+        except OSError:
+            resolved = ""
+        print("NOTE: the target is a SYMLINK — cp -a stages the link")
+        print("itself, not the tree it points to. To stage the tree,")
+        if resolved and resolved != str(path):
+            print(f"re-run against the resolved path: {_esc(resolved)}")
+        else:
+            print("re-run against the link's resolved target path.")
+        print()
+    if dest is None:
+        print("Pick a DURABLE staging location first (not /tmp or other")
+        print("scratch space — scratch sweeps destroy analysis inputs),")
+        print("then substitute it for <durable-dir> below, or re-run")
+        print("with --dest <dir> to render the exact commands.")
+        print()
+    print("Run as the operator:")
+    print()
+    print(f"    sudo cp -a -- {_esc(shlex.quote(str(path)))} "
+          f"{_esc(shlex.quote(dest_display))}/")
+    # chown -h: never dereference — a symlink inside an unvetted
+    # staged tree must not steer ownership changes onto its target
+    # outside the tree.
+    print(f"    sudo chown -R -h \"$(id -un):$(id -gn)\" -- "
+          f"{_esc(shlex.quote(staged))}")
+    print()
+    print("Then verify the staged copy:")
+    print()
+    print(f"    libexec/raptor-stage-hints {_esc(shlex.quote(str(path)))} "
+          f"--verify {_esc(shlex.quote(staged))}")
+    print()
+    print("Review the commands before pasting: the tree can change")
+    print("between printing and running (print-to-paste TOCTOU).")
+    if escape_nonprintable(str(path)) != str(path):
+        print()
+        print("NOTE: the target path contains non-printable bytes")
+        print("(rendered escaped above) — review it before pasting.")
+
+
+def _verify(original: Path, staged: Path) -> int:
+    # Root symlinks refuse loudly: a staged copy swapped for a
+    # symlink (or an original path that is itself a link) would let
+    # the walk verify some OTHER tree vacuously. Nested entries are
+    # already lstat-walked; the ROOTS need the same discipline.
+    # Residual (documented): the walk is path-based, not fd-anchored
+    # — a directory swapped mid-walk is not detected.
+    for label, root in (("original", original), ("staged", staged)):
+        if _lstat_kind(root) == "symlink":
+            print(f"{label} path is a symlink — refusing to verify "
+                  f"through it: {_esc(root)}")
+            print("re-run against the resolved path if that is the "
+                  "tree you mean.")
+            return 2
+    staged_readable, staged_reason = _is_readable(staged)
+    if not staged_readable:
+        print(f"staged copy unreadable ({_esc(staged_reason)}): "
+              f"{_esc(staged)}")
+        return 2
+    if not staged.is_dir() and not original.is_dir():
+        # Single-file staging: basenames legitimately differ, so
+        # compare sizes directly (lstat needs no read permission —
+        # this works even against a still-unreadable original).
+        staged_size = staged.lstat().st_size
+        print(f"staged:   1 file, {staged_size} byte(s)")
+        try:
+            orig_size = original.lstat().st_size
+        except OSError:
+            print(f"original: unstattable ({_esc(original)}) — "
+                  "cannot compare; best-effort only.")
+            return 0
+        print(f"original: 1 file, {orig_size} byte(s)")
+        if orig_size == staged_size:
+            print("verify: staged file matches the original size")
+            return 0
+        print("verify: INCOMPLETE — size mismatch")
+        return 1
+    staged_stats, staged_unreadable, staged_trunc, _sr = _walk_stats(staged)
+    staged_bytes = sum(staged_stats.values())
+    print(f"staged:   {len(staged_stats)} entr(ies), "
+          f"{staged_bytes} readable byte(s)"
+          + (f", {staged_unreadable} unreadable" if staged_unreadable else "")
+          + (" [walk cap reached]" if staged_trunc else ""))
+
+    orig_stats, orig_unreadable, orig_trunc, orig_root_readable = (
+        _walk_stats(original)
+    )
+    if not orig_stats and not orig_root_readable:
+        print(f"original: unreadable ({_esc(original)}) — cannot compare;")
+        print("staged-side statistics only. This is best-effort: an")
+        print("unreadable original cannot prove the copy is complete.")
+        return 0
+    orig_bytes = sum(orig_stats.values())
+    print(f"original: {len(orig_stats)} entr(ies), "
+          f"{orig_bytes} readable byte(s)"
+          + (f", {orig_unreadable} unreadable" if orig_unreadable else "")
+          + (" [walk cap reached]" if orig_trunc else ""))
+
+    extras = len(set(staged_stats) - set(orig_stats))
+    if extras:
+        print(f"staged copy has {extras} entr(ies) not present in the "
+              "readable original view (unreadable originals, or "
+              "additions — review before analysis)")
+    missing = sorted(set(orig_stats) - set(staged_stats))
+    size_mismatch = sorted(
+        rel for rel, size in orig_stats.items()
+        if rel in staged_stats and staged_stats[rel] != size
+    )
+    if not missing and not size_mismatch:
+        note = ""
+        if orig_unreadable or orig_trunc:
+            note = (" (best-effort: parts of the original were "
+                    "unreadable or past the walk cap)")
+        print(f"verify: staged copy covers every readable original "
+              f"entry{note}")
+        return 0
+    for rel in missing[:_MAX_MISSING_LISTED]:
+        print(f"missing in staged copy: {_esc(rel)}")
+    if len(missing) > _MAX_MISSING_LISTED:
+        print(f"... and {len(missing) - _MAX_MISSING_LISTED} more "
+              "missing entr(ies)")
+    for rel in size_mismatch[:_MAX_MISSING_LISTED]:
+        print(f"size mismatch: {_esc(rel)} "
+              f"(original {orig_stats[rel]}, staged {staged_stats[rel]})")
+    print(f"verify: INCOMPLETE — {len(missing)} missing, "
+          f"{len(size_mismatch)} size mismatch(es)")
+    return 1
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-stage-hints",
+        description=(
+            "Print operator staging commands for an unreadable target "
+            "path (never executes them), and verify a staged copy."
+        ),
+    )
+    parser.add_argument("path", type=Path, help="target path")
+    parser.add_argument(
+        "--dest", default=None,
+        help="durable staging directory to render into the recipe",
+    )
+    parser.add_argument(
+        "--verify", type=Path, default=None, metavar="STAGED",
+        help="verify a staged copy against the target (best-effort)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.verify is not None:
+        return _verify(args.path, args.verify)
+
+    readable, reason = _is_readable(args.path)
+    if reason == "no such path":
+        print(f"no such path: {_esc(args.path)}")
+        return 2
+    if reason in ("not a regular file or directory",
+                  "symlink to a non-regular file",
+                  "dangling symlink"):
+        # FIFO/device/socket targets: staging does not apply, and
+        # probing them any further is exactly the class of side
+        # effect this tool refuses.
+        print(f"{_esc(reason)}: {_esc(args.path)} — staging does "
+              "not apply")
+        return 2
+    if readable:
+        print(f"path is readable by this session: {_esc(args.path)}")
+        print("no staging needed. (Use --verify <staged-copy> to check "
+              "an existing staged tree.)")
+        return 0
+    _print_recipe(args.path, args.dest)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
