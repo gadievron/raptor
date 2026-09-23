@@ -201,39 +201,6 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             'to [A-Za-z0-9_.-] — no tag or delimiter can survive.'
         ),
     ),
-    # ----- core/audit/context.py -----
-    AllowlistEntry(
-        file='core/audit/context.py',
-        func_name='render_pattern_library',
-        attr='title',
-        expr_text="{ex['title']}",
-        audit_note=(
-            'first-party curated exemplar table (_STRATEGY_EXEMPLARS '
-            'module literal) — no attacker-influenced content'
-        ),
-    ),
-    AllowlistEntry(
-        file='core/audit/context.py',
-        func_name='format_context_for_prompt',
-        attr='summary',
-        expr_text="{ex.get('summary', '')}",
-        audit_note=(
-            'prior-attempts exemplars from the run-local knowledge '
-            "store (this run's own earlier analysis records) — same "
-            'semi-untrusted tier and rationale as the allowlisted '
-            'evidence.summary relay in hypothesis_validation'
-        ),
-    ),
-    AllowlistEntry(
-        file='core/audit/context.py',
-        func_name='format_context_for_prompt',
-        attr='title',
-        expr_text="{ex['title']}",
-        audit_note=(
-            'ctx strategy_exemplars is populated from the first-party '
-            'curated _STRATEGY_EXEMPLARS table — module literals only'
-        ),
-    ),
     # ----- core/audit/spec_inference.py -----
     AllowlistEntry(
         file='core/audit/spec_inference.py',
