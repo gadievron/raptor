@@ -1,6 +1,6 @@
 # RAPTOR Web Scanner
 
-A web application security scanner built into RAPTOR. It does two things: runs 36 passive checks mapped to ASVS 5.0 against any target, and uses an LLM to generate and evaluate injection payloads against discovered parameters and forms. It works unauthenticated or with a live session.
+A web application security scanner built into RAPTOR. It does two things: runs risk-tiered checks mapped to ASVS 5.0 against any target, and uses an LLM to generate and evaluate injection payloads against discovered parameters and forms. It works unauthenticated or with a live session.
 
 ---
 
@@ -94,9 +94,15 @@ discovery and crawl. Any in-scope paths it finds are fed back into the crawler.
 The tool is represented through the same adapter and scope-receipt layer as the
 built-in client, so copied configs cannot quietly point it at another host.
 
-### Phase 4: Passive checks
+### Phase 4: Security checks (unauthenticated)
 
-36 checks that send no attack payloads, organised by ASVS 5.0 category.
+Checks organised by ASVS 5.0 category. Each declares the risk tier its
+requests need — passive (benign requests and response inspection only),
+active (crafted probe values: login POSTs, desync frames, `__proto__`
+bodies), or intrusive (may change target state) — and the scope
+receipt's `--approval-level` gates which tiers actually run. The
+default `active` level therefore DOES send attack-shaped probe values;
+pass `--approval-level passive` for observation-only scans.
 
 **V14.4 -- Security headers**
 CSP (including unsafe-inline and wildcard analysis), HSTS and its max-age, X-Content-Type-Options, X-Frame-Options and CSP frame-ancestors, Referrer-Policy, Permissions-Policy, server version disclosure via Server and X-Powered-By.
@@ -126,7 +132,7 @@ This is where most scanners stop looking. These checks follow the methodology Ja
 - Password reset link poisoning via host header
 - Web cache poisoning via unkeyed headers (X-Forwarded-Host, X-Original-URL, X-Rewrite-URL)
 - Web cache deception on authenticated endpoints
-- HTTP request smuggling CL.TE probe via raw socket
+- HTTP request smuggling probes (CL.TE, TE.CL, CL.0) via raw socket
 - Server-side prototype pollution via `__proto__` in JSON bodies and query strings
 - OAuth open redirect in redirect_uri
 - OAuth missing state parameter
@@ -266,7 +272,10 @@ Next.js/cache fingerprints push cache-chain assessment higher.
 | `--approve-tool <id>` | Individually approve a tool that would otherwise be blocked by the approval level |
 | `--validator nuclei` | Run an opt-in external second-opinion validator after RAPTOR's own findings |
 
-Both require an interactive session. They are blocked in CI/CD per the Rule of Two: an agent with write access processing untrusted web content needs a human in the loop.
+`--validate` requires an interactive session and is blocked in CI/CD per
+the Rule of Two: an agent with write access processing untrusted web
+content needs a human in the loop. `--understand` builds its context map
+non-interactively.
 
 External validators are not used as refuters. A `nuclei` match adds another
 piece of evidence; a `nuclei` no-match does not undo a live RAPTOR oracle that

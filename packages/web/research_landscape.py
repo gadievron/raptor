@@ -219,7 +219,12 @@ def assess_research_landscape(
 
     return {
         "source_archive": PORTSWIGGER_ARCHIVE_URL,
-        "archive_years_reviewed": list(range(2006, 2026)),
+        # Derived from the theme registry so the claim can never
+        # outrun the sources actually cited (a static 2006-2025 range
+        # asserted totality the curation does not have).
+        "archive_years_reviewed": sorted(
+            {year for theme in RESEARCH_THEMES for year in theme.years}
+        ),
         "curation_mode": "static_versioned_registry",
         "method": (
             "Themes distilled from the PortSwigger Top 10 Web Hacking Techniques "

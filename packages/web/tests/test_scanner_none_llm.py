@@ -385,7 +385,9 @@ class TestWebScannerNoneLlm(unittest.TestCase):
             registered_check_ids=["V5.1.12", "V5.1.13", "V10.3.1", "V10.3.2"],
         )
 
-        self.assertEqual(landscape["archive_years_reviewed"][0], 2006)
+        # Provenance claim derives from the cited theme years — no
+        # static range asserting totality the curation does not have.
+        self.assertEqual(landscape["archive_years_reviewed"][0], 2017)
         self.assertIn(2025, landscape["archive_years_reviewed"])
         high_priority = {
             theme["id"]
