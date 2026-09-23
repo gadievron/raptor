@@ -22,6 +22,7 @@ import time
 
 from core.audit.fail_open_lang import (
     OUTCOME_FAIL_CLOSED,
+    c_ignored_return_sites,
     go_recover_handlers,
     java_handlers,
     js_handlers,
@@ -347,3 +348,72 @@ class TestGoDeferCallExclusion:
         assert "work" in h.try_calls
         assert "verifyToken" in h.try_calls
         assert "handleIt" not in h.try_calls
+
+
+class TestLineModelDesync:
+    r"""Handler classification is immune to splitlines-only bytes.
+
+    ast.lineno / tree-sitter rows count \n only; CPython's tokenizer
+    treats \f as WHITESPACE.  A splitlines() view of the same source
+    desynced on one form feed in code whitespace, so the shifted
+    view-slice read handler-classification evidence from the wrong
+    physical lines and flipped a quiet fail-open swallow
+    (quiet_log_only) to fallback_action.
+    """
+
+    CLEAN = (
+        "import logging\n"
+        "logger = logging.getLogger(__name__)\n"
+        "\n"
+        "def check(token):\n"
+        "    try:\n"
+        "        verify(token)\n"
+        '        logger.error("verify raised no alarm path")\n'
+        "        act(token)\n"
+        "    except Exception:\n"
+        '        logger.debug("ignored")\n'
+    )
+
+    def test_form_feed_in_code_whitespace_cannot_flip_verdict(self):
+        evil = self.CLEAN.replace(
+            "\ndef check(token):", "\x0c\ndef check(token):",
+        )
+        as_tuple = lambda hs: [  # noqa: E731
+            (h.line, h.idiom, h.outcome_kind, h.permissive_value,
+             h.evidence_snippet)
+            for h in hs
+        ]
+        clean = as_tuple(python_handlers(self.CLEAN, "t.py"))
+        evil_out = as_tuple(python_handlers(evil, "t.py"))
+        assert clean == evil_out
+        assert clean[0][2] == "quiet_log_only"
+
+    @requires_ts("c")
+    def test_c_ignored_return_immune_to_string_form_feed(self):
+        clean = (
+            'const char *B = "x";\n'
+            "int use(int fd, char *buf) {\n"
+            "    read(fd, buf, 16);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        evil = clean.replace('"x"', '"x\x0c\x0c"')
+        keyf = lambda sites: [  # noqa: E731
+            (s.line, s.code, s.verdict, s.evidence) for s in sites
+        ]
+        c_clean = keyf(c_ignored_return_sites(clean, "t.c", "read"))
+        c_evil = keyf(c_ignored_return_sites(evil, "t.c", "read"))
+        assert c_clean == c_evil
+        assert c_clean and c_clean[0][0] == 3
+        assert "read(fd, buf, 16);" in c_clean[0][1]
+
+    def test_bare_carriage_return_pairs_with_ast(self):
+        # CPython's ast counts a bare \r as a line break (the one
+        # \r-breaking producer); python_handlers normalises its parse
+        # input so both sides share one model.
+        evil = self.CLEAN.replace(
+            "\ndef check(token):", "\rdef check(token):",
+        )
+        hs = python_handlers(evil, "t.py")
+        assert [h.outcome_kind for h in hs] == ["quiet_log_only"]
+        assert "logger.debug" in hs[0].evidence_snippet

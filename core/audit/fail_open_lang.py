@@ -58,6 +58,8 @@ from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
 
+from core.source.lines import split_lines
+
 if TYPE_CHECKING:
     from tree_sitter import Node
 
@@ -386,14 +388,21 @@ def _enclosing_function_names(tree: ast.Module) -> dict[int, str]:
 def python_handlers(source: str, file_path: str) -> list[HandlerOutcome]:
     """All classified exception handlers / suppress blocks in a Python
     source file. Empty list on syntax errors (never a guess)."""
+    # CPython's ast counts bare \r (and \r\n) as line breaks — the
+    # one \r-BREAKING producer in the line-model family. Normalise
+    # the string BOTH sides consume (ast.parse input AND the split
+    # views below) so their line coordinates always agree, even for
+    # callers that hand over non-universal-newline text.
+    if "\r" in source:
+        source = source.replace("\r\n", "\n").replace("\r", "\n")
     try:
         tree = ast.parse(source)
     except SyntaxError:
         logger.debug("fail_open_lang: syntax error in %s", file_path)
         return []
     from .source_view import sanitized_view
-    lines = source.splitlines()
-    view_lines = sanitized_view(source, language="python").splitlines()
+    lines = split_lines(source)
+    view_lines = split_lines(sanitized_view(source, language="python"))
     enclosing = _enclosing_function_names(tree)
     out: list[HandlerOutcome] = []
 
@@ -637,7 +646,7 @@ def _ignored_return_regex(
         rf"(?:=|\breturn\b|\bif\b|\bwhile\b|[!=<>]=|&&|\|\|)"
         rf"[^;]{{0,250}}\b{re.escape(callee)}\s*\(",
     )
-    for idx, line in enumerate(source.splitlines(), 1):
+    for idx, line in enumerate(split_lines(source), 1):
         if span and not (span[0] <= idx <= span[1]):
             continue
         if callee not in line:
@@ -688,7 +697,7 @@ def c_ignored_return_sites(
         try:
             src = source.encode("utf-8", errors="replace")
             tree = parser.parse(src)
-            lines = source.splitlines()
+            lines = split_lines(source)
             sites = []
             for node in _iter_calls_ts(tree, src, callee, function_span):
                 site = _classify_ignored_return_site(node, src, lines)
@@ -826,7 +835,7 @@ def _tristate_regex(
     truth_re = re.compile(
         _TRISTATE_LINE_RE_TEMPLATE.format(callee=re.escape(callee)),
     )
-    for idx, line in enumerate(source.splitlines(), 1):
+    for idx, line in enumerate(split_lines(source), 1):
         if span and not (span[0] <= idx <= span[1]):
             continue
         if callee not in line:
@@ -868,7 +877,7 @@ def c_tristate_sites(
         try:
             src = source.encode("utf-8", errors="replace")
             tree = parser.parse(src)
-            lines = source.splitlines()
+            lines = split_lines(source)
             sites = []
             for node in _iter_calls_ts(tree, src, callee, function_span):
                 site = _classify_tristate_site(node, src, lines)
@@ -902,7 +911,7 @@ def c_function_span(
         except Exception:
             logger.debug("fail_open_lang: ts span failed", exc_info=True)
     # Fallback: definition line + brace counting.
-    lines = source.splitlines()
+    lines = split_lines(source)
     def_re = re.compile(
         rf"^[\w\s\*]*\b{re.escape(function_name)}\s*\([^;]*$"
         rf"|^[\w\s\*]*\b{re.escape(function_name)}\s*\([^;]*\)\s*\{{?\s*$",
@@ -1174,7 +1183,7 @@ def java_handlers(
         logger.debug("fail_open_lang: java parse failed for %s",
                      file_path, exc_info=True)
         return None
-    lines = source.splitlines()
+    lines = split_lines(source)
     call_index = _java_call_index(tree.root_node, src)
     out: list[HandlerOutcome] = []
     # The walk carries the enclosing-function name down instead of
@@ -1453,7 +1462,7 @@ def go_recover_handlers(
         logger.debug("fail_open_lang: go parse failed for %s",
                      file_path, exc_info=True)
         return None
-    lines = source.splitlines()
+    lines = split_lines(source)
     call_index = _go_call_index(tree.root_node, src)
     out: list[HandlerOutcome] = []
     # Enclosing-function node carried down the walk (per-defer
@@ -1680,7 +1689,7 @@ def go_discard_sites(
     try:
         src = source.encode("utf-8", errors="replace")
         tree = parser.parse(src)
-        lines = source.splitlines()
+        lines = split_lines(source)
     except Exception:
         logger.debug("fail_open_lang: go discard scan failed for %s",
                      file_path, exc_info=True)
@@ -2050,7 +2059,7 @@ def js_handlers(
         logger.debug("fail_open_lang: %s parse failed for %s",
                      language, file_path, exc_info=True)
         return None
-    lines = source.splitlines()
+    lines = split_lines(source)
     call_index = _js_call_index(tree.root_node, src)
     out: list[HandlerOutcome] = []
     # Enclosing-function name carried down the walk (per-handler
@@ -2363,7 +2372,7 @@ def js_unawaited_sites(
     try:
         src = source.encode("utf-8", errors="replace")
         tree = parser.parse(src)
-        lines = source.splitlines()
+        lines = split_lines(source)
     except Exception:
         logger.debug("fail_open_lang: js unawaited scan failed for %s",
                      file_path, exc_info=True)
@@ -2631,7 +2640,7 @@ def rust_discard_sites(
     try:
         src = source.encode("utf-8", errors="replace")
         tree = parser.parse(src)
-        lines = source.splitlines()
+        lines = split_lines(source)
     except Exception:
         logger.debug("fail_open_lang: rust discard scan failed for %s",
                      file_path, exc_info=True)
