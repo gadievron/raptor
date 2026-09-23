@@ -20,7 +20,8 @@ from core.understand_graph import (
 from core.understand_graph.store import open_graph
 
 
-def _write_understand_run(run_dir, target, *, extra_flow=False):
+def _write_understand_run(run_dir, target, *, extra_flow=False,
+                          extra_confidence="high"):
     src = target / "server.c"
     src.parent.mkdir(parents=True, exist_ok=True)
     src.write_text("void handle_request(char *i) { system(i); }\n",
@@ -58,7 +59,8 @@ def _write_understand_run(run_dir, target, *, extra_flow=False):
             {"id": "SINK-3", "name": "execve", "file": "server.c", "line": 9})
         context_map["unchecked_flows"].append(
             {"id": "FLOW-3", "entry_point": "EP-1", "sink": "SINK-3",
-             "confidence": "high", "missing_boundary": "no sanitisation"})
+             "confidence": extra_confidence,
+             "missing_boundary": "no sanitisation"})
     save_json(run_dir / "checklist.json", checklist)
     save_json(run_dir / "context-map.json", context_map)
     graph_path = ingest_run(run_dir, str(target))
@@ -190,3 +192,59 @@ def test_explicit_snapshot_pair_stays_unrestricted(tmp_path):
     assert diff["is_diffable"] is True
     assert diff["base_snapshot"]["id"] == by_producer["understand"]
     assert diff["head_snapshot"]["id"] == by_producer["scan"]
+
+
+def test_unchecked_reads_the_nested_evidence_key(tmp_path):
+    """The producer stores missing_boundary under evidence["flow"];
+    the diff's reachability index read it at the top level, so every
+    edge rendered unchecked=False and a genuinely new unchecked flow
+    below high confidence never surfaced as a new risk."""
+    from core.understand_graph.queries import _snapshot_reachability_index
+
+    target = tmp_path / "target"
+    run_dir = tmp_path / "run"
+    graph_path = _write_understand_run(run_dir, target)
+    with open_graph(graph_path) as conn:
+        snap = conn.execute(
+            "SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        index = _snapshot_reachability_index(conn, snap["id"])
+    assert index, "fixture must produce reachability edges"
+    assert all(edge["unchecked"] for edge in index.values()), (
+        "flows carrying missing_boundary must render unchecked=True"
+    )
+
+
+def test_new_medium_confidence_unchecked_flow_is_a_new_risk(tmp_path):
+    """A NEW medium-confidence unchecked flow in the head snapshot
+    appears in new_risks (the unchecked arm), not only when its
+    confidence spelling lands in the high/confirmed set — which is
+    also case-folded now ("Confirmed" from an upstream producer)."""
+    target = tmp_path / "target"
+    run_dir = tmp_path / "run"
+    graph_path = _write_understand_run(run_dir, target)
+    _bump_created_at(graph_path, "understand", "2026-01-01T00:00:00+00:00")
+
+    _write_understand_run(run_dir, target, extra_flow=True,
+                          extra_confidence="medium")
+    diff = graph_diff(graph_path, str(target))
+    assert diff["is_diffable"] is True
+    added = [(e["source"], e["sink"]) for e in diff["reachability"]["added"]]
+    assert ("handle_request", "execve") in added
+    risks = [(e["source"], e["sink"]) for e in diff["new_risks"]]
+    assert ("handle_request", "execve") in risks, (
+        "medium-confidence unchecked flow missing from new_risks"
+    )
+
+
+def test_new_risks_confidence_set_is_case_folded(tmp_path):
+    target = tmp_path / "target"
+    run_dir = tmp_path / "run"
+    graph_path = _write_understand_run(run_dir, target)
+    _bump_created_at(graph_path, "understand", "2026-01-01T00:00:00+00:00")
+
+    _write_understand_run(run_dir, target, extra_flow=True,
+                          extra_confidence="Confirmed")
+    diff = graph_diff(graph_path, str(target))
+    risks = [(e["source"], e["sink"]) for e in diff["new_risks"]]
+    assert ("handle_request", "execve") in risks
