@@ -42,7 +42,7 @@ from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.paths import confine, strip_file_uri
 from core.run.finding_status import read_verdict
-from core.source import read_text_capped
+from core.source import read_text_capped, split_lines
 from core.progress import HackerProgress
 from core.run.output import unique_run_suffix
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError
@@ -411,7 +411,7 @@ class VulnerabilityContext:
         # otherwise OOM-kill the analyser. Truncated reads still
         # return True so the agent can analyse the visible portion.
         try:
-            got = read_text_capped(file_path)
+            got = read_text_capped(file_path, newline="")
             if got is None:
                 logger.warning("Cannot read file: %s", file_path)
                 return False
@@ -420,7 +420,13 @@ class VulnerabilityContext:
                 logger.warning(
                     "Source file %s exceeded the capped read; analysis sees truncated content", file_path
                 )
-            lines = content.splitlines(keepends=True)
+            # \n-model split (core.source.lines contract): the
+            # slice indices are the finding's SARIF startLine/endLine,
+            # which count \n only. A splitlines() view let form feeds
+            # in a string literal above the finding shift the slice,
+            # so the "vulnerable code" the LLM verdicts on was an
+            # attacker-chosen substitute line.
+            lines = split_lines(content)
 
             # Get the specific vulnerable lines. endLine is optional
             # in SARIF (the parser coerces a missing value to None) —
@@ -432,15 +438,15 @@ class VulnerabilityContext:
                 end_line = self.end_line or self.start_line
                 start_idx = max(0, self.start_line - 1)
                 end_idx = min(len(lines), end_line)
-                self.full_code = "".join(lines[start_idx:end_idx])
+                self.full_code = "\n".join(lines[start_idx:end_idx])
 
                 # Get surrounding context (50 lines before and after)
                 context_start = max(0, start_idx - 50)
                 context_end = min(len(lines), end_idx + 50)
-                self.surrounding_context = "".join(lines[context_start:context_end])
+                self.surrounding_context = "\n".join(lines[context_start:context_end])
             else:
                 # If no line numbers, take first 100 lines
-                self.full_code = "".join(lines[:100])
+                self.full_code = "\n".join(lines[:100])
                 self.surrounding_context = self.full_code
 
             return True
@@ -477,10 +483,13 @@ class VulnerabilityContext:
             # Same capped read as read_vulnerable_code above. Same
             # rationale: bound the in-flight memory regardless of
             # source-file size.
-            got = read_text_capped(file_path)
+            got = read_text_capped(file_path, newline="")
             if got is None:
                 return f"[Error reading code: {file_uri}]"
-            lines = got[0].splitlines(keepends=True)
+            # Same \n-model contract as read_vulnerable_code: *line*
+            # comes from SARIF, so the >>> marker must land on the
+            # \n-counted line, not a splitlines()-shifted one.
+            lines = split_lines(got[0])
 
             # Get context around the line
             start = max(0, line - context_lines - 1)
