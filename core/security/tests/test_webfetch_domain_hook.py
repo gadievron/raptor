@@ -206,7 +206,62 @@ class TestFetcherAgentWiring(unittest.TestCase):
                      encoding="utf-8")
         self.assertIn("webfetch-domain-allowlist.py", agent)
         self.assertIn("--anchor-file", agent)
-        self.assertIn(".claude/run/crash-report-fetcher.anchor", agent)
+        # Session-scoped: a single repo-global anchor was
+        # last-writer-wins across concurrent investigations.
+        self.assertIn(
+            ".claude/run/crash-report-fetcher-{session}.anchor", agent)
+
+    def test_fetcher_frontmatter_wires_write_allowlist(self):
+        """The fetcher's Write grant is narrowed to its single
+        artifact — prose alone let a steered fetcher rewrite the very
+        anchor that constrains its WebFetch."""
+        agent = (_REPO / ".claude" / "agents"
+                 / "crash-report-fetcher-agent.md").read_text(
+                     encoding="utf-8")
+        self.assertIn("write-path-allowlist.py bug-report.json", agent)
+
+    def test_session_placeholder_resolves_from_env(self):
+        """{session} in --anchor-file resolves via RAPTOR_SESSION_PID,
+        so writer (raptor-fetch-anchor) and enforcer agree; outside
+        the launcher it degrades to 'default' (the pre-existing
+        single-session shape), never to a fetch allowed without an
+        anchor."""
+        import os
+        with TemporaryDirectory() as td:
+            anchor = Path(td) / "a-77.anchor"
+            anchor.write_text("https://tracker.example.org/t/1\n")
+            template = str(Path(td) / "a-{session}.anchor")
+            env = dict(os.environ)
+            env["RAPTOR_SESSION_PID"] = "77"
+            proc = subprocess.run(
+                [sys.executable, str(_HOOK), "--anchor-file", template],
+                input=json.dumps({"tool_name": "WebFetch", "tool_input":
+                                  {"url": "https://tracker.example.org/x"}}),
+                capture_output=True, text=True, check=False, env=env,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            # Wrong session's anchor is invisible: fail-closed.
+            env["RAPTOR_SESSION_PID"] = "88"
+            proc = subprocess.run(
+                [sys.executable, str(_HOOK), "--anchor-file", template],
+                input=json.dumps({"tool_name": "WebFetch", "tool_input":
+                                  {"url": "https://tracker.example.org/x"}}),
+                capture_output=True, text=True, check=False, env=env,
+            )
+            self.assertEqual(proc.returncode, 2)
+
+    def test_log_lines_escape_control_bytes(self):
+        """A hostile URL with an interior newline must not forge audit
+        rows in the decision log."""
+        with TemporaryDirectory() as td:
+            anchor = Path(td) / "a.anchor"
+            anchor.write_text("https://tracker.example.org/t/1\n")
+            _run_hook(["--anchor-file", str(anchor)],
+                      "https://tracker.example.org/x?d=a\nforged\tallow")
+            log = (Path(td) / "a.anchor.log").read_text(encoding="utf-8")
+            lines = [ln for ln in log.splitlines() if ln.strip()]
+            self.assertEqual(len(lines), 1, log)
+            self.assertIn("\\x0a", lines[0])
 
 
 if __name__ == "__main__":

@@ -217,6 +217,7 @@ MEMBER_IDS = (
     "M13-create-skill-persist-consent",
     "M14-openant-core-consent",
     "M15-validation-recovery-fork",
+    "M16-crash-fetch-host-consent",
 )
 
 
@@ -386,6 +387,16 @@ REGISTRY: dict[str, Entry] = {
              "continue, never a blocking ask",
         wire_tokens=("render them with non-printables escaped",
                      "gate with `libexec/raptor-may-ask` first",
+                     "Non-interactive fallback",),
+    ),
+    ".claude/agents/crash-analysis-agent.md": Entry(
+        lane="instruction", status="clean",
+        members=("M16-crash-fetch-host-consent",),
+        note="denied-attachment-host consent quotes a hostname and "
+             "denial excerpt derived from the hostile tracker page; "
+             "non-interactive fallback keeps the denial",
+        wire_tokens=("with non-printables escaped",
+                     "Gate with `libexec/raptor-may-ask`",
                      "Non-interactive fallback",),
     ),
     # ── instruction lane: adjudicated clean (no external content) ─

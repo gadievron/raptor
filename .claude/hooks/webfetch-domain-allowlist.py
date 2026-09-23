@@ -24,7 +24,12 @@ operator-supplied URLs on arbitrary vendor domains).
 
 With ``--anchor-file <path>`` the allowlist is derived at run time
 from an operator-provenance anchor file the dispatching orchestrator
-writes BEFORE the agent sees any fetched content:
+writes BEFORE the agent sees any fetched content. A literal
+``{session}`` in the path is replaced with this launcher session's
+``RAPTOR_SESSION_PID`` (``default`` outside the launcher), so
+concurrent sessions in the same repo get separate anchors — writer
+(libexec/raptor-fetch-anchor) and enforcer resolve the same
+placeholder from the same inherited environment. The file's shape:
 
   - line 1 (first non-empty, non-``#`` line): the operator-supplied
     URL (or bare hostname) — the anchor;
@@ -76,12 +81,25 @@ def _registrable_domain(host: str) -> str:
     return ".".join(labels[-2:])
 
 
+def _printable(value: str) -> str:
+    """Escape control bytes so a hostile URL cannot forge audit lines
+    (an interior newline in the fetched-page-derived URL would write
+    a fake decision row)."""
+    return "".join(
+        ch if 0x20 <= ord(ch) < 0x7F or ord(ch) >= 0xA0 else
+        f"\\x{ord(ch):02x}"
+        for ch in value
+    )
+
+
 def _log_decision(anchor_file: str, verdict: str, host: str, url: str) -> None:
     """Best-effort audit trail next to the anchor file."""
     stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
     try:
         with Path(f"{anchor_file}.log").open("a", encoding="utf-8") as fh:
-            fh.write(f"{stamp}\t{verdict}\t{host}\t{url}\n")
+            fh.write(
+                f"{stamp}\t{verdict}\t{_printable(host)}\t"
+                f"{_printable(url)}\n")
     except OSError:
         # Logging never changes the verdict; an unwritable log
         # directory must not turn a deny into a crash or an allow
@@ -166,6 +184,11 @@ def main(argv: list[str]) -> int:
                     "path; blocking the WebFetch call (fail-closed).\n"
                 )
                 return 2
+            if "{session}" in anchor_file:
+                import os
+                session = (os.environ.get("RAPTOR_SESSION_PID", "").strip()
+                           or "default")
+                anchor_file = anchor_file.replace("{session}", session)
         elif arg.startswith("--"):
             sys.stderr.write(
                 f"webfetch-domain-allowlist: unknown flag {arg!r}; "
