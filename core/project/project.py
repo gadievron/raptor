@@ -671,13 +671,20 @@ class Project:
         Default is sweep=False to avoid damaging active runs from read-only
         commands (status, findings, coverage).
         """
+        from core.project.findings_utils import safe_run_mtime
         from core.run.metadata import parse_timestamp_from_name
 
         def _sort_key(d: Path) -> str:
             ts = parse_timestamp_from_name(d.name)
             if ts:
                 return ts
-            return datetime.fromtimestamp(d.stat().st_mtime, tz=timezone.utc).isoformat()
+            # safe_run_mtime, not a bare d.stat(): the dir can vanish
+            # between _list_run_dirs and this sort key (a concurrent
+            # /project clean, manual rm) — the helper was built for
+            # exactly this crash and every consumer funnels through
+            # this enumerator. A vanished dir sorts oldest.
+            return datetime.fromtimestamp(
+                safe_run_mtime(d), tz=timezone.utc).isoformat()
 
         dirs = self._list_run_dirs()
         if sweep:

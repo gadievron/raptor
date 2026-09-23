@@ -886,3 +886,43 @@ class TestSweepOversizeMarker(unittest.TestCase):
         with patch("core.run.metadata._pid_alive", lambda pid: False):
             p.get_run_dirs(sweep=True)
         self.assertEqual(load_json(marker)["status"], "failed")
+
+
+class TestGetRunDirsVanishedDir(unittest.TestCase):
+    """A run dir removed between enumeration and the sort key (a
+    concurrent /project clean, manual rm) must sort oldest, not crash
+    every /project consumer out of the central enumerator —
+    safe_run_mtime exists for exactly this and the enumerator was the
+    one caller still running a bare stat."""
+
+    def setUp(self):
+        self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        base = Path(self.tmpdir.name)
+        out_base = base / "out" / "projects"
+        _ob = patch("core.project.project.DEFAULT_OUTPUT_BASE", out_base)
+        _ob.start()
+        self.addCleanup(_ob.stop)
+        self.mgr = ProjectManager(projects_dir=base / "projects")
+        self.target = str(base / "code")
+        Path(self.target).mkdir()
+
+    def test_vanishing_run_dir_sorts_oldest_instead_of_crashing(self):
+        import shutil
+
+        p = self.mgr.create("proj", self.target)
+        out = Path(p.output_dir)
+        # Non-timestamp names force the mtime fallback.
+        (out / "oddly-named-run").mkdir(parents=True)
+        (out / "another-odd-run").mkdir()
+
+        real_list = p._list_run_dirs
+
+        def listing_then_vanish():
+            dirs = real_list()
+            shutil.rmtree(out / "oddly-named-run")
+            return dirs
+
+        with patch.object(p, "_list_run_dirs", listing_then_vanish):
+            dirs = p.get_run_dirs()
+        self.assertEqual([d.name for d in dirs][-1], "oddly-named-run")
