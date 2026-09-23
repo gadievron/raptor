@@ -107,8 +107,13 @@ _MISSING: Any = object()
 # with a lazy ``[\s\S]*?`` body — quadratic on fence-open-without-
 # close inputs (seconds of CPU on a 200 KB hostile payload, even
 # under the input cap).
+# The language tag gates its own trailing whitespace: the naive
+# ``\s*(?P<lang>[..]*)\s*$`` put two whitespace spans around the
+# optional tag — quadratic on a fence-opening line ending in a
+# whitespace run. An absent tag now captures None instead of ''
+# and the consumers normalise (``or ""``).
 _FENCE_LINE_RE = re.compile(
-    r"^\s*(?P<delim>```|~~~)\s*(?P<lang>[a-zA-Z0-9_+-]*)\s*$"
+    r"^\s*(?P<delim>```|~~~)\s*(?:(?P<lang>[a-zA-Z0-9_+-]+)\s*)?$"
 )
 
 
@@ -346,14 +351,15 @@ def _extract_fence(text: str) -> tuple[str | None, str | None]:
             continue
         delim = m.group("delim")
         if first_open is None:
-            first_open = (i, m.group("lang"))
+            first_open = (i, m.group("lang") or "")
         # Close scan starts at i + 2: the body sits strictly BETWEEN
         # the fence lines, so an immediately-adjacent close leaves no
         # body line and the pair doesn't count as a complete fence
         # (the open-only fallback handles it, as before).
         for j in range(i + 2, n):
             if lines[j].lstrip().startswith(delim):
-                return m.group("lang"), "\n".join(lines[i + 1 : j])
+                return (m.group("lang") or "",
+                        "\n".join(lines[i + 1 : j]))
 
     if first_open is not None:
         # Truncated output — take everything after the opening fence.

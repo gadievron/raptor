@@ -944,13 +944,16 @@ def _is_response_shape_failure(error: Exception) -> bool:
 # start of the message (google-genai's "500 INTERNAL ..." shape), or
 # followed by its canonical reason phrase.
 _GATEWAY_STATUS_RE = re.compile(r"\b50[234]\b")
+# The optional colon gates its own trailing whitespace — the naive
+# ``\s*:?\s*`` put two whitespace spans around it, quadratic on a
+# status token followed by a whitespace run.
 _HTTP_500_STATUS_RE = re.compile(
-    r"\b(?:http|status|code)\s*:?\s*500\b"
+    r"\b(?:http|status|code)\s*(?::\s*)?500\b"
     r"|^\s*500\b"
     r"|\b500\s+internal\b",
 )
 _HTTP_400_STATUS_RE = re.compile(
-    r"\b(?:http|status|code)\s*:?\s*400\b"
+    r"\b(?:http|status|code)\s*(?::\s*)?400\b"
     r"|^\s*400\b"
     r"|\b400\s+(?:bad request|invalid_argument)\b",
 )

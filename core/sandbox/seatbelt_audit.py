@@ -146,13 +146,17 @@ _SANDBOX_EXEC_FALLBACK = "/usr/bin/sandbox-exec"
 # treated as in-scope-suspect by the scope gate — never silently
 # attributed to either candidate PID, and never silently dropped as
 # foreign. See parse_log_entry.
+# (?=\S) pins the whitespace run before the lazy name group (same
+# language — the lazy group absorbed any remainder): the naive
+# ``\s+(.+?)`` overlapped the run and the group — quadratic on a
+# 'Sandbox:'-opening log line ending in a whitespace run.
 _LOG_LINE_RE = re.compile(
-    r"Sandbox:\s+(.+?)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
+    r"Sandbox:\s+(?=\S)(.+?)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
 )
 # Greedy-name twin of _LOG_LINE_RE — identical structure, but (.+)
 # anchors the name to the LAST "(digits) <verdict>" occurrence.
 _LOG_LINE_RE_GREEDY = re.compile(
-    r"Sandbox:\s+(.+)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
+    r"Sandbox:\s+(?=\S)(.+)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
 )
 
 # Parse-ratio diagnostic thresholds (see LogStreamer.stop). When at

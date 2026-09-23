@@ -13,7 +13,11 @@ _ASSETS = Path(__file__).resolve().parent / "assets"
 # The banner's version line carries a ``__VERSION__`` placeholder rather than a
 # hardcoded number, so the displayed version is always the live one injected
 # here — never a stale stamp. Matches the box layout the release uses.
-_VERSION_LINE = re.compile(r"(║\s+Based on Claude Code - )\S+[^║]*║")
+# The version token is one non-whitespace char then the box fill —
+# the naive ``\S+[^║]*`` overlapped two unbounded repeats on
+# non-whitespace chars (quadratic on a crafted logo line). The one
+# dropped corner is a version token itself containing the box glyph.
+_VERSION_LINE = re.compile(r"(║\s+Based on Claude Code - )\S[^║]*║")
 
 
 def read_logo(version: str = "") -> str:

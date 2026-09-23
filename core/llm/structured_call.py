@@ -50,7 +50,10 @@ from typing import Any
 # decode error otherwise false-positives. The context arm accepts an
 # optional colon (`\s*:?\s*`): the genuine SDK shape is
 # ``Error code: 401 - ...`` and a plain `\s+` never matched it.
-_STATUS_40X = r"(?:http|status|code)\s*:?\s*40[13]\b"
+# The optional colon gates its own trailing whitespace — the naive
+# ``\s*:?\s*`` put two whitespace spans around it, quadratic on a
+# status token followed by a whitespace run.
+_STATUS_40X = r"(?:http|status|code)\s*(?::\s*)?40[13]\b"
 # google-genai renders errors as ``"<code> <STATUS>. {...}"`` —
 # message-leading status position plus the gRPC SCREAMING_SNAKE
 # reason vocabulary ("401 UNAUTHENTICATED", "403 PERMISSION_DENIED").
@@ -115,12 +118,14 @@ TIMEOUT_KEYWORDS_RE = re.compile(
 # wrappers emit — message-leading position, or the canonical reason
 # phrases, colon-separated or not) so unrelated numerics like
 # stack-trace "line 429, in foo" don't classify as a limit.
+# Optional colons gate their own trailing whitespace (the
+# ``\s*:?\s*`` chains were quadratic on whitespace runs).
 RATE_LIMIT_KEYWORDS_RE = re.compile(
     r"rate[_ -]limit(?:_error|ed|ing|s)?\b"
-    r"|\b(?:http|status|code|api\s+error)\s*:?\s*429\b"
-    r"|\b(?:http|status|code)\s*error\s*:?\s*429\b"
+    r"|\b(?:http|status|code|api\s+error)\s*(?::\s*)?429\b"
+    r"|\b(?:http|status|code)\s*error\s*(?::\s*)?429\b"
     r"|^\s*429\b"
-    r"|\b429\s*:?\s+(?:too many requests|resource_exhausted)\b",
+    r"|\b429(?:\s*:\s+|\s+)(?:too many requests|resource_exhausted)\b",
     re.IGNORECASE,
 )
 
