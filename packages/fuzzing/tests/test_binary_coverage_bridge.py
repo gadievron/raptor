@@ -234,3 +234,32 @@ class TestSancovPieBaseInference:
         assert doc["meta"]["inferred_pie_bases"] == {}
         funcs = set(doc["files"]["binary:t"]["functions"])
         assert funcs <= {"fn00", "fn01"}
+
+
+class TestChecklistLoaderBounded:
+    """checklist.json is read from the target-writable fuzz out dir —
+    the same boundary the module's own trace caps defend. The loader
+    must be byte-budgeted and shape-gated (a list-shaped file crashed
+    the .get() walk)."""
+
+    def test_list_shaped_checklist_returns_none(self, tmp_path):
+        from packages.fuzzing.coverage_bridge import _load_binary_checklist
+
+        (tmp_path / "checklist.json").write_text('["not", "a", "dict"]')
+        assert _load_binary_checklist(tmp_path) is None
+
+    def test_oversized_checklist_refused(self, tmp_path, monkeypatch):
+        import packages.fuzzing.coverage_bridge as cb
+
+        monkeypatch.setattr(cb, "MAX_CHECKLIST_BYTES", 64)
+        (tmp_path / "checklist.json").write_text(
+            '{"target_kind": "binary", "pad": "' + "x" * 256 + '"}')
+        assert cb._load_binary_checklist(tmp_path) is None
+
+    def test_valid_binary_checklist_still_loads(self, tmp_path):
+        from packages.fuzzing.coverage_bridge import _load_binary_checklist
+
+        (tmp_path / "checklist.json").write_text(
+            '{"target_kind": "binary", "files": []}')
+        cl = _load_binary_checklist(tmp_path)
+        assert cl is not None and cl["target_kind"] == "binary"
