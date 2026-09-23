@@ -267,3 +267,83 @@ def test_metadata_lands_in_function_context_block():
     assert 'kind="function-context"' in user
     assert "Class: Parser" in user
     assert "entry_point" in user
+
+
+# --- Threat-model context on the ORCHESTRATED lane ---
+#
+# All four orchestrated task classes (analysis, consensus, judge,
+# retry) build prompts via build_analysis_prompt_bundle_from_finding.
+# The operator's `/project set threat-model` must reach them exactly
+# like it reaches the sequential agent lane (agent.analyze_vulnerability
+# extends extra_blocks with threat_model_untrusted_blocks) — pre-fix it
+# never did, so verdicts silently diverged between --sequential and
+# default runs on threat-model-bearing projects.
+
+def _tm_finding(repo_path="/some/target/repo"):
+    f = {
+        "rule_id": "python.lang.security.command-injection",
+        "level": "error", "file_path": "src/app.py", "start_line": 10,
+        "message": "cmd injection", "code": "os.system(x)",
+        "metadata": {}, "dataflow": {},
+    }
+    if repo_path is not None:
+        f["repo_path"] = repo_path
+    return f
+
+
+def _tm_spy(monkeypatch, blocks):
+    import core.threat_model as tm
+    from packages.llm_analysis.prompts import analysis as pa
+
+    pa._THREAT_MODEL_BLOCK_CACHE.clear()
+    calls: list[str] = []
+
+    def spy(target):
+        calls.append(str(target))
+        return list(blocks)
+
+    monkeypatch.setattr(tm, "threat_model_untrusted_blocks", spy)
+    return calls
+
+
+def test_threat_model_block_present_in_orchestrated_bundle(monkeypatch):
+    from core.security.prompt_envelope import UntrustedBlock
+
+    sentinel = UntrustedBlock(
+        content="TM-SENTINEL-9f3a",
+        kind="operator-threat-model",
+        origin="project-threat-model",
+    )
+    calls = _tm_spy(monkeypatch, [sentinel])
+    bundle = build_analysis_prompt_bundle_from_finding(_tm_finding())
+    assert calls == ["/some/target/repo"]
+    assert "TM-SENTINEL-9f3a" in _user_message(bundle)
+
+
+def test_no_threat_model_adds_nothing(monkeypatch):
+    # Two-direction: a project without a threat model injects nothing.
+    calls = _tm_spy(monkeypatch, [])
+    bundle = build_analysis_prompt_bundle_from_finding(_tm_finding())
+    assert calls == ["/some/target/repo"]
+    assert "operator-threat-model" not in _user_message(bundle)
+
+
+def test_finding_without_repo_path_skips_lookup(monkeypatch):
+    calls = _tm_spy(monkeypatch, [])
+    build_analysis_prompt_bundle_from_finding(_tm_finding(repo_path=None))
+    assert calls == []
+
+
+def test_threat_model_lookup_memoised_per_repo(monkeypatch):
+    from core.security.prompt_envelope import UntrustedBlock
+
+    sentinel = UntrustedBlock(
+        content="TM-SENTINEL-9f3a",
+        kind="operator-threat-model",
+        origin="project-threat-model",
+    )
+    calls = _tm_spy(monkeypatch, [sentinel])
+    for _ in range(3):
+        bundle = build_analysis_prompt_bundle_from_finding(_tm_finding())
+        assert "TM-SENTINEL-9f3a" in _user_message(bundle)
+    assert calls == ["/some/target/repo"]  # one disk read, three bundles
