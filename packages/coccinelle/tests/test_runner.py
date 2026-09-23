@@ -2185,3 +2185,171 @@ class TestUndecodableRuleFiles:
             result = run_rule(target, bad)
         assert result.returncode == -1
         assert any("unreadable" in e for e in result.errors)
+
+
+class TestBatchedRuleCap:
+    """The 1 MiB rule-size OOM defence covers BOTH read paths: the
+    ≥2-rule batched loop used to read, concatenate, and run an
+    uncapped rule whenever it had a sibling."""
+
+    def _rules(self, tmp_path):
+        good = tmp_path / "good.cocci"
+        good.write_text(
+            "@good@\n@@\n- return 0;\n+ return 1;\n", encoding="utf-8",
+        )
+        big = tmp_path / "big.cocci"
+        big.write_text(
+            "// " + "x" * (runner_mod._RULE_MAX_BYTES + 100) + "\n",
+            encoding="utf-8",
+        )
+        return good, big
+
+    @pytest.mark.skipif(not is_available(), reason="spatch not installed")
+    def test_batched_refuses_oversized_rule_others_run(self, tmp_path):
+        target = tmp_path / "a.c"
+        target.write_text("int f(void) { return 0; }\n")
+        good, big = self._rules(tmp_path)
+        out = run_rules_batched(target, [good, big])
+        assert out["big"].returncode == -1
+        assert any("cap" in e for e in out["big"].errors)
+        assert out["good"].returncode == 0
+
+    def test_batched_cap_refusal_without_spawn(self, tmp_path):
+        """Both rules oversized → nothing reaches spatch at all."""
+        target = tmp_path / "a.c"
+        target.write_text("int f(void) { return 0; }\n")
+        _, big = self._rules(tmp_path)
+        big2 = tmp_path / "big2.cocci"
+        big2.write_text(
+            "// " + "y" * (runner_mod._RULE_MAX_BYTES + 100) + "\n",
+            encoding="utf-8",
+        )
+        spawned = []
+
+        def fake_runner(cmd, **kwargs):  # pragma: no cover - must not run
+            spawned.append(cmd)
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        out = run_rules_batched(
+            target, [big, big2],
+            subprocess_runner=fake_runner,
+        )
+        assert not spawned
+        assert all(r.returncode == -1 for r in out.values())
+
+
+class TestBatchedApiParity:
+    """run_rules_batched carries run_rule's include_dirs /
+    no_includes / defines semantics — pre-fix all three were
+    silently dropped, so rules needing them diverged between the
+    batched and per-rule lanes."""
+
+    def _two_rules(self, tmp_path):
+        a = tmp_path / "a.cocci"
+        a.write_text("@a@\n@@\n- return 0;\n+ return 1;\n",
+                     encoding="utf-8")
+        b = tmp_path / "b.cocci"
+        b.write_text("@b@\n@@\n- return 2;\n+ return 3;\n",
+                     encoding="utf-8")
+        return [a, b]
+
+    def test_flags_reach_the_batched_command(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        (target / "a.c").write_text("int f(void) { return 0; }\n")
+        inc = tmp_path / "hdrs"
+        inc.mkdir()
+        captured = {}
+
+        def fake_runner(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch.object(runner_mod, "is_available", return_value=True):
+            run_rules_batched(
+                target, self._two_rules(tmp_path),
+                include_dirs=[inc],
+                no_includes=True,
+                defines={"KERNEL": "1"},
+                subprocess_runner=fake_runner,
+            )
+        cmd = captured["cmd"]
+        assert "--no-includes" in cmd
+        assert "-I" in cmd and str(inc) in cmd
+        assert "-D" in cmd and "KERNEL=1" in cmd
+
+    def test_single_rule_fallback_forwards_flags(self, tmp_path):
+        target = tmp_path / "a.c"
+        target.write_text("int f(void) { return 0; }\n")
+        rule = self._two_rules(tmp_path)[0]
+        captured = {}
+
+        def fake_runner(cmd, **kwargs):
+            captured["cmd"] = list(cmd)
+            return MagicMock(stdout="", stderr="", returncode=0)
+
+        with patch.object(runner_mod, "is_available", return_value=True):
+            run_rules_batched(
+                target, [rule],
+                no_includes=True,
+                defines={"X": "2"},
+                subprocess_runner=fake_runner,
+            )
+        assert "--no-includes" in captured["cmd"]
+        assert "X=2" in captured["cmd"]
+
+
+class TestTimeoutElapsedMs:
+    """Timeout results carry the wall time actually spent — the
+    default 0 misread the SLOWEST invocations as instantaneous."""
+
+    def _ticker(self):
+        state = {"t": 1000.0}
+
+        def _mono():
+            state["t"] += 0.25
+            return state["t"]
+
+        return _mono
+
+    def test_run_rule_timeout_carries_elapsed(self, tmp_path):
+        import subprocess as sp
+        target = tmp_path / "a.c"
+        target.write_text("int f(void) { return 0; }\n")
+        rule = tmp_path / "r.cocci"
+        rule.write_text("@r@\n@@\n- return 0;\n+ return 1;\n",
+                        encoding="utf-8")
+
+        def fake_runner(cmd, **kwargs):
+            raise sp.TimeoutExpired(cmd, 1)
+
+        with patch.object(runner_mod, "is_available", return_value=True), \
+             patch.object(runner_mod.time, "monotonic",
+                          side_effect=self._ticker()):
+            result = run_rule(
+                target, rule, timeout=1, subprocess_runner=fake_runner,
+            )
+        assert result.returncode == -1
+        assert result.elapsed_ms > 0
+
+    def test_batched_timeout_carries_elapsed(self, tmp_path):
+        import subprocess as sp
+        target = tmp_path / "a.c"
+        target.write_text("int f(void) { return 0; }\n")
+        rules = []
+        for name in ("a", "b"):
+            r = tmp_path / f"{name}.cocci"
+            r.write_text(f"@{name}@\n@@\n- return 0;\n+ return 1;\n",
+                         encoding="utf-8")
+            rules.append(r)
+
+        def fake_runner(cmd, **kwargs):
+            raise sp.TimeoutExpired(cmd, 1)
+
+        with patch.object(runner_mod, "is_available", return_value=True), \
+             patch.object(runner_mod.time, "monotonic",
+                          side_effect=self._ticker()):
+            out = run_rules_batched(
+                target, rules, timeout=1, subprocess_runner=fake_runner,
+            )
+        assert all(r.elapsed_ms > 0 for r in out.values())

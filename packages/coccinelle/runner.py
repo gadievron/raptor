@@ -98,6 +98,13 @@ _SCRIPT_BLOCK_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 
+# Size cap on a .cocci rule body, shared by run_rule and the batched
+# loop. Operator-supplied today, but the cocci_utilization arc
+# proposes deriving rules from scanned-repo content — this prevents a
+# hostile rule from OOMing the runner via a multi-GiB file. Real
+# coccinelle rules are <100 KiB; 1 MiB is generous.
+_RULE_MAX_BYTES = 1 * 1024 * 1024
+
 # Structured-refusal message shared by run_rule / run_rules_batched.
 _SCRIPT_BLOCK_REFUSAL = (
     "Rule contains a scripting block (@script:/@initialize:/@finalize:) "
@@ -343,12 +350,7 @@ def run_rule(
             returncode=-1,
         )
 
-    # Size cap on the .cocci rule body. Operator-supplied today, but
-    # the cocci_utilization arc proposes deriving rules from
-    # scanned-repo content — this prevents a hostile rule from
-    # OOMing the runner via a multi-GiB file. Real coccinelle rules
-    # are <100 KiB; 1 MiB is generous.
-    _RULE_MAX_BYTES = 1 * 1024 * 1024
+    # Size cap on the .cocci rule body (see _RULE_MAX_BYTES).
     try:
         if rule.stat().st_size > _RULE_MAX_BYTES:
             return SpatchResult(
@@ -522,6 +524,10 @@ def run_rule(
                 rule=rule_name, rule_path=str(rule),
                 matches=partial_matches,
                 errors=[f"Timeout after {timeout}s (partial output captured)"],
+                # Wall time actually spent before the kill — leaving
+                # the default 0 misread the SLOWEST invocations as
+                # instantaneous in timing reports.
+                elapsed_ms=int((time.monotonic() - start) * 1000),
                 returncode=-1,
                 forged_markers=_warn_forged_markers(
                     partial_stdout, partial_stderr,
@@ -664,8 +670,11 @@ def run_rules_batched(
     target: Path,
     rules: list[Path],
     *,
+    include_dirs: list[Path] | None = None,
+    no_includes: bool = False,
     timeout: int = 300,
     env: dict[str, str] | None = None,
+    defines: dict[str, str] | None = None,
     subprocess_runner=None,
     allow_scripting: bool = False,
 ) -> dict[str, SpatchResult]:
@@ -680,6 +689,12 @@ def run_rules_batched(
     a scripting block gets a structured refusal result (no execution);
     the remaining rules still run.
 
+    ``include_dirs`` / ``no_includes`` / ``defines`` carry run_rule's
+    semantics (extra ``-I`` dirs, ``--no-includes`` for untrusted
+    targets, ``-D`` virtual bindings) — the batched path used to
+    silently drop all three, so rules that needed them diverged
+    between the batched and per-rule lanes.
+
     Returns a dict keyed by rule stem name → SpatchResult.
     Falls back to per-rule run_rule when only one rule is given.
     """
@@ -688,8 +703,12 @@ def run_rules_batched(
         return {}
     if len(rules) == 1:
         result = run_rule(
-            target, rules[0], timeout=timeout,
-            env=env, subprocess_runner=subprocess_runner,
+            target, rules[0],
+            include_dirs=include_dirs,
+            no_includes=no_includes,
+            timeout=timeout,
+            env=env, defines=defines,
+            subprocess_runner=subprocess_runner,
             allow_scripting=allow_scripting,
         )
         return {rules[0].stem: result}
@@ -710,6 +729,27 @@ def run_rules_batched(
     refused: dict[str, SpatchResult] = {}
     alias_of: dict[str, str] = {}
     for r in rules:
+        # Same per-rule size cap as run_rule (_RULE_MAX_BYTES) — the
+        # batched loop is the OTHER read path the OOM defence must
+        # cover; pre-fix a multi-GiB rule was read, concatenated, and
+        # handed to spatch uncapped whenever ≥2 rules batched.
+        try:
+            if r.stat().st_size > _RULE_MAX_BYTES:
+                refused[r.stem] = SpatchResult(
+                    rule=r.stem, rule_path=str(r),
+                    errors=[
+                        f"Rule file exceeds {_RULE_MAX_BYTES}-byte cap",
+                    ],
+                    returncode=-1,
+                )
+                continue
+        except OSError as e:
+            refused[r.stem] = SpatchResult(
+                rule=r.stem, rule_path=str(r),
+                errors=[f"Rule file stat failed: {e}"],
+                returncode=-1,
+            )
+            continue
         # Same structured degradation as run_rule: an undecodable or
         # unreadable rule gets its own error result; the remaining
         # rules still batch and run.
@@ -792,7 +832,15 @@ def run_rules_batched(
             cmd.extend(["--dir", str(target)])
         else:
             cmd.append(str(target))
+        if no_includes:
+            cmd.append("--no-includes")
+        if include_dirs:
+            for d in include_dirs:
+                cmd.extend(["-I", str(d)])
         cmd.append("--very-quiet")
+        if defines:
+            for k, v in defines.items():
+                cmd.extend(["-D", f"{k}={v}"])
 
         if target.is_file():
             spatch_cwd = target.parent
@@ -801,7 +849,7 @@ def run_rules_batched(
         else:
             spatch_cwd = None
         runner = _confined_default_runner(
-            subprocess_runner, spatch_cwd, spatch_scratch)
+            subprocess_runner, spatch_cwd, spatch_scratch, include_dirs)
 
         start = time.monotonic()
         try:
@@ -834,10 +882,14 @@ def run_rules_batched(
             by_rule = _demux_batch_matches(
                 all_matches, rule_stems, alias_of,
             )
+            batch_elapsed = int((time.monotonic() - start) * 1000)
             out = {
                 s: SpatchResult(
                     rule=s, matches=by_rule.get(s, []),
                     errors=[f"Batch timeout after {timeout}s"],
+                    # Same rationale as run_rule's timeout leg: the
+                    # slowest invocations must not report as 0 ms.
+                    elapsed_ms=batch_elapsed,
                     returncode=-1,
                     forged_markers=forged,
                 )
