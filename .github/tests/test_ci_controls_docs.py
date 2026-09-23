@@ -63,6 +63,32 @@ def test_ruff_tree_is_exempt_from_the_run_dedup() -> None:
     assert "needs.pre_check.outputs.should_skip != 'true'" in pr_block
 
 
+def test_codeql_push_runs_skip_the_squash_merge_dedup() -> None:
+    """GitHub's default-branch code-scanning alert baseline refreshes
+    only from analyses uploaded for refs/heads/main; the PR run's
+    upload targets the PR ref. codeql.yml's squash-merge dedup arm
+    therefore skipped the ONLY delivery to main's baseline on every
+    squash-landed PR — alert state went stale until the weekly cron,
+    while the workflow's own concurrency comment promised every main
+    commit a full analysis. Both directions: codeql.yml must carry
+    the exact-SHA arm only (a true re-run of the same commit already
+    uploaded for this ref), and tests.yml keeps its squash-merge arm
+    (its push runs have no push-only unique effect — same mechanism,
+    different consequence, per-mechanism disposition)."""
+    codeql = _read(".github/workflows/codeql.yml")
+    assert "commits/${SHA}/pulls" not in codeql, (
+        "codeql.yml regrew the squash-merge dedup arm — push runs to "
+        "main stop uploading and the code-scanning baseline starves"
+    )
+    assert codeql.count("head_sha=") == 1  # the exact-SHA arm stays
+    tests_wf = _read(".github/workflows/tests.yml")
+    assert "commits/${SHA}/pulls" in tests_wf, (
+        "tests.yml lost its squash-merge dedup arm — its push runs "
+        "are coverage-equivalent to the PR head run and the dedup is "
+        "deliberate there"
+    )
+
+
 def test_readme_links_to_ci_controls_doc() -> None:
     readme = _read("README.md")
     assert "## How RAPTOR checks itself" in readme

@@ -72,6 +72,13 @@ jobs:
             # 2. Squash-merge fallback — the push-to-main SHA is brand
             #    new, but GitHub links it to the source PR. Look up the
             #    PR's head SHA and check whether *that* already passed.
+            #    Push-only effect here: NONE — every job this
+            #    workflow runs on push also ran on the PR head, so the
+            #    dedup loses no coverage. Contrast codeql.yml, whose
+            #    push-run upload is the only feed of main's
+            #    code-scanning baseline and so carries no such arm
+            #    (and lint.yml, whose ruff-tree job is push-only and
+            #    exempts itself from the dedup).
             if [[ "$should_skip" == "false" && "$EVENT" == "push" ]]; then
               pr_head=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
                           --jq '[.[] | select(.merged_at != null)][0].head.sha // empty' || true)

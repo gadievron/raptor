@@ -51,7 +51,16 @@ permissions:
 
 jobs:
   # Skip the analyze + upload jobs if a previous successful run already
-  # covered this exact commit SHA. Same homebrew dedup pattern as tests.yml.
+  # covered this exact commit SHA. Exact-SHA arm ONLY — unlike
+  # tests.yml, this workflow deliberately carries NO squash-merge
+  # fallback: GitHub's default-branch code-scanning alert baseline
+  # refreshes only from analyses uploaded for refs/heads/main, and the
+  # PR run's upload targets the PR ref. Skipping the push-to-main run
+  # because the PR head's (byte-identical) tree already passed starved
+  # main's alert state — new alerts opening and fixed alerts closing —
+  # until the weekly cron or the next direct push, contradicting the
+  # concurrency comment above. A true re-run of the SAME commit stays
+  # deduped: its earlier run already uploaded for this ref.
   pre_check:
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -85,23 +94,10 @@ jobs:
               should_skip=true
               echo "Skipping: prior successful run ${dup} already covered SHA ${SHA}"
             fi
-            # 2. Squash-merge fallback — the push-to-main SHA is brand
-            #    new, but GitHub links it to the source PR. Look up the
-            #    PR's head SHA and check whether *that* already passed.
-            if [[ "$should_skip" == "false" && "$EVENT" == "push" ]]; then
-              pr_head=$(gh api "repos/${REPO}/commits/${SHA}/pulls" \
-                          --jq '[.[] | select(.merged_at != null)][0].head.sha // empty' || true)
-              if [[ -n "${pr_head:-}" ]]; then
-                dup=$(gh api -X GET "repos/${REPO}/actions/runs" \
-                        -f "head_sha=${pr_head}" -f "status=success" \
-                        --jq ".workflow_runs[] | select(.name==\"${WORKFLOW}\" and .id != ${RUN_ID}) | .id" \
-                      | head -n1 || true)
-                if [[ -n "${dup:-}" ]]; then
-                  should_skip=true
-                  echo "Skipping: source PR head ${pr_head} already passed in run ${dup}"
-                fi
-              fi
-            fi
+            # NO arm 2 here: the squash-merge fallback (see tests.yml)
+            # must not gate this workflow — the push run's upload is
+            # the ONLY delivery to main's code-scanning baseline (see
+            # the pre_check heading comment).
           fi
           echo "should_skip=${should_skip}" >> "$GITHUB_OUTPUT"
 
