@@ -206,3 +206,15 @@ def test_devcontainer_command_string_array_scans_per_element(
     )
     deps = parse_devcontainer_json(dc)
     assert sorted(d.name for d in deps) == ["django", "requests"]
+
+
+def test_fd_variable_redirect_prefix_stripped(tmp_path: Path) -> None:
+    """bash's ``{varname}>file`` fd-variable redirection is part of
+    the operator grammar too — its target must not surface."""
+    sh = tmp_path / "setup.sh"
+    sh.write_text(
+        "pip install uv==0.12.6 {log}> capture.txt\n",
+        encoding="utf-8",
+    )
+    deps = parse_shell_script(sh)
+    assert {d.name for d in deps} == {"uv"}

@@ -803,3 +803,26 @@ def test_arm_runner_labels_resolve_aarch64_with_base_libc(tmp_path: Path) -> Non
     assert ("aarch64", LibcVersion("glibc", (2, 35)), "linux") in rows
     assert ("aarch64", None, "windows") in rows
     assert not any(arch == "x86_64" for arch, _, _ in rows)
+
+
+def test_stacked_variable_runs_on_times_large_matrix_is_fast(
+    tmp_path: Path,
+) -> None:
+    """k variable runs-on lines times an m-item matrix list is k*m
+    runner registrations even with the list SCAN hoisted — quadratic
+    work for a set the dedup collapses. Items register once per file
+    (every add stamps the identical per-file source string, so the
+    resulting matrix is the same)."""
+    import time
+
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    items = ",".join(f"r{i}" for i in range(100000))
+    (wf_dir / "ci.yml").write_text(
+        ("runs-on: ${{ matrix.os }}\n" * 2000)
+        + f"os: [{items}]\n")
+    start = time.monotonic()
+    matrix = discover_platform_matrix(tmp_path)
+    assert time.monotonic() - start < 5.0
+    # The items were still registered (unknown labels → x86_64 rows).
+    assert len(matrix) >= 1
