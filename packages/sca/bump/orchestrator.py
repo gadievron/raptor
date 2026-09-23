@@ -894,15 +894,21 @@ def _enumerate_from_image_candidates(
     for inst in instructions:
         if inst.directive != "FROM":
             continue
-        args = inst.args.strip()
-        # ``FROM image AS stage`` — record the stage name + bump
-        # the image portion.
-        as_split = args.split(" AS ", 1)
-        if len(as_split) == 1:
-            as_split = args.split(" as ", 1)
-        image_ref_str = as_split[0].strip()
-        if len(as_split) > 1:
-            stage_names.add(as_split[1].strip())
+        # ``FROM [--platform=...] image [AS stage]``. Flags precede
+        # the ref (BuildKit ``--platform``); Dockerfile keywords are
+        # case-insensitive, so ``As`` / ``aS`` name a stage too —
+        # a two-way case-sensitive split left the flag glued to the
+        # ref (per-line "unparseable FROM ref" noise) and mixed-case
+        # aliases unrecorded (a later ``FROM <stage>`` then looked
+        # up as an image).
+        tokens = inst.args.strip().split()
+        while tokens and tokens[0].startswith("--"):
+            tokens.pop(0)
+        if not tokens:
+            continue
+        image_ref_str = tokens[0]
+        if len(tokens) >= 3 and tokens[1].upper() == "AS":
+            stage_names.add(tokens[2])
         # Reusing a prior stage by name — not a bump target.
         if image_ref_str in stage_names:
             continue

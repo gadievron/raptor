@@ -95,6 +95,28 @@ def test_dockerfile_with_unknown_arg_skipped(tmp_path: Path) -> None:
     assert report.skipped == []
 
 
+def test_from_walker_strips_platform_flag_and_mixed_case_as(
+    tmp_path: Path,
+) -> None:
+    """``FROM --platform=... image`` must not glue the flag to the
+    ref (pre-fix: per-line 'unparseable FROM ref' noise), and
+    Dockerfile keywords are case-insensitive — ``aS builder`` names
+    a stage whose later reuse must not be looked up as an image."""
+    (tmp_path / "Dockerfile").write_text(
+        "FROM --platform=linux/amd64 python:3.12-slim aS builder\n"
+        "FROM builder\n"
+    )
+    http = _StubHttp({})
+    report = run_bump(tmp_path, http=http)
+    reasons = [reason for _, _, reason in report.skipped]
+    assert not any("unparseable FROM ref" in r for r in reasons)
+    # Neither the flag-glued string nor the stage alias reached the
+    # image-ref path; the real image ref did (its upstream lookup
+    # fails against the empty stub, which is fine).
+    assert not any("--platform" in name for name, _, _ in report.skipped)
+    assert not any(name == "builder" for name, _, _ in report.skipped)
+
+
 def test_cve_mapped_arg_without_upstream_surfaces_in_skipped(
     tmp_path: Path,
 ) -> None:
