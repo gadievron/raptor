@@ -1492,3 +1492,43 @@ def test_module_has_no_dunder_import_spelling():
     import core.threat_model as tm
     src = Path(tm.__file__).read_text(encoding="utf-8")
     assert "__import__" not in src
+
+
+def test_category_cwe_map_covers_every_minted_category():
+    # The CWE->category fallback attaches evidence rows for operator
+    # review (never status flips). A hand-picked 4-entry map left
+    # secret_exposure / memory_corruption / unchecked_trust_boundary
+    # threats without category-tier evidence attachment. Closure is
+    # pinned against the same table _stride_for_category reads plus
+    # the sink-fallback category, so a new category cannot miss the
+    # map silently.
+    from core.threat_model import (
+        _CATEGORY_CWE_NUMBERS,
+        _CATEGORY_STRIDE,
+    )
+    minted = set(_CATEGORY_STRIDE) | {"unchecked_trust_boundary"}
+    assert set(_CATEGORY_CWE_NUMBERS) == minted
+
+
+def test_outcome_category_match_attaches_across_all_categories():
+    from core.threat_model import _outcome_match_kind
+    cases = [
+        ("CWE-78", "command_execution"),
+        ("CWE-89", "sql_injection"),
+        ("CWE-1336", "server_side_template_injection"),
+        ("CWE-22", "path_traversal"),
+        ("CWE-798", "secret_exposure"),
+        ("CWE-787", "memory_corruption"),
+        ("CWE-501", "unchecked_trust_boundary"),
+    ]
+    for cwe, category in cases:
+        kind = _outcome_match_kind(
+            {"finding_id": "F-OTHER", "cwe_id": cwe},
+            {"id": "T-1", "category": category},
+        )
+        assert kind == "category", f"{cwe} should match {category}"
+    # Non-member CWE never matches.
+    assert _outcome_match_kind(
+        {"finding_id": "F-OTHER", "cwe_id": "CWE-79"},
+        {"id": "T-1", "category": "command_execution"},
+    ) is None
