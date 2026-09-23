@@ -446,8 +446,10 @@ _REPORT_WRITER_FILES = (
     # decompilation). Terminal writer — sanitise_for_terminal grade.
     "libexec/raptor-cve-diff",
     # Enrich family: the corroborate-mismatch text is escaped at its
-    # core/run/metadata chokepoint; per-shim stage-failure relays are
-    # escaped in-file. Terminal writers — sanitise_for_terminal grade.
+    # core/run/metadata chokepoint; every stage-failure relay routes
+    # through the in-file _stage_failed helper, which owns the escape
+    # (never rely on the transitively-imported console formatter).
+    # Terminal writers — sanitise_for_terminal grade.
     "libexec/raptor-enrich-context-map",
     # Graph-store query CLI: node ids / labels / target paths come
     # from ingested run artifacts (scanned-tree names, LLM hypothesis

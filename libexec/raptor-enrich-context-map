@@ -44,11 +44,17 @@ logger = logging.getLogger(__name__)
 
 
 def _stage_failed(stage: str, exc: Exception) -> None:
-    """One loud stderr line per failed stage. The script configures no
-    logging, so a bare logger.debug record vanishes — a raising
-    substrate then looks like "no enrichments applied" with zero
-    diagnostic, while the standalone shims print explicit skip
-    reasons. Traceback detail stays on the debug channel."""
+    """One loud stderr line per failed stage, escaped in-file.
+
+    EVERY stage's failure lane must route through here. The script
+    configures no logging ITSELF — substrate imports happen to
+    install an escaping console formatter as a side effect, but a
+    lane's escaping (and its visibility: a bare logger record can
+    vanish, leaving "no enrichments applied" with zero diagnostic)
+    must not hang on a transitive import any refactor can drop. The
+    print below owns the terminal escape; the standalone shims print
+    explicit skip reasons. Traceback detail stays on the debug
+    channel."""
     from core.security.log_sanitisation import sanitise_for_terminal
     # Exception text can quote target-file/LLM-artifact bytes.
     print(f"raptor-enrich-context-map: {stage} failed: "
@@ -243,7 +249,7 @@ def main() -> int:
             if n_sinks:
                 summary.append(f"sinks: {n_sinks} entries")
         except Exception as e:
-            logger.warning("sink enrichment failed: %s", e, exc_info=True)
+            _stage_failed("sink enrichment", e)
 
     # Save unconditionally through the producer chokepoint: even a
     # no-op enrichment pass must not let an oversize or pretty-printed

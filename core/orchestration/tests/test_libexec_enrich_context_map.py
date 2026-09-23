@@ -175,3 +175,30 @@ class TestStageFailureDiagnostics:
         err = capsys.readouterr().err
         assert "callgraph enrichment failed" in err
         assert "callgraph substrate broke" in err
+
+
+class TestSinkStageUsesStageFailedChokepoint:
+    """Stage 6's failure lane must go through _stage_failed like
+    stages 1-5: the previous bare logger.warning relay was escaped
+    only by a console formatter installed as an import side effect —
+    an escape that any import-graph refactor silently drops — and it
+    bypassed the file's own diagnostic chokepoint."""
+
+    def test_sink_failure_prints_escaped_stage_line(
+        self, understand_dir, monkeypatch, capsys,
+    ):
+        hostile = "boom \x1b]0;PWNED\x07\x1b[2J end"
+
+        def raising_sink(context_map, target_path, **kw):
+            raise RuntimeError(hostile)
+
+        rc = _run(understand_dir, monkeypatch, raising_sink)
+        assert rc == 0
+        err = capsys.readouterr().err
+        assert ("raptor-enrich-context-map: sink enrichment failed: "
+                "RuntimeError") in err
+        # The escape is owned in-file: hostile bytes never reach the
+        # stream raw, regardless of what logging happens to have
+        # installed.
+        assert "\x1b" not in err
+        assert "\x07" not in err
