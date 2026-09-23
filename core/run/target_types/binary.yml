@@ -1,0 +1,26 @@
+name: binary
+description: |
+  Directory dominated by compiled artifacts (ELF / Mach-O / PE)
+  with no substantial source tree — a firmware dump, an extracted
+  package, a build-output drop. The pattern scanners (/scan,
+  /agentic) are source-tree tools and have nothing to work on
+  here; the binary lane is the right pipeline.
+
+  Detection signals are deliberately empty: this entry is selected
+  by the magic-byte sampler (``binary_dominant``) from the smart
+  project-create surface, never by the score-ranked ``detect()``.
+
+detection: {}
+
+semgrep_packs: {}
+
+attack_surface: {}
+
+pipeline:
+  recommended:
+    - binary
+    - understand-study
+
+budget_defaults: {}
+
+version: 1

@@ -71,6 +71,8 @@ in follow-on commits as those code paths get touched.
 from __future__ import annotations
 
 import fnmatch
+import os
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -336,6 +338,175 @@ def load(target_path: Path) -> CatalogEntry | None:
     return ranked[0][0]
 
 
+# ---------------------------------------------------------------------------
+# Binary-dominance detection (magic bytes, never extensions)
+# ---------------------------------------------------------------------------
+
+# Cap how many files get their first bytes read during
+# binary-dominance sampling. The capped ``_walk_target`` enumeration
+# already bounds the candidate list; this second cap bounds the
+# number of ``open()`` calls, so classification stays cheap even on
+# a 10k-file artifact drop.
+_BINARY_SAMPLE_CAP = 200
+
+# Minimum number of successfully examined files before a dominance
+# verdict is allowed. Without a floor, a single planted 2-byte
+# ``MZ`` file plus unreadable noise could classify a whole tree.
+_BINARY_MIN_EXAMINED = 3
+
+# First-bytes signatures of compiled artifacts. Prefix checks for
+# ELF, PE (the ``MZ`` DOS stub) and ar static archives (``.a`` —
+# a static-library drop is a compiled-artifact tree too); Mach-O
+# thin and 64-bit fat magics are exact 4-byte words in both byte
+# orders. The 32-bit fat Mach-O magic (``0xCAFEBABE``) is
+# deliberately absent — it collides with JVM class files, which
+# live in source-shaped trees; 32-bit fat binaries therefore
+# dilute the sample (documented residual). ``0xCAFEBABF``
+# (FAT_MAGIC_64) has no such collision and is included.
+_COMPILED_MAGIC_PREFIXES: tuple[bytes, ...] = (
+    b"\x7fELF",    # ELF
+    b"MZ",         # PE
+    b"!<arch>\n",  # ar static archive
+)
+_MACHO_MAGICS: frozenset[bytes] = frozenset({
+    b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe",  # Mach-O 32-bit
+    b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",  # Mach-O 64-bit
+    b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca",  # fat 64-bit (FAT_MAGIC_64)
+})
+
+# Extensions that mark a *source* tree. Used only to veto the
+# binary classification when a substantial source tree co-exists
+# with built artifacts (a ``build/`` dir inside a source repo must
+# keep the source-tree pipeline). Extension check only — no reads —
+# so the veto covers the full capped walk, not just the magic
+# sample.
+_SOURCE_EXTENSIONS: frozenset[str] = frozenset({
+    ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh",
+    ".rs", ".go", ".py", ".js", ".ts", ".jsx", ".tsx",
+    ".java", ".kt", ".scala", ".rb", ".php", ".cs",
+    ".swift", ".m", ".mm", ".pl", ".pm", ".lua", ".zig",
+})
+
+
+def _read_magic(path: Path) -> bytes | None:
+    """Read the first 8 bytes of a regular file. Returns None for
+    anything unreadable or non-regular — callers treat that as
+    "no evidence either way", never an error.
+
+    The target tree is untrusted, so non-regular files are refused
+    BEFORE any open(2): opening a hostile character device can
+    itself have side effects (canonically ``/dev/watchdog``, which
+    arms on open), and a FIFO would block a plain open. The
+    ``os.lstat`` check refuses symlinks and special files pre-open;
+    the ``O_NOFOLLOW`` + ``O_NONBLOCK`` open with a post-open
+    ``fstat``/``S_ISREG`` re-check stays as the TOCTOU belt for a
+    swap between the lstat and the open. Nothing is executed or
+    parsed beyond the 8-byte read.
+    """
+    try:
+        if not stat.S_ISREG(os.lstat(str(path)).st_mode):
+            return None
+    except OSError:
+        return None
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(str(path), flags)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        return os.read(fd, 8)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _is_compiled_artifact(head: bytes) -> bool:
+    """True when ``head`` (the file's first bytes) carries a
+    compiled-artifact signature (ELF / Mach-O / PE / ar)."""
+    for magic in _COMPILED_MAGIC_PREFIXES:
+        if head.startswith(magic):
+            return True
+    return head[:4] in _MACHO_MAGICS
+
+
+def binary_dominant(
+    target_path: Path, sample_cap: int = _BINARY_SAMPLE_CAP,
+) -> bool:
+    """True when ``target_path`` is dominated by compiled artifacts
+    (ELF / Mach-O / PE / ar magic bytes) and no substantial source
+    tree exists — a firmware dump, an extracted package, a
+    static-archive or build-output drop — or is itself a single
+    compiled-artifact file. Such targets give the source-tree
+    pattern scanners nothing to work on; consumers use this verdict
+    to steer operators to the binary lane instead.
+
+    Cheap and safe by construction: reuses the capped
+    ``_walk_target`` enumeration, reads only the first 8 bytes of
+    at most ``sample_cap`` files via ``_read_magic`` (list-based
+    filesystem ops only — nothing is executed or shell-quoted),
+    and skips unreadable files gracefully.
+    """
+    root = Path(target_path)
+    if root.is_file():
+        # Single-file target (``--target ./firmware.elf``): the
+        # walk-based census has nothing to walk, so classify by the
+        # file's own magic — same lstat/open hardening.
+        head = _read_magic(root)
+        return head is not None and _is_compiled_artifact(head)
+    paths = _walk_target(root)
+    if not paths:
+        return False
+    if len(paths) >= _MAX_DETECT_FILES:
+        # The walk hit its file cap, so the census is TRUNCATED —
+        # it saw only whichever files happened to enumerate first.
+        # A truncated census is not evidence: a hostile tree can
+        # front-load the cap with binary-magic names so no real
+        # source is ever walked, and the source veto below would
+        # then see zero sources on a genuine source repo (which
+        # --require-target-type would turn into a refused create).
+        # Refuse the binary verdict and fail toward the status-quo
+        # source pipeline.
+        return False
+    # Substantial-source veto: whatever the magic sample says, a
+    # real source tree keeps the source pipeline. Threshold: 3
+    # source files minimum, scaling to 10% of the walked tree so
+    # a handful of generated stubs in a large artifact drop can't
+    # veto, while any small source project always does.
+    source_count = sum(
+        1 for p in paths if Path(p).suffix.lower() in _SOURCE_EXTENSIONS
+    )
+    if source_count >= max(3, len(paths) // 10):
+        return False
+    # Evenly-strided sample so one crowded subdirectory doesn't
+    # monopolise the cap.
+    if sample_cap <= 0:
+        return False
+    if len(paths) > sample_cap:
+        step = len(paths) / sample_cap
+        sample = [paths[int(i * step)] for i in range(sample_cap)]
+    else:
+        sample = paths
+    resolved = root.resolve()
+    compiled = 0
+    examined = 0
+    for rel in sample:
+        head = _read_magic(resolved / rel)
+        if head is None:
+            continue  # unreadable / special / symlink — no evidence
+        examined += 1
+        if _is_compiled_artifact(head):
+            compiled += 1
+    # Dominance = a STRICT majority of the examined sample carries
+    # a compiled-artifact magic, and at least _BINARY_MIN_EXAMINED
+    # files were actually examined — a single planted magic file
+    # plus unreadable noise must never classify a tree.
+    return examined >= _BINARY_MIN_EXAMINED and compiled * 2 > examined
+
+
 def _reset_cache_for_tests() -> None:
     """Clear the loader cache. Test-only hook — production code
     treats the catalog as immutable per process."""
@@ -346,6 +517,7 @@ def _reset_cache_for_tests() -> None:
 __all__ = [
     "CatalogEntry",
     "all_entries",
+    "binary_dominant",
     "detect",
     "load",
     "load_by_name",

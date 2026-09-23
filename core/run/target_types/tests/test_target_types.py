@@ -11,6 +11,7 @@ from core.run.target_types import (
     CatalogEntry,
     _reset_cache_for_tests,
     all_entries,
+    binary_dominant,
     detect,
     load,
     load_by_name,
@@ -347,3 +348,257 @@ class TestTierAGenericEntries:
             e = load_by_name(n)
             for pack in (*e.semgrep_packs_default, *e.semgrep_packs_optional):
                 assert pack and "/" not in pack and not pack.startswith("p/")
+
+
+# ---------------------------------------------------------------------------
+# Binary-dominance detection (magic bytes)
+# ---------------------------------------------------------------------------
+
+
+_ELF_HEAD = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 8
+_MACHO_HEAD = b"\xcf\xfa\xed\xfe" + b"\x00" * 12
+_PE_HEAD = b"MZ\x90\x00" + b"\x00" * 12
+
+
+class TestBinaryDominant:
+    def test_elf_tree_is_binary_dominant(self, tmp_path):
+        for i in range(6):
+            (tmp_path / f"tool{i}").write_bytes(_ELF_HEAD)
+        assert binary_dominant(tmp_path) is True
+
+    def test_mixed_artifact_magics_count(self, tmp_path):
+        (tmp_path / "a").write_bytes(_ELF_HEAD)
+        (tmp_path / "b").write_bytes(_MACHO_HEAD)
+        (tmp_path / "c.exe").write_bytes(_PE_HEAD)
+        assert binary_dominant(tmp_path) is True
+
+    def test_source_tree_is_not_binary_dominant(self, tmp_path):
+        for i in range(6):
+            (tmp_path / f"mod{i}.c").write_text("int x;\n")
+        assert binary_dominant(tmp_path) is False
+
+    def test_artifacts_beside_source_tree_veto(self, tmp_path):
+        # Built artifacts INSIDE a source repo (a build/ dir of .o
+        # files): the substantial-source veto keeps the source
+        # pipeline whatever the magic sample says.
+        (tmp_path / "src").mkdir()
+        for i in range(8):
+            (tmp_path / "src" / f"mod{i}.c").write_text("int x;\n")
+        (tmp_path / "build").mkdir()
+        for i in range(4):
+            (tmp_path / "build" / f"mod{i}.o").write_bytes(_ELF_HEAD)
+        assert binary_dominant(tmp_path) is False
+
+    def test_empty_dir_is_not_binary_dominant(self, tmp_path):
+        assert binary_dominant(tmp_path) is False
+
+    def test_text_tree_is_not_binary_dominant(self, tmp_path):
+        (tmp_path / "README.md").write_text("hello\n")
+        (tmp_path / "data.bin").write_bytes(b"\x00\x01\x02\x03")
+        assert binary_dominant(tmp_path) is False
+
+    def test_unreadable_and_special_files_tolerated(self, tmp_path):
+        import os as _os
+        for i in range(5):
+            (tmp_path / f"tool{i}").write_bytes(_ELF_HEAD)
+        # Dangling symlink — open fails, skipped.
+        (tmp_path / "dangling").symlink_to(tmp_path / "nope")
+        # FIFO — must neither block nor count (S_ISREG refusal).
+        _os.mkfifo(tmp_path / "pipe")
+        # chmod-000 file — unreadable for non-root (skipped); a
+        # root runner reads 4 non-magic bytes instead, which is
+        # equally non-evidence. Either way the verdict holds.
+        locked = tmp_path / "locked"
+        locked.write_bytes(b"data")
+        locked.chmod(0)
+        try:
+            assert binary_dominant(tmp_path) is True
+        finally:
+            locked.chmod(0o600)
+
+    def test_sample_cap_bounds_magic_reads(self, tmp_path, monkeypatch):
+        import core.run.target_types as tt
+        for i in range(40):
+            (tmp_path / f"tool{i:02d}").write_bytes(_ELF_HEAD)
+        calls: list = []
+        real = tt._read_magic
+
+        def counting(path):
+            calls.append(path)
+            return real(path)
+
+        monkeypatch.setattr(tt, "_read_magic", counting)
+        assert binary_dominant(tmp_path, sample_cap=10) is True
+        assert len(calls) <= 10
+
+    def test_zero_sample_cap_refuses(self, tmp_path):
+        (tmp_path / "tool").write_bytes(_ELF_HEAD)
+        assert binary_dominant(tmp_path, sample_cap=0) is False
+
+    def test_default_sample_cap_pinned(self):
+        import core.run.target_types as tt
+        assert tt._BINARY_SAMPLE_CAP == 200
+        assert tt._BINARY_MIN_EXAMINED == 3
+
+    def test_exact_tie_is_not_dominant(self, tmp_path):
+        # STRICT majority: 2 compiled / 4 examined is a tie, not
+        # dominance.
+        (tmp_path / "a").write_bytes(_ELF_HEAD)
+        (tmp_path / "b").write_bytes(_PE_HEAD)
+        (tmp_path / "notes.txt").write_text("x\n")
+        (tmp_path / "README.md").write_text("y\n")
+        assert binary_dominant(tmp_path) is False
+
+    def test_minimum_examined_floor(self, tmp_path):
+        # One planted magic file plus one text file: fewer than 3
+        # examined files is not evidence.
+        (tmp_path / "planted").write_bytes(_PE_HEAD)
+        (tmp_path / "notes.txt").write_text("x\n")
+        assert binary_dominant(tmp_path) is False
+
+    def test_minimum_examined_floor_decisive(self, tmp_path):
+        # Two compiled files ALONE satisfy the strict majority
+        # (2/2) — ONLY the minimum-examined floor refuses here.
+        (tmp_path / "a").write_bytes(_ELF_HEAD)
+        (tmp_path / "b").write_bytes(_PE_HEAD)
+        assert binary_dominant(tmp_path) is False
+
+    def test_source_veto_decisive_at_floor(self, tmp_path):
+        # 10 compiled / 13 examined is a strict majority — ONLY the
+        # 3-source-file veto refuses here.
+        for i in range(10):
+            (tmp_path / f"tool{i}").write_bytes(_ELF_HEAD)
+        for i in range(3):
+            (tmp_path / f"mod{i}.c").write_text("int x;\n")
+        assert binary_dominant(tmp_path) is False
+
+    def test_source_veto_ten_percent_scaling_boundary(self, tmp_path):
+        # 40 walked files scale the veto threshold to 4: exactly 4
+        # source files veto, 3 do not (and the tree then classifies
+        # on its strict compiled majority).
+        for i in range(36):
+            (tmp_path / f"tool{i:02d}").write_bytes(_ELF_HEAD)
+        for i in range(4):
+            (tmp_path / f"mod{i}.c").write_text("int x;\n")
+        assert binary_dominant(tmp_path) is False
+        (tmp_path / "mod3.c").unlink()
+        (tmp_path / "tool36").write_bytes(_ELF_HEAD)
+        assert binary_dominant(tmp_path) is True
+
+    def test_walk_cap_truncation_refuses(self, tmp_path, monkeypatch):
+        # When the walk hits its file cap the census is truncated —
+        # a hostile tree can front-load binary-magic names so no
+        # real source is ever walked. Truncation must refuse the
+        # binary verdict.
+        import core.run.target_types as tt
+        monkeypatch.setattr(tt, "_MAX_DETECT_FILES", 10)
+        for i in range(12):
+            (tmp_path / f"tool{i:02d}").write_bytes(_ELF_HEAD)
+        assert binary_dominant(tmp_path) is False
+
+    def test_pe_only_tree(self, tmp_path):
+        for i in range(4):
+            (tmp_path / f"tool{i}.exe").write_bytes(_PE_HEAD)
+        assert binary_dominant(tmp_path) is True
+
+    def test_macho_only_tree(self, tmp_path):
+        (tmp_path / "a").write_bytes(b"\xfe\xed\xfa\xce" + b"\x00" * 12)
+        (tmp_path / "b").write_bytes(b"\xce\xfa\xed\xfe" + b"\x00" * 12)
+        (tmp_path / "c").write_bytes(_MACHO_HEAD)
+        (tmp_path / "d").write_bytes(b"\xca\xfe\xba\xbf" + b"\x00" * 12)
+        (tmp_path / "e").write_bytes(b"\xbf\xba\xfe\xca" + b"\x00" * 12)
+        assert binary_dominant(tmp_path) is True
+
+    def test_static_archive_tree(self, tmp_path):
+        # A drop of ar static libraries is a compiled-artifact tree.
+        for i in range(4):
+            (tmp_path / f"lib{i}.a").write_bytes(b"!<arch>\n" + b"x" * 8)
+        assert binary_dominant(tmp_path) is True
+
+    def test_live_out_of_tree_symlinks_not_counted(self, tmp_path):
+        # LIVE symlinks to an out-of-tree ELF: if they were followed
+        # (5 compiled / 8 examined) the tree would classify binary —
+        # the symlink refusal must keep them out of the census.
+        outside = tmp_path / "outside.elf"
+        outside.write_bytes(_ELF_HEAD)
+        tree = tmp_path / "tree"
+        tree.mkdir()
+        for i in range(3):
+            (tree / f"notes{i}.txt").write_text("x\n")
+        for i in range(5):
+            (tree / f"lnk{i}").symlink_to(outside)
+        assert binary_dominant(tree) is False
+
+    def test_fifo_refused_before_open(self, tmp_path, monkeypatch):
+        # The non-regular refusal must happen at the pre-open lstat:
+        # opening a hostile special file can itself have side
+        # effects, so _read_magic must never open(2) one at all.
+        import os as _os
+
+        import core.run.target_types as tt
+        fifo = tmp_path / "pipe"
+        _os.mkfifo(fifo)
+        opened: list = []
+        real_open = _os.open
+
+        def spy(path, flags, *args, **kwargs):
+            opened.append(str(path))
+            return real_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(tt.os, "open", spy)
+        assert tt._read_magic(fifo) is None
+        assert str(fifo) not in opened
+
+    def test_only_unreadable_tree_is_not_dominant(self, tmp_path):
+        # Nothing examinable — no evidence, never dominance.
+        import os as _os
+        for i in range(3):
+            _os.mkfifo(tmp_path / f"pipe{i}")
+        (tmp_path / "dangling").symlink_to(tmp_path / "nope")
+        assert binary_dominant(tmp_path) is False
+
+    def test_strided_sample_properties(self, tmp_path, monkeypatch):
+        # The sample is exactly the cap, duplicate-free, in walk
+        # order, and drawn from the walked tree.
+        import core.run.target_types as tt
+        for i in range(50):
+            (tmp_path / f"tool{i:02d}").write_bytes(_ELF_HEAD)
+        calls: list = []
+        real = tt._read_magic
+
+        def recording(path):
+            calls.append(path)
+            return real(path)
+
+        monkeypatch.setattr(tt, "_read_magic", recording)
+        assert binary_dominant(tmp_path, sample_cap=10) is True
+        rels = tt._walk_target(tmp_path)
+        resolved = tmp_path.resolve()
+        recorded = [p.relative_to(resolved).as_posix() for p in calls]
+        assert len(recorded) == 10
+        assert len(set(recorded)) == 10
+        positions = [rels.index(r) for r in recorded]
+        assert positions == sorted(positions)
+        assert all(0 <= pos < len(rels) for pos in positions)
+
+    def test_single_file_elf_target(self, tmp_path):
+        fw = tmp_path / "firmware.elf"
+        fw.write_bytes(_ELF_HEAD)
+        assert binary_dominant(fw) is True
+
+    def test_single_file_text_target(self, tmp_path):
+        f = tmp_path / "notes.txt"
+        f.write_text("hello\n")
+        assert binary_dominant(f) is False
+
+    def test_binary_entry_loads_but_is_never_score_ranked(self, tmp_path):
+        # binary.yml resolves by name with the binary-lane pipeline,
+        # but declares no positive signals — the score-ranked
+        # detect() must never surface it (selection is the
+        # magic-byte sampler's job).
+        e = load_by_name("binary")
+        assert e is not None
+        assert e.pipeline_recommended == ("binary", "understand-study")
+        for i in range(4):
+            (tmp_path / f"tool{i}").write_bytes(_ELF_HEAD)
+        assert all(entry.name != "binary" for entry, _ in detect(tmp_path))
