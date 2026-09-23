@@ -431,8 +431,12 @@ def compute_gaps(
     reviewable_kinds = _resolve_reviewable_kinds(include_kinds)
     consumed_covered: dict[str, int] = {}
 
-    # Per-file source cache for the parser-shape classifier. Missing
-    # target or unreadable files degrade to signature-only signals.
+    # Single-slot source cache for the parser-shape classifier: gap
+    # iteration is grouped per checklist file, so one slot hits like
+    # an unbounded map without letting peak memory track the hostile
+    # target's TOTAL tree size (entries were never evicted). Missing
+    # target, unreadable, or oversized files degrade to
+    # signature-only signals.
     _source_lines_cache: dict[str, list[str] | None] = {}
     _target_root = Path(target_path_str) if target_path_str else None
 
@@ -442,6 +446,7 @@ def compute_gaps(
         if _target_root is None or not line_start:
             return None
         if file_path not in _source_lines_cache:
+            _source_lines_cache.clear()
             source_lines: list[str] | None = None
             # Containment-checked like _read_spans: checklist paths
             # derive from the scanned tree, so an absolute path or a
@@ -450,11 +455,18 @@ def compute_gaps(
             resolved = safe_join(_target_root, file_path)
             if resolved is not None and resolved.is_file():
                 try:
-                    source_lines = (
-                        resolved
-                        .read_text(encoding="utf-8", errors="replace")
-                        .splitlines()
-                    )
+                    # Same oversized-file refusal as _read_spans: a
+                    # planted multi-hundred-MB file must degrade to
+                    # signature-only, not buffer wholesale (and a
+                    # capped PREFIX would silently misclassify
+                    # functions past the cap, so refuse outright).
+                    if (resolved.stat().st_size
+                            <= _MAX_HYDRATED_FILE_BYTES):
+                        source_lines = (
+                            resolved
+                            .read_text(encoding="utf-8", errors="replace")
+                            .splitlines()
+                        )
                 except OSError:
                     source_lines = None
             _source_lines_cache[file_path] = source_lines

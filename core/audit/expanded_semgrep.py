@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 from core.sarif import emit
+from core.source import read_text_capped
 
 from ._util import safe_join
 from .preprocessor_view import (
@@ -385,11 +386,16 @@ def build_expanded_corpus(
         resolved = safe_join(target_path, rel)
         if resolved is None or not resolved.is_file():
             continue
-        try:
-            raw = resolved.read_text(errors="replace")
-        except OSError:
+        # Capped like every migrated core/audit sibling: the
+        # candidate gate buffered whole files, so a planted
+        # multi-hundred-MB "source" cost its full size in peak
+        # memory before being screened. An oversized file is not a
+        # sensible expansion candidate — skip it.
+        got = read_text_capped(resolved, errors="replace")
+        if got is None:
             continue
-        if not has_macro_invocation(raw):
+        raw, truncated = got
+        if truncated or not has_macro_invocation(raw):
             continue
         corpus.candidates_total += 1
         if budget <= 0:

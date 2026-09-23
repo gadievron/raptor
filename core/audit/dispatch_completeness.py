@@ -591,8 +591,20 @@ def _get_source(
             fpath,
         )
         return None
-    try:
-        with full.open(encoding="utf-8", errors="replace") as f:
-            return f.read()
-    except OSError:
+    # Capped like every migrated core/audit sibling: unbounded
+    # f.read() let a planted multi-hundred-MB file cost its full
+    # size in peak memory. Refuse the truncated prefix outright —
+    # dispatch-arm analysis over a partial file would mint
+    # missing-case hypotheses about arms the cap cut off.
+    from core.source import read_text_capped
+    got = read_text_capped(full, errors="replace")
+    if got is None:
         return None
+    text, truncated = got
+    if truncated:
+        logger.debug(
+            "_get_source: %r exceeds the source read cap — "
+            "skipping dispatch analysis for it", fpath,
+        )
+        return None
+    return text
