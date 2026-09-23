@@ -807,3 +807,22 @@ class TestMultiCandidateWitness:
         ]
         rec = next(r for r in recs if r["verdict"] == "sanitizer_dominated")
         assert "candidate_sources" not in rec
+
+
+class TestCappedReads:
+    def test_oversized_file_reads_as_unreadable(self, tmp_path,
+                                                monkeypatch):
+        import core.analysis.sanitizer_cut_postpass as scp
+        monkeypatch.setattr(scp, "_MAX_SOURCE_READ_BYTES", 64)
+        big = tmp_path / "big.java"
+        big.write_text("x" * 65)
+        assert scp._read_source_capped(big) is None
+        # And the kinds scan degrades to the unreadable path (None),
+        # which the candidate locator turns into a refusal.
+        assert scp._scan_file_for_kinds(big, "java", ()) is None
+
+    def test_in_cap_file_reads_normally(self, tmp_path):
+        import core.analysis.sanitizer_cut_postpass as scp
+        small = tmp_path / "s.java"
+        small.write_text("class A {}")
+        assert scp._read_source_capped(small) == "class A {}"
