@@ -1924,7 +1924,12 @@ def run_orchestrator(
             try:
                 from packages.joern.lifecycle import joern_release
 
-                joern_release()
+                joern_release(
+                    token=getattr(
+                        joern_server, "_lifecycle_token", None,
+                    ),
+                    srv=joern_server,
+                )
             except Exception:
                 logger.debug("joern lifecycle release failed", exc_info=True)
         else:

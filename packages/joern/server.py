@@ -728,6 +728,12 @@ class JoernServer:
         # it a stuck-query restart brought an importCode session back
         # CPG-less while ensure_alive reported healthy.
         self._code_path: Path | None = None
+        # Lineage token attached by packages.joern.lifecycle at
+        # acquire time (None for privately booted servers): names the
+        # state-file lineage this handle belongs to, so release-time
+        # bookkeeping can refuse to touch a record that a concurrent
+        # session replaced.
+        self._lifecycle_token: str | None = None
         # Counts successful CPG loads (import_cpg / import_code, the
         # restart() re-import included). Consumers key per-graph memos
         # on it: entries computed against load N describe a graph that
