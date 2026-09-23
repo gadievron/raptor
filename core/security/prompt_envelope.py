@@ -348,6 +348,9 @@ _BRACKET_BOUNDARY_ARMS = "".join(
     for name in BLOCK_BOUNDARY_TAG_NAMES
 )
 
+# The optional slash gates its own trailing whitespace in the three
+# tag arms ((?:/\s*)?) — the ``\s*/?\s*`` chains were quadratic on
+# a '<'-opening run in untrusted content.
 _ENVELOPE_TAG_RE = re.compile(
     # Spelling note: this pattern neutralises ASCII spellings only. A
     # fullwidth/homoglyph respelling of a closing tag (`＜/untrusted＞`)
@@ -368,9 +371,9 @@ _ENVELOPE_TAG_RE = re.compile(
     # `<\s*/?` (not `</?`): whitespace is legal between `<` and `/` in
     # HTML/XML-ish parsers, so `< /untrusted-XXXX>` reads as a closing
     # tag downstream while a `</?` pattern passes it through raw.
-    r'<\s*/?\s*untrusted'
-    r'|<\s*/?\s*slots?\b'
-    r'|<\s*/?\s*document(?:_content)?\b'
+    r'<\s*(?:/\s*)?untrusted'
+    r'|<\s*(?:/\s*)?slots?\b'
+    r'|<\s*(?:/\s*)?document(?:_content)?\b'
     # Bracket-style block boundaries — DERIVED from
     # BLOCK_BOUNDARY_TAG_NAMES above ([MARK_INPT] from the
     # PASSTHROUGH envelope, [threat-model-context source=…] from the
