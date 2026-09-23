@@ -157,12 +157,24 @@ def view(
         return None
     fi = matches[0]
 
-    # Calls — filter file-wide graph by the function's line range.
-    calls_made = _filter_calls(content, language, fi.line_start, fi.line_end)
+    # parse_origin: the call-graph and return walkers parse with
+    # tree-sitter; a budget-abandoned parse must name this file on
+    # the run's analysis-gap trail. (Function discovery above
+    # attributes itself — the extractor knows the path.)
+    from core.run.gaps import parse_origin
+    with parse_origin(path):
+        # Calls — filter file-wide graph by the function's line range.
+        calls_made = _filter_calls(
+            content, language, fi.line_start, fi.line_end,
+        )
 
-    # Returns + inline asm.
-    returns = _walk_returns(content, language, fi.line_start, fi.line_end)
-    has_asm = _has_inline_asm(content, language, fi.line_start, fi.line_end)
+        # Returns + inline asm.
+        returns = _walk_returns(
+            content, language, fi.line_start, fi.line_end,
+        )
+        has_asm = _has_inline_asm(
+            content, language, fi.line_start, fi.line_end,
+        )
 
     return FunctionView(
         function=fi.name,

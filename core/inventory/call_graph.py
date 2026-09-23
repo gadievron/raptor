@@ -3890,7 +3890,8 @@ def extract_call_graph_php(
             lang_fn = getattr(ts_php, "language_php", None) or ts_php.language()
             if callable(lang_fn):
                 lang_fn = lang_fn()
-            parser = _PHPParser(_PHPLanguage(lang_fn))
+            from core.inventory._ts_cache import bounded
+            parser = bounded(_PHPParser(_PHPLanguage(lang_fn)), label="php")
             tree = parser.parse(content.encode("utf-8", errors="replace"))
         except Exception as e:                              # noqa: BLE001
             logger.debug("call_graph: PHP parse failed (%s)", e)

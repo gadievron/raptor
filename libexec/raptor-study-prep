@@ -692,8 +692,12 @@ def _get_ts_parser():
     try:
         import tree_sitter
         import tree_sitter_c
+        from core.inventory._ts_cache import bounded
         lang = tree_sitter.Language(tree_sitter_c.language())
-        return tree_sitter.Parser(lang)
+        # Bounded like every other tree-sitter parser: the study
+        # pipeline parses untrusted target C content, and an
+        # unbudgeted parse hangs uninterruptibly on crafted input.
+        return bounded(tree_sitter.Parser(lang), label="c")
     except Exception:  # noqa: BLE001 - any grammar failure means "no AST"
         return None
 
@@ -1697,9 +1701,20 @@ def _scan_file_result(
     if extract_protos:
         parser = _get_ts_parser_for_thread() if use_ts else None
         if parser is not None:
-            protos = _extract_prototypes_ts(
-                content.encode("utf-8", errors="replace"), rel, parser,
-            )
+            try:
+                from core.run.gaps import parse_origin
+                with parse_origin(rel):
+                    protos = _extract_prototypes_ts(
+                        content.encode("utf-8", errors="replace"), rel,
+                        parser,
+                    )
+            except Exception:  # noqa: BLE001 - degrade like grammar-absent
+                # A budget-abandoned parse already emitted its loud
+                # gap record naming this file; prototypes fall back
+                # to the same regex path a missing grammar takes.
+                protos = _extract_prototypes_regex(
+                    content, rel, _nl_index=nl_index,
+                )
         else:
             protos = _extract_prototypes_regex(content, rel, _nl_index=nl_index)
 

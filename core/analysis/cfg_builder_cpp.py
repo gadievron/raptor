@@ -1513,7 +1513,11 @@ def build_cpp_intraproc_cfg(
     else:
         file_path = "<string>"
         source_text = source
-    tree = parser.parse(source_text.encode("utf-8", errors="replace"))
+    # parse_origin: a budget-abandoned parse must name this file on
+    # the run's analysis-gap trail.
+    from core.run.gaps import parse_origin
+    with parse_origin(file_path):
+        tree = parser.parse(source_text.encode("utf-8", errors="replace"))
     fn_def = _find_function_definition(tree.root_node, function_name)
     if fn_def is None:
         return None

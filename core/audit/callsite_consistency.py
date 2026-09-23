@@ -432,7 +432,11 @@ def parse_source_cached(file_path: str, source: str):
         result = (None, None)
     else:
         src_bytes = source.encode("utf-8", errors="replace")
-        result = (parser.parse(src_bytes), lang)
+        # parse_origin: a budget-abandoned parse must name this
+        # file on the run's analysis-gap trail.
+        from core.run.gaps import parse_origin
+        with parse_origin(file_path):
+            result = (parser.parse(src_bytes), lang)
     if len(_parse_cache) >= _PARSE_CACHE_MAX:
         _parse_cache.popitem(last=False)
     _parse_cache[key] = result
