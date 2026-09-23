@@ -1334,11 +1334,23 @@ def _lexical_validator_in_branch(
 
 def find_validator_line(
     source_text: str, spec: ValidatorSpec, *, language: str = "python",
+    sink_line: int | None = None,
 ) -> int | None:
     """Locate the validator's 1-based line number in the post-fix source
     text.  Matches by the stripped line-text the extractor saved on the
-    spec; first CODE occurrence wins (multiple matches are unusual and
-    any of them would gate the sink the same way).
+    spec.
+
+    Occurrence selection mirrors Tier 1B's
+    ``_find_best_validator_line``: with ``sink_line`` given, prefer
+    CODE occurrences strictly before the sink — for Python, among
+    those in the SAME function as the sink — picking the closest
+    (largest line < sink_line).  First-match-wins (the historical
+    rule, kept for callers without a sink) could bind an occurrence
+    in an unrelated function and fail the dominance check even when a
+    later occurrence is the actual sanitizer — a pure yield loss, the
+    verdict then lands NOT_APPLICABLE rather than SOUND.  When no
+    occurrence precedes the sink, the first occurrence is returned
+    and the dominance check downstream refuses it.
 
     Anchored against the comment/string-blanked view of the file: a
     line whose validator text lives inside a comment or a multi-line
@@ -1353,6 +1365,7 @@ def find_validator_line(
     needle = spec.source_line
     lines = source_text.splitlines()
     view = code_view_lines(source_text, language)
+    candidates: list[int] = []
     for idx, ln in enumerate(lines):
         if ln.strip() != needle:
             continue
@@ -1361,8 +1374,27 @@ def find_validator_line(
             ln, language, code_view=view_ln,
         ) is None:
             continue
-        return idx + 1
-    return None
+        candidates.append(idx + 1)
+    if not candidates:
+        return None
+    if sink_line is None:
+        return candidates[0]
+    before = [ln for ln in candidates if ln < sink_line]
+    if not before:
+        return candidates[0]
+    if language == "python":
+        try:
+            tree = ast.parse(source_text)
+        except SyntaxError:
+            return max(before)
+        sink_fn = _function_containing(tree, sink_line)
+        if sink_fn is not None:
+            same_fn = [ln for ln in before
+                       if _function_containing(tree, ln) is sink_fn]
+            if same_fn:
+                return max(same_fn)
+        return max(before)
+    return max(before)
 
 
 def _target_rebinds(target: ast.AST, var_name: str) -> bool:
@@ -2917,7 +2949,9 @@ def try_tier0(
             spec=spec,
         )
     source_text = got[0]
-    line = find_validator_line(source_text, spec, language=language)
+    line = find_validator_line(
+        source_text, spec, language=language, sink_line=sink_line,
+    )
     if line is None:
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
