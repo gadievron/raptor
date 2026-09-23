@@ -310,6 +310,16 @@ binaries unrelated to the source. A planted ELF for a different project
 is dropped with a warning rather than driving every source function to
 `absent`.
 
+Operator-declared binaries (explicit `--binary` flags and the project
+binary store) are exempt from the floor — the declaration is the trust
+assertion the drop warning names, so a low-match declared binary is
+kept with a warning instead. When the floor drops a non-declared
+binary that produced evidence, the run's `absent` verdicts lose
+suppression authority (`suppression_grade: false` per surviving
+record, `any_floor_dropped` in the summary): "absent only when EVERY
+declared binary lacks it" must not silently narrow to "every
+surviving binary".
+
 ### Precision
 
 The `absent` verdict is corpus-validated before it is allowed to
