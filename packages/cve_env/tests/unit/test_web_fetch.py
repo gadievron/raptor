@@ -170,11 +170,14 @@ def test_resolve_hostname_safe_empty_sockaddr_skipped() -> None:
         assert _resolve_hostname_safe("example.com") is None
 
 
-def test_resolve_hostname_safe_unparseable_ip_skipped() -> None:
+def test_resolve_hostname_safe_unparseable_ip_fails_closed() -> None:
+    """An unparseable resolved address can't be vetted, so the guard must
+    reject the hostname — skipping it (the old behaviour) let the
+    transport connect to an address the guard never classified."""
     infos = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not-an-ip", 0)),
              *PUBLIC_ADDRINFO]
     with patch.object(wf.socket, "getaddrinfo", return_value=infos):
-        assert _resolve_hostname_safe("example.com") is None
+        assert _resolve_hostname_safe("example.com") is not None
 
 
 # ── transport behaviour via the core.http double ─────────────────────────
@@ -527,3 +530,32 @@ def test_rebinding_hostname_blocked_at_guard_time_still_blocked() -> None:
     assert r.ok is False
     assert "SSRF" in r.reason
     assert not fake.calls
+
+
+# ── RFC 6598 shared address space + unvettable-resolution fail-close ──
+
+
+@pytest.mark.parametrize("host", ["100.64.0.1", "100.127.255.254"])
+def test_rfc6598_shared_address_space_blocked(host: str) -> None:
+    """100.64.0.0/10 (CGNAT / cloud-provider VPC-internal services) is
+    deliberately not `is_private`, so the named-class list admitted the
+    whole /10. `not is_global` closes it."""
+    assert _is_loopback_or_private(host) is True
+
+
+@pytest.mark.parametrize("host", ["100.63.255.255", "100.128.0.1", "8.8.8.8"])
+def test_rfc6598_neighbours_stay_public(host: str) -> None:
+    assert _is_loopback_or_private(host) is False
+
+
+def test_vet_hostname_unparseable_resolved_address_fails_closed() -> None:
+    """A resolved address string ipaddress cannot parse used to be
+    skipped (`continue`) — the request then proceeded on an address the
+    guard never vetted. It must reject instead."""
+    fake_infos = [
+        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("not-an-ip", 80)),
+    ]
+    with patch.object(wf.socket, "getaddrinfo", return_value=fake_infos):
+        reason, infos = wf._vet_hostname("weird.example.com", 80)
+    assert reason is not None and "fail closed" in reason
+    assert infos == []
