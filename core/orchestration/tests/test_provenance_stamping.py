@@ -199,7 +199,7 @@ def _strings_of(obj):
             yield from _strings_of(value)
 
 
-class TestImportGraphAttackPathsStamps(unittest.TestCase):
+class TestImportGraphAttackPathsDefangsHostileLabels(unittest.TestCase):
     """The graph lane routes through the same chokepoint as its siblings.
 
     Hostile-labelled graph paths (terminal-escape bytes in label,
