@@ -733,3 +733,41 @@ class TestReadSourceContext:
         out = self._v().read_source_context(
             str(outside), 1, repo_root=repo)
         assert out == ""
+
+
+class TestSourceContextLineModel:
+    r"""read_source_context speaks CodeQL's \n line model.
+
+    The line number comes from CodeQL SARIF (\n-counted); a
+    splitlines() view put the >>> marker and the whole context window
+    on the wrong lines after any in-literal form feed.
+    """
+
+    def _validator(self):
+        from unittest.mock import MagicMock
+
+        return DataflowValidator(MagicMock())
+
+    def test_marker_lands_on_the_reported_line(self, tmp_path):
+        src = tmp_path / "vuln.c"
+        src.write_bytes(
+            'const char *P = "a\x0c\x0cb";\n'
+            "void safe(void) {}\n"
+            "void handle(char *d, const char *s) {\n"
+            "    strcpy(d, s);\n"
+            "}\n".encode()
+        )
+        out = self._validator().read_source_context(
+            str(src), 4, context_lines=1, repo_root=tmp_path,
+        )
+        marked = [ln for ln in out.split("\n") if ln.startswith(">>>")]
+        assert len(marked) == 1
+        assert "strcpy(d, s);" in marked[0]
+
+    def test_clean_twin_content_unchanged(self, tmp_path):
+        src = tmp_path / "vuln.c"
+        src.write_text("int a;\nint b;\nint c;\n")
+        out = self._validator().read_source_context(
+            str(src), 2, context_lines=1, repo_root=tmp_path,
+        )
+        assert ">>>    2: int b;" in out
