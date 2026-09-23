@@ -1284,8 +1284,16 @@ def _fortified_dest_is_variable_size(
     # Scope: scan up to 200 lines before the sink (typical function
     # body); we don't have function-bounds info here so use a bounded
     # window. Look for `dest_var = <dyn-alloc>(`.
+    # The optional cast paren gates its own whitespace and the
+    # filler expression is \S-headed: the naive
+    # ``\(?\s*[^=;]*?`` overlapped the lazy filler and the
+    # preceding whitespace span, so an assignment line ending in a
+    # long whitespace run with no allocator call cost every split of
+    # the run — cubic in the line length. Match set unchanged (the
+    # greedy ``\s*`` already owned the leading whitespace).
     assign_pat = re.compile(
-        r"\b" + re.escape(dest_var) + r"\s*=\s*\(?\s*[^=;]*?"
+        r"\b" + re.escape(dest_var) + r"\s*=\s*(?:\(\s*)?"
+        r"(?:[^=;\s][^=;]*?)?"
         + _DYNAMIC_ALLOCATORS_PATTERN.pattern[:-2] + r"\("
     )
     start = max(0, sink_line - 200)
@@ -2015,8 +2023,15 @@ def _function_body_via_inventory(
     return None
 
 
+# Bounded return-type window with a gated pointer star: the naive
+# ``[A-Za-z_][A-Za-z_0-9*\s]*?\s+\*?\s*`` chained overlapping
+# whitespace-capable spans, so a declaration-shaped line ending in a
+# long token run with no paren cost every split of the run — cubic
+# even at the anchored match call. 256 chars sits far above real
+# return types (trade-off both directions: larger admits absurd
+# types, smaller drops them).
 _FN_DEF_OPEN_RE = re.compile(
-    r"^\s*(?:[A-Za-z_][A-Za-z_0-9*\s]*?\s+\*?\s*)?"  # optional return type
+    r"^\s*(?:[A-Za-z_][A-Za-z_0-9*\s]{0,256}?\s+(?:\*\s*)?)?"
     r"(?P<name>[A-Za-z_][A-Za-z_0-9]*)\s*\("
 )
 
