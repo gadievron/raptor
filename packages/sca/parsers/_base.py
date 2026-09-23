@@ -160,6 +160,15 @@ def iter_walk_up(
     if cur.is_file():
         cur = cur.parent
     bound = _safe_read.active_scan_root()
+    # A resolved start OUTSIDE the declared scan root (reachable via
+    # the dir-symlink discovery class) made the ``cur == bound`` stop
+    # condition vacuous — the walk proceeded past the root toward
+    # ``/`` with only the depth cap in the way, eligible to adopt
+    # out-of-tree config files. Out-of-root starts don't get a walk
+    # at all: nothing above them is inside the operator's scope.
+    if (bound is not None and cur != bound
+            and bound not in cur.parents):
+        return
     visited: set[Path] = set()
     first = True
     yielded = 0

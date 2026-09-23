@@ -365,3 +365,20 @@ def test_capture_captures_cannot_read_refusal(tmp_path: Path) -> None:
     assert len(failures) == 1
     assert failures[0].path == blocked
     assert "cannot" in failures[0].reason
+
+
+def test_nested_capture_restores_outer_collector(tmp_path: Path) -> None:
+    """A nested capture must restore the OUTER collector on exit, not
+    clear the slot — clearing silently dropped every failure logged
+    after the inner block."""
+    bad = tmp_path / "pom.xml"
+    bad.write_text("<project><unclosed>", encoding="utf-8")
+    from packages.sca.parsers import pom
+
+    with capture_parse_failures() as outer:
+        with capture_parse_failures() as inner:
+            pom.parse(bad)
+        # After the inner block, failures must still route to OUTER.
+        pom.parse(bad)
+    assert len(inner) == 1
+    assert len(outer) >= 1

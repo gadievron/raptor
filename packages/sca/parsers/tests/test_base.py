@@ -179,3 +179,24 @@ def test_gradle_catalog_stops_at_scan_root(tmp_path) -> None:
     inner.write_text('[versions]\nokio = "3.9.0"\n')
     with scan_root_context(target):
         assert _resolve_catalog(script) is not None
+
+
+def test_iter_walk_up_out_of_root_start_yields_nothing(tmp_path) -> None:
+    """A resolved start OUTSIDE the declared scan root (dir-symlink
+    discovery can produce one) made the ``cur == bound`` stop vacuous
+    — the walk ran past the root toward ``/`` with only the depth cap
+    in the way. Out-of-root starts get no walk at all."""
+    from packages.sca.parsers._base import iter_walk_up
+    from packages.sca.parsers._safe_read import scan_root_context
+
+    root = tmp_path / "scanroot"
+    root.mkdir()
+    outside = tmp_path / "elsewhere" / "deep"
+    outside.mkdir(parents=True)
+    with scan_root_context(root):
+        assert list(iter_walk_up(outside)) == []
+    # Inside-root walks are unaffected.
+    inner = root / "a" / "b"
+    inner.mkdir(parents=True)
+    with scan_root_context(root):
+        assert list(iter_walk_up(inner)) == [inner, inner.parent, root]
