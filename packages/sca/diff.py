@@ -291,7 +291,11 @@ def _canonical_key(row: FindingRow) -> tuple[str, ...] | None:
              if isinstance(a, str) and a.upper().startswith("CVE-")),
             None,
         )
-        adv_key = (cve.upper() if cve else (adv.get("id") or ""))
+        # ``.upper()`` on BOTH arms: distro-secdb / kernel-CNA
+        # advisories are CVE-primary (the id IS the CVE, no
+        # self-alias), so a feed-case drift on the primary id would
+        # otherwise read as new+resolved instead of persistent.
+        adv_key = (cve or adv.get("id") or "").upper()
         if not adv_key:
             return None
         return ("vuln", eco, name, adv_key)

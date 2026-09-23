@@ -610,3 +610,15 @@ def test_md_cell_neutralises_link_and_image_syntax() -> None:
     cell2 = diff.md_cell("[phish](https://evil.example)")
     assert "[phish]" not in cell2
     assert "\\[phish\\]" in cell2
+
+
+def test_canonical_key_case_folds_cve_primary_id() -> None:
+    """Distro-secdb / kernel-CNA advisories are CVE-PRIMARY (the id IS
+    the CVE, no self-alias). A feed-case drift on the primary id must
+    read as the same persistent finding — not a spurious new+resolved
+    pair (which fails severity-gated PRs on nothing). The alias arm
+    two lines up already folds case; same discipline."""
+    a = [_vuln_row(advisory_id="CVE-2023-1111", aliases=[])]
+    b = [_vuln_row(advisory_id="cve-2023-1111", aliases=[])]
+    d = diff.compute_delta(a, b)
+    assert d.new == [] and d.resolved == []
