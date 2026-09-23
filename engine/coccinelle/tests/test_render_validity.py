@@ -266,6 +266,52 @@ def test_no_unknown_vocab_buckets(rule):
     )
 
 
+@pytest.mark.parametrize(
+    "rule", _VOCAB_RULES, ids=lambda p: p.stem,
+)
+def test_every_marker_splices(rule):
+    """Every ``@vocab`` marker must actually extend its construct.
+
+    A marker that maps a known bucket but effects no textual change is
+    just as dead as an unknown bucket — one construct gap (a set
+    literal that grew a line) or one formatting edit (a blank line
+    after the marker) silently kills the learned lane forever with
+    green CI. The renderer's dead-splice warning is the only witness;
+    promote it to failure here.
+    """
+    rendered, warnings = _render_capturing_warnings(
+        rule, _RepresentativeVocab(),
+    )
+    if rendered is not None:
+        rendered.unlink()
+    dead = [w for w in warnings if "produced no extension" in w]
+    assert not dead, (
+        f"{rule.name} carries dead @vocab splice slot(s) — the marked "
+        f"construct never extends, so the learned lane is seed-only "
+        f"on every vocabulary-bearing audit: {dead}"
+    )
+
+
+def test_dead_splice_detection_self_check(tmp_path):
+    # The gate above proves the universe clean only if the dead-splice
+    # witness actually fires — plant a detached marker (the latent
+    # blank-line member of the class) so a broken warning channel
+    # cannot green the universe silently.
+    rule = tmp_path / "synthetic.cocci"
+    rule.write_text(
+        "// @vocab: deallocators\n"
+        "\n"
+        r"\(kfree\|kvfree\)(E);" + "\n",
+        encoding="utf-8",
+    )
+    rendered, warnings = _render_capturing_warnings(
+        rule, _RepresentativeVocab(),
+    )
+    assert rendered is None
+    dead = [w for w in warnings if "produced no extension" in w]
+    assert dead and "deallocators" in dead[0]
+
+
 def test_unknown_bucket_detection_self_check(tmp_path):
     # The gate above proves the universe clean only if the warning
     # capture actually works — flag a synthetic unknown bucket here so

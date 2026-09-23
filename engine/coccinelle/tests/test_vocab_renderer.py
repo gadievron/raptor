@@ -98,6 +98,140 @@ class TestPythonSetExtension:
         assert '"kfree"' in text
         Path(result).unlink()
 
+    def test_extends_multi_line_python_set(self, tmp_path):
+        # The stock rules' report-script suppression sets span lines
+        # (use_after_free's ``_safe``); a line-bound splice left them
+        # seed-only with zero diagnostics — a dead splice slot on a
+        # verification rule.
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            '// @vocab: deallocators\n'
+            '_safe = {"kfree", "kvfree",\n'
+            '         "pr_info", "printk",\n'
+            '         "WARN"}\n'
+            'if fn not in _safe:\n'
+            '    pass\n'
+        )
+        vocab = FakeVocab(deallocators=frozenset({"custom_free"}))
+        result = render(rule, vocab)
+        assert result is not None
+        text = result.read_text()
+        assert '"custom_free"' in text
+        assert '"WARN", "custom_free"}' in text
+        # The literal's other lines and the consumer survive intact.
+        assert '"kfree", "kvfree",' in text
+        assert 'if fn not in _safe:' in text
+        Path(result).unlink()
+
+    def test_unterminated_set_passes_through_and_warns(
+        self, tmp_path, caplog,
+    ):
+        import logging as _logging
+
+        # No closing brace before the next marker: refuse the splice
+        # loudly rather than consuming the rest of the file.
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            '// @vocab: deallocators\n'
+            '_safe = {"kfree",\n'
+            '// @vocab: allocators\n'
+            r'\(kmalloc\|kzalloc\)(sz)' + '\n'
+        )
+        vocab = FakeVocab(
+            deallocators=frozenset({"custom_free"}),
+            allocators=frozenset({"pool_alloc"}),
+        )
+        with caplog.at_level(
+            _logging.WARNING, logger="engine.coccinelle.vocab_renderer",
+        ):
+            result = render(rule, vocab)
+        assert result is not None
+        text = result.read_text()
+        # The broken set is untouched; the later marker still splices.
+        assert '"custom_free"' not in text
+        assert r"\|pool_alloc" in text
+        assert any("produced no extension" in r.message
+                   for r in caplog.records)
+        Path(result).unlink()
+
+
+class TestDeadSpliceWitness:
+    """A marker with non-empty vocabulary that effects no textual
+    change is a dead splice slot — the renderer must say so (the
+    warning channel is the only witness; the render-validity oracle
+    promotes it to failure)."""
+
+    def test_no_op_marker_warns_and_render_stays_honest(
+        self, tmp_path, caplog,
+    ):
+        import logging as _logging
+
+        # A blank line between the marker and its construct detaches
+        # the splice: nothing is extended, and the rendered text would
+        # equal the source — render() must warn AND return None rather
+        # than positively claiming the marker took effect.
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            "// @vocab: deallocators\n"
+            "\n"
+            r"\(kfree\|kvfree\)(E);" + "\n"
+        )
+        vocab = FakeVocab(deallocators=frozenset({"custom_free"}))
+        with caplog.at_level(
+            _logging.WARNING, logger="engine.coccinelle.vocab_renderer",
+        ):
+            result = render(rule, vocab)
+        assert result is None
+        dead = [r.message for r in caplog.records
+                if "produced no extension" in r.message]
+        assert dead and "deallocators" in dead[0]
+
+    def test_partial_no_op_still_warns(self, tmp_path, caplog):
+        import logging as _logging
+
+        # One live marker plus one dead one: the render is modified
+        # (live splice) but the dead slot must still be witnessed.
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            "// @vocab: deallocators\n"
+            r"\(kfree\|kvfree\)(E);" + "\n"
+            "// @vocab: allocators\n"
+            "\n"
+            r"\(kmalloc\|kzalloc\)(sz)" + "\n"
+        )
+        vocab = FakeVocab(
+            deallocators=frozenset({"custom_free"}),
+            allocators=frozenset({"pool_alloc"}),
+        )
+        with caplog.at_level(
+            _logging.WARNING, logger="engine.coccinelle.vocab_renderer",
+        ):
+            result = render(rule, vocab)
+        assert result is not None
+        assert r"\|custom_free" in result.read_text()
+        Path(result).unlink()
+        dead = [r.message for r in caplog.records
+                if "produced no extension" in r.message]
+        assert dead and "allocators" in dead[0]
+
+    def test_empty_bucket_does_not_warn(self, tmp_path, caplog):
+        import logging as _logging
+
+        # No names to splice means no dead slot — the seed-only render
+        # is the correct outcome, not a defect.
+        rule = tmp_path / "test.cocci"
+        rule.write_text(
+            "// @vocab: deallocators\n"
+            r"\(kfree\|kvfree\)(E);" + "\n"
+        )
+        with caplog.at_level(
+            _logging.WARNING, logger="engine.coccinelle.vocab_renderer",
+        ):
+            result = render(rule, FakeVocab())
+        assert result is None
+        assert not any("produced no extension" in r.message
+                       for r in caplog.records)
+
 
 class TestDisjunctionExtension:
     def test_extends_disjunction_with_template(self, tmp_path):
