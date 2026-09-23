@@ -1118,12 +1118,18 @@ def queue_reading_list_item(
         READING_LIST_WRITE_LOCK,
         ReadingList,
         ReadingListItem,
+        question_scoped_id,
     )
 
     rl_path = out_dir / "reading-list.json"
 
+    # The readable prefix truncates the question, so the id must carry
+    # the full-question hash: two distinct questions about one
+    # function otherwise share an id and the persistence fold destroys
+    # one.
     item_id = f"audit-{source_file}:{source_function}:{question[:30]}"
     item_id = re.sub(r"[^a-zA-Z0-9_\-:.]", "_", item_id)
+    item_id = question_scoped_id(item_id, question)
 
     item = ReadingListItem(
         id=item_id,

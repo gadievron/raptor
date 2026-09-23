@@ -458,3 +458,67 @@ class TestSharedWriterLock:
         rl.queue(_item("rl-l", question="q-l"))
         rl.save_merged(p)
         assert held == [True]
+
+
+class TestQuestionScopedIdentity:
+    """Distinct questions never share an id; the persistence fold
+    keeps a concurrent writer's distinct question."""
+
+    def test_same_prefix_questions_get_distinct_ids(self):
+        from core.concepts.reading_list import question_scoped_id
+        prefix = "audit-a.c:fn:" + ("what governs the buffer siz"[:30])
+        q1 = "what governs the buffer size on the read path?"
+        q2 = "what governs the buffer size on the write path?"
+        assert question_scoped_id(prefix, q1) != \
+            question_scoped_id(prefix, q2)
+        # Deterministic: the same question always yields the same id.
+        assert question_scoped_id(prefix, q1) == \
+            question_scoped_id(prefix, q1)
+
+    def test_save_merged_keeps_concurrent_distinct_question(
+        self, tmp_path,
+    ):
+        """Two writers, same lossy id, different questions: the merge
+        must keep both (the dropped one previously left its assumption
+        unverified with NO record)."""
+        from core.concepts.reading_list import (
+            ReadingList,
+            ReadingListItem,
+        )
+        path = tmp_path / "reading-list.json"
+
+        # Writer A loads (empty), holds its instance.
+        a = ReadingList.load(path)
+        a.queue(ReadingListItem(
+            id="shared_id", question="Q1: is len checked on read?",
+            source_command="/audit"))
+
+        # Writer B persists a DIFFERENT question under the same id.
+        b = ReadingList.load(path)
+        b.queue(ReadingListItem(
+            id="shared_id", question="Q2: is len checked on write?",
+            source_command="/audit"))
+        b.save(path)
+
+        # A's merge-save must fold B's item in, not destroy it.
+        a.save_merged(path)
+        on_disk = ReadingList.load(path)
+        questions = {i.question for i in on_disk.items}
+        assert questions == {
+            "Q1: is len checked on read?",
+            "Q2: is len checked on write?",
+        }, f"concurrent writer's question dropped: {questions}"
+
+    def test_audit_queue_ids_distinct_for_same_prefix(self, tmp_path):
+        from core.concepts.audit_bridge import queue_reading_list_item
+        from core.concepts.reading_list import ReadingList
+        q_base = "does the ring buffer wrap check hold for "
+        assert queue_reading_list_item(
+            tmp_path, question=q_base + "reads?",
+            source_file="a.c", source_function="ring_read")
+        assert queue_reading_list_item(
+            tmp_path, question=q_base + "writes?",
+            source_file="a.c", source_function="ring_read")
+        rl = ReadingList.load(tmp_path / "reading-list.json")
+        assert len(rl.items) == 2
+        assert len({i.id for i in rl.items}) == 2
