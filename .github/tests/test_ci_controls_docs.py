@@ -165,6 +165,34 @@ def test_auto_pr_publishers_rebase_onto_main() -> None:
     )
 
 
+def test_workflow_pytest_installs_use_the_single_source_pin() -> None:
+    """Workflows installing pytest standalone must take the pin from
+    requirements-dev.txt (the grep idiom lint.yml uses for ruff) —
+    hand-typed copies drifted a minor version behind the dev pin, so
+    the same suite ran under different pytest versions per lane (the
+    collection-behaviour divergence the 'pinned exactly' rationale in
+    requirements-dev.txt exists to prevent). Same mechanism as the
+    semgrep pin-drift class; this ends the pytest member."""
+    import re
+
+    for wf in sorted((REPO / ".github" / "workflows").glob("*.y*ml")):
+        # A hand pin spells a version digit after ``==``; the grep
+        # idiom spells ``'^pytest=='`` with no version literal. The
+        # installer spelling set is every way pip is invoked in this
+        # tree's workflows (pip / pip3 / python -m pip /
+        # python3 -m pip / uv pip) — a pin through any of them is the
+        # same drift member.
+        hand_pins = re.findall(
+            r"(?:uv +pip|(?:python3? +-m +)?pip3?) +install[^\n]*pytest==\d\S*",
+            wf.read_text(encoding="utf-8"),
+        )
+        assert not hand_pins, (
+            f"{wf.name} hand-pins pytest ({hand_pins}) — install via "
+            "pip install \"$(grep -E '^pytest==' requirements-dev.txt)\" "
+            "so requirements-dev.txt stays the single source"
+        )
+
+
 def test_readme_links_to_ci_controls_doc() -> None:
     readme = _read("README.md")
     assert "## How RAPTOR checks itself" in readme
