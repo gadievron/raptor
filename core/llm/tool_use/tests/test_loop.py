@@ -1923,3 +1923,26 @@ def test_truncate_single_orphaned_tool_result_raises_typed_error() -> None:
     with pytest.raises(ContextOverflow, match="cannot open a conversation"):
         loop.run_with_history(history, "")
     assert len(fp.calls) == 0
+
+
+class TestPerTurnTokensScope:
+    """``per_turn_tokens`` covers assistant turns appended THIS RUN —
+    a resumed history contributes turns with no tuple, so the
+    documented contract must not promise a per-``messages`` zip."""
+
+    def test_resumed_history_turns_carry_no_tuple(self):
+        provider = _FakeProvider([_text_response("final", 7, 3)])
+        history = [
+            Message(role="user", content=[TextBlock(text="q1")]),
+            Message(role="assistant", content=[TextBlock(text="a1")]),
+            Message(role="user", content=[TextBlock(text="q2")]),
+            Message(role="assistant", content=[TextBlock(text="a2")]),
+        ]
+        loop = ToolUseLoop(provider, [_echo_tool()], max_iterations=2)
+        result = loop.run_with_history(list(history), "resume")
+        n_assistant = sum(
+            1 for m in result.messages if m.role == "assistant"
+        )
+        assert n_assistant == 3
+        # One tuple for the one turn THIS run added.
+        assert result.per_turn_tokens == ((7, 3),)

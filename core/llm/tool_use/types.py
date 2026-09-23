@@ -600,10 +600,16 @@ class ToolLoopResult:
     ]
     error_message: str | None = None
     # Per-turn token accounting — one (input, output) tuple per
-    # assistant turn in ``messages``, in order. Zero entries when
-    # the loop couldn't populate them (defensive default; producers
-    # populate on every real turn). Consumers that want per-turn
-    # cost use these alongside the pricing table; consumers that
-    # only want totals use ``total_input_tokens`` / ``total_output
-    # _tokens``.
+    # assistant turn appended THIS RUN, in append order,
+    # pre-truncation. NOT one per assistant turn in ``messages``:
+    # a resumed history (``run_with_history``) contributes assistant
+    # turns with no tuple, and context truncation pops head messages
+    # without remapping — so zipping ``messages`` by assistant-turn
+    # index misaligns on exactly the long/resumed runs where
+    # per-turn cost matters. Consumers must align from the TAIL of
+    # this run's turns or track message indices themselves. Zero
+    # entries when the loop couldn't populate them (defensive
+    # default; producers populate on every real turn). Consumers
+    # that only want totals use ``total_input_tokens`` /
+    # ``total_output_tokens``.
     per_turn_tokens: tuple[tuple[int, int], ...] = ()
