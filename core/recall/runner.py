@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import contextlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -125,23 +127,43 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
     argv = build_pipeline_argv(manifest, target, repo_root,
                                pipeline_out=pipeline_out)
     logger.info("running: %s", " ".join(argv))
+    # Stream both pipeline streams to disk instead of buffering them:
+    # capture_output held a multi-hour pipeline's whole stdout+stderr
+    # in memory just to write it out and grep one sentinel line.
+    stderr_tmp = log_path.with_suffix(log_path.suffix + ".stderr.tmp")
     try:
-        proc = subprocess.run(
-            argv, capture_output=True, text=True, cwd=str(repo_root),
-            timeout=timeout_s, check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        msg = f"pipeline timed out after {timeout_s}s"
-        raise RunnerError(msg) from exc
+        with open(log_path, "wb") as out_f, \
+                open(stderr_tmp, "wb") as err_f:
+            try:
+                proc = subprocess.run(
+                    argv, stdout=out_f, stderr=err_f,
+                    cwd=str(repo_root), timeout=timeout_s, check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                msg = f"pipeline timed out after {timeout_s}s"
+                raise RunnerError(msg) from exc
 
-    log_path.write_text(
-        (proc.stdout or "") + "\n--- stderr ---\n" + (proc.stderr or ""),
-        encoding="utf-8")
+        # The lifecycle contract is "the LAST line of output is
+        # OUTPUT_DIR=<path>" — earlier occurrences (echoed config,
+        # nested tool output) can name other directories, so bind the
+        # final one. Scan the stdout portion of the log line by line
+        # (bounded memory).
+        sentinel_matches: list[str] = []
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m = _OUTPUT_DIR_RE.match(line.rstrip("\n"))
+                if m:
+                    sentinel_matches.append(m.group(1))
 
-    # The lifecycle contract is "the LAST line of output is
-    # OUTPUT_DIR=<path>" — earlier occurrences (echoed config, nested
-    # tool output) can name other directories, so bind the final one.
-    sentinel_matches = _OUTPUT_DIR_RE.findall(proc.stdout or "")
+        # Append stderr behind the same separator the log always
+        # carried, by chunked copy (never buffered whole).
+        with open(log_path, "ab") as out_f, \
+                open(stderr_tmp, "rb") as err_f:
+            out_f.write(b"\n--- stderr ---\n")
+            shutil.copyfileobj(err_f, out_f)
+    finally:
+        with contextlib.suppress(OSError):
+            stderr_tmp.unlink(missing_ok=True)
     sentinel_dir = (Path(sentinel_matches[-1].strip())
                     if sentinel_matches else None)
 

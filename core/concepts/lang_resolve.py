@@ -45,6 +45,28 @@ from .model import StudyItem
 
 logger = logging.getLogger(__name__)
 
+# rglob scan budget for header-stem sibling directories (entries
+# VISITED, not matched) — bounds directory materialisation on scanned
+# targets. Wide enough for real include trees; a subtree wider than
+# this is scanned partially rather than slurped.
+_STEM_DIR_SCAN_BOUND = 10_000
+
+
+def _read_capped(path: Path, max_chars: int | None = None) -> str | None:
+    """Capped text read of scanned-target content (degrades to None).
+
+    Routes through ``core.source.read_text_capped`` so every read this
+    module performs over the (untrusted) target tree pays a byte
+    budget; truncation degrades to the capped prefix.
+    """
+    from core.source import read_text_capped
+
+    if max_chars is None:
+        got = read_text_capped(path)
+    else:
+        got = read_text_capped(path, max_chars)
+    return None if got is None else got[0]
+
 
 # ------------------------------------------------------------------
 # Language support
@@ -305,18 +327,31 @@ def include_scope_files(
         sib = header.parent / header.stem
         if not sib.is_dir() or sib.is_symlink():
             return
+        # Iterate lazily with a scan bound, then sort the matches:
+        # sorted(rglob("*")) materialised the WHOLE subtree before the
+        # cap ran, so a huge scanned-target directory ballooned memory
+        # for a handful of wanted files. The bound trades exhaustive
+        # coverage of pathologically wide subtrees for a fixed scan
+        # budget; matches within the budget stay deterministic via the
+        # post-scan sort.
+        matches: list[Path] = []
+        scanned = 0
         try:
-            entries = sorted(sib.rglob("*"))
+            for e in sib.rglob("*"):
+                scanned += 1
+                if scanned > _STEM_DIR_SCAN_BOUND:
+                    break
+                try:
+                    if e.is_file() and e.suffix.lower() in _C_SUFFIXES:
+                        matches.append(e)
+                except OSError:
+                    continue
         except OSError:
             return
-        for e in entries:
+        for e in sorted(matches):
             if len(out) >= max_files:
                 return
-            try:
-                if e.is_file() and e.suffix.lower() in _C_SUFFIXES:
-                    _add(e)
-            except OSError:
-                continue
+            _add(e)
 
     frontier = [start]
     for _depth in range(max_depth):
@@ -324,10 +359,12 @@ def include_scope_files(
             break
         next_frontier: list[Path] = []
         for f in frontier:
-            try:
-                text = f.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            # Capped: include lines live near the top; a pathological
+            # header must not be slurped whole to find them.
+            got = _read_capped(f)
+            if got is None:
                 continue
+            text = got
             for ref in _INCLUDE_RE.findall(text):
                 if len(out) >= max_files:
                     break
@@ -713,16 +750,22 @@ def resolve_identifiers(
         return lang
 
     # Read + language-tag every candidate file once; grep-scope to
-    # files that mention at least one identifier tail.
+    # files that mention at least one identifier tail. Reads are
+    # per-file capped (core.source.read_text_capped): this loop runs
+    # over SCANNED-target content on the default study path and
+    # retains matching texts — one planted multi-hundred-MB file must
+    # not balloon resident memory.
+    from core.source import read_text_capped
+
     contents: dict[Path, tuple[str, str]] = {}
     for f in files:
         lang = _lang_for(f)
         if lang is None:
             continue
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        got = read_text_capped(f)
+        if got is None:
             continue
+        text = got[0]
         if any(tail in text for tail in tails_ordered):
             contents[f] = (lang, text)
 
@@ -1058,10 +1101,10 @@ def resolve_concept_docs(
     for doc in candidates:
         if len(results) >= max_docs:
             break
-        try:
-            snippet = doc.read_text(encoding="utf-8", errors="ignore")[:8192]
-        except OSError:
+        got = _read_capped(doc, 8192)
+        if got is None:
             continue
+        snippet = got
         snippet_lower = snippet.lower()
         hits = [k for k in keywords if k in snippet_lower]
         if len(hits) >= 2 or (hits and doc.name.lower().startswith("readme")):

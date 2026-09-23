@@ -20,12 +20,6 @@ from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-try:
-    import fcntl
-    _HAS_FCNTL = True
-except ImportError:  # non-POSIX (Windows) — locks degrade to no-ops
-    _HAS_FCNTL = False
-
 from core.json import dumps_display, save_json
 from core.llm.coerce import structured_result
 from core.paths import confine
@@ -3395,6 +3389,8 @@ def _collect_security_context_texts(src_root: Path) -> dict[str, str]:
     are root-relative so same-named files in different directories
     don't collapse.
     """
+    from core.source import read_text_capped
+
     source_texts: dict[str, str] = {}
     dirs_seen = 0
     for dirpath, dirnames, filenames in os.walk(src_root):
@@ -3411,9 +3407,13 @@ def _collect_security_context_texts(src_root: Path) -> dict[str, str]:
             try:
                 if not fp.is_file():
                     continue
-                source_texts[str(fp.relative_to(src_root))] = (
-                    fp.read_text(encoding="utf-8", errors="replace")
-                )
+                # Capped per file: the count/dir caps alone still let
+                # a few planted multi-hundred-MB files dominate memory
+                # (marker inference needs no more than the cap).
+                got = read_text_capped(fp)
+                if got is None:
+                    continue
+                source_texts[str(fp.relative_to(src_root))] = got[0]
             except (OSError, ValueError):
                 continue
             if len(source_texts) >= _SECURITY_CONTEXT_MAX_FILES:

@@ -3028,3 +3028,25 @@ class TestVerifyEvidenceHashes:
         assert _verify_evidence_hashes(
             self._content(["aaaaaaaaaaaa"]), tmp_path,
         ) is False
+
+
+class TestSecurityContextReadsCapped:
+    def test_reads_route_through_capped_reader(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.source as core_source
+        from core.concepts.study import _collect_security_context_texts
+
+        (tmp_path / "a.c").write_text("int main(void){}\n",
+                                      encoding="utf-8")
+        calls = {"n": 0}
+        orig = core_source.read_text_capped
+
+        def spy(path, *a, **kw):
+            calls["n"] += 1
+            return orig(path, *a, **kw)
+
+        monkeypatch.setattr(core_source, "read_text_capped", spy)
+        texts = _collect_security_context_texts(tmp_path)
+        assert "a.c" in texts
+        assert calls["n"] > 0

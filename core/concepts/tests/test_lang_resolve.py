@@ -1073,3 +1073,38 @@ class TestExplicitFileList:
         res = resolve_identifiers(tmp_path, ["ghost"], files=[])
         assert not res.items
         assert res.unresolved
+
+
+class TestCappedTargetReads:
+    """Every read this module performs over scanned-target content
+    routes through the shared capped reader."""
+
+    def test_resolve_identifiers_reads_are_capped(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.source as core_source
+        from core.concepts.lang_resolve import resolve_identifiers
+
+        (tmp_path / "m.py").write_text(
+            "FRAME_MAX = 4096\n", encoding="utf-8")
+        calls = {"n": 0}
+        orig = core_source.read_text_capped
+
+        def spy(path, *a, **kw):
+            calls["n"] += 1
+            return orig(path, *a, **kw)
+
+        monkeypatch.setattr(core_source, "read_text_capped", spy)
+        resolve_identifiers(tmp_path, ["FRAME_MAX"])
+        assert calls["n"] > 0, (
+            "target file reads bypass the capped reader"
+        )
+
+    def test_read_capped_honours_budget(self, tmp_path):
+        from core.concepts.lang_resolve import _read_capped
+
+        big = tmp_path / "big.txt"
+        big.write_text(("x" * 100 + "\n") * 200, encoding="utf-8")
+        got = _read_capped(big, 512)
+        assert got is not None
+        assert len(got) <= 512
