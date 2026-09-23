@@ -263,6 +263,37 @@ def test_missing_epss_uses_neutral_default():
     assert comps["epss_multiplier"] == pytest.approx(expected, abs=1e-6)
 
 
+def test_verdict_reader_ignores_non_snapshot_files(tmp_path):
+    """The verdict reader honours the same strictly-date-shaped
+    pattern the writer / pruner apply — a stray late-sorting .json
+    (operator scratch, tooling artifact) that parses as a dict with
+    a verdict key must not shadow every dated snapshot."""
+    import json as _json
+
+    from packages.sca.risk import _load_latest_validation_verdict
+
+    vdir = tmp_path / "validation"
+    vdir.mkdir()
+    (vdir / "2026-01-05.json").write_text(
+        _json.dumps({"verdict": "needs_retune"}),
+    )
+    (vdir / "zz-scratch.json").write_text(
+        _json.dumps({"verdict": "validated_v1"}),
+    )
+    assert _load_latest_validation_verdict(vdir) == "needs_retune"
+
+
+def test_verdict_reader_empty_when_only_strays(tmp_path):
+    import json as _json
+
+    from packages.sca.risk import _load_latest_validation_verdict
+
+    vdir = tmp_path / "validation"
+    vdir.mkdir()
+    (vdir / "notes.json").write_text(_json.dumps({"verdict": "x"}))
+    assert _load_latest_validation_verdict(vdir) == "unverified"
+
+
 def test_calibration_status_in_components(tmp_path, monkeypatch):
     """Every breakdown carries a ``calibration_status`` key so
     consumers can show a UI hint or refuse to ship the score.

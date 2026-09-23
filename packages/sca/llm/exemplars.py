@@ -33,6 +33,12 @@ def popular_names_block(ecosystem: str) -> UntrustedBlock | None:
     # Repo-bundled data file; corrupt / oversize warn-and-None inside
     # load_json, and the emptiness guard below covers None.
     names = load_json(path, max_bytes=8 * 1024 * 1024)
+    if not isinstance(names, list):
+        return None
+    # The list is machine-refreshed (refresh_typosquat_lists) and
+    # unvalidated at load; one non-string element would TypeError the
+    # join and lru_cache would pin the failure for the process.
+    names = [n for n in names if isinstance(n, str)]
     if not names:
         return None
     text = (

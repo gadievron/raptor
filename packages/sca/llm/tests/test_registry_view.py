@@ -123,6 +123,24 @@ class TestBuildRegistryView:
         assert view["first_publish"].startswith("2021-03-01")
         assert view["latest_publish"].startswith("2026-01-15")
 
+    def test_unrendered_keys_are_stripped_not_asserted(
+        self, monkeypatch,
+    ):
+        """The renderer-keys contract is enforced by stripping (with
+        a warning), not by a bare assert that ``-O`` removes — an
+        unknown key from a buggy projection must never ride into the
+        prompt in any interpreter mode."""
+        from packages.sca.llm import registry_view
+
+        def bad_view(raw):
+            return {"maintainers": ["a"], "not_a_rendered_key": "x"}
+
+        monkeypatch.setattr(registry_view, "_view_pypi", bad_view)
+        view = build_registry_view("PyPI", {"info": {}})
+        assert "not_a_rendered_key" not in view
+        assert view["maintainers"] == ["a"]
+        assert set(view) <= RENDERED_KEYS
+
     def test_unwired_ecosystem_and_junk_docs_yield_empty(self):
         assert build_registry_view("Cargo", RAW_PACKUMENT) == {}
         assert build_registry_view("npm", None) == {}
