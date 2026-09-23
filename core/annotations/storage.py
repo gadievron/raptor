@@ -162,6 +162,17 @@ def _validate_source_path(source_file: str) -> None:
     if any(part == ".." for part in parts):
         msg = f"source_file may not contain '..' segments: {source_file!r}"
         raise ValueError(msg)
+    # Reject empty and '.' segments on the RAW string — Path()
+    # normalises them away, but annotation_path builds the on-disk
+    # name by string concatenation, so 'a/b/' writes '<base>/a/b/.md'
+    # (a suffix-less hidden file every tree walker skips): the note
+    # is written yet invisible to every cross-run reader.
+    if any(seg in ("", ".") for seg in source_file.split("/")):
+        msg = (
+            f"source_file may not contain empty or '.' path segments "
+            f"(trailing slash included): {source_file!r}"
+        )
+        raise ValueError(msg)
 
 
 # Line-splice characters that the ``\n``-anchored forged-structure
@@ -177,6 +188,27 @@ def _validate_source_path(source_file: str) -> None:
 # the set — plus NUL — the characters have no legitimate use and are
 # refused outright.
 _LINE_SPLICE_CHARS = "\r\x00\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
+
+# Remaining C0 / C1 control characters (plus DEL) that carry no
+# legitimate use in names, bodies, or metadata values but survive the
+# line-splice checks above — ESC first among them: today's CLI sinks
+# sanitise on render, but persisting terminal-control bytes makes
+# every current and future display sink individually responsible for
+# defanging them. Reject at write time instead. ``\t`` and ``\n``
+# stay legal where each field's own rules allow them.
+_CONTROL_CHARS_RE = re.compile(
+    "[\x00-\x08\x0e-\x1f\x7f\x80-\x9f]"
+)
+
+
+def _reject_control_chars(text: str, what: str) -> None:
+    m = _CONTROL_CHARS_RE.search(text)
+    if m:
+        msg = (
+            f"{what} may not contain control characters "
+            f"(found {m.group(0)!r})"
+        )
+        raise ValueError(msg)
 
 
 def _validate_function_name(function: str) -> None:
@@ -206,6 +238,7 @@ def _validate_function_name(function: str) -> None:
             f"round-trip): {function!r}"
         )
         raise ValueError(msg)
+    _reject_control_chars(function, "function name")
     if unicodedata.normalize("NFC", function) != function:
         # A non-NFC name is byte-distinct from its visually identical
         # NFC twin: writing one beside the other creates duplicate
@@ -294,6 +327,7 @@ def _validate_metadata(metadata) -> None:
                 f"/ line-separator characters: {v_str!r}"
             )
             raise ValueError(msg)
+        _reject_control_chars(v_str, f"metadata value for {k!r}")
         for forbidden in _FORBIDDEN_META_VALUE_SUBSTRINGS:
             if forbidden in v_str:
                 msg = (
@@ -302,6 +336,12 @@ def _validate_metadata(metadata) -> None:
                     f"{v_str!r}"
                 )
                 raise ValueError(msg)
+        if k == "status" and v_str not in _VALID_ANNOTATION_STATUSES:
+            msg = (
+                f"invalid annotation status {v_str!r}; expected one of "
+                f"{sorted(_VALID_ANNOTATION_STATUSES)}"
+            )
+            raise ValueError(msg)
         if k == "source" and v_str not in _VALID_ANNOTATION_SOURCES:
             msg = (
                 f"invalid annotation source {v_str!r}; expected one of "
@@ -403,6 +443,7 @@ def _validate_body(body) -> None:
             f"breaks)"
         )
         raise ValueError(msg)
+    _reject_control_chars(body_str, "annotation body")
     if _BODY_FORGED_HEADING_RE.search(body_str):
         msg = (
             "annotation body may not contain a line starting with '## ' — "
@@ -555,6 +596,20 @@ def _file_lock(path: Path):
 # annotations (new LLM verdicts go to the review journal instead).
 _VALID_ANNOTATION_SOURCES = frozenset({"human", "llm", "agent"})
 
+# The ``status`` enum: review verdicts plus the role markers the
+# readers consume (sink / entry_point / trust_boundary — the set
+# fail_open_roles._ROLE_ANNOTATION_STATUSES binds and IRIS spec
+# promotion reads). Validated at write time like the other
+# conventional enum keys (``source`` / the stamp) — its own
+# rationale applies: a typoed ``status=cleaan`` silently skews every
+# consumer that branches on the value. The CLI restricts --status to
+# this same set; the library check closes the direct-API and --meta
+# routes.
+_VALID_ANNOTATION_STATUSES = frozenset({
+    "clean", "suspicious", "finding", "dormant", "error",
+    "sink", "entry_point", "trust_boundary",
+})
+
 
 def _parse_meta(comment_body: str) -> dict[str, str]:
     r"""Parse ``key=value`` pairs from the inside of a meta comment.
@@ -567,7 +622,6 @@ def _parse_meta(comment_body: str) -> dict[str, str]:
     the write path (``_validate_metadata``) rejects such values
     outright.
     """
-    import logging as _log
     out: dict[str, str] = {}
     for m in _META_KV_RE.finditer(comment_body):
         key = m.group(1)
@@ -577,7 +631,7 @@ def _parse_meta(comment_body: str) -> dict[str, str]:
         out[key] = value
     src = out.get("source")
     if src is not None and src not in _VALID_ANNOTATION_SOURCES:
-        _log.getLogger(__name__).warning(
+        logger.warning(
             "annotation metadata: unknown source=%r (expected one of %s) — "
             "consumers checking source=='human' will treat as non-human",
             src, sorted(_VALID_ANNOTATION_SOURCES),
@@ -605,8 +659,9 @@ def _format_meta(metadata: dict[str, str]) -> str:
 
 def _split_sections(text: str) -> list[tuple[str, int, int]]:
     """Split a markdown body into ``(name, start_offset, end_offset)``
-    triples, one per ``## name`` heading. Offsets are byte positions
-    of the heading line (start) and start of next heading or EOF (end).
+    triples, one per ``## name`` heading. Offsets are ``str``
+    code-point offsets (not byte positions) of the heading line
+    (start) and start of next heading or EOF (end).
     """
     headings = list(_SECTION_HEADING_RE.finditer(text))
     out: list[tuple[str, int, int]] = []
@@ -1039,8 +1094,14 @@ def remove_annotation(
         if not remaining and not state.extra:
             try:
                 path.unlink()
-            except OSError:
-                pass
+            except OSError as e:
+                # Swallowing this reported 'removed' while readers
+                # still saw the note (e.g. read-only parent dir).
+                msg = (
+                    f"could not remove annotation file {path} ({e}); "
+                    f"the annotation is still on disk"
+                )
+                raise AnnotationFileError(msg) from e
             return True
         # Preserved out-of-section prose keeps the file alive past
         # the last section's removal — unlinking would destroy it.
