@@ -361,5 +361,53 @@ class TestSpawnRecheckClosesConsentToctou(unittest.TestCase):
             self.assertIn('== "clean-pinned"', src, launcher)
 
 
+class TestVenvFallbackVisibility(unittest.TestCase):
+    """The consent gate's documented refusal remedy ('re-clone at the
+    pin') produces a venv-less core; _find_venv_python then silently
+    fell back to sys.executable, losing the four tree-sitter grammar
+    languages BUG-R-017 documents. The fallback must warn, naming
+    them — and versioned interpreters are discovered by glob, not a
+    hand-picked list that ended at python3.13."""
+
+    def test_fallback_to_sys_executable_warns_lost_languages(self):
+        import sys as _sys
+        from packages.openant.scanner import _find_venv_python
+        with tempfile.TemporaryDirectory() as td:
+            core = Path(td)
+            with self.assertLogs("raptor", level="WARNING") as cm:
+                result = _find_venv_python(core)
+        self.assertEqual(result, _sys.executable)
+        joined = "\n".join(cm.output)
+        for lang in ("c", "ruby", "php", "javascript"):
+            self.assertIn(lang, joined)
+
+    def test_versioned_only_venv_is_found(self):
+        """A python3.14-only venv (no python3 symlink) must be used,
+        not silently skipped."""
+        from packages.openant.scanner import _find_venv_python
+        with tempfile.TemporaryDirectory() as td:
+            core = Path(td)
+            bin_dir = core / ".venv" / "bin"
+            bin_dir.mkdir(parents=True)
+            exe = bin_dir / "python3.14"
+            exe.write_text("#!/bin/sh\n")
+            exe.chmod(0o755)
+            result = _find_venv_python(core)
+        self.assertTrue(result.endswith("python3.14"), result)
+
+    def test_plain_python3_still_preferred(self):
+        from packages.openant.scanner import _find_venv_python
+        with tempfile.TemporaryDirectory() as td:
+            core = Path(td)
+            bin_dir = core / ".venv" / "bin"
+            bin_dir.mkdir(parents=True)
+            for name in ("python3", "python3.14"):
+                exe = bin_dir / name
+                exe.write_text("#!/bin/sh\n")
+                exe.chmod(0o755)
+            result = _find_venv_python(core)
+        self.assertTrue(result.endswith("/python3"), result)
+
+
 if __name__ == "__main__":
     unittest.main()

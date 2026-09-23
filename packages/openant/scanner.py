@@ -495,6 +495,17 @@ def enforce_core_consent(
     loud warning that summarises deviation COUNTS only (never echoing
     attacker-controlled filenames).
 
+    NAMED RESIDUAL — the venv contradiction: a functional install
+    carries an untracked ``.venv/`` (the interpreter
+    :func:`_find_venv_python` prefers) and ``__pycache__/``, so it
+    never passes the gate clean; consenting then executes that
+    untracked interpreter, which the survey can never verify. The
+    survey deliberately does NOT exempt ``.venv/`` — an exemption
+    would put an unverifiable interpreter inside the "clean" verdict,
+    which is worse than consent fatigue. The re-clone remedy's silent
+    language loss is warned at the ``sys.executable`` fallback; both
+    trade-offs are documented on the command surface (openant.md).
+
     Returns the provenance record (already loudly warned when not a
     clean pinned checkout) when the run may proceed; raises
     :class:`OpenAntCoreConsentError` naming the risk and the escape
@@ -741,15 +752,42 @@ def _find_venv_python(core_path: Path) -> str:
     BUG-R-017: sys.executable (Raptor's Python) lacks tree-sitter-c,
     tree-sitter-ruby, tree-sitter-php, tree-sitter-javascript. Those packages
     are only installed in OpenAnt's own venv at core_path/.venv/bin/python3.
-    Prefer that venv Python; fall back to sys.executable if the venv is absent.
+    Prefer that venv Python; fall back to sys.executable if the venv is
+    absent — LOUDLY: the consent gate's documented refusal remedy
+    ("re-clone at the pin") produces exactly this venv-less shape, and a
+    silent fallback silently dropped four languages from the scan.
+
+    Versioned interpreter names are discovered by glob instead of a
+    hand-picked list (which ended at python3.13 and silently missed a
+    python3.14-only venv without a ``python3`` symlink).
 
     Uses os.access(path, os.X_OK) instead of .exists() to avoid returning a
     venv Python that exists on disk but is not executable (e.g., wrong mode bits).
     """
-    for candidate in ("python3", "python3.11", "python3.12", "python3.13", "python"):
-        venv_python = core_path / ".venv" / "bin" / candidate
+    bin_dir = core_path / ".venv" / "bin"
+    versioned: list[tuple[int, str]] = []
+    try:
+        for entry in bin_dir.glob("python3.*"):
+            suffix = entry.name[len("python3."):]
+            if suffix.isdigit():
+                versioned.append((int(suffix), entry.name))
+    except OSError:
+        pass
+    names = ["python3",
+             *(name for _, name in sorted(versioned, reverse=True)),
+             "python"]
+    for candidate in names:
+        venv_python = bin_dir / candidate
         if os.access(venv_python, os.X_OK):
             return str(venv_python)
+    logger.warning(
+        "OpenAnt venv interpreter not found under %s — falling back to "
+        "the launching Python (%s), which typically lacks the "
+        "tree-sitter grammars for c, ruby, php and javascript "
+        "(BUG-R-017): findings in those languages will be missed. "
+        "Create the venv per the OpenAnt setup docs to restore them.",
+        bin_dir, sys.executable,
+    )
     return sys.executable
 
 
