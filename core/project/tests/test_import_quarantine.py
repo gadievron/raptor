@@ -244,5 +244,79 @@ class TestImportQuarantinesChecklist(unittest.TestCase):
                 (q / "scan_20260101-000000" / "checklist.json").is_file())
 
 
+class TestQuarantineUniverseDerivation(unittest.TestCase):
+    """The quarantine set is trust-bearing and was hand-picked — two
+    demonstrated escapes (the run marker's liveness claim; the
+    coverage-record glob family) were both omissions of the SAME hand
+    list. Derive the expected universe from the privileged consumers'
+    own canonical-name spellings and assert closure: an owner renaming
+    or re-homing a canonical artifact fails here until the quarantine
+    set moves with it."""
+
+    def _quarantine_covers(self, name: str) -> bool:
+        import fnmatch
+
+        from core.project.export import (
+            _PRIVILEGED_DIR_NAMES,
+            _PRIVILEGED_FILE_GLOBS,
+            _PRIVILEGED_FILE_NAMES,
+        )
+        return (name in _PRIVILEGED_FILE_NAMES
+                or name in _PRIVILEGED_DIR_NAMES
+                or any(fnmatch.fnmatch(name, pat)
+                       for pat in _PRIVILEGED_FILE_GLOBS))
+
+    def test_importable_canonical_constants_covered(self):
+        # Families whose owners export a canonical-name constant: the
+        # derivation imports the REAL spelling, so a rename cannot
+        # silently leave the quarantine matching a stale name.
+        from core.coverage.journal import INDEX_FILENAME, JOURNAL_FILENAME
+        from core.coverage.record import COVERAGE_RECORD_FILE
+        from core.coverage.store import COVERAGE_STORE_FILE
+        for name in (JOURNAL_FILENAME, INDEX_FILENAME,
+                     COVERAGE_STORE_FILE, COVERAGE_RECORD_FILE):
+            self.assertTrue(self._quarantine_covers(name), name)
+        # The record family is a producer-named glob; the fixed legacy
+        # name above must ride the same glob the consumers use.
+        import core.coverage.record as record_mod
+        import inspect
+        self.assertIn('glob("coverage-*.json")',
+                      inspect.getsource(record_mod))
+        self.assertTrue(self._quarantine_covers("coverage-semgrep.json"))
+
+    def test_literal_spelling_owners_covered(self):
+        # Families whose owners spell the canonical name inline: pin
+        # the spelling AT THE OWNER (a rename fails the pin, forcing
+        # this test — and the quarantine set — to move with it), then
+        # assert coverage.
+        import inspect
+
+        import core.coverage.store_summary as store_summary
+        import core.iris.store as iris_store
+        import core.labeled_attempts.view as outcomes_view
+        import core.run.metadata as run_metadata
+        import core.witness.discovery as witness_discovery
+        cases = [
+            (iris_store, "iris-taint-specs-refined.json"),
+            (iris_store, "iris-specs"),
+            (witness_discovery, "witnesses"),
+            (store_summary, "coverage-progress.jsonl"),
+            (outcomes_view, "verified-outcomes.jsonl"),
+            (run_metadata, "checklist.json"),
+        ]
+        for owner, name in cases:
+            src = inspect.getsource(owner)
+            self.assertIn(name, src,
+                          f"{owner.__name__} no longer spells "
+                          f"{name!r} — update the derivation AND the "
+                          f"quarantine set together")
+            self.assertTrue(self._quarantine_covers(name), name)
+
+    def test_labeled_attempts_store_dir_covered(self):
+        from core.labeled_attempts.store import project_pool_path
+        name = project_pool_path(Path("/x")).name
+        self.assertTrue(self._quarantine_covers(name), name)
+
+
 if __name__ == "__main__":
     unittest.main()

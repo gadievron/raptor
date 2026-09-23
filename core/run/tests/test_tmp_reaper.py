@@ -583,45 +583,136 @@ class TestStartRunHook:
         assert calls == ["tmp", "logs", ("runs", out.parent)]
 
 
-# Production scratch sites whose cleanup is exit-path-only (rmtree in a
-# finally, an atexit hook, or an owner object's teardown). SIGKILL and
-# OOM skip every exit path, and a runtime register_dir_prefix() call
-# dies with the process that made it — cross-process reclamation of
-# these strays requires a static _DIR_PREFIXES entry.
-_PRODUCTION_SCRATCH_PREFIXES = (
-    "r2-sandbox-",             # packages/binary_analysis/radare2_understand.py
-    "raptor-cocci-hunt-",      # packages/code_understanding/dispatch/hunt_cocci_dispatch.py
-    "raptor-oracle-envbuild-", # core/analysis/binary_oracle_cli.py
-    "corpus-excerpt-",         # core/audit/corpus/run_corpus.py
-    "raptor-compose-",         # core/container/compose.py
-    "raptor-env-",             # core/env/provision.py (+ raptor-env-build-)
-    "cve-env-source-",         # packages/cve_env .../tools/source_build.py
-    "cve-env-dfgbuild-",       # packages/cve_env .../agent/tools.py
-    "joern-matrix-",           # packages/joern/scripts/compat_matrix.py
-    "raptor-sca-stress-",      # packages/sca/calibration/stress.py
-)
+def _derived_production_scratch_prefixes() -> dict[str, list[str]]:
+    """Mechanically derive production scratch prefixes.
+
+    Sweeps every production source (tests / subsystem scripts /
+    .github excluded) for ``tempfile.mkdtemp(prefix=...)`` and
+    ``TemporaryDirectory(prefix=...)`` calls that land in the SYSTEM
+    tmp (no contained ``dir=``). Both shapes are exit-path-cleaned
+    only — SIGKILL and OOM skip finally/GC — so each derived prefix
+    needs static reaper coverage. This replaces the hand-picked
+    census tuple whose fail direction was disk-leak: a new production
+    mkdtemp prefix outside both hand lists stranded scratch forever.
+    """
+    import ast
+    import subprocess
+
+    repo_root = Path(__file__).resolve().parents[3]
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files", "*.py", "libexec/*"],
+            capture_output=True, text=True, check=True,
+        ).stdout.split()
+    except (OSError, subprocess.CalledProcessError):
+        pytest.skip("git unavailable — derivation needs the tracked list")
+    found: dict[str, list[str]] = {}
+    for rel in out:
+        parts = rel.split("/")
+        if ("tests" in parts or "scripts" in parts
+                or parts[0] == ".github"
+                or parts[-1].startswith("test_")
+                or parts[-1] == "conftest.py"):
+            continue
+        path = repo_root / rel
+        try:
+            src = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "mkdtemp" not in src and "TemporaryDirectory" not in src:
+            continue
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = ""
+            if isinstance(node.func, ast.Attribute):
+                name = node.func.attr
+            elif isinstance(node.func, ast.Name):
+                name = node.func.id
+            if name not in ("mkdtemp", "TemporaryDirectory"):
+                continue
+            kw = {k.arg: k.value for k in node.keywords}
+            dirv = kw.get("dir")
+            if dirv is not None and not (
+                    isinstance(dirv, ast.Constant) and dirv.value is None):
+                continue  # contained under an explicit parent dir
+            pv = kw.get("prefix")
+            if isinstance(pv, ast.Constant) and isinstance(pv.value, str):
+                found.setdefault(pv.value, []).append(rel)
+    return found
 
 
-class TestProductionScratchPrefixContract:
+# Derived prefixes adjudicated OUT of the reaper: their dirs hold
+# operator-facing OUTPUT, not scratch — reaping them would destroy
+# results (the observe-keep test pins the first).
+_REAPER_EXCLUDED_OUTPUT_PREFIXES = {
+    # sandbox observe dirs: --keep / --out operator-preserved on purpose
+    "raptor-observe-",
+    # default sandbox host-output dir: holds a crashed run's results
+    "raptor-host-out-",
+}
 
-    @pytest.mark.parametrize("prefix", _PRODUCTION_SCRATCH_PREFIXES)
-    def test_prefix_listed_static(self, prefix):
-        from core.run import tmp_reaper
-        assert prefix in tmp_reaper._DIR_PREFIXES, (
-            f"{prefix!r} scratch dirs are cleaned on exit paths only; "
-            "without a static _DIR_PREFIXES entry a SIGKILLed run "
-            "strands them in the system tmp forever"
+
+class TestProductionScratchPrefixDerivation:
+    """The census IS the derivation: every discovered production
+    scratch prefix must be reaper-coverable through one of the three
+    matching mechanisms (or carry an adjudicated output-dir
+    exclusion)."""
+
+    def _covered(self, prefix: str) -> bool:
+        from core.run import tmp_reaper as tr
+        probe_name = prefix + "a1b2c3_4"  # one tempfile random suffix
+        if any(probe_name.startswith(e) for e in tr._dir_prefixes()):
+            return True
+        if any(tr._mkdtemp_anchored_match(probe_name, e)
+               for e in tr._MKDTEMP_ANCHORED_DIR_PREFIXES):
+            return True
+        return any(tr._anchored_name_match(probe_name, e)
+                   for e in tr._ANCHORED_DIR_PREFIXES)
+
+    def test_every_derived_prefix_is_covered(self):
+        found = _derived_production_scratch_prefixes()
+        misses = {p: files for p, files in sorted(found.items())
+                  if p not in _REAPER_EXCLUDED_OUTPUT_PREFIXES
+                  and not self._covered(p)}
+        assert not misses, (
+            "production scratch prefixes without reaper coverage — a "
+            "SIGKILLed run strands them in the system tmp forever; add "
+            f"a _DIR_PREFIXES entry: {misses}"
         )
 
+    def test_derivation_is_not_vacuous(self):
+        # Two-direction guard: the sweep must actually see the known
+        # production sites (spellings pinned loosely so refactors that
+        # keep the prefix pass).
+        found = _derived_production_scratch_prefixes()
+        assert len(found) >= 30, sorted(found)
+        assert "raptor-oracle-envbuild-" in found
+        assert any(p.startswith("raptor-sca-") for p in found)
+
     def test_stale_production_scratch_reaped(self, tmp_root):
-        dirs = [
-            _make_old_dir(tmp_root, p + "stray01")
-            for p in _PRODUCTION_SCRATCH_PREFIXES
-        ]
+        sample = ("raptor-oracle-envbuild-", "raptor-sca-npm-",
+                  "semgrep-sbx-", "raptor-gcov-")
+        dirs = [_make_old_dir(tmp_root, p + "stray01") for p in sample]
         reaped = reap_stale_tmp()
         assert sorted(reaped) == sorted(dirs)
         for d in dirs:
             assert not d.exists()
+
+
+# Representative sample for the own-pgid SIGKILL drill below (the
+# full census lives in the derivation test above).
+_SIGKILL_DRILL_PREFIXES = (
+    "raptor-oracle-envbuild-",
+    "raptor-sca-npm-",
+    "corpus-excerpt-",
+    "raptor-compose-",
+    "cve-env-source-",
+)
 
 
 class TestSigkilledProcessStrays:
@@ -647,13 +738,13 @@ class TestSigkilledProcessStrays:
         env["TMPDIR"] = str(tmp_path)
         proc = subprocess.run(
             [sys.executable, "-c", child_code,
-             *_PRODUCTION_SCRATCH_PREFIXES],
+             *_SIGKILL_DRILL_PREFIXES],
             env=env, start_new_session=True, capture_output=True,
             timeout=60,
         )
         assert proc.returncode == -9, proc.stderr.decode()
         strays = list(tmp_path.iterdir())
-        assert len(strays) == len(_PRODUCTION_SCRATCH_PREFIXES)
+        assert len(strays) == len(_SIGKILL_DRILL_PREFIXES)
         for d in strays:
             os.utime(d, (_OLD, _OLD))
 
