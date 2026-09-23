@@ -210,6 +210,135 @@ def test_dns_pins_are_thread_local_and_never_leak():
     assert socket.getaddrinfo("localhost", 80)
 
 
+# -- pin key canonicalisation (IDN / spelling variants) ------------------------
+#
+# The pin is only sound when it operates on the SAME normalized form
+# the socket layer resolves. urllib3 resolves the IDNA2008 punycode
+# form; keying the pin on urlparse's unicode form made it miss for
+# every IDN hostname — a live second resolution, i.e. the rebinding
+# TOCTOU the pin exists to close, plus an is_global verdict about a
+# DIFFERENT registrable domain (legacy-codec 'faß.de' -> 'fass.de').
+
+
+_GLOBAL_ADDR = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))]
+_REBOUND_ADDR = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]
+
+
+@contextmanager
+def _hostile_resolver(answers):
+    """Swap the LIVE resolution the pin wrapper falls back to.
+
+    ``answers(host)`` returns an addrinfo list or None (miss -> refuse
+    with gaierror so no test resolution ever leaves the process).
+    Installs the pin wrapper first so the swap sits UNDER it, exactly
+    where a rebinding resolver sits in production.
+    """
+    calls: list = []
+    client_module._ensure_pin_wrapper_installed()
+    original = client_module._original_getaddrinfo
+
+    def fake(host, port, *args, **kwargs):
+        calls.append(host)
+        answer = answers(host)
+        if answer is None:
+            raise socket.gaierror(f"test resolver has no answer for {host!r}")
+        return [
+            (family, type_, proto, cname, (addr, port))
+            for family, type_, proto, cname, (addr, _p) in answer
+        ]
+
+    client_module._original_getaddrinfo = fake
+    try:
+        yield calls
+    finally:
+        client_module._original_getaddrinfo = original
+
+
+def test_idn_pin_serves_the_punycode_lookup_and_blocks_the_rebind():
+    """In-process rebind: validation-time DNS answers a global IP,
+    connect-time DNS answers loopback. The connect-time lookup arrives
+    as the IDNA2008 punycode form (what urllib3 resolves); the pin must
+    serve it from the validated answer instead of letting the hostile
+    second resolution through."""
+    def answers(host):
+        text = str(host)
+        if "fa" in text and ("ß" in text or "xn--" in text):
+            # First (validation) resolution: global. Any later live
+            # resolution is the REBOUND answer — reaching it at all is
+            # the vulnerability.
+            return _GLOBAL_ADDR if len(calls) <= 1 else _REBOUND_ADDR
+        return None
+
+    with _hostile_resolver(answers) as calls:
+        client = WebClient("http://faß.de", block_private_ips=True, rate_limit=0)
+        pinned = client._resolve_and_validate("http://faß.de/x")
+        assert pinned is not None
+        # Validation resolved the SAME registrable domain the transport
+        # connects to — the IDNA2008 form, never legacy 'fass.de'.
+        assert calls == ["xn--fa-hia.de"]
+        host_key, _port, addrs = pinned
+        assert host_key == "xn--fa-hia.de"
+        assert addrs[0][4][0] == "93.184.216.34"
+        with WebClient._pinned_dns(pinned):
+            served = socket.getaddrinfo("xn--fa-hia.de", 80)
+        # Pin hit: the validated answer, and NO live second resolution.
+        assert served[0][4][0] == "93.184.216.34"
+        assert calls == ["xn--fa-hia.de"]
+
+
+@pytest.mark.parametrize("lookup_spelling", [
+    "xn--fa-hia.de",        # punycode (urllib3's form)
+    "faß.de",               # unicode (CPython str-host form)
+    "faß.de.",              # trailing-dot FQDN
+    "XN--FA-HIA.DE",        # mixed case
+    "faß。de",              # ideographic full stop U+3002
+    "faß．de",              # fullwidth full stop U+FF0E
+])
+def test_pin_hit_for_every_spelling_of_the_pinned_host(lookup_spelling):
+    sentinel = [("PINNED",)]
+    with WebClient._pinned_dns(("faß.de", 80, sentinel)):
+        assert socket.getaddrinfo(lookup_spelling, 80) == sentinel
+
+
+def test_unpinned_hosts_still_resolve_live_inside_a_pin_window():
+    sentinel = [("PINNED",)]
+    with WebClient._pinned_dns(("faß.de", 80, sentinel)):
+        assert socket.getaddrinfo("localhost", 80) != sentinel
+
+
+def test_idna_invalid_hostname_fails_closed_not_open(monkeypatch):
+    """A hostname with no valid IDNA2008 form cannot be validated or
+    pinned — the guard must refuse it, not fall back to an unpinned
+    live resolution."""
+    client = WebClient("http://xn--valid.example", block_private_ips=True)
+    with pytest.raises(ValueError, match="no valid IDNA2008 form"):
+        client._resolve_and_validate("http://❤️.example/")
+
+
+@pytest.mark.parametrize("literal", [
+    "http://[::ffff:127.0.0.1]/",   # IPv4-mapped IPv6 spelling
+    "http://[0:0:0:0:0:0:0:1]/",    # expanded loopback spelling
+])
+def test_ipv6_literal_spellings_of_loopback_are_blocked(literal):
+    client = WebClient("http://target.example", block_private_ips=True)
+    with pytest.raises(ValueError, match="non-global"):
+        client._resolve_and_validate(literal)
+
+
+@pytest.mark.parametrize("evasion_host", ["0x7f000001", "0177.0.0.1"])
+def test_octal_hex_ipv4_forms_are_caught_at_the_resolution_gate(evasion_host):
+    """Not IP literals for `ipaddress`, but glibc resolves them via
+    inet_aton semantics — the post-resolution is_global loop must
+    still block the loopback answer."""
+    def answers(host):
+        return _REBOUND_ADDR if str(host) == evasion_host else None
+
+    with _hostile_resolver(answers):
+        client = WebClient("http://target.example", block_private_ips=True)
+        with pytest.raises(ValueError, match="non-global"):
+            client._resolve_and_validate(f"http://{evasion_host}/")
+
+
 # -- transport-error accounting (degraded-vs-clean distinction) ---------------
 
 
