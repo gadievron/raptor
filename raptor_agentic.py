@@ -2501,13 +2501,18 @@ def main() -> int:
     _openant_core_explicit = args.openant_core is not None
     if args.openant_core is None:
         args.openant_core = os.environ.get("OPENANT_CORE") or None
+    args.openant_gate_provenance = None
     if _openant_core_explicit and (args.openant or args.openant_only):
         from packages.openant.scanner import (
             OpenAntCoreConsentError,
             enforce_core_consent,
         )
+        # Resolve ONCE, before the gate: the gate's verdict and the
+        # Phase 1b spawn (an entire pattern-scan phase later) must
+        # name the same directory.
+        args.openant_core = str(Path(args.openant_core).resolve())
         try:
-            enforce_core_consent(
+            args.openant_gate_provenance = enforce_core_consent(
                 Path(args.openant_core),
                 consented=args.openant_core_unpinned,
                 target_path=str(args.repo) if args.repo else None,
@@ -3735,7 +3740,11 @@ def main() -> int:
             from packages.openant.config import OpenAntConfig
 
             if getattr(args, "openant_core", None):
-                oa_config = OpenAntConfig(core_path=Path(args.openant_core))
+                oa_config = OpenAntConfig(
+                    core_path=Path(args.openant_core),
+                    gate_provenance=getattr(
+                        args, "openant_gate_provenance", None),
+                )
             else:
                 oa_config = get_config(raptor_dir=script_root)
             oa_config.model = getattr(args, "openant_model", "sonnet")

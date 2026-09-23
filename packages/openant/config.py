@@ -74,6 +74,12 @@ class OpenAntConfig:
     workers: int = 4
     timeout_seconds: int = 1800
     language: str = "auto"
+    # Enriched provenance record from enforce_core_consent when the
+    # --openant-core flag surface gated this run: the scan persists
+    # THIS record (worktree survey verdict + consent route) instead of
+    # re-deriving a content-blind one. None on the env / auto-detect
+    # lanes, where no gate runs.
+    gate_provenance: Optional[dict] = None
 
     def validate(self) -> None:
         marker = self.core_path / _CORE_MARKER

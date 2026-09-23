@@ -506,6 +506,7 @@ def enforce_core_consent(
         dirty = _pinned_tree_deviations(core_path)
         if dirty is not None and not (dirty["modified"] or dirty["untracked"]):
             provenance["worktree_clean"] = True
+            provenance["consent"] = "clean-pinned"
             return provenance
         provenance["worktree_clean"] = False
         provenance["worktree_deviations"] = dirty
@@ -525,9 +526,11 @@ def enforce_core_consent(
                 dirty["modified"], dirty["untracked"],
             )
     if consented:
+        provenance["consent"] = "operator-flag"
         return provenance
     from core.project.trust import resolve_repo_trust
     if resolve_repo_trust(None, target_path=target_path):
+        provenance["consent"] = "trust-marker"
         return provenance
     from core.security.log_sanitisation import sanitise_for_terminal
     if provenance["matches"] is True and dirty is None:
@@ -588,7 +591,21 @@ def run_openant_scan(
     repo_path = Path(repo_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    provenance = checkout_provenance(config.core_path)
+    if config.gate_provenance is not None:
+        # The consent gate already surveyed this core: ITS enriched
+        # record (worktree_clean / deviations / consent route) is the
+        # record of note. Re-running the bare checkout_provenance here
+        # both double-warned and REPLACED the gate's verdict with a
+        # content-blind one — a consented tampered core was recorded
+        # as pristine {matches: true}, the deviation surviving only as
+        # a transient stderr warning.
+        provenance = dict(config.gate_provenance)
+    else:
+        provenance = checkout_provenance(config.core_path)
+        # No gate ran on this lane (env / auto-detect default), so the
+        # content survey never executed: the record must say so
+        # instead of reading as clean.
+        provenance.setdefault("worktree_clean", "unknown")
     result = _run_subprocess(repo_path, out_dir, config)
     result["core_provenance"] = provenance
     return result

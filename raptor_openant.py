@@ -165,13 +165,19 @@ def main() -> int:
     openant_core_explicit = args.openant_core is not None
     if args.openant_core is None:
         args.openant_core = os.environ.get("OPENANT_CORE") or None
+    gate_provenance = None
     if openant_core_explicit:
         from packages.openant.scanner import (
             OpenAntCoreConsentError,
             enforce_core_consent,
         )
+        # Resolve ONCE, before the gate: the gate's verdict and the
+        # spawned subprocess must name the same directory (a symlink
+        # re-pointed after the gate would otherwise redirect the spawn
+        # to content the gate never saw).
+        args.openant_core = str(Path(args.openant_core).resolve())
         try:
-            enforce_core_consent(
+            gate_provenance = enforce_core_consent(
                 Path(args.openant_core),
                 consented=args.openant_core_unpinned,
                 target_path=str(repo_path),
@@ -235,7 +241,10 @@ def main() -> int:
         from packages.openant.config import OpenAntConfig
 
         if args.openant_core:
-            oa_config = OpenAntConfig(core_path=Path(args.openant_core))
+            oa_config = OpenAntConfig(
+                core_path=Path(args.openant_core),
+                gate_provenance=gate_provenance,
+            )
         else:
             oa_config = get_config(raptor_dir=_BASE)
 

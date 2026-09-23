@@ -189,5 +189,84 @@ class TestPythonpathNotReinjected(unittest.TestCase):
             self.assertNotIn(hostile, env["PYTHONPATH"])
 
 
+class TestProvenanceRecordThreading(unittest.TestCase):
+    """The gate's enriched provenance (worktree survey verdict +
+    consent route) is the record of note: run_openant_scan used to
+    re-run the BARE checkout_provenance and persist THAT, so a
+    consented tampered core's report read {matches: true} with the
+    deviation surviving only as a transient stderr warning (and the
+    flag path double-warned)."""
+
+    def _scan(self, cfg, td: Path):
+        from unittest import mock
+        from packages.openant import scanner
+        stub = {"pipeline_output_path": None,
+                "pipeline_output": {"findings": []},
+                "token_usage": {}, "error": None, "skipped": False}
+        with mock.patch.object(scanner, "_run_subprocess",
+                               return_value=dict(stub)):
+            return scanner.run_openant_scan(td / "repo", td / "out", cfg)
+
+    def test_gate_record_is_persisted_not_rederived(self):
+        from unittest import mock
+        from packages.openant import scanner
+        from packages.openant.config import OpenAntConfig
+        gate_rec = {"pinned_commit": "p", "head": "p", "matches": True,
+                    "worktree_clean": False,
+                    "worktree_deviations": {"modified": 1, "untracked": 0},
+                    "consent": "operator-flag"}
+        with tempfile.TemporaryDirectory() as td_s:
+            td = Path(td_s)
+            cfg = OpenAntConfig(core_path=td / "core",
+                                gate_provenance=gate_rec)
+            with mock.patch.object(
+                    scanner, "checkout_provenance",
+                    side_effect=AssertionError(
+                        "bare provenance re-derived over the gate record")):
+                res = self._scan(cfg, td)
+        self.assertEqual(res["core_provenance"], gate_rec)
+
+    def test_env_lane_records_survey_not_run(self):
+        from unittest import mock
+        from packages.openant import scanner
+        from packages.openant.config import OpenAntConfig
+        with tempfile.TemporaryDirectory() as td_s:
+            td = Path(td_s)
+            cfg = OpenAntConfig(core_path=td / "core")
+            bare = {"pinned_commit": "p", "head": "p", "matches": True}
+            with mock.patch.object(scanner, "checkout_provenance",
+                                   return_value=dict(bare)):
+                res = self._scan(cfg, td)
+        self.assertEqual(res["core_provenance"]["worktree_clean"],
+                         "unknown")
+
+    def test_gate_stamps_consent_route(self):
+        from unittest import mock
+        from packages.openant import scanner
+        from packages.openant.tests.test_phase1b_integration import (
+            TestOpenantCoreConsentGate,
+        )
+        pinned_repo = TestOpenantCoreConsentGate.__dict__[
+            "_pinned_repo"].__func__
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = pinned_repo(Path(td))
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                prov = scanner.enforce_core_consent(
+                    core, consented=False, target_path=td)
+                self.assertEqual(prov["consent"], "clean-pinned")
+                (core / "core" / "scanner.py").write_text("tampered\n")
+                with self.assertLogs("raptor", level="WARNING"):
+                    prov = scanner.enforce_core_consent(
+                        core, consented=True, target_path=td)
+                self.assertEqual(prov["consent"], "operator-flag")
+                self.assertIs(prov["worktree_clean"], False)
+                with mock.patch("core.project.trust.resolve_repo_trust",
+                                return_value=True):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        prov = scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+                self.assertEqual(prov["consent"], "trust-marker")
+
+
 if __name__ == "__main__":
     unittest.main()
