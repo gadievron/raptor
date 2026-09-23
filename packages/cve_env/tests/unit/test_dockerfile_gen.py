@@ -517,3 +517,60 @@ def test_render_rejects_malformed_apt_package_hard() -> None:
         )
         assert r.ok is False, pkg
         assert any("apt_packages[0]" in i for i in r.issues), pkg
+
+
+# ─── P6: apt package cap per render call ─────────────────────────────
+
+
+_PINNED_BASE = "alpine@sha256:" + "a" * 64
+
+
+def test_p6_rejects_more_than_ten_apt_packages() -> None:
+    pkgs = [f"pkg{i}=1.0" for i in range(11)]
+    result = render_dockerfile(
+        base_image=_PINNED_BASE, install_steps=[], apt_packages=pkgs
+    )
+    assert not result.ok
+    assert any(i.startswith("P6") for i in result.issues)
+
+
+def test_p6_allows_ten_apt_packages() -> None:
+    pkgs = [f"pkg{i}=1.0" for i in range(10)]
+    result = render_dockerfile(
+        base_image=_PINNED_BASE, install_steps=[], apt_packages=pkgs
+    )
+    assert result.ok, result.issues
+
+
+def test_p6_counts_install_step_packages_across_lanes() -> None:
+    """Both install lanes count toward the cap: 6 via apt_packages plus 5
+    distinct names via an install step = 11 > 10."""
+    pkgs = [f"pkg{i}=1.0" for i in range(6)]
+    step = "apt-get install -y --no-install-recommends " + " ".join(
+        f"extra{i}=1.0" for i in range(5)
+    )
+    result = render_dockerfile(
+        base_image=_PINNED_BASE, install_steps=[step], apt_packages=pkgs
+    )
+    assert not result.ok
+    assert any(i.startswith("P6") for i in result.issues)
+
+
+def test_p6_duplicate_names_count_once() -> None:
+    pkgs = ["libssl3=3.0.2"] * 11  # one distinct name
+    result = render_dockerfile(
+        base_image=_PINNED_BASE, install_steps=[], apt_packages=pkgs
+    )
+    assert result.ok, result.issues
+
+
+def test_p17_rejects_setuid_install_step_at_render() -> None:
+    """The render path routes through validate_dockerfile_semantics, so a
+    privilege-granting install step is refused at dockerfile_gen — the
+    invariant the tool schema and system prompt advertise."""
+    result = render_dockerfile(
+        base_image=_PINNED_BASE,
+        install_steps=["chmod u+s /usr/local/bin/helper"],
+    )
+    assert not result.ok
+    assert any(i.startswith("P17") for i in result.issues)
