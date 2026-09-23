@@ -18,6 +18,7 @@ it becomes a finding.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -55,6 +56,31 @@ def _set_json_field(template: dict, field_path: tuple[str, ...], value: str) -> 
     if field_path:
         node[field_path[-1]] = value
     return body
+
+# State-destroying SQL shapes. The framework's tier vocabulary
+# (checks/base.py) is explicit: active = crafted probe values,
+# intrusive = may change target state — and Phase 6 authorises this
+# fuzzing at "active", the same reason tool_adapters holds sqlmap at
+# the intrusive tier. A stacked-query DROP/TRUNCATE reaching a capable
+# target is the definitionally intrusive outcome, so such payloads are
+# dropped on BOTH the static and the LLM generation paths; the
+# error-oracle and tautology payloads detect the same injection
+# without mutating data. Word-bounded so error-BASED functions
+# (updatexml, extractvalue) survive; case-insensitive; a comment
+# BETWEEN keywords (DROP/**/TABLE — the executable split) still
+# matches the verb itself, while a comment INSIDE a keyword (DR/**/OP)
+# is not executable SQL and needs no handling. REPLACE deliberately
+# also drops the non-mutating REPLACE() string function — over-
+# dropping a probe is the safe direction; under-dropping is the tier
+# violation. INTO OUTFILE/DUMPFILE writes server-side files; its two
+# keywords may be separated by whitespace OR an inline comment (both
+# forms execute).
+_DESTRUCTIVE_SQL_RE = re.compile(
+    r"\b(?:drop|truncate|alter|delete|update|insert|create|grant|"
+    r"shutdown|exec(?:ute)?|merge|replace)\b"
+    r"|\binto(?:\s+|/\*.*?\*/)+(?:out|dump)file\b",
+    re.IGNORECASE,
+)
 
 # Signal prefix per marker class, carried into finding evidence so the
 # verified-outcomes projection never has to scrape prose.
@@ -224,9 +250,9 @@ class WebFuzzer:
         Without an LLM the static fallbacks are used directly.
         """
         if self.llm is None:
-            return self._mark_static(
+            return self._non_destructive(self._mark_static(
                 self._get_basic_payloads(vuln_type, param_name=param_name),
-            )
+            ), vuln_type)
 
         cache_key = (param_name, param_type, vuln_type)
         cached = self._payload_cache.get(cache_key)
@@ -311,9 +337,10 @@ class WebFuzzer:
                     "LLM returned no usable payloads for %s; using static "
                     "fallback", vuln_type,
                 )
-                return self._mark_static(
+                return self._non_destructive(self._mark_static(
                     self._get_basic_payloads(vuln_type, param_name=param_name),
-                )
+                ), vuln_type)
+            payloads = self._non_destructive(payloads, vuln_type)
             logger.info("Generated %d payloads for %s", len(payloads), vuln_type)
             self._payload_cache[cache_key] = list(payloads)
             return payloads
@@ -333,9 +360,27 @@ class WebFuzzer:
                 redact_secrets(str(e), reveal_secrets=self.client.reveal_secrets),
             )
             # Fallback to basic payloads
-            return self._mark_static(
+            return self._non_destructive(self._mark_static(
                 self._get_basic_payloads(vuln_type, param_name=param_name),
+            ), vuln_type)
+
+    def _non_destructive(self, payloads: list[str], vuln_type: str) -> list[str]:
+        """Drop state-destroying SQL payloads (see _DESTRUCTIVE_SQL_RE).
+
+        Applied to LLM output and static fallbacks alike — the tier
+        contract does not care who wrote the payload.
+        """
+        if vuln_type != "sqli":
+            return payloads
+        kept = [p for p in payloads if not _DESTRUCTIVE_SQL_RE.search(p)]
+        dropped = len(payloads) - len(kept)
+        if dropped:
+            logger.info(
+                "Dropped %d state-destroying sqli payload(s): Phase 6 "
+                "runs at the active tier, and data mutation needs the "
+                "intrusive tier", dropped,
             )
+        return kept
 
     def _mark_static(self, payloads: list[str]) -> list[str]:
         self._static_payloads.update(payloads)
@@ -352,7 +397,12 @@ class WebFuzzer:
         upstream validation; command-like parameters try direct commands.
         """
         basic_payloads = {
-            'sqli': ["' OR '1'='1", "' OR 1=1--", "'; DROP TABLE users--"],
+            # Error-oracle third payload: a bare quote breaks SQL syntax
+            # and trips the class markers without mutating data (the
+            # DROP TABLE payload it replaces attempted a table drop —
+            # intrusive-tier state destruction — on stacked-query
+            # targets under the active-tier receipt).
+            'sqli': ["' OR '1'='1", "' OR 1=1--", "'"],
             'xss': ["<script>alert('XSS')</script>", "<img src=x onerror=alert(1)>"],
             'ssti': ["{{7*7}}", "${7*7}", "<%= 7*7 %>", "#{7*7}"],
             'command_injection': ["; id", "&& id", "| id", "`id`", "`cat /etc/passwd`"],
