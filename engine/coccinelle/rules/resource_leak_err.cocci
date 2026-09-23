@@ -75,10 +75,26 @@ ptr << leak.ptr;
 @@
 
 import json, sys
+# One record per report site: multi-path matches bind several
+# allocation positions to the same error return (both branches of an
+# if allocate — one match environment each), and the cross product
+# emitted near-identical duplicates that only consumer-side dedup
+# absorbed. The seen-set lives in module globals because coccinelle
+# re-executes this block once per match environment within one
+# persistent interpreter; the key carries the file so state never
+# leaks across targets.
+try:
+    _rl_seen
+except NameError:
+    _rl_seen = set()
+_first = min(int(_a.line) for _a in p_alloc)
 for _p in p_ret:
-    for _a in p_alloc:
-        _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
-              "line_end": int(_p.line_end), "col_end": int(_p.column_end),
-              "rule": "resource_leak_err",
-              "message": "'%s' allocated at line %s not freed before return on error path" % (ptr, _a.line)}
-        sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
+    _key = (_p.file, int(_p.line), int(_p.column))
+    if _key in _rl_seen:
+        continue
+    _rl_seen.add(_key)
+    _m = {"file": _p.file, "line": int(_p.line), "col": int(_p.column),
+          "line_end": int(_p.line_end), "col_end": int(_p.column_end),
+          "rule": "resource_leak_err",
+          "message": "'%s' allocated at line %s not freed before return on error path" % (ptr, _first)}
+    sys.stderr.write("COCCIRESULT:" + json.dumps(_m) + "\n")
