@@ -455,3 +455,63 @@ class TestNeverRaisesOnShapeDrift(unittest.TestCase):
             "description": "d",
         }]})
         self.assertEqual(out[0]["finding_id"], "openant:12")
+
+
+class TestMetadataCaps(unittest.TestCase):
+    """snippet/message were always capped; the metadata slots were
+    not — 100KB hostile-influenced impact/name/id fields flowed
+    verbatim into openant_findings.json and /validate's records."""
+
+    def test_hostile_long_fields_are_capped(self):
+        big = "A" * 100_000
+        out = translate_pipeline_output({"findings": [{
+            "id": big,
+            "stage1_verdict": "vulnerable",
+            "location": {"file": "a.py", "function": big},
+            "cwe_id": 78,
+            "description": big,
+            "impact": big,
+            "vulnerable_code": big,
+            "name": big,
+        }]})
+        self.assertEqual(len(out), 1)
+        f = out[0]
+        meta = f["metadata"]
+        self.assertLessEqual(len(f["snippet"]), 2000)
+        self.assertLessEqual(len(f["message"]), 4000)
+        self.assertLessEqual(len(meta["attack_vector"]), 4000)
+        self.assertLessEqual(len(meta["vuln_name"]), 500)
+        self.assertLessEqual(len(meta["function"]), 500)
+        self.assertLessEqual(len(meta["route_key"]), 500)
+        self.assertLessEqual(len(meta["openant_id"]), 200)
+        self.assertLessEqual(len(f["finding_id"]), 250)
+
+    def test_hostile_verdict_spellings_are_capped(self):
+        big = "V" * 100_000
+        with self.assertLogs("raptor", level="WARNING"):
+            out = translate_pipeline_output({"findings": [{
+                "id": "VULN-001",
+                "stage1_verdict": big,
+                "stage2_verdict": big,
+                "location": {"file": "a.py", "function": "f"},
+                "cwe_id": 78,
+                "description": "d",
+            }]})
+        meta = out[0]["metadata"]
+        self.assertLessEqual(len(meta["stage1_verdict"]), 200)
+        self.assertLessEqual(len(meta["stage2_verdict"]), 200)
+
+    def test_ordinary_fields_untouched(self):
+        out = translate_pipeline_output({"findings": [{
+            "id": "VULN-001",
+            "stage1_verdict": "vulnerable",
+            "location": {"file": "a.py", "function": "handler"},
+            "cwe_id": 78,
+            "description": "short description",
+            "impact": "short impact",
+            "name": "Command Injection",
+        }]})
+        meta = out[0]["metadata"]
+        self.assertEqual(meta["vuln_name"], "Command Injection")
+        self.assertEqual(meta["attack_vector"], "short impact")
+        self.assertEqual(meta["function"], "handler")

@@ -44,6 +44,17 @@ _UNKNOWN_VERDICT_LEVEL = "note"
 _STAGE2_BOOSTS: frozenset[str] = frozenset({"confirmed", "agreed"})
 _STAGE2_DEMOTES: frozenset[str] = frozenset({"rejected", "bypass_failed"})
 
+# Byte-in-character caps for hostile-influenced translated fields.
+# snippet/message were always capped; the metadata slots were not —
+# a 100 KB impact/name flowed verbatim into openant_findings.json and
+# from there into /validate's finding records (the report writer's
+# md_inline caps protected only the markdown surface).
+_SNIPPET_CAP = 2000
+_MESSAGE_CAP = 4000
+_ATTACK_VECTOR_CAP = 4000
+_NAME_CAP = 500
+_ID_CAP = 200
+
 
 def _coerce_str(value) -> str:
     """Coerce an untrusted OpenAnt output field to ``str``.
@@ -124,7 +135,8 @@ def _translate_finding(
     index: int,
 ) -> Optional[dict]:
     # OpenAnt uses "stage1_verdict" in pipeline_output.json
-    verdict = _coerce_str(finding.get("stage1_verdict")).lower()
+    # (verdict spellings are hostile-influenced too — capped like ids)
+    verdict = _coerce_str(finding.get("stage1_verdict")).lower()[:_ID_CAP]
     level = _compute_level(verdict, finding)
     if level is None:
         return None
@@ -136,11 +148,13 @@ def _translate_finding(
     cwe_str = _canonical_cwe(cwe_id_raw)
 
     file_rel = _coerce_str(location.get("file"))
-    route_key = _coerce_str(location.get("function")) or _coerce_str(finding.get("id"))
+    route_key = (_coerce_str(location.get("function"))
+                 or _coerce_str(finding.get("id")))[:_NAME_CAP]
     snippet = _coerce_str(finding.get("vulnerable_code"))
     message = _coerce_str(finding.get("description")) or _coerce_str(finding.get("impact"))
-    stage2_verdict = _coerce_str(finding.get("stage2_verdict")).lower()
-    finding_name = _coerce_str(finding.get("name")) or _coerce_str(finding.get("cwe_name"))
+    stage2_verdict = _coerce_str(finding.get("stage2_verdict")).lower()[:_ID_CAP]
+    finding_name = (_coerce_str(finding.get("name"))
+                    or _coerce_str(finding.get("cwe_name")))[:_NAME_CAP]
 
     return {
         "finding_id": _make_finding_id(finding, file_rel, cwe_str, index),
@@ -148,18 +162,19 @@ def _translate_finding(
         "file": file_rel,
         "startLine": None,
         "endLine": None,
-        "snippet": snippet[:2000] if snippet else "",
-        "message": message[:4000] if message else "",
+        "snippet": snippet[:_SNIPPET_CAP] if snippet else "",
+        "message": message[:_MESSAGE_CAP] if message else "",
         "level": level,
         "cwe_id": cwe_str,
         "tool": "openant",
         "has_dataflow": False,
         "metadata": {
             "function": route_key,
-            "attack_vector": _coerce_str(finding.get("impact")),
+            "attack_vector": _coerce_str(finding.get("impact"))[:_ATTACK_VECTOR_CAP],
             "stage1_verdict": verdict,
             "stage2_verdict": stage2_verdict,
-            "openant_id": _coerce_str(finding.get("id")) or f"VULN-{index+1:03d}",
+            "openant_id": (_coerce_str(finding.get("id"))[:_ID_CAP]
+                           or f"VULN-{index+1:03d}"),
             "route_key": route_key,
             "vuln_name": finding_name,
         },
@@ -207,7 +222,7 @@ def _make_finding_id(
     cwe: Optional[str],
     index: int,
 ) -> str:
-    openant_id = _coerce_str(finding.get("id"))
+    openant_id = _coerce_str(finding.get("id"))[:_ID_CAP]
     if openant_id:
         return f"openant:{openant_id}"
     if file_rel:
