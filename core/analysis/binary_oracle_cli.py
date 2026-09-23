@@ -453,6 +453,7 @@ def _envbuild_out_dir() -> Path:
 def resolve_binary_paths(args, repo: Path, target_kind: str,
                          parser=None,
                          no_suppress_out: list | None = None,
+                         declared_out: list | None = None,
                          ) -> tuple[str, ...]:
     """Compose the final tuple of binary paths from three sources:
     ``--binary`` (explicit), auto-detect, and the active project's
@@ -474,7 +475,12 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
 
     Always returns SOMETHING — even an empty tuple — so the caller
     can unconditionally assign to ``RaptorConfig.BINARY_ORACLE_PATHS``
-    and never leak a prior run's value (adversarial review P0-117)."""
+    and never leak a prior run's value (adversarial review P0-117).
+
+    ``declared_out`` — when supplied, receives the OPERATOR-declared
+    subset (explicit ``--binary`` paths + project-store binaries).
+    The enrichment exempts these from its source-coverage floor;
+    auto-detected and env-built paths stay floor-subject."""
     explicit_binary = getattr(args, "binary", None)
     explicit_auto = bool(getattr(args, "binary_auto", False))
     opted_out = bool(getattr(args, "no_binary_oracle", False))
@@ -492,6 +498,8 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
 
     for p in _validate_explicit_paths(explicit_binary, parser=parser):
         seen.setdefault(str(p), True)
+        if declared_out is not None:
+            declared_out.append(str(p))
 
     # Auto-detect runs when the operator explicitly asked
     # (--binary-auto) OR when no --binary was supplied (default-on).
@@ -519,6 +527,10 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
         if str(p) not in seen:
             seen[str(p)] = True
             added += 1
+        if declared_out is not None and str(p) not in declared_out:
+            # Project-store binaries carry the same standing trust as
+            # an explicit --binary (see /project binary add).
+            declared_out.append(str(p))
     if proj_name and added:
         print(f"--project '{proj_name}' contributes {added} binary(s) "
               f"from /project binary store.")
@@ -550,15 +562,18 @@ def apply_to_config(args, repo: Path, parser=None) -> tuple[str, ...]:
     site for both CLIs so they can't diverge."""
     from core.config import RaptorConfig
     no_suppress: list = []
+    declared: list = []
     paths = resolve_binary_paths(
         args, repo, resolve_target_kind(args), parser=parser,
         no_suppress_out=no_suppress,
+        declared_out=declared,
     )
     # ALWAYS assign — never gate on truthiness — so a prior run's
     # value cannot leak into this one in long-lived processes
     # (Claude Code, library use, chained pytest).
     RaptorConfig.BINARY_ORACLE_PATHS = paths
     RaptorConfig.BINARY_ORACLE_NO_SUPPRESS = tuple(no_suppress)
+    RaptorConfig.BINARY_ORACLE_DECLARED = tuple(declared)
     RaptorConfig.BINARY_ORACLE_EDGES = bool(
         getattr(args, "binary_edges", False))
     return paths

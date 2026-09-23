@@ -1070,6 +1070,7 @@ def build_inventory(
             enrich_inventory_with_binary_oracle(
                 inventory, bin_paths,
                 no_suppression_paths=RaptorConfig.BINARY_ORACLE_NO_SUPPRESS,
+                declared_paths=RaptorConfig.BINARY_ORACLE_DECLARED,
             )
             # Persist per-binary verdicts into the build-ID-keyed cache
             # so later runs (and external consumers of the shared cache
