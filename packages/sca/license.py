@@ -66,6 +66,7 @@ from pathlib import Path
 from typing import Any
 
 from .kinds import SCA_PREFIX
+from .parsers._base import PARSE_ESCAPE_ERRORS
 from .models import (
     Confidence,
     Dependency,
@@ -172,7 +173,7 @@ def load_policy(target: Path) -> LicensePolicy:
     try:
         text = path.read_text(encoding="utf-8")
         data = safe_load(text) or {}
-    except (OSError, yaml.YAMLError) as e:
+    except (OSError, yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.license: failed to read %s (%s) — using default",
             path, e,

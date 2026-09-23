@@ -37,6 +37,7 @@ the integer.
 from __future__ import annotations
 
 import logging
+from .parsers._base import PARSE_ESCAPE_ERRORS
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -150,7 +151,7 @@ def load(path: Path) -> list[SuppressionEntry]:
     try:
         text = path.read_text(encoding="utf-8")
         data = _safe_load(text)                # type: ignore[misc]
-    except (OSError, _yaml.YAMLError) as e:    # type: ignore[union-attr]
+    except (OSError, _yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[union-attr]  # hostile-input escape classes
         logger.warning("sca.suppressions: failed to read %s: %s", path, e)
         return []
     if not isinstance(data, dict):

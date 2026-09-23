@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
 from ..parsers import _safe_read
+from ..parsers._base import PARSE_ESCAPE_ERRORS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -77,7 +78,7 @@ def _load_toml(path: Path) -> dict | None:
         return None
     try:
         data = tomllib.loads(text)
-    except (tomllib.TOMLDecodeError, ValueError):
+    except (tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
         return None
     return data if isinstance(data, dict) else None
 

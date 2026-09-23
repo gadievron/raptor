@@ -27,6 +27,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from ._base import iter_walk_up
+from ._base import PARSE_ESCAPE_ERRORS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -141,7 +142,7 @@ def _parse_catalogs(path: Path) -> dict[str, dict[str, str]]:
 
     try:
         data = safe_load(text)
-    except yaml.YAMLError as e:
+    except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         # ``<kind> parse failed for`` — the leading kind token is what
         # the parse-failure collector's regex requires; without it the
         # failure never reaches the report's parse_failures.
