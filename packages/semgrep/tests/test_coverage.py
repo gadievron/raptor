@@ -175,3 +175,37 @@ class TestErrorDoubleCounting:
         assert {
             "rule": "pack1", "path": "pack1", "reason": "Timeout after 60s",
         } in record["files_failed"]
+
+
+class TestEngineErrorDedupIdentity:
+    """The engine-error dedupe keys on message identity, never
+    substring: a per-file reason that merely substrings an unrelated
+    engine error must not drop the engine-error row."""
+
+    def test_unrelated_engine_error_survives_substring_overlap(self):
+        results = [SemgrepResult(
+            name="r1",
+            files_examined=["a.py"],
+            files_failed=[{"path": "a.py", "reason": "error"}],
+            errors=["SemgrepError: unrelated fatal error in pack"],
+        )]
+        record = to_coverage_record(results)
+        assert any(
+            f["path"] == "r1" and "unrelated fatal" in f["reason"]
+            for f in record["files_failed"]
+        ), "engine-error row dropped by substring overlap"
+
+    def test_true_duplicate_still_deduped(self):
+        results = [SemgrepResult(
+            name="r1",
+            files_examined=["a.py"],
+            files_failed=[
+                {"path": "a.py", "reason": "Lexical error at line 3"},
+            ],
+            errors=["SemgrepError: Lexical error at line 3"],
+        )]
+        record = to_coverage_record(results)
+        engine_rows = [
+            f for f in record["files_failed"] if f["path"] == "r1"
+        ]
+        assert engine_rows == [], "duplicated per-file failure"

@@ -381,9 +381,21 @@ def run_rule(
         # persist an attacker-sized payload.
         budget_errors: list[str] = []
         sarif_text = proc.stdout or ""
-        if len(sarif_text) > _MAX_TOOL_OUTPUT_BYTES:
+        # Measure BYTES, matching the budget's unit: len(str) counts
+        # characters, and UTF-8 encodes up to 4 bytes per char — a
+        # non-ASCII-heavy payload could weigh 4x the budget while
+        # passing a character-count gate. chars <= bytes always, so
+        # the cheap length check short-circuits the common case and
+        # the encode only runs on strings already under the budget
+        # in characters (bounded work).
+        sarif_bytes = (
+            len(sarif_text)
+            if len(sarif_text) > _MAX_TOOL_OUTPUT_BYTES
+            else len(sarif_text.encode("utf-8", errors="surrogatepass"))
+        )
+        if sarif_bytes > _MAX_TOOL_OUTPUT_BYTES:
             msg = (
-                f"semgrep SARIF output is {len(sarif_text)} characters"
+                f"semgrep SARIF output is at least {sarif_bytes} bytes"
                 f" — exceeds the {_MAX_TOOL_OUTPUT_BYTES}-byte budget;"
                 " scan results unavailable (failed scan, not a clean"
                 " one)"
