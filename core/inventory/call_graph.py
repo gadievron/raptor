@@ -1600,6 +1600,21 @@ def _go_bare_binding_names(path: str) -> list[str]:
                 names.append(pre_v_last)
                 names.extend(_hyphen_aliases(pre_v_last))
 
+    # gopkg.in-style DOT-VERSIONED segment: ``gopkg.in/yaml.v2``
+    # declares package ``yaml`` — the convention for EVERY gopkg.in
+    # path (``gopkg.in/<pkg>.vN`` and ``gopkg.in/<user>/<pkg>.vN``),
+    # and the ``<name>.vN`` spelling wherever else it appears. The
+    # literal last segment (``yaml.v2``) is not a valid Go
+    # identifier, so bare-last-segment binding missed every call
+    # into such a package. The pre-dot part composes with the
+    # hyphen conventions (``go-git.v4`` → ``go-git`` → ``git`` /
+    # ``gogit``).
+    dot_base, dot, dot_ver = last.rpartition(".")
+    if (dot and dot_base and dot_ver.startswith("v")
+            and len(dot_ver) > 1 and dot_ver[1:].isdigit()):
+        names.append(dot_base)
+        names.extend(_hyphen_aliases(dot_base))
+
     names.extend(_hyphen_aliases(last))
 
     return names
