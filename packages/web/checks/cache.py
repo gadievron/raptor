@@ -281,7 +281,7 @@ class RequestSmugglingCheck(Check):
         from packages.web.checks.base import note_transport_error
 
         for variant, request_text, signal in self._probe_requests(host):
-            response, duration = self._raw_exchange(
+            response, duration, truncated = self._raw_exchange(
                 host, port, use_tls, request_text,
             )
             if response is None:
@@ -289,6 +289,12 @@ class RequestSmugglingCheck(Check):
                 # exchange is still transport degradation, not a clean run.
                 note_transport_error(client)
                 continue
+            if truncated:
+                # The exchange hit the byte cap or the wall-clock
+                # deadline: evidence below is judged on a bounded
+                # prefix, so the probe's coverage is degraded, not
+                # clean.
+                note_transport_error(client)
             status_lines = self._STATUS_LINE_RE.findall(response)
             if signal == "stalled_no_response":
                 hit = duration >= self._STALL_SECONDS and not status_lines
@@ -335,11 +341,28 @@ class RequestSmugglingCheck(Check):
 
         return []
 
-    @staticmethod
+    # Bounds on the raw read loop. The heuristics above need response
+    # STATUS LINES only, so 256 KiB is generous; and the 5s socket
+    # timeout is PER RECV — a server dripping one byte per timeout
+    # window keeps every read alive forever, so a monotonic wall-clock
+    # deadline bounds the exchange in time. Without both, one hostile
+    # endpoint wedges/OOMs the scan on the default active path,
+    # bypassing the WebClient response-cap chokepoint this raw lane
+    # opted out of.
+    _RAW_MAX_BYTES = 256 * 1024
+    _RAW_DEADLINE_S = 15.0
+
+    @classmethod
     def _raw_exchange(
-        host: str, port: int, use_tls: bool, request_text: str,
+        cls, host: str, port: int, use_tls: bool, request_text: str,
     ) -> tuple:
-        """One raw request/response exchange; (None, 0.0) on error."""
+        """One raw request/response exchange.
+
+        Returns ``(text, duration, truncated)``; ``(None, 0.0, False)``
+        on connection/handshake error. ``truncated=True`` means the
+        byte cap or the deadline cut the read short — the caller counts
+        it as degraded coverage.
+        """
         import socket
         import time
 
@@ -356,17 +379,32 @@ class RequestSmugglingCheck(Check):
 
             sock.sendall(request_text.encode())
             t_start = time.monotonic()
-            data = b""
+            deadline = t_start + cls._RAW_DEADLINE_S
+            chunks: list[bytes] = []
+            total = 0
+            truncated = False
             try:
                 while True:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0 or total >= cls._RAW_MAX_BYTES:
+                        truncated = True
+                        break
+                    sock.settimeout(min(5.0, remaining))
                     chunk = sock.recv(4096)
                     if not chunk:
                         break
-                    data += chunk
+                    chunks.append(chunk)
+                    total += len(chunk)
             except Exception:
-                pass
+                # A recv timeout that fires because the DEADLINE
+                # shrank its window is the deadline cutting the read
+                # short; a plain 5s stall below the deadline is the
+                # probe's own signal, not truncation.
+                if time.monotonic() >= deadline:
+                    truncated = True
             duration = time.monotonic() - t_start
             sock.close()
-            return data.decode("utf-8", errors="replace"), duration
+            data = b"".join(chunks)
+            return data.decode("utf-8", errors="replace"), duration, truncated
         except Exception:
-            return None, 0.0
+            return None, 0.0, False
