@@ -311,3 +311,65 @@ def test_ingest_rechecks_freshness_after_taking_the_write_lock(
     stats = loser._ingest_ecosystem("PyPI", "PyPI")
     assert stats is None
     assert loser.query("PyPI", "racepkg", "1.0")
+
+
+def test_failed_ingest_rolls_back_and_keeps_existing_advisories(
+    tmp_path: Path,
+) -> None:
+    """A mid-ingest exception must roll the transaction back: the
+    uncommitted DELETE is visible to the connection's own later
+    queries, so without rollback a failed refresh silently zeroed the
+    ecosystem's advisories for the rest of the run (and kept holding
+    the write lock) while the pipeline's warn-and-degrade carried on."""
+    rec = _osv("GHSA-keep", "PyPI", "keptpkg", fixed="2.0")
+    http = _ZipServingHttp({"PyPI/all.zip": _make_zip([rec])})
+    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http, ttl_seconds=0)
+    assert db.ensure_fresh(["PyPI"])
+    assert db.query("PyPI", "keptpkg", "1.0")
+
+    # Second refresh blows up after the DELETE (inside the insert
+    # loop) — simulate via a record that crashes _insert_record.
+    import pytest as _pytest
+
+    def _boom(*a, **k):
+        raise RuntimeError("simulated mid-ingest failure")
+
+    original = db._insert_record
+    db._insert_record = _boom               # type: ignore[method-assign]
+    try:
+        with _pytest.raises(RuntimeError):
+            db._ingest_ecosystem("PyPI", "PyPI")
+    finally:
+        db._insert_record = original        # type: ignore[method-assign]
+
+    assert db._conn is not None
+    assert db._conn.in_transaction is False
+    assert db.query("PyPI", "keptpkg", "1.0")
+
+
+def test_post_lock_freshness_recheck_failure_releases_the_lock(
+    tmp_path: Path,
+) -> None:
+    """The post-lock freshness re-check runs inside the rollback
+    scope: a failure there (corrupt ingest_meta) must not leave the
+    transaction open + write lock held under the pipeline's
+    warn-and-degrade."""
+    import pytest as _pytest
+
+    rec = _osv("GHSA-keep2", "PyPI", "keptpkg2", fixed="2.0")
+    http = _ZipServingHttp({"PyPI/all.zip": _make_zip([rec])})
+    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=http, ttl_seconds=0)
+    db._init_db()
+
+    def _boom(eco):
+        raise RuntimeError("simulated corrupt ingest_meta")
+
+    original = db._is_fresh
+    db._is_fresh = _boom                    # type: ignore[method-assign]
+    try:
+        with _pytest.raises(RuntimeError):
+            db._ingest_ecosystem("PyPI", "PyPI")
+    finally:
+        db._is_fresh = original             # type: ignore[method-assign]
+    assert db._conn is not None
+    assert db._conn.in_transaction is False

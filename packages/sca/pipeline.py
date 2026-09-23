@@ -43,6 +43,7 @@ from .models import (
 )
 from .osv import OsvClient
 from .parsers import capture_parse_failures, parse_manifest
+from .parsers._safe_read import scan_root_context
 from .reachability import scan as scan_reachability
 from .report import render_markdown_report, write_markdown_report
 from .sarif import write_sarif
@@ -406,7 +407,6 @@ def run_sca(
             # symlinked manifests whose resolved target stays inside
             # the target tree (monorepo shared-manifest layouts)
             # while still refusing links that escape it.
-            from .parsers._safe_read import scan_root_context
             with capture_parse_failures() as parse_failures, \
                     scan_root_context(target):
                 for m in manifests:
@@ -999,7 +999,13 @@ def run_sca(
                 "SUPPRESS", "untrusted overlay ignored (not read)",
             )
         else:
-            entries = _suppressions.load(overlay_path)
+            # Scan-root context: a TRUSTED run honours an overlay
+            # symlink whose resolved target stays inside the tree
+            # (monorepo shared-config layouts) — same containment
+            # discipline the manifest readers use; out-of-tree
+            # targets stay refused by the no-follow reader.
+            with scan_root_context(target):
+                entries = _suppressions.load(overlay_path)
         if entries:
             finding_sets = (vuln_findings, hygiene_findings,
                              supply_chain_findings, license_findings)

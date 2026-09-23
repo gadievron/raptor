@@ -30,6 +30,7 @@ from pathlib import Path
 from core.json import load_json
 from core.security.log_sanitisation import sanitise_for_terminal as _sft
 
+from .parsers._safe_read import scan_root_context
 from .suppressions import (
     SUPPRESS_FILENAME,
     SuppressionEntry,
@@ -110,7 +111,10 @@ def _cmd_list(target: Path, *, emit_json: bool) -> int:
         print(f"raptor-sca suppress: no {SUPPRESS_FILENAME} in "
               f"{target}", file=sys.stderr)
         return 1
-    entries = load(suppress_path)
+    # Scan-root context: an overlay symlink resolving inside the
+    # target is honoured (monorepo shared-config); escapes refused.
+    with scan_root_context(target):
+        entries = load(suppress_path)
     if emit_json:
         # The entries come from the SCANNED target's suppress file —
         # hostile bytes in reasons/ids must not reach the terminal as
@@ -150,7 +154,8 @@ def _cmd_check(*, target: Path, findings_path: Path) -> int:
         print(f"raptor-sca suppress: {findings_path} not found",
               file=sys.stderr)
         return 2
-    entries = load(suppress_path)
+    with scan_root_context(target):
+        entries = load(suppress_path)
     if not entries:
         print(f"raptor-sca suppress: {suppress_path} has no entries.")
         return 0

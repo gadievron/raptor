@@ -1132,3 +1132,12 @@ def test_common_ancestor_refuses_rootless_batches() -> None:
     # A real shared prefix still batches.
     assert _common_ancestor(
         [_P("/srv/app/a"), _P("/srv/app/b")]) == _P("/srv/app")
+
+
+def test_common_ancestor_single_root_input_refused() -> None:
+    from pathlib import Path as _P
+
+    from packages.sca.transitive import _common_ancestor
+
+    assert _common_ancestor([_P("/")]) is None
+    assert _common_ancestor([_P("/srv/app")]) == _P("/srv/app")
