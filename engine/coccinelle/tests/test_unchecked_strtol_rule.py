@@ -111,3 +111,39 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+    def test_null_endptr_with_errno_check_does_not_fire(self, tmp_path):
+        # The canonical errno-checked overflow idiom: a NULL endptr is
+        # a deliberate "whole-string or bust" choice, and the errno
+        # check catches overflow — same suppression the &endptr arm
+        # already grants.
+        results = _run_rule(tmp_path, """\
+            long parse(const char *s)
+            {
+                long v;
+                errno = 0;
+                v = strtol(s, NULL, 10);
+                if (errno == ERANGE)
+                    return -1;
+                return v;
+            }
+        """)
+        assert results == []
+
+    def test_null_endptr_errno_elsewhere_still_fires(self, tmp_path):
+        # Recall guard: an errno check bound to a DIFFERENT conversion
+        # does not license the unchecked one.
+        results = _run_rule(tmp_path, """\
+            long parse(const char *s, const char *t)
+            {
+                long v, w;
+                errno = 0;
+                v = strtol(s, NULL, 10);
+                if (errno == ERANGE)
+                    return -1;
+                w = strtol(t, NULL, 10);
+                return v + w;
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["line"] == 8
