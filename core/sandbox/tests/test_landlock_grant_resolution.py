@@ -30,6 +30,7 @@ from __future__ import annotations
 import errno
 import logging
 import os
+import stat
 import sys
 
 import pytest
@@ -121,6 +122,172 @@ class TestValidationTimeResolution:
         assert resolved == [str(plain)]
         assert not [r for r in caplog.records
                     if "resolves through a symlink" in r.message]
+
+
+def _link_stat(uid: int) -> os.stat_result:
+    """A fabricated lstat result for a symlink owned by ``uid``."""
+    return os.stat_result((stat.S_IFLNK | 0o777, 1, 1, 1, uid, 0, 0, 0, 0, 0))
+
+
+def _dir_stat(uid: int) -> os.stat_result:
+    """A fabricated lstat result for a plain directory owned by ``uid``."""
+    return os.stat_result((stat.S_IFDIR | 0o755, 1, 1, 1, uid, 0, 0, 0, 0, 0))
+
+
+def _file_stat(uid: int) -> os.stat_result:
+    """A fabricated lstat result for a regular file owned by ``uid``."""
+    return os.stat_result((stat.S_IFREG | 0o644, 1, 1, 1, uid, 0, 0, 0, 0, 0))
+
+
+class TestUsrmergeRedirectExemption:
+    """The canonical root-owned usrmerge aliases (/bin -> /usr/bin
+    etc.) are exempt from the planted-redirect announcement — logging
+    policy only, the grant still binds the resolved tree. Everything
+    outside the exact three-condition match keeps the warning. All
+    tests fabricate the filesystem view (realpath/lstat) so none needs
+    a usrmerged host, real top-level symlinks, or root."""
+
+    def _fake_fs(self, monkeypatch, realpaths: dict, lstats: dict) -> None:
+        real_realpath = os.path.realpath
+        real_lstat = os.lstat
+
+        def fake_realpath(p, **kw):
+            return realpaths.get(p, real_realpath(p, **kw))
+
+        def fake_lstat(p, *a, **kw):
+            if p in lstats:
+                return lstats[p]
+            return real_lstat(p, *a, **kw)
+
+        monkeypatch.setattr(os.path, "realpath", fake_realpath)
+        monkeypatch.setattr(os, "lstat", fake_lstat)
+
+    @pytest.mark.parametrize(
+        "alias", ["/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32"],
+    )
+    def test_canonical_usrmerge_root_symlink_not_announced(
+            self, monkeypatch, caplog, alias):
+        # Every member of the canonical set is exempt — a shrunk
+        # allowlist fails one of these parametrizations.
+        target = "/usr" + alias
+        self._fake_fs(monkeypatch, {alias: target},
+                      {alias: _link_stat(0)})
+        landlock._grant_redirects_warned.clear()
+        with caplog.at_level(logging.WARNING, logger="core.sandbox.landlock"):
+            resolved = landlock._resolve_grant_paths([alias], "readable")
+        # Grant semantics unchanged: the rule still binds the
+        # resolved tree; only the announcement is suppressed.
+        assert resolved == [target]
+        assert not [r for r in caplog.records
+                    if "resolves through a symlink" in r.message]
+
+    def test_cross_name_usr_target_warns(self, monkeypatch, caplog):
+        # A root-owned symlink from one canonical name to a DIFFERENT
+        # /usr directory is not the usrmerge shape — same-basename is
+        # required, not merely "somewhere under /usr".
+        self._fake_fs(monkeypatch, {"/bin": "/usr/sbin"},
+                      {"/bin": _link_stat(0)})
+        landlock._grant_redirects_warned.clear()
+        with caplog.at_level(logging.WARNING, logger="core.sandbox.landlock"):
+            resolved = landlock._resolve_grant_paths(["/bin"], "readable")
+        assert resolved == ["/usr/sbin"]
+        assert [r for r in caplog.records
+                if "resolves through a symlink" in r.message]
+
+    def test_trailing_slash_spelling_still_exempt(self, monkeypatch, caplog):
+        # Normalization contract: the predicate must receive the
+        # NORMALIZED requested path — a "/lib/" grant spelling is the
+        # same canonical alias, not a warn-through miss.
+        self._fake_fs(monkeypatch,
+                      {"/lib/": "/usr/lib", "/lib": "/usr/lib"},
+                      {"/lib": _link_stat(0)})
+        landlock._grant_redirects_warned.clear()
+        with caplog.at_level(logging.WARNING, logger="core.sandbox.landlock"):
+            resolved = landlock._resolve_grant_paths(["/lib/"], "readable")
+        assert resolved == ["/usr/lib"]
+        assert not [r for r in caplog.records
+                    if "resolves through a symlink" in r.message]
+
+    def test_canonical_name_to_noncanonical_target_warns(
+            self, monkeypatch, caplog):
+        self._fake_fs(monkeypatch, {"/lib": "/opt/x"},
+                      {"/lib": _link_stat(0)})
+        landlock._grant_redirects_warned.clear()
+        with caplog.at_level(logging.WARNING, logger="core.sandbox.landlock"):
+            resolved = landlock._resolve_grant_paths(["/lib"], "readable")
+        assert resolved == ["/opt/x"]
+        assert [r for r in caplog.records
+                if "resolves through a symlink" in r.message]
+
+    def test_non_root_owned_symlink_warns(self, monkeypatch, caplog):
+        self._fake_fs(monkeypatch, {"/sbin": "/usr/sbin"},
+                      {"/sbin": _link_stat(1000)})
+        landlock._grant_redirects_warned.clear()
+        with caplog.at_level(logging.WARNING, logger="core.sandbox.landlock"):
+            resolved = landlock._resolve_grant_paths(["/sbin"], "readable")
+        assert resolved == ["/usr/sbin"]
+        assert [r for r in caplog.records
+                if "resolves through a symlink" in r.message]
+
+    def test_non_listed_top_level_path_warns(self, monkeypatch, caplog):
+        # Same /usr/<basename> shape, but /data is not in the
+        # canonical set — exact-match allowlist, never a prefix rule.
+        self._fake_fs(monkeypatch, {"/data": "/usr/data"},
+                      {"/data": _link_stat(0)})
+        landlock._grant_redirects_warned.clear()
+        with caplog.at_level(logging.WARNING, logger="core.sandbox.landlock"):
+            resolved = landlock._resolve_grant_paths(["/data"], "readable")
+        assert resolved == ["/usr/data"]
+        assert [r for r in caplog.records
+                if "resolves through a symlink" in r.message]
+
+    def test_non_symlink_grant_stays_silent(self, tmp_path, caplog):
+        # Existing behavior regression pin: a plain (non-symlink)
+        # grant path never triggers the redirect announcement.
+        plain = tmp_path / "grants"
+        plain.mkdir()
+        landlock._grant_redirects_warned.clear()
+        with caplog.at_level(logging.WARNING, logger="core.sandbox.landlock"):
+            resolved = landlock._resolve_grant_paths([str(plain)], "writable")
+        assert resolved == [str(plain)]
+        assert not [r for r in caplog.records
+                    if "resolves through a symlink" in r.message]
+
+    # ---- the pure predicate, via the injectable lstat ----
+
+    def test_predicate_true_only_on_full_match(self):
+        assert landlock._is_canonical_usrmerge_redirect(
+            "/lib64", "/usr/lib64", lambda p: _link_stat(0))
+
+    def test_predicate_false_when_lstat_sees_no_symlink(self):
+        # Resolution says redirect but lstat sees a plain directory
+        # (e.g. a bind-mount shim): keep the warning.
+        assert not landlock._is_canonical_usrmerge_redirect(
+            "/bin", "/usr/bin", lambda p: _dir_stat(0))
+        # ... or a regular file: a symlink is required specifically,
+        # not merely "anything that is not a directory".
+        assert not landlock._is_canonical_usrmerge_redirect(
+            "/bin", "/usr/bin", lambda p: _file_stat(0))
+
+    def test_predicate_false_on_system_but_nonzero_owner(self):
+        # Root means uid 0 exactly — a low system uid (1) is not
+        # trust-equivalent.
+        assert not landlock._is_canonical_usrmerge_redirect(
+            "/bin", "/usr/bin", lambda p: _link_stat(1))
+
+    def test_predicate_false_on_lstat_failure(self):
+        def _raise(p: str) -> os.stat_result:
+            raise OSError(errno.EACCES, "denied", p)
+        assert not landlock._is_canonical_usrmerge_redirect(
+            "/bin", "/usr/bin", _raise)
+
+    def test_predicate_false_on_prefix_spellings(self):
+        # Children of a canonical alias are NOT exempt — only the
+        # top-level path itself.
+        assert not landlock._is_canonical_usrmerge_redirect(
+            "/bin/sh", "/usr/bin/sh", lambda p: _link_stat(0))
+        assert not landlock._is_canonical_usrmerge_redirect(
+            "/lib64x", "/usr/lib64x", lambda p: _link_stat(0))
 
 
 class TestPostValidationSwapRefused:
