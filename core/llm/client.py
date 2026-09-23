@@ -16,6 +16,7 @@ import json
 # install issues via --verbose. See core/llm/detection.py for the
 # canonical probe sites.
 import logging as _logging
+import math
 import re
 import threading
 import time
@@ -1838,7 +1839,10 @@ class LLMClient:
                     "input_tokens": 0, "output_tokens": 0,
                     "latency_ms_sum": 0, "latency_ms_max": 0,
                 })
-                cur["cost_usd"] += float(cost or 0.0)
+                # sanitize_cost: a NaN here survives into the scorecard
+                # flush and poisons every aggregate it joins.
+                from core.llm.cost import sanitize_cost
+                cur["cost_usd"] += sanitize_cost(cost)
                 cur["tokens"] += int(tokens or 0)
                 cur["input_tokens"] += int(input_tokens or 0)
                 cur["output_tokens"] += int(output_tokens or 0)
@@ -2443,8 +2447,26 @@ class LLMClient:
         call including failed-attempt spend the client deliberately
         does not book per-call (per-call attribution from shared
         counters is impossible under parallel workers). The max of
-        the two never double-counts and misses neither surface."""
-        return max(self.total_cost, self.provider_spend_usd)
+        the two never double-counts and misses neither surface.
+
+        Fails CLOSED on a non-finite ledger: every write is sanitised
+        (``sanitize_cost``), but if a NaN/inf slips in anyway, spend
+        the cap cannot reason about must refuse further dispatch —
+        NaN comparisons are all False, which silently DISABLED
+        ``max_cost_per_scan``. Both ledgers are checked individually
+        because ``max()`` does not propagate NaN."""
+        total = self.total_cost
+        provider = self.provider_spend_usd
+        if not (math.isfinite(total) and math.isfinite(provider)):
+            if not getattr(self, "_nonfinite_spend_warned", False):
+                self._nonfinite_spend_warned = True
+                logger.warning(
+                    "Budget ledger non-finite (total_cost=%r, "
+                    "provider_spend=%r) — failing closed: refusing "
+                    "further paid dispatch", total, provider,
+                )
+            return float("inf")
+        return max(total, provider)
 
     def hold_budget_reserve(self, amount: float) -> float:
         """Hold back ``amount`` of the per-scan cap from ordinary
@@ -2856,15 +2878,20 @@ class LLMClient:
                         # reservation cancellation must also be skipped —
                         # otherwise total_cost drifts negative by the
                         # reservation amount per call.
+                        # sanitize_cost at the write: a non-finite cost
+                        # figure booked here disables every budget
+                        # comparison for the rest of the run.
+                        from core.llm.cost import sanitize_cost
+                        cost_actual = sanitize_cost(response.cost)
                         with self._stats_lock:
                             if self.config.enable_cost_tracking:
-                                self.total_cost += response.cost - reservation
+                                self.total_cost += cost_actual - reservation
                             else:
-                                self.total_cost += response.cost
+                                self.total_cost += cost_actual
                             self.request_count += 1
                             if task_type:
-                                self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + response.cost
-                        self._note_call_cost(call_class, response.cost)
+                                self.task_type_costs[task_type] = self.task_type_costs.get(task_type, 0.0) + cost_actual
+                        self._note_call_cost(call_class, cost_actual)
 
                         # Cache response
                         self._save_to_cache(cache_key, response)
@@ -3475,6 +3502,10 @@ class LLMClient:
                         # Reconcile reservation → actual. Skip the
                         # reservation cancel when cost-tracking is
                         # disabled (see ``generate`` for the rationale).
+                        # sanitize_cost at the write — same non-finite
+                        # ledger defence as ``generate``.
+                        from core.llm.cost import sanitize_cost
+                        cost_delta = sanitize_cost(cost_delta)
                         with self._stats_lock:
                             if self.config.enable_cost_tracking:
                                 self.total_cost += cost_delta - reservation

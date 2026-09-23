@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import math
 import os
 import stat
 import tempfile
@@ -1273,6 +1274,38 @@ class StreamJsonResult:
     error: str | None = None
 
 
+def _finite_cost(value: Any) -> float | None:
+    """A cost figure fit for a spend ledger, or ``None`` to refuse.
+
+    Stdlib ``json.loads`` accepts the ``NaN`` / ``Infinity`` literals
+    and ``isinstance(x, (int, float))`` passes them (and ``bool``);
+    one NaN booked into ``total_cost`` makes every budget comparison
+    False and silently disables ``max_cost_per_scan``. Finite,
+    non-negative, non-bool only — the same finite-guard idiom as the
+    EPSS score gate.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    as_float = float(value)
+    if not math.isfinite(as_float) or as_float < 0:
+        return None
+    return as_float
+
+
+def _token_count(value: Any) -> int | None:
+    """A token count fit for a usage ledger, or ``None`` to refuse.
+
+    Ints only (``bool`` excluded), non-negative — a float NaN or a
+    negative figure from a malformed usage block would poison the
+    accumulated totals the cost split and telemetry read.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
 def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
     """Parse JSON lines from ``--output-format stream-json --verbose``.
 
@@ -1280,6 +1313,10 @@ def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
     - ``assistant``: contains the model response in ``message.content``
     - ``result``: final metadata — session_id, cost, usage
     - ``system``: hook events (ignored)
+
+    Numeric envelope fields pass the finite guards above — the parse
+    boundary refuses non-finite/negative cost and token figures rather
+    than booking them into the spend ledgers.
     """
     result = StreamJsonResult()
     for raw in lines:
@@ -1326,10 +1363,13 @@ def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
             usage = message.get("usage")
             if not isinstance(usage, dict):
                 usage = {}
-            result.input_tokens += usage.get("input_tokens", 0) or 0
-            result.output_tokens += usage.get("output_tokens", 0) or 0
-            cache_read = usage.get("cache_read_input_tokens", 0)
-            cache_create = usage.get("cache_creation_input_tokens", 0)
+            result.input_tokens += _token_count(
+                usage.get("input_tokens")) or 0
+            result.output_tokens += _token_count(
+                usage.get("output_tokens")) or 0
+            cache_read = _token_count(usage.get("cache_read_input_tokens"))
+            cache_create = _token_count(
+                usage.get("cache_creation_input_tokens"))
             if cache_read:
                 result.cache_read_tokens += cache_read
             if cache_create:
@@ -1347,18 +1387,20 @@ def parse_stream_json_lines(lines: list[str]) -> StreamJsonResult:
             structured = obj.get("structured_output")
             if isinstance(structured, dict):
                 result.structured_output = structured
-            cost = obj.get("total_cost_usd")
-            if isinstance(cost, (int, float)):
+            cost = _finite_cost(obj.get("total_cost_usd"))
+            if cost is not None:
                 result.cost_usd = cost
             usage = obj.get("usage")
             if not isinstance(usage, dict):
                 # A null / non-object ``usage`` on the result event
                 # degrades the same way as on assistant events.
                 usage = {}
-            if isinstance(usage.get("input_tokens"), int):
-                result.input_tokens = usage["input_tokens"]
-            if isinstance(usage.get("output_tokens"), int):
-                result.output_tokens = usage["output_tokens"]
+            input_tokens = _token_count(usage.get("input_tokens"))
+            if input_tokens is not None:
+                result.input_tokens = input_tokens
+            output_tokens = _token_count(usage.get("output_tokens"))
+            if output_tokens is not None:
+                result.output_tokens = output_tokens
             if obj.get("is_error"):
                 # ``result`` may be an empty string on abort events
                 # (e.g. budget cap: subtype error_max_budget_usd with

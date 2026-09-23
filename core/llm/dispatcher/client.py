@@ -741,16 +741,17 @@ def reconcile_child_spend(
     (a killed child reports nothing; an unpriced model books $0 on
     the dispatcher). Matches the failed-call booking contract on the
     provider ledger (``max(total_cost, provider_spend)``).
+
+    ``sanitize_cost`` on both sides: ``max(float(x), 0.0)`` passed NaN
+    straight through (NaN comparisons are False, so ``max`` returns
+    its first argument), and the reconciled figure lands on the parent
+    budget ledger.
     """
-    try:
-        a = max(float(dispatcher_spent_usd), 0.0)
-    except (TypeError, ValueError):
-        a = 0.0
-    try:
-        b = max(float(child_reported_usd), 0.0)
-    except (TypeError, ValueError):
-        b = 0.0
-    return max(a, b)
+    from core.llm.cost import sanitize_cost
+    return max(
+        sanitize_cost(dispatcher_spent_usd),
+        sanitize_cost(child_reported_usd),
+    )
 
 
 def make_gemini_base_url(*, socket_path: str | None = None,
