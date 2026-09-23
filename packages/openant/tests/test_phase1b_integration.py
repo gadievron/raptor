@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parents[4]))  # repo root
+sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
 
 
 class TestOpenAntFindingsConverter(unittest.TestCase):
@@ -348,10 +348,6 @@ class TestSageHandlesFunctionLevelFindings(unittest.TestCase):
         agent_py = Path(__file__).parents[3] / "packages" / "llm_analysis" / "agent.py"
         src = agent_py.read_text()
         self.assertIn("sha256_string", src)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestOpenantOnlyReachesPhase1b(unittest.TestCase):
@@ -1010,3 +1006,7 @@ class TestAgenticOpenantHardFailure(unittest.TestCase):
             self.assertNotIn("OpenAnt unavailable", combined)
             self.assertIn("SARIF IMPORT", combined)
             self.assertNotIn("no other scan results", combined)
+
+
+if __name__ == "__main__":
+    unittest.main()

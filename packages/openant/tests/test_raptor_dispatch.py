@@ -103,10 +103,6 @@ class TestFeatR005OpenantFlagsInAgentic(unittest.TestCase):
                       "'and not _openant_only'")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestOpenantDefaultTargetDoctrine(unittest.TestCase):
     """`/openant` resolves no-path runs like every sibling analysis
     command: raptor.py back-fills --repo via resolve_default_target
@@ -129,3 +125,7 @@ class TestOpenantDefaultTargetDoctrine(unittest.TestCase):
             "raptor_openant.py must not back-fill --repo from raw "
             "RAPTOR_CALLER_DIR (unvetted, bypasses the volatile-target gate)",
         )
+
+
+if __name__ == "__main__":
+    unittest.main()
