@@ -721,9 +721,16 @@ class TestOnRealRepo:
         result = compute_tier_dispatch(
             ["packages/web/scanner.py"], repo
         )
+        # redos_census dispatches on EVERY runtime-source change by
+        # design (its universe is the runtime tree; one test file,
+        # seconds) — it is not the fan-out this bound polices.
         active = [t for t, i in result.items()
-                  if not t.startswith("_") and i["run"]]
+                  if not t.startswith("_") and t != "redos_census"
+                  and i["run"]]
         assert len(active) <= 3, f"leaf change activated too many tiers: {active}"
+        assert result["redos_census"]["run"], (
+            "runtime-source change must dispatch the redos census"
+        )
 
     def test_no_dead_deps_gate_in_result(self, repo):
         # deps-job gating lives in tests.yml (it ORs the venv tier

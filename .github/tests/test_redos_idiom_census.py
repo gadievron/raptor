@@ -672,6 +672,53 @@ class RedosIdiomCensus(unittest.TestCase):
             self.assertEqual([key for key, _ in members],
                              [(probe.name, name)], source)
 
+    def test_dispatch_triggers_cover_the_universe(self) -> None:
+        """The census can only stop the NEXT member if a change in its
+        universe DISPATCHES it — assert the ``redos_census`` dispatch
+        tier's trigger set covers every file the universe walk yields
+        (derived from the walk itself, so widening the universe fails
+        here until the trigger set follows), names exactly this test
+        file, and carries no dead trigger claiming nothing (a stale
+        trigger row would dispatch the census for trees that no
+        longer exist while reading as coverage)."""
+        import sys
+
+        scripts_dir = _REPO / ".github" / "scripts"
+        sys.path.insert(0, str(scripts_dir))
+        try:
+            from test_scope import TIERS
+        finally:
+            sys.path.remove(str(scripts_dir))
+        tier = TIERS["redos_census"]
+        rel_self = Path(__file__).resolve().relative_to(_REPO).as_posix()
+        self.assertEqual(tier["test_files"], [rel_self])
+        triggers = tier["extra_triggers"]
+        universe = [
+            p.relative_to(_REPO).as_posix() for p in _iter_python_files()
+        ]
+        self.assertTrue(universe, "universe walk went vacuous")
+        uncovered = sorted(
+            rel for rel in universe
+            if not any(rel == t or rel.startswith(t + "/")
+                       for t in triggers)
+        )
+        self.assertFalse(uncovered, (
+            f"census universe file(s) outside the dispatch triggers "
+            f"(first: {uncovered[:5]}) — a member added there merges "
+            "green; extend TIERS['redos_census']['extra_triggers'] in "
+            ".github/scripts/test_scope.py"
+        ))
+        dead = sorted(
+            t for t in triggers
+            if not any(rel == t or rel.startswith(t + "/")
+                       for rel in universe)
+        )
+        self.assertFalse(dead, (
+            f"dispatch trigger(s) {dead} claim no census universe "
+            "file — drop the stale row(s) from "
+            "TIERS['redos_census']['extra_triggers']"
+        ))
+
     def test_runtime_source_has_no_members(self) -> None:
         files = _iter_python_files()
         self.assertGreater(len(files), 100, "scan roots missing?")
