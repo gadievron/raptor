@@ -794,8 +794,13 @@ def render_pattern_library() -> str:
     exemplar_lines: list[str] = []
     for strategy in sorted(_STRATEGY_EXEMPLARS):
         for ex in _STRATEGY_EXEMPLARS[strategy]:
+            # Curated module literals today, but the render path
+            # must stay forgery-safe if the table ever gains loaded
+            # entries — and the file's contract is raw-clean under
+            # the envelope audit.
             exemplar_lines.append(
-                f"\n**{ex['cve']}** ({strategy}): {ex['title']}")
+                f"\n**{ex['cve']}** ({strategy}): "
+                f"{neutralize_tag_forgery(ex['title'])}")
             exemplar_lines.append(ex["reasoning"])
     if exemplar_lines:
         parts.append("\n## Strategy exemplars")
@@ -1556,7 +1561,9 @@ def format_context_for_prompt(
         pp = ["\n### Prior attempts"]
         for ex in ctx["prior_attempts"]["exemplars"]:
             tier_label = f" [{ex['tier']}]" if ex.get("tier") else ""
-            pp.append(f"- {ex['cwe']}{tier_label}: {ex.get('summary', '')}")
+            pp.append(
+                f"- {ex['cwe']}{tier_label}: "
+                f"{neutralize_tag_forgery(ex.get('summary', ''))}")
             if ex.get("evidence"):
                 pp.append(f"  Evidence: {ex['evidence']}")
         sections.append(PromptSection("prior_attempts", "\n".join(pp), 3))
@@ -1593,7 +1600,9 @@ def format_context_for_prompt(
     if ctx.get("strategy_exemplars") and not patterns_in_system:
         ep = ["\n### Strategy exemplars"]
         for ex in ctx["strategy_exemplars"]:
-            ep.append(f"\n**{ex['cve']}** ({ex['strategy']}): {ex['title']}")
+            ep.append(
+                f"\n**{ex['cve']}** ({ex['strategy']}): "
+                f"{neutralize_tag_forgery(ex['title'])}")
             ep.append(ex["reasoning"])
         sections.append(PromptSection("strategy_exemplars", "\n".join(ep), 3))
 
