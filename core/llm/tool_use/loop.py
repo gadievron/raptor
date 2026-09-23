@@ -423,8 +423,24 @@ class ToolUseLoop:
         # warning/steering text in a tag-stripped rebuilt history
         # cannot be told apart from user text.
         known_values: set[str] = set()
+        # Every union below routes through the shared-cap merge; warn
+        # once per run when the cap clips (past it, x-source gated
+        # fields false-block newly discovered values — safe direction,
+        # but the operator should see why).
+        _cap_warned = [False]
+
+        def _absorb(new_values: set[str]) -> None:
+            if _merge_known_values(known_values, new_values) and not _cap_warned[0]:
+                _cap_warned[0] = True
+                logger.warning(
+                    "x-source: known_values cap (%d) reached — further "
+                    "discovered values will not register and gated "
+                    "fields may block them",
+                    _MAX_KNOWN_VALUES,
+                )
+
         if next_message:
-            known_values |= _extract_tokens_from_text(next_message)
+            _absorb(_extract_tokens_from_text(next_message))
         for msg in history:
             if msg.role != "user":
                 continue
@@ -436,7 +452,7 @@ class ToolUseLoop:
                                 and block.text
                                 == self._nudge_on_no_tool_call)):
                         continue
-                    known_values |= _extract_tokens_from_text(block.text)
+                    _absorb(_extract_tokens_from_text(block.text))
                 elif isinstance(block, ToolResult) and not block.is_error:
                     # The loop persists the messages-bound tool-result
                     # copy envelope-WRAPPED (wrap_tool_result below)
@@ -463,11 +479,9 @@ class ToolUseLoop:
                     # unchanged.
                     raw = getattr(block, "raw_content", None)
                     if raw is not None:
-                        known_values |= _extract_values_from_json(raw)
+                        _absorb(_extract_values_from_json(raw))
                     elif unwrap_untrusted(block.content) == block.content:
-                        known_values |= _extract_values_from_json(
-                            block.content
-                        )
+                        _absorb(_extract_values_from_json(block.content))
 
         for iteration in range(self._max_iterations):
             # ---- pre-flight: caller-supplied give-up predicate ---------
@@ -969,7 +983,7 @@ class ToolUseLoop:
                 # nothing", so its leaf strings must not become
                 # dispatchable through discovered fields either.
                 if not result.is_error and not refuse_hit:
-                    known_values |= _extract_values_from_json(raw_content)
+                    _absorb(_extract_values_from_json(raw_content))
 
                 self._emit(ToolCallReturned(
                     iteration=iteration,
@@ -1638,7 +1652,48 @@ def _stop_reason_to_term(reason: StopReason) -> str:
 
 _TOKEN_SPLIT = re.compile(r"[\s,;|\"'`(){}\[\]]+")
 _MIN_TOKEN_LEN = 3
+# Hard bound on the per-run discovered-values set — enforced at every
+# extraction lane AND at the shared-union merge (it was previously a
+# walk-local check only, so the non-JSON token fallback and the per-run
+# union escaped it: one hostile 24 MB tool result retained a
+# multi-million-entry set in the orchestration process for the whole
+# run). Trade-off, both directions: LARGER retains more legitimately
+# discovered values on very chatty runs (past the cap, new discoveries
+# stop registering and x-source gated fields start false-blocking —
+# the safe direction, loudly warned once); SMALLER bounds memory
+# tighter but false-blocks earlier. 50k values at the length ceiling
+# below is a few tens of MB worst-case — small next to message
+# history, large next to any honest run's discovery volume.
 _MAX_KNOWN_VALUES = 50_000
+# Per-value length ceiling. The pre-dispatch gate compares EXACT
+# strings, so a multi-KB "value" has no legitimate x-source use (no
+# model echoes a 6 MB blob byte-exactly into a tool argument) — but an
+# unbounded leaf let a single JSON string retain megabytes. Trade-off,
+# both directions: LARGER admits longer genuine values (full URLs with
+# long query strings, deep paths) at more retained bytes per entry;
+# SMALLER bounds memory but false-blocks any gated field whose genuine
+# value exceeds it. 1024 covers observed URL/path/id shapes with wide
+# margin. Oversized leaves are SKIPPED, not truncated — a truncated
+# entry could never match the exact-string gate anyway.
+_MAX_KNOWN_VALUE_LEN = 1024
+
+
+def _merge_known_values(dest: set[str], src: set[str]) -> bool:
+    """Merge newly extracted values into the run's shared set,
+    enforcing ``_MAX_KNOWN_VALUES`` on the UNION (the extraction-lane
+    budgets bound each result; without this, repeated near-cap results
+    still grew the run set monotonically across up to 50 iterations).
+    Already-known members are free. Returns True when the cap clipped
+    at least one new value — the caller warns once per run."""
+    clipped = False
+    for v in src:
+        if v in dest:
+            continue
+        if len(dest) >= _MAX_KNOWN_VALUES:
+            clipped = True
+            break
+        dest.add(v)
+    return clipped
 
 
 def _extract_tokens_from_text(text: str) -> set[str]:
@@ -1646,23 +1701,31 @@ def _extract_tokens_from_text(text: str) -> set[str]:
 
     Splits on whitespace/punctuation, strips edge junk, includes
     slash-split components (``"owner/repo"`` yields both the whole
-    string and ``"owner"``, ``"repo"``).
+    string and ``"owner"``, ``"repo"``). Budgeted: stops collecting at
+    ``_MAX_KNOWN_VALUES`` and skips tokens over the per-value length
+    ceiling — this is the lane hostile non-JSON blobs (file contents,
+    command output) hit.
     """
     values: set[str] = set()
     for raw in _TOKEN_SPLIT.split(text):
+        if len(values) >= _MAX_KNOWN_VALUES:
+            break
         token = raw.strip(".,;:!?()[]{}\"'<>")
-        if len(token) < _MIN_TOKEN_LEN:
+        if not (_MIN_TOKEN_LEN <= len(token) <= _MAX_KNOWN_VALUE_LEN):
             continue
         values.add(token)
         if "/" in token:
             for part in token.split("/"):
-                if len(part) >= _MIN_TOKEN_LEN:
+                if _MIN_TOKEN_LEN <= len(part) <= _MAX_KNOWN_VALUE_LEN:
                     values.add(part)
     return values
 
 
 def _extract_values_from_json(text: str) -> set[str]:
-    """Walk a JSON tool result and collect leaf strings."""
+    """Walk a JSON tool result and collect leaf strings. Budgeted like
+    the token fallback: at most ``_MAX_KNOWN_VALUES`` entries, each at
+    most ``_MAX_KNOWN_VALUE_LEN`` chars (oversized leaves are skipped
+    whole — see the constant's rationale)."""
     try:
         obj = json.loads(text)
     except (json.JSONDecodeError, TypeError):
@@ -1679,11 +1742,13 @@ def _extract_values_from_json(text: str) -> set[str]:
         elif isinstance(node, list):
             for v in node:
                 _walk(v, depth + 1)
-        elif isinstance(node, str) and len(node) >= _MIN_TOKEN_LEN:
+        elif isinstance(node, str):
+            if not (_MIN_TOKEN_LEN <= len(node) <= _MAX_KNOWN_VALUE_LEN):
+                return
             values.add(node)
             if "/" in node:
                 for part in node.split("/"):
-                    if len(part) >= _MIN_TOKEN_LEN:
+                    if _MIN_TOKEN_LEN <= len(part) <= _MAX_KNOWN_VALUE_LEN:
                         values.add(part)
 
     _walk(obj)
