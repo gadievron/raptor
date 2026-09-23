@@ -39,25 +39,39 @@ def _resolve_function_from_checklist(
     checklist: dict[str, Any],
 ) -> str | None:
     """Resolve a definition like 'src/auth.py:34' to a function name
-    using the checklist inventory."""
+    using the checklist inventory.
+
+    Span containment via the shared ``enclosing_function`` primitive
+    (line_start <= line <= line_end, innermost wins, open-ended range
+    when line_end is absent) — the previous nearest-line_start
+    heuristic attributed points inside one function to a neighbour
+    that merely STARTED closer, and returned nothing at all more than
+    20 lines into any long body. Checklist items that carry ``line``
+    instead of ``line_start`` (legacy shape, as with the ``functions``
+    section key) are normalised into a shim record so one resolver
+    owns the semantics.
+    """
     m = _FUNC_FROM_DEF_RE.match(definition or "")
     if not m:
         return None
     file_path = m.group(1)
     line = int(m.group(2))
 
+    from core.analysis.reachability import enclosing_function
+
     for fi in checklist.get("files", []):
-        if fi.get("path") != file_path:
+        if not isinstance(fi, dict) or fi.get("path") != file_path:
             continue
-        best_name = None
-        best_dist = float("inf")
-        for func in fi.get("items") or fi.get("functions") or []:
-            func_line = func.get("line_start", 0) or func.get("line", 0)
-            if func_line and abs(func_line - line) < best_dist:
-                best_dist = abs(func_line - line)
-                best_name = func.get("name")
-        if best_name and best_dist <= 20:
-            return best_name
+        funcs = fi.get("items") or fi.get("functions") or []
+        if not isinstance(funcs, list):
+            return None
+        items = [
+            {**f, "line_start": f.get("line_start") or f.get("line")}
+            for f in funcs if isinstance(f, dict)
+        ]
+        shim = {"files": [{"path": file_path, "items": items}]}
+        fn = enclosing_function(shim, file_path, line)
+        return fn.name if fn is not None else None
     return None
 
 
