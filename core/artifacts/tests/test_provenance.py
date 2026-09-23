@@ -294,3 +294,35 @@ class TestArtifactTextPromptStructureDefang:
         ):
             once = sanitise_artifact_text(payload)
             assert sanitise_artifact_text(once) == once, payload
+
+
+class TestContextMapSchemaCoversConsumedProse(unittest.TestCase):
+    """Marker-table coverage for prose fields downstream consumers
+    actually read.
+
+    The threat-model builder reads entry_points[].trust into
+    operator-facing summaries, and consumes hardcoded_secrets entries
+    (label fields only; values are dropped/redacted downstream) — a
+    field the schema does not mark is invisible to sanitise_free_text
+    AND to the schema-validation idempotence gate, leaving downstream
+    clipping as the only defense.
+    """
+
+    def test_entry_points_trust_is_marked(self):
+        cm = {"entry_points": [{"trust": "# heading\nuntrusted"}]}
+        changed = sanitise_free_text(cm, CONTEXT_MAP_TEXT_SCHEMA)
+        self.assertEqual(changed, ["entry_points[0].trust"])
+
+    def test_hardcoded_secrets_labels_are_marked(self):
+        cm = {"hardcoded_secrets": [{
+            "name": "\x1b[31mMASTER_PASSWORD\x1b[0m",
+            "notes": "# forged heading",
+            "description": "prose\nwith newline heading\n# x",
+        }]}
+        changed = sanitise_free_text(cm, CONTEXT_MAP_TEXT_SCHEMA)
+        self.assertEqual(sorted(changed), [
+            "hardcoded_secrets[0].description",
+            "hardcoded_secrets[0].name",
+            "hardcoded_secrets[0].notes",
+        ])
+        self.assertNotIn("\x1b", cm["hardcoded_secrets"][0]["name"])
