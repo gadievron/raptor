@@ -31,6 +31,7 @@ from pathlib import Path
 
 from core.json import save_json
 from core.security.env_sanitisation import safe_subprocess_env
+from core.security.markdown_render import md_inline
 
 logger = logging.getLogger(__name__)
 
@@ -299,8 +300,14 @@ def render_section(results: list[BlamedLineResult]) -> str:
         elif r.status == "not_executed":
             cell = "**NOT EXECUTED**"
         else:
-            cell = f"Unknown — {r.reason}" if r.reason else "Unknown"
-        lines.append(f"| `{r.file}:{r.line}` | {cell} |")
+            # The reason cell carries up to 200 chars of checker
+            # stderr — hostile-gcov-derived bytes. md_inline keeps a
+            # raw pipe from breaking the table row, an embedded
+            # newline from splitting the line, and image/autofetch
+            # markup from going live in the report.
+            reason = md_inline(r.reason) if r.reason else ""
+            cell = f"Unknown — {reason}" if reason else "Unknown"
+        lines.append(f"| `{md_inline(f'{r.file}:{r.line}')}` | {cell} |")
     lines.append("")
     lines.append(
         "_Generated mechanically from gcov data by "
