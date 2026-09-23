@@ -48,6 +48,9 @@ _SAFE_FILE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./+-]{0,255}$")
 _MAX_BLAMED_LINES = 100
 _CHECKER_TIMEOUT_S = 60
 _SECTION_MARKER = "## Blamed-line execution check (mechanical)"
+_SECTION_FOOTER = ("_Generated mechanically from gcov data by "
+                   "packages.binary_analysis.blamed_lines; evidence, "
+                   "not a verdict._")
 
 _SKILL_CPP = Path(".claude/skills/crash-analysis/line-execution-checker/"
                   "line_checker.cpp")
@@ -309,9 +312,7 @@ def render_section(results: list[BlamedLineResult]) -> str:
             cell = f"Unknown — {reason}" if reason else "Unknown"
         lines.append(f"| `{md_inline(f'{r.file}:{r.line}')}` | {cell} |")
     lines.append("")
-    lines.append(
-        "_Generated mechanically from gcov data by "
-        "packages.binary_analysis.blamed_lines; evidence, not a verdict._")
+    lines.append(_SECTION_FOOTER)
     return "\n".join(lines) + "\n"
 
 
@@ -348,7 +349,17 @@ def check_report(
     except OSError as exc:
         logger.warning("blamed_lines: sidecar write failed: %s", exc)
     if stamp and results:
-        base = text.split("\n---\n\n" + _SECTION_MARKER)[0]
+        # Replace only a section WE previously stamped: strip from the
+        # LAST delimiter occurrence, and only when the tail carries the
+        # mechanical footer. Splitting on the first occurrence
+        # truncated a report whose agent prose legitimately contained
+        # the delimiter byte sequence.
+        delim = "\n---\n\n" + _SECTION_MARKER
+        idx = text.rfind(delim)
+        if idx != -1 and _SECTION_FOOTER in text[idx:]:
+            base = text[:idx]
+        else:
+            base = text
         try:
             report_path.write_text(
                 base.rstrip("\n") + "\n" + render_section(results),
