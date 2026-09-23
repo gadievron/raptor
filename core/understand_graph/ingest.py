@@ -906,10 +906,12 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
         )
         return None
 
-    # Fresh temp store beside the live one; clear any leftover from a
-    # previously interrupted rebuild first.
+    # Fresh temp store beside the live one; clear leftovers from ANY
+    # previously interrupted rebuild first (pid-suffixed, so a crashed
+    # rebuild's temp would otherwise accumulate forever).
     temp_path = graph_path.with_name(f".rebuild-{os.getpid()}-{graph_path.name}")
-    remove_graph_db(temp_path)
+    for stale in graph_path.parent.glob(f".rebuild-*-{graph_path.name}*"):
+        stale.unlink(missing_ok=True)
 
     run_dirs: list[tuple[str, Path]] = []
     for child in sorted(project_dir.iterdir()):
@@ -947,9 +949,13 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
                 lane(d, target, graph_path=temp_path)
             except Exception as exc:  # noqa: BLE001 — per-run containment: one bad artefact never costs the rest
                 skipped += 1
+                # Exception text can quote artifact-derived strings —
+                # escape before the operator TTY.
+                from core.security.log_sanitisation import sanitise_for_terminal
                 print(
                     f"graph: rebuild skipped {lane.__name__} for "
-                    f"{d.name} ({exc})",
+                    f"{sanitise_for_terminal(d.name)} "
+                    f"({sanitise_for_terminal(str(exc))})",
                     file=sys.stderr,
                 )
 
@@ -959,7 +965,9 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
             ingest_annotations(project_dir, target, graph_path=temp_path)
         except Exception as exc:  # noqa: BLE001 — same per-run containment
             skipped += 1
-            print(f"graph: rebuild skipped annotations ({exc})", file=sys.stderr)
+            from core.security.log_sanitisation import sanitise_for_terminal
+            print(f"graph: rebuild skipped annotations "
+                  f"({sanitise_for_terminal(str(exc))})", file=sys.stderr)
     if skipped:
         print(f"graph: rebuild skipped {skipped} artefact set(s)", file=sys.stderr)
 

@@ -187,3 +187,24 @@ def test_rebuild_refuses_foreign_directory(tmp_path, capsys):
         assert "refus" in capsys.readouterr().err.lower()
     finally:
         mgr.delete("rebuild-foreign-dir")
+
+
+def test_rebuild_clears_stale_temp_from_crashed_rebuild(tmp_path):
+    """A temp store left by a crashed rebuild (any pid) is cleared on
+    the next rebuild instead of accumulating beside the live store."""
+    target = tmp_path / "target"
+    target.mkdir()
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / ".raptor-project-root").touch()
+    _write_run_artifacts(project_dir / "run_b", target)
+
+    graph_dir = project_dir / "graph"
+    graph_dir.mkdir()
+    stale = graph_dir / ".rebuild-99999-raptor.graph.sqlite"
+    stale.write_bytes(b"stale temp from a crashed rebuild")
+
+    result = rebuild_graph(project_dir)
+    assert result is not None
+    assert not stale.exists()
+    assert not list(graph_dir.glob(".rebuild-*"))

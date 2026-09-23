@@ -186,3 +186,39 @@ def test_newer_schema_raises_typed_error(tmp_path):
         open_graph(db)
     # The store itself is untouched.
     assert db.exists()
+
+
+def test_migration_failure_mid_transaction_leaves_v1_intact(tmp_path, monkeypatch):
+    """Adversarial direction: a crash INSIDE the migration transaction
+    (after the v2 swap, before commit) rolls the whole migration back
+    — the v1 store stays byte-consistent and the next clean open
+    migrates it successfully."""
+    from core.understand_graph import store as store_mod
+
+    db = tmp_path / "raptor.graph.sqlite"
+    _make_v1_db(db)
+
+    def bomb(_conn):
+        raise sqlite3.OperationalError("simulated mid-migration crash")
+
+    monkeypatch.setattr(store_mod, "_migrate_3", bomb)
+    with pytest.raises(sqlite3.OperationalError):
+        open_graph(db)
+
+    raw = sqlite3.connect(db)
+    try:
+        assert raw.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert raw.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == 3
+        tables = {r[0] for r in raw.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "nodes_v1_tmp" not in tables
+    finally:
+        raw.close()
+
+    monkeypatch.undo()
+    conn = open_graph(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == 3
+        assert conn.execute("PRAGMA user_version").fetchone()[0] >= 3
+    finally:
+        conn.close()
