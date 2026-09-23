@@ -505,7 +505,12 @@ def _fetch_pypi(
         # and marker; keep name + specifier. Extras-gated entries
         # deliberately ride along (see docstring).
         spec = entry.split(";", 1)[0].strip()
-        spec = re.sub(r"\[[^\]]+\]", "", spec)        # drop extras
+        # Bounded extras body: an unbounded ``[^\]]+`` re-scans every
+        # planted ``[`` inside an unclosed bracket — quadratic on
+        # hostile registry metadata. 256 is far above any real
+        # extras list; a longer body is left in place and the entry
+        # is then skipped by the name match below.
+        spec = re.sub(r"\[[^\]]{1,256}\]", "", spec)  # drop extras
         m = re.match(r"^\s*([A-Za-z0-9._-]+)\s*(.*?)\s*$", spec)
         if not m:
             continue

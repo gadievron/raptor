@@ -66,9 +66,13 @@ _DANGEROUS_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
     # previous ``\s+[^|]*\s*`` form had three adjacent overlapping
     # quantifiers (the negated class includes whitespace), which was
     # quadratic on "curl" + long whitespace runs with no pipe.
-    (re.compile(r"\bcurl\b[^|\n]*\|\s*(?:bash|sh|zsh)\b"),
+    # The class is also bounded ({0,1000}): unbounded, every planted
+    # ``curl``/``wget`` token on an unpiped line re-scanned the rest
+    # of the line — quadratic on hostile hook text. 1000 is far above
+    # any real fetch-and-pipe command; a longer gap stops matching.
+    (re.compile(r"\bcurl\b[^|\n]{0,1000}\|\s*(?:bash|sh|zsh)\b"),
      "curl piped to shell"),
-    (re.compile(r"\bwget\b[^|\n]*\|\s*(?:bash|sh|zsh)\b"),
+    (re.compile(r"\bwget\b[^|\n]{0,1000}\|\s*(?:bash|sh|zsh)\b"),
      "wget piped to shell"),
     # flag tokens are \S+ (not [^ ]+): the space-only negation let a
     # tab-run split between the token and the separator — quadratic.

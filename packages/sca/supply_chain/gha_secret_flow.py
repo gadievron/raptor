@@ -192,8 +192,12 @@ def _action_name(uses: str) -> str:
 _SECRETS_LITERAL_RE = re.compile(
     r"\$\{\{\s*secrets\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}"
 )
+# The key body is bounded: an unbounded ``[^\]]+`` re-scans every
+# planted ``${{ secrets[`` opener inside an unclosed access —
+# quadratic on hostile workflow text. 256 is far above any real
+# computed-key expression; a longer body stops matching.
 _SECRETS_DICT_RE = re.compile(
-    r"\$\{\{\s*secrets\[[^\]]+\]\s*\}\}"          # computed access
+    r"\$\{\{\s*secrets\[[^\]]{1,256}\]\s*\}\}"    # computed access
 )
 _TOJSON_SECRETS_RE = re.compile(
     r"\$\{\{\s*toJSON\s*\(\s*secrets\s*\)\s*\}\}",
@@ -868,10 +872,16 @@ class _JobContext:
     # ``upload-artifact`` for unrelated build outputs).
 
 
+# The argument fillers here and in _VAR_DUMP_RE_FACTORY are bounded:
+# unbounded, every planted command keyword on an unredirected line
+# re-scans the rest of the line — quadratic on hostile workflow
+# text. The bounds sit far above any real dump-to-file command
+# line (and, in the var-dump shape, keep the filler/variable/filler
+# fan-out constant); a longer gap stops matching.
 _ENV_DUMP_RE = re.compile(
     r"""
     \b(?:env|printenv|set|export\s+-p)\b   # env-dumping commands
-    [^\n|>]*                                # anything except pipe/newline/redirect
+    [^\n|>]{0,500}                          # anything except pipe/newline/redirect
     >+(?!>)                                 # all consecutive > (no backtracking past last >)
     \s*
     (?:"|'|)                                # optional quote
@@ -883,12 +893,17 @@ _ENV_DUMP_RE = re.compile(
 # (same language — the filler absorbed any remainder): the naive
 # ``\s+[^\n|]*?`` overlapped the run and the filler — quadratic on
 # an echo-opening line ending in a whitespace run.
+# The pre-variable filler is additionally tempered against the
+# variable reference itself, so a line dense in ``$VAR`` teasers
+# cannot multiply the filler/variable/filler decompositions — the
+# match always binds the first reference in its window; a redirect
+# more than the filler bound past that reference stops matching.
 _VAR_DUMP_RE_FACTORY = lambda var: re.compile(
     rf"""
     \b(?:echo|printf)\s+(?=\S)
-    [^\n|]*?
+    (?:(?!\$\{{?{re.escape(var)})[^\n|]){{0,200}}?
     \$\{{?{re.escape(var)}\}}?
-    [^\n|>]*
+    [^\n|>]{{0,300}}
     >+(?!>)
     \s*
     (?!\s*\$\{{?GITHUB_(?:ENV|OUTPUT|PATH))
@@ -1014,9 +1029,13 @@ def _is_truthy_run_body_egress(body: str) -> bool:
     # artifact uploads later)
     if re.search(r">>?\s*\$?GITHUB_(OUTPUT|ENV)|>>?\s*/tmp/", body):
         return True
-    # IFS / base64 / curl-pipe-shell
+    # IFS / base64 / curl-pipe-shell. The curl-to-pipe gap is
+    # bounded: unbounded, every planted ``curl`` on an unpiped line
+    # re-scanned the rest of the line — quadratic on hostile run
+    # bodies. 1000 is far above any real fetch-and-pipe command.
     return bool(
-        re.search(r"curl.+\|\s*(?:bash|sh)|base64\s+(?:-d|--decode)", body)
+        re.search(r"curl.{1,1000}\|\s*(?:bash|sh)|base64\s+(?:-d|--decode)",
+                  body)
     )
 
 

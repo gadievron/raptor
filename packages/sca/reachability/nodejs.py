@@ -62,11 +62,21 @@ _REQUIRE_RE = re.compile(
       # remainder); the naive ``\s+[^'";]+?`` overlapped the run and
       # the clause — quadratic on an import ending in a whitespace
       # run.
-      | \bimport\s+(?=\S)(?:[^'";]+?\bfrom\s+)?['"`]([^'"`]+)['"`]
-                                                          # static import
+      # Both clause fillers are tempered against a bare
+      # ``import``/``export`` keyword: with an untempered loop,
+      # every planted keyword inside an unterminated clause
+      # re-scanned the rest of the clause — quadratic on hostile
+      # source. Real clauses never carry the bare reserved word
+      # (identifiers like ``exports`` still pass the \b fence), so
+      # the language over real code is unchanged.
+      | \bimport\s+(?=\S)
+            (?:(?:(?!\b(?:import|export)\b)[^'";])+?\bfrom\s+)?
+            ['"`]([^'"`]+)['"`]                               # static import
       # (?=\S) pins the keyword gap here too — the lazy token loop
       # admits whitespace, so an unpinned run split against it.
-      | \bexport\s+(?=\S)(?:(?:[^'";]|"[^"\n;]*"|'[^'\n;]*')*?\bfrom\s+)
+      | \bexport\s+(?=\S)
+            (?:(?:"[^"\n;]*"|'[^'\n;]*'|(?!\b(?:import|export)\b)[^'";])*?
+               \bfrom\s+)
             ['"`]([^'"`]+)['"`]                               # re-export
             # The quoted-string alternatives keep ES2022 string-named
             # re-exports (``export { a as "x y" } from 'm'``) matched

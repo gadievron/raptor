@@ -855,7 +855,12 @@ _MAX_RESOLVED_VALUE_LEN = 4096
 
 # Embedded-capable property reference — same grammar as pom.py's
 # substitution pass (any ``${...}`` span, anywhere in the value).
-_PROPERTY_REF_RE = re.compile(r"\$\{([^}]+)\}")
+# The name body is bounded: an unbounded ``[^}]+`` re-scans every
+# planted ``${`` opener inside an unclosed reference — quadratic on
+# hostile pom text (the size budget below bounds materialised OUTPUT,
+# not the scan). 256 is far above any real Maven property name; a
+# longer body stays unsubstituted (and unresolvable downstream).
+_PROPERTY_REF_RE = re.compile(r"\$\{([^}]{1,256})\}")
 
 
 def _resolve_property_refs(
