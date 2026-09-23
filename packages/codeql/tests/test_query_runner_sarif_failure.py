@@ -302,3 +302,35 @@ class TestNonSarifJsonIsFailure:
             ],
         }), encoding="utf-8")
         assert runner._count_sarif_findings(p) == 2
+
+
+class TestOversizedSarifDiagnosis:
+    """The refusal stays honest-loud, but the oversized case is
+    diagnosed with the mechanical facts (size vs SARIF_MAX_BYTES) —
+    a completed multi-hour analyze discarded over the parser cap
+    must name the limit that fired and that the artifact is intact,
+    not the undifferentiated parse/size/schema wording."""
+
+    def test_oversized_reason_names_the_cap(
+        self, runner, tmp_path, monkeypatch,
+    ):
+        import core.sarif.parser as sarif_parser
+        monkeypatch.setattr(sarif_parser, "SARIF_MAX_BYTES", 64)
+        big = tmp_path / "results.sarif"
+        big.write_text(json.dumps({"runs": [{"results": []}]}) + " " * 200)
+        reason = runner._unreadable_sarif_reason(big)
+        assert "exceeds the parser cap" in reason
+        assert "SARIF_MAX_BYTES=64" in reason
+        assert "artifact is intact" in reason
+
+    def test_undersized_unreadable_keeps_parse_wording(
+        self, runner, tmp_path,
+    ):
+        bad = tmp_path / "results.sarif"
+        bad.write_text("{not json")
+        reason = runner._unreadable_sarif_reason(bad)
+        assert "parse/schema failure" in reason
+
+    def test_missing_wording_unchanged(self, runner, tmp_path):
+        reason = runner._unreadable_sarif_reason(tmp_path / "gone.sarif")
+        assert "SARIF output missing" in reason
