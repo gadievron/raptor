@@ -1121,6 +1121,12 @@ class TestFuturesTimeoutClassCoverage:
             """py3.10 stand-in: not a builtin TimeoutError subclass."""
 
         def raising_as_completed(futures, timeout=None):
+            # Deterministic: let the trivial task finish first so the
+            # harvest path (not thread-scheduling luck) decides the
+            # outcome. The class-coverage claim under test is only
+            # that the except clause CATCHES this class.
+            for f in list(futures):
+                f.result()
             raise DistinctTimeout
 
         monkeypatch.setattr(
@@ -1131,7 +1137,9 @@ class TestFuturesTimeoutClassCoverage:
         per_model, failed = dispatch_mod._dispatch_parallel(
             lambda m: [], [FakeModel("m1")], max_parallel=1, timeout=0.1,
         )
-        assert failed == ["m1"]
+        # Caught (no crash) — and the completed future is harvested
+        # as a healthy zero-result member, not marked failed.
+        assert failed == []
         assert per_model == {"m1": []}
 
     def test_real_futures_timeout_error_is_caught(self, monkeypatch):
@@ -1140,6 +1148,9 @@ class TestFuturesTimeoutClassCoverage:
         import core.llm.multi_model.dispatch as dispatch_mod
 
         def raising_as_completed(futures, timeout=None):
+            # Deterministic — see the DistinctTimeout variant above.
+            for f in list(futures):
+                f.result()
             raise CFTimeout
 
         monkeypatch.setattr(
@@ -1147,7 +1158,8 @@ class TestFuturesTimeoutClassCoverage:
         per_model, failed = dispatch_mod._dispatch_parallel(
             lambda m: [], [FakeModel("m1")], max_parallel=1, timeout=0.1,
         )
-        assert failed == ["m1"]
+        assert failed == []
+        assert per_model == {"m1": []}
 
 
 class TestPanelTimeoutParameter:
@@ -1247,3 +1259,70 @@ class TestFailedModelsExcludedFromAdapterView:
         )
         assert result.failed_models == []
         assert result.correlation["recall_signals"]["v1"] == "majority"
+
+
+class TestTimeoutHarvestsCompletedFutures:
+    """The panel-timeout branch abandons HUNG workers by design — but a
+    future that COMPLETED between as_completed's last yield and the
+    expiry is a paid-for result. Discarding it and marking the model
+    failed both loses the result and mis-labels a healthy member
+    (failed_models consumers may alert). The except branch must
+    harvest done futures before marking the remainder failed."""
+
+    def test_completed_but_unyielded_future_harvested(self, monkeypatch):
+        import concurrent.futures as cf
+
+        from core.llm.multi_model import dispatch as dispatch_mod
+
+        def expired_after_completion(futures, timeout=None):
+            # Deterministic stand-in for the race window: every
+            # worker has finished, but the timeout fires before any
+            # future is yielded.
+            for f in list(futures):
+                f.result()
+            raise cf.TimeoutError(
+                "simulated: expiry between completion and yield",
+            )
+
+        monkeypatch.setattr(
+            dispatch_mod, "as_completed", expired_after_completion,
+        )
+
+        def task(model):
+            return [{"id": "v1", "note": "paid result"}]
+
+        per_model_raw, failed = dispatch_mod._dispatch_parallel(
+            task, [FakeModel("model-a")], 2, timeout=5,
+        )
+        assert per_model_raw == {
+            "model-a": [{"id": "v1", "note": "paid result"}],
+        }
+        assert failed == []
+
+    def test_genuinely_hung_worker_still_marked_failed(self, monkeypatch):
+        import concurrent.futures as cf
+
+        from core.llm.multi_model import dispatch as dispatch_mod
+
+        def instant_expiry(futures, timeout=None):
+            raise cf.TimeoutError("simulated: nothing completed")
+
+        monkeypatch.setattr(dispatch_mod, "as_completed", instant_expiry)
+
+        started = threading.Event()
+        release = threading.Event()
+
+        def task(model):
+            started.set()
+            release.wait(timeout=10)
+            return []
+
+        try:
+            per_model_raw, failed = dispatch_mod._dispatch_parallel(
+                task, [FakeModel("model-a")], 2, timeout=5,
+            )
+            assert started.wait(timeout=5)
+            assert per_model_raw == {"model-a": []}
+            assert failed == ["model-a"]
+        finally:
+            release.set()

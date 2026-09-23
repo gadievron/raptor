@@ -439,6 +439,45 @@ def _dispatch_parallel(
     per_model_raw: dict[str, list[dict[str, Any]]] = {}
     failed: list[str] = []
 
+    def _ingest_done_future(name: str, future: Any) -> None:
+        """Record one COMPLETED future's outcome (the future must be
+        done — ``result(timeout=0)`` never blocks). Shared by the
+        happy-path yield loop and the timeout branch's harvest."""
+        try:
+            results = future.result(timeout=0)
+        except Exception as exc:
+            logger.warning(
+                "Model %r task raised: %s", name, exc,
+                exc_info=True,
+            )
+            per_model_raw[name] = []
+            failed.append(name)
+            return
+
+        if not isinstance(results, list):
+            logger.warning(
+                "Model %r task returned %s, expected list — treating as failure", name, type(results).__name__)
+            per_model_raw[name] = []
+            failed.append(name)
+            return
+
+        non_dict = [
+            type(r).__name__
+            for r in results
+            if not isinstance(r, dict)
+        ]
+        if non_dict:
+            logger.warning(
+                "Model %r task returned non-dict items (%s%s) — treating as failure. Item contract is List[Dict[str, Any]].", name, non_dict[:3], ('...' if len(non_dict) > 3 else '')
+            )
+            per_model_raw[name] = []
+            failed.append(name)
+            return
+
+        per_model_raw[name] = results
+        if results and all(_is_error(r) for r in results):
+            failed.append(name)
+
     workers = max(1, min(max_parallel, len(models)))
     ex = ThreadPoolExecutor(max_workers=workers)
     try:
@@ -446,57 +485,32 @@ def _dispatch_parallel(
         try:
             completed = as_completed(futures, timeout=timeout)
             for future in completed:
-                model = futures[future]
-                name = model.model_name
-                try:
-                    results = future.result(timeout=timeout)
-                except Exception as exc:
-                    logger.warning(
-                        "Model %r task raised: %s", name, exc,
-                        exc_info=True,
-                    )
-                    per_model_raw[name] = []
-                    failed.append(name)
-                    continue
-
-                if not isinstance(results, list):
-                    logger.warning(
-                        "Model %r task returned %s, expected list — treating as failure", name, type(results).__name__)
-                    per_model_raw[name] = []
-                    failed.append(name)
-                    continue
-
-                non_dict = [
-                    type(r).__name__
-                    for r in results
-                    if not isinstance(r, dict)
-                ]
-                if non_dict:
-                    logger.warning(
-                        "Model %r task returned non-dict items (%s%s) — treating as failure. Item contract is List[Dict[str, Any]].", name, non_dict[:3], ('...' if len(non_dict) > 3 else '')
-                    )
-                    per_model_raw[name] = []
-                    failed.append(name)
-                    continue
-
-                per_model_raw[name] = results
-                if results and all(_is_error(r) for r in results):
-                    failed.append(name)
+                _ingest_done_future(futures[future].model_name, future)
         except (TimeoutError, FuturesTimeoutError):
             # Both classes: ``as_completed`` raises
             # ``concurrent.futures.TimeoutError``, which only became an
             # alias of the builtin in Python 3.11 — on the 3.10 floor a
             # bare ``except TimeoutError`` misses it and the whole panel
             # crashes instead of isolating the straggler.
-            # Mark models that didn't complete as failed.
-            for model in futures.values():
-                if model.model_name not in per_model_raw:
-                    logger.warning(
-                        "Model %r timed out after %.0fs",
-                        model.model_name, timeout,
-                    )
-                    per_model_raw[model.model_name] = []
-                    failed.append(model.model_name)
+            #
+            # Harvest first, then mark: a future that COMPLETED
+            # between as_completed's last yield and the expiry is a
+            # paid-for result — discarding it both lost the result
+            # and mis-labelled a healthy member failed. Only models
+            # whose future is genuinely not done (the hung workers
+            # the documented abandonment targets) are marked failed.
+            for future, model in futures.items():
+                name = model.model_name
+                if name in per_model_raw:
+                    continue
+                if future.done():
+                    _ingest_done_future(name, future)
+                    continue
+                logger.warning(
+                    "Model %r timed out after %.0fs", name, timeout,
+                )
+                per_model_raw[name] = []
+                failed.append(name)
     finally:
         # Never wait on hung workers (see docstring) — cancel what's
         # still queued and return; on the happy path everything has
