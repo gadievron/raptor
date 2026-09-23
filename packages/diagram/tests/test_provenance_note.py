@@ -69,6 +69,60 @@ class TestProvenanceNote(unittest.TestCase):
             out = render_directory(Path(tmp))
             self.assertIn("`understand:trace`", out)
 
+    # The three graph-derived sections were outside the original
+    # plumbing's derivation — the stamp existed and the reader lanes
+    # never consulted it.
+
+    def test_stamped_edge_obligations_gets_note(self):
+        with TemporaryDirectory() as tmp:
+            save_json(Path(tmp) / "edge-obligations.json", _stamped({
+                "tier1": [{"caller_file": "a.c", "caller": "f",
+                           "callee_file": "b.c", "callee": "g",
+                           "reason": "boundary:x"}],
+                "tier2": [], "blind_spots": [], "stats": {},
+            }, generator="audit:edges"))
+            out = render_directory(Path(tmp))
+            self.assertIn("Edge Obligations", out)
+            self.assertIn("`audit:edges`", out)
+
+    def test_stamped_graph_priority_paths_gets_note(self):
+        with TemporaryDirectory() as tmp:
+            save_json(Path(tmp) / "graph-priority-paths.json", {
+                "paths": [_stamped({
+                    "id": "GP-1",
+                    "entry": {"id": "EP-1", "label": "main"},
+                    "sink": {"id": "S-1", "label": "exec"},
+                }, generator="understand:graph")],
+            })
+            out = render_directory(Path(tmp))
+            self.assertIn("Graph Priority Paths", out)
+            self.assertIn("`understand:graph`", out)
+
+    def test_stamped_graph_diff_gets_note(self):
+        with TemporaryDirectory() as tmp:
+            save_json(Path(tmp) / "graph-diff.json", _stamped({
+                "is_diffable": True,
+                "base_snapshot": {"id": "s1"},
+                "head_snapshot": {"id": "s2"},
+                "new_risks": [],
+            }, generator="understand:graph-diff"))
+            out = render_directory(Path(tmp))
+            self.assertIn("Graph Snapshot Diff", out)
+            self.assertIn("`understand:graph-diff`", out)
+
+    def test_legacy_graph_sections_render_without_note(self):
+        with TemporaryDirectory() as tmp:
+            save_json(Path(tmp) / "edge-obligations.json", {
+                "tier1": [], "tier2": [], "blind_spots": [], "stats": {},
+            })
+            save_json(Path(tmp) / "graph-diff.json", {
+                "is_diffable": True,
+                "base_snapshot": {"id": "s1"},
+                "head_snapshot": {"id": "s2"},
+            })
+            out = render_directory(Path(tmp))
+            self.assertNotIn("Provenance: LLM-derived", out)
+
 
 if __name__ == "__main__":
     unittest.main()
