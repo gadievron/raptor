@@ -142,8 +142,17 @@ def _slug(value: str) -> str:
 
 
 def _c_string(value: str) -> str:
+    # Non-printable / non-ASCII bytes use FIXED-WIDTH octal escapes
+    # (\ooo), never \x: C hex escapes are greedy — "\xe9" followed by
+    # a hex-digit character parses as one multi-digit escape (\xe91 is
+    # out of byte range: miscompile, or the wrong byte), so a
+    # non-ASCII symbol name yielded a harness that failed to build or
+    # dlsym'd the wrong name. Octal stops at three digits by
+    # definition, so a following literal digit can never be absorbed
+    # (that also covers NUL: \000 + '7' stays two tokens).
     out = ['"']
-    for ch in str(value):
+    for byte in str(value).encode('utf-8'):
+        ch = chr(byte)
         if ch == '"':
             out.append('\\"')
         elif ch == '\\':
@@ -154,12 +163,10 @@ def _c_string(value: str) -> str:
             out.append('\\r')
         elif ch == '\t':
             out.append('\\t')
-        elif ch == '\0':
-            out.append('\\0')
-        elif 0x20 <= ord(ch) <= 0x7e:
+        elif 0x20 <= byte <= 0x7e:
             out.append(ch)
         else:
-            out.append(f'\\x{ord(ch):02x}')
+            out.append(f'\\{byte:03o}')
     out.append('"')
     return ''.join(out)
 

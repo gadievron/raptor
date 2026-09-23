@@ -765,16 +765,33 @@ def test_load_investigation_summary_truncates_ranked(tmp_path):
 def test_c_string_null_byte():
     from packages.binary_analysis.harness import _c_string
 
-    assert _c_string("a\x00b") == '"a\\0b"'
+    assert _c_string("a\x00b") == '"a\\000b"'
+
+
+def test_c_string_null_byte_before_digit_stays_two_tokens():
+    from packages.binary_analysis.harness import _c_string
+
+    # '\0' + '7' would parse as one octal escape \07 (BEL);
+    # fixed-width \000 cannot absorb the following digit.
+    assert _c_string("\x007") == '"\\0007"'
 
 
 def test_c_string_non_ascii():
     from packages.binary_analysis.harness import _c_string
 
-    result = _c_string("café")
-    assert result.startswith('"')
-    assert result.endswith('"')
-    assert "\\x" in result
+    # UTF-8 bytes as fixed-width octal — é is C3 A9.
+    assert _c_string("café") == '"caf\\303\\251"'
+
+
+def test_c_string_escape_never_absorbs_following_hex_digit():
+    from packages.binary_analysis.harness import _c_string
+
+    # Greedy C hex escapes made "é1" render as "\xe91" — a single
+    # out-of-range escape (miscompile or wrong byte). Octal escapes
+    # are fixed-width, so the literal '1' survives as itself.
+    result = _c_string("é1")
+    assert result == '"\\303\\2511"'
+    assert "\\x" not in result
 
 
 def test_c_string_empty():
