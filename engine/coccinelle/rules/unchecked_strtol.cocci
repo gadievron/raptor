@@ -43,9 +43,30 @@ msg = {
 }
 print("COCCIRESULT:" + json.dumps(msg))
 
+// The canonical errno-checked overflow idiom (`errno = 0;
+// v = strtol(s, NULL, 10); if (errno == ERANGE) ...`) deliberately
+// passes a NULL endptr ("whole-string or bust") and catches overflow
+// through errno — the same suppression the &endptr arm above grants
+// via its `when != errno`. Bind those positions and exclude them.
+@strtol_null_errno_checked exists@
+expression S, BASE;
+identifier V;
+type T;
+statement S1;
+position p;
+@@
+
+(
+  V = \(strtol\|strtoul\|strtoll\|strtoull\|strtoimax\|strtoumax\)(S, NULL@p, BASE);
+|
+  T V = \(strtol\|strtoul\|strtoll\|strtoull\|strtoimax\|strtoumax\)(S, NULL@p, BASE);
+)
+  ... when any
+  if (<+... errno ...+>) S1
+
 @strtol_null_endptr@
 expression S, BASE;
-position p;
+position p != strtol_null_errno_checked.p;
 @@
 
 * \(strtol\|strtoul\|strtoll\|strtoull\|strtoimax\|strtoumax\)(S, NULL@p, BASE)
