@@ -132,6 +132,22 @@ def test_empty_content_max_tokens_names_budget_exhaustion():
     assert "stop_reason=max_tokens" in str(e.value)
 
 
+def test_empty_content_max_tokens_carries_truncation_marker():
+    """This guard's message contains NEITHER "truncated" NOR "output
+    token limit", so phrase-matching consumers (study split-retry,
+    audit _classify_error) can only classify it via the typed
+    ``llm_truncation`` marker every truncation guard stamps."""
+    with pytest.raises(RuntimeError) as e:
+        _generate_with(_response(stop_reason="max_tokens"))
+    assert getattr(e.value, "llm_truncation", False) is True
+
+
+def test_empty_content_refusal_carries_no_truncation_marker():
+    with pytest.raises(RuntimeError) as e:
+        _generate_with(_response(stop_reason="refusal"))
+    assert not getattr(e.value, "llm_truncation", False)
+
+
 def test_empty_content_end_turn_carries_stop_reason():
     with pytest.raises(RuntimeError) as e:
         _generate_with(_response(stop_reason="end_turn"))

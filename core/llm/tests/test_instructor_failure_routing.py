@@ -292,6 +292,8 @@ def test_fallback_truncation_raises_non_retryable(monkeypatch) -> None:
     assert not _is_retryable_error(excinfo.value)
     # The audit orchestrator's _classify_error keys on this phrasing.
     assert "truncated (output token limit" in str(excinfo.value)
+    # Attribute-first consumers key on the typed marker.
+    assert getattr(excinfo.value, "llm_truncation", False) is True
 
 
 def test_fallback_truncation_classifies_as_truncation() -> None:
@@ -417,6 +419,8 @@ def test_anthropic_truncation_skips_fallback_and_names_condition(
             provider.generate_structured("p", _SCHEMA)
     # The audit orchestrator's _classify_error keys on this phrasing.
     assert "truncated (output token limit" in str(excinfo.value)
+    # Attribute-first consumers key on the typed marker.
+    assert getattr(excinfo.value, "llm_truncation", False) is True
     assert fallback_calls == []
     assert provider._instructor_consec_failures == 0
     assert provider.instructor_client is not None

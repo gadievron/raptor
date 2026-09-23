@@ -2622,6 +2622,289 @@ class TestPhase2FailureHonesty:
         assert len(big) == 1
 
 
+class TestPhase2TruncationRecovery:
+    """Output-truncated batches split-retry instead of failing whole."""
+
+    _TRUNC_MSG = (
+        "Structured response truncated (output token limit reached, "
+        "stop_reason=max_tokens, instructor tool-use leg)"
+    )
+
+    def _items(self, n: int) -> list[StudyItem]:
+        return [StudyItem(id=f"i{k}", kind="function", name=f"fn{k}",
+                          file="x.c") for k in range(n)]
+
+    class _FakeClient:
+        """Truncates when a batch carries more items than ``fits``,
+        or any ``poison`` item at all — mirrors the provider guard's
+        RuntimeError chain. ``marker_only=True`` raises with the
+        typed ``llm_truncation`` marker and NO legacy phrasing (the
+        Gemini-shaped case)."""
+
+        def __init__(self, fits: int,
+                     poison: "set[str] | None" = None,
+                     marker_only: bool = False) -> None:
+            self.fits = fits
+            self.poison = poison or set()
+            self.marker_only = marker_only
+            self.batch_sizes: list[int] = []
+
+        def generate_structured(self, prompt: str, schema, **kw):
+            import re as _re
+            names = set(_re.findall(r"\bfn\d+\b", prompt))
+            self.batch_sizes.append(len(names))
+            if len(names) > self.fits or names & self.poison:
+                if self.marker_only:
+                    err = RuntimeError(
+                        "model stopped early (finish_reason=cap)")
+                    err.llm_truncation = True
+                    raise err
+                raise RuntimeError(
+                    TestPhase2TruncationRecovery._TRUNC_MSG)
+            return ({"concepts": [
+                {"id": n, "description": f"desc {n}",
+                 "evidence": [{"type": "doc", "file": "x.c",
+                               "observation": "obs"}],
+                 "confidence": "inferred"} for n in sorted(names)],
+                "invariants": [], "contracts": []}, "raw")
+
+    def test_truncated_batch_splits_and_recovers(self):
+        items = self._items(8)
+        client = self._FakeClient(fits=2)
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=8)
+        assert sorted(c.id for c in concepts) == sorted(
+            f"fn{k}" for k in range(8))
+        # First attempt was the oversized batch; recovery worked down
+        # to half-sizes that fit.
+        assert client.batch_sizes[0] == 8
+        assert [s for s in client.batch_sizes if s <= 2]
+
+    def test_single_poison_item_recorded_failed_phase_succeeds(self):
+        items = self._items(3)
+        client = self._FakeClient(fits=8, poison={"fn0"})
+        discards: list[dict] = []
+        concepts, *_ = run_phase2(
+            items, "t/", client, batch_target=8,
+            discard_sink=discards,
+        )
+        assert sorted(c.id for c in concepts) == ["fn1", "fn2"]
+        assert any(
+            d.get("id") == "fn0" and "truncated" in d.get("reason", "")
+            for d in discards
+        )
+
+    def test_all_items_truncating_still_refuses_empty_model(self):
+        import pytest
+
+        from core.concepts.study import _BatchLLMError
+        items = self._items(2)
+        client = self._FakeClient(fits=0)
+        with pytest.raises(_BatchLLMError, match="refusing"):
+            run_phase2(items, "t/", client, batch_target=8)
+
+    def test_initial_batch_size_clamped_to_output_budget(
+        self, monkeypatch,
+    ):
+        # ceiling = 1024 // _PHASE2_ITEM_OUTPUT_TOKENS_EST(512) = 2
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "1024")
+        items = self._items(6)
+        client = self._FakeClient(fits=6)
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=80)
+        assert client.batch_sizes
+        assert all(s <= 2 for s in client.batch_sizes)
+        assert len(concepts) == 6
+
+    def test_typed_marker_engages_without_legacy_phrasing(self):
+        """The Gemini-shaped regression: a truncation error carrying
+        ONLY the typed marker (no legacy phrase) must still trigger
+        the split retry."""
+        items = self._items(4)
+        client = self._FakeClient(fits=2, marker_only=True)
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=4)
+        assert sorted(c.id for c in concepts) == sorted(
+            f"fn{k}" for k in range(4))
+
+    def test_truncation_failures_do_not_feed_the_breaker_serial(self):
+        """_CONSECUTIVE_FAIL_LIMIT truncation-failed batches in a row
+        must not abort the loop — a later healthy batch still runs."""
+        # One poison single-item batch per file, then a clean batch;
+        # the poison batches each fail truncation-flagged. `calls`
+        # boosts the poison items' priority score so they batch
+        # FIRST — the clean batch must come after the streak.
+        items = [StudyItem(id=f"p{k}", kind="function", name=f"fn{k}",
+                           file=f"p{k}/f.c", calls=["a", "b", "c"])
+                 for k in range(_CONSECUTIVE_FAIL_LIMIT)]
+        items.append(StudyItem(id="ok", kind="function", name="fn9",
+                               file="ok/f.c"))
+        client = self._FakeClient(
+            fits=8,
+            poison={f"fn{k}" for k in range(_CONSECUTIVE_FAIL_LIMIT)},
+        )
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=1)
+        assert [c.id for c in concepts] == ["fn9"]
+
+    def test_truncation_failures_do_not_feed_the_breaker_parallel(
+        self, monkeypatch,
+    ):
+        """Parallel twin: seven truncating single-item batches must
+        not trip the abort event — the eighth, healthy batch (which
+        only starts after earlier ones complete) still dispatches."""
+        monkeypatch.setattr(
+            "core.llm.concurrency.derive_max_workers", lambda _m: 2)
+        items = [StudyItem(id=f"p{k}", kind="function", name=f"fn{k}",
+                           file=f"p{k}/f.c", calls=["a", "b", "c"])
+                 for k in range(7)]
+        items.append(StudyItem(id="ok", kind="function", name="fn9",
+                               file="ok/f.c"))
+        client = self._FakeClient(
+            fits=8, poison={f"fn{k}" for k in range(7)})
+        client.model = "gemini-2.5-flash"
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=1)
+        assert [c.id for c in concepts] == ["fn9"]
+
+
+class TestPhase2TruncationHonesty:
+    """Split subtrees must not launder non-truncation failures."""
+
+    _TRUNC_MSG = TestPhase2TruncationRecovery._TRUNC_MSG
+
+    class _HalfTransportClient:
+        """Truncates the full batch; then one named item's half fails
+        with a transport error while the sibling half succeeds."""
+
+        def __init__(self, fits: int, transport: str) -> None:
+            self.fits = fits
+            self.transport = transport
+
+        def generate_structured(self, prompt: str, schema, **kw):
+            import re as _re
+            names = set(_re.findall(r"\bfn\d+\b", prompt))
+            if len(names) > self.fits:
+                raise RuntimeError(
+                    TestPhase2TruncationHonesty._TRUNC_MSG)
+            if self.transport in names:
+                raise RuntimeError("connection reset by peer")
+            return ({"concepts": [
+                {"id": n, "description": f"desc {n}",
+                 "evidence": [{"type": "doc", "file": "x.c",
+                               "observation": "obs"}],
+                 "confidence": "inferred"} for n in sorted(names)],
+                "invariants": [], "contracts": []}, "raw")
+
+    def _items(self, n: int) -> list[StudyItem]:
+        return [StudyItem(id=f"i{k}", kind="function", name=f"fn{k}",
+                          file="x.c") for k in range(n)]
+
+    def test_transport_failure_in_split_fails_batch_honestly(self):
+        """A half dying on transport while its sibling succeeds must
+        fail the whole batch (breaker-visible), not vanish into a
+        silent partial success — and must NOT be classified as
+        truncation via __context__ inherited from the handled
+        truncation error."""
+        import pytest
+
+        from core.concepts.study import _BatchLLMError
+        items = self._items(2)
+        client = self._HalfTransportClient(fits=1, transport="fn1")
+        discards: list[dict] = []
+        with pytest.raises(_BatchLLMError) as excinfo:
+            run_phase2(items, "t/", client, batch_target=2,
+                       discard_sink=discards)
+        # The phase-level refusal fires because the sole batch failed
+        # with a NON-truncation error (zero successes).
+        assert "refusing" in str(excinfo.value)
+        # No item was mislabelled as a truncation discard.
+        assert discards == []
+
+    def test_transport_failure_counts_toward_the_breaker(self):
+        """The laundering corollary: transport failures surfacing
+        through split subtrees still feed the consecutive-failure
+        abort (a truncation-flagged raise would starve it)."""
+        import pytest
+
+        from core.concepts.study import _BatchLLMError
+        # Enough two-item batches that a mislabelled (truncation-
+        # flagged) failure would keep the loop churning through all
+        # of them; correct labelling aborts at the limit.
+        items = []
+        for k in range(0, 2 * (_CONSECUTIVE_FAIL_LIMIT + 2), 2):
+            items.append(StudyItem(
+                id=f"i{k}", kind="function", name=f"fn{k}",
+                file=f"d{k}/f.c"))
+            items.append(StudyItem(
+                id=f"i{k + 1}", kind="function", name=f"fn{k + 1}",
+                file=f"d{k}/f.c"))
+        transport_names = {f"fn{k}" for k in range(1, 99, 2)}
+
+        class _AllTransportHalves(self._HalfTransportClient):
+            def generate_structured(self, prompt, schema, **kw):
+                import re as _re
+                names = set(_re.findall(r"\bfn\d+\b", prompt))
+                if len(names) > 1:
+                    raise RuntimeError(
+                        TestPhase2TruncationHonesty._TRUNC_MSG)
+                if names & transport_names:
+                    raise RuntimeError("connection reset by peer")
+                return ({"concepts": [], "invariants": [],
+                         "contracts": []}, "raw")
+
+        client = _AllTransportHalves(fits=1, transport="")
+        calls: list[int] = []
+        orig = client.generate_structured
+
+        def _counting(prompt, schema, **kw):
+            calls.append(1)
+            return orig(prompt, schema, **kw)
+        client.generate_structured = _counting
+        with pytest.raises(_BatchLLMError, match="refusing"):
+            run_phase2(items, "t/", client, batch_target=2)
+        # Each failed batch costs 3 calls (full, half, half); the
+        # breaker stops the loop at the limit instead of churning
+        # every batch.
+        assert len(calls) <= 3 * _CONSECUTIVE_FAIL_LIMIT
+
+
+class TestTruncationMatcher:
+    def test_attribute_first(self):
+        from core.concepts.study import _is_truncation_error
+        err = RuntimeError("model stopped early (finish_reason=cap)")
+        err.llm_truncation = True
+        assert _is_truncation_error(err)
+
+    def test_provider_guard_constructor_is_matched(self):
+        from core.concepts.study import _is_truncation_error
+        from core.llm.providers import _llm_truncation_error
+        assert _is_truncation_error(
+            _llm_truncation_error("anything at all"))
+
+    def test_legacy_phrases_still_match(self):
+        from core.concepts.study import _is_truncation_error
+        for msg in (
+            "Structured response truncated (output token limit "
+            "reached, stop_reason=max_tokens, instructor tool-use "
+            "leg)",
+            "Gemini native structured response truncated "
+            "(finish_reason=max_tokens, output_tokens=4096)",
+            "Response truncated (output token limit reached, "
+            "finish_reason=length)",
+        ):
+            assert _is_truncation_error(RuntimeError(msg)), msg
+
+    def test_chain_walked_through_wrappers(self):
+        from core.concepts.study import _is_truncation_error
+        from core.llm.providers import _llm_truncation_error
+        inner = _llm_truncation_error("cut")
+        try:
+            raise RuntimeError("wrapped") from inner
+        except RuntimeError as outer:
+            assert _is_truncation_error(outer)
+
+    def test_unrelated_errors_do_not_match(self):
+        from core.concepts.study import _is_truncation_error
+        assert not _is_truncation_error(
+            RuntimeError("connection reset by peer"))
+
+
 class TestStudyOutputCap:
     def test_batch_call_carries_capped_max_tokens(self, monkeypatch):
         from unittest.mock import MagicMock

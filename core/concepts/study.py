@@ -506,9 +506,73 @@ def _study_max_output_tokens() -> int:
 # after their tokens were already billed.
 _CONSECUTIVE_FAIL_LIMIT = 3  # abort run after N consecutive batch failures
 
+# Estimated structured-output tokens ONE focus item costs in a Phase 2
+# response (concept + invariant/contract share, with evidence quotes).
+# Divides the per-call output budget into the batch-size ceiling
+# (``_phase2_batch_ceiling``) that ``run_phase2`` clamps
+# ``batch_target`` to. Both directions hurt: estimate too LOW and the
+# ceiling admits batches whose response truncates at the output cap —
+# a wasted full-prompt round-trip before split-retry recovers; too
+# HIGH and batches shrink, multiplying prompt-side token cost (each
+# batch re-sends the header, doc context, and context items).
+_PHASE2_ITEM_OUTPUT_TOKENS_EST = 512
+
+
+def _phase2_batch_ceiling() -> int:
+    """Max focus items one Phase 2 batch may carry.
+
+    Derived from the per-call output budget so a batch's structured
+    response fits under the cap it is generated against — sized at
+    call time because the budget is env-tunable.
+    """
+    return max(
+        1, _study_max_output_tokens() // _PHASE2_ITEM_OUTPUT_TOKENS_EST,
+    )
+
 
 class _BatchLLMError(Exception):
-    """LLM call failed for a batch — lets callers distinguish from empty-but-ok."""
+    """LLM call failed for a batch — lets callers distinguish from empty-but-ok.
+
+    ``truncation`` marks output-token-limit failures (the provider's
+    structured guards); the batch loops treat those as content-sized,
+    not provider-health, failures: split-retried, never counted toward
+    the consecutive-failure abort.
+    """
+
+    def __init__(self, msg: str, *, truncation: bool = False) -> None:
+        super().__init__(msg)
+        self.truncation = truncation
+
+
+def _is_truncation_error(exc: BaseException) -> bool:
+    """Chain-walking output-truncation check.
+
+    Attribute-first: every provider output-truncation guard raises
+    through ``core.llm.providers._llm_truncation_error``, which
+    stamps ``llm_truncation=True`` on the error — the four guards'
+    message phrasings diverge (the Gemini native guard says neither
+    "output token limit" nor the instructor leg's wording), so the
+    typed marker is the contract. Message matching stays as a legacy
+    fallback for wrappers that re-raise with a copied string, using
+    the audit orchestrator's ``_classify_error`` vocabulary
+    ("truncated" / "output token limit"). Wrappers re-raise ``from``
+    the original, so walk the causal chain like the other shared
+    classifiers.
+    """
+    try:
+        from core.llm.client import _exception_chain
+        chain: Any = list(_exception_chain(exc))
+    except ImportError:
+        chain = [exc]
+    for e in chain:
+        if getattr(e, "llm_truncation", False):
+            return True
+        msg = str(e).lower()
+        if "truncated" in msg or "output token limit" in msg:
+            return True
+    return False
+
+
 # The optional slash gates its own trailing whitespace — the naive
 # ``\s*/?\s*`` put two whitespace spans around it, quadratic on a
 # '<'-opening run.
@@ -2753,7 +2817,9 @@ def _run_one_batch(
             exc_info=payload,
         )
         msg = f"batch {idx + 1}/{total}: {payload}"
-        raise _BatchLLMError(msg) from payload
+        raise _BatchLLMError(
+            msg, truncation=_is_truncation_error(payload),
+        ) from payload
     result = structured_result(payload)
 
     if not isinstance(result, dict):
@@ -2805,6 +2871,126 @@ def _run_one_batch(
     return concepts, invariants, contracts, bug_patterns, struct_annots
 
 
+def _run_batch_splitting_on_truncation(
+    idx: int,
+    total: int,
+    focus: list[StudyItem],
+    context: list[StudyItem],
+    target: str,
+    source_root: str,
+    llm_client: Any,
+    reading_list: Any,
+    on_batch: Any,
+    doc_context: str = "",
+    correlate: list[str] | None = None,
+    discard_sink: list | None = None,
+    vocab_sink: list | None = None,
+) -> tuple[
+    list[Concept], list[Invariant], list[Contract],
+    list[BugPattern], list[dict[str, str]],
+]:
+    """Run one batch, halving-and-retrying on output truncation.
+
+    A truncated response means the batch's CONTENT outgrew the output
+    budget, not that the provider failed — an identical re-send
+    re-truncates deterministically, but each half fits twice the
+    per-item budget. Recurses down to single items; a single item that
+    still truncates is recorded as failed (log + discard record) and
+    its siblings' results are returned, so one oversized item can
+    never zero out a batch, let alone the phase.
+
+    Failure semantics: only errors whose OWN ``truncation`` flag is
+    set are absorbed by the split loop. Any non-truncation
+    ``_BatchLLMError`` from a half re-raises and fails the whole
+    batch honestly (its sibling's results are dropped in favour of
+    correct breaker accounting — a transport failure must reach the
+    consecutive-failure abort, never be laundered into a
+    truncation-flagged partial success). Raises truncation-flagged
+    ``_BatchLLMError`` only when every item truncated.
+
+    The recursion runs OUTSIDE the ``except`` handler on purpose:
+    inside it, Python chains every new exception's ``__context__`` to
+    the truncation error being handled, and the chain-walking
+    classifier would then read unrelated transport failures as
+    truncation.
+    """
+    trunc_exc: _BatchLLMError | None = None
+    try:
+        return _run_one_batch(
+            idx, total, focus, context, target, source_root,
+            llm_client, reading_list, on_batch, doc_context=doc_context,
+            correlate=correlate, discard_sink=discard_sink,
+            vocab_sink=vocab_sink,
+        )
+    except _BatchLLMError as exc:
+        if not exc.truncation:
+            raise
+        if len(focus) <= 1:
+            item = focus[0] if focus else None
+            if item is not None:
+                logger.warning(
+                    "Phase 2 batch %d/%d: single item %s (%s) still "
+                    "truncates the output budget — recording it as "
+                    "failed and continuing with the rest",
+                    idx + 1, total, item.name, item.file,
+                )
+                if discard_sink is not None:
+                    discard_sink.append({
+                        "kind": "item",
+                        "id": item.name,
+                        "reason": "batch response truncated at the "
+                                  "output token limit for this single "
+                                  "item",
+                        "names": [item.name],
+                    })
+            raise
+        trunc_exc = exc
+
+    # From here down we are outside the handler (see docstring).
+    mid = len(focus) // 2
+    if not 0 < mid < len(focus):
+        # Unsplittable despite len(focus) >= 2 would mean an empty
+        # half recursing forever on the same input — surface the
+        # truncation instead of hanging.
+        raise trunc_exc
+    logger.warning(
+        "Phase 2 batch %d/%d: response truncated at %d items — "
+        "splitting in half and retrying",
+        idx + 1, total, len(focus),
+    )
+    combined: tuple[list, list, list, list, list] = (
+        [], [], [], [], [],
+    )
+    succeeded = False
+    last_trunc: _BatchLLMError | None = None
+    for half in (focus[:mid], focus[mid:]):
+        try:
+            parts = _run_batch_splitting_on_truncation(
+                idx, total, half, context, target, source_root,
+                llm_client, reading_list,
+                # Progress was already reported for the full
+                # batch; retried halves stay silent.
+                None,
+                doc_context=doc_context, correlate=correlate,
+                discard_sink=discard_sink, vocab_sink=vocab_sink,
+            )
+        except _BatchLLMError as sub:
+            if sub.truncation:
+                last_trunc = sub
+                continue
+            # Non-truncation failure in a split subtree: fail the
+            # batch honestly (never silently absorbed, never
+            # truncation-masked) so the provider-health breaker
+            # sees it.
+            raise
+        succeeded = True
+        for acc, part in zip(combined, parts):
+            acc.extend(part)
+    if not succeeded and last_trunc is not None:
+        raise last_trunc
+    return combined
+
+
 def run_phase2(
     items: list[StudyItem],
     target: str,
@@ -2841,6 +3027,21 @@ def run_phase2(
         "Phase 2: %d in-scope items, %d dependency items",
         len(in_scope), len(deps),
     )
+
+    # Clamp (never replace) batch_target to the output-budget ceiling:
+    # a batch whose structured response cannot fit under the per-call
+    # output cap truncates deterministically and wastes the whole
+    # round-trip before split-retry recovers.
+    ceiling = _phase2_batch_ceiling()
+    if batch_target > ceiling:
+        logger.info(
+            "Phase 2: batch_target %d exceeds the output-budget "
+            "ceiling %d (%d-token response budget / ~%d tokens per "
+            "item) — clamping",
+            batch_target, ceiling, _study_max_output_tokens(),
+            _PHASE2_ITEM_OUTPUT_TOKENS_EST,
+        )
+        batch_target = ceiling
 
     batches = _cluster_items(in_scope, deps, batch_target=batch_target)
 
@@ -2900,16 +3101,23 @@ def _run_phase2_serial(
     for idx, (focus, context) in enumerate(batches):
         try:
             concepts, invariants, contracts, bug_patterns, struct_annots = (
-                _run_one_batch(
+                _run_batch_splitting_on_truncation(
                     idx, total, focus, context, target, source_root,
                     llm_client, reading_list, on_batch, doc_context=doc_context,
                     correlate=correlate, discard_sink=discard_sink,
                     vocab_sink=vocab_sink,
                 )
             )
-        except _BatchLLMError:
-            consecutive_failures += 1
+        except _BatchLLMError as exc:
             failures += 1
+            if exc.truncation:
+                # Content outgrew the output budget and the split
+                # retries were already exhausted — says nothing about
+                # provider health, so it never feeds the
+                # consecutive-failure abort (which exists to stop
+                # paying a downed provider).
+                continue
+            consecutive_failures += 1
             if consecutive_failures >= _CONSECUTIVE_FAIL_LIMIT:
                 logger.error(
                     "Phase 2: %d consecutive batch failures — aborting "
@@ -2972,7 +3180,7 @@ def _run_phase2_parallel(
         if _abort.is_set():
             return ([], [], [], [], [])
         idx, focus, ctx = args
-        result = _run_one_batch(
+        result = _run_batch_splitting_on_truncation(
             idx, total, focus, ctx, target, source_root,
             llm_client, reading_list, on_batch,
             doc_context=doc_context, correlate=correlate,
@@ -2988,9 +3196,15 @@ def _run_phase2_parallel(
     _failed = [0]
 
     def _on_batch_error(item: Any, exc: Exception) -> tuple:
+        truncated = (
+            isinstance(exc, _BatchLLMError) and exc.truncation
+        )
         with _fail_lock:
             _failed[0] += 1
-            _consecutive_failures[0] += 1
+            # Truncation is content-sized, already split-retried, and
+            # no provider-health signal — see the sequential path.
+            if not truncated:
+                _consecutive_failures[0] += 1
             if _consecutive_failures[0] >= _CONSECUTIVE_FAIL_LIMIT:
                 logger.error(
                     "Phase 2: %d consecutive batch failures — aborting "
