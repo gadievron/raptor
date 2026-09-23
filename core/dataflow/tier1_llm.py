@@ -611,7 +611,7 @@ def _try_known_safe_call(
     # the flow is live whenever the branch is skipped — breaking the
     # sound tier's zero-false-suppression guarantee.
     if language != "python" and _lexical_validator_in_branch(
-            source_text, validator_line, sink_line):
+            source_text, validator_line, sink_line, language=language):
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
             f"safe-call at line {validator_line} not proven to execute "
@@ -751,7 +751,7 @@ def try_tier1b(
             )
         if language != "python" and _lexical_validator_in_branch(
                 source_text, validator_line, sink_line,
-                guard_shaped=(mech.kind == "charset")):
+                guard_shaped=(mech.kind == "charset"), language=language):
             # Same conditional-execution gate the known_safe_call path
             # applies: a branch-wrapped sanitizer certifies SOUND while
             # the flow is live whenever the branch is skipped. For the

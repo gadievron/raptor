@@ -1029,20 +1029,88 @@ def _validator_in_branch(
 _COND_BLOCK_KEYWORD = _re.compile(
     r"\b(?:if|else|for|while|switch|case|default|catch|do)\b"
 )
-# Crude string/comment scrubber for the lexical brace tracker: brace
-# characters inside literals or comments must not perturb the stack.
-_LEXICAL_NOISE = _re.compile(
-    r'"(?:[^"\\]|\\.)*"'
-    r"|'(?:[^'\\]|\\.)*'"
-    r"|`(?:[^`\\]|\\.)*`"
-    r"|/\*.*?\*/"
-    r"|//.*$"
-)
 
 
+def _tracker_brace_view(line: str) -> str:
+    """Second-stage blanking for the BRACE COUNTING only.
+
+    Applied on top of the whole-file sanitized view, and consumed
+    exclusively by the brace-stack scan — every KEYWORD read (the
+    validator-line arms, the preceding-line dangling scan, and the
+    ``prev_tail`` conditional classifier inside the loop) stays on
+    the softer sanitized view, where a phantom keyword inside a
+    visible regex can only mark a real block conditional (a refusal),
+    never un-mark one.
+
+    * ``/…/`` spans blank GREEDILY, ignoring the sanitizer's
+      regex-vs-division position heuristic.  That heuristic errs
+      toward leaving code visible (right for its original absence/
+      presence consumers), which is ANTI-conservative here: a
+      statement-position regex literal (``if (a) /{/.test(x)``, or
+      after ``return`` / ``]``) stays visible and feeds its interior
+      braces to the tracker as phantoms — and a balanced phantom PAIR
+      (``/{/`` inside the wrap, ``/}/`` after it) defeats the
+      EOF-unbalance refusal.  Over-blanking is brace-conservative in
+      both directions: an UNBALANCED swallow of a real brace leaves
+      the file unbalanced (underflow or EOF-leftover → True), and a
+      BALANCED swallow needs the block's open and close inside one
+      same-line span, where the validator-line keyword arms already
+      refuse.  Keyword classification is untouched by construction —
+      it never reads this view (a greedy span between two genuine
+      divisions can swallow an ``if``, which is exactly why the
+      classifier must not look here).  Character classes (``[/{]``)
+      and escapes do not close a span; an unclosed ``/`` blanks
+      nothing (division tails carry no braces the source didn't).
+    * Annex-B HTML comment channels — ``<!--`` to end of line, and a
+      line whose code starts with ``-->`` — blank the same way: dead
+      to execution, visible to the tracker, and pairable into the
+      same balanced-phantom shape.
+
+    Length-preserving (blanked spans become spaces), so the tracker
+    view stays per-character aligned with the sanitized view it was
+    derived from.
+    """
+    stripped = line.lstrip()
+    if stripped.startswith("-->"):
+        return " " * len(line)
+    cut = line.find("<!--")
+    if cut != -1:
+        line = line[:cut] + " " * (len(line) - cut)
+    if "/" not in line:
+        return line
+    out = list(line)
+    n = len(line)
+    i = 0
+    while i < n:
+        if line[i] != "/":
+            i += 1
+            continue
+        j = i + 1
+        in_class = False
+        closed = False
+        while j < n:
+            ch = line[j]
+            if ch == "\\":
+                j += 2
+                continue
+            if in_class:
+                if ch == "]":
+                    in_class = False
+            elif ch == "[":
+                in_class = True
+            elif ch == "/":
+                closed = True
+                break
+            j += 1
+        if not closed:
+            break
+        for k in range(i, j + 1):
+            out[k] = " "
+        i = j + 1
+    return "".join(out)
 def _lexical_validator_in_branch(
     source_text: str, validator_line: int, sink_line: int,
-    *, guard_shaped: bool = False,
+    *, guard_shaped: bool = False, language: str = "javascript",
 ) -> bool:
     """Brace-language (JS/TS/Java/C/C++) analogue of
     :func:`_validator_in_branch`: True when the validator line is
@@ -1061,8 +1129,22 @@ def _lexical_validator_in_branch(
     never sees).  Residual, not modeled: ternaries, and dangling
     guards whose condition spans multiple lines (the keyword is then
     not on the nearest preceding line).  CONSERVATIVE on tracker
-    confusion (unbalanced braces after scrubbing): returns True —
-    "not proven unconditional" must never read as dominance.
+    confusion (unbalanced braces after scrubbing) in BOTH directions:
+    a ``}`` with no open block (underflow) returns True immediately,
+    and a block still open when the file ends (excess ``{``) returns
+    True as well — "not proven unconditional" must never read as
+    dominance.  The excess direction matters: a phantom ``{`` the
+    scrubber failed to blank pushes an extra block, the real ``}``
+    closing the enclosing conditional pops the phantom instead, and
+    the conditional reads "still open at the sink" — certifying
+    dominance for a branch-wrapped validator.
+
+    Scrubbing uses the whole-file comment/string-blanked view
+    (:func:`code_view_lines`, ``language``-aware) — the same
+    chokepoint the validator-line anchors use.  A per-line scrubber
+    cannot see enclosing multi-line constructs, so one ``{`` planted
+    inside a multi-line block comment or template literal leaked into
+    the stack (the phantom above).
 
     ``guard_shaped=True`` is for ``kind="charset"`` guard validators
     whose exit-on-fail lives ON the matched line (``if
@@ -1085,7 +1167,12 @@ def _lexical_validator_in_branch(
     lines = source_text.splitlines()
     if not (0 < validator_line <= len(lines) and 0 < sink_line <= len(lines)):
         return True
-    scrubbed_validator = _LEXICAL_NOISE.sub(" ", lines[validator_line - 1])
+    view = code_view_lines(source_text, language)
+    if len(view) < len(lines):
+        # Defensive: the scanner preserves newlines, so the views map
+        # 1:1; pad rather than index past the end if that ever drifts.
+        view = view + [""] * (len(lines) - len(view))
+    scrubbed_validator = view[validator_line - 1]
     if not guard_shaped:
         if _COND_BLOCK_KEYWORD.search(scrubbed_validator):
             return True
@@ -1103,48 +1190,72 @@ def _lexical_validator_in_branch(
     # where the open-line exemption below would otherwise wave it
     # through.
     for prev_idx in range(validator_line - 2, -1, -1):
-        prev = _LEXICAL_NOISE.sub(" ", lines[prev_idx])
+        prev = view[prev_idx]
         if not prev.strip():
             continue
         if _COND_BLOCK_KEYWORD.search(prev) and "{" not in prev:
             return True
         break
     # Each block gets a unique id so "still open at the sink" means the
-    # SAME block, not merely the same nesting depth.
+    # SAME block, not merely the same nesting depth.  The scan runs to
+    # the END of the file (not just the sink line): leftover open
+    # blocks at EOF mean the tracker mis-lexed something — every
+    # judgment it made is then suspect, including the sink snapshot.
     stack: list[tuple[int, bool, int]] = []  # (block id, conditional?, open line)
     at_validator: list[tuple[int, bool, int]] | None = None
     opened_on_validator: list[tuple[int, bool, int]] = []
+    open_at_sink: set[int] | None = None
     next_id = 0
-    prev_tail = ""                       # scrubbed text since the last brace
-    for idx, raw in enumerate(lines[:sink_line], start=1):
+    prev_tail = ""                       # SOFT-view text since the last brace
+    # Braces come from the hard-blanked tracker view; prev_tail (the
+    # conditional classifier) accumulates the per-char-aligned SOFT
+    # view — a greedy division span must never swallow a real keyword
+    # (that would classify a real wrap non-conditional), and a phantom
+    # keyword from the soft view can only add a refusal.
+    for idx, (soft, text) in enumerate(
+            zip(view, map(_tracker_brace_view, view)), start=1):
         if idx == validator_line:
             # Snapshot at line START: a block whose `}` lands on the
             # validator line itself must still count as wrapping it.
             at_validator = list(stack)
-        text = _LEXICAL_NOISE.sub(" ", raw)
-        for ch in text:
-            if ch == "{":
-                conditional = bool(_COND_BLOCK_KEYWORD.search(prev_tail))
-                entry = (next_id, conditional, idx)
-                stack.append(entry)
-                if idx == validator_line:
-                    opened_on_validator.append(entry)
-                next_id += 1
-                prev_tail = ""
-            elif ch == "}":
-                if not stack:
-                    return True          # tracker confused — conservative
-                stack.pop()
-                prev_tail = ""
-            else:
-                prev_tail += ch
-    if at_validator is None:
+        if "{" not in text and "}" not in text:
+            prev_tail += soft
+        else:
+            for pos, ch in enumerate(text):
+                if ch == "{":
+                    conditional = bool(_COND_BLOCK_KEYWORD.search(prev_tail))
+                    entry = (next_id, conditional, idx)
+                    stack.append(entry)
+                    if idx == validator_line:
+                        opened_on_validator.append(entry)
+                    next_id += 1
+                    prev_tail = ""
+                elif ch == "}":
+                    if not stack:
+                        return True      # tracker confused — conservative
+                    stack.pop()
+                    prev_tail = ""
+                else:
+                    prev_tail += soft[pos]
+        if idx == sink_line:
+            # Snapshot at line END (matches the historical semantics of
+            # stopping the scan after the sink line).
+            open_at_sink = {block_id for block_id, _, _ in stack}
+    if stack:
+        # Excess-'{' direction: a block never closed by EOF.  The
+        # phantom-brace shape (a '{' the scrubber failed to blank)
+        # lands here when its stray open survives to EOF; a stray open
+        # CONSUMED by a later real '}' shifts every close after it, so
+        # the file still ends unbalanced unless the source itself also
+        # carries a matching stray '}' — at which point the underflow
+        # arm above fires first on that close.
+        return True
+    if at_validator is None or open_at_sink is None:
         return True
     # Every conditional block wrapping the validator — open at its
     # line start, or opened on the line itself — must STILL be open
     # at the sink; one that closed in between means the sink runs on
     # paths that skipped the validator.
-    open_at_sink = {block_id for block_id, _, _ in stack}
     return any(
         conditional and block_id not in open_at_sink
         for block_id, conditional, open_line in at_validator + opened_on_validator
@@ -2767,6 +2878,7 @@ def try_tier0(
             and not _lexical_validator_in_branch(
                 source_text, line, sink_line,
                 guard_shaped=(spec.kind == "charset"),
+                language=language,
             )
         )
         why = (f"either out of source order, a function boundary "

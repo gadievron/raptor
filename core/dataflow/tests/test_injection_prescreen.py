@@ -748,3 +748,88 @@ class TestNestedScopeRebindKill:
             rule_id="py/command-line-injection",
         )
         assert verdict is not None and verdict.refuted is True
+
+
+class TestBranchWrappedLexicalGuards:
+    """A JS/Java guard whose enclosing conditional is hidden by a '{'
+    inside a multi-line comment / template literal must yield NO
+    signal — the sink runs on paths that skipped the guard."""
+
+    HOSTILE_JS = (
+        "function run(x) {\n"
+        "  if (opts.paranoid) {\n"
+        "    /*\n"
+        "      {\n"
+        "    */\n"
+        "    if (!/^[a-z0-9]+$/.test(x)) return;\n"  # line 6 = guard
+        "  }\n"
+        "  exec(x);\n"                               # line 8 = sink
+        "}\n"
+    )
+    HONEST_JS = (
+        "function run(x) {\n"
+        "  if (!/^[a-z0-9]+$/.test(x)) return;\n"    # line 2 = guard
+        "  exec(x);\n"                               # line 3 = sink
+        "}\n"
+    )
+
+    def test_comment_hidden_branch_wrap_yields_no_signal(self, tmp_path):
+        (tmp_path / "hostile.js").write_text(self.HOSTILE_JS)
+        verdict = prescreen_finding(
+            paths=[_path("hostile.js", 1, [6], 8)], repo_root=tmp_path,
+            rule_id="js/command-line-injection", cwe="CWE-78",
+        )
+        assert verdict is None
+
+    def test_unconditional_guard_still_refutes(self, tmp_path):
+        """Two-direction control: the same guard NOT branch-wrapped
+        keeps refuting."""
+        (tmp_path / "honest.js").write_text(self.HONEST_JS)
+        verdict = prescreen_finding(
+            paths=[_path("honest.js", 1, [2], 3)], repo_root=tmp_path,
+            rule_id="js/command-line-injection", cwe="CWE-78",
+        )
+        assert verdict is not None and verdict.refuted is True
+
+
+class TestBalancedPhantomPairE2E:
+    ATTACK = (
+        "function run(x) {\n"
+        "  if (opts.paranoid) {\n"
+        "    if (!/^[a-z0-9]+$/.test(x)) return;\n"   # line 3 = guard
+        "    if (a) /{/.test(x);\n"                   # phantom '{'
+        "  }\n"
+        "  exec(x);\n"                                 # line 6 = sink
+        "}\n"
+        "if (b) /}/.test(y);\n"                        # rebalancing '}'
+    )
+    KEYWORD_SWALLOW = (
+        "function run(x) {\n"
+        "  q = a / 1; if (opts.paranoid && c / 2 > 0) {\n"
+        "    if (!/^[a-z0-9]+$/.test(x)) return;\n"   # line 3 = guard
+        "  }\n"
+        "  exec(x);\n"                                 # line 5 = sink
+        "}\n"
+    )
+
+    def test_balanced_phantom_pair_yields_no_signal(self, tmp_path):
+        """Statement-position regex literals carrying a balanced
+        phantom brace pair must not certify the branch-wrapped guard
+        as dominating (valid JS; the wrap is real)."""
+        (tmp_path / "a.js").write_text(self.ATTACK)
+        verdict = prescreen_finding(
+            paths=[_path("a.js", 1, [3], 6)], repo_root=tmp_path,
+            rule_id="js/command-line-injection", cwe="CWE-78",
+        )
+        assert verdict is None
+
+    def test_division_swallowed_keyword_yields_no_signal(self, tmp_path):
+        """Two genuine divisions around the wrap's 'if': the greedy
+        tracker blanking must not reach the conditional classifier —
+        the wrap is real and the finding stays live."""
+        (tmp_path / "b.js").write_text(self.KEYWORD_SWALLOW)
+        verdict = prescreen_finding(
+            paths=[_path("b.js", 1, [3], 5)], repo_root=tmp_path,
+            rule_id="js/command-line-injection", cwe="CWE-78",
+        )
+        assert verdict is None

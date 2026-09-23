@@ -3370,3 +3370,205 @@ def test_chain_class_body_plain_binding_stays_class_scoped():
     assert sb._python_chain_reaches_sink(
         tree, "x", 2, 6, "print(open(x))",
     ) is True
+
+
+# ---------------------------------------------------------------------------
+# Lexical brace tracker: multi-line scrub state + both-direction
+# unbalance conservatism.
+# ---------------------------------------------------------------------------
+
+_PHANTOM_CONTROL_JS = (
+    "function f(x) {\n"
+    "  if (opts.paranoid) {\n"                       # line 2
+    "    if (!/^[a-z0-9]+$/.test(x)) return;\n"      # line 3 = guard
+    "  }\n"
+    "  exec(x);\n"                                   # line 5 = sink
+    "}\n"
+)
+
+
+def test_lexical_branch_wrap_control_flags_wrapped_guard():
+    assert sb._lexical_validator_in_branch(
+        _PHANTOM_CONTROL_JS, 3, 5, guard_shaped=True,
+        language="javascript",
+    ) is True
+
+
+def test_lexical_branch_wrap_sees_brace_in_multiline_comment():
+    """A '{' inside a MULTI-LINE block comment must not push a phantom
+    block: the real '}' closing the enclosing conditional would pop
+    the phantom instead, and the conditional would read 'still open at
+    the sink' — dominance certified for a branch-wrapped guard."""
+    src = (
+        "function f(x) {\n"
+        "  if (opts.paranoid) {\n"
+        "    /*\n"
+        "      {\n"
+        "    */\n"
+        "    if (!/^[a-z0-9]+$/.test(x)) return;\n"  # line 6 = guard
+        "  }\n"
+        "  exec(x);\n"                               # line 8 = sink
+        "}\n"
+    )
+    assert sb._lexical_validator_in_branch(
+        src, 6, 8, guard_shaped=True, language="javascript",
+    ) is True
+
+
+def test_lexical_branch_wrap_sees_brace_in_multiline_template_literal():
+    src = (
+        "function f(x) {\n"
+        "  if (opts.paranoid) {\n"
+        "    const css = `\n"
+        "      body { color: red;\n"
+        "    `;\n"
+        "    if (!/^[a-z0-9]+$/.test(x)) return;\n"  # line 6 = guard
+        "  }\n"
+        "  exec(x);\n"                               # line 8 = sink
+        "}\n"
+    )
+    assert sb._lexical_validator_in_branch(
+        src, 6, 8, guard_shaped=True, language="javascript",
+    ) is True
+
+
+def test_lexical_branch_wrap_conservative_on_close_underflow():
+    src = "}\nif (!/^[a-z]+$/.test(x)) return;\nexec(x)\n"
+    assert sb._lexical_validator_in_branch(
+        src, 2, 3, guard_shaped=True, language="javascript",
+    ) is True
+
+
+def test_lexical_branch_wrap_conservative_on_excess_open_at_eof():
+    """Excess-'{' direction: a stray code-level open the file never
+    closes means the tracker mis-lexed or the source is fragmentary —
+    every snapshot it took is suspect, so it must refuse to certify
+    even when the guard LOOKS unconditional."""
+    src = (
+        "function f(x) {\n"
+        "  if (!/^[a-z0-9]+$/.test(x)) return;\n"    # line 2 = guard
+        "  exec(x);\n"                               # line 3 = sink
+        "}\n"
+        "function g() { {\n"                         # stray extra '{'
+        "}\n"
+    )
+    assert sb._lexical_validator_in_branch(
+        src, 2, 3, guard_shaped=True, language="javascript",
+    ) is True
+
+
+def test_lexical_branch_wrap_balanced_multiline_comment_still_certifies():
+    """Two-direction: a benign balanced multi-line comment (or one
+    containing '}') must not push the tracker into refusing an
+    honestly unconditional guard."""
+    src = (
+        "function f(x) {\n"
+        "  /*\n"
+        "     closing brace in prose: }\n"
+        "  */\n"
+        "  if (!/^[a-z0-9]+$/.test(x)) return;\n"    # line 5 = guard
+        "  exec(x);\n"                               # line 6 = sink
+        "}\n"
+    )
+    assert sb._lexical_validator_in_branch(
+        src, 5, 6, guard_shaped=True, language="javascript",
+    ) is False
+
+
+class TestBalancedPhantomPairs:
+    """The sanitizer's regex-vs-division heuristic leaves statement-
+    position regex literals visible (after ')', 'return', ']'), so a
+    BALANCED phantom pair (/{/ inside the wrap, /}/ after it) would
+    defeat the EOF-unbalance refusal — the real '}' pops the phantom
+    and the wrap reads 'still open at the sink'. The brace loop
+    therefore reads a harder-blanked tracker view (greedy /…/ spans +
+    Annex-B HTML comment channels) — while every keyword read,
+    including the prev_tail conditional classifier, stays on the
+    softer view so a greedy span between two GENUINE divisions can
+    never swallow a real 'if' and declassify a real wrap."""
+
+    GUARD = "    if (!/^[a-z0-9]+$/.test(x)) return;\n"
+
+    def _wrap(self, inner: str, tail: str) -> str:
+        return (
+            "function run(x) {\n"
+            "  if (opts.paranoid) {\n"
+            + self.GUARD                       # line 3 = guard
+            + inner                            # line 4 = phantom '{'
+            + "  }\n"
+            "  exec(x);\n"                     # line 6 = sink
+            "}\n"
+            + tail                             # phantom '}' rebalances EOF
+        )
+
+    @pytest.mark.parametrize("inner,tail", [
+        ("    if (a) /{/.test(x);\n", "if (b) /}/.test(y);\n"),
+        ("    return /{/.test(x);\n", "var t = /}/;\n"),
+        ("    a[0] /{/;\n", "b[1] /}/;\n"),
+        ("    <!-- {\n", "<!-- }\n"),
+    ])
+    def test_balanced_phantom_pair_refuses(self, inner, tail):
+        src = self._wrap(inner, tail)
+        assert sb._lexical_validator_in_branch(
+            src, 3, 6, guard_shaped=True, language="javascript",
+        ) is True
+
+    def test_division_swallowed_keyword_still_classifies_wrap(self):
+        """Two GENUINE divisions around the wrap's 'if' on the
+        block-opening line: the greedy span eats the keyword in the
+        tracker view, so the classifier must not read that view — the
+        real wrap stays conditional and the tracker refuses."""
+        src = (
+            "function run(x) {\n"
+            "  q = a / 1; if (opts.paranoid && c / 2 > 0) {\n"
+            "    if (!/^[a-z0-9]+$/.test(x)) return;\n"   # line 3
+            "  }\n"
+            "  exec(x);\n"                                 # line 5
+            "}\n"
+        )
+        assert sb._lexical_validator_in_branch(
+            src, 3, 5, guard_shaped=True, language="javascript",
+        ) is True
+
+    def test_division_swallowed_keyword_two_line_variant(self):
+        """Same shape with the '{' on its own next line."""
+        src = (
+            "function run(x) {\n"
+            "  q = a / 1; if (opts.paranoid && c / 2 > 0)\n"
+            "  {\n"
+            "    if (!/^[a-z0-9]+$/.test(x)) return;\n"   # line 4
+            "  }\n"
+            "  exec(x);\n"                                 # line 6
+            "}\n"
+        )
+        assert sb._lexical_validator_in_branch(
+            src, 4, 6, guard_shaped=True, language="javascript",
+        ) is True
+
+    def test_honest_regex_and_division_files_still_certify(self):
+        honest = (
+            "function run(x, a, b) {\n"
+            "  var r = a / 2 + b / 3;\n"
+            "  if (!/^[a-z0-9]+$/.test(x)) return;\n"   # line 3
+            "  exec(x);\n"                               # line 4
+            "}\n"
+        )
+        assert sb._lexical_validator_in_branch(
+            honest, 3, 4, guard_shaped=True, language="javascript",
+        ) is False
+
+    def test_tracker_view_blanks_slash_spans_and_html_comments(self):
+        f = sb._tracker_brace_view
+        assert "{" not in f("if (a) /{/.test(x);")
+        assert "{" not in f("return /{/.test(x);")
+        assert "{" not in f("code(); <!-- { tail")
+        assert f("  --> } tail").strip() == ""
+        # char class and escape do not close a span early
+        assert "{" not in f(r"if (a) /[/{]/.test(x);")
+        assert "{" not in f(r"if (a) /\/{/.test(x);")
+        # unclosed slash blanks nothing; real code braces survive
+        assert "{" in f("if (a) { x = b / 2;")
+        # length-preserving: the classifier's per-char alignment
+        # depends on it
+        line = "if (a) /{/.test(x); b = c / 2;"
+        assert len(f(line)) == len(line)
