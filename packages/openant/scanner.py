@@ -132,21 +132,158 @@ class OpenAntCoreConsentError(RuntimeError):
     the pinned commit and nothing authorizes running it."""
 
 
+def _read_verified_object(
+    git, top: Path, algo: str, otype: str, oid: str,
+) -> bytes | None:
+    """Raw payload of ``oid``, SELF-HASHED against its claimed name.
+
+    git does NOT re-hash every object on ordinary reads: a loose (or
+    packed) object file whose CONTENT was substituted under a genuine
+    name is served as-is by ``ls-tree``/``cat-file`` (``git fsck``
+    reports it as a hash mismatch, but the read path never checks).
+    The object store of an attacker-shipped clone is therefore not in
+    the trust base — every object this survey consumes is re-hashed
+    in Python (``"<type> <len>\\0" + payload``) against the name its
+    verified PARENT claimed, exactly the discipline the survey already
+    applies to worktree blobs. Returns ``None`` (fail-closed) on a
+    read failure or a hash mismatch. Alternates / replace refs /
+    doctored packs cannot help an attacker here: wherever the bytes
+    come from, they must hash to the requested name (replace refs are
+    additionally pinned off via ``core.useReplaceRefs=false`` in the
+    safe-git overrides).
+    """
+    import hashlib
+
+    proc = git(top, "cat-file", otype, oid)
+    if proc.returncode != 0:
+        return None
+    payload = proc.stdout
+    hasher = hashlib.sha1 if algo == "sha1" else hashlib.sha256
+    h = hasher(b"%s %d\x00" % (otype.encode("ascii"), len(payload)))
+    h.update(payload)
+    if h.hexdigest() != oid:
+        return None
+    return payload
+
+
+def _parse_tree_payload(
+    payload: bytes, oid_len: int,
+) -> list[tuple[str, bytes, str]] | None:
+    """Parse a raw tree payload into ``(mode, name, hex_oid)`` entries.
+
+    Returns ``None`` on any structural anomaly (a VERIFIED tree from
+    the genuine pinned commit is always well-formed, so an anomaly
+    means the walk must fail closed). Entry names containing path
+    separators or ``.``/``..`` are rejected outright — a genuine git
+    tree never contains them.
+    """
+    entries: list[tuple[str, bytes, str]] = []
+    i = 0
+    n = len(payload)
+    while i < n:
+        sp = payload.find(b" ", i)
+        if sp < 0:
+            return None
+        try:
+            mode = payload[i:sp].decode("ascii")
+        except UnicodeDecodeError:
+            return None
+        nul = payload.find(b"\x00", sp + 1)
+        if nul < 0:
+            return None
+        name = payload[sp + 1:nul]
+        if (not name or name in (b".", b"..") or b"/" in name
+                or b"\\" in name):
+            return None
+        raw_oid = payload[nul + 1:nul + 1 + oid_len]
+        if len(raw_oid) != oid_len:
+            return None
+        entries.append((mode, name, raw_oid.hex()))
+        i = nul + 1 + oid_len
+    return entries
+
+
+# Ceiling on tree entries walked by the survey. The verified walk can
+# only ever traverse the GENUINE pinned content (every tree self-hashes
+# against the pin-anchored chain), so this is a robustness backstop,
+# not a hostile-input bound; the genuine OpenAnt tree is a few thousand
+# entries.
+_TREE_WALK_MAX_ENTRIES = 1_000_000
+
+
+def _verified_pinned_tree(
+    git, top: Path, algo: str, pin: str,
+) -> list[tuple[str, str, str]] | None:
+    """Merkle-verified recursive listing of the PIN's tree.
+
+    Anchors at the pinned commit id itself (never a ref): the commit
+    payload is self-hashed against the pin, the root tree oid is taken
+    from that verified payload, and every subtree payload is
+    self-hashed against the oid its verified parent claimed before its
+    listing is trusted. This extends the survey's Merkle discipline
+    one level up — the landed survey hashed worktree blobs against
+    HEAD's tree LISTING but took the listing from ``ls-tree``, which
+    trusts attacker-shipped tree objects as stored (one substituted
+    subtree object whose forged listing matched the hostile on-disk
+    files passed the whole gate).
+
+    Returns ``[(mode, blob_oid, relpath), ...]`` for every non-tree
+    entry, or ``None`` when any object fails verification
+    (fail-closed).
+    """
+    oid_len = 20 if algo == "sha1" else 32
+    hex_len = oid_len * 2
+
+    commit_payload = _read_verified_object(git, top, algo, "commit", pin)
+    if commit_payload is None:
+        return None
+    first_line, _, _ = commit_payload.partition(b"\n")
+    if not first_line.startswith(b"tree "):
+        return None
+    root_oid = first_line[5:].decode("ascii", "replace").strip().lower()
+    if len(root_oid) != hex_len or any(
+        c not in "0123456789abcdef" for c in root_oid
+    ):
+        return None
+
+    listing: list[tuple[str, str, str]] = []
+    stack: list[tuple[bytes, str]] = [(b"", root_oid)]
+    total_entries = 0
+    while stack:
+        prefix, tree_oid = stack.pop()
+        payload = _read_verified_object(git, top, algo, "tree", tree_oid)
+        if payload is None:
+            return None
+        entries = _parse_tree_payload(payload, oid_len)
+        if entries is None:
+            return None
+        total_entries += len(entries)
+        if total_entries > _TREE_WALK_MAX_ENTRIES:
+            return None
+        for mode, name, entry_oid in entries:
+            rel = name if not prefix else prefix + b"/" + name
+            if mode == "40000":
+                stack.append((rel, entry_oid))
+            else:
+                listing.append((mode, entry_oid, os.fsdecode(rel)))
+    return listing
+
+
 def _pinned_tree_deviations(core_path: Path) -> dict[str, int] | None:
-    """Content-true worktree-vs-HEAD deviation counts for a checkout
+    """Content-true worktree-vs-PIN deviation counts for a checkout
     whose HEAD already matched the pin.
 
     Returns ``{"modified": n, "untracked": m}`` (``{"modified": 0,
     "untracked": 0}`` when clean), or ``None`` when the survey itself
     fails — the gate treats ``None`` as unverifiable (fail-closed).
     ``modified`` counts tracked entries whose on-disk content, type,
-    or executable bit deviates from HEAD (missing files and
+    or executable bit deviates from the pin (missing files and
     unverifiable gitlink entries included); ``untracked`` counts every
-    on-disk file that is not in HEAD's tree — IGNORED and INDEX-STAGED
-    FILES INCLUDED: the attacker controls ``.gitignore`` and the
-    shipped index alike, and an ignored or pre-staged stdlib-shadow
-    module (or a poisoned ``__pycache__`` bytecode file) executes all
-    the same.
+    on-disk file that is not in the pin's tree — IGNORED and
+    INDEX-STAGED FILES INCLUDED: the attacker controls ``.gitignore``
+    and the shipped index alike, and an ignored or pre-staged
+    stdlib-shadow module (or a poisoned ``__pycache__`` bytecode file)
+    executes all the same.
 
     Deliberately NOT ``git status``/``git diff``: on an
     attacker-written clone the status machinery re-hashes worktree
@@ -158,22 +295,29 @@ def _pinned_tree_deviations(core_path: Path) -> dict[str, int] | None:
     attacker ships ``.git/index`` too, so an index-derived untracked
     listing (``ls-files --others``) is blind to a shadow module the
     archive pre-staged with ``git add -f`` (in the index, not in
-    HEAD). The survey therefore compares DISK against HEAD only:
-    ``ls-tree`` supplies the pinned tree, a Python filesystem walk of
-    the clone toplevel (minus ``.git``) supplies what is actually on
-    disk, and tracked content is hashed in Python against HEAD's blob
-    ids — which also defeats fabricated index stat data that fools
-    stat-based diffs. Tracked blobs larger than the hashing cap fail
-    closed as modified rather than being read.
+    HEAD). NEITHER IS THE OBJECT STORE: the attacker ships
+    ``.git/objects`` too, and git serves a content-substituted object
+    without re-hashing it, so an ``ls-tree`` listing is forgeable
+    even when the commit id matched the pin. The survey therefore
+    compares DISK against the PIN only, through
+    :func:`_verified_pinned_tree`: the pinned commit object is
+    self-hashed against the pin id, every tree object is self-hashed
+    against the oid its verified parent claimed, a Python filesystem
+    walk of the clone toplevel (minus ``.git``) supplies what is
+    actually on disk, and tracked content is hashed in Python against
+    the verified blob ids — no attacker-shipped byte participates in
+    the verification chain unverified. This also defeats fabricated
+    index stat data that fools stat-based diffs. Tracked blobs larger
+    than the hashing cap fail closed as modified rather than being
+    read.
     """
     import hashlib
     import stat as stat_mod
 
-    # Cap on bytes hashed per tracked blob. HEAD is the genuine pinned
-    # commit here (the id matched the pin), so legit blob sizes are
-    # upstream-bounded; anything claiming to be larger fails closed
-    # without a read (a multi-GB on-disk file already fails the size
-    # precheck before any read either way).
+    # Cap on bytes hashed per tracked on-disk file. The verified
+    # listing only ever names the genuine pinned content, so legit
+    # blob sizes are upstream-bounded; an on-disk file claiming to be
+    # larger fails closed without a read.
     max_hash_bytes = 64 * 1024 * 1024
     try:
         from core.git import get_safe_git_env, safe_git_readonly_command
@@ -195,35 +339,24 @@ def _pinned_tree_deviations(core_path: Path) -> dict[str, int] | None:
             return None
         top = Path(toplevel)
         # The WHOLE clone is surveyed, not just the openant-core
-        # subtree. `-l` adds the blob size for the read precheck.
-        tree = _git(top, "ls-tree", "--full-tree", "-r", "-l", "-z", "HEAD")
-        if tree.returncode != 0:
+        # subtree — anchored at the PIN id, never at HEAD (an
+        # attacker-shipped ref is not in the trust base either).
+        listing = _verified_pinned_tree(_git, top, algo, OPENANT_PINNED_COMMIT)
+        if listing is None:
             return None
     except (OSError, subprocess.SubprocessError):
         return None
 
     modified = 0
     tracked: set[str] = set()
-    for entry in tree.stdout.split(b"\x00"):
-        if not entry:
-            continue
-        meta, _, rel = entry.partition(b"\t")
-        parts = meta.split()
-        if len(parts) != 4:
-            return None
-        mode, otype, oid, size_s = (p.decode("ascii", "replace") for p in parts)
-        rel_str = os.fsdecode(rel)
+    for mode, oid, rel_str in listing:
         tracked.add(rel_str)
         path = top / rel_str
-        if otype != "blob":
-            # gitlink (submodule) or other non-blob: content cannot be
+        if mode not in ("100644", "100755", "120000"):
+            # gitlink (submodule) or unknown mode: content cannot be
             # verified against the pin from here — fail closed.
             modified += 1
             continue
-        try:
-            size = int(size_s)
-        except ValueError:
-            return None
         try:
             st = os.lstat(path)
         except OSError:
@@ -234,9 +367,6 @@ def _pinned_tree_deviations(core_path: Path) -> dict[str, int] | None:
                 modified += 1
                 continue
             data = os.fsencode(os.readlink(path))
-            if len(data) != size:
-                modified += 1
-                continue
         else:
             if not stat_mod.S_ISREG(st.st_mode):
                 modified += 1
@@ -245,10 +375,10 @@ def _pinned_tree_deviations(core_path: Path) -> dict[str, int] | None:
             if bool(st.st_mode & 0o100) != want_exec:
                 modified += 1
                 continue
-            # Size precheck BEFORE any read: a mismatched size is a
-            # deviation without touching content, and an over-cap blob
-            # fails closed instead of being slurped.
-            if st.st_size != size or size > max_hash_bytes:
+            # Size precheck BEFORE any read: an over-cap on-disk file
+            # fails closed instead of being slurped (the verified blob
+            # hash below catches any size mismatch either way).
+            if st.st_size > max_hash_bytes:
                 modified += 1
                 continue
             try:
