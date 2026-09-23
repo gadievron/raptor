@@ -30,6 +30,7 @@ pytestmark = [
 def test_demoted_proxy_run_is_not_stamped_netns(tmp_path, monkeypatch):
     from core.sandbox import _spawn as sp
     from core.sandbox import context as ctx
+    from core.sandbox import probes as probes_mod
     from core.sandbox.errors import SandboxSetupError
     from core.sandbox.landlock import _get_landlock_abi
 
@@ -47,6 +48,21 @@ def test_demoted_proxy_run_is_not_stamped_netns(tmp_path, monkeypatch):
             setup_category="U",
         )
 
+    # Pin the construction-time probes to the capable shape: this test
+    # is about the CALL-TIME demotion arm ("the probe passed, the
+    # runtime unshare refused"), and that premise only exists when
+    # construction resolves to the namespace tier. On hosts where the
+    # real probes already fail (userns-denied containers, degraded
+    # mount-in-userns), construction takes the Tier-2 landlock_tcp
+    # lane instead: refuse_spawn never fires, no deny-all engages, and
+    # degraded_net_deny is legitimately unset — a different scenario
+    # than the one under test. The Landlock ABI stays REAL (gated
+    # above): the demoted deny-all install actually runs.
+    monkeypatch.setattr(ctx, "check_net_available", lambda: True)
+    monkeypatch.setattr(ctx, "check_mount_available", lambda: True)
+    monkeypatch.setattr(sp, "mount_ns_available", lambda: True)
+    monkeypatch.setattr(probes_mod, "check_unshare_engages",
+                        lambda flags: (True, ""))
     monkeypatch.setattr(sp, "run_sandboxed", refuse_spawn)
     res = ctx.run(
         ["/bin/sh", "-c", "echo ran-on-lane"],
