@@ -222,7 +222,15 @@ def render_bundle(bundle: ZKPoXBundle) -> str:
             else f"source {bundle.target_source_hash[:16]}..."
             if bundle.target_source_hash else "none"
         ),
-        f"   claim:    {bundle.attestation['claim']}",
+        # attestation is optional on the reproduce path (the CLI
+        # defaults it to {} and it is not a required manifest field)
+        # — a sparse manifest renders "(none)", never a KeyError
+        # traceback in place of the exit-2 diagnostic contract.
+        "   claim:    "
+        + str(
+            (bundle.attestation or {}).get("claim", "(none)")
+            if isinstance(bundle.attestation, dict) else "(none)"
+        ),
     ]
     if bundle.reproduction is not None:
         rep = bundle.reproduction
