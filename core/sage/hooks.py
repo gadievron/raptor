@@ -5,9 +5,14 @@ Mechanical hooks that make hard decisions (skip, suppress, reorder,
 set flags) based on SAGE recall. Every hook is a no-op when SAGE is
 unavailable.
 
-Prompt-injection hooks (recalled text dropped into LLM prompts) were
-removed — they had no measurable effect and no guarantee the LLM
-weighed them correctly.
+Two hint-tier recall surfaces DO feed recalled rows into prompt/
+report context — ``recall_context_for_validation`` and
+``recall_context_for_web_scan``. They carry hint authority only
+(rows are ``mac_verified``-annotated so consumers can distinguish
+rows minted by this install from arbitrary recall text) and must
+never suppress or hard-decide anything. The earlier generation of
+prompt-injection hooks beyond those two was removed — no measurable
+effect and no guarantee the LLM weighed them correctly.
 """
 
 import math
@@ -2502,10 +2507,16 @@ def store_validation_verdicts(
             verdict = _s(
                 finding.get("status") or finding.get("verdict") or "unknown",
             )
-            title = _clip(
+            # Sanitised like every other prose component (the SCA
+            # writer's counterfeit-marker rationale): the title is
+            # LLM/finding-derived and renders BEFORE the ||key=value||
+            # markers, so a '|' smuggled into it could plant
+            # counterfeit markers ahead of the genuine ones for any
+            # first-match parser of the same grammar.
+            title = _s(_clip(
                 str(finding.get("title") or finding.get("rule_id")
                     or finding.get("type") or "finding"), 120,
-            )
+            ))
             content = (
                 f"Validation verdict: {title} "
                 f"||file={file_path}|| ||fn={fn}|| ||verdict={verdict}||"
@@ -2575,10 +2586,12 @@ def store_validation_disproven(
             reason = _s(_clip(
                 str(item.get("reason") or item.get("why") or "disproven"),
             ))
-            desc = _clip(
+            # Same counterfeit-marker defence as the verdict writer:
+            # prose ahead of the markers must never carry '|'.
+            desc = _s(_clip(
                 str(item.get("hypothesis") or item.get("title")
                     or item.get("description") or "hypothesis"), 120,
-            )
+            ))
             content = (
                 f"Validation disproven: {desc} "
                 f"||file={file_path}|| ||fn={fn}|| ||reason={reason}||"

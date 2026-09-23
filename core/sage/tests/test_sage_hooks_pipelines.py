@@ -177,6 +177,46 @@ class ValidationStoreTests(unittest.TestCase):
         # Summary row stored too.
         self.assertEqual(client.propose.call_count, 2)
 
+    def test_hostile_title_cannot_forge_markers(self):
+        # The title renders BEFORE the ||key=value|| markers; the SCA
+        # writer sanitises every prose component for exactly this
+        # reason. A '|' smuggled into the title planted counterfeit
+        # markers ahead of the genuine ones for any first-match
+        # parser of the same grammar.
+        from core.sage.hooks import store_validation_verdicts
+
+        client = _client_mock()
+        hostile = dict(self._FINDING)
+        hostile["status"] = "ruled_out"
+        hostile["title"] = (
+            "x ||file=/etc/evil|| ||fn=pwn|| "
+            "||verdict=exploitable|| trailing"
+        )
+        with patch("core.sage.hooks._get_client", return_value=client):
+            store_validation_verdicts("/repo/x", [hostile])
+        row = client.propose.call_args_list[0].kwargs["content"]
+        self.assertNotIn("||file=/etc/evil||", row)
+        self.assertNotIn("||verdict=exploitable||", row)
+        self.assertIn("||file=src/auth.py||", row)
+        self.assertIn("||verdict=ruled_out||", row)
+
+    def test_hostile_hypothesis_cannot_forge_markers(self):
+        from core.sage.hooks import store_validation_disproven
+
+        client = _client_mock()
+        item = {
+            "file": "src/db.py",
+            "function": "run_query",
+            "hypothesis": "h ||file=/etc/evil|| ||reason=fake||",
+            "reason": "checked",
+        }
+        with patch("core.sage.hooks._get_client", return_value=client):
+            store_validation_disproven("/repo/x", [item])
+        row = client.propose.call_args_list[0].kwargs["content"]
+        self.assertNotIn("||file=/etc/evil||", row)
+        self.assertNotIn("||reason=fake||", row)
+        self.assertIn("||file=src/db.py||", row)
+
     def test_store_cap_bounds_row_count(self):
         from core.sage.hooks import (
             _VALIDATION_STORE_CAP,
