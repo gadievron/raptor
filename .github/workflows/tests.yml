@@ -450,12 +450,22 @@ jobs:
           find $VENV_PATH/bin -maxdepth 1 -type f -exec chmod +x {} +
 
       - name: Cache Python bytecode
+        id: pycache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # was v6.1.0
         with:
           # __pycache__ contents are deterministic per (Python version,
-          # source contents). Caching by source-tree hash recovers the
-          # ~10–30s `compileall` adds per runner. Cache miss is a no-op
-          # — `compileall` regenerates from scratch.
+          # source contents). An EXACT-key hit means the sources are
+          # byte-identical to the tree that built the cache, so the
+          # compile step below is skipped outright — that skip is what
+          # recovers the compile cost, and it is sound only because
+          # the pycs are checked-hash (PEP 552): import validates them
+          # by SOURCE CONTENT, so fresh-checkout mtime churn cannot
+          # stale them. Running compileall over restored pycs would
+          # recompile everything regardless of mode (its up-to-date
+          # probe compares a timestamp-shaped header), which is why
+          # the gate is on the cache step, not inside compileall.
+          # Miss or restore-keys prefix hit (cache-hit != 'true'):
+          # compile from scratch.
           path: |
             core/**/__pycache__
             packages/**/__pycache__
@@ -464,9 +474,13 @@ jobs:
             pycache-${{ env.PYTHON_VERSION }}-
 
       - name: Compile Python sources
+        # Skipped on an exact cache hit — see the cache step comment.
+        if: steps.pycache.outputs.cache-hit != 'true'
         run: |
           source $VENV_PATH/bin/activate
-          python -m compileall -q core packages *.py
+          # checked-hash: import validates by content, so the cached
+          # pycs stay valid across checkout mtime churn.
+          python -m compileall -q --invalidation-mode checked-hash core packages *.py
 
       - name: Run unit tests (batch ${{ matrix.batch }})
         env:
