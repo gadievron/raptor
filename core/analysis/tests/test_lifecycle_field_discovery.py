@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from core.analysis.lifecycle_field_discovery import (
     _extract_class_fields_java,
     _extract_class_fields_python,
@@ -342,3 +344,71 @@ int get(struct s *p) {
             assert len(f.write_sites) >= 1
             assert len(f.read_sites) >= 1
             assert f.write_sites[0].file == "s.c"
+
+
+class TestHostileSourceScale:
+    @pytest.mark.slow
+    def test_unclosed_struct_heads_are_not_quadratic(self):
+        # N unclosed 'struct a{' heads made the per-struct forward
+        # scan re-walk to EOF each time (~78s at n=8000 pre-fix).
+        import time
+        from core.analysis.lifecycle_field_discovery import (
+            _extract_struct_fields_c,
+        )
+        n = 8000
+        src = "struct a{ " * n
+        t0 = time.monotonic()
+        _extract_struct_fields_c(src)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 3.0, f"{elapsed:.1f}s at n={n}"
+
+    @pytest.mark.slow
+    def test_many_python_classes_are_not_quadratic(self):
+        import time
+        from core.analysis.lifecycle_field_discovery import (
+            _extract_class_fields_python,
+        )
+        n = 16000
+        src = "".join(
+            f"class C{i}:\n    def __init__(self):\n"
+            f"        self.x{i} = 1\n" for i in range(n))
+        t0 = time.monotonic()
+        out = _extract_class_fields_python(src)
+        elapsed = time.monotonic() - t0
+        assert len(out) == n
+        assert elapsed < 3.0, f"{elapsed:.1f}s at n={n}"
+
+    def test_closed_struct_extraction_unchanged(self):
+        # Behavior equivalence for the one-pass brace matcher.
+        from core.analysis.lifecycle_field_discovery import (
+            _extract_struct_fields_c,
+        )
+        src = (
+            "struct outer {\n"
+            "    int a;\n"
+            "    struct inner { int b; } nested;\n"
+            "};\n"
+            "struct second { char *name; };\n"
+        )
+        out = _extract_struct_fields_c(src)
+        assert "a" in out.get("outer", [])
+        assert out.get("second") == ["name"]
+
+    def test_unclosed_struct_is_skipped(self):
+        # Malformed head: no body attribution (refusal direction) —
+        # attributing a to-EOF body was also the quadratic driver.
+        from core.analysis.lifecycle_field_discovery import (
+            _extract_struct_fields_c,
+        )
+        out = _extract_struct_fields_c("struct t {\n    int a;\n")
+        assert out == {}
+
+    def test_oversized_file_is_skipped(self, tmp_path):
+        from core.analysis import lifecycle_field_discovery as lfd
+        big = tmp_path / "big.c"
+        big.write_text(
+            "struct s { int val; };\n" + "x" * (lfd._MAX_SOURCE_BYTES + 1),
+            encoding="utf-8")
+        checklist = {"files": [{"path": "big.c"}]}
+        assert lfd.discover_state_fields(
+            checklist, tmp_path, min_score=0.0) == []
