@@ -61,6 +61,9 @@ class _StubFacts:
         }
         self.is_skipped = False
         self.skipped_reason = None
+        # Real PrereqFacts marks partially-errored sweeps incomplete;
+        # the suppression entry gate requires a complete caller map.
+        self.complete = True
 
     def callers_of(self, name):
         return [(f, line) for (f, line, _c) in self._edges.get(name, [])]
@@ -313,6 +316,39 @@ class TestPrivilegeBackWalkSuppresses:
                 max_depth=3,
             ) is True
 
+    def test_incomplete_sweep_does_not_suppress(self):
+        """Fully-gated shape, but the fact base is marked partial (an
+        errored rule): the caller map may be missing an ungated
+        caller, so the all-paths-gated suppression must not fire."""
+        facts = _StubFacts({
+            "leaf_fn": [("/repo/a.c", 50, "mid_fn")],
+            "mid_fn": [("/repo/a.c", 30, "gated_top")],
+        })
+        facts.complete = False
+
+        def _enc(file_path, line):
+            if line == 100:
+                return "leaf_fn"
+            return facts.enclosing(file_path, line)
+
+        with (
+            patch("packages.coccinelle.prereqs.gather_prereqs",
+                  return_value=facts),
+            patch("packages.source_intel.analyze._enclosing_function",
+                  side_effect=_enc),
+            patch("packages.source_intel.adapter._line_uses_privileged_cap",
+                  return_value=True),
+            patch("packages.source_intel.adapter._function_is_static",
+                  return_value=True),
+            patch.object(Path, "is_dir", return_value=True),
+        ):
+            assert _privilege_back_walk_suppresses(
+                _finding(),
+                _result_with_caps(_cap_for("gated_top")),
+                Path("/repo"),
+                max_depth=3,
+            ) is False
+
     def test_two_hop_ungated_does_not_suppress(self):
         """Same shape as above, but no gate anywhere — must NOT suppress."""
         facts = _StubFacts({
@@ -457,3 +493,36 @@ class TestPrivilegeBackWalkSuppresses:
             assert _privilege_back_walk_suppresses(
                 finding, caps, tmp_path,
             ) is True
+
+
+# ---- compute_privilege_back_walk_evidence (prose evidence walker) -----
+
+
+class TestBackWalkEvidenceCompleteness:
+    def test_incomplete_sweep_yields_no_evidence(self, tmp_path):
+        """Both the "all paths gated" and the "no callers" prose
+        claims quantify over the caller map — a partial sweep must
+        yield no back-walk evidence at all."""
+        from packages.source_intel.analyze import (
+            compute_privilege_back_walk_evidence,
+        )
+        facts = _StubFacts({})
+        facts.complete = False
+        with patch("packages.coccinelle.prereqs.gather_prereqs",
+                   return_value=facts):
+            assert compute_privilege_back_walk_evidence(
+                "leaf_fn", tmp_path, _result_with_caps(),
+            ) is None
+
+    def test_complete_sweep_still_yields_evidence(self, tmp_path):
+        from packages.source_intel.analyze import (
+            compute_privilege_back_walk_evidence,
+        )
+        facts = _StubFacts({})
+        with patch("packages.coccinelle.prereqs.gather_prereqs",
+                   return_value=facts):
+            ev = compute_privilege_back_walk_evidence(
+                "leaf_fn", tmp_path, _result_with_caps(),
+            )
+        assert ev is not None
+        assert ev.no_callers is True

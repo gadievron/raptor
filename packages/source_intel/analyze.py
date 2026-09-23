@@ -661,7 +661,14 @@ class SourceIntelResult:
             return "prereqs_skipped"
         if facts.is_skipped:
             return "prereqs_skipped"
-        return "in_tree" if facts.function_exists(function_name) else "name_not_in_tree"
+        if facts.function_exists(function_name):
+            return "in_tree"
+        if not facts.complete:
+            # An errored rule may be the one that would have seen the
+            # definition — "I scanned and the name isn't here" is only
+            # claimable from a complete sweep.
+            return "prereqs_skipped"
+        return "name_not_in_tree"
 
     def variant_ratio(self, allocator: str) -> tuple[int, int]:
         """Return (checked_count, unchecked_count) for ``allocator``
@@ -2825,7 +2832,10 @@ def compute_privilege_back_walk_evidence(
         facts = gather_prereqs(target)
     except Exception:  # noqa: BLE001
         return None
-    if facts.is_skipped:
+    if facts.is_skipped or not facts.complete:
+        # Both the "all paths gated" and the "no callers" claims
+        # quantify over the caller map — an incomplete sweep (an
+        # errored rule) may be missing exactly the ungated caller.
         return None
 
     callers = facts.callers_of(finding_function)

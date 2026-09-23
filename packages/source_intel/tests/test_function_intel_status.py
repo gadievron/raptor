@@ -59,9 +59,11 @@ def test_status_mapping_unit(tmp_path, monkeypatch):
     import packages.coccinelle.prereqs as prereqs_mod
 
     class _Facts:
-        def __init__(self, skipped: bool, exists: bool):
+        def __init__(self, skipped: bool, exists: bool,
+                     complete: bool = True):
             self.is_skipped = skipped
             self._exists = exists
+            self.complete = complete
 
         def function_exists(self, name: str) -> bool:
             return self._exists
@@ -86,3 +88,22 @@ def test_status_mapping_unit(tmp_path, monkeypatch):
     assert result.function_intel_status(
         "f", target=tmp_path,
     ) == "prereqs_skipped"
+
+    # Partial sweep: "I scanned and the name isn't here" is only
+    # claimable from a complete sweep — absence degrades to skipped,
+    # positive hits still count.
+    monkeypatch.setattr(
+        prereqs_mod, "gather_prereqs",
+        lambda t: _Facts(False, False, complete=False),
+    )
+    assert result.function_intel_status(
+        "f", target=tmp_path,
+    ) == "prereqs_skipped"
+
+    monkeypatch.setattr(
+        prereqs_mod, "gather_prereqs",
+        lambda t: _Facts(False, True, complete=False),
+    )
+    assert result.function_intel_status(
+        "f", target=tmp_path,
+    ) == "in_tree"
