@@ -243,10 +243,12 @@ jobs:
       - name: Lint slash-command metadata
         run: python3 .github/scripts/check_command_metadata.py
 
-  # Repo-invariant detectors as a PR gate. The five baseline-gated
-  # detectors below also run in the daily scheduled sweep
-  # (miswiring-scan.yml, kept as belt-and-braces + the stale-baseline
-  # triage surface), but schedule-only coverage means a change that
+  # Repo-invariant detectors as a PR gate. Every detector below also
+  # runs in the daily scheduled sweep (miswiring-scan.yml, kept as
+  # belt-and-braces + the stale-baseline triage surface; the two step
+  # lists are parity-pinned by test_ci_controls_docs — hand-counted
+  # copies of this set had already drifted), but schedule-only
+  # coverage means a change that
   # introduces a NEW finding merges green and turns main red at the
   # next morning's scan — a delayed failure attributed to the scan,
   # not to the change that caused it. Running them here closes that
