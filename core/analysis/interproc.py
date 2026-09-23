@@ -72,6 +72,7 @@ from core.dataflow.sanitizer_catalog import (
     SanitizerBinding,
     sanitizer_callables_for_cwe,
 )
+from core.analysis.python_module_callgraph import local_binding_names
 from core.analysis.taint_summaries import TaintSummary
 
 
@@ -235,6 +236,16 @@ def synthetic_sanitizer_bindings(
     if not sanitizer_names or not summaries:
         return frozenset()
 
+    # Shadow guard: the summary join below is keyed by NAME. When the
+    # analysed function's own scope binds the callee chain's root name
+    # (``esc = str``, a param named ``esc``, a nested ``def esc``, a
+    # walrus), the runtime callee is the local binding — joining the
+    # module-table summary would certify a helper the call provably
+    # may not reach, and the enforced sanitizer-cut would consume the
+    # forged clean-wrapper binding. Any local definition refuses the
+    # join (an ambiguous binding only ever loses suppression power).
+    local_bindings = local_binding_names(fn_ast)
+
     bindings: list[SanitizerBinding] = []
     for node in cfg.nodes():
         call_sites = getattr(node, "call_sites", ()) or ()
@@ -243,6 +254,8 @@ def synthetic_sanitizer_bindings(
             # name matches its summary key directly; ``A.m`` matches a
             # static-style method summary key. ``self.m`` typically
             # won't match (summary key is ``Class.m``) — best-effort.
+            if cs.name.split(".", 1)[0] in local_bindings:
+                continue
             summary = summaries.get(cs.name)
             if summary is None:
                 continue

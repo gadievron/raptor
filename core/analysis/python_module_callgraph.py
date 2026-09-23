@@ -195,6 +195,16 @@ class _FunctionRecord:
     is_method: bool
     class_name: str | None
     ast_node: ast.AST
+    # Names this function's own scope binds (params, assignments,
+    # nested defs, imports, …) — computed lazily via
+    # :meth:`local_bindings`; the bare-name callee arm refuses to
+    # resolve through them (shadow guard).
+    _local_bindings: frozenset[str] | None = None
+
+    def local_bindings(self) -> frozenset[str]:
+        if self._local_bindings is None:
+            self._local_bindings = local_binding_names(self.ast_node)
+        return self._local_bindings
 
 
 def _function_params(
@@ -317,6 +327,118 @@ def _collect_functions(tree: ast.AST) -> list[_FunctionRecord]:
 
 
 # ---------------------------------------------------------------------------
+# Local-binding discovery — the shadow guard for name-keyed joins
+# ---------------------------------------------------------------------------
+
+
+def local_binding_names(fn_ast: ast.AST) -> frozenset[str]:
+    """Every name the function's OWN scope binds, flow-insensitively.
+
+    The summary/binding joins downstream (``taint_summaries``'s
+    callee join, ``interproc``'s synthetic bindings, this module's
+    bare-name callee resolution) are keyed by NAME against the
+    module-level table. A local binding of that name (``esc = str``,
+    a parameter named ``esc``, a nested ``def esc``, a walrus, a
+    ``for``/``with``/``except``/import target) makes the runtime
+    callee a different object than the table entry — a hostile repo
+    collides the key and mints a clean-sanitizer wrapper the enforced
+    sanitizer-cut consumes. Joins must refuse when the name has ANY
+    local definition: an ambiguous binding can only lose suppression
+    power, never gain it.
+
+    Scope rules:
+
+    * Parameters, assignment/augmented/annotated targets (including
+      tuple/list/star destructuring), walrus targets, ``for`` /
+      ``async for`` targets, ``with … as`` targets, ``except … as``
+      names, import aliases, ``match`` capture names, and the NAMES
+      of nested function/class definitions all bind locally.
+    * Nested function/class BODIES bind their own scopes and are not
+      descended into — but their decorators and default expressions
+      evaluate in THIS scope, so walruses there are collected.
+    * Comprehension for-targets are NOT collected: comprehensions
+      have their own scope, so a target there never rebinds the
+      function's names (a walrus inside a comprehension DOES — it is
+      an ordinary ``NamedExpr`` in the walk and is collected).
+    """
+    out: set[str] = set()
+    args = getattr(fn_ast, "args", None)
+    if args is not None:
+        for a in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            out.add(a.arg)
+        if args.vararg is not None:
+            out.add(args.vararg.arg)
+        if args.kwarg is not None:
+            out.add(args.kwarg.arg)
+
+    def _add_target(t: ast.AST) -> None:
+        if isinstance(t, ast.Name):
+            out.add(t.id)
+        elif isinstance(t, ast.Starred):
+            _add_target(t.value)
+        elif isinstance(t, (ast.Tuple, ast.List)):
+            for e in t.elts:
+                _add_target(e)
+        # Attribute / Subscript targets bind no bare name.
+
+    def _walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                out.add(child.name)
+                # Decorators and defaults evaluate in THIS scope.
+                for expr in (*child.decorator_list,
+                             *child.args.defaults,
+                             *(d for d in child.args.kw_defaults
+                               if d is not None)):
+                    _walk(expr)
+                continue
+            if isinstance(child, ast.ClassDef):
+                out.add(child.name)
+                for expr in (*child.decorator_list, *child.bases,
+                             *(kw.value for kw in child.keywords)):
+                    _walk(expr)
+                continue
+            if isinstance(child, ast.Lambda):
+                for expr in (*child.args.defaults,
+                             *(d for d in child.args.kw_defaults
+                               if d is not None)):
+                    _walk(expr)
+                continue
+            if isinstance(child, ast.Assign):
+                for t in child.targets:
+                    _add_target(t)
+            elif isinstance(child, (ast.AnnAssign, ast.AugAssign)):
+                _add_target(child.target)
+            elif isinstance(child, ast.NamedExpr):
+                _add_target(child.target)
+            elif isinstance(child, (ast.For, ast.AsyncFor)):
+                _add_target(child.target)
+            elif isinstance(child, (ast.With, ast.AsyncWith)):
+                for item in child.items:
+                    if item.optional_vars is not None:
+                        _add_target(item.optional_vars)
+            elif isinstance(child, ast.ExceptHandler):
+                if child.name:
+                    out.add(child.name)
+            elif isinstance(child, (ast.Import, ast.ImportFrom)):
+                for alias in child.names:
+                    if alias.asname:
+                        out.add(alias.asname)
+                    elif alias.name != "*":
+                        out.add(alias.name.split(".", 1)[0])
+            elif isinstance(child, (ast.MatchAs, ast.MatchStar)):
+                if child.name:
+                    out.add(child.name)
+            elif isinstance(child, ast.MatchMapping):
+                if child.rest:
+                    out.add(child.rest)
+            _walk(child)
+
+    _walk(fn_ast)
+    return frozenset(out)
+
+
+# ---------------------------------------------------------------------------
 # Call resolution
 # ---------------------------------------------------------------------------
 
@@ -382,6 +504,15 @@ def _resolve_callee(
       resolve to ``ClassName.m`` when defined.
     * Anything longer or with an unknown root — drop (cross-module
       or dynamic).
+
+    Shadow guard: when the CALLER's own scope binds the chain's root
+    name (``esc = str``, a param named ``esc``, a walrus, an import
+    alias), the runtime callee is the local binding, not the module
+    table's entry — resolving through the table would attribute the
+    call to a function it provably may not reach (the downstream
+    taint summaries then certify forged clean-sanitizer wrappers).
+    The one exception is the nested-def preference below: a nested
+    ``def esc`` IS the local binding, so resolving to it is exact.
     """
     if not chain:
         return None
@@ -393,6 +524,10 @@ def _resolve_callee(
             nested = f"{caller.qualified_name}.{name}"
             if nested in function_records_by_name:
                 return nested
+        if caller is not None and name in caller.local_bindings():
+            # Locally rebound (and not the nested def handled above)
+            # — the module-level entry is not the runtime callee.
+            return None
         if name in function_records_by_name:
             return name
         # Class construction — ClassName() → ClassName.__init__
@@ -410,6 +545,9 @@ def _resolve_callee(
         return None
     # ``Class.m`` — module-level class methods, static-style.
     if len(chain) == 2:
+        if caller is not None and chain[0] in caller.local_bindings():
+            # A local named like the class shadows it for this call.
+            return None
         cls = chain[0]
         if cls in class_methods and chain[1] in class_methods[cls]:
             return f"{cls}.{chain[1]}"
@@ -633,4 +771,5 @@ __all__ = [
     "PyCallGraphNode",
     "PyModuleCallGraph",
     "build_python_module_callgraph",
+    "local_binding_names",
 ]

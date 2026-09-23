@@ -690,11 +690,15 @@ class TestDirtySiblingShapesStayDirty:
         # The receiver flow survives WITH the method chain stamped
         # opaque — a non-catalog callable on the chain, so the
         # consumer refuses; it is not collapsed into the clean atom.
+        # The chain root ``a`` is a local (the parameter), so the
+        # stamp carries the shadow marker: a locally-rooted chain's
+        # written name must never be able to match a catalog or
+        # module-table identity.
         from core.analysis.taint_summaries import _OPAQUE_ARG
         _, summaries = _summaries(
             "def h(a):\n    return a.strip()\n"
         )
-        assert (0, "a.strip", _OPAQUE_ARG) in (
+        assert (0, "<shadowed:a.strip>", _OPAQUE_ARG) in (
             summaries["h"].return_effects
         )
 
@@ -973,4 +977,108 @@ class TestSameLineRebindCollision:
         )
         s = summaries["_clean"]
         assert (0, "", -1) not in s.return_effects
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+
+
+class TestShadowedCalleeJoinRefused:
+    """The callee join is name-keyed against the module table; a
+    local binding of the callable's root name (``esc = str``, a
+    param, a nested ``def``, a walrus) makes the runtime callee a
+    different object. The join must refuse and the stamped chain
+    must carry the shadow marker so no catalog identity can match —
+    a hostile repo otherwise mints an enforced clean-sanitizer
+    wrapper from the collision."""
+
+    def test_local_rebind_shadow_refuses_join(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    esc = str\n"
+            "    y = esc(x)\n"
+            "    return y\n"
+        )
+        s = summaries["handle"]
+        # The module esc's clean chain must NOT be copied in.
+        assert ("html.escape", 0) not in s.return_sanitizers_for_param(0)
+        # Taint survives, stamped with the shadow marker.
+        assert any(
+            c.startswith("<shadowed:") for _pi, c, _a in s.return_effects
+        )
+
+    def test_param_shadow_refuses_join(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x, esc):\n"
+            "    return esc(x)\n"
+        )
+        s = summaries["handle"]
+        assert ("html.escape", 0) not in s.return_sanitizers_for_param(0)
+
+    def test_nested_def_shadow_refuses_module_join(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    def esc(s):\n"
+            "        return s\n"
+            "    return esc(x)\n"
+        )
+        s = summaries["handle"]
+        assert ("html.escape", 0) not in s.return_sanitizers_for_param(0)
+
+    def test_walrus_shadow_refuses_join(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    if (esc := str):\n"
+            "        return esc(x)\n"
+            "    return ''\n"
+        )
+        s = summaries["handle"]
+        assert ("html.escape", 0) not in s.return_sanitizers_for_param(0)
+
+    def test_catalog_module_shadow_poisons_stamp(self):
+        # ``html = Fake`` then ``html.escape(s)`` — the written name
+        # IS a catalog sanitizer, so the external-arm stamp must be
+        # poisoned or the wrapper certifies clean.
+        _, summaries = _summaries(
+            "def _clean(s):\n"
+            "    html = object()\n"
+            "    return html.escape(s)\n"
+        )
+        s = summaries["_clean"]
+        assert ("html.escape", 0) not in s.return_sanitizers_for_param(0)
+
+    def test_comprehension_target_does_not_shadow(self):
+        # Comprehensions scope their targets; the module helper stays
+        # the runtime callee and the rescue must survive (precision
+        # pin against over-collection).
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    items = [esc for esc in [1]]\n"
+            "    return esc(x)\n"
+        )
+        s = summaries["handle"]
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+
+    def test_unshadowed_helper_join_unchanged(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    y = esc(x)\n"
+            "    return y\n"
+        )
+        s = summaries["handle"]
         assert ("html.escape", 0) in s.return_sanitizers_for_param(0)

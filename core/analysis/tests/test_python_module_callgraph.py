@@ -402,3 +402,106 @@ def test_non_utf8_file_degrades_instead_of_raising(tmp_path):
     cg = build_python_module_callgraph(p)
     assert cg is not None
     assert cg.find("f") is not None
+
+
+class TestShadowGuardedCalleeResolution:
+    """Bare-name callee resolution must not bind through a caller's
+    local rebinding of the name — the runtime callee is the local
+    object, not the module-level def."""
+
+    def test_local_rebind_drops_module_edge(self):
+        from core.analysis.python_module_callgraph import (
+            build_python_module_callgraph,
+        )
+        cg = build_python_module_callgraph(
+            "def esc(s):\n"
+            "    return s\n"
+            "def handle(x):\n"
+            "    esc = str\n"
+            "    return esc(x)\n"
+        )
+        assert cg is not None
+        handle = cg.find("handle")
+        esc = cg.find("esc")
+        assert esc not in set(cg.successors(handle))
+
+    def test_nested_def_preference_survives_guard(self):
+        from core.analysis.python_module_callgraph import (
+            build_python_module_callgraph,
+        )
+        cg = build_python_module_callgraph(
+            "def esc(s):\n"
+            "    return s\n"
+            "def handle(x):\n"
+            "    def esc(s):\n"
+            "        return s + s\n"
+            "    return esc(x)\n"
+        )
+        assert cg is not None
+        handle = cg.find("handle")
+        names = {n.name for n in cg.successors(handle)}
+        assert "handle.esc" in names
+        assert "esc" not in names
+
+    def test_unshadowed_bare_name_edge_unchanged(self):
+        from core.analysis.python_module_callgraph import (
+            build_python_module_callgraph,
+        )
+        cg = build_python_module_callgraph(
+            "def esc(s):\n"
+            "    return s\n"
+            "def handle(x):\n"
+            "    return esc(x)\n"
+        )
+        assert cg is not None
+        handle = cg.find("handle")
+        assert "esc" in {n.name for n in cg.successors(handle)}
+
+
+class TestLocalBindingNames:
+    def test_collects_scope_binding_shapes(self):
+        import ast
+
+        from core.analysis.python_module_callgraph import (
+            local_binding_names,
+        )
+        src = (
+            "def f(a, b=1, *args, kw=None, **kwargs):\n"
+            "    x = 1\n"
+            "    y: int = 2\n"
+            "    z += 3\n"
+            "    (p, q), *rest = point\n"
+            "    for i in it:\n"
+            "        pass\n"
+            "    with open('f') as fh:\n"
+            "        pass\n"
+            "    try:\n"
+            "        pass\n"
+            "    except ValueError as exc:\n"
+            "        pass\n"
+            "    import html\n"
+            "    import os.path\n"
+            "    from shlex import quote as q2\n"
+            "    if (w := 1):\n"
+            "        pass\n"
+            "    vals = [v2 for v2 in it if (v3 := v2)]\n"
+            "    def nested():\n"
+            "        hidden = 1\n"
+            "    class C:\n"
+            "        attr = 1\n"
+            "    lam = lambda l_param: l_param\n"
+        )
+        fn_ast = ast.parse(src).body[0]
+        names = local_binding_names(fn_ast)
+        expected = {
+            "a", "b", "args", "kw", "kwargs", "x", "y", "z", "p", "q",
+            "rest", "i", "fh", "exc", "html", "os", "q2", "w", "vals",
+            "v3", "nested", "C", "lam",
+        }
+        assert expected <= names
+        # Own-scope names of nested defs/classes and comprehension
+        # for-targets do NOT bind the function's scope.
+        assert "hidden" not in names
+        assert "attr" not in names
+        assert "v2" not in names
+        assert "l_param" not in names
