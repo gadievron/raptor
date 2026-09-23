@@ -278,3 +278,25 @@ class TestRenderAndStamp:
             check_report(report, tmp_path)
             check_report(report, tmp_path)
         assert report.read_text().count(bl._SECTION_MARKER) == 1
+
+    def test_prose_containing_delimiter_survives_stamping(self, tmp_path):
+        """Agent prose that legitimately contains the delimiter byte
+        sequence must not be truncated — only a previously stamped
+        (footer-verified) mechanical section is replaced."""
+        prose_tail = (
+            "\n---\n\n" + bl._SECTION_MARKER
+            + "\n\nThe agent quotes the section header in its "
+            "discussion here.\n\n### Step 5: Conclusion\n"
+            "**Location:** `src/parser.c:300`\n"
+        )
+        report = tmp_path / "root-cause-hypothesis-1.md"
+        report.write_text(REPORT + prose_tail, encoding="utf-8")
+        fake_results = [BlamedLineResult("src/parser.c", 120, "executed",
+                                         count=1)]
+        with patch.object(bl, "check_blamed_lines",
+                          return_value=fake_results):
+            check_report(report, tmp_path)
+            check_report(report, tmp_path)
+        text = report.read_text()
+        assert "Step 5: Conclusion" in text, "agent prose truncated"
+        assert text.count(bl._SECTION_FOOTER) == 1
