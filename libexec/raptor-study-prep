@@ -622,25 +622,35 @@ def _extract_doc_comment(source: str, pos: int) -> str:
 # Attribute/declspec prefix: handles __attribute__((visibility("default"))),
 # __attribute__((format(printf, 1, 2))), __declspec(dllexport), extern, etc.
 # Two-level paren matching covers all common attribute forms.
-#
-# The attribute body uses a SINGLE-CHARACTER base ([^()] — never
-# [^()]*) inside the repeated group: a starred base under an outer
-# star is the ambiguous (a*)* shape, and an unterminated
-# "__attribute__((" line makes the engine try every split of the
-# body between the two stars — exponential backtracking on ~100
-# bytes of hostile scanned content. The single-character spelling
-# denotes the same language (runs of non-paren characters and
-# one-level paren groups) with exactly one parse per input, so
-# matching stays linear. Keep it that way.
+# The attribute interior is spelled in first-rest normal form
+# ([^()]*(?:\([^()]*\)[^()]*)*): the previous (?:[^()]*|\([^()]*\))*
+# nested an unbounded branch inside an unbounded loop, so an
+# '__attribute__((' followed by a long run with no closing paren made
+# the engine try every split of the run across loop iterations —
+# exponential. Same language (any mix of non-paren runs and
+# single-level paren groups), deterministic scan.
+# The attribute loop itself is bounded ({0,8}): under MULTILINE
+# every line start anchors a match attempt, and an unbounded
+# attribute loop lets each anchor consume arbitrarily many following
+# attribute-shaped lines before failing — quadratic over a planted
+# file of such lines. Eight chained attributes sits far above real
+# declarations (trade-off both directions: larger admits absurd
+# chains, smaller drops them) while capping per-anchor reach.
 _ATTR_PREFIX = (
-    r"(?:__attribute__\s*\(\((?:[^()]|\([^()]*\))*\)\)\s*)*"
+    r"(?:__attribute__\s*\(\([^()]*(?:\([^()]*\)[^()]*)*\)\)\s*){0,8}"
     r"(?:__declspec\s*\([^()]*\)\s*)?"
     r"(?:extern\s+)?"
 )
 
+# The __-qualifier loop is bounded: it overlaps the type token on
+# every __-word, so an unbounded spelling let a run of __-words with
+# no paren drive the engine through every split of the run between
+# the loop and the type/name tokens. Eight qualifiers sits far above
+# real declarations while capping per-anchor work (trade-off both
+# directions: larger admits absurd headers, smaller drops them).
 _C_FUNC_RE = re.compile(
     r"^" + _ATTR_PREFIX +
-    r"(?:static\s+)?(?:inline\s+)?(?:__\w+\s+)*"
+    r"(?:static\s+)?(?:inline\s+)?(?:__\w+\s+){0,8}"
     r"(?:const\s+)?(?:unsigned\s+)?"
     r"(?:struct\s+\w+(?:\s+\*\s*|\s+)|enum\s+\w+\s+|union\s+\w+(?:\s+\*\s*|\s+)|"
     r"\w+(?:\s+\*\s*|\s+))"
