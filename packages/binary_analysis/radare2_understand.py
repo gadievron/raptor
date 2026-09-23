@@ -220,6 +220,41 @@ _DANGEROUS_IMPORTS = frozenset(
 )
 
 
+def _inventory_interest_key(raw: Any) -> tuple[int, int, int, str]:
+    """Truncation order for an over-cap ``aflj`` inventory.
+
+    Sorts most-interesting first so the cap drops the least
+    interesting tail: imported functions first (few, and the entire
+    dangerous-sink map is derived from them — dropping one silently
+    removes a sink class), then real functions by descending body
+    size (matching the decompile-priority heuristic: big bodies are
+    where parsers and handlers live), with ascending address and then
+    name as the final tiebreaks so the survivor set is deterministic
+    regardless of r2's emission order — even against hostile
+    duplicate-address records. Malformed entries sort last — the
+    parse loop skips them anyway. Must never raise: the payload is
+    hostile (OverflowError covers JSON Infinity, which json.loads
+    accepts and int() refuses)."""
+    if not isinstance(raw, dict):
+        return (2, 0, 0, "")
+    name = str(raw.get("name", ""))
+    is_imported = name.startswith(("sym.imp.", "imp."))
+    try:
+        size = int(raw.get("size", 0) or 0)
+    except (ValueError, TypeError, OverflowError):
+        size = 0
+    addr = raw.get("addr")
+    if addr is None:
+        addr = raw.get("offset")
+    if addr is None:
+        addr = raw.get("minaddr")
+    try:
+        addr = int(addr)
+    except (ValueError, TypeError, OverflowError):
+        addr = 0
+    return (0 if is_imported else 1, -size, addr, name)
+
+
 @dataclass
 class FunctionInfo:
     """A function discovered in the binary."""
@@ -650,11 +685,17 @@ class BinaryUnderstand:
         max_strings: int = 100,
         quick: bool = False,
         extract_cfgs: bool = False,
+        max_functions: int | None = None,
     ) -> BinaryContextMap:
         """Run the full analysis pipeline.
 
         max_decompile bounds the number of high-priority functions we ask
         the decompiler for, since decompilation is the slowest step.
+
+        ``max_functions`` overrides the function-inventory cap
+        (``_MAX_FUNCTIONS`` when None). Raise it for large binaries
+        where the default would blind-spot the map; lower it to bound
+        per-function r2 work on constrained runs.
 
         ``extract_cfgs=True`` additionally populates each interesting
         function's ``basic_block_cfg`` (via r2 ``afbj``, cached per
@@ -751,7 +792,8 @@ class BinaryUnderstand:
                     session.analysed = True
                     self._extract_metadata(r2, ctx)
                     self._extract_imports_exports(r2, ctx)
-                    self._extract_functions(r2, ctx)
+                    self._extract_functions(r2, ctx,
+                                            max_functions=max_functions)
                     self._extract_classes(r2, ctx)
                     self._extract_entry_points(ctx)
                     self._extract_strings(r2, ctx, limit=max_strings)
@@ -916,9 +958,28 @@ class BinaryUnderstand:
             ctx.exports = []
             ctx.export_types = {}
 
+    # Function-inventory cap. Trade-off cuts both ways: too low and
+    # large binaries are silently blind-spotted (functions the cap
+    # drops never reach the sink map, transitive reachability or
+    # decompilation, and only a note says so); unbounded and a huge or
+    # hostile aflj payload turns the per-function passes (axffj xrefs,
+    # CFG extraction, BFS adjacency) into a memory/time blowup. 10k
+    # covers typical applications with headroom; callers analysing
+    # bigger targets raise it per run via ``max_functions`` rather
+    # than editing this default.
     _MAX_FUNCTIONS = 10_000
 
-    def _extract_functions(self, r2, ctx: BinaryContextMap) -> None:
+    def _extract_functions(
+        self,
+        r2,
+        ctx: BinaryContextMap,
+        max_functions: int | None = None,
+    ) -> None:
+        # Clamp negative overrides: a negative cap would leak Python
+        # slice semantics into the truncation (keeping the TAIL) and
+        # corrupt the dropped-count arithmetic in the note below.
+        cap = (self._MAX_FUNCTIONS if max_functions is None
+               else max(0, max_functions))
         try:
             fns = json.loads(
                 self._cmd_deg(r2, ctx, "aflj", self._T_QUERY,
@@ -936,10 +997,13 @@ class BinaryUnderstand:
             logger.warning("function list extraction failed: not a list")
             return
 
-        if len(fns) > self._MAX_FUNCTIONS:
+        if len(fns) > cap:
+            dropped = len(fns) - cap
             logger.warning(
-                "function list capped: %d -> %d",
-                len(fns), self._MAX_FUNCTIONS,
+                "function list capped: %d -> %d (%d dropped; retained "
+                "by interest: imports first, then largest bodies, "
+                "address then name as tiebreaks)",
+                len(fns), cap, dropped,
             )
             # Mirror the class-cap pattern: the cap must reach the
             # operator-facing map/report via ctx.notes — a log line
@@ -947,12 +1011,17 @@ class BinaryUnderstand:
             # while dropped functions are invisible to the sink map
             # and transitive reachability.
             ctx.notes.append(
-                f"Function inventory capped at {self._MAX_FUNCTIONS} "
-                f"of {len(fns)} recovered functions; sinks and "
-                "reachability cover only the retained set — inspect "
-                "radare2 aflj output directly for the remainder."
+                f"Function inventory capped at {cap} of {len(fns)} "
+                f"recovered functions ({dropped} dropped — imports and "
+                "largest bodies retained, smallest tail dropped); sinks "
+                "and reachability cover only the retained set — rerun "
+                "with a higher max_functions or inspect radare2 aflj "
+                "output directly for the remainder."
             )
-            fns = fns[:self._MAX_FUNCTIONS]
+            # Deterministic, least-interesting-tail truncation: sort by
+            # the explicit interest key before slicing so what survives
+            # never depends on r2's emission order.
+            fns = sorted(fns, key=_inventory_interest_key)[:cap]
 
         # Exports are a list for consumers that keep order; membership
         # checks below use a set so the per-function test is O(1)
@@ -976,12 +1045,12 @@ class BinaryUnderstand:
                 addr = 0
             try:
                 size = int(raw.get("size", 0) or 0)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
                 size = 0
             is_imported = name.startswith(("sym.imp.", "imp."))
             try:
                 addr = int(addr)
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, OverflowError):
                 addr = 0
             info = FunctionInfo(
                 name=name,
@@ -1737,6 +1806,7 @@ def analyse_binary_context(
     quick: bool = False,
     extract_cfgs: bool = False,
     slice_arch: str | None = None,
+    max_functions: int | None = None,
 ) -> BinaryContextMap:
     """Run radare2 analysis and optionally persist the context map.
 
@@ -1757,6 +1827,11 @@ def analyse_binary_context(
     ``cyclomatic`` field on the function records in the context map.
     Off by default — adds a per-function r2 call. Ignored under
     ``quick``.
+
+    ``max_functions`` overrides the function-inventory cap (module
+    default when None); over-cap inventories are truncated to the
+    most interesting entries deterministically, with a ctx.notes
+    record of the drop.
     """
     if slice_arch is None:
         analyser = BinaryUnderstand(binary_path, llm=llm)
@@ -1767,6 +1842,7 @@ def analyse_binary_context(
         max_strings=max_strings,
         quick=quick,
         extract_cfgs=extract_cfgs,
+        max_functions=max_functions,
     )
     if out_path:
         context.write(out_path)
