@@ -4565,6 +4565,22 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # checks can chain their refusal to the real failure. None on
         # every other demotion route.
         _spawn_ladder_err: BaseException | None = None
+        # Pre-spawn grant-identity pin state (mount-lane calls only —
+        # captured right before the first spawn dispatch, re-checked
+        # before any retry/demotion lane re-consumes the grants).
+        # _grant_pin_fds holds one O_PATH fd per pinned grant root for
+        # the rest of the call: an open fd keeps the pinned inode
+        # ALLOCATED, so a filesystem that recycles freed inode numbers
+        # (ext4 hands the freed number to the very next create; tmpfs
+        # allocates monotonically) can never mint a replacement that
+        # is stat-identical to the original — the re-check compares
+        # the path's re-stat against fstat() of the HELD descriptor,
+        # kernel truth for the validated object, instead of trusting
+        # two pathname stats to disagree. Closed in the proxy-token
+        # finally below (success, refusal raise, and ladder demotion
+        # all pass through it).
+        _grant_ids_before: "dict[str, tuple] | None" = None
+        _grant_pin_fds: list[int] = []
         _audit_landlock_engaged = False
         # Why audit could not engage for this call, for the degrade
         # marker / audit_required raise at the no-audit bottleneck
@@ -5322,8 +5338,37 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 child_pid_callback=_register_lane_peer,
                             )
 
-                        def _grant_path_identities() -> dict[str, tuple]:
-                            identities = {}
+                        def _capture_grant_identities() -> dict[str, tuple]:
+                            """Snapshot every grant root's identity with
+                            a HELD O_PATH fd (appended to
+                            ``_grant_pin_fds``; released in the
+                            proxy-token finally).
+
+                            The fd does two jobs. It anchors the
+                            re-check: the path's later re-stat must
+                            match ``fstat()`` of this descriptor —
+                            kernel truth for the validated object, not
+                            a comparison of two forgeable pathname
+                            stats. And holding it keeps the pinned
+                            inode allocated, so inode-number recycling
+                            cannot make an unlink+recreate swap
+                            stat-identical to the original: a plain
+                            (st_dev, st_ino) snapshot was blind to
+                            exactly that swap on ext4, where the freed
+                            inode number goes to the very next create.
+
+                            A grant root that cannot be pinned (absent
+                            optional readable, vanished dir, or a
+                            symlink planted inside the realpath→walk
+                            window — ``open_pinned`` refuses mid-walk
+                            symlinks) records an explicit
+                            ``("unpinnable",)`` sentinel: still-absent
+                            at re-check time is clean (same as the old
+                            skip), while a path that BECOMES resolvable
+                            mid-call is a violation.
+                            """
+                            from . import _pathpin as _pathpin_mod
+                            identities: dict[str, tuple] = {}
                             grant_paths = [
                                 target, output,
                                 *(writable_paths or []),
@@ -5333,16 +5378,76 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                 if not grant_path:
                                     continue
                                 absolute = os.path.abspath(grant_path)
+                                if absolute in identities:
+                                    continue
                                 try:
                                     resolved = os.path.realpath(absolute)
-                                    path_stat = os.stat(resolved)
-                                except OSError:
+                                    pin_fd = _pathpin_mod.open_pinned(
+                                        resolved)
+                                except (OSError, ValueError):
+                                    identities[absolute] = ("unpinnable",)
                                     continue
+                                _grant_pin_fds.append(pin_fd)
+                                pin_st = os.fstat(pin_fd)
                                 identities[absolute] = (
-                                    resolved, path_stat.st_dev,
-                                    path_stat.st_ino,
+                                    resolved, pin_st.st_dev,
+                                    pin_st.st_ino, pin_fd,
                                 )
                             return identities
+
+                        def _grant_pin_mismatch_reason(
+                                pins: dict[str, tuple]) -> "str | None":
+                            """First grant root whose pinned identity no
+                            longer holds, as a reason string; None while
+                            every pin holds.
+
+                            Every arm is fail-closed for an
+                            attacker-observable swap: a vanished or
+                            unresolvable path, a changed realpath, a
+                            re-stat that differs from the HELD fd's
+                            fstat, a pinned inode whose link count
+                            dropped to zero (the unlink+recreate
+                            signature — refused even if a hostile
+                            filesystem reports the pinned numbers for
+                            the replacement path), and a
+                            previously-unpinnable path that now
+                            resolves.
+                            """
+                            for absolute, pin in pins.items():
+                                if pin[0] == "unpinnable":
+                                    try:
+                                        os.stat(os.path.realpath(absolute))
+                                    except OSError:
+                                        continue
+                                    return (
+                                        f"{absolute} was not resolvable "
+                                        f"at validation but resolves now")
+                                resolved, _dev, _ino, pin_fd = pin
+                                try:
+                                    resolved_now = os.path.realpath(
+                                        absolute)
+                                    st_now = os.stat(resolved_now)
+                                except OSError:
+                                    return f"{absolute} no longer resolves"
+                                if resolved_now != resolved:
+                                    return (
+                                        f"{absolute} re-resolves to "
+                                        f"{resolved_now!r} (validated "
+                                        f"{resolved!r})")
+                                st_fd = os.fstat(pin_fd)
+                                if ((st_now.st_dev, st_now.st_ino)
+                                        != (st_fd.st_dev, st_fd.st_ino)):
+                                    return (
+                                        f"{absolute} changed identity "
+                                        f"(dev/ino {st_now.st_dev}/"
+                                        f"{st_now.st_ino} != pinned "
+                                        f"{st_fd.st_dev}/{st_fd.st_ino})")
+                                if st_fd.st_nlink == 0:
+                                    return (
+                                        f"{absolute}: the validation-time "
+                                        f"inode was unlinked "
+                                        f"(recreate-in-place swap)")
+                            return None
 
                         _spawn_without_mount = (
                             _skip_mount_ns or _prefer_mountless_spawn
@@ -5405,7 +5510,7 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             _spawn_lane = "mount-ns spawn"
                             _spawn_lane_kwargs = {}
                         _grant_ids_before = (
-                            _grant_path_identities()
+                            _capture_grant_identities()
                             if not _spawn_without_mount else None
                         )
                         try:
@@ -5808,13 +5913,17 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                                         _floor_exc:
                                     _note_floor_refusal(_floor_exc)
                                     raise
-                                if (_grant_ids_before is not None
-                                        and _grant_path_identities()
-                                        != _grant_ids_before):
+                                _pin_reason = (
+                                    _grant_pin_mismatch_reason(
+                                        _grant_ids_before)
+                                    if _grant_ids_before is not None
+                                    else None)
+                                if _pin_reason is not None:
                                     from .errors import SandboxSetupError
                                     raise SandboxSetupError(
                                         "sandbox grant-source pin violation "
-                                        "during bind-tree fallback",
+                                        f"during bind-tree fallback: "
+                                        f"{_pin_reason}",
                                         "a target, output, writable, or readable "
                                         "path changed while the first sandbox "
                                         "backend was starting; refusing to grant "
@@ -6030,6 +6139,34 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                          if (map_root or target) else ""),
                     )
             if not used_spawn:
+                # Grant-identity re-check for the demotion ladder: the
+                # fallback lanes below re-consume the caller's grants
+                # on the HOST filesystem (no bind tree), so a grant
+                # root swapped while the spawn backend was failing —
+                # the status-byte 'U' reset, the mountless-unachievable
+                # reroute, and the mid-setup exception ladder all land
+                # here — must refuse exactly as the bind-tree (M/X)
+                # retry does, never be granted to the demoted lane.
+                # Ordering: for a run that is BOTH tampered and floored
+                # this tamper refusal outranks the fallback dispatch's
+                # floor refusal — both shapes refuse, and the tamper
+                # verdict is the more specific evidence. None when the
+                # mount lane was never attempted (nothing captured,
+                # nothing to re-check).
+                _ladder_pin_reason = (
+                    _grant_pin_mismatch_reason(_grant_ids_before)
+                    if _grant_ids_before is not None else None)
+                if _ladder_pin_reason is not None:
+                    from .errors import SandboxSetupError
+                    raise SandboxSetupError(
+                        "sandbox grant-source pin violation during "
+                        f"spawn-ladder demotion: {_ladder_pin_reason}",
+                        "a target, output, writable, or readable path "
+                        "changed while the spawn backend was failing; "
+                        "refusing to grant the replacement path to the "
+                        "demoted lane.",
+                        setup_category="P",
+                    )
                 # ---- Mount-ns demotion hardening -------------------
                 # Reaching here with use_mount True means THIS CALL was
                 # demoted from the mount-ns backend to the Landlock-only
@@ -6848,6 +6985,17 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         if _reap_token is not None:
                             _sweep_marked_processes(_reap_token)
         finally:
+            # Release the grant-identity pin fds on every exit path
+            # (success, refusal raise, ladder demotion): the pins only
+            # need to outlive the LAST possible re-check above, and a
+            # raise-path leak would accumulate one fd per pinned grant
+            # per refused call.
+            for _pin_fd in _grant_pin_fds:
+                try:
+                    os.close(_pin_fd)
+                except OSError:
+                    pass
+            _grant_pin_fds.clear()
             events = (
                 proxy_instance.unregister_sandbox(proxy_token)
                 if proxy_token is not None else []

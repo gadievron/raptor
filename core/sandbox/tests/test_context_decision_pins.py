@@ -998,3 +998,191 @@ def test_mountless_retry_scratch_swap_keeps_non_shared_grants(
     assert any(str(extra) in p for p in grants)
     assert "/tmp" not in grants  # host-shared grant swapped out
     assert result.sandbox_info.get("private_scratch") is True
+
+
+# ---------------------------------------------------------------------------
+# grant-identity pin: fd-anchored identity (recycling-proof)
+# ---------------------------------------------------------------------------
+
+import os  # noqa: E402  (section-local: only the pin tests below use it)
+
+
+class _StatForger:
+    """os.stat wrapper that reports a chosen (st_dev, st_ino) for one
+    path — the observable a recycling filesystem hands an attacker:
+    the freed inode number reused for the very next create, making the
+    replacement stat-identical to the original."""
+
+    def __init__(self, path: str, dev: int, ino: int) -> None:
+        self.path = path
+        self.dev = dev
+        self.ino = ino
+        self.armed = False
+        self._real_stat = os.stat
+
+    def __call__(self, target: Any, *args: Any, **kwargs: Any) -> Any:
+        st = self._real_stat(target, *args, **kwargs)
+        if self.armed and isinstance(target, (str, bytes)) and \
+                os.fspath(target) == self.path:
+            class _Doctored:
+                st_dev = self.dev
+                st_ino = self.ino
+
+                def __getattr__(self, name: str) -> Any:
+                    return getattr(st, name)
+            return _Doctored()
+        return st
+
+
+def test_grant_pin_refuses_simulated_inode_recycling(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Recycled-inode swap: the readable grant dir is removed and
+    recreated between the failed mount attempt and the mountless
+    retry, and the filesystem hands the replacement the ORIGINAL
+    inode number (simulated via a stat forger — ext4 does this for
+    real; tmpfs allocates monotonically). A snapshot-vs-resnapshot
+    (st_dev, st_ino) comparison is blind to this swap; the pin must
+    refuse anyway, because its held O_PATH fd is kernel truth for the
+    validated object (the unlinked pinned inode has st_nlink == 0 and
+    can never be re-minted while the fd is open)."""
+    readable = tmp_path / "readable"
+    readable.mkdir()
+    orig = os.stat(readable)
+    forger = _StatForger(str(readable), orig.st_dev, orig.st_ino)
+
+    class _RecyclingRecorder(_SpawnRecorder):
+        def __call__(self, cmd: Any, **kw: Any):
+            if not self.calls:
+                import shutil as _shutil
+                _shutil.rmtree(readable)
+                readable.mkdir()
+                forger.armed = True
+                cp = subprocess.CompletedProcess(cmd, returncode=126,
+                                                 stdout="", stderr="")
+                cp._setup_status = ("X", "exec failed in tree")
+                self.calls.append(kw)
+                return cp
+            return super().__call__(cmd, **kw)
+
+    rec = _RecyclingRecorder()
+    _Driver(monkeypatch, rec)
+    monkeypatch.setattr(os, "stat", forger)
+    with pytest.raises(SandboxSetupError, match="pin violation"):
+        with context.sandbox(target=str(tmp_path),
+                             restrict_reads=True,
+                             readable_paths=[str(readable)]) as run:
+            run(["/bin/true"], capture_output=True, timeout=60)
+
+
+def test_grant_pin_refuses_real_swap_on_any_filesystem(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Plain unlink+recreate swap with NO forgery: because the pin
+    holds an O_PATH fd on the validated inode, no filesystem can
+    recycle its number for the replacement — the refusal is
+    deterministic on every filesystem (ext4 included), with no
+    fixture-side fd needed to keep the test honest."""
+    readable = tmp_path / "readable"
+    readable.mkdir()
+
+    class _SwappingRecorder(_SpawnRecorder):
+        def __call__(self, cmd: Any, **kw: Any):
+            if not self.calls:
+                import shutil as _shutil
+                _shutil.rmtree(readable)
+                readable.mkdir()
+                cp = subprocess.CompletedProcess(cmd, returncode=126,
+                                                 stdout="", stderr="")
+                cp._setup_status = ("X", "exec failed in tree")
+                self.calls.append(kw)
+                return cp
+            return super().__call__(cmd, **kw)
+
+    rec = _SwappingRecorder()
+    _Driver(monkeypatch, rec)
+    with pytest.raises(SandboxSetupError, match="pin violation"):
+        with context.sandbox(target=str(tmp_path),
+                             restrict_reads=True,
+                             readable_paths=[str(readable)]) as run:
+            run(["/bin/true"], capture_output=True, timeout=60)
+
+
+def test_grant_pin_covers_spawn_ladder_demotion(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The demotion ladder is a grant consumer too: when the spawn
+    backend dies mid-setup (environmental exception) the plain
+    subprocess fallback re-consumes the caller's grants on the HOST
+    filesystem — a grant root swapped in that window must refuse with
+    the pin violation, not be silently granted to the demoted lane."""
+    readable = tmp_path / "readable"
+    readable.mkdir()
+
+    class _SwapThenDieRecorder(_SpawnRecorder):
+        def __call__(self, cmd: Any, **kw: Any):
+            self.calls.append(kw)
+            import shutil as _shutil
+            _shutil.rmtree(readable)
+            readable.mkdir()
+            raise RuntimeError("spawn backend down")
+
+    rec = _SwapThenDieRecorder()
+    _Driver(monkeypatch, rec)
+    with pytest.raises(SandboxSetupError, match="pin violation"):
+        with context.sandbox(target=str(tmp_path),
+                             restrict_reads=True,
+                             readable_paths=[str(readable)]) as run:
+            run(["/bin/true"], capture_output=True, timeout=60)
+
+
+def test_grant_pin_unpinnable_path_that_appears_is_refused(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A readable grant that did NOT resolve at validation and is
+    created inside the retry window is a violation (the old snapshot
+    semantics, kept): the retry must not consume a grant the
+    validation never saw."""
+    ghost = tmp_path / "ghost"  # absent at validation
+
+    class _PlantingRecorder(_SpawnRecorder):
+        def __call__(self, cmd: Any, **kw: Any):
+            if not self.calls:
+                ghost.mkdir()
+                cp = subprocess.CompletedProcess(cmd, returncode=126,
+                                                 stdout="", stderr="")
+                cp._setup_status = ("X", "exec failed in tree")
+                self.calls.append(kw)
+                return cp
+            return super().__call__(cmd, **kw)
+
+    rec = _PlantingRecorder()
+    _Driver(monkeypatch, rec)
+    with pytest.raises(SandboxSetupError, match="pin violation"):
+        with context.sandbox(target=str(tmp_path),
+                             restrict_reads=True,
+                             readable_paths=[str(ghost)]) as run:
+            run(["/bin/true"], capture_output=True, timeout=60)
+
+
+def test_grant_pin_benign_retry_unchanged_and_no_fd_leak(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Differential: a benign M/X retry (no swap) is unaffected by the
+    pin, and the held pin fds are released when the call finishes —
+    on the success path AND on a refused call."""
+    readable = tmp_path / "readable"
+    readable.mkdir()
+
+    def _run_once() -> Any:
+        rec = _SpawnRecorder([("X", "exec failed in tree")])
+        _Driver(monkeypatch, rec)
+        with context.sandbox(target=str(tmp_path),
+                             restrict_reads=True,
+                             readable_paths=[str(readable)]) as run:
+            result = run(["/bin/true"], capture_output=True, timeout=60)
+        assert result.returncode == 0
+        assert len(rec.calls) == 2
+        return result
+
+    _run_once()  # warm-up: one-time lazy imports may open fds
+    before = set(os.listdir("/proc/self/fd"))
+    _run_once()
+    after = set(os.listdir("/proc/self/fd"))
+    assert len(after - before) == 0, (
+        f"fds leaked across a pinned run: {sorted(after - before)}")
