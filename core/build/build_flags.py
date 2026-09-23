@@ -46,6 +46,7 @@ from pathlib import Path
 from core.build.macro_config import (
     _MAX_COMPILE_COMMANDS_BYTES,
     _MAX_KCONFIG_BYTES,
+    _nests_like_a_bomb,
     _read_bounded,
 )
 
@@ -140,7 +141,8 @@ def extract_flags(target: Path) -> BuildFlagsContext:
             # If parse yielded actual signal, use it; else fall through
             if ctx.extraction_confidence != "absent":
                 return ctx
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
+        except (OSError, json.JSONDecodeError, ValueError,
+                RecursionError) as exc:
             logger.debug("compile_commands.json parse failed: %s", exc)
 
     # 2. .config — kernel build (reliable for CONFIG_* derived signals)
@@ -193,9 +195,18 @@ def _from_compile_commands(path: Path) -> BuildFlagsContext:
     and we want the most-hardened observed setting per flag.
     """
     raw = _read_bounded(path, _MAX_COMPILE_COMMANDS_BYTES)
+    if _nests_like_a_bomb(raw):
+        logger.warning("deeply nested compile_commands.json at %s — "
+                       "refused before parse", path)
+        return BuildFlagsContext(
+            source="compile_commands.json",
+            extraction_confidence="absent",
+        )
     try:
         entries = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError, RecursionError):
+        # RecursionError: a nesting bomb past the pre-gate's scan
+        # window degrades like malformed JSON (never-raises contract).
         logger.warning("malformed compile_commands.json at %s", path)
         return BuildFlagsContext(
             source="compile_commands.json",
