@@ -604,6 +604,71 @@ class TestPathContainment:
         assert path.is_file()
 
 
+class TestFinalComponentSymlink:
+    def _plant(self, tmp_path):
+        import os
+        base = tmp_path / "base"
+        (base / "src").mkdir(parents=True)
+        outside = tmp_path / "outside.md"
+        outside.write_text("## fn\n\nOUTSIDE-BASE CONTENT\n")
+        os.symlink(outside, base / "src" / "x.py.md")
+        return base, outside
+
+    def test_read_refuses_symlinked_annotation_file(self, tmp_path):
+        # Static, no race: the parent resolve never inspected the
+        # final component, so reads followed a planted link to any
+        # reachable file and parsed its content into annotation
+        # surfaces (/annotate show included).
+        base, _ = self._plant(tmp_path)
+        assert read_file_annotations(base, "src/x.py") == []
+        assert list(iter_all_annotations(base)) == []
+
+    def test_write_refuses_through_symlinked_annotation_file(
+        self, tmp_path,
+    ):
+        from core.annotations import AnnotationFileError
+        base, outside = self._plant(tmp_path)
+        before = outside.read_text()
+        with pytest.raises(AnnotationFileError, match="symlink"):
+            write_annotation(base, Annotation(
+                file="src/x.py", function="g", body="y",
+            ))
+        assert outside.read_text() == before
+
+    def test_write_window_dir_swap_is_refused_under_lock(
+        self, tmp_path, monkeypatch,
+    ):
+        """Deterministic injection at the exact check-to-use window:
+        the attacker's dir->symlink swap lands after annotation_path's
+        resolve check but before the write — emulated by swapping
+        inside the lock acquisition. The under-lock re-verification
+        must refuse; pre-fix the rename landed outside the base."""
+        import os
+        import shutil
+        import core.annotations.storage as storage
+        base = tmp_path / "base"
+        (base / "src").mkdir(parents=True)
+        redirect = tmp_path / "redirect_target"
+        redirect.mkdir()
+        real_lock = storage._file_lock
+
+        from contextlib import contextmanager
+
+        @contextmanager
+        def swapping_lock(path):
+            with real_lock(path):
+                shutil.rmtree(base / "src")
+                os.symlink(redirect, base / "src")
+                yield
+
+        monkeypatch.setattr(storage, "_file_lock", swapping_lock)
+        with pytest.raises(ValueError, match="escaped base"):
+            write_annotation(base, Annotation(
+                file="src/y.py", function="f", body="x",
+            ))
+        assert not (redirect / "y.py.md").exists()
+
+
 class TestLockSymlinkDefence:
     def test_lock_path_symlink_refused(self, tmp_path):
         """A symlink squatted at the predictable ``.md.lock`` sibling

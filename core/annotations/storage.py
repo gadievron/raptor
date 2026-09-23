@@ -445,6 +445,32 @@ def annotation_path(base_dir: Path, source_file: str) -> Path:
     return path
 
 
+def _assert_parent_contained(base_dir: Path, path: Path) -> None:
+    """Re-verify (post-mkdir, under the write lock) that ``path``'s
+    parent still resolves inside ``base_dir``.
+
+    ``annotation_path`` performs the same resolve check, but that is
+    point-in-time: a same-privilege writer who swaps an intermediate
+    directory for a symlink between the check and the rename would
+    redirect the atomic write outside the base. Re-checking under the
+    lock, after the parents exist, narrows the window to the
+    lock-to-rename span. (The final component needs no follow-guard
+    on write: ``os.replace`` replaces a symlink itself rather than
+    following it. Reads lstat the final component separately.)"""
+    base_resolved = Path(base_dir).resolve()
+    parent_resolved = path.parent.resolve()
+    if not (
+        parent_resolved == base_resolved
+        or base_resolved in parent_resolved.parents
+    ):
+        msg = (
+            f"annotation path escaped base dir between check and "
+            f"write: resolved parent {parent_resolved} is not under "
+            f"{base_resolved}"
+        )
+        raise ValueError(msg)
+
+
 def annotation_file_mtime(base_dir: Path, source_file: str) -> float | None:
     """The annotation .md file's mtime for one source file, or None
     when the file (or its path) doesn't resolve.
@@ -673,6 +699,22 @@ def _load_file_state(
     content + parsed sections). See :func:`read_file_annotations`
     for the strict/tolerant contract."""
     path = annotation_path(base_dir, source_file)
+    if path.is_symlink():
+        # The parent-containment resolve above never inspects the
+        # final component, and read_text() would follow it anywhere —
+        # a symlinked .md is not a file this writer produces, and
+        # following it lets a planted link exfiltrate/parse any
+        # reachable file's content into annotation surfaces.
+        if strict:
+            msg = (
+                f"annotation file {path} is a symlink; refusing to "
+                f"read or rewrite through it"
+            )
+            raise AnnotationFileError(msg)
+        logger.warning(
+            "annotation file %s is a symlink — skipping", path,
+        )
+        return _FileState(False, False, "", [])
     try:
         size = path.stat().st_size
     except OSError:
@@ -902,6 +944,7 @@ def write_annotation(
     # it, two concurrent writers could each load state A, then write
     # A+B1 and A+B2 — one B is dropped. The lock serialises them.
     with _file_lock(path):
+        _assert_parent_contained(base_dir, path)
         # Strict read: an unreadable/corrupt existing file raises
         # AnnotationFileError here instead of reading as empty — the
         # render below would otherwise atomically replace the file
@@ -961,6 +1004,7 @@ def remove_annotation(
     """
     path = annotation_path(base_dir, source_file)
     with _file_lock(path):
+        _assert_parent_contained(base_dir, path)
         # Strict read — same fail-closed contract as write_annotation:
         # a corrupt file must not be re-rendered (or unlinked) from a
         # partial parse.
