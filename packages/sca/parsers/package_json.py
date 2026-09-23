@@ -93,8 +93,16 @@ _DEP_BUCKETS = (
 
 # Comparator characters that indicate a multi-bound range, e.g.
 # ">=1.0.0 <2.0.0" or "1.0.0 - 2.0.0". Used after ruling out caret/tilde.
-_RANGE_CHARS = set("<>=|") | {" - "}
-_HEX_SHA = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+# Range markers: single comparator/union chars plus the spaced-hyphen
+# range form — all substring-tested uniformly (a tuple, not a set
+# union of chars and a string, which only worked by the accident of
+# set iteration feeding a substring check).
+_RANGE_MARKERS = ("<", ">", "=", "|", " - ")
+# A git object name is hex, 7-40 chars — but an ALL-DIGIT string of
+# that length is far likelier a bare version ("1234567" as a datelike
+# or build number) than a commit that happens to spell only digits;
+# require at least one hex LETTER before classifying as a git pin.
+_HEX_SHA = re.compile(r"^(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}$", re.IGNORECASE)
 _BARE_VERSION = re.compile(r"^v?\d+(?:\.\d+){0,2}(?:[-+].+)?$")
 
 
@@ -525,7 +533,7 @@ def _classify(spec: str) -> tuple[PinStyle, str | None, str | None]:
         return PinStyle.TILDE, spec[1:].strip() or None, None
 
     # Multi-bound or comparator-based range.
-    if any(ch in spec for ch in _RANGE_CHARS) or " - " in spec:
+    if any(marker in spec for marker in _RANGE_MARKERS):
         return PinStyle.RANGE, spec, None
 
     # Bare version: treat as exact unless it's a SHA (which npm allows
