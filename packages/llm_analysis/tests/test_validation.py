@@ -24,6 +24,17 @@ class TestCheckSelfConsistency:
         assert flagged == 1
         assert "safe" in results["F1"]["contradictions"][0] or "no security impact" in results["F1"]["contradictions"][0]
 
+    def test_fullwidth_signal_spelling_still_flags(self):
+        # The signal patterns are ASCII; NFKC folding catches
+        # fullwidth/compatibility spellings of the same phrases.
+        results = {"F1": {
+            "is_true_positive": True, "is_exploitable": False,
+            "reasoning": "This is a \uff46\uff41\uff4c\uff53\uff45 \uff50\uff4f\uff53\uff49\uff54\uff49\uff56\uff45.",
+        }}
+        flagged = check_self_contradiction(results)
+        assert flagged == 1
+        assert results["F1"]["self_contradictory"] is True
+
     def test_no_flag_when_consistent(self):
         results = {"F1": {
             "is_true_positive": True, "is_exploitable": True,

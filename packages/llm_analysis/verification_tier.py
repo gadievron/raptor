@@ -132,7 +132,12 @@ def derive_verification_tier(finding: dict[str, Any]) -> str:
     fo = analysis.get("fail_open") or finding.get("fail_open") or {}
     if isinstance(fo, dict) and fo.get("outcome") in (
             "confirmed", "refuted"):
-        rule = fo.get("rule_id") or ""
+        # isinstance guard keeps the "pure inspection — safe on
+        # partial dicts" promise: a non-string rule_id in a receipt
+        # grades like a missing one instead of raising.
+        rule = fo.get("rule_id")
+        if not isinstance(rule, str):
+            rule = ""
         if not rule.endswith("-naming"):
             return VerificationTier.TOOL_BACKED.value
 

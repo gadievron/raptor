@@ -74,7 +74,17 @@ def test_empty_id_falls_back_to_unknown():
 
 def _f_string_id_interpolations(source: str, ident: str) -> list[str]:
     """Return f-string interpolations of ``ident`` used to build output
-    filenames, e.g. ``f"{vuln.finding_id}_patch.md"``."""
+    filenames, e.g. ``f"{vuln.finding_id}_patch.md"``.
+
+    TEXTUAL BOUND (documented, deliberate): this census sees only
+    double-quoted f-strings whose literal tail ends in a known output
+    extension. Spellings outside the net — variable-suffix f-strings
+    (``f"{_safe_id(id)}{suffix}"``), %-format, string concat, and
+    Path-argument construction — escape silently, so new id-derived
+    write paths must either match this shape or get an explicit
+    convention assertion like
+    ``test_variable_suffix_writers_route_through_safe_id`` below.
+    """
     return re.findall(
         rf'f"[^"]*\{{[^{{}}"]*\b{ident}[^{{}}"]*\}}[^"]*\.(?:json|cpp|md|txt)"',
         source,
@@ -93,5 +103,24 @@ def test_crash_agent_write_sites_use_safe_id():
     source = (REPO / "packages/llm_analysis/crash_agent.py").read_text()
     sites = _f_string_id_interpolations(source, "crash_id")
     assert sites, "expected crash_id-derived output filenames in crash_agent.py"
+    for site in sites:
+        assert "_safe_id(" in site, f"raw crash_id in filename: {site!r}"
+
+
+def test_variable_suffix_writers_route_through_safe_id():
+    """Convention assertion for the known spelling outside the
+    census regex's textual bound: refined_exploit_artifact_path
+    builds its filename with a VARIABLE suffix, so the extension-
+    anchored census above can never see it. Pin its _safe_id routing
+    directly."""
+    source = (REPO / "packages/llm_analysis/crash_agent.py").read_text()
+    sites = re.findall(
+        r'f"\{[^{}"]*\bcrash_id[^{}"]*\}\{suffix\}"', source,
+    )
+    assert sites, (
+        "refined_exploit_artifact_path's variable-suffix filename "
+        "spelling not found — if it was refactored, re-anchor this "
+        "convention assertion to the new spelling"
+    )
     for site in sites:
         assert "_safe_id(" in site, f"raw crash_id in filename: {site!r}"
