@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, TYPE_CHECKING
 
 from core.json import load_json
+from core.security.markdown_render import md_inline
 
 from .envelope import unwrap_list
 from .sanitize import sanitize as _sanitize
@@ -164,7 +165,14 @@ def generate(data: list[dict[str, Any]]) -> str:
         except (TypeError, ValueError):
             proximity = 0
         status = _sanitize(path_data.get("status", "uncertain"))
-        sections.append(f"#### {path_id}: {name} (Proximity {proximity}/10, {status})\n")
+        # The heading is a MARKDOWN line: after the Mermaid label
+        # sanitize, md_inline handles the heading's own context
+        # (backticks, image-autofetch markup — both live in markdown,
+        # both left alone by the label sanitizer).
+        heading = md_inline(
+            f"{path_id}: {name} (Proximity {proximity}/10, {status})",
+        )
+        sections.append(f"#### {heading}\n")
         sections.append("```mermaid")
         sections.append(generate_single(path_data, i))
         sections.append("```\n")

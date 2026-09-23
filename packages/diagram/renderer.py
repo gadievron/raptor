@@ -11,6 +11,7 @@ from pathlib import Path
 from core.artifacts.provenance import provenance_of
 from core.atomic_fs import write_text_atomically
 from core.json import load_json as _load_json
+from core.security.markdown_render import md_inline
 from core.security.prompt_output_sanitise import sanitise_code, sanitise_string
 
 from . import (
@@ -81,10 +82,15 @@ def _id_collision_warning(data: object) -> str:
     collisions = detect_id_collisions(raw_ids)
     if not collisions:
         return ""
+    # md_inline, not the Mermaid label sanitizer: this text lands on a
+    # MARKDOWN line, where an embedded backtick closes the wrapping
+    # `…` span and the tail renders live (image autofetch included).
+    # md_inline entity-escapes backticks/pipes and strips autofetch
+    # markup; the sanitized id is already [A-Za-z0-9_-]-only.
     shown = "; ".join(
         "%s → `%s`" % (
             ", ".join(
-                f"`{_sanitize(r, 40)}`" for r in sorted(set(raws))
+                f"`{md_inline(r, max_chars=40)}`" for r in sorted(set(raws))
             ),
             sanitized,
         )
@@ -363,14 +369,17 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                     raise ValueError(msg)
                 # `id` / `name` come raw from the flow-trace JSON; route them
                 # through the shared sanitizer so a crafted value can't break
-                # the heading out of its line or the markdown structure.
+                # the heading out of its line or the markdown structure, then
+                # through md_inline for the heading's OWN context (a heading
+                # is markdown, not a Mermaid label: backticks and image
+                # markup are live there and the label sanitizer leaves both).
                 raw_id = data.get("id", tf.stem)
                 trace_id = _sanitize(raw_id)
                 name = _sanitize(data.get("name", raw_id))
                 diagram = flow_trace.generate(data)
                 body = (f"_Source: `{tf.name}`_{_provenance_note(data)}"
                         f"\n\n```mermaid\n{_fence(diagram)}\n```")
-                heading = f"{trace_id}: {name}".replace("\n", " ").replace("\r", " ")
+                heading = md_inline(f"{trace_id}: {name}")
                 trace_sections.append(_section(heading, body, level=3))
             except Exception as exc:  # noqa: BLE001
                 trace_sections.append(_section(tf.stem, f"> Could not render `{tf.name}`: {_err(exc)}", level=3))
