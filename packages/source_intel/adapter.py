@@ -46,6 +46,7 @@ from packages.source_intel.analyze import (
     KIND_WUR,
     SourceIntelResult,
     _is_word_present,
+    _sub_block_comments,
     analyze,
 )
 from packages.source_intel.cache import SourceIntelCache
@@ -771,8 +772,14 @@ def _has_interprocedural_check(
     if lines is None:
         return False
 
+    # The condition span is bounded: with an unbounded span, hostile
+    # source repeating `if(` inside one close-paren-free run makes
+    # every opener re-scan the rest of the run for the variable —
+    # quadratic. Real if-conditions sit well inside 512 chars
+    # (beyond it the guard is not credited — the conservative
+    # direction for this witness).
     var_in_if = re.compile(
-        r"\bif\s*\([^)]*\b" + re.escape(var_name) + r"\b"
+        r"\bif\s*\([^)]{0,512}\b" + re.escape(var_name) + r"\b"
     )
     early_exit = re.compile(r"\b(?:return\b|continue\b|break\b|goto\b)")
     # Two-line "separate err var" pattern:
@@ -799,8 +806,9 @@ def _has_interprocedural_check(
         m = call_with_var.search(lines[i])
         if m:
             assigned = m.group(1)
+            # Bounded for the same reason as var_in_if above.
             if_with_assigned = re.compile(
-                r"\bif\s*\([^)]*\b" + re.escape(assigned) + r"\b"
+                r"\bif\s*\([^)]{0,512}\b" + re.escape(assigned) + r"\b"
             )
             # Look for `if (assigned ...)` within next 5 lines,
             # then early-exit within 3 lines after that.
@@ -1261,8 +1269,12 @@ def _fortified_dest_is_variable_size(
     snippet = finding.sink.snippet or ""
     # Match the first identifier inside the call's argument list:
     # `strcpy(buf, src)` → "buf"; `memcpy(dst, src, n)` → "dst"
+    # \b pins the scan to identifier starts: unanchored, every
+    # position inside a long identifier run restarts the scan and
+    # re-reads the run — quadratic on hostile snippets. Mid-word
+    # starts only ever matched a truncated tail of the identifier.
     m = re.search(
-        r"[A-Za-z_][A-Za-z0-9_]*\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\b",
+        r"\b[A-Za-z_][A-Za-z0-9_]*\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\b",
         snippet,
     )
     if not m:
@@ -1394,8 +1406,13 @@ def _downstream_check_suppresses_finding(
     var_rel_re = re.compile(
         r"\b" + re.escape(var_name) + r"\s*(?:[<>]=?|==|!=)"
     )
+    # The gap between `if(` and the comparison is bounded: with an
+    # unbounded gap, hostile source repeating `if(` on one line makes
+    # every opener re-scan the rest of the line — quadratic. Real
+    # conditions sit well inside 512 chars (beyond it the guard is
+    # not credited — the conservative direction for this witness).
     var_in_if = re.compile(
-        r"\bif\s*\(.*?" + var_rel_re.pattern,
+        r"\bif\s*\(.{0,512}?" + var_rel_re.pattern,
     )
     has_relational = re.compile(r"(?<![<>])[<>](?![<>=])|[<>]=")
 
@@ -1419,7 +1436,6 @@ def _downstream_check_suppresses_finding(
     return False
 
 
-_COMMENT_STRIP_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
 _LINE_COMMENT_STRIP_RE = re.compile(r"//.*$", re.MULTILINE)
 
 _EARLY_EXIT_RE = re.compile(r"\b(?:return\b|continue\b|break\b|goto\b)")
@@ -1466,7 +1482,7 @@ def _if_scope_has_early_exit(
 
     max_scan = min(if_idx + 20, len(lines))
     for j in range(if_idx, max_scan):
-        stripped = _COMMENT_STRIP_RE.sub("", lines[j])
+        stripped = _sub_block_comments(lines[j], cross_lines=True)
         stripped = _LINE_COMMENT_STRIP_RE.sub("", stripped)
         if j == if_idx:
             stripped = stripped[if_col:]
@@ -2063,7 +2079,7 @@ def _find_function_definition_open(
         # Strip comments first — `int foo(void) /* ... ; ... */` has `;`
         # in the comment but is still a definition.
         for j in range(i, min(i + 5, len(lines))):
-            stripped = re.sub(r"/\*.*?\*/", "", lines[j], flags=re.DOTALL)
+            stripped = _sub_block_comments(lines[j], cross_lines=True)
             stripped = re.sub(r"//.*$", "", stripped, flags=re.MULTILINE)
             if "{" in stripped:
                 return j
@@ -2107,7 +2123,7 @@ def _count_statements(body_lines: list) -> int:
     """
     count = 0
     for line in body_lines:
-        stripped = re.sub(r"/\*.*?\*/", "", line, flags=re.DOTALL)
+        stripped = _sub_block_comments(line, cross_lines=True)
         stripped = re.sub(r"//.*$", "", stripped, flags=re.MULTILINE)
         stripped = stripped.strip()
         if not stripped:
@@ -2144,7 +2160,7 @@ def _extract_return_values(body_lines: list) -> list:
     """
     values = []
     for line in body_lines:
-        stripped = re.sub(r"/\*.*?\*/", "", line, flags=re.DOTALL)
+        stripped = _sub_block_comments(line, cross_lines=True)
         stripped = re.sub(r"//.*$", "", stripped, flags=re.MULTILINE)
         m = _RETURN_VALUE_RE.search(stripped)
         if m:

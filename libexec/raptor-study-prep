@@ -220,12 +220,20 @@ _REFERENCED_TYPE_PATTERN = re.compile(r"\bstruct\s+(\w+)\b")
 # ``\[\s*(?:0|1)?\s*\]\s*;`` chained whitespace spans around
 # optional atoms — quadratic on a field-shaped line ending in a
 # whitespace run.
+# \b pins the scan to identifier starts: unanchored, every position
+# inside a long identifier run restarts the scan and re-reads the
+# run — quadratic on hostile source. Mid-word starts only ever
+# matched a truncated tail of the type name.
 _FLEX_ARRAY_PATTERN = re.compile(
-    r"(\w+)\s+(\w+)\s*\[\s*(?:[01]\s*)?\]\s*;",
+    r"\b(\w+)\s+(\w+)\s*\[\s*(?:[01]\s*)?\]\s*;",
 )
 
+# The condition span is bounded: with an unbounded span, hostile
+# source repeating `if(` inside one close-paren-free run makes every
+# opener re-scan the rest of the run — quadratic. Real if-conditions
+# sit well inside 256 chars (beyond it the flag check is missed).
 _FLAG_CHECK_PATTERN = re.compile(
-    r"\bif\s*\([^)]*\b(\w+)\s*&\s*(\w+)",
+    r"\bif\s*\([^)]{0,256}\b(\w+)\s*&\s*(\w+)",
 )
 
 _ALLOC_NAMES = frozenset({
@@ -264,8 +272,10 @@ _ALLOC_FREE_PATTERN = re.compile(
 )
 
 # State machine signals
+# \b pin: same identifier-run scan-restart rationale as
+# _FLEX_ARRAY_PATTERN above.
 _STATE_TRANSITION_PATTERN = re.compile(
-    r"(\w+)->(\w+)\s*=\s*(?!NULL\b|0\b|false\b)(\w+)",
+    r"\b(\w+)->(\w+)\s*=\s*(?!NULL\b|0\b|false\b)(\w+)",
 )
 
 _GATE_CHECK_PATTERN = re.compile(
@@ -289,15 +299,28 @@ _NULL_GUARD_PATTERN = re.compile(
     r"(?:return\s+(-\w+)|goto\s+(\w+))",
 )
 
+# The RHS call-argument span and accessor chain are bounded: with an
+# unbounded span, hostile source repeating the opener inside one
+# close-paren-free run makes every opener re-scan the rest of the
+# run — quadratic. Real bound expressions sit far inside the bounds
+# (beyond them the validation is not credited).
+# The brace tail is a gated fold: the naive ``\)\s*\{?\s*\n?\s*``
+# stacks three whitespace spans around optional atoms — the engine
+# explores every split of a hostile brace/newline/space run (the
+# ``\n?`` is subsumed by ``\s``, so the gated spelling matches the
+# identical language).
 _VALIDATION_BOUND_PATTERN = re.compile(
-    r"if\s*\(\s*(\w+(?:->\w+)*)\s*([><!]=?)\s*(\w+(?:->\w+|\([^)]*\))*)\s*\)"
-    r"\s*\{?\s*\n?\s*return\s+(-\w+)",
+    r"if\s*\(\s*(\w+(?:->\w+)*)\s*([><!]=?)"
+    r"\s*(\w+(?:->\w+|\([^)]{0,256}\)){0,32})\s*\)"
+    r"\s*(?:\{\s*)?return\s+(-\w+)",
 )
 
 # \b keeps the unanchored scan from restarting inside an
 # identifier run (quadratic); earliest-start matches unchanged.
+# The allocator argument span is bounded (same close-paren-free run
+# rationale as _FLAG_CHECK_PATTERN; alloc arguments are tiny).
 _ALLOC_THEN_CHECK_PATTERN = re.compile(
-    r"\b(\w+(?:->\w+)*)\s*=\s*(\w+alloc\w*|alloc_\w+)\s*\([^)]*\)\s*;"
+    r"\b(\w+(?:->\w+)*)\s*=\s*(\w+alloc\w*|alloc_\w+)\s*\([^)]{0,256}\)\s*;"
     r"\s*\n\s*if\s*\(\s*!(?:\1)\s*\)",
 )
 
@@ -459,7 +482,8 @@ def _extract_flexible_arrays(definition: str) -> list[str]:
     last = matches[-1]
     closing_brace = definition.find("}", last.end())
     between = definition[last.end():closing_brace] if closing_brace != -1 else ""
-    if re.search(r"\w+\s+\w+\s*[;\[]", between):
+    # \b pin: identifier-run scan-restart (see _FLEX_ARRAY_PATTERN).
+    if re.search(r"\b\w+\s+\w+\s*[;\[]", between):
         return []
     return [last.group(2)]
 
@@ -555,8 +579,10 @@ def _extract_fields(block: str) -> list[str]:
         # field-shaped line ending in a long whitespace run with no
         # ``;`` makes the engine try every split of the run between
         # them — cubic in the line length. Match set unchanged.
+        # \b pin: identifier-run scan-restart (see
+        # _FLEX_ARRAY_PATTERN).
         fm = re.search(
-            r"(\w+)\s*(?:\[[\w\s]*\]\s*)?(?::\s*\d+\s*)?;", line,
+            r"\b(\w+)\s*(?:\[[\w\s]*\]\s*)?(?::\s*\d+\s*)?;", line,
         )
         if fm:
             fields.append(fm.group(1))
@@ -1013,7 +1039,12 @@ def _classify_dotlang(body: str, param_names: list[str]) -> str:
         pe = re.escape(pname)
         if re.search(rf"\b{pe}\s*\.\s*\w+\s*[+\-|&^]?=", body):
             return "writer"
-        if re.search(rf"\b{pe}\s*\[[^\]]*\]\s*[+\-|&^]?=", body):
+        # The subscript span is bounded: hostile source repeating the
+        # parameter name inside one close-bracket-free run makes
+        # every occurrence re-scan the run — quadratic. Real
+        # subscript expressions are tiny (beyond the bound the write
+        # is not seen — "reader" is the conservative verdict here).
+        if re.search(rf"\b{pe}\s*\[[^\]]{{0,256}}\]\s*[+\-|&^]?=", body):
             return "writer"
         if re.search(rf"\.\s*\w+\s*=\s*{pe}\b", body):
             return "writer"
