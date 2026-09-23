@@ -135,6 +135,14 @@ class PyModuleCallGraph:
         default_factory=dict)
     _asts_by_node: dict[tuple[str, int], ast.AST] = field(
         default_factory=dict)
+    # Module-scope names whose runtime binding may differ from their
+    # def: a non-def module-level assignment to a def's name
+    # (``def esc(…): …`` then ``esc = str``), or a ``global``
+    # declaration of it anywhere in the module (a sibling function
+    # can rewrite the slot before the analysed call runs). Name-keyed
+    # summary consumers must treat these identities as unknown — the
+    # written name no longer proves which body executes.
+    rebound_names: frozenset[str] = frozenset()
 
     @property
     def entry(self) -> PyCallGraphNode:
@@ -436,6 +444,85 @@ def local_binding_names(fn_ast: ast.AST) -> frozenset[str]:
 
     _walk(fn_ast)
     return frozenset(out)
+
+
+def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
+    """Module-scope names whose runtime binding is not proven to be
+    their def — see :attr:`PyModuleCallGraph.rebound_names`.
+
+    Two channels, both flow-insensitive (order between the def and
+    the rebind does not matter — either order leaves the name's
+    runtime identity unprovable to a name-keyed consumer):
+
+    * A non-def binding statement at module scope naming the same
+      name as a ``def``/lambda-def elsewhere at module scope
+      (``esc = str``, an import alias, a ``for`` target, …). The
+      single-``Name``-target lambda assignment is exempt — it IS the
+      def :func:`_collect_functions` harvests.
+    * A ``global`` declaration of the name anywhere in the module: a
+      sibling function that runs at any point before the analysed
+      call can rewrite the module slot.
+    """
+    # Non-def bindings at module scope: same boundary walk as
+    # local_binding_names (stops at def/class bodies) but WITHOUT
+    # recording the def/class names themselves — those are the defs,
+    # not rebinds — and skipping harvested lambda-assign statements.
+    nondef: set[str] = set()
+
+    def _add_target(t: ast.AST) -> None:
+        if isinstance(t, ast.Name):
+            nondef.add(t.id)
+        elif isinstance(t, ast.Starred):
+            _add_target(t.value)
+        elif isinstance(t, (ast.Tuple, ast.List)):
+            for e in t.elts:
+                _add_target(e)
+
+    def _walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef, ast.Lambda)):
+                continue
+            if isinstance(child, ast.Assign):
+                if (len(child.targets) == 1
+                        and isinstance(child.targets[0], ast.Name)
+                        and isinstance(child.value, ast.Lambda)):
+                    # The lambda-def shape — a function record, not a
+                    # rebind of one.
+                    continue
+                for t in child.targets:
+                    _add_target(t)
+            elif isinstance(child, (ast.AnnAssign, ast.AugAssign)):
+                _add_target(child.target)
+            elif isinstance(child, ast.NamedExpr):
+                _add_target(child.target)
+            elif isinstance(child, (ast.For, ast.AsyncFor)):
+                _add_target(child.target)
+            elif isinstance(child, (ast.With, ast.AsyncWith)):
+                for item in child.items:
+                    if item.optional_vars is not None:
+                        _add_target(item.optional_vars)
+            elif isinstance(child, ast.ExceptHandler):
+                if child.name:
+                    nondef.add(child.name)
+            elif isinstance(child, (ast.Import, ast.ImportFrom)):
+                for alias in child.names:
+                    if alias.asname:
+                        nondef.add(alias.asname)
+                    elif alias.name != "*":
+                        nondef.add(alias.name.split(".", 1)[0])
+            _walk(child)
+
+    _walk(tree)
+
+    # ``global`` declarations anywhere in the module (function bodies
+    # included — that is the point).
+    global_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            global_names.update(node.names)
+
+    return frozenset(nondef | global_names)
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +839,15 @@ def build_python_module_callgraph(
         fn_node_by_key.values(), key=lambda n: (n.lineno, n.name),
     )
 
+    # Rebound-identity poison set: only roots that actually name a
+    # collected function (or its enclosing class prefix) matter to
+    # summary consumers, so intersect the module-scope rebinds down
+    # to them.
+    fn_roots = {fr.qualified_name.split(".", 1)[0] for fr in fn_records}
+    rebound = frozenset(
+        _module_rebound_names(tree) & fn_roots,
+    )
+
     return PyModuleCallGraph(
         file_path=file_path,
         entry_node=entry,
@@ -763,6 +859,7 @@ def build_python_module_callgraph(
             name: tuple(nodes) for name, nodes in variants_by_name.items()
         },
         _asts_by_node=asts_by_node,
+        rebound_names=rebound,
     )
 
 
