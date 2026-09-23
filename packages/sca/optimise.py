@@ -822,7 +822,17 @@ def _pin_bare_pyproject(
     bracket_depth = 0
     for raw in text.splitlines(keepends=True):
         stripped = raw.strip()
-        header = re.match(r"^\[+\s*([^\]]+?)\s*\]+\s*$", stripped)
+        # \S-delimited section name: the naive trim spelling
+        # ``\s*([^\]]+?)\s*`` overlaps three unbounded repeats on
+        # whitespace — a '['-opening line ending in a long whitespace
+        # run with no ']' cost every split of the run, cubic in the
+        # line length. Real headers are unchanged; the dropped corner
+        # is a whitespace-only section name ('[  ]'), which stripped
+        # to '' downstream.
+        header = re.match(
+            r"^\[+\s*([^\]\s](?:[^\]]*[^\]\s])?)\s*\]+\s*$",
+            stripped,
+        )
         if header and bracket_depth == 0:
             section = header.group(1).strip().strip('"').strip("'")
             # optional-dependency group headers keep the table prefix.
