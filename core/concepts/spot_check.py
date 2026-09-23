@@ -199,21 +199,37 @@ def spot_check_question(
         if tok not in candidates:
             candidates.append(tok)
 
-    by_name: dict[str, dict] = {}
+    by_name: dict[str, list[dict]] = {}
     for item in study_items:
         if isinstance(item, dict) and item.get("name"):
-            by_name.setdefault(item["name"], item)
+            by_name.setdefault(item["name"], []).append(item)
 
     for cand in candidates:
         tail = re.split(r"\.|::", cand)[-1]
-        item = by_name.get(tail)
-        if item is None:
+        same_named = by_name.get(tail)
+        if not same_named:
             continue
-        value = extract_constant_value(
-            tail, item.get("definition") or "",
-        )
-        if value is None:
+        # Corpus authority is (name, definition) — first-by-name is a
+        # wrong-file trap: same-named constants in different files can
+        # carry DIFFERENT values, and picking one arbitrarily emits a
+        # confidently wrong trusted mechanical answer. When the
+        # same-named definitions disagree on the extracted value,
+        # refuse the mechanical channel (ambiguous authority — the
+        # LLM path sees the question instead). Agreeing duplicates
+        # answer normally.
+        extracted: list[tuple[dict, str]] = []
+        for it in same_named:
+            v = extract_constant_value(
+                tail, it.get("definition") or "",
+            )
+            if v is not None:
+                extracted.append((it, v))
+        if not extracted:
             continue
+        distinct = {_normalise_literal(v) or v for _, v in extracted}
+        if len(distinct) > 1:
+            continue
+        item, value = extracted[0]
         # Receipt: the definition line carrying the assignment
         def_line: str | None = None
         for line in (item.get("definition") or "").splitlines():

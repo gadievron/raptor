@@ -539,3 +539,33 @@ class TestLedgerKeyedByOrigin:
         recs = load_answers(tmp_path)
         assert len(recs) == 1
         assert recs[0]["answer"] == "second"
+
+
+class TestAmbiguousSameNamedConstantRefused:
+    """Same-named corpus constants with DIFFERENT values are ambiguous
+    authority — the mechanical channel refuses rather than picking one
+    file's definition arbitrarily."""
+
+    _AMBIG = [
+        {"name": "BUF_CAP", "kind": "macro", "file": "a.h", "line": 1,
+         "definition": "#define BUF_CAP 64"},
+        {"name": "BUF_CAP", "kind": "macro", "file": "b.h", "line": 1,
+         "definition": "#define BUF_CAP 4096"},
+    ]
+
+    def test_conflicting_values_refuse(self) -> None:
+        r = spot_check_question("Is BUF_CAP 4096?", self._AMBIG)
+        assert r is None, (
+            f"ambiguous constant answered mechanically: {r}"
+        )
+
+    def test_agreeing_duplicates_still_answer(self) -> None:
+        items = [
+            {"name": "BUF_CAP", "kind": "macro", "file": "a.h",
+             "line": 1, "definition": "#define BUF_CAP 4096"},
+            {"name": "BUF_CAP", "kind": "macro", "file": "b.h",
+             "line": 1, "definition": "#define BUF_CAP 0x1000"},
+        ]
+        r = spot_check_question("Is BUF_CAP 4096?", items)
+        assert r is not None
+        assert r.matches is True
