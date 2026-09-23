@@ -11,16 +11,20 @@ Five security layers (see ``server.py`` for implementation detail):
   2. Peer-UID verification on every accept.
   3. Per-worker capability token, passed to the worker via inherited
      file descriptor (NOT env var, NOT argv).
-  4. Single-use-per-connection tokens with per-token request budget.
+  4. Tokens bounded by request budget + TTL + explicit revocation —
+     a token may establish multiple connections within those bounds,
+     and worker tokens renew in place on the peer-UID-verified socket
+     (``POST /_token/renew``); scoped child tokens are not renewable.
   5. Audit log of every accept / token / dispatch event.
 
 See ``project_sandbox_enhancements.md`` (item d) for the threat model
 that motivated this work.
 
-This module does NOT migrate any existing call site; it ships the
-infrastructure and one PoC E2E flow. Phase B (separate PR) audits
-each LLM-calling subprocess and switches it to ``spawn_worker`` +
-``client.make_anthropic_client``.
+Call sites are migrated: the SDK providers route through the
+dispatcher whenever ``RAPTOR_LLM_SOCKET`` is present (the Bedrock
+provider requires it), and CLI children reach it via the loopback /
+child-plane bridges. New LLM-calling subprocesses use
+``spawn_worker`` + the ``make_*_client`` factories below.
 """
 
 from .client import (
