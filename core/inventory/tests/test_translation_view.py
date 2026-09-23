@@ -460,3 +460,110 @@ def test_digit_separator_is_not_a_char_literal():
     # rest of the line — the /* after it is a REAL comment opener.
     src = "int x = 1'000; /*\n#if 0\n*/\nlive();\n"
     assert detect_preprocessor_dead_ranges(src) == []
+
+
+# ---------------------------------------------------------------------------
+# Directive-mask divergences the compiler resolves the other way:
+# same-line comment closes (phase 3 turns the comment into whitespace,
+# so `*/ #endif` IS a directive) and backslash-space / backslash-CRLF
+# splices (phase 2 splices them; only "\\\n" was recognised). Each
+# shape compiles clean with the flagged symbol present while the old
+# scanner blanked its defining line out of the parse view.
+# ---------------------------------------------------------------------------
+
+
+def test_comment_close_then_endif_is_honoured():
+    # Plain C, no line-ending or whitespace craft: phase 3 removes the
+    # /* */ comment before phase 4, leaving # the first token — gcc
+    # honours the #endif and compiles live2 with zero diagnostics.
+    src = (
+        "#if 0\n"
+        "/*\n"
+        "*/ #endif\n"
+        "void live2(void){}\n"
+        "int main(void){ live2(); return 0; }\n"
+    )
+    assert detect_preprocessor_dead_ranges(src) == [(2, 2)]
+
+
+def test_comment_close_then_if0_opens_dead_arm():
+    # Symmetric direction: a directive AFTER a same-line comment close
+    # opens the arm the compiler opens.
+    src = "/* note */ #if 0\ndead();\n#endif\nlive();\n"
+    assert detect_preprocessor_dead_ranges(src) == [(2, 2)]
+
+
+def test_backslash_space_comment_splice_masks_directive():
+    # gcc splices "\\ \n" (diagnostic only): the #if 0 is part of the
+    # // comment, live_fn compiles with zero diagnostics.
+    src = (
+        "// note \\ \n"
+        "#if 0\n"
+        "void live_fn(void){}\n"
+        "#endif\n"
+        "int main(void){ live_fn(); return 0; }\n"
+    )
+    assert detect_preprocessor_dead_ranges(src) == []
+
+
+def test_backslash_crlf_comment_splice_masks_directive():
+    # CRLF twin: content.split("\n") leaves \r on the line, so
+    # endswith("\\") missed the splice entirely.
+    src = (
+        "// note \\\r\n"
+        "#if 0\r\n"
+        "void live_vuln(void){ }\r\n"
+        "#endif\r\n"
+        "int main(void){ live_vuln(); return 0; }\r\n"
+    )
+    assert detect_preprocessor_dead_ranges(src) == []
+
+
+def test_backslash_space_define_splice_masks_directive():
+    src = (
+        "#if 1\n"
+        "#define X \\ \n"
+        "#if 0\n"
+        "void live_vuln2(void){}\n"
+        "#endif\n"
+        "int main(void){ live_vuln2(); return 0; }\n"
+    )
+    assert detect_preprocessor_dead_ranges(src) == []
+
+
+def test_backslash_crlf_define_splice_masks_directive():
+    src = (
+        "#if 1\r\n"
+        "#define X \\\r\n"
+        "#if 0\r\n"
+        "void live_vuln3(void){}\r\n"
+        "#endif\r\n"
+        "int main(void){ live_vuln3(); return 0; }\r\n"
+    )
+    assert detect_preprocessor_dead_ranges(src) == []
+
+
+def test_crlf_dead_arm_still_detected():
+    # CRLF alone (no splice) must not disturb ordinary detection.
+    src = "#if 0\r\ndead();\r\n#endif\r\nlive();\r\n"
+    assert detect_preprocessor_dead_ranges(src) == [(2, 2)]
+
+
+def test_macro_call_targets_crlf_splice_folds():
+    # Every CRLF C file with multi-line function-like macros loses the
+    # UNCERTAIN rescue for macro-only-reachable functions otherwise.
+    assert detect_macro_call_targets("#define CALL_F() \\\nf()\n") == {"f"}
+    assert detect_macro_call_targets(
+        "#define CALL_F() \\\r\nf()\r\n") == {"f"}
+    assert detect_macro_call_targets(
+        "#define CALL_F() \\ \nf()\n") == {"f"}
+
+
+def test_unterminated_comment_in_directive_rest_keeps_old_evaluation():
+    # Conservatism pin: a directive whose rest opens an unterminated
+    # comment (#if 0 /* note ... spanning lines) keeps its historical
+    # 'unknown' evaluation — the raw-line rest, not the phase-3 rest,
+    # feeds the condition for every raw-shaped directive line, so no
+    # previously-honoured directive changes evaluation.
+    src = "#if 0 /* note\nstill comment */\n#endif\nlive();\n"
+    assert detect_preprocessor_dead_ranges(src) == []
