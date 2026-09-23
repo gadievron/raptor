@@ -701,7 +701,9 @@ _WRAP_CAPABLE_OP_KW = re.compile(
     r"|multipl|\bproduct\b|\btimes\b|\bscal(?:e|ed|es|ing)\b"
     r"|\bdoubl|\bsquar"
     # shift: "left shift", "left-shifted", "shifted (to the) left", <<
-    r"|left[- ]shift|shift\w*\s+(?:\S+\s+){0,2}left|<<"
+    # shift\w run bounded: unbounded, every "shift" planted inside
+    # one hostile word re-scans the word's remainder — quadratic.
+    r"|left[- ]shift|shift\w{0,64}\s+(?:\S+\s+){0,2}left|<<"
     # truncation / cast narrowing
     r"|truncat|narrow(?:ed|ing)?|\bcast(?:s|ed|ing)?\b|\bdowncast"
     r"|\bmodulo\b"
@@ -999,8 +1001,11 @@ _GOCONC_INTERNAL_HYP_RE = re.compile(
     r"|(?:package|library)\s+spawns?\b"
     r"|spawns?\s+no\s+goroutines?"
     r"|no\s+goroutines?\s+(?:in|inside|within)\b"
-    r"|concurrent\w*\s+(?:\w+\s+){0,2}?\w*opt(?:s|ions?)?\b"
-    r"|\w*opt(?:s|ions?)\b[^.;]{0,80}?concurrent",
+    # Word runs bounded (and the bare-prefix branch \b-pinned):
+    # unbounded, every keyword planted inside one hostile word
+    # re-scans the word's remainder — quadratic on hypothesis text.
+    r"|concurrent\w{0,64}\s+(?:\w+\s+){0,2}?\w{0,64}opt(?:s|ions?)?\b"
+    r"|\b\w{0,64}opt(?:s|ions?)\b[^.;]{0,80}?concurrent",
     re.IGNORECASE,
 )
 
@@ -1232,7 +1237,8 @@ _CALLERLOCK_HELD_BY_CALLER_RE = re.compile(
     r"|\bcalled\s+(?:with|under|while)\b[^.;]{0,80}?\b(?:held"
     r"|locked)\b"
     r"|\b(?:under|with)\b[^.;]{0,60}?\bheld\s+by\b"
-    r"|serial\w*\s+(?:by|via|through|at)\s+(?:the\s+|its\s+|each\s+"
+    # serial\w run bounded (same rationale as the goconc word runs).
+    r"|serial\w{0,64}\s+(?:by|via|through|at)\s+(?:the\s+|its\s+|each\s+"
     r"|every\s+)?call(?:er|ers|ing)?\b",
     re.IGNORECASE,
 )
@@ -1355,19 +1361,24 @@ _DETECTOR_FAMILY_HYP_RES: dict[str, re.Pattern] = {
         # undersiz* only next to a table/segment-shaped object — a
         # ring/allocation "undersized" by a race or an integer wrap
         # is another family's lane.
-        r"undersiz\w*[^.;]{0,80}?(?:scatterlist|"
+        # Keyword \w runs bounded to real English-suffix length:
+        # unbounded, every keyword planted inside one hostile word
+        # re-scans the word's remainder — quadratic on hypothesis
+        # text — and a wide bound still multiplies against the
+        # adjacent bounded span (the two overlap on word chars).
+        r"undersiz\w{0,12}[^.;]{0,80}?(?:scatterlist|"
         r"sg (?:table|list|array|vec|entr\w*)|entr\w*|segments?|"
         r"fragments?|frag_list|mapping|\btable\b)|"
         r"(?:scatterlist|sg (?:table|list|array|vec|entr\w*)|"
         r"frag_list|fragmented|non.linear|\btable\b|mapping)"
         r"[^.;]{0,80}?undersiz|"
-        r"undercount\w*[^.;]{0,80}?(?:entr\w*|segments?|fragments?|"
+        r"undercount\w{0,12}[^.;]{0,80}?(?:entr\w*|segments?|fragments?|"
         r"scatterlist|sg |slots?)|"
         r"(?:scatterlist|sg (?:table|list|array|vec|entr\w*))"
         r"[^.;]{0,80}?(?:overflow|overrun|too small|too few|short|"
         r"exceed|past the end|beyond)|"
         r"(?:overflow|overrun|writes? past|walks? (?:beyond|past)|"
-        r"exceed\w*)[^.;]{0,80}?(?:scatterlist|"
+        r"exceed\w{0,12})[^.;]{0,80}?(?:scatterlist|"
         r"sg (?:table|list|array|vec|entr\w*)|allocated entr\w*|"
         r"the table)|"
         r"too few (?:sg )?(?:slots?|entr\w*|elements?)|"
@@ -1390,7 +1401,8 @@ _DETECTOR_FAMILY_HYP_RES: dict[str, re.Pattern] = {
         r"(?:failure|error) (?:return|signal|code|value)"
         r"[^.;]{0,80}?(?:not fail.closed|fail.open)|"
         r"tri-?state[^.;]{0,80}?binary|"
-        r"bypass\w*[^.;]{0,80}?(?:==\s*-1|-1 (?:check|comparison|"
+        # bypass\w run bounded to suffix length (see the runs above).
+        r"bypass\w{0,12}[^.;]{0,80}?(?:==\s*-1|-1 (?:check|comparison|"
         r"test))|"
         r"(?:==\s*-1|-1 (?:check|comparison))[^.;]{0,80}?"
         r"(?:bypass|miss|escape|fall)",
@@ -2464,7 +2476,11 @@ _CALLEE_NAME_IN_HYPO = re.compile(
 )
 
 _WRAPPER_EXCLUSION_RE = re.compile(
-    r"\*\s*\(|\([^)]*\*\s*\)"
+    # The cast-shaped paren span is bounded: unbounded, every "("
+    # planted inside the span makes each occurrence re-scan the rest
+    # of the (hostile) function body — quadratic. A real cast operand
+    # sits far inside 256 chars.
+    r"\*\s*\(|\([^)]{0,256}\*\s*\)"
     r"|\b(?:memcpy|memset|memmove|copy_from_user|copy_to_user)\b"
     r"|\b(?:k?m?alloc|calloc|realloc|kzalloc|kmalloc|vmalloc)\b",
 )

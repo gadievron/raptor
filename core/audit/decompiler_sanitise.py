@@ -19,9 +19,16 @@ from __future__ import annotations
 import re
 
 
+# Paren/operand spans below are bounded: unbounded, every opener
+# planted inside a span makes each occurrence re-scan the rest of the
+# (hostile, decompiler-derived) text — quadratic. Real Ghidra
+# argument and operand spans sit far inside 256 chars; beyond the
+# bound the token is left unrewritten rather than scanned without
+# bound.
+
 # FuncName(type_args)::staticVar → __static_FuncName__staticVar
 _SCOPED_STATIC_RE = re.compile(
-    r'\b(\w+)\([^)]*\)::(\w+)',
+    r'\b(\w+)\([^)]{0,256}\)::(\w+)',
 )
 
 # ClassName::memberOrMethod → ClassName__memberOrMethod
@@ -31,22 +38,22 @@ _CLASS_MEMBER_RE = re.compile(
 
 # CONCAT44(a, b) → ((a) | (b))  (preserves both operands for analysis)
 _CONCAT_RE = re.compile(
-    r'\bCONCAT\d+\s*\(([^,)]+),([^)]+)\)',
+    r'\bCONCAT\d+\s*\(([^,)]{1,256}),([^)]{1,256})\)',
 )
 
 # SUB41(expr, n) → (expr)  (Ghidra sub-register extraction)
 _SUB_RE = re.compile(
-    r'\bSUB\d+\s*\(([^,)]+),[^)]+\)',
+    r'\bSUB\d+\s*\(([^,)]{1,256}),[^)]{1,256}\)',
 )
 
 # SEXT14(expr) → (expr)  (sign-extension)
 _SEXT_RE = re.compile(
-    r'\bSEXT\d+\s*\(([^)]+)\)',
+    r'\bSEXT\d+\s*\(([^)]{1,256})\)',
 )
 
 # ZEXT14(expr) → (expr)  (zero-extension)
 _ZEXT_RE = re.compile(
-    r'\bZEXT\d+\s*\(([^)]+)\)',
+    r'\bZEXT\d+\s*\(([^)]{1,256})\)',
 )
 
 

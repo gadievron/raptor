@@ -62,10 +62,16 @@ def _init_dispatch() -> None:
             # dot-star absorbed any remainder); the naive runs split
             # against the lazy fillers, quadratic on hypothesis text
             # ending in a whitespace run.
-            r"|(?:user|attacker|external)[\w\s-]*(?:control|suppli|provid)\w*\s+(?:data|input|value)(?=\s|$|\W).*(?:sink|output|render|inject|interpolat)"
+            # Filler spans and keyword gaps are bounded: unbounded, every
+            # occurrence of the head keyword re-scans the rest of the
+            # hypothesis text for the tail — quadratic-or-worse on
+            # hostile-shaped text. Real hypothesis prose keeps the pair
+            # within a phrase; beyond the bound the verifier does not
+            # dispatch.
+            r"|(?:user|attacker|external)[\w\s-]{0,100}(?:control|suppli|provid)\w{0,64}\s+(?:data|input|value)(?=\s|$|\W).{0,100}(?:sink|output|render|inject|interpolat)"
             r"|(?:host|header|query|path|url)\s+(?:value\s+)?(?:directly|without)"
-            r"|taint(?:ed)?\s+(?=\S).*(?:sink|output|render)"
-            r"|unsaniti[sz]ed\s+\w+\s+(?=\S).*(?:path|directory|travers)"
+            r"|taint(?:ed)?\s+(?=\S).{0,100}(?:sink|output|render)"
+            r"|unsaniti[sz]ed\s+\w{1,64}\s+(?=\S).{0,100}(?:path|directory|travers)"
             r"|(?:\.\./|path\s+travers|directory\s+travers)",
             re.IGNORECASE,
         ), "taint_source_sink"),
@@ -75,7 +81,9 @@ def _init_dispatch() -> None:
             r"|(?:without|no)\s+(?:holding|acquiring)\s+(?:the\s+)?(?:necessary\s+)?lock"
             r"|precondition\s+(?:not\s+)?(?:met|check|enforc)"
             r"|lock\s+(?:not\s+)?held"
-            r"|after\s+(?:sleeping|releasing|dropping)\s+(?:and\s+)?(?:releasing\s+)?(?:\w+\s+)*(?:lock|mutex|sem|rwsem)",
+            # The pre-lock word run is iteration-bounded (same rationale
+            # as the bounded gaps above).
+            r"|after\s+(?:sleeping|releasing|dropping)\s+(?:and\s+)?(?:releasing\s+)?(?:\w+\s+){0,8}(?:lock|mutex|sem|rwsem)",
             re.IGNORECASE,
         ), "caller_constraint"),
 
@@ -84,9 +92,10 @@ def _init_dispatch() -> None:
             r"|arithmetic\s+(?:overflow|underflow)"
             # (?=\S)-pinned whitespace runs (same language), as in
             # the taint patterns above.
-            r"|(?:size|length|count|offset)\s+(?=\S).*(?:overflow|truncat|wrap)"
-            r"|(?:multiply|shift|add)\s+(?=\S).*(?:alloc|size|length)"
-            r"|truncat\w+\s+(?=\S).*(?:int|u32|u16|size_t)",
+            # Bounded keyword gaps (same rationale as taint_source_sink).
+            r"|(?:size|length|count|offset)\s+(?=\S).{0,100}(?:overflow|truncat|wrap)"
+            r"|(?:multiply|shift|add)\s+(?=\S).{0,100}(?:alloc|size|length)"
+            r"|truncat\w{1,64}\s+(?=\S).{0,100}(?:int|u32|u16|size_t)",
             re.IGNORECASE,
         ), "taint_to_arithmetic"),
 
@@ -99,8 +108,8 @@ def _init_dispatch() -> None:
             r"|incomplete\s+(?:clean|teardown|shutdown|release)"
             # (?=\S)-pinned whitespace runs (same language), as in
             # the taint patterns above.
-            r"|(?:freed|free)\s+(?=\S).*(?:pointer|reference)\s+(?=\S).*(?:remains|dangling|stale)"
-            r"|(?:pointer|reference)\s+(?=\S).*(?:remains|dangling|stale)",
+            r"|(?:freed|free)\s+(?=\S).{0,100}(?:pointer|reference)\s+(?=\S).{0,100}(?:remains|dangling|stale)"
+            r"|(?:pointer|reference)\s+(?=\S).{0,100}(?:remains|dangling|stale)",
             re.IGNORECASE,
         ), "incomplete_cleanup"),
     ]
@@ -175,7 +184,9 @@ def _verify_unchecked_return(
 def _extract_callee_from_hypothesis(hypothesis: str) -> str | None:
     """Extract a callee function name from hypothesis text."""
     patterns = [
-        re.compile(r"ignor\w+\s+(?:the\s+)?(?:return|error|failure)\s+(?:value\s+)?(?:of\s+)?[`'\"]?(\w+)[`'\"]?"),
+        # \w run after "ignor" bounded: unbounded, every "ignor" inside
+        # one hostile word re-scans the word's remainder — quadratic.
+        re.compile(r"ignor\w{1,64}\s+(?:the\s+)?(?:return|error|failure)\s+(?:value\s+)?(?:of\s+)?[`'\"]?(\w+)[`'\"]?"),
         re.compile(r"[`'\"](\w+)[`'\"]?\s*\(\)\s*(?:return|error|failure|result)\s+(?:is\s+)?(?:not\s+)?check"),
         re.compile(r"return\s+value\s+of\s+[`'\"]?(\w+)[`'\"]?"),
         re.compile(r"[`'\"](\w+)[`'\"]?\s+(?:return|error)\s+(?:is\s+)?(?:ignored|unchecked|discarded)"),

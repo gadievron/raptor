@@ -630,9 +630,12 @@ def _ignored_return_regex(
     call_re = re.compile(
         rf"^\s*(?:\(\s*void\s*\)\s*)?{re.escape(callee)}\s*\(",
     )
+    # The statement span is bounded: unbounded, every "=" planted
+    # inside it makes each occurrence re-scan the rest of a hostile
+    # line — quadratic. Real statements sit far inside 250 chars.
     used_re = re.compile(
         rf"(?:=|\breturn\b|\bif\b|\bwhile\b|[!=<>]=|&&|\|\|)"
-        rf"[^;]*\b{re.escape(callee)}\s*\(",
+        rf"[^;]{{0,250}}\b{re.escape(callee)}\s*\(",
     )
     for idx, line in enumerate(source.splitlines(), 1):
         if span and not (span[0] <= idx <= span[1]):
@@ -816,8 +819,9 @@ def _tristate_regex(
     source: str, callee: str, span: tuple[int, int] | None,
 ) -> list[CallSiteOutcome]:
     sites: list[CallSiteOutcome] = []
+    # Bounded argument span (same rationale as used_re above).
     cmp_re = re.compile(
-        rf"{re.escape(callee)}\s*\([^;]*?\)\s*(==|!=|<=|>=|<|>)\s*(-?\d+)",
+        rf"{re.escape(callee)}\s*\([^;]{{0,600}}?\)\s*(==|!=|<=|>=|<|>)\s*(-?\d+)",
     )
     truth_re = re.compile(
         _TRISTATE_LINE_RE_TEMPLATE.format(callee=re.escape(callee)),
@@ -1718,9 +1722,13 @@ def go_function_returns_error(source: str, function_name: str) -> bool:
                          exc_info=True)
     # Line-regex fallback: `func [recv] name(...) (..., error) {` or
     # `func name(...) error {`.
+    # Receiver/parameter/return spans bounded: unbounded, every
+    # "func" or "(" planted inside a span re-scans the rest of the
+    # hostile source — quadratic. Real Go signatures sit far inside
+    # 400 chars per span.
     return bool(re.search(
-        rf"func\s+(?:\([^)]*\)\s*)?{re.escape(tail)}\s*\([^)]*\)\s*"
-        rf"(?:\([^()]*\berror\b[^()]*\)|error)\s*\{{",
+        rf"func\s+(?:\([^)]{{0,400}}\)\s*)?{re.escape(tail)}\s*\([^)]{{0,400}}\)\s*"
+        rf"(?:\([^()]{{0,400}}\berror\b[^()]{{0,400}}\)|error)\s*\{{",
         source,
     ))
 
@@ -2677,8 +2685,10 @@ def rust_function_returns_result(
     # ((?:<...>\s*)?): the naive ``\s*(?:<[^>]*>)?\s*`` put two
     # whitespace spans around it — quadratic on an fn-opening line
     # ending in a whitespace run.
+    # Generics/parameter spans bounded (same rationale as the Go
+    # signature scan).
     return bool(re.search(
-        rf"fn\s+{re.escape(tail)}\s*(?:<[^>]*>\s*)?\([^)]*\)\s*->\s*"
+        rf"fn\s+{re.escape(tail)}\s*(?:<[^>]{{0,400}}>\s*)?\([^)]{{0,400}}\)\s*->\s*"
         rf"[\w:]*Result\b",
         source,
     ))

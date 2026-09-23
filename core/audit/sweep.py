@@ -1681,7 +1681,10 @@ def _hypothesis_identifiers(hypothesis: str) -> frozenset:
     ))
     idents.update(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", hypothesis))
     idents.update(re.findall(r"(?:->|\.)([A-Za-z_][A-Za-z0-9_]*)", hypothesis))
-    idents.update(re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*->", hypothesis))
+    # \b pins the scan to word starts: unanchored, every position
+    # inside one hostile word re-scans the word's remainder —
+    # quadratic. A mid-word start was a false token anyway.
+    idents.update(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*->", hypothesis))
     for tok in _IDENT_RE.findall(hypothesis):
         if "_" in tok or any(c.isdigit() for c in tok):
             idents.add(tok)
@@ -2801,7 +2804,10 @@ def _extract_negative_bypass_operands(
     value = m.group(1) if m else None
 
     m = re.search(
-        r"(?:bypass|exceed|circumvent)\w*\s+(?:the\s+)?[`'\"]?(\w+)[`'\"]?\s+(?:check|limit|bound)",
+        # Keyword \w run bounded: unbounded, every keyword planted
+        # inside one hostile word re-scans the word's remainder —
+        # quadratic on hypothesis text.
+        r"(?:bypass|exceed|circumvent)\w{0,64}\s+(?:the\s+)?[`'\"]?(\w+)[`'\"]?\s+(?:check|limit|bound)",
         hyp,
     )
     if m:
@@ -2831,14 +2837,89 @@ def _lang_has_overflow_safety(file_path: str) -> bool:
     return Path(file_path).suffix in _OVERFLOW_SAFE_EXTS
 
 
+_STRIP_TOKEN_RE = _re.compile(r"//|/\*|[\"']")
+
+
+def _string_close_index(source: str, body: int,
+                        cache: dict[int, int], quote: str) -> int:
+    """Index of the unescaped *quote* closing a literal whose body
+    starts at *body*, or -1.  The walk (escape pairs consume two
+    chars) is deterministic per position, so results are memoized:
+    without the cache a run of escaped quotes with no closer makes
+    every later opener re-walk the same tail — quadratic in the
+    source length."""
+    path: list[int] = []
+    i = body
+    n = len(source)
+    close = -1
+    while i < n:
+        hit = cache.get(i)
+        if hit is not None:
+            close = hit
+            break
+        path.append(i)
+        ch = source[i]
+        if ch == "\\":
+            i += 2
+        elif ch == quote:
+            close = i
+            break
+        else:
+            i += 1
+    for pos in path:
+        cache[pos] = close
+    return close
+
+
 def _strip_comments_and_strings(source: str) -> str:
     """Blank out comments and string literals so lexical scans don't
-    match prose that merely mentions code."""
-    import re
-    return re.sub(
-        r'//[^\n]*|/\*.*?\*/|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'',
-        " ", source, flags=re.DOTALL,
-    )
+    match prose that merely mentions code.
+
+    Single left-to-right token scan with memoized literal walks —
+    match-identical to the alternation sub it replaces
+    (``//…`` to end of line, lazy ``/*…*/``, escape-aware quoted
+    literals; an unterminated opener is not a token and scanning
+    resumes right after it), without that sub's quadratic re-walks
+    on hostile escaped-quote or unclosed-comment storms."""
+    out: list[str] = []
+    pos = 0
+    no_block_closer = False
+    close_cache: dict[str, dict[int, int]] = {'"': {}, "'": {}}
+    while True:
+        m = _STRIP_TOKEN_RE.search(source, pos)
+        if m is None:
+            out.append(source[pos:])
+            return "".join(out)
+        out.append(source[pos:m.start()])
+        token = m.group()
+        if token == "//":
+            end = source.find("\n", m.end())
+            out.append(" ")
+            pos = end if end != -1 else len(source)
+        elif token == "/*":
+            end = -1 if no_block_closer else source.find("*/", m.end())
+            if end == -1:
+                # Never closes: not a comment token (and no later
+                # opener can close either).  Keep the chars, resume
+                # after them.
+                no_block_closer = True
+                out.append(token)
+                pos = m.end()
+            else:
+                out.append(" ")
+                pos = end + 2
+        else:  # '"' or "'"
+            close = _string_close_index(
+                source, m.end(), close_cache[token], token,
+            )
+            if close == -1:
+                # Unterminated: not a literal — the scan resumes at
+                # the next char (a later token may still match).
+                out.append(token)
+                pos = m.end()
+            else:
+                out.append(" ")
+                pos = close + 1
 
 
 def _operand_in_source_arithmetic(operand: str, source: str) -> bool:
@@ -2988,7 +3069,9 @@ def _extract_arith_operator(hypothesis: str) -> str:
 def _extract_ptr_operand(hypothesis: str) -> str | None:
     """Extract pointer name from hypothesis like 'NULL pointer dereference of ptr'."""
     import re
-    m = re.search(r"[`'\"]?(\w+)[`'\"]?\s+(?:is\s+)?(?:null|NULL)", hypothesis)
+    # (?<!\w) pins the scan to word starts (mid-word starts were
+    # false tokens; unanchored they cost quadratic on hostile text).
+    m = re.search(r"(?<!\w)[`'\"]?(\w+)[`'\"]?\s+(?:is\s+)?(?:null|NULL)", hypothesis)
     if m and _IDENT_RE.fullmatch(m.group(1)):
         return m.group(1)
     m = re.search(r"(?:null|NULL)\s+(?:pointer\s+)?(?:dereference\s+)?(?:of\s+)?[`'\"]?(\w+)[`'\"]?", hypothesis)
@@ -3031,7 +3114,8 @@ def _extract_oob_operands(
 ) -> tuple:
     """Extract (index, size) from hypothesis about out-of-bounds access."""
     import re
-    m = re.search(r"[`'\"]?(\w+)[`'\"]?\s+(?:is\s+)?(?:used\s+)?(?:as\s+)?(?:an?\s+)?(?:array\s+)?index", hypothesis.lower())
+    # (?<!\w) pin — same rationale as _extract_ptr_operand.
+    m = re.search(r"(?<!\w)[`'\"]?(\w+)[`'\"]?\s+(?:is\s+)?(?:used\s+)?(?:as\s+)?(?:an?\s+)?(?:array\s+)?index", hypothesis.lower())
     index = m.group(1) if m and _IDENT_RE.fullmatch(m.group(1)) else None
 
     m = re.search(r"(?:array|buffer)\s+(?:of\s+)?(?:size\s+)?[`'\"]?(\w+)[`'\"]?", hypothesis.lower())
@@ -3126,8 +3210,9 @@ def _extract_path_conditions(
     if quoted_conds:
         return quoted_conds
 
+    # \b pin — same rationale as the identifier scans above.
     relational = re.findall(
-        r"(\w+\s*(?:[<>=!]=?|!=)\s*\w+)", hypothesis,
+        r"\b(\w+\s*(?:[<>=!]=?|!=)\s*\w+)", hypothesis,
     )
     return relational or []
 

@@ -64,20 +64,28 @@ _MAX_SOURCE_BYTES = 2 * 1024 * 1024  # 2 MB cap for heuristic source reads
 # per-caller-per-constraint read this memo exists to collapse).
 _SOURCE_MEMO_MAX_ENTRIES = 32
 
+# The condition spans are bounded: unbounded, every "if(" planted
+# inside a span makes each occurrence re-scan the rest of the hostile
+# caller source — worse than quadratic with two spans. Real
+# conditions sit far inside 160 chars per span; beyond the bound the
+# check simply does not count as a bounds check.
 _BOUNDS_CHECK_RE = re.compile(
     r"""
     (?:if|while|assert|CHECK|DCHECK|BUG_ON|WARN_ON)
     \s*\(
-    [^)]*
+    [^)]{0,160}
     (?:<=?|>=?|==|!=|<|>)
-    [^)]*
+    [^)]{0,160}
     \)
     """,
     re.VERBOSE,
 )
 
+# The test-stem run is bounded: unbounded, every "test_" planted
+# inside one hostile path component re-scans the component's
+# remainder — quadratic. Path components sit far inside 250 chars.
 _TEST_PATH_RE = re.compile(
-    r"(?:^|/)(?:test|tests|testing|__tests__|spec|specs)/|_test\.\w+$|test_\w+\.\w+$",
+    r"(?:^|/)(?:test|tests|testing|__tests__|spec|specs)/|_test\.\w+$|test_\w{1,250}\.\w{1,64}$",
 )
 
 
@@ -274,8 +282,9 @@ def _score_from_source(
     if not call_pattern.search(source):
         return
 
+    # Bounded argument span (same rationale as _BOUNDS_CHECK_RE).
     has_literal = re.search(
-        rf"{re.escape(constraint.function)}\s*\([^)]*\b\d+\b",
+        rf"{re.escape(constraint.function)}\s*\([^)]{{0,400}}\b\d+\b",
         source,
     )
     if has_literal:
@@ -1142,8 +1151,11 @@ _CALLER_VIOLATION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# \b pins the callee-name scan to word starts: unanchored, every
+# position inside one hostile word re-scans the word's remainder —
+# quadratic. A mid-word start was a false token anyway.
 _CALLEE_VIOLATION_RE = re.compile(
-    r"(\w+)\(\)\s+(?:returns|produces|yields|could\s+(?:return|produce|fail))|"
+    r"\b(\w+)\(\)\s+(?:returns|produces|yields|could\s+(?:return|produce|fail))|"
     r"assumes\s+(\w+)\(\)\s+(?:will|always)|"
     r"(?:if|when)\s+(\w+)\(\)\s+(?:fails|errors|returns\s+(?:null|NULL|-1|error))",
     re.IGNORECASE,

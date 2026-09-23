@@ -25,6 +25,12 @@ from .strategy_stats import _safe_mtime
 
 logger = logging.getLogger(__name__)
 
+# Keyword-pair gaps below are bounded ({0,100}): an unbounded `.*`
+# gap makes every occurrence of the first keyword re-scan the rest of
+# the hypothesis text for the second — quadratic on hostile-shaped
+# text. Real hypothesis prose puts the pair within a phrase; 100
+# chars is generous (beyond it the category primer simply does not
+# attach).
 _FP_CATEGORY_PATTERNS = [
     (
         "caller_contract",
@@ -39,8 +45,8 @@ _FP_CATEGORY_PATTERNS = [
     (
         "speculative_race",
         re.compile(
-            r"race\s+condition|concurren|toctou|lock.*not.*held|"
-            r"without.*lock|after.*unlock",
+            r"race\s+condition|concurren|toctou|lock.{0,100}not.{0,100}held|"
+            r"without.{0,100}lock|after.{0,100}unlock",
             re.IGNORECASE,
         ),
         ("Do not flag race conditions when the code is protected by a "
@@ -50,8 +56,8 @@ _FP_CATEGORY_PATTERNS = [
     (
         "wrapper_distrust",
         re.compile(
-            r"wrapper|delegat|pass.*through|thin.*function|"
-            r"callee.*not.*visible|unknown.*callee",
+            r"wrapper|delegat|pass.{0,100}through|thin.{0,100}function|"
+            r"callee.{0,100}not.{0,100}visible|unknown.{0,100}callee",
             re.IGNORECASE,
         ),
         ("Thin wrapper functions that only call one callee without "
@@ -61,8 +67,8 @@ _FP_CATEGORY_PATTERNS = [
     (
         "arithmetic_speculation",
         re.compile(
-            r"overflow|underflow|truncat|integer.*wrap|"
-            r"arithmetic.*on.*kernel|bounded.*value",
+            r"overflow|underflow|truncat|integer.{0,100}wrap|"
+            r"arithmetic.{0,100}on.{0,100}kernel|bounded.{0,100}value",
             re.IGNORECASE,
         ),
         ("Do not hypothesise integer overflow on kernel-bounded values "
@@ -72,7 +78,7 @@ _FP_CATEGORY_PATTERNS = [
     (
         "crypto_hygiene",
         re.compile(
-            r"crypto|timing|constant.*time|side.*channel|"
+            r"crypto|timing|constant.{0,40}time|side.{0,40}channel|"
             r"hash|encrypt|decrypt",
             re.IGNORECASE,
         ),
