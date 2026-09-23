@@ -126,3 +126,64 @@ class TestLoadWriteCycle:
         )
         assert data["fingerprint"] == "fp1"
         assert data["payload"] == [1, 2]
+
+
+class TestIntegrityBinding:
+    """The cache lives in the target-writable run dir and its
+    fingerprint is computed over attacker-knowable inputs with a
+    public recipe — fingerprint equality authenticates nothing. Only
+    a payload whose run-bound MAC token verifies may hit; everything
+    else is a miss (fail toward recompute)."""
+
+    def test_written_row_carries_integrity_token(self, tmp_path):
+        write_prep_cache(tmp_path, "artifact.json", "fp1", [1],
+                         label="test")
+        data = json.loads(
+            prep_cache_path(tmp_path, "artifact.json").read_text(),
+        )
+        assert isinstance(data.get("integrity"), str)
+
+    def test_forged_unstamped_payload_is_a_miss(self, tmp_path):
+        # An attacker holding the run-dir write grant can write any
+        # bytes and recompute the public fingerprint; they cannot
+        # mint a token.
+        cache_dir = tmp_path / PREP_CACHE_DIRNAME
+        cache_dir.mkdir()
+        (cache_dir / "detector-results.json").write_text(json.dumps({
+            "fingerprint": "fp1",
+            "payload": {"results": [], "forged": "by-run-dir-writer"},
+        }))
+        assert load_prep_cache(
+            tmp_path, "detector-results.json", "fp1", label="test",
+        ) is None
+
+    def test_tampered_payload_is_a_miss(self, tmp_path):
+        write_prep_cache(tmp_path, "artifact.json", "fp1",
+                         {"results": ["real"]}, label="test")
+        path = prep_cache_path(tmp_path, "artifact.json")
+        data = json.loads(path.read_text())
+        data["payload"] = {"results": []}
+        path.write_text(json.dumps(data))
+        assert load_prep_cache(
+            tmp_path, "artifact.json", "fp1", label="test",
+        ) is None
+
+    def test_cross_run_replay_is_a_miss(self, tmp_path):
+        # A validly-stamped cache copied verbatim from a SIBLING run
+        # dir fails the run binding.
+        run_a = tmp_path / "a"
+        run_a.mkdir()
+        run_b = tmp_path / "b"
+        (run_b / PREP_CACHE_DIRNAME).mkdir(parents=True)
+        write_prep_cache(run_a, "artifact.json", "fp1", [1],
+                         label="test")
+        (run_b / PREP_CACHE_DIRNAME / "artifact.json").write_bytes(
+            prep_cache_path(run_a, "artifact.json").read_bytes(),
+        )
+        assert load_prep_cache(
+            run_b, "artifact.json", "fp1", label="test",
+        ) is None
+        # The genuine home still hits.
+        assert load_prep_cache(
+            run_a, "artifact.json", "fp1", label="test",
+        ) == [1]

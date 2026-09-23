@@ -12,6 +12,19 @@ Doctrine: the fingerprint must cover every input that can change the
 artifact, and nothing derived from per-segment state (gaps remaining,
 journal, budgets) may be cached — per-segment state changes between
 resumed segments without changing any fingerprintable input.
+
+Integrity: the fingerprint AUTHENTICATES nothing — it is computed
+over attacker-knowable inputs (the target's own source texts) with a
+public recipe, and the cache lives in the target-writable run dir, so
+a run-dir writer could forge a payload (empty detector results,
+steered codeql prep) and stamp it with a recomputed fingerprint.
+Every cache file therefore carries a run-bound HMAC token over its
+canonical ``{fingerprint, payload}`` row
+(``core.coverage.journal_mac``, prep-cache domain — the
+journal/audit-log key and discipline); the loader treats a missing or
+unverifiable token as a MISS and rebuilds from the tree. Fail toward
+recompute: on hosts with no usable MAC key the cache never hits, and
+it never serves unauthenticated payloads.
 """
 
 from __future__ import annotations
@@ -77,11 +90,26 @@ def load_prep_cache(
     if not path.is_file():
         return None
     try:
+        from core.coverage import journal_mac
+
         data = json.loads(path.read_text(encoding="utf-8"))
         if data.get("fingerprint") != fingerprint:
             logger.info(
                 "%s prep cache stale (input fingerprint changed) — "
                 "rebuilding", label,
+            )
+            return None
+        # Authority gate (module docstring): the payload is served as
+        # a mechanical analysis input, so only a row whose run-bound
+        # token verifies may hit — a forged/unstamped/replayed row is
+        # a MISS, never an error (fail toward recompute).
+        if not journal_mac.verify_prep_cache_row(
+            data, data.get(journal_mac.TOKEN_KEY),
+            journal_mac.audit_log_run_binding(out_dir),
+        ):
+            logger.info(
+                "%s prep cache integrity token missing or unverified "
+                "— rebuilding", label,
             )
             return None
         return data.get("payload")
@@ -103,11 +131,20 @@ def write_prep_cache(
     try:
         cache_dir = Path(out_dir) / PREP_CACHE_DIRNAME
         cache_dir.mkdir(parents=True, exist_ok=True)
+        from core.coverage import journal_mac
+
         # Raw json.dumps is deliberate: an unserialisable payload must
         # make the write fail (TypeError → best-effort skip) rather
         # than be stringified and later served back from the cache as
         # a corrupted payload shape.
-        blob = json.dumps({"fingerprint": fingerprint, "payload": payload})
+        row: dict[str, Any] = {
+            "fingerprint": fingerprint, "payload": payload,
+        }
+        token = journal_mac.mint_prep_cache_row(
+            row, journal_mac.audit_log_run_binding(out_dir))
+        if token is not None:
+            row[journal_mac.TOKEN_KEY] = token
+        blob = json.dumps(row)
         # Shared atomic writer: the hand-rolled mkstemp/replace pair
         # leaked its .tmp file when the write failed mid-way and never
         # fsynced before the rename.
