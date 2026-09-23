@@ -17,12 +17,23 @@ from .detect import get_project_dir, get_project_name
 from .export_script_java import EXPORT_SCRIPT_JAVA
 from .project_util import prepare_working_copy
 from core.security.env_sanitisation import safe_subprocess_env
+from core.security.log_sanitisation import escape_nonprintable
 
 logger = logging.getLogger(__name__)
 
 
 class GhidraError(Exception):
     """Raised when a Ghidra headless operation fails."""
+
+
+class GhidraProjectExistsError(GhidraError):
+    """A create destination is already occupied.
+
+    Distinct from the general failure class so callers can treat it
+    as terminal (operator must choose: reuse the existing .gpr
+    explicitly, or remove it) instead of degrading to a fallback
+    engine that would overwrite the existing project's artifacts.
+    """
 
 
 def _find_headless() -> str:
@@ -101,6 +112,41 @@ def _install_read_paths(headless: str) -> list[str]:
     return paths
 
 
+def _jvm_scoped_env(work_path: Path) -> dict:
+    """Sanitised env pointing every JVM home/tmp surface at *work_path*.
+
+    Ghidra's launcher demands a writable user home (launch prefs, JDK
+    detection cache). $HOME alone is not enough: the JDK derives
+    user.home from the passwd entry, and inside the sandbox user
+    namespace the uid maps to nobody (Debian home /nonexistent).
+    JAVA_TOOL_OPTIONS reaches every JVM the launcher spawns. Ghidra
+    also buffers database work in java.io.tmpdir; host /tmp is not
+    granted under restrict_reads, so it is pinned inside *work_path*
+    too. prepare_working_copy stamps the project OWNER to the invoking
+    OS user; the sandboxed JVM's passwd-derived user.name is nobody,
+    so force it back to the stamped owner or Ghidra refuses the
+    project (NotOwnerException).
+
+    *work_path* must be inside the sandbox's writable scope.
+    """
+    jvm_tmp = work_path / "jvm-tmp"
+    jvm_tmp.mkdir(exist_ok=True)
+    env = _safe_env()
+    return dict(
+        env,
+        HOME=str(work_path),
+        TMPDIR=str(jvm_tmp),
+        XDG_CONFIG_HOME=str(work_path / ".config"),
+        XDG_CACHE_HOME=str(work_path / ".cache"),
+        JAVA_TOOL_OPTIONS=(
+            env.get("JAVA_TOOL_OPTIONS", "")
+            + f" -Duser.home={work_path}"
+            + f" -Djava.io.tmpdir={jvm_tmp}"
+            + f" -Duser.name={getpass.getuser()}"
+        ).strip(),
+    )
+
+
 def _project_process_args(
     project_name: str, program_name: Optional[str],
 ) -> tuple:
@@ -158,6 +204,177 @@ def _refuse_hidden_path_elements(path: Path, what: str) -> None:
         )
 
 
+def _refuse_symlinked_path(path: Path, what: str) -> Path:
+    """Refuse *path* when any existing component is a symlink; return
+    the normalized absolute form.
+
+    The sandbox realpath-resolves its write grants, so a planted
+    symlink at (or above) the destination redirects both this
+    module's own ``mkdir`` and the JVM's whole write scope to the
+    symlink's TARGET — outside the RAPTOR-owned output location the
+    caller believes it granted. Textual abspath == realpath exactly
+    when no component dereferences a symlink (not-yet-existing tail
+    components resolve textually), same validation posture as
+    ``_refuse_hidden_path_elements``. The returned abspath is what
+    downstream argv/grants must use — normalization also keeps a
+    relative destination from reaching analyzeHeadless's positional
+    project-directory argument unanchored.
+    """
+    ab = os.path.abspath(str(path))
+    if os.path.realpath(ab) != ab:
+        raise GhidraError(
+            f"cannot place the Ghidra {what} under {path}: a path "
+            "component is a symlink — the sandboxed JVM's write "
+            "grant would follow it outside the intended output "
+            "location; use a symlink-free output path"
+        )
+    return Path(ab)
+
+
+def _remove_created_project(project_dir: Path) -> None:
+    """Best-effort removal of a failed create's own debris.
+
+    Only ever called on the ``raptor.*`` set this module itself just
+    created — a pre-existing project never reaches the failure paths
+    (the occupied-destination refusal runs first). Without this, a
+    half-written project makes every subsequent create refuse over
+    debris that no operator placed.
+    """
+    shutil.rmtree(project_dir / "raptor.rep", ignore_errors=True)
+    for leftover in (project_dir / "raptor.gpr",
+                     project_dir / "raptor.lock"):
+        try:
+            leftover.unlink()
+        except OSError:
+            pass
+
+
+def create_project_from_binary(
+    binary_path: Path,
+    project_dir: Path,
+    *,
+    timeout: int = 3600,
+) -> Path:
+    """Create a Ghidra project by importing a raw binary.
+
+    Runs ``analyzeHeadless -import`` with full auto-analysis into
+    *project_dir* (created if missing). The project is named
+    ``raptor`` — a fixed, RAPTOR-chosen name, so the attacker-chosen
+    binary filename never reaches analyzeHeadless's project-name
+    argument (a dash-leading name would be parsed as a switch, same
+    class as ``_project_process_args``'s refusal).
+
+    Args:
+        binary_path: The raw binary to import.
+        project_dir: RAPTOR-owned directory to create the project in.
+        timeout: Maximum seconds for the headless process. Default
+            3600, not the 300s metadata-export cap — import runs full
+            auto-analysis, which is minutes-long on large binaries.
+
+    Returns:
+        The created ``.gpr`` path.
+
+    Raises:
+        GhidraError: If Ghidra is not installed, the destination is
+            already occupied, or the import fails.
+    """
+    _refuse_hidden_path_elements(project_dir, "project")
+    project_dir = _refuse_symlinked_path(project_dir, "project")
+    headless = _find_headless()
+    binary_path = Path(binary_path).resolve()
+    gpr_path = project_dir / "raptor.gpr"
+
+    # Same posture as import_enrichments' destination check: a
+    # pre-placed project would be silently trusted (and analyzeHeadless
+    # refuses a conflicting program file anyway) — refuse instead of
+    # guessing. The .rep directory and lock are as load-bearing as the
+    # .gpr marker itself. Distinct exception type: callers must treat
+    # this as terminal, never as a degrade-to-fallback condition.
+    for leftover in (
+        gpr_path,
+        gpr_path.with_suffix(".rep"),
+        project_dir / "raptor.lock",
+    ):
+        if leftover.exists():
+            raise GhidraProjectExistsError(
+                f"destination already exists: {leftover} — remove it, "
+                f"or import the existing project by passing "
+                f"{gpr_path} directly"
+            )
+
+    project_dir.mkdir(parents=True, exist_ok=True)
+    # JVM home/tmp inside the writable scope (see export_project for
+    # the /tmp-grant rationale).
+    with tempfile.TemporaryDirectory(
+        prefix="raptor-ghidra-create-", dir=project_dir,
+    ) as work_dir:
+        env = _jvm_scoped_env(Path(work_dir))
+
+        cmd = [
+            headless,
+            str(project_dir),
+            "raptor",
+            "-import", str(binary_path),
+        ]
+
+        logger.info("running: %s", escape_nonprintable(" ".join(cmd)))
+
+        try:
+            # Same sandbox posture as export_project: the JVM parses
+            # an attacker-supplied binary (loader + auto-analysis) —
+            # network denied, reads restricted to system dirs, the
+            # binary's directory, the project dir, and the Ghidra
+            # install; writes scoped to the project dir.
+            from core.sandbox import run as _sandbox_run
+            result = _sandbox_run(
+                cmd,
+                block_network=True,
+                target=str(binary_path.parent),
+                output=str(project_dir),
+                restrict_reads=True,
+                readable_paths=_install_read_paths(headless),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+                # env comes from safe_subprocess_env() above —
+                # already allowlist-filtered upstream.
+                env_caller_filtered=True,
+            )
+        except subprocess.TimeoutExpired:
+            # A killed mid-create leaves partial project files that
+            # the occupied-destination refusal would blame on the
+            # operator next run — remove our own debris on every
+            # failure path.
+            _remove_created_project(project_dir)
+            raise GhidraError(
+                f"analyzeHeadless -import timed out after {timeout}s — "
+                "auto-analysis on large binaries can need more; "
+                "consider increasing timeout"
+            )
+        except OSError as e:
+            _remove_created_project(project_dir)
+            raise GhidraError(f"failed to run analyzeHeadless: {e}")
+
+    if result.returncode != 0:
+        _remove_created_project(project_dir)
+        stderr_tail = result.stderr[-500:] if result.stderr else "(no stderr)"
+        raise GhidraError(
+            f"analyzeHeadless -import exited {result.returncode}:\n"
+            f"{stderr_tail}"
+        )
+
+    if not gpr_path.exists():
+        _remove_created_project(project_dir)
+        raise GhidraError(
+            f"analyzeHeadless -import completed but no project was "
+            f"created at {gpr_path}:\n"
+            f"{(result.stdout or '')[-500:]}"
+        )
+
+    return gpr_path
+
+
 def export_project(
     gpr_path: Path,
     output_path: Path,
@@ -192,8 +409,6 @@ def export_project(
         get_project_name(gpr_path), program_name,
     )
 
-    env = _safe_env()
-
     # The working copy lives INSIDE the output scope: the sandbox's
     # mount-namespace mode replaces host-/tmp extra grants with a
     # private scratch under restrict_reads, so a /tmp work dir would
@@ -206,34 +421,7 @@ def export_project(
 
         work_gpr = prepare_working_copy(gpr_path, work_path)
         work_project_dir = str(get_project_dir(work_gpr))
-        # Ghidra's launcher demands a writable user home (launch
-        # prefs, JDK detection cache). $HOME alone is not enough: the
-        # JDK derives user.home from the passwd entry, and inside the
-        # sandbox user namespace the uid maps to nobody (Debian home
-        # /nonexistent). JAVA_TOOL_OPTIONS reaches every JVM the
-        # launcher spawns.
-        jvm_tmp = work_path / "jvm-tmp"
-        jvm_tmp.mkdir()
-        env = dict(
-            env,
-            HOME=str(work_path),
-            TMPDIR=str(jvm_tmp),
-            XDG_CONFIG_HOME=str(work_path / ".config"),
-            XDG_CACHE_HOME=str(work_path / ".cache"),
-            JAVA_TOOL_OPTIONS=(
-                env.get("JAVA_TOOL_OPTIONS", "")
-                + f" -Duser.home={work_path}"
-                # Ghidra buffers database work in java.io.tmpdir;
-                # host /tmp is not granted under restrict_reads.
-                + f" -Djava.io.tmpdir={jvm_tmp}"
-                # prepare_working_copy stamps the project OWNER to
-                # the invoking OS user; inside the sandbox user
-                # namespace the JVM's passwd-derived user.name is
-                # nobody, so force it back to the stamped owner or
-                # Ghidra refuses the project (NotOwnerException).
-                + f" -Duser.name={getpass.getuser()}"
-            ).strip(),
-        )
+        env = _jvm_scoped_env(work_path)
 
         script_dir = work_path / "scripts"
         script_dir.mkdir()
@@ -383,8 +571,6 @@ def import_enrichments(
         dst_dir.mkdir(parents=True, exist_ok=True)
         prepare_working_copy(gpr_path, dst_dir)
 
-    env = _safe_env()
-
     from .import_script_java import IMPORT_SCRIPT_JAVA
     # Script dir + JVM HOME inside the output scope (see
     # export_project for the /tmp-grant rationale).
@@ -393,23 +579,7 @@ def import_enrichments(
     ) as script_dir:
         script_path = Path(script_dir) / "ImportRaptor.java"
         script_path.write_text(IMPORT_SCRIPT_JAVA, encoding="utf-8")
-        # Writable user home for the JVM launcher (see export_project
-        # for the passwd-derivation rationale).
-        jvm_tmp = Path(script_dir) / "jvm-tmp"
-        jvm_tmp.mkdir()
-        env = dict(
-            env,
-            HOME=str(script_dir),
-            TMPDIR=str(jvm_tmp),
-            XDG_CONFIG_HOME=str(Path(script_dir) / ".config"),
-            XDG_CACHE_HOME=str(Path(script_dir) / ".cache"),
-            JAVA_TOOL_OPTIONS=(
-                env.get("JAVA_TOOL_OPTIONS", "")
-                + f" -Duser.home={script_dir}"
-                + f" -Djava.io.tmpdir={jvm_tmp}"
-                + f" -Duser.name={getpass.getuser()}"
-            ).strip(),
-        )
+        env = _jvm_scoped_env(Path(script_dir))
 
         proc_project, process_args = _project_process_args(
             dst_name, program_name,

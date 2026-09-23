@@ -1691,3 +1691,183 @@ class TestRelativeOutputDirAbsolutized:
         assert cache.is_absolute()
         assert str(cache).startswith(
             os.path.abspath("out/projects/rel"))
+
+
+class TestRawBinaryImportOnramp:
+    """`import <raw-binary>` with a headless install present must
+    create a Ghidra project and take the normal .gpr path — pre-fix
+    it degraded straight to r2 with a message claiming Ghidra was
+    unavailable."""
+
+    def _args(self, binary, out, **over):
+        import argparse as _ap
+        base = dict(gpr=binary, out=out, enrich=False,
+                    decompile_all=False, program=None, binary=None,
+                    timeout=None)
+        base.update(over)
+        return _ap.Namespace(**base)
+
+    def _fake_create(self, seen):
+        def fake(binary, project_dir, *, timeout=3600):
+            seen["create"] = (Path(binary), Path(project_dir), timeout)
+            project_dir.mkdir(parents=True, exist_ok=True)
+            gpr = project_dir / "raptor.gpr"
+            gpr.write_text("")
+            return gpr
+        return fake
+
+    def test_create_then_normal_import_path(
+            self, tmp_path, monkeypatch, capsys):
+        import packages.ghidra.detect as detect
+        import packages.ghidra.headless as headless_mod
+        mod = _load_ghidra_cli(monkeypatch)
+        binary = tmp_path / "firmware.bin"
+        binary.write_bytes(b"\x7fELF")
+        out_dir = tmp_path / "out"
+        seen: dict = {}
+        monkeypatch.setattr(detect, "ghidra_available", lambda: True)
+        monkeypatch.setattr(headless_mod, "create_project_from_binary",
+                            self._fake_create(seen))
+
+        def fake_do_import(gpr, args, od):
+            seen["import"] = Path(gpr)
+            return _test_db()
+
+        monkeypatch.setattr(mod, "_do_import", fake_do_import)
+        rc = mod._cmd_import(self._args(binary, out_dir))
+        err = capsys.readouterr().err
+        assert rc == 0
+        created_binary, project_dir, timeout = seen["create"]
+        assert created_binary == binary
+        assert project_dir == out_dir / "ghidra-project" / "firmware"
+        # Create + auto-analysis is decompile-scale work: an unset
+        # --timeout must not inherit the 300s metadata cap.
+        assert timeout == 3600
+        # The created project continues through the NORMAL import.
+        assert seen["import"] == project_dir / "raptor.gpr"
+        assert "created:" in err
+
+    def test_enrich_gets_the_binary_for_r2(
+            self, tmp_path, monkeypatch):
+        import packages.ghidra.detect as detect
+        import packages.ghidra.headless as headless_mod
+        mod = _load_ghidra_cli(monkeypatch)
+        binary = tmp_path / "firmware.bin"
+        binary.write_bytes(b"\x7fELF")
+        seen: dict = {}
+        monkeypatch.setattr(detect, "ghidra_available", lambda: True)
+        monkeypatch.setattr(headless_mod, "create_project_from_binary",
+                            self._fake_create(seen))
+
+        def fake_do_import(gpr, args, od):
+            seen["r2_binary"] = args.binary
+            return _test_db()
+
+        monkeypatch.setattr(mod, "_do_import", fake_do_import)
+        rc = mod._cmd_import(
+            self._args(binary, tmp_path / "out", enrich=True))
+        assert rc == 0
+        assert seen["r2_binary"] == binary
+
+    def test_absent_ghidra_prints_real_reason(
+            self, tmp_path, monkeypatch, capsys):
+        import packages.ghidra.detect as detect
+        mod = _load_ghidra_cli(monkeypatch)
+        binary = tmp_path / "firmware.bin"
+        binary.write_bytes(b"\x7fELF")
+        seen: dict = {}
+        monkeypatch.setattr(detect, "ghidra_available", lambda: False)
+
+        def fake_fallback(b, od):
+            seen["fallback"] = Path(b)
+            return 0
+
+        monkeypatch.setattr(mod, "_import_binary_fallback",
+                            fake_fallback)
+        rc = mod._cmd_import(self._args(binary, tmp_path / "out"))
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert seen["fallback"] == binary
+        assert "no Ghidra install found" in err
+
+    def test_occupied_destination_is_terminal_not_degrading(
+            self, tmp_path, monkeypatch, capsys):
+        """Re-running `import <binary>` with the deterministic out dir
+        already populated must be a hard error: falling through to the
+        r2/objdump fallback would OVERWRITE the first run's
+        full-fidelity re-database.json with a degraded one, and silent
+        reuse would trust a possibly stale project."""
+        from types import SimpleNamespace
+
+        import packages.ghidra.detect as detect
+        import packages.ghidra.headless as headless_mod
+        mod = _load_ghidra_cli(monkeypatch)
+        binary = tmp_path / "firmware.bin"
+        binary.write_bytes(b"\x7fELF")
+        out_dir = tmp_path / "out"
+        monkeypatch.setattr(detect, "ghidra_available", lambda: True)
+        monkeypatch.setattr(
+            headless_mod, "_find_headless",
+            lambda: "/opt/ghidra/support/analyzeHeadless")
+
+        def fake_run(cmd, **kwargs):
+            project_dir = Path(cmd[1])
+            (project_dir / "raptor.gpr").write_text("")
+            (project_dir / "raptor.rep").mkdir()
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr("core.sandbox.run", fake_run)
+
+        def fake_do_import(gpr, args, od):
+            Path(od).mkdir(parents=True, exist_ok=True)
+            (Path(od) / "re-database.json").write_text("full-fidelity")
+            return _test_db()
+
+        monkeypatch.setattr(mod, "_do_import", fake_do_import)
+
+        def fail_fallback(b, od):  # pragma: no cover - must not run
+            raise AssertionError("degrading fallback must not run")
+
+        monkeypatch.setattr(mod, "_import_binary_fallback",
+                            fail_fallback)
+
+        # Run 1: creates the project and imports normally.
+        assert mod._cmd_import(self._args(binary, out_dir)) == 0
+        capsys.readouterr()
+
+        # Run 2: occupied destination — terminal, artifact untouched.
+        rc = mod._cmd_import(self._args(binary, out_dir))
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert "already exists" in err
+        assert (out_dir / "re-database.json").read_text() == \
+            "full-fidelity"
+
+    def test_create_failure_prints_reason_and_falls_back(
+            self, tmp_path, monkeypatch, capsys):
+        import packages.ghidra.detect as detect
+        import packages.ghidra.headless as headless_mod
+        mod = _load_ghidra_cli(monkeypatch)
+        binary = tmp_path / "firmware.bin"
+        binary.write_bytes(b"\x7fELF")
+        seen: dict = {}
+        monkeypatch.setattr(detect, "ghidra_available", lambda: True)
+
+        def boom(*a, **kw):
+            raise headless_mod.GhidraError("jvm exploded")
+
+        monkeypatch.setattr(headless_mod, "create_project_from_binary",
+                            boom)
+
+        def fake_fallback(b, od):
+            seen["fallback"] = Path(b)
+            return 0
+
+        monkeypatch.setattr(mod, "_import_binary_fallback",
+                            fake_fallback)
+        rc = mod._cmd_import(self._args(binary, tmp_path / "out"))
+        err = capsys.readouterr().err
+        assert rc == 0
+        assert seen["fallback"] == binary
+        assert "ghidra project create failed" in err
+        assert "jvm exploded" in err
