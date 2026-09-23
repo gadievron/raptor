@@ -198,6 +198,25 @@ class TestFusedEvidenceReachesThePrompt:
         out = format_context_for_prompt(ctx)
         assert "Pre-review evidence (fused)" in out
 
+    def test_block_renders_exactly_once(self):
+        # Two renderer sections once consumed the same key: the same
+        # bytes reached the prompt twice — once untrusted-enveloped,
+        # once at trusted position — with contradictory trust framing,
+        # and the two copies shed independently under budget pressure
+        # (fixed priority vs fused_evidence_priority), so which copy
+        # survived was arbitrary.  The producer contract decides the
+        # framing: the block is orchestrator-authored and already
+        # defended (_store_fused_evidence → defend_repo_text), so the
+        # trusted-position rendering with the fusion module's own
+        # shed priority is the one copy.
+        from core.audit.context import format_context_for_prompt
+
+        ctx = self._ctx_with_fused()
+        marker = "second signal"
+        assert ctx["fused_evidence"].count(marker) == 1
+        out = format_context_for_prompt(ctx)
+        assert out.count(marker) == 1
+
     def test_section_priority_follows_the_fusion_contract(self):
         # Corroborated / high-confidence fused evidence is priority-0
         # by the module's own compute_injection_priority contract —
