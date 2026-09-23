@@ -3064,8 +3064,17 @@ def _dedup_concepts(concepts: list[Concept]) -> list[Concept]:
 def _dedup_invariants(
     invariants: list[Invariant],
     valid_concepts: set[str],
+    discard_sink: list | None = None,
 ) -> list[Invariant]:
-    """Deduplicate invariants, dropping those with orphan concept refs."""
+    """Deduplicate invariants, dropping those with orphan concept refs.
+
+    Orphan drops are recorded to *discard_sink* (same record shape as
+    the receipt-verification discards): a receipt-VERIFIED invariant
+    can die here when its concept was discarded upstream, and the
+    accounting contract is total over discards — the consumer marks
+    the originating reading-list question unresolvable instead of
+    losing the invariant without trace.
+    """
     by_id: dict[str, Invariant] = {}
     for inv in invariants:
         norm = _normalise_id(inv.id)
@@ -3075,6 +3084,13 @@ def _dedup_invariants(
                 "Dropping invariant %s: concept %s not found",
                 inv.id, inv.concept,
             )
+            if discard_sink is not None:
+                discard_sink.append({
+                    "kind": "invariant",
+                    "id": inv.id,
+                    "reason": "orphan concept reference",
+                    "names": [inv.concept] if inv.concept else [],
+                })
             continue
         inv.id = norm
         inv.concept = concept_norm
@@ -3226,8 +3242,14 @@ def _semantic_dedup_concepts(concepts: list[Concept]) -> list[Concept]:
 def _semantic_dedup_invariants(
     invariants: list[Invariant],
     valid_concepts: set[str],
+    discard_sink: list | None = None,
 ) -> list[Invariant]:
-    """Merge semantically similar invariants (high keyword overlap on statement)."""
+    """Merge semantically similar invariants (high keyword overlap on statement).
+
+    Merge-group winners whose concept is orphaned are dropped like the
+    phase-3 dedup drops them — and recorded to *discard_sink* the same
+    way (the accounting contract is total over discards).
+    """
     if len(invariants) <= 1:
         return invariants
 
@@ -3291,6 +3313,13 @@ def _semantic_dedup_invariants(
                     winner.provenance = donor.provenance
         if winner.concept in valid_concepts:
             merged.append(winner)
+        elif discard_sink is not None:
+            discard_sink.append({
+                "kind": "invariant",
+                "id": winner.id,
+                "reason": "orphan concept reference",
+                "names": [winner.concept] if winner.concept else [],
+            })
 
     if len(merged) < len(invariants):
         logger.info(
@@ -3526,17 +3555,23 @@ def run_phase3(
     target: str = "",
     source_root: str = "",
     security_context: SecurityContext | None = None,
+    discard_sink: list | None = None,
 ) -> DomainModel:
-    """Run Phase 3: deduplicate, filter, resolve, assemble domain model."""
+    """Run Phase 3: deduplicate, filter, resolve, assemble domain model.
+
+    Invariants dropped for orphan concept references are recorded to
+    *discard_sink* (receipt-discard record shape).
+    """
     deduped_concepts = _dedup_concepts(concepts)
     sem_deduped_concepts = _semantic_dedup_concepts(deduped_concepts)
     filtered_concepts = _filter_thin_concepts(sem_deduped_concepts)
     valid_ids = {c.id for c in filtered_concepts}
 
-    deduped_invariants = _dedup_invariants(invariants, valid_ids)
+    deduped_invariants = _dedup_invariants(
+        invariants, valid_ids, discard_sink)
     filtered_invariants = _filter_guard_invariants(deduped_invariants)
     sem_deduped_invariants = _semantic_dedup_invariants(
-        filtered_invariants, valid_ids,
+        filtered_invariants, valid_ids, discard_sink,
     )
 
     deduped_contracts = _dedup_contracts(contracts)
@@ -4041,12 +4076,15 @@ def run_study(
     except Exception:
         logger.debug("security context inference failed", exc_info=True)
 
+    phase3_discards: list[dict] = []
     model = run_phase3(
         concepts, invariants, contracts, bug_patterns,
         target=target,
         source_root=source_root,
         security_context=sc,
+        discard_sink=phase3_discards,
     )
+    _record_discards(output_dir, phase3_discards)
 
     try:
         _derive_threat_frame_invariants(

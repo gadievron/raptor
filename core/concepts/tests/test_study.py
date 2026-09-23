@@ -3050,3 +3050,55 @@ class TestSecurityContextReadsCapped:
         texts = _collect_security_context_texts(tmp_path)
         assert "a.c" in texts
         assert calls["n"] > 0
+
+
+class TestOrphanInvariantDropRecorded:
+    """A receipt-verified invariant dying on an orphan concept ref is
+    recorded to the discard sink — the accounting contract is total
+    over discards, never a debug log alone."""
+
+    def test_dedup_records_orphan_drop(self):
+        from core.concepts.study import _dedup_invariants
+
+        inv = Invariant(
+            id="crc_checked", concept="frame_layout",
+            statement="s", negation="n", provenance="verbatim",
+            receipt={"file": "a.c", "quote": "q", "verified": True},
+        )
+        sink: list[dict] = []
+        kept = _dedup_invariants([inv], set(), sink)
+        assert kept == []
+        assert sink == [{
+            "kind": "invariant", "id": "crc_checked",
+            "reason": "orphan concept reference",
+            "names": ["frame_layout"],
+        }]
+
+    def test_semantic_dedup_records_orphan_drop(self):
+        from core.concepts.study import _semantic_dedup_invariants
+
+        invs = [
+            Invariant(id="a", concept="gone",
+                      statement="frame length checked before use",
+                      negation="n"),
+            Invariant(id="b", concept="gone",
+                      statement="frame length checked before use "
+                                "always", negation="n"),
+        ]
+        sink: list[dict] = []
+        kept = _semantic_dedup_invariants(invs, set(), sink)
+        assert kept == []
+        assert len(sink) == 1
+        assert sink[0]["reason"] == "orphan concept reference"
+
+    def test_run_phase3_threads_the_sink(self):
+        from core.concepts.study import run_phase3
+
+        sink: list[dict] = []
+        model = run_phase3(
+            [], [Invariant(id="i", concept="missing",
+                           statement="s", negation="n")], [],
+            discard_sink=sink,
+        )
+        assert model.invariants == []
+        assert [d["id"] for d in sink] == ["i"]
