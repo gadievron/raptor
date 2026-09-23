@@ -240,10 +240,29 @@ def is_generated_file(content: str, check_lines: int = 10) -> bool:
 # generated-shaped name; requiring that corroboration keeps the
 # noise-reduction for real generated code while a hand-planted marker
 # on a normal source file no longer buys invisibility.
+#
+# The corroborating path is as repo-author-controlled as the marker,
+# so a hint name may only corroborate where the WALK POLICY itself
+# treats the location as generated-shaped. Names the walk keeps as
+# first-party source — nested ``out``/``output`` (root-anchored
+# prunes only), and package-exempted ``build``/``dist``/``target`` —
+# must not corroborate there: marker + kept-namespace hint would
+# compose into exactly the whole-file suppression channel the
+# corroboration requirement closed (and the pkg exemption's
+# "planting build/__init__.py only ADDS files" claim relies on it).
 _GENERATED_PATH_HINTS = (
-    "generated", "gen", "autogen", "codegen", "build", "dist",
-    "target", "out", "output", "node_modules", "vendor", "third_party",
+    "generated", "gen", "autogen", "codegen",
+    "node_modules", "vendor", "third_party",
 )
+# Hint names the walk policy keeps when NESTED (see
+# ROOT_ANCHORED_EXCLUDE_DIRS): corroborate at the scan root only.
+_GENERATED_HINTS_ROOT_ANCHORED = ("out", "output")
+# Hint names the walk policy keeps for first-party packages (see
+# PKG_EXEMPTIBLE_BUILD_DIRS): corroborate only when the occurrence is
+# NOT a package-exempted first-party dir. Without a ``target_root``
+# the probe cannot run and the name corroborates as before (legacy
+# callers keep their behavior).
+_GENERATED_HINTS_PKG_EXEMPTIBLE = ("build", "dist", "target")
 _GENERATED_NAME_RE = re.compile(
     r"(\.generated\.|_generated\.|\.auto\.|_pb2(_grpc)?\.py$"
     r"|\.pb\.(go|cc|h)$|\.min\.(js|css)$|\.bundle\.(js|css)$"
@@ -254,14 +273,35 @@ _GENERATED_NAME_RE = re.compile(
 )
 
 
-def generated_marker_corroborated(filepath: str) -> bool:
+def generated_marker_corroborated(
+    filepath: str,
+    target_root: 'Path | str | None' = None,
+) -> bool:
     """True when the file's PATH independently supports its
-    generated-file marker (see the rationale above)."""
+    generated-file marker (see the rationale above).
+
+    ``target_root`` (optional) arms the first-party package probe for
+    the ``build``/``dist``/``target`` hint names, mirroring the walk
+    policy: an occurrence the walk keeps as first-party source never
+    corroborates. Without it those names corroborate as before.
+    """
     norm = filepath.replace("\\", "/").lower()
     if _GENERATED_NAME_RE.search(norm):
         return True
     parts = norm.split("/")[:-1]
-    return any(part in _GENERATED_PATH_HINTS for part in parts)
+    if any(part in _GENERATED_PATH_HINTS for part in parts):
+        return True
+    # Root-anchored names: the walk prunes them at the top level only;
+    # a nested occurrence is walk-kept first-party namespace and must
+    # not corroborate.
+    if parts and parts[0] in _GENERATED_HINTS_ROOT_ANCHORED:
+        return True
+    for name in _GENERATED_HINTS_PKG_EXEMPTIBLE:
+        if name in parts and not _pkg_exempt(
+            name, filepath, filepath.lower().split(os.sep), target_root,
+        ):
+            return True
+    return False
 
 
 def should_exclude(
