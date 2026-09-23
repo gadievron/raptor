@@ -48,9 +48,25 @@ from __future__ import annotations
 import ast
 import logging
 import re
+from bisect import bisect_right
 from collections import Counter
 
 logger = logging.getLogger(__name__)
+
+
+def _newline_offsets(source: str) -> list[int]:
+    """Offsets of every ``\\n`` in ``source``, computed once so
+    per-match line numbers are a bisect instead of an O(offset)
+    ``str.count`` — the count-per-match spelling made a crafted file
+    of thousands of tiny matches O(matches x file-size), hours of CPU
+    within the builder's 8 MiB per-file cap (and one stalled worker
+    evicts exactly that file from the inventory)."""
+    return [m.start() for m in re.finditer("\n", source)]
+
+
+def _line_at(offsets: list[int], pos: int) -> int:
+    """1-indexed line number of character ``pos``."""
+    return bisect_right(offsets, pos - 1) + 1
 
 # A dead scope is reported as an inclusive ``(start_line, end_line)``
 # 1-indexed range. A function whose ``line_start`` falls within any
@@ -161,14 +177,14 @@ def _detect_javascript(language: str, content: str) -> list[DeadRange]:
         # Grammar unavailable — cannot vouch a code view; no witness.
         return []
     ranges: list[DeadRange] = []
+    offsets = _newline_offsets(stripped)
     for m in _JS_DEAD_IF.finditer(stripped):
         brace_pos = m.end() - 1
         close = _match_brace(stripped, brace_pos)
         if close is None:
             continue
-        start_line = stripped.count("\n", 0, m.start()) + 1
-        end_line = stripped.count("\n", 0, close) + 1
-        ranges.append((start_line, end_line))
+        ranges.append((_line_at(offsets, m.start()),
+                       _line_at(offsets, close)))
     return ranges
 
 
@@ -217,15 +233,15 @@ def _detect_rust(content: str) -> list[DeadRange]:
         # Grammar unavailable — cannot vouch a code view; no witness.
         return []
     ranges: list[DeadRange] = []
+    offsets = _newline_offsets(stripped)
     # ``if false { … }`` blocks.
     for m in _RUST_DEAD_IF.finditer(stripped):
         brace_pos = m.end() - 1
         close = _match_brace(stripped, brace_pos)
         if close is None:
             continue
-        start_line = stripped.count("\n", 0, m.start()) + 1
-        end_line = stripped.count("\n", 0, close) + 1
-        ranges.append((start_line, end_line))
+        ranges.append((_line_at(offsets, m.start()),
+                       _line_at(offsets, close)))
     # ``#[cfg(any())]`` gating the immediately-following fn / mod.
     for m in _RUST_DEAD_CFG.finditer(stripped):
         after = stripped[m.end():]
@@ -250,9 +266,8 @@ def _detect_rust(content: str) -> list[DeadRange]:
         # Range spans from the attribute to the item's closing brace,
         # so the fn/mod ``line_start`` is captured (and, for mod, every
         # nested fn inside the dead module).
-        start_line = stripped.count("\n", 0, m.start()) + 1
-        end_line = stripped.count("\n", 0, close) + 1
-        ranges.append((start_line, end_line))
+        ranges.append((_line_at(offsets, m.start()),
+                       _line_at(offsets, close)))
     return ranges
 
 
@@ -353,6 +368,7 @@ _C_MAX_PARAM_SCAN = 16 * 1024
 def _detect_c(content: str) -> list[DeadRange]:
     stripped = _c_strip_comments_and_strings(content)
     ranges: list[DeadRange] = []
+    offsets: list[int] | None = None
     budget = _C_SCAN_BUDGET_FACTOR * len(stripped)
     # Whole-word occurrence count for every identifier, computed once —
     # a per-candidate re.findall over the full file is the other half of
@@ -422,9 +438,15 @@ def _detect_c(content: str) -> list[DeadRange]:
         if counts is None:
             counts = Counter(re.findall(r"\w+", stripped))
         if counts[name] <= 1:
-            start_line = stripped.count("\n", 0, m.start()) + 1
-            end_line = stripped.count("\n", 0, close) + 1
-            ranges.append((start_line, end_line))
+            # Line numbers via the shared one-pass offsets — the
+            # per-range str.count spelling was the half of the
+            # O(candidates x file-size) class the _C_SCAN_BUDGET
+            # comment didn't cover (built lazily: most files never
+            # append a range).
+            if offsets is None:
+                offsets = _newline_offsets(stripped)
+            ranges.append((_line_at(offsets, m.start()),
+                           _line_at(offsets, close)))
 
     return ranges
 
@@ -589,8 +611,44 @@ def _detect_ruby(content: str) -> list[DeadRange]:
         return []
     lines = stripped.split("\n")
     ranges: list[DeadRange] = []
-    for i, line in enumerate(lines):
-        m = _RB_DEAD_IF.match(line)
+    # Single pass with a stack of pending dead-if openers. Per-opener
+    # forward rescans made a balanced nested ladder O(openers x file)
+    # — minutes of CPU inside the builder's per-file cap, and one
+    # stalled worker evicts exactly that file from the inventory. The
+    # close / bail decisions depend only on (line, opener indent), so
+    # evaluating each line against the stack innermost-first takes the
+    # same decisions the independent scans took.
+    stack: list[tuple[int, str]] = []   # (opener line idx, opener indent)
+    for j, lj in enumerate(lines):
+        if lj.strip():
+            cur = lj[:len(lj) - len(lj.lstrip())]
+            be = _RB_BRANCH_AT.match(lj)
+            en = _RB_END_AT.match(lj)
+            while stack:
+                i, ind = stack[-1]
+                if (be and be.group(1) == ind) or (en and en.group(1) == ind):
+                    # dead branch body is lines i+1..j-1 (0-indexed) →
+                    # (i+2 .. j) 1-indexed.
+                    stack.pop()
+                    if i + 2 <= j:
+                        ranges.append((i + 2, j))
+                    # The same line may close / bail enclosing openers
+                    # too (their checks see the same (line, indent)).
+                    continue
+                if len(cur) <= len(ind) and cur != ind:
+                    # Dedented past the opener — or at/inside the
+                    # opener's column with a DIFFERENT whitespace mix
+                    # (space vs tab: same length, different bytes
+                    # evades both the byte-equal closer match above
+                    # and a length-only dedent check, letting the scan
+                    # latch onto a later end and range live defs
+                    # dead). Either way the indentation anchor is
+                    # broken — bail this opener (sound, under-detect)
+                    # and let enclosing openers judge the line.
+                    stack.pop()
+                    continue
+                break
+        m = _RB_DEAD_IF.match(lj)
         if not m:
             continue
         # Self-contained one-liner (``if false then nil end``): the
@@ -601,32 +659,14 @@ def _detect_ruby(content: str) -> list[DeadRange]:
         # on one line — nothing below it is dead; skip (under-detect,
         # sound). Checked on the comment-stripped line; an ``end``
         # inside a string also skips — same cheap FN direction.
-        if re.search(r"\bend\b", line[m.end(1):]):
+        if re.search(r"\bend\b", lj[m.end(1):]):
             continue
-        ind = m.group(1)
-        for j in range(i + 1, len(lines)):
-            lj = lines[j]
-            if not lj.strip():
-                continue
-            cur = lj[:len(lj) - len(lj.lstrip())]
-            be = _RB_BRANCH_AT.match(lj)
-            en = _RB_END_AT.match(lj)
-            if (be and be.group(1) == ind) or (en and en.group(1) == ind):
-                # dead branch body is lines i+1..j-1 (0-indexed) →
-                # (i+2 .. j) 1-indexed.
-                if i + 2 <= j:
-                    ranges.append((i + 2, j))
-                break
-            if len(cur) <= len(ind) and cur != ind:
-                # Dedented past the opener — or at/inside the opener's
-                # column with a DIFFERENT whitespace mix (space vs tab:
-                # same length, different bytes evades both the
-                # byte-equal closer match above and a length-only
-                # dedent check, letting the scan latch onto a later
-                # end and range live defs dead). Either way the
-                # indentation anchor is broken — bail (sound,
-                # under-detect).
-                break
+        stack.append((j, m.group(1)))
+    # Openers still pending at EOF never found a closer — no range
+    # (exactly the independent scans' run-to-EOF outcome). Emission
+    # order above is innermost-first; the independent scans emitted
+    # opener-order (ascending start line) — restore it.
+    ranges.sort()
     return ranges
 
 
