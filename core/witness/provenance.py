@@ -218,6 +218,25 @@ _BINDING_FILE = ".witness-binding"
 BINDING_GRADE_KEY = "provenance_binding"
 
 #: Binding grades, as reported by the graded verifiers.
+#:
+#: What each grade DOES and DOES NOT prove — consumers weighting
+#: GRADE_RUN_NONCE above GRADE_BASENAME should know both rest on
+#: same-user-readable material:
+#:
+#: * GRADE_RUN_NONCE defeats replay of stamped records ACROSS run
+#:   directories (a record minted under run A's nonce never verifies
+#:   in run B). It does NOT defeat directory staging by a same-user
+#:   reader: verification recomputes the binding from the
+#:   ``.witness-binding`` file INSIDE the directory under
+#:   verification, so an actor who can read a donor run's nonce file
+#:   can stage a directory (donor basename + copied nonce +
+#:   selectively copied validly-stamped records) that verifies at
+#:   this grade — a PARTIAL clone is indistinguishable from the
+#:   documented whole-directory archive/move, and that equivalence is
+#:   inherent to the portability property, not a defect a stronger
+#:   nonce could remove.
+#: * GRADE_BASENAME proves only that the record was minted by this
+#:   install for a directory of the same resolved basename.
 GRADE_RUN_NONCE = "run-nonce"
 GRADE_BASENAME = "basename"
 
@@ -283,6 +302,13 @@ def _binding_for_verify(
     The marker cannot be stripped to demote the check: a token minted
     over the nonced binding never verifies against the basename-only
     field set, and vice versa.
+
+    The nonce is read FROM the directory under verification (the
+    archive/move portability property), so a fully STAGED directory —
+    donor basename, copied nonce file, selectively copied stamped
+    records — verifies at GRADE_RUN_NONCE for a same-user reader; see
+    the partial-clone note at the grade constants before weighting
+    the grade as more than cross-run replay defence.
     """
     if record.get(BINDING_GRADE_KEY) == GRADE_RUN_NONCE:
         nonce = _read_run_nonce(run_dir)
