@@ -206,7 +206,12 @@ class TestMountlessLaneKeepsHostTmpdirGrant(unittest.TestCase):
 
 class TestGrantOpenFailureNamesPath(unittest.TestCase):
     """A genuinely un-openable writable grant still fails loudly —
-    and the failure line names the path, so it is attributable."""
+    and the failure line names the path, so it is attributable. The
+    grant must be IN-VIEW for this shape to exist at all: an
+    out-of-view grant refuses at spawn assembly with a named error
+    (the bind-view contract tests in
+    test_bind_source_validation_pin) instead of reaching the child's
+    rule open."""
 
     def test_missing_writable_grant_named_in_stderr(self):
         from tempfile import TemporaryDirectory
@@ -215,9 +220,12 @@ class TestGrantOpenFailureNamesPath(unittest.TestCase):
         from core.sandbox.landlock import check_landlock_available
         if not check_landlock_available():
             self.skipTest("Landlock unavailable")
-        missing = "/var/tmp/no-such-grant-dir-e79b1c"
         with TemporaryDirectory(dir="/var/tmp") as target, \
                 TemporaryDirectory(dir="/var/tmp") as output:
+            # Under the OUTPUT bind (an in-view tree), but
+            # nonexistent: passes spawn assembly, fails the child's
+            # post-pivot rule open — which must name it.
+            missing = os.path.join(output, "no-such-grant-dir-e79b1c")
             with sandbox(target=target, output=output,
                          block_network=True,
                          writable_paths=[missing]) as run:
