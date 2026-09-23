@@ -69,9 +69,15 @@ class UpstreamSource:
 
 
 # Built-in mapping. Coordinates picked to align with the
-# corresponding ``_BUILTIN_ARG_MAP`` entries — every ARG with
-# a CVE ecosystem mapping ALSO needs an upstream source so the
-# bumper can propose a target version.
+# corresponding ``_BUILTIN_ARG_MAP`` entries where one exists.
+# Coverage rule: standalone TOOL ARGs (semgrep, ruff, eslint, ...)
+# get upstream sources here; runtime/base-image version ARGs
+# (PYTHON_VERSION, GO_VERSION, UBUNTU_VERSION, ...) deliberately do
+# NOT — their pins track the base image / toolchain axis, and
+# proposing "latest upstream" for them is the wrong axis. Those
+# CVE-mapped-but-unbumpable ARGs are surfaced in the bump report's
+# ``skipped`` rows by the orchestrator; the inline
+# ``# raptor-sca:`` override is the operator escape hatch.
 _BUILTIN_UPSTREAM_MAP: dict[str, UpstreamSource] = {
     # PyPI tools — most cut proper GitHub releases.
     "SEMGREP_VERSION": UpstreamSource("github_release", "semgrep/semgrep"),

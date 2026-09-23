@@ -91,6 +91,27 @@ def test_dockerfile_with_unknown_arg_skipped(tmp_path: Path) -> None:
     report = run_bump(tmp_path, http=http)
     assert report.candidates == []
     assert report.results == []
+    # ...and stay silent: an unmapped internal ARG is noise.
+    assert report.skipped == []
+
+
+def test_cve_mapped_arg_without_upstream_surfaces_in_skipped(
+    tmp_path: Path,
+) -> None:
+    """Runtime-version ARGs (PYTHON_VERSION, GO_VERSION, ...) carry
+    CVE ecosystem mappings — scan-time gives them verdicts — but
+    have no upstream-latest source, so the bumper cannot act. That
+    gap must surface as a skipped row, not vanish."""
+    (tmp_path / "Dockerfile").write_text(
+        "ARG PYTHON_VERSION=3.12.0\n"
+    )
+    http = _StubHttp({})
+    report = run_bump(tmp_path, http=http)
+    assert report.candidates == []
+    assert len(report.skipped) == 1
+    arg, _path, reason = report.skipped[0]
+    assert arg == "PYTHON_VERSION"
+    assert "no upstream-latest source" in reason
 
 
 def test_dockerfile_with_known_arg_at_latest_no_candidate(
