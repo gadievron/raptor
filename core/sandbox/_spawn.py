@@ -62,6 +62,13 @@ import logging
 import os
 import platform
 import resource
+# Module-level, ALIASED: the setup child's step-7 go-pipe wait needs
+# select POST-FORK, where imports are banned (an import can allocate,
+# lock, and run arbitrary module code in the forked child) — and the
+# bare name `select` is function-LOCAL inside run_sandboxed (the
+# capture loop's own `import select`), so the child must reference a
+# distinct module-scope name or it hits UnboundLocalError pre-exec.
+import select as _select_mod
 import signal
 import socket as _socket_mod
 import subprocess
@@ -2587,11 +2594,38 @@ def run_sandboxed(
             os.close(p_ready_w)
 
             # Step 7: wait for parent 'go' signal — parent has run
-            # newuidmap by this point.
+            # newuidmap by this point. Select-with-deadline, not a
+            # bare blocking read (the same cross-spawn pin class as
+            # the parent's t_ready_r/pid_r/status_r waits): p_go_w
+            # lives in the parent's fd table until step 8, so a
+            # sibling spawn forked in the step-4..8 window holds a
+            # transient copy in its never-exec'ing setup child —
+            # after an orchestrator hard-kill, this dead run's setup
+            # child otherwise stays parked on the pipe until the
+            # longest concurrent sibling completes. Deadline is 2x
+            # the ready deadline: the parent's step-4..8 window
+            # legitimately contains newuidmap plus, under audit, the
+            # tracer fork and its own ready wait — the go deadline
+            # must not fire while the parent is lawfully inside that
+            # budget. (_select_mod, not the bare `select` name —
+            # that name is function-local here; see the import.)
             try:
-                if os.read(p_go_r, 1) != b"G":
+                _go = b""
+                _go_deadline = (time.monotonic()
+                                + 2 * _P_READY_DEADLINE_S)
+                while True:
+                    _go_left = _go_deadline - time.monotonic()
+                    if _go_left <= 0:
+                        break
+                    _go_ready, _, _ = _select_mod.select(
+                        [p_go_r], [], [], _go_left)
+                    if _go_ready:
+                        _go = os.read(p_go_r, 1)
+                        break
+                if _go != b"G":
                     # Parent failed before signalling go (it has already
-                    # raised + killed us). Write a status anyway so the pipe
+                    # raised + killed us), or the deadline expired with
+                    # the parent gone. Write a status anyway so the pipe
                     # is self-sufficient and never relies on caller ordering.
                     _write_setup_status(status_w, b"U", "no go signal")
                     os._exit(125)
