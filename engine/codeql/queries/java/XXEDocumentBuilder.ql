@@ -40,12 +40,38 @@ predicate setsFeature(MethodCall mc, Variable factory, string feature, boolean v
 }
 
 /**
+ * A `factory.setAttribute(ACCESS_EXTERNAL_DTD, "")` call.  Covers
+ * both the `XMLConstants.ACCESS_EXTERNAL_DTD` field spelling (matched
+ * as a field read — the JDK field's literal initializer is not
+ * always visible to `CompileTimeConstantExpr` under buildless
+ * extraction) and the raw string-literal spelling.
+ */
+predicate setsEmptyExternalDtd(Variable factory) {
+  exists(MethodCall mc |
+    mc.getMethod().hasName("setAttribute") and
+    mc.getMethod().getDeclaringType().hasQualifiedName("javax.xml.parsers", "DocumentBuilderFactory") and
+    mc.getQualifier().(VarAccess).getVariable() = factory and
+    (
+      mc.getArgument(0).(CompileTimeConstantExpr).getStringValue() =
+        "http://javax.xml.XMLConstants/property/accessExternalDTD"
+      or
+      exists(Field fld | fld = mc.getArgument(0).(FieldRead).getField() |
+        fld.getDeclaringType().hasQualifiedName("javax.xml", "XMLConstants") and
+        fld.hasName("ACCESS_EXTERNAL_DTD")
+      )
+    ) and
+    mc.getArgument(1).(CompileTimeConstantExpr).getStringValue() = ""
+  )
+}
+
+/**
  * Holds when `factory` (a variable holding the DocumentBuilderFactory)
  * has been hardened against XXE. Disabling external-general-entities
  * alone is NOT sufficient — parameter entities still allow blind XXE /
- * SSRF via a crafted DTD. The factory must either disallow DOCTYPE
- * declarations entirely, or disable BOTH the general and parameter
- * external-entity features.
+ * SSRF via a crafted DTD. The factory must disallow DOCTYPE
+ * declarations entirely, disable BOTH the general and parameter
+ * external-entity features, or block external DTD access via the
+ * JAXP 1.5 accessExternalDTD attribute.
  */
 predicate isFactoryHardened(Variable factory) {
   // Disallow DOCTYPE declarations entirely (strongest defence)
@@ -54,6 +80,11 @@ predicate isFactoryHardened(Variable factory) {
   // Both external entity classes disabled
   setsFeature(_, factory, "http://xml.org/sax/features/external-general-entities", false) and
   setsFeature(_, factory, "http://xml.org/sax/features/external-parameter-entities", false)
+  or
+  // JAXP 1.5 hardening idiom: an empty accessExternalDTD value blocks
+  // all external DTD and entity fetches
+  // (`setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "")`).
+  setsEmptyExternalDtd(factory)
 }
 
 /**
