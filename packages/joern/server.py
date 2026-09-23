@@ -728,6 +728,14 @@ class JoernServer:
         # it a stuck-query restart brought an importCode session back
         # CPG-less while ensure_alive reported healthy.
         self._code_path: Path | None = None
+        # Counts successful CPG loads (import_cpg / import_code, the
+        # restart() re-import included). Consumers key per-graph memos
+        # on it: entries computed against load N describe a graph that
+        # no longer exists at load N+1 — a probe answered during a
+        # restart window would otherwise stay memoised (as None)
+        # across the recovery and silently remove its lane for the
+        # rest of the run.
+        self._cpg_load_epoch: int = 0
 
     def start(self) -> None:
         """Boot the Joern server and wait for readiness."""
@@ -1058,6 +1066,16 @@ class JoernServer:
             return False
 
     @property
+    def cpg_load_epoch(self) -> int:
+        """Successful CPG loads so far (see ``_cpg_load_epoch``).
+
+        Per-graph memo key for consumers that cache answers computed
+        against the loaded CPG: a changed epoch means every cached
+        entry describes a dead graph.
+        """
+        return self._cpg_load_epoch
+
+    @property
     def restarting(self) -> bool:
         """True while a restart (stop → boot → CPG reload) is running."""
         return self._restarting.is_set()
@@ -1350,6 +1368,7 @@ class JoernServer:
         # message from a CPG *build* cache.
         logger.info("CPG imported into Joern server in %.1fs", elapsed)
         self._cpg_loaded = True
+        self._cpg_load_epoch += 1
         self._cpg_path = cpg_path
         # The session now holds this file's graph, not any earlier
         # importCode tree — restart() must re-import from cpg_path.
@@ -1438,6 +1457,7 @@ class JoernServer:
 
         logger.info("code imported in %.1fs", elapsed)
         self._cpg_loaded = True
+        self._cpg_load_epoch += 1
         self._code_path = target_path
         self._cpg_path = None
         self._last_import_timeout = timeout

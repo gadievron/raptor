@@ -471,6 +471,75 @@ class TestCoverageProbeAnchoring:
         assert joern_function_in_cpg(srv, "f", file_path="b.c") is True
         assert len(srv.queries) == 2  # distinct anchors, distinct memo
 
+class TestCoverageMemoAcrossRestart:
+    """The memo dies with the CPG (re)load — INCLUDING the mid-run
+    ``restart()`` re-import, which never passes through lane start.
+
+    A probe landing in a restart window gets the fail-fast restarting
+    error (empty raw_output → answer None) and memoises it; pre-fix
+    the only reset site was lane start, so the poisoned None survived
+    the server's recovery and the joern refutation lane stayed
+    silently removed for that function for the rest of the run — one
+    restart, unbounded within-run evidence loss. The probe now keys
+    the memo on the server's ``cpg_load_epoch`` (bumped by every
+    successful import) and discards a stale memo.
+    """
+
+    class _RestartingServer:
+        """Restart-window shape first, then healthy; a successful
+        recovery bumps ``cpg_load_epoch`` exactly like the real
+        ``restart()`` → ``import_cpg`` path."""
+
+        def __init__(self) -> None:
+            self.healthy = False
+            self.cpg_load_epoch = 1
+            self.calls = 0
+
+        def recover(self) -> None:
+            self.healthy = True
+            self.cpg_load_epoch += 1
+
+        def query(self, query: str, timeout: int = 0,
+                  check_length: bool = False, **kwargs):
+            from packages.joern.server import JoernResult, _RESTARTING_ERROR
+            self.calls += 1
+            if not self.healthy:
+                return JoernResult(query=query, errors=[_RESTARTING_ERROR])
+            last = query.strip().rsplit("\n", 1)[-1]
+            nonce = last.split('"')[1]  # '<nonce>:'
+            return JoernResult(
+                query=query, raw_output=f'res0: String = "{nonce}true"',
+            )
+
+    def test_restart_window_poison_dies_with_the_reload(self):
+        srv = self._RestartingServer()
+        setattr(srv, _FN_COVERAGE_CACHE_ATTR, {})  # lane start
+        assert joern_function_in_cpg(srv, "f") is None  # window: did not look
+        srv.recover()
+        # The re-import bumped the epoch: the poisoned None describes
+        # a dead graph and must be re-asked, not replayed.
+        assert joern_function_in_cpg(srv, "f") is True
+        assert srv.calls == 2
+
+    def test_memo_still_reused_within_one_epoch(self):
+        srv = self._RestartingServer()
+        srv.healthy = True
+        setattr(srv, _FN_COVERAGE_CACHE_ATTR, {})
+        assert joern_function_in_cpg(srv, "f") is True
+        assert joern_function_in_cpg(srv, "f") is True
+        assert srv.calls == 1  # epoch unchanged — memo answers
+
+    def test_epochless_server_degrades_to_lane_start_reset(self):
+        # A server double (or foreign handle) without cpg_load_epoch
+        # keeps the pre-existing behavior: memo reset at lane start
+        # only. Documented degradation, not an error.
+        srv = _Server(covers=True)
+        setattr(srv, _FN_COVERAGE_CACHE_ATTR, {})
+        assert joern_function_in_cpg(srv, "f") is True
+        assert joern_function_in_cpg(srv, "f") is True
+        assert len(srv.queries) == 1
+
+
 class TestCoverageProbeTimeout:
     """The probe's timeout rides the same CPG-scaled, deadline-clamped
     tunables as the live query it gates. The def-time 10s default

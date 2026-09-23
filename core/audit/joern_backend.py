@@ -203,8 +203,13 @@ def start_joern_server(target_path, joern_overrides=None, tunables=None,
         return None
     try:
         # Fresh coverage memo for the graph just loaded — entries from
-        # a previously loaded CPG describe a different graph.
+        # a previously loaded CPG describe a different graph. Stamped
+        # with the server's load epoch so a mid-run restart's CPG
+        # re-import (which never passes through here) also invalidates
+        # it — see joern_function_in_cpg.
         setattr(srv, _FN_COVERAGE_CACHE_ATTR, {})
+        setattr(srv, _FN_COVERAGE_EPOCH_ATTR,
+                getattr(srv, "cpg_load_epoch", None))
     except AttributeError:
         logger.debug("joern server rejects coverage cache attribute")
     install_flow_semantics(srv, target_path, out_dir=out_dir)
@@ -334,10 +339,20 @@ def _flow_sort_key(flow: Any) -> tuple:
     )
 
 
-#: Attribute holding the per-server function-coverage memo. Reset by
-#: :func:`start_joern_server` whenever a CPG is (re)loaded, because the
-#: entries describe the graph that was live when they were computed.
+#: Attribute holding the per-server function-coverage memo. The
+#: entries describe the graph that was live when they were computed,
+#: so the memo is invalidated on EVERY load path: lane start
+#: (:func:`start_joern_server` installs a fresh dict) AND the mid-run
+#: ``restart()`` re-import, which never passes through lane start —
+#: :func:`joern_function_in_cpg` compares the epoch stamp below
+#: against the server's ``cpg_load_epoch`` and discards a stale memo.
+#: Pre-fix the restart path kept the memo: every probe answered during
+#: a restart window memoised None ("did not look") and the joern
+#: refutation lane stayed silently removed for those functions for the
+#: rest of the run.
 _FN_COVERAGE_CACHE_ATTR = "_raptor_fn_in_cpg_cache"
+#: CPG-load epoch the memo was stamped against (see above).
+_FN_COVERAGE_EPOCH_ATTR = "_raptor_fn_in_cpg_cache_epoch"
 
 
 def joern_name_queryable(function_name: str) -> bool:
@@ -399,6 +414,22 @@ def joern_function_in_cpg(
         return None
 
     cache = getattr(server, _FN_COVERAGE_CACHE_ATTR, None)
+    if cache is not None:
+        epoch = getattr(server, "cpg_load_epoch", None)
+        if (epoch is not None
+                and getattr(server, _FN_COVERAGE_EPOCH_ATTR, None) != epoch):
+            # A CPG (re)load happened since the memo was stamped —
+            # every entry (a restart window's poisoned Nones included)
+            # describes a graph that no longer exists. Concurrent
+            # sweep threads may race this swap; both install an empty
+            # dict stamped with the same epoch, so the worst case is a
+            # re-probe, never a stale answer.
+            cache = {}
+            try:
+                setattr(server, _FN_COVERAGE_CACHE_ATTR, cache)
+                setattr(server, _FN_COVERAGE_EPOCH_ATTR, epoch)
+            except AttributeError:
+                logger.debug("joern server rejects coverage cache attribute")
     cache_key = (function_name, file_path)
     if cache is not None and cache_key in cache:
         return cache[cache_key]
