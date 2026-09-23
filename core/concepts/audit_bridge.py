@@ -483,6 +483,45 @@ def _tier_tag(entry: dict) -> str:
     return "[unverified]"
 
 
+def _drifted_entries(model: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """Dict-shaped entries of ``model[key]``, WARN-skipping the rest.
+
+    Raw domain-model JSON is loaded without the DomainModel drift
+    loader, so schema-drifted records (strings, partial dicts) reach
+    the prompt renderers. One bad record must degrade to a logged gap,
+    never kill the whole domain-knowledge block: the consumers wrap
+    this module in ``except Exception`` at DEBUG, so an escaped
+    KeyError silently costs every receipt-backed study fact for the
+    function under review.
+    """
+    raw = model.get(key) or []
+    if not isinstance(raw, list):
+        logger.warning(
+            "domain-model %r is not a list — treated as empty "
+            "(schema drift; domain knowledge for this key is lost "
+            "until the model is regenerated)", key,
+        )
+        return []
+    entries = [e for e in raw if isinstance(e, dict)]
+    dropped = len(raw) - len(entries)
+    if dropped:
+        logger.warning(
+            "domain-model %r: %d non-dict entr(y/ies) skipped from "
+            "prompt injection (schema drift); %d remaining still "
+            "render", key, dropped, len(entries),
+        )
+    return entries
+
+
+def _entry_gap(kind: str, entry: dict[str, Any], missing: str) -> None:
+    """Record one skipped drifted entry — a visible gap, never silence."""
+    logger.warning(
+        "domain-model %s entry missing %r — skipped from prompt "
+        "injection (schema drift; the rest of the block still "
+        "renders): %.120s", kind, missing, str(entry),
+    )
+
+
 def domain_model_context(
     out_dir: Path,
     file_path: str,
@@ -502,9 +541,9 @@ def domain_model_context(
     if not model:
         return None
 
-    concepts = model.get("concepts", [])
-    invariants = model.get("invariants", [])
-    contracts = model.get("contracts", [])
+    concepts = _drifted_entries(model, "concepts")
+    invariants = _drifted_entries(model, "invariants")
+    contracts = _drifted_entries(model, "contracts")
 
     sage_block = _sage_recall_for_context(out_dir, file_path, function_name)
 
@@ -563,20 +602,31 @@ def domain_model_context(
     )
     parts.extend(_security_context_lines(model))
 
+    gaps = 0
     if relevant_concepts:
         parts.append("### Semantic Concepts\n")
         for c in relevant_concepts:
+            cid = str(c.get("id") or "")
+            if not cid:
+                _entry_gap("concept", c, "id")
+                gaps += 1
+                continue
             conf = c.get("confidence", "inferred")
             parts.append(
-                f"- **{c['id']}** {_tier_tag(c)} [{conf}]: "
+                f"- **{cid}** {_tier_tag(c)} [{conf}]: "
                 f"{c.get('description', '')}"
             )
 
     if relevant_invariants:
         parts.append("\n### Invariants\n")
         for i in relevant_invariants:
+            iid = str(i.get("id") or "")
+            if not iid:
+                _entry_gap("invariant", i, "id")
+                gaps += 1
+                continue
             parts.append(
-                f"- **{i['id']}** {_tier_tag(i)}: {i.get('statement', '')}"
+                f"- **{iid}** {_tier_tag(i)}: {i.get('statement', '')}"
             )
             neg = i.get("negation", "")
             if neg:
@@ -588,8 +638,13 @@ def domain_model_context(
     if relevant_contracts:
         parts.append("\n### Contracts\n")
         for c in relevant_contracts:
+            cfn = str(c.get("function") or "")
+            if not cfn:
+                _entry_gap("contract", c, "function")
+                gaps += 1
+                continue
             parts.append(
-                f"- **{c['function']}** {_tier_tag(c)} ({c.get('file', '')})"
+                f"- **{cfn}** {_tier_tag(c)} ({c.get('file', '')})"
             )
             if c.get("when"):
                 parts.append(f"  - When: {c['when']}")
@@ -602,7 +657,7 @@ def domain_model_context(
             if c.get("implication"):
                 parts.append(f"  - Implication: {c['implication']}")
 
-    bug_patterns = model.get("bug_patterns", [])
+    bug_patterns = _drifted_entries(model, "bug_patterns")
     if bug_patterns:
         parts.append("\n### Bug Patterns (from study)\n")
         parts.append(
@@ -615,6 +670,16 @@ def domain_model_context(
             grep_hint = bp.get("what_to_grep", "")
             if grep_hint:
                 parts.append(f"  - Grep: `{grep_hint}`")
+
+    if gaps:
+        # The prompt-visible half of the gap record: reviewers (and
+        # prompt-dump debugging) see that study knowledge was partial,
+        # instead of a silently thinner block.
+        parts.append(
+            f"\nNote: {gaps} schema-drifted domain-model entr(y/ies) "
+            "were skipped; the knowledge above is complete except for "
+            "those."
+        )
 
     if sage_block:
         parts.append(sage_block)
@@ -730,11 +795,11 @@ def primers_from_domain_model(
     #       field, so a top-level join is what makes these primers
     #       reachable from real domain-model.json files).
     invs_by_concept: dict[str, list[dict[str, Any]]] = {}
-    for inv in model.get("invariants", []):
+    for inv in _drifted_entries(model, "invariants"):
         cid = str(inv.get("concept") or "")
         if cid:
             invs_by_concept.setdefault(cid, []).append(inv)
-    for concept in model.get("concepts", []):
+    for concept in _drifted_entries(model, "concepts"):
         cid = str(concept.get("id") or "")
         inv_list: list[Any] = list(concept.get("invariants") or [])
         inv_list.extend(invs_by_concept.get(cid, []))
@@ -771,7 +836,7 @@ def primers_from_domain_model(
         candidates.append((score, "\n".join(lines)))
 
     # --- Paired operations → check for unbalanced acquire/release ---
-    paired = model.get("paired_operations", [])
+    paired = _drifted_entries(model, "paired_operations")
     if paired and source:
         source_lower = source.lower()
         relevant_pairs = []
@@ -792,13 +857,14 @@ def primers_from_domain_model(
             for po in relevant_pairs:
                 note = f" ({po['note']})" if po.get("note") else ""
                 lines.append(
-                    f"- {po['acquire']} / {po['release']} "
+                    f"- {po.get('acquire', '?')} / "
+                    f"{po.get('release', '?')} "
                     f"[{po.get('kind', '?')}]{note}"
                 )
             candidates.append((score, "\n".join(lines)))
 
     # --- Top-level invariants (rich schema: id/statement/negation) ---
-    top_invariants = model.get("invariants", [])
+    top_invariants = _drifted_entries(model, "invariants")
     if top_invariants:
         scored = sorted(
             [
@@ -844,7 +910,7 @@ def primers_from_domain_model(
             candidates.append((avg_score, "\n".join(lines)))
 
     # --- Contracts (rich schema: function/input_semantics/output_semantics) ---
-    for contract in model.get("contracts", []):
+    for contract in _drifted_entries(model, "contracts"):
         cf = (contract.get("function") or "").lower()
         if cf not in tuple(v.lower()
                            for v in _name_variants(function_name)):
