@@ -1055,6 +1055,12 @@ class DatabaseManager:
             )
         try:
             os.rename(canonical, marker)
+            # Refresh the marker's mtime: rename preserves the
+            # evicted DB's own (stale-by-definition) timestamp, so a
+            # canonical evicted BECAUSE it aged out was GC-eligible
+            # the moment it became a marker — the documented 1-hour
+            # reader grace never held for exactly this marker class.
+            os.utime(marker, None)
         except OSError:
             pass  # raced with another evictor; harmless
 
@@ -1246,6 +1252,10 @@ class DatabaseManager:
             try:
                 marker = canonical_path.with_name(self._stale_marker_name(canonical_path))
                 os.rename(canonical_path, marker)
+                # Fresh marker mtime — the reader grace must start at
+                # eviction, not at the evicted DB's own age (see
+                # _evict_stale_canonical).
+                os.utime(marker, None)
             except OSError:
                 pass  # someone else evicted in parallel; harmless
 
@@ -1702,6 +1712,10 @@ class DatabaseManager:
                                     self._stale_marker_name(canonical_path)
                                 )
                                 os.rename(canonical_path, marker)
+                                # Fresh marker mtime — reader grace
+                                # starts at eviction (see
+                                # _evict_stale_canonical).
+                                os.utime(marker, None)
                             except OSError:
                                 pass  # eviction failed; retry-promote will see ENOTEMPTY
                             try:
