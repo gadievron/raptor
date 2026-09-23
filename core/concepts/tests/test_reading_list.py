@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -522,3 +523,47 @@ class TestQuestionScopedIdentity:
         rl = ReadingList.load(tmp_path / "reading-list.json")
         assert len(rl.items) == 2
         assert len({i.id for i in rl.items}) == 2
+
+
+def _rl_race_worker(args):
+    idx, path = args
+    from core.concepts.audit_bridge import queue_reading_list_item
+    from pathlib import Path as _P
+    for k in range(10):
+        queue_reading_list_item(
+            _P(path), question=f"worker {idx} question {k}?",
+            source_file="a.c", source_function=f"fn{idx}")
+    return idx
+
+
+class TestCrossProcessReadingList:
+    """Concurrent RUNS share the project-level reading list; the
+    load->mutate->save window holds a cross-process file lock so no
+    writer drops another's items."""
+
+    def test_lock_sibling_created(self, tmp_path):
+        from core.concepts.audit_bridge import queue_reading_list_item
+        queue_reading_list_item(
+            tmp_path, question="q?", source_file="a.c",
+            source_function="f")
+        assert (tmp_path / "reading-list.json.lock").is_file()
+
+    @pytest.mark.slow
+    @pytest.mark.skipif(sys.platform == "win32",
+                        reason="fork start method")
+    def test_concurrent_queuers_lose_no_items(self, tmp_path):
+        import multiprocessing as mp
+
+        n = 6
+        ctx = mp.get_context("fork")
+        with ctx.Pool(n) as pool:
+            pool.map(_rl_race_worker,
+                     [(i, str(tmp_path)) for i in range(n)])
+        from core.concepts.reading_list import ReadingList
+        rl = ReadingList.load(tmp_path / "reading-list.json")
+        questions = {i.question for i in rl.items}
+        expected = {f"worker {i} question {k}?"
+                    for i in range(n) for k in range(10)}
+        missing = expected - questions
+        assert not missing, f"lost {len(missing)} items: " \
+            f"{sorted(missing)[:5]}..."
