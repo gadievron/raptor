@@ -87,13 +87,50 @@ def finding_file(finding: dict[str, Any]) -> str:
     return str(PurePosixPath(fp))
 
 
+def _key_str(value: Any) -> str:
+    """Coerce a key component to str.
+
+    Finding rows are LLM-authored and import-restored — a hostile row
+    carrying a dict/list in ``function``/``vuln_type`` produced an
+    UNHASHABLE key tuple, and one such row TypeError'd every consumer
+    that indexes by key (/project findings, report, merge, diff,
+    correlate all wedge; main() does not catch TypeError). Non-str
+    scalars stringify; unhashable containers collapse to a stable
+    repr-ish string so the row still participates in dedup.
+    """
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return ""
+    try:
+        return str(value)
+    except Exception:  # noqa: BLE001 — a __str__ bomb must not wedge views
+        return "?"
+
+
+def _key_line(value: Any) -> int:
+    """Coerce a line component to int-or-0 (same hostile-row rationale
+    as :func:`_key_str` — a list-valued ``line`` made the tuple
+    unhashable)."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, int):
+        return value
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def dedup_key(finding: dict[str, Any]) -> tuple[str, str, int]:
     """Dedup key for a finding: (file, function, line). More stable than ID.
 
     Uses :func:`finding_file` so scan-shaped (``file``) and orchestrated
-    (``file_path``) findings at the same location share a key.
+    (``file_path``) findings at the same location share a key. Every
+    component is coerced hashable — see :func:`_key_str`.
     """
-    return (finding_file(finding), finding.get("function", ""), finding.get("line") or 0)
+    return (finding_file(finding), _key_str(finding.get("function", "")),
+            _key_line(finding.get("line") or 0))
 
 
 def group_key(finding: dict[str, Any]) -> tuple[str, str, str]:
@@ -110,8 +147,8 @@ def group_key(finding: dict[str, Any]) -> tuple[str, str, str]:
     """
     return (
         finding_file(finding),
-        finding.get("function", ""),
-        finding.get("vuln_type", ""),
+        _key_str(finding.get("function", "")),
+        _key_str(finding.get("vuln_type", "")),
     )
 
 
