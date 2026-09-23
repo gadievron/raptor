@@ -222,6 +222,57 @@ def preflight(
     )
 
 
+def preflight_excerpts(
+    content: str,
+    *,
+    corpora: tuple[str, ...] | None = None,
+    context: int = 30,
+    max_matches: int = 8,
+) -> tuple[tuple[str, str], ...]:
+    """``(corpus_stem, excerpt)`` pairs for human review displays.
+
+    :func:`preflight` reports only which corpora fired — the right
+    signal for mechanical confidence haircuts, but an operator asked to
+    approve flagged content needs to SEE what matched. Each pair
+    carries the first match of one pattern with ``context`` characters
+    either side, capped at ``max_matches`` total so a hostile input
+    stuffed with matches cannot flood the consumer's display.
+
+    Excerpts are RAW slices of the (untrusted) input: display consumers
+    MUST route them through their escaped rendering lane — an excerpt
+    is exactly the part of the content most likely to carry terminal
+    escapes or bidi controls.
+
+    Same *corpora* validation as :func:`preflight` (``ValueError`` on
+    an unknown stem — a typo must never silently scan nothing). An
+    empty corpus yields no excerpts; consumers that need loudness on
+    that state should check :func:`loaded_corpora` first.
+    """
+    if corpora is not None:
+        loaded = set(_PATTERNS)
+        unknown = [c for c in corpora if c not in loaded]
+        if unknown:
+            msg = (
+                f"preflight: unknown corpora {unknown!r}. "
+                f"Loaded corpora: {sorted(loaded)!r}"
+            )
+            raise ValueError(msg)
+    out: list[tuple[str, str]] = []
+    for name, patterns in _PATTERNS.items():
+        if corpora is not None and name not in corpora:
+            continue
+        for pattern in patterns:
+            match = pattern.search(content)
+            if not match:
+                continue
+            start = max(0, match.start() - context)
+            end = min(len(content), match.end() + context)
+            out.append((name, content[start:end]))
+            if len(out) >= max_matches:
+                return tuple(out)
+    return tuple(out)
+
+
 def loaded_corpora() -> tuple[str, ...]:
     """File stems of corpora that loaded successfully — for diagnostics."""
     return tuple(sorted(_PATTERNS.keys()))
