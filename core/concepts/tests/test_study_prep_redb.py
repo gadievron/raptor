@@ -186,3 +186,53 @@ class TestRedbMechanicalItems:
             assert "\n" not in it.name and "</" not in it.name
             for c in it.calls + it.callers:
                 assert "\n" not in c and "</" not in c
+
+
+class TestRedbReadCeiling:
+    """--redb reads pay the SHARED RE-database ceiling, not a private
+    64MiB copy that refuses the importer's own --decompile-all
+    output."""
+
+    def test_site_binds_the_shared_constant(self):
+        # Bound to the one core name — a hand-copied value would let
+        # this reader drift from the importer again.
+        import inspect
+
+        src = inspect.getsource(prep._redb_mechanical_items)
+        assert "RE_DATABASE_MAX_BYTES" in src
+        assert "64 * 1024 * 1024" not in src
+
+    def test_accepts_database_over_the_old_64mib_bound(self, tmp_path):
+        redb_path, side_path = _write_inputs(tmp_path)
+        # Pad past 64MiB textually (json.dumps on a 65MiB value would
+        # double the test's peak memory for no added coverage).
+        base = json.loads(redb_path.read_text())
+        pad = '"pad": "' + "x" * (65 * 1024 * 1024) + '", '
+        redb_path.write_text("{" + pad + json.dumps(base)[1:])
+        assert redb_path.stat().st_size > 64 * 1024 * 1024
+        items = prep._redb_mechanical_items(redb_path, side_path,
+                                            existing=set())
+        assert {i.name for i in items} >= {"main", "parse"}
+
+    def test_still_refuses_past_the_effective_ceiling(
+            self, tmp_path, monkeypatch):
+        # Raised, not removed: the whole-document parse is a
+        # memory-exhaustion primitive on a bloated cache.
+        redb_path, side_path = _write_inputs(tmp_path)
+        monkeypatch.setattr("core.json.utils.RE_DATABASE_MAX_BYTES", 16)
+        assert prep._redb_mechanical_items(redb_path, side_path,
+                                           existing=set()) == []
+
+    def test_override_survives_the_studyloop_child_env(
+            self, monkeypatch):
+        # raptor-study-loop spawns study-prep with
+        # RaptorConfig.get_llm_env() (an allowlist scrub, not an
+        # os.environ copy); the operator's ceiling override must
+        # survive it, or the child resolves a DIFFERENT effective
+        # ceiling than the parent that wrote the artifact —
+        # binary-study's own reads accept a database its study-prep
+        # child then refuses.
+        monkeypatch.setenv("RAPTOR_REDB_MAX_BYTES", "123456789")
+        from core.config import RaptorConfig
+        env = RaptorConfig.get_llm_env()
+        assert env.get("RAPTOR_REDB_MAX_BYTES") == "123456789"
