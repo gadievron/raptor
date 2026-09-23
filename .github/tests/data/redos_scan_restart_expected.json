@@ -98,7 +98,7 @@
    "digests": [
     "7bac92ef17b0"
    ],
-   "exp": 1.02,
+   "exp": 1.12,
    "verdict": "linear"
   },
   "core/audit/auth_witnesses.py\u001f_KEYED_GET_RE": {
@@ -112,7 +112,7 @@
    "digests": [
     "c8f8ffc78d2c"
    ],
-   "exp": 1.02,
+   "exp": 0.99,
    "verdict": "linear"
   },
   "core/audit/binary_layer0.py\u001f_CALLEE_RE": {
@@ -133,7 +133,7 @@
    "digests": [
     "65ffe561ec4e"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/caller_lock.py\u001f\\b(?:X|X)\\w*\\s*\\(": {
@@ -224,19 +224,33 @@
    "digests": [
     "21cabba43cfd"
    ],
-   "exp": 1.0,
+   "exp": 1.4,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001flines[0]": {
    "digests": [
     "0f64f014c82d"
    ],
-   "exp": 2.02,
+   "exp": 1.82,
    "verdict": "adjudicated"
+  },
+  "core/audit/compiler_sweep.py\u001f_PP_SUPPRESSION_RE": {
+   "digests": [
+    "814035f5a395"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
   },
   "core/audit/condition_adequacy.py\u001f_NEG_UPPER_BOUND_FWD_RE": {
    "digests": [
-    "a10f43f8717b"
+    "8bb96514722a"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_adequacy.py\u001f_NEG_UPPER_BOUND_REV_RE": {
+   "digests": [
+    "0b5838181f26"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -371,7 +385,7 @@
    "digests": [
     "be592db3fa7b"
    ],
-   "exp": 1.03,
+   "exp": 1.06,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001f_GO_ATOI_RE": {
@@ -624,7 +638,7 @@
    "digests": [
     "7ebd359a4d82"
    ],
-   "exp": 1.01,
+   "exp": 1.21,
    "verdict": "linear"
   },
   "core/audit/integer_truncation_checker.py\u001f_ALLOC_RE": {
@@ -673,6 +687,13 @@
   "core/audit/joern_verify.py\u001f_CALL_NAME_RE": {
    "digests": [
     "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/joern_verify.py\u001fshapes[3]": {
+   "digests": [
+    "e54718418346"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -777,9 +798,9 @@
   },
   "core/audit/parser_shape.py\u001f_LEN_ARITH_RE": {
    "digests": [
-    "6ff853bf5c41"
+    "ae40fb5f77d0"
    ],
-   "exp": 0.97,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/audit/path_feasibility.py\u001fif_patterns": {
@@ -842,21 +863,21 @@
    "digests": [
     "0d3f53af0a22"
    ],
-   "exp": 1.04,
+   "exp": 0.86,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}len\\w*\\s*[<>=!]+": {
    "digests": [
     "d017fec15766"
    ],
-   "exp": 1.06,
+   "exp": 0.98,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}size\\w*\\s*[<>=!]+": {
    "digests": [
     "451711e8fcea"
    ],
-   "exp": 1.07,
+   "exp": 0.91,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\bexecv\\w*\\s*\\(": {
@@ -975,7 +996,7 @@
    "digests": [
     "6791b0fd26a9"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
@@ -1038,7 +1059,7 @@
    "digests": [
     "a0cc73423185"
    ],
-   "exp": 1.15,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/return_contracts.py\u001fdecl_re": {
@@ -1277,7 +1298,7 @@
    "digests": [
     "8fe688d1a940"
    ],
-   "exp": 0.96,
+   "exp": 0.97,
    "verdict": "linear"
   },
   "core/concepts/study.py\u001f\\b(struct\\s+\\w+|[A-Za-z_]\\w{3,}_[A-Za-z_": {
@@ -1368,7 +1389,7 @@
    "digests": [
     "37de29a408f1"
    ],
-   "exp": 2.04,
+   "exp": 1.95,
    "verdict": "adjudicated"
   },
   "core/inventory/extractors.py\u001fPATTERNS[1]": {
@@ -1466,7 +1487,7 @@
    "digests": [
     "39a9efa70ae9"
    ],
-   "exp": 1.0,
+   "exp": 1.16,
    "verdict": "linear"
   },
   "core/inventory/macro_resolve.py\u001f_ENUMERATOR_NAME_RE": {
@@ -1494,7 +1515,7 @@
    "digests": [
     "8eba6201f599"
    ],
-   "exp": 2.0,
+   "exp": 1.78,
    "verdict": "adjudicated"
   },
   "core/license/detector.py\u001f_ANDOR_SPLIT_RE_CI": {
@@ -1773,6 +1794,20 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "packages/cve_env/cve_env/utils/dockerfile_hygiene.py\u001f\\bchmod\\b[^;&|]*\\s0*[2-7][0-7]{3}\\b": {
+   "digests": [
+    "7456688bf9de"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/dockerfile_hygiene.py\u001f\\bchmod\\b[^;&|]*\\s[ugoa]*\\+[rwxXt]*s": {
+   "digests": [
+    "387842237144"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f,?\\s{0,16}leading to (?:a |an )?(?:[a-zA": {
    "digests": [
     "731fe2e6e9dc"
@@ -1840,14 +1875,14 @@
    "digests": [
     "ec4f60198160"
    ],
-   "exp": 0.9,
+   "exp": 1.14,
    "verdict": "linear"
   },
   "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f\\b(the\\s+)?attacks?\\s+(may|can|could|wil": {
    "digests": [
     "a467ec7eea86"
    ],
-   "exp": 1.07,
+   "exp": 1.3,
    "verdict": "linear"
   },
   "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f\\bexploitable by(?:[^.\\n]|\\.(?=\\d))*(?:\\": {
@@ -1882,13 +1917,6 @@
   "packages/exploit_feasibility/strategies.py\u001fm": {
    "digests": [
     "509a592b6026"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "packages/exploit_feasibility/strategies.py\u001fmatch": {
-   "digests": [
-    "16700cf89dbd"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -1998,6 +2026,13 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "packages/sca/supply_chain/gha_secret_flow.py\u001f_KEY_HEREDOC_OPEN_RE": {
+   "digests": [
+    "000b93b7324b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "packages/sca/supply_chain/gha_secret_flow.py\u001f_KEY_VALUE_RE": {
    "digests": [
     "dc340e61cd81"
@@ -2071,14 +2106,6 @@
   "packages/source_intel/analyze.py\u001f_FUNC_NAME_CALL_RE": {
    "digests": [
     "9df2d9ac878b"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "packages/source_intel/analyze.py\u001fstripped": {
-   "digests": [
-    "00e2d789000f",
-    "aaedb334e655"
    ],
    "exp": 1.0,
    "verdict": "linear"
