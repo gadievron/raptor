@@ -333,23 +333,37 @@ class AdaptiveThrottle:
         before entering the wait loop and after each timeout expiry
         (the ``wait()`` releases the lock internally, so
         ``_maybe_restore`` runs outside the held region).
+
+        A normal-priority waiter registers in ``_sync_waiters`` ONCE
+        and stays registered until it has acquired (or unwound) — not
+        per wait cycle.  A per-cycle decrement left a between-cycles
+        gap (lock dropped, ``_maybe_restore`` running) in which the
+        counter read 0 with the waiter still logically waiting, so a
+        low-priority caller whose 0.5s expiry landed in the gap could
+        legally take the freed slot first — the order the priority
+        contract forbids.
         """
-        while True:
-            self._maybe_restore()
-            with self._condition:
-                if self._in_flight < self._effective and (
-                    not low_priority or self._sync_waiters == 0
-                ):
-                    self._in_flight += 1
-                    break
-                if low_priority:
+        registered = False
+        try:
+            while True:
+                self._maybe_restore()
+                with self._condition:
+                    if self._in_flight < self._effective and (
+                        not low_priority or self._sync_waiters == 0
+                    ):
+                        self._in_flight += 1
+                        break
+                    if not low_priority and not registered:
+                        self._sync_waiters += 1
+                        registered = True
                     self._condition.wait(timeout=0.5)
-                else:
-                    self._sync_waiters += 1
-                    try:
-                        self._condition.wait(timeout=0.5)
-                    finally:
-                        self._sync_waiters -= 1
+        finally:
+            if registered:
+                with self._condition:
+                    self._sync_waiters -= 1
+                    # A deferring low-priority waiter may be eligible
+                    # the moment the last normal waiter deregisters.
+                    self._condition.notify_all()
         try:
             yield
         finally:
