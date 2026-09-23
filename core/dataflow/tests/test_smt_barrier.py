@@ -1656,6 +1656,10 @@ def test_try_tier0_z3_unavailable_degrades(monkeypatch, tmp_path: Path):
     # xss URL-valued attribute context: javascript:alert(1) uses none
     # of the tag/attribute breakers.
     ("xss", "a-z0-9:()",  False),
+    # xss entity-decoding channel: &#106;avascript&#58;alert&#40;1&#41;
+    # spells the same payload from letters/digits + & # ; alone.
+    ("xss", "a-z0-9&#;",  False),
+    ("xss", "a-z0-9#;",   True),   # without '&' no entity can form
     ("xss", "a-z0-9_.",   True),
     # cmdi cmd.exe expansion context: %VAR% / !VAR! splice variable
     # content into the command string with no POSIX metachar.
