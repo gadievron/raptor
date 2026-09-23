@@ -67,6 +67,7 @@ from typing import Any
 
 from .kinds import SCA_PREFIX
 from .parsers._base import PARSE_ESCAPE_ERRORS
+from .registries._negative_cache import should_negative_cache
 from .models import (
     Confidence,
     Dependency,
@@ -877,8 +878,15 @@ def _fetch_maven_license(
     )
     try:
         body = http.get_bytes(pom_url, max_bytes=2 * 1024 * 1024)
-    except Exception:                                   # noqa: BLE001
-        if cache is not None:
+    except Exception as e:                              # noqa: BLE001
+        # Negative-cache ONLY authoritative not-found (404/410). A
+        # timeout/5xx says nothing about the artifact's license;
+        # caching it as "" mints ``license_unknown`` (info under the
+        # default policy) for the full TTL — a ``--fail-on-license
+        # high`` gate then passes a denied-license dep on one blip.
+        # Transient failures stay uncached so the next run retries
+        # (the crates fetcher's behaviour, same file).
+        if cache is not None and should_negative_cache(e):
             cache.put(cache_key, "", ttl_seconds=24 * 3600)
         return None
 
@@ -1006,8 +1014,9 @@ def _fetch_nuget_license(
             f"{_quote_seg(name.lower())}/{_quote_seg(version)}.json"
         )
         data = http.get_json(url)
-    except Exception:                                   # noqa: BLE001
-        if cache is not None:
+    except Exception as e:                              # noqa: BLE001
+        # Authoritative not-found only — see the maven fetcher above.
+        if cache is not None and should_negative_cache(e):
             cache.put(cache_key, "", ttl_seconds=24 * 3600)
         return None
     # registration5 entries embed the catalog entry inline.
@@ -1053,8 +1062,9 @@ def _fetch_packagist_license(
         url = (f"https://repo.packagist.org/p2/"
                f"{_quote_seg(name, safe='/')}.json")
         data = http.get_json(url)
-    except Exception:                                   # noqa: BLE001
-        if cache is not None:
+    except Exception as e:                              # noqa: BLE001
+        # Authoritative not-found only — see the maven fetcher above.
+        if cache is not None and should_negative_cache(e):
             cache.put(cache_key, "", ttl_seconds=24 * 3600)
         return None
     packages = (data or {}).get("packages") if isinstance(data, dict) else None
