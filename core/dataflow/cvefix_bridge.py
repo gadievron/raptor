@@ -23,11 +23,13 @@ is injectable so the orchestration is unit-testable with no LLM and no CodeQL.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import sqlite3
 import subprocess
 import time
+import uuid
 from collections import Counter
 from pathlib import Path
 
@@ -647,7 +649,13 @@ def synthesize_from_results(
             pair = CveFixPair(cve_id, cwe, repo_url, lang, fix_hash, parent_hash)
             try:
                 status, fid, backend, barrier_q, detail = synthesize_one(
-                    pair, work_dir=work_dir / "item", proposer=proposer, status=row_status,
+                    # Unique per-candidate scratch: the fixed "item"
+                    # subpath let two bridge processes sharing a work
+                    # dir interleave clone/build state (and each
+                    # other's finally-rmtree) mid-candidate.
+                    pair,
+                    work_dir=work_dir / f"item-{os.getpid()}-{uuid.uuid4().hex[:8]}",
+                    proposer=proposer, status=row_status,
                     codeql_bin=codeql_bin, search_path=search_path,
                     max_attempts=max_attempts,
                     max_refine_attempts=max_refine_attempts,
