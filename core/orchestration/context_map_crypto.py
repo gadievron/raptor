@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import load_json
+from core.paths import confine
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +184,18 @@ def enrich_with_crypto_inventory(
                 "remaining files skipped", _MAX_FILES,
             )
             break
-        full = root / fp
+        # Checklist entry paths are external input (the run-dir
+        # checklist is CC-child-writable): containment before any
+        # stat/read, like every sibling enricher — a `../` or
+        # absolute path must not point the unsandboxed parent at
+        # host files outside the target.
+        full = confine(root, fp)
+        if full is None:
+            logger.debug(
+                "crypto inventory bootstrap: checklist path escapes "
+                "the target root — skipped",
+            )
+            continue
         try:
             if not full.is_file() or full.stat().st_size > _MAX_FILE_BYTES:
                 continue

@@ -197,3 +197,61 @@ class TestAuditPathConsumption:
         bare = compute_gaps(checklist, [], context_map=None)
         bare_gap = next(g for g in bare if g["name"] == "mix")
         assert "crypto" not in bare_gap["strategies"]
+
+
+class TestChecklistPathContainment:
+    """Checklist entry paths are external input (CC-child-writable
+    run dir): traversal and absolute paths must never point the
+    unsandboxed parent at files outside the target root."""
+
+    @staticmethod
+    def _outside_secret(tmp_path):
+        root = tmp_path / "target-root"
+        outside = tmp_path / "outside"
+        root.mkdir()
+        outside.mkdir()
+        secret = outside / "secret_host_file.c"
+        secret.write_text(
+            "int use_key(){ return rand(); }\n"
+            "static void host_only(){ srand(42); }\n")
+        return root, secret
+
+    def test_traversal_path_is_dropped(self, tmp_path):
+        root, _secret = self._outside_secret(tmp_path)
+        cm: dict = {}
+        checklist = {"files": [
+            {"path": "../outside/secret_host_file.c", "items": []},
+        ]}
+        n = enrich_with_crypto_inventory(
+            cm, checklist=checklist, target_path=root)
+        assert n == 0
+        assert "crypto_inventory" not in cm
+
+    def test_absolute_path_outside_root_is_dropped(self, tmp_path):
+        root, secret = self._outside_secret(tmp_path)
+        cm: dict = {}
+        checklist = {"files": [{"path": str(secret), "items": []}]}
+        n = enrich_with_crypto_inventory(
+            cm, checklist=checklist, target_path=root)
+        assert n == 0
+        assert "crypto_inventory" not in cm
+
+    def test_symlink_escape_is_dropped(self, tmp_path):
+        root, secret = self._outside_secret(tmp_path)
+        (root / "link.c").symlink_to(secret)
+        cm: dict = {}
+        checklist = {"files": [{"path": "link.c", "items": []}]}
+        n = enrich_with_crypto_inventory(
+            cm, checklist=checklist, target_path=root)
+        assert n == 0
+        assert "crypto_inventory" not in cm
+
+    def test_in_root_path_still_scans(self, tmp_path):
+        root, _secret = self._outside_secret(tmp_path)
+        (root / "ok.c").write_text("int f(){ return rand(); }\n")
+        cm: dict = {}
+        checklist = {"files": [{"path": "ok.c", "items": []}]}
+        n = enrich_with_crypto_inventory(
+            cm, checklist=checklist, target_path=root)
+        assert n >= 1
+        assert cm["crypto_inventory"][0]["file"] == "ok.c"
