@@ -1401,3 +1401,72 @@ class TestAbsoluteFindingPaths:
         )
         assert result.gate == "skipped"
         assert any("escapes the repo" in n for n in result.notes)
+
+
+class TestSemgrepCacheMemo:
+    """Registry-pack resolution is memoised per process, stamped with
+    the pack files' signature — pre-memo, every gated patch re-read
+    and re-parsed every cache pack (up to 50 MB each)."""
+
+    def _setup(self, tmp_path, monkeypatch):
+        import json as _json
+
+        cache_dir = tmp_path / "packs"
+        cache_dir.mkdir()
+        (cache_dir / "c.a.json").write_text(
+            _json.dumps({"rules": [{"id": "pack.rule-one"}]}),
+        )
+        (cache_dir / "c.b.json").write_text(
+            _json.dumps({"rules": [{"id": "pack.rule-two"}]}),
+        )
+        from core.config import RaptorConfig
+        monkeypatch.setattr(
+            RaptorConfig, "SEMGREP_REGISTRY_CACHE_DIR", str(cache_dir),
+            raising=False,
+        )
+        monkeypatch.setattr(patch_gate, "_SEMGREP_RULE_CACHE", {})
+        monkeypatch.setattr(patch_gate, "_SEMGREP_RULE_CACHE_SIG", None)
+
+        counts = {"loads": 0}
+        real_loads = patch_gate.json.loads
+
+        def counting_loads(*a, **k):
+            counts["loads"] += 1
+            return real_loads(*a, **k)
+
+        monkeypatch.setattr(patch_gate.json, "loads", counting_loads)
+        return cache_dir, counts
+
+    def test_repeat_lookups_parse_packs_once(self, tmp_path, monkeypatch):
+        _cache_dir, counts = self._setup(tmp_path, monkeypatch)
+        first = patch_gate._find_cached_semgrep_rule("rule-two")
+        assert first is not None and first.name == "c.b.json"
+        n_first = counts["loads"]
+        assert n_first >= 1
+        for _ in range(3):
+            again = patch_gate._find_cached_semgrep_rule("rule-two")
+            assert again == first
+        assert counts["loads"] == n_first  # memo hit — no re-parses
+
+    def test_missing_rule_result_also_memoised(self, tmp_path, monkeypatch):
+        _cache_dir, counts = self._setup(tmp_path, monkeypatch)
+        assert patch_gate._find_cached_semgrep_rule("no-such-rule") is None
+        n_first = counts["loads"]
+        assert patch_gate._find_cached_semgrep_rule("no-such-rule") is None
+        assert counts["loads"] == n_first
+
+    def test_cache_refresh_invalidates_memo(self, tmp_path, monkeypatch):
+        import json as _json
+        import os as _os
+
+        cache_dir, _counts = self._setup(tmp_path, monkeypatch)
+        assert patch_gate._find_cached_semgrep_rule(
+            "rule-one",
+        ).name == "c.a.json"
+        # The pack no longer carries the rule; bump mtime so the
+        # signature stamp shifts.
+        pack = cache_dir / "c.a.json"
+        pack.write_text(_json.dumps({"rules": [{"id": "pack.other"}]}))
+        st = pack.stat()
+        _os.utime(pack, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
+        assert patch_gate._find_cached_semgrep_rule("rule-one") is None

@@ -651,6 +651,29 @@ def _rule_ids_match(a: str, b: str) -> bool:
     return a == b or a.endswith("." + b) or b.endswith("." + a)
 
 
+# Registry-pack lookup memo. Pre-memo, _find_cached_semgrep_rule
+# re-read and re-parsed EVERY cache pack per gated patch (packs run up
+# to _MAX_CACHE_PACK_BYTES each), and the resolution only changes when
+# the cache dir does. Keyed per queried rule_id, stamped with the pack
+# files' (name, mtime, size) signature so a refreshed cache drops the
+# memo — same signature-stamp shape as the build-flags memo in
+# source_intel_inject.
+_SEMGREP_RULE_CACHE: dict[str, Path | None] = {}
+_SEMGREP_RULE_CACHE_SIG: tuple | None = None
+
+
+def _cache_dir_signature(cache_dir: Path) -> tuple:
+    """Change-detection stamp over the registry cache packs."""
+    sig: list[tuple[str, int, int]] = []
+    for f in sorted(cache_dir.glob("c.*.json")):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        sig.append((f.name, st.st_mtime_ns, st.st_size))
+    return tuple(sig)
+
+
 def _find_cached_semgrep_rule(rule_id: str) -> Path | None:
     """Locate the cached registry pack that defines ``rule_id``.
 
@@ -658,8 +681,10 @@ def _find_cached_semgrep_rule(rule_id: str) -> Path | None:
     ``RaptorConfig.get_semgrep_config`` — the same cache is the only
     way to re-run a registry rule with the sandbox's network block in
     force. No cached pack carrying the rule → None (the caller
-    annotates recheck-unsupported honestly).
+    annotates recheck-unsupported honestly). Memoised per process —
+    see ``_SEMGREP_RULE_CACHE``.
     """
+    global _SEMGREP_RULE_CACHE_SIG
     if not rule_id:
         return None
     try:
@@ -669,6 +694,13 @@ def _find_cached_semgrep_rule(rule_id: str) -> Path | None:
         return None
     if not cache_dir.is_dir():
         return None
+    sig = _cache_dir_signature(cache_dir)
+    if sig != _SEMGREP_RULE_CACHE_SIG:
+        _SEMGREP_RULE_CACHE.clear()
+        _SEMGREP_RULE_CACHE_SIG = sig
+    if rule_id in _SEMGREP_RULE_CACHE:
+        return _SEMGREP_RULE_CACHE[rule_id]
+    found: Path | None = None
     for cache_file in sorted(cache_dir.glob("c.*.json")):
         try:
             if cache_file.stat().st_size > _MAX_CACHE_PACK_BYTES:
@@ -681,8 +713,12 @@ def _find_cached_semgrep_rule(rule_id: str) -> Path | None:
             continue
         for r in rules:
             if isinstance(r, dict) and _rule_ids_match(str(r.get("id", "")), rule_id):
-                return cache_file
-    return None
+                found = cache_file
+                break
+        if found is not None:
+            break
+    _SEMGREP_RULE_CACHE[rule_id] = found
+    return found
 
 
 def _resolve_detector(
