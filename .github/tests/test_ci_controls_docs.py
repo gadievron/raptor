@@ -89,6 +89,50 @@ def test_codeql_push_runs_skip_the_squash_merge_dedup() -> None:
     )
 
 
+def test_daily_sweep_covers_every_repo_invariant_detector() -> None:
+    """lint.yml's repo-invariants job and miswiring-scan.yml's daily
+    sweep are two hand-lists of ONE detector set, and they had
+    drifted (the sweep ran five of lint's seven, so two detectors'
+    stale-baseline warn lanes never reached the calm-cadence triage
+    surface the sweep's own header promises). Exact-set parity ends
+    the drift class: every detector step in lint's repo-invariants
+    job must have a daily-sweep job running the same script, and the
+    sweep must not run detectors lint dropped."""
+    import re
+
+    def _live_detector_scripts(text: str) -> set[str]:
+        # Comment lines don't run: a commented-out
+        # ``# python3 .github/scripts/check_x.py`` must not satisfy
+        # parity — only executable lines count.
+        live = "\n".join(
+            line for line in text.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        return set(re.findall(
+            r"python3 (\.github/scripts/check_\w+\.py)", live,
+        ))
+
+    lint = _read(".github/workflows/lint.yml")
+    lint_scripts = _live_detector_scripts(
+        lint.split("\n  repo-invariants:", 1)[1],
+    )
+    sweep_scripts = _live_detector_scripts(
+        _read(".github/workflows/miswiring-scan.yml"),
+    )
+    assert lint_scripts, "repo-invariants step extraction went vacuous"
+    missing = sorted(lint_scripts - sweep_scripts)
+    extra = sorted(sweep_scripts - lint_scripts)
+    assert not missing, (
+        f"repo-invariant detector(s) with no daily-sweep job: "
+        f"{missing} — their stale-baseline warn lanes only appear in "
+        "PR logs; add the job(s) to miswiring-scan.yml"
+    )
+    assert not extra, (
+        f"daily-sweep job(s) running detectors lint's repo-invariants "
+        f"job dropped: {extra} — remove or re-gate them"
+    )
+
+
 def test_readme_links_to_ci_controls_doc() -> None:
     readme = _read("README.md")
     assert "## How RAPTOR checks itself" in readme
