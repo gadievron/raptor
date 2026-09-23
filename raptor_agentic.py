@@ -3768,7 +3768,11 @@ def main() -> int:
                     openant_hard_error = _oa_err
                     print(f"✗ OpenAnt scan failed: {_oa_err}", file=sys.stderr)
                 else:
-                    print(f"⚠️  OpenAnt unavailable: {_oa_err}")
+                    # stderr like its hard-error twin and every other
+                    # degrade lane — a piped stdout consumer must not
+                    # swallow the skip notice.
+                    print(f"⚠️  OpenAnt unavailable: {_oa_err}",
+                          file=sys.stderr)
             else:
                 raw = translate_pipeline_output(
                     oa_result.get("pipeline_output") or {},
