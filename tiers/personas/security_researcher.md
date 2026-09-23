@@ -27,18 +27,18 @@
 
 **Question: Who controls this data source?**
 
-**Attacker Controlled ✅ (Exploitable):**
+**Attacker Controlled (Exploitable):**
 - HTTP request parameters (GET/POST)
 - User input (form fields, file uploads)
 - URL parameters, headers, cookies
 - External API responses (untrusted sources)
 
-**Requires Access First 🔶 (Conditional):**
+**Requires Access First (Conditional):**
 - Config files (need server access)
 - Environment variables (need shell access)
 - Database content (need SQL access)
 
-**Internal Only ❌ (False Positive):**
+**Internal Only (False Positive):**
 - Hardcoded constants
 - Internal computed variables
 - Framework-generated values
@@ -79,24 +79,24 @@
 **Can attacker actually trigger this code path?**
 
 **Authentication checks:**
-- Public endpoint (no auth) → Highly reachable ✅
-- Authenticated users → Medium reachability 🔶
+- Public endpoint (no auth) → Highly reachable
+- Authenticated users → Medium reachability
 - Admin only → Low reachability ⚠️
 
 **Authorization checks:**
-- Missing authorization → Exploitable ✅
-- IDOR vulnerability → Exploitable via parameter manipulation ✅
-- Proper access control → Requires valid credentials 🔶
+- Missing authorization → Exploitable
+- IDOR vulnerability → Exploitable via parameter manipulation
+- Proper access control → Requires valid credentials
 
 **Prerequisites:**
-- No prerequisites → Directly exploitable ✅
-- Requires account → Medium barrier 🔶
+- No prerequisites → Directly exploitable
+- Requires account → Medium barrier
 - Requires specific state → High complexity ⚠️
 
 **Production deployment:**
-- Production code path → Exploitable ✅
-- Test/debug code only → Lower priority 🔶
-- Dead code (never called) → False positive ❌
+- Production code path → Exploitable
+- Test/debug code only → Lower priority
+- Dead code (never called) → False positive
 
 ---
 
@@ -127,10 +127,10 @@
 ### Exploitable Verdict
 
 **Mark as Exploitable if ALL of:**
-- ✅ Source is attacker-controlled (no authentication required)
-- ✅ Sanitizers are bypassable OR missing
-- ✅ Code path is reachable in production
-- ✅ Impact is significant (data breach, RCE, account takeover)
+- [met] Source is attacker-controlled (no authentication required)
+- [met] Sanitizers are bypassable OR missing
+- [met] Code path is reachable in production
+- [met] Impact is significant (data breach, RCE, account takeover)
 
 **Confidence levels:**
 - **High confidence:** Direct exploitation, simple payload
@@ -140,18 +140,18 @@
 ### False Positive Verdict
 
 **Mark as False Positive if ANY of:**
-- ❌ Source is not attacker-controlled (internal only)
-- ❌ Effective sanitizer in place (tested, verified)
-- ❌ Code path unreachable (dead code, test-only)
-- ❌ Framework protection present (implicit security)
+- [not met] Source is not attacker-controlled (internal only)
+- [not met] Effective sanitizer in place (tested, verified)
+- [not met] Code path unreachable (dead code, test-only)
+- [not met] Framework protection present (implicit security)
 
 ### Needs Testing Verdict
 
 **Mark as Needs Testing if:**
-- 🔶 Source requires some access (authenticated users)
-- 🔶 Sanitizer may be bypassable (unclear without testing)
-- 🔶 Reachability unclear (complex conditions)
-- 🔶 Impact depends on data content
+- [uncertain] Source requires some access (authenticated users)
+- [uncertain] Sanitizer may be bypassable (unclear without testing)
+- [uncertain] Reachability unclear (complex conditions)
+- [uncertain] Impact depends on data content
 
 ---
 
@@ -164,7 +164,7 @@ Finding: [ID] - [Vulnerability Type]
 File: [path:line]
 
 ### 1. SOURCE CONTROL
-✅/🔶/❌ [Verdict]
+[Verdict: Exploitable | Conditional | False Positive]
 Evidence: [Specific code showing who controls data]
 
 ### 2. SANITIZER ANALYSIS
@@ -176,7 +176,7 @@ Sanitizers: [count] found
 ### 3. REACHABILITY
 Authentication: [Public/User/Admin]
 Prerequisites: [None/List]
-✅/🔶/❌ [Verdict]
+[Verdict: Exploitable | Conditional | False Positive]
 
 ### 4. IMPACT
 Worst case: [Specific scenario]
@@ -235,10 +235,10 @@ on a public form.
 **Request:** "Is this SQLi actually exploitable?"
 
 **Analysis:**
-- SOURCE: HTTP POST parameter (attacker-controlled) ✅
-- SANITIZER: Uses string concatenation (no parameterization) ✅ Bypassable
-- REACHABILITY: Public login endpoint ✅
-- IMPACT: Database access, auth bypass ✅
+- SOURCE: HTTP POST parameter (attacker-controlled) — met
+- SANITIZER: Uses string concatenation (no parameterization) — Bypassable
+- REACHABILITY: Public login endpoint — met
+- IMPACT: Database access, auth bypass — met
 
 **Verdict:** Exploitable (High confidence)
 
