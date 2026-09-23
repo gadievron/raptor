@@ -110,6 +110,11 @@ class CrashCollector:
                 break
 
             crash = self._parse_crash_file(crash_file)
+            if crash is None:
+                # Deleted between listing and stat — the crashes dir
+                # is target-writable and live during collection.
+                logger.debug("Crash file vanished: %s", crash_file.name)
+                continue
 
             if stack_hasher is not None and not crash.stack_hash:
                 try:
@@ -124,7 +129,15 @@ class CrashCollector:
             if crash.stack_hash:
                 key = ("stack", crash.stack_hash)
             else:
-                key = ("input", self._hash_file(crash_file))
+                try:
+                    key = ("input", self._hash_file(crash_file))
+                except OSError:
+                    # Same vanish window as above, one read later.
+                    logger.debug(
+                        "Crash file vanished before hashing: %s",
+                        crash_file.name,
+                    )
+                    continue
 
             if key not in seen_keys:
                 crashes.append(crash)
@@ -136,8 +149,10 @@ class CrashCollector:
 
         return crashes
 
-    def _parse_crash_file(self, crash_file: Path) -> Crash:
-        """Parse crash metadata from filename and content."""
+    def _parse_crash_file(self, crash_file: Path) -> Crash | None:
+        """Parse crash metadata from filename and content. Returns
+        ``None`` when the file vanished between directory listing and
+        the stat (target-writable dir, live campaign)."""
         # AFL crash format: id:000000,sig:06,src:000000,op:havoc,rep:16
         # Merged multi-instance dirs add a trailing ",instance:<name>"
         # part to disambiguate identical AFL ids across instances.
@@ -162,8 +177,12 @@ class CrashCollector:
         if crash_id and instance:
             crash_id = f"{crash_id},instance:{instance}"
 
-        size = crash_file.stat().st_size
-        timestamp = crash_file.stat().st_mtime
+        try:
+            st = crash_file.stat()
+        except OSError:
+            return None
+        size = st.st_size
+        timestamp = st.st_mtime
 
         return Crash(
             crash_id=crash_id or crash_file.stem,

@@ -326,3 +326,36 @@ class TestMergedInstanceCrashIds:
         _make_crash_file(tmp_path, "id:000042,sig:11,src:000001", b"a")
         crashes = CrashCollector(tmp_path).collect_crashes()
         assert crashes[0].crash_id == "000042"
+
+
+class TestVanishingFiles:
+    """The crashes dir is target-writable and live during collection —
+    a file deleted between directory listing and stat() must be
+    skipped, not crash the collection pass."""
+
+    def test_parse_crash_file_vanished_returns_none(self, tmp_path):
+        from packages.fuzzing.crash_collector import CrashCollector
+
+        collector = CrashCollector(tmp_path)
+        ghost = tmp_path / "id:000000,sig:11,src:000000"
+        assert collector._parse_crash_file(ghost) is None
+
+    def test_collect_skips_vanishing_file(self, tmp_path, monkeypatch):
+        from packages.fuzzing.crash_collector import CrashCollector
+
+        survivor = tmp_path / "id:000001,sig:06,src:000000"
+        survivor.write_bytes(b"crash-bytes")
+        ghost = tmp_path / "id:000000,sig:11,src:000000"
+        ghost.write_bytes(b"soon-gone")
+
+        collector = CrashCollector(tmp_path)
+        real_parse = collector._parse_crash_file
+
+        def racing_parse(crash_file):
+            if crash_file.name.startswith("id:000000"):
+                crash_file.unlink(missing_ok=True)  # the race
+            return real_parse(crash_file)
+
+        monkeypatch.setattr(collector, "_parse_crash_file", racing_parse)
+        crashes = collector.collect_crashes()
+        assert [c.input_file.name for c in crashes] == [survivor.name]
