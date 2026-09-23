@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import re
+import signal
 import stat
 import shlex
 import shutil
@@ -163,6 +164,31 @@ def _drain_stream(stream, chunks: list[str]) -> None:
         pass
 
 
+def _kill_build_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the joern-parse process GROUP, not just the leader.
+
+    joern-parse may be a shell wrapper that spawns the JVM without
+    exec (the shape ``JoernServer.stop()`` documents and defends): a
+    leader-only ``proc.kill()`` orphaned the wrapper-spawned JVM,
+    which kept parsing — and holding memory — after the stall/timeout
+    verdict. Only ``killpg`` when the pid still leads its own group
+    (the build Popen used ``start_new_session=True``; anything else
+    means reuse or a mock) and the group is not the caller's own —
+    mirroring the server's ``_signal_group``.
+    """
+    try:
+        pid = proc.pid
+        if pid != os.getpgid(pid) or pid == os.getpgrp():
+            raise ProcessLookupError
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError, TypeError,
+            AttributeError):
+        # Mock/handle shapes without a real leader pid keep the
+        # leader-only kill.
+        with contextlib.suppress(OSError):
+            proc.kill()
+
+
 class _StallMonitor:
     """Monitor joern-parse stderr for per-file progress and kill on stall.
 
@@ -244,8 +270,7 @@ class _StallMonitor:
                     self._total_files, elapsed, threshold,
                 )
                 self._killed = True
-                with contextlib.suppress(OSError):
-                    self._proc.kill()
+                _kill_build_group(self._proc)
                 return
 
     def _calibrate(self) -> None:
@@ -741,6 +766,9 @@ def _build_cpg_with_stall_monitor(
             stderr=subprocess.PIPE,
             text=True,
             env=safe_env,
+            # Own group, so the stall/timeout kills below can address
+            # the wrapper-spawned JVM too (see _kill_build_group).
+            start_new_session=True,
         )
     except OSError as e:
         logger.error("joern-parse failed to start: %s", e)
@@ -778,7 +806,7 @@ def _build_cpg_with_stall_monitor(
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_build_group(proc)
         proc.wait()
         logger.warning("joern-parse timed out after %ds", timeout)
         return _failed_build_cpg(cpg_path, target)

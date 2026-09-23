@@ -1352,3 +1352,68 @@ class TestRunQueryScriptBodyValidation:
         )
         assert any("cap" in e for e in result.errors)
         assert calls == []
+
+
+class TestStallKillAddressesTheGroup:
+    """The unsandboxed joern-parse lane's stall/timeout kills must
+    address the process GROUP: joern-parse may be a shell wrapper
+    whose JVM child survives a leader-only kill (the shape the server
+    documents and defends with start_new_session+killpg)."""
+
+    def _wrapper_with_grandchild(self):
+        import subprocess as sp
+        proc = sp.Popen(
+            ["bash", "-c", "sleep 300 & echo $!; wait"],
+            stdout=sp.PIPE, text=True,
+            start_new_session=True,  # as the build Popen now spawns
+        )
+        assert proc.stdout is not None
+        grandchild = int(proc.stdout.readline())
+        return proc, grandchild
+
+    @staticmethod
+    def _gone(pid: int) -> bool:
+        import os
+        try:
+            os.kill(pid, 0)
+            return False
+        except ProcessLookupError:
+            return True
+
+    def test_stall_kill_reaps_wrapper_spawned_grandchild(self):
+        import os
+        import signal as sig
+        import threading
+        import time as time_mod
+        from packages.joern.runner import _StallMonitor
+        proc, grandchild = self._wrapper_with_grandchild()
+        try:
+            mon = _StallMonitor(proc)
+            mon._threshold = 0.1
+            mon._last_progress = time_mod.monotonic() - 60
+            t = threading.Thread(target=mon.watch)
+            t.start()
+            t.join(15)
+            proc.wait(10)
+            deadline = time_mod.monotonic() + 5
+            while time_mod.monotonic() < deadline:
+                if self._gone(grandchild):
+                    break
+                time_mod.sleep(0.05)
+            assert mon.was_killed
+            assert self._gone(grandchild), (
+                "wrapper-spawned grandchild survived the stall kill"
+            )
+        finally:
+            with __import__("contextlib").suppress(OSError):
+                os.killpg(proc.pid, sig.SIGKILL)
+
+    def test_kill_helper_tolerates_mock_pids(self):
+        # Handle-shaped mocks reach the helper from tests; a non-int
+        # pid must fall back to proc.kill(), never raise.
+        from unittest.mock import MagicMock
+        from packages.joern.runner import _kill_build_group
+        proc = MagicMock()
+        proc.pid = MagicMock()
+        _kill_build_group(proc)
+        proc.kill.assert_called_once()
