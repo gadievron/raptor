@@ -280,6 +280,72 @@ class TestTimeoutAttemptVisibility:
         assert len(attempt_debugs) == 2
 
 
+class TestStructuredTimeoutAttemptVisibility:
+    """``generate_structured`` is the twin loop the timeout carve-out
+    was written FOR — the review/audit calls that motivated it are
+    structured calls, and the observed 50-minute silent stall
+    reproduced verbatim on this path while only ``generate`` had the
+    WARNING selector. Same carve-out, same dedup for non-timeouts."""
+
+    SCHEMA = {"type": "object", "properties": {"x": {"type": "string"}}}
+
+    def _run(self, monkeypatch, error, *, max_retries: int = 3) -> dict:
+        import core.llm.client as client_mod
+        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        client = LLMClient(
+            _config(_model("anthropic", "primary"),
+                    max_retries=max_retries))
+        cap = _captured_logger(monkeypatch, client_mod)
+        with patch.object(client, "_get_provider") as mock_get:
+            prov = MagicMock()
+            prov.generate_structured.side_effect = error
+            prov.total_cost = 0.0
+            prov.total_tokens = 0
+            mock_get.return_value = prov
+            with pytest.raises(Exception):  # noqa: B017 — wrapper re-raises the provider's own error
+                client.generate_structured("test prompt", self.SCHEMA)
+        return cap
+
+    def test_timeout_attempts_emit_per_attempt_warnings(
+        self, monkeypatch,
+    ):
+        cap = self._run(
+            monkeypatch,
+            RuntimeError("Request timed out waiting for upstream"))
+        # Timeout retry cap = 1 → two attempts, each WARNING-visible,
+        # each carrying the wall-clock the attempt consumed.
+        attempt_warnings = [
+            m for m in cap["warning"]
+            if "Attempt" in m and "failed for" in m
+        ]
+        assert len(attempt_warnings) == 2, (
+            f"structured timeout attempts must be WARNING-visible, "
+            f"got: {cap['warning']}"
+        )
+        assert all("after" in m and "s:" in m for m in attempt_warnings)
+        attempt_debugs = [
+            m for m in cap["debug"]
+            if "failed" in m and "ttempt" in m
+        ]
+        assert attempt_debugs == []
+
+    def test_non_timeout_attempts_stay_debug(self, monkeypatch):
+        cap = self._run(
+            monkeypatch,
+            RuntimeError("simulated 503 from upstream"),
+            max_retries=2)
+        attempt_warnings = [
+            m for m in cap["warning"]
+            if "Attempt" in m and "failed for" in m
+        ]
+        assert attempt_warnings == []
+        attempt_debugs = [
+            m for m in cap["debug"]
+            if "Attempt" in m and "failed for" in m
+        ]
+        assert len(attempt_debugs) == 2
+
+
 class TestProviderCompletionFailedDemoted:
     """Source-level verification: each provider's ``except``
     block uses ``logger.debug`` (not ``logger.error``) for the
