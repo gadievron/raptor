@@ -1,6 +1,12 @@
 # Exclude dev/CI files from release archives (git archive --export-ignore)
+# .claude/ is deliberately NOT here: in RAPTOR it is runtime surface,
+# not dev tooling — the slash-command dispatch files CLAUDE.md declares
+# authoritative, the skills, the agents, and the SessionStart hook all
+# live there. Excluding it shipped release archives where every
+# /command and the startup banner were silently absent
+# (test_release_workflow.sh pins the inclusion; release.yml verifies
+# the extracted archive carries the runtime surface).
 .github/          export-ignore
-.claude/          export-ignore
 .devcontainer/    export-ignore
 .vscode/          export-ignore
 .gitattributes    export-ignore

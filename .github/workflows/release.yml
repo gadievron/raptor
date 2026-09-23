@@ -148,6 +148,23 @@ jobs:
 
           git archive --format=tar --prefix="${NAME}/" HEAD | tar -x -C /tmp
 
+          # The published archive is the product: verify the extracted
+          # tree carries the runtime surface BEFORE packaging. .claude/
+          # is the LLM dispatch surface (slash commands, skills,
+          # agents, the SessionStart hook) — a .gitattributes
+          # export-ignore once shipped releases with all of it
+          # silently absent. Named oracle for the archive-content
+          # claim; test_release_workflow.sh pins the same set against
+          # the real .gitattributes.
+          for p in .claude/commands .claude/skills .claude/hooks \
+                   .claude/settings.json CLAUDE.md raptor.py bin \
+                   libexec core packages engine tiers; do
+            if [ ! -e "/tmp/${NAME}/${p}" ]; then
+              echo "::error::release archive missing runtime surface: ${p}"
+              exit 1
+            fi
+          done
+
           cd /tmp
           zip -r "${NAME}.zip" "${NAME}" -x "*.DS_Store"
           tar -czf "${NAME}.tar.gz" "${NAME}"

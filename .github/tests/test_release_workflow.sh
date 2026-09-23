@@ -110,7 +110,6 @@ CFFEOF
     cp "$SCRIPT_DIR/.gitattributes" "$REPO/.gitattributes" 2>/dev/null || \
     cat > .gitattributes <<'ATTR'
 .github/          export-ignore
-.claude/          export-ignore
 .devcontainer/    export-ignore
 .vscode/          export-ignore
 .gitattributes    export-ignore
@@ -124,19 +123,32 @@ conftest.py       export-ignore
 ATTR
 
     # Create files that should be excluded from archives
-    mkdir -p .github/workflows .claude .vscode test docs/img
+    mkdir -p .github/workflows .vscode test docs/img
     echo "workflow" > .github/workflows/test.yml
-    echo "claude"   > .claude/settings.json
     echo "vscode"   > .vscode/settings.json
     echo "test"     > test/test_something.py
     echo "img"      > docs/img/logo.png
     echo "conftest" > conftest.py
     echo ".env"     > .env
 
-    # Create files that should be included
+    # Create files that should be included. .claude/ is RUNTIME
+    # surface (slash-command dispatch, skills, hooks, settings), not
+    # dev tooling — a release archive without it silently loses every
+    # /command and the SessionStart banner.
     echo "source" > raptor.py
-    mkdir -p packages
+    mkdir -p packages .claude/commands .claude/skills .claude/hooks \
+             libexec bin core engine tiers
     echo "pkg" > packages/__init__.py
+    echo "dispatch" > .claude/commands/scan.md
+    echo "skill"    > .claude/skills/demo.md
+    echo "hook"     > .claude/hooks/session_start.sh
+    echo "settings" > .claude/settings.json
+    echo "cli"      > bin/raptor
+    echo "exec"     > libexec/raptor-run-lifecycle
+    echo "core"     > core/__init__.py
+    echo "engine"   > engine/__init__.py
+    echo "tier"     > tiers/recovery.md
+    echo "claude-md" > CLAUDE.md
 
     git add -A
     git commit -m "initial commit"
@@ -515,9 +527,40 @@ assert_file_exists "raptor-offset in archive"       "$ARCHIVE_DIR/core/startup/a
 assert_file_exists "core/config/__init__.py in archive"      "$ARCHIVE_DIR/core/config/__init__.py"
 assert_file_exists "packages/ in archive"           "$ARCHIVE_DIR/packages/__init__.py"
 
+# Runtime surface ships (the .claude/ dispatch surface was once
+# export-ignored as "dev/CI" — releases lost every /command and the
+# SessionStart hook; both directions pinned here against the REAL
+# .gitattributes, and release.yml verifies the same set at publish).
+assert_file_exists ".claude/commands in archive"    "$ARCHIVE_DIR/.claude/commands/scan.md"
+assert_file_exists ".claude/skills in archive"      "$ARCHIVE_DIR/.claude/skills/demo.md"
+assert_file_exists ".claude/hooks in archive"       "$ARCHIVE_DIR/.claude/hooks/session_start.sh"
+assert_file_exists ".claude/settings.json in archive" "$ARCHIVE_DIR/.claude/settings.json"
+
+# The release.yml runtime-surface verify loop, run against the
+# fixture archive with the member list DERIVED from release.yml
+# itself (verbatim consumption, never a copy): weakening the
+# workflow's verify list fails this suite instead of drifting
+# silently past it. The floor assertion pins the load-bearing
+# members so an extraction bug reads as a loud failure, not an
+# empty loop.
+RELEASE_YML="$SCRIPT_DIR/.github/workflows/release.yml"
+VERIFY_MEMBERS=$(awk '/for p in /{f=1} f{print; if (/; do/) exit}' \
+    "$RELEASE_YML" | tr -d '\\' \
+    | sed -e 's/.*for p in//' -e 's/; do.*//' | tr -s ' \n' ' ')
+assert_contains "derived verify list carries .claude/commands" \
+    "$VERIFY_MEMBERS" ".claude/commands"
+assert_contains "derived verify list carries CLAUDE.md" \
+    "$VERIFY_MEMBERS" "CLAUDE.md"
+assert_contains "derived verify list carries libexec" \
+    "$VERIFY_MEMBERS" "libexec"
+VERIFY_FAIL=""
+for p in $VERIFY_MEMBERS; do
+    [ -e "$ARCHIVE_DIR/$p" ] || VERIFY_FAIL="$VERIFY_FAIL $p"
+done
+assert_eq "runtime-surface verify loop finds no gaps" "" "$VERIFY_FAIL"
+
 # Should be excluded by .gitattributes export-ignore
 assert_file_missing ".github/ excluded"             "$ARCHIVE_DIR/.github"
-assert_file_missing ".claude/ excluded"             "$ARCHIVE_DIR/.claude"
 assert_file_missing ".vscode/ excluded"             "$ARCHIVE_DIR/.vscode"
 assert_file_missing ".gitattributes excluded"       "$ARCHIVE_DIR/.gitattributes"
 assert_file_missing ".env excluded"                 "$ARCHIVE_DIR/.env"
