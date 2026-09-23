@@ -281,11 +281,45 @@ def test_validate_corpus_emits_report_file(tmp_path: Path) -> None:
     corpus_dir = tmp_path / "calibration"
     corpus_dir.mkdir()
     _build_synthetic_corpus(corpus_dir, scored=80)
-    validate_corpus(corpus_dir)
+    validate_corpus(corpus_dir, update_snapshot=True)
     out_files = list((corpus_dir / "validation").iterdir())
     assert len(out_files) == 1
     on_disk = json.loads(out_files[0].read_text())
     assert on_disk["findings_with_score"] == 80
+
+
+def test_validate_corpus_default_is_metrics_only(tmp_path: Path) -> None:
+    """Without out_path / update_snapshot, nothing is written and
+    nothing is pruned — the default validation/ dir is repo-committed,
+    and the natural "verify the committed report reproduces" call
+    must not overwrite the committed same-day snapshot or prune
+    committed history as a side effect."""
+    corpus_dir = tmp_path / "calibration"
+    corpus_dir.mkdir()
+    _build_synthetic_corpus(corpus_dir, scored=80)
+    # Pre-existing committed snapshots must survive untouched.
+    validation_dir = corpus_dir / "validation"
+    validation_dir.mkdir()
+    (validation_dir / "2020-01-01.json").write_text("{}")
+    report = validate_corpus(corpus_dir)
+    assert report.findings_with_score == 80
+    assert sorted(p.name for p in validation_dir.iterdir()) == [
+        "2020-01-01.json",
+    ]
+
+
+def test_validate_corpus_out_path_and_snapshot_conflict(
+    tmp_path: Path,
+) -> None:
+    import pytest
+    corpus_dir = tmp_path / "calibration"
+    corpus_dir.mkdir()
+    _build_synthetic_corpus(corpus_dir, scored=80)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        validate_corpus(
+            corpus_dir, out_path=tmp_path / "r.json",
+            update_snapshot=True,
+        )
 
 
 def test_validate_corpus_validated_when_score_correlates(

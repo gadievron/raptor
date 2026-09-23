@@ -4,8 +4,11 @@
 """Refit the risk-score multipliers from the calibration corpus.
 
 Wraps :func:`packages.sca.calibration.refit.grid_search_refit`.
-Computes per-constant grid search + improvement gate; writes the
-report to ``packages/sca/data/calibration/refit/<date>.json``.
+Computes per-constant grid search + improvement gate. By default
+the report is printed only (metrics-only) — pass
+``--update-snapshot`` to write (and retention-prune) the
+repo-committed ``refit/<date>.json`` snapshot, or ``--out`` for
+an explicit file.
 
 By default DOES NOT modify ``risk.py`` — the refit produces a
 proposal that an operator (or the CI workflow) reviews. Pass
@@ -68,8 +71,17 @@ def main() -> int:
     )
     parser.add_argument(
         "--out", type=Path, default=None,
-        help="report output file (defaults to "
-             "<corpus>/refit/<date>.json)",
+        help="report output file (default: metrics-only — nothing "
+             "is written; see --update-snapshot)",
+    )
+    parser.add_argument(
+        "--update-snapshot", action="store_true",
+        help="write the dated report to <corpus>/refit/<date>.json "
+             "(<date>.joint.json with --joint) and prune that "
+             "directory to its retention window. That directory is "
+             "repo-committed — this flag is for the refit workflow "
+             "(which commits the report); a local verification run "
+             "must not overwrite or prune committed snapshots.",
     )
     parser.add_argument(
         "--max-delta", type=float, default=None,
@@ -122,6 +134,8 @@ def main() -> int:
              "should pass this so refits are reproducible.",
     )
     args = parser.parse_args()
+    if args.out is not None and args.update_snapshot:
+        parser.error("--out and --update-snapshot are mutually exclusive")
 
     corpus_dir = (
         args.corpus
@@ -159,6 +173,7 @@ def main() -> int:
             max_delta=max_delta,
             improvement_threshold=improvement_threshold,
             out_path=args.out,
+            update_snapshot=args.update_snapshot,
             ecosystem_filter=args.ecosystem,
             **joint_kwargs,
         )
@@ -168,6 +183,7 @@ def main() -> int:
             max_delta=max_delta,
             improvement_threshold=improvement_threshold,
             out_path=args.out,
+            update_snapshot=args.update_snapshot,
             ecosystem_filter=args.ecosystem,
         )
 

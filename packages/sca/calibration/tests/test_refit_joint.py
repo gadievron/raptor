@@ -96,8 +96,10 @@ def test_joint_no_samples_short_circuits(tmp_path: Path):
 
 
 def test_joint_report_writes_to_dot_joint_path(tmp_path: Path):
-    """Default report path is ``<corpus>/refit/<date>.joint.json``
-    so a joint refit doesn't clobber a same-day single-pass run."""
+    """The snapshot path is ``<corpus>/refit/<date>.joint.json`` so
+    a joint refit doesn't clobber a same-day single-pass run. The
+    write needs the explicit ``update_snapshot`` opt-in — the plain
+    default is metrics-only (the refit/ dir is repo-committed)."""
     _write_signals(tmp_path, [f"CVE-{i}" for i in range(60)])
     findings = [
         _make_finding(cve=f"CVE-{i}", in_kev=True) for i in range(60)
@@ -105,8 +107,14 @@ def test_joint_report_writes_to_dot_joint_path(tmp_path: Path):
         _make_finding(cve=f"CVE-N-{i}") for i in range(100)
     ]
     _write_sample(tmp_path, "PyPI", "p", findings)
+    metrics_only = joint_grid_search_refit(
+        tmp_path, improvement_threshold=0.0, seed=42,
+    )
+    assert not (tmp_path / "refit").exists()
+    assert metrics_only.status is not None
     report = joint_grid_search_refit(
         tmp_path, improvement_threshold=0.0, seed=42,
+        update_snapshot=True,
     )
     expected = tmp_path / "refit" / f"{report.snapshot_date}.joint.json"
     assert expected.is_file()

@@ -3,9 +3,11 @@
 
 Wraps :func:`packages.sca.calibration.validate.validate_corpus`.
 Computes top-N precision + Spearman correlation between
-``raptor_risk_estimate`` and the corpus's exploitation signals,
-writes the report to
-``packages/sca/data/calibration/validation/<date>.json``.
+``raptor_risk_estimate`` and the corpus's exploitation signals.
+By default the report is printed only (metrics-only) — pass
+``--update-snapshot`` to write (and retention-prune) the
+repo-committed ``validation/<date>.json`` snapshot, or ``--out``
+for an explicit file.
 
 Re-tuning ``risk.py`` weights is an OPERATOR DECISION based on
 the report — this script never auto-mutates weights.
@@ -53,8 +55,17 @@ def main() -> int:
     )
     parser.add_argument(
         "--out", type=Path, default=None,
-        help="report output file (defaults to "
-             "<corpus>/validation/<date>.json)",
+        help="report output file (default: metrics-only — nothing "
+             "is written; see --update-snapshot)",
+    )
+    parser.add_argument(
+        "--update-snapshot", action="store_true",
+        help="write the dated report to <corpus>/validation/"
+             "<date>.json and prune that directory to its retention "
+             "window. That directory is repo-committed — this flag "
+             "is for the refresh workflow (which commits the new "
+             "snapshot); a plain verification run must not overwrite "
+             "or prune committed snapshots as a side effect.",
     )
     parser.add_argument(
         "--threshold-top-20", type=float, default=0.5,
@@ -67,6 +78,8 @@ def main() -> int:
              "verdict (default 0.4)",
     )
     args = parser.parse_args()
+    if args.out is not None and args.update_snapshot:
+        parser.error("--out and --update-snapshot are mutually exclusive")
 
     corpus_dir = args.corpus
     if corpus_dir is None:
@@ -83,6 +96,7 @@ def main() -> int:
     report = validate_corpus(
         corpus_dir,
         out_path=args.out,
+        update_snapshot=args.update_snapshot,
         threshold_top_20=args.threshold_top_20,
         threshold_spearman=args.threshold_spearman,
     )
