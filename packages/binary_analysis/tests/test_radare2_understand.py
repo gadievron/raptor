@@ -1210,6 +1210,191 @@ class TestFunctionInventoryCap(unittest.TestCase):
         understand._extract_functions(r2, ctx)
         self.assertEqual(ctx.notes, [])
 
+    def test_cap_note_states_exact_dropped_count(self):
+        understand = _make_understand_for("r2-cap3-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps([
+            {"name": f"fn{i}", "addr": 0x1000 + i * 0x10, "size": 64}
+            for i in range(15)
+        ])
+        understand._extract_functions(r2, ctx, max_functions=10)
+        self.assertEqual(len(ctx.interesting_functions), 10)
+        self.assertEqual(len(ctx.notes), 1)
+        self.assertIn("5 dropped", ctx.notes[0])
+        self.assertIn("capped at 10 of 15", ctx.notes[0])
+
+    def test_override_lowers_cap(self):
+        """Two-direction control, downward: an explicit max_functions
+        below the module default must be enforced."""
+        understand = _make_understand_for("r2-cap-lo-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps([
+            {"name": f"fn{i}", "addr": 0x1000 + i * 0x10, "size": 64}
+            for i in range(12)
+        ])
+        understand._extract_functions(r2, ctx, max_functions=4)
+        self.assertEqual(len(ctx.interesting_functions), 4)
+
+    def test_override_raises_cap(self):
+        """Two-direction control, upward: raising max_functions above
+        the inventory size must keep every function and emit no cap
+        note — the default cap must not silently re-apply."""
+        understand = _make_understand_for("r2-cap-hi-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        n = BinaryUnderstand._MAX_FUNCTIONS + 5
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps([
+            {"name": f"fn{i}", "addr": 0x1000 + i * 0x10, "size": 64}
+            for i in range(n)
+        ])
+        understand._extract_functions(r2, ctx, max_functions=n + 100)
+        self.assertEqual(len(ctx.interesting_functions), n)
+        self.assertEqual(ctx.notes, [])
+
+    def test_truncation_keeps_imports_and_largest_bodies(self):
+        """The drop is principled: imports survive (the sink map is
+        derived from them), then the largest bodies — never a blind
+        prefix of whatever order r2 emitted."""
+        understand = _make_understand_for("r2-cap-int-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        entries = [
+            # Emission order deliberately puts the interesting entries
+            # LAST so a naive prefix slice would drop them.
+            {"name": "tiny_a", "addr": 0x1000, "size": 8},
+            {"name": "tiny_b", "addr": 0x1010, "size": 8},
+            {"name": "tiny_c", "addr": 0x1020, "size": 8},
+            {"name": "big_parser", "addr": 0x2000, "size": 4096},
+            {"name": "big_handler", "addr": 0x2100, "size": 2048},
+            {"name": "sym.imp.strcpy", "addr": 0x3000, "size": 16},
+        ]
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps(entries)
+        understand._extract_functions(r2, ctx, max_functions=3)
+        self.assertEqual(
+            [fn.name for fn in ctx.imported_functions], ["sym.imp.strcpy"])
+        self.assertEqual(
+            [fn.name for fn in ctx.interesting_functions],
+            ["big_parser", "big_handler"],
+        )
+
+    def test_negative_and_zero_override_clamped(self):
+        """Two-direction cap validation: a negative max_functions must
+        behave as 0 (never leak slice-tail semantics), and the note
+        arithmetic must stay consistent (capped at 0 of N, N dropped)."""
+        for override in (-3, 0):
+            understand = _make_understand_for(
+                f"r2-cap-neg{abs(override)}-", self.addCleanup)
+            ctx = BinaryContextMap(binary_path=understand.binary)
+            r2 = MagicMock()
+            r2.cmd.return_value = json.dumps([
+                {"name": f"fn{i}", "addr": 0x1000 + i * 0x10, "size": 64}
+                for i in range(10)
+            ])
+            understand._extract_functions(r2, ctx, max_functions=override)
+            self.assertEqual(ctx.interesting_functions, [])
+            self.assertEqual(ctx.imported_functions, [])
+            self.assertEqual(len(ctx.notes), 1)
+            self.assertIn("capped at 0 of 10", ctx.notes[0])
+            self.assertIn("10 dropped", ctx.notes[0])
+
+    def test_addr_tiebreak_prefers_lower_address(self):
+        """Direction fixture for the address tiebreak: of two
+        same-size non-imports, only the LOWER address fits the cap."""
+        understand = _make_understand_for("r2-cap-dir-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps([
+            {"name": "hi_addr", "addr": 0x2000, "size": 64},
+            {"name": "lo_addr", "addr": 0x1000, "size": 64},
+        ])
+        understand._extract_functions(r2, ctx, max_functions=1)
+        self.assertEqual(
+            [fn.name for fn in ctx.interesting_functions], ["lo_addr"])
+
+    def test_infinity_payload_does_not_kill_extraction(self):
+        """json.loads accepts Infinity/NaN; int(float('inf')) raises
+        OverflowError. Hostile size/addr values must degrade inside
+        the interest key, never abort the whole map."""
+        understand = _make_understand_for("r2-cap-inf-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        r2 = MagicMock()
+        r2.cmd.return_value = (
+            '[{"name": "evil_size", "addr": 4096, "size": Infinity},'
+            ' {"name": "evil_addr", "addr": Infinity, "size": 64},'
+            ' {"name": "sane", "addr": 8192, "size": 128},'
+            ' {"name": "other", "addr": 12288, "size": 32}]'
+        )
+        understand._extract_functions(r2, ctx, max_functions=3)  # must not raise
+        self.assertEqual(len(ctx.interesting_functions), 3)
+        self.assertIn(
+            "sane", [fn.name for fn in ctx.interesting_functions])
+
+    def test_duplicate_key_records_still_deterministic(self):
+        """Hostile duplicate addr+size records used to fall back to
+        emission order on full-tuple ties; the name component makes
+        the order total. Shuffles must agree on the survivor
+        SEQUENCE, not just the set."""
+        import random
+
+        entries = [
+            {"name": f"dup_{i}", "addr": 0x1000, "size": 64}
+            for i in range(8)
+        ]
+        sequences = []
+        for seed in (3, 4):
+            understand = _make_understand_for(
+                f"r2-cap-dup{seed}-", self.addCleanup)
+            ctx = BinaryContextMap(binary_path=understand.binary)
+            shuffled = list(entries)
+            random.Random(seed).shuffle(shuffled)
+            r2 = MagicMock()
+            r2.cmd.return_value = json.dumps(shuffled)
+            understand._extract_functions(r2, ctx, max_functions=4)
+            sequences.append([fn.name for fn in ctx.interesting_functions])
+        self.assertEqual(sequences[0], sequences[1])
+        self.assertEqual(len(sequences[0]), 4)
+
+    def test_truncation_survivors_deterministic_across_input_order(self):
+        """Shuffled aflj emission order must yield the identical
+        survivor set — the interest key (imports, size desc, address
+        asc, then name) fully determines what the cap keeps."""
+        import random
+
+        entries = [
+            {"name": f"fn{i}", "addr": 0x1000 + i * 0x10,
+             "size": 16 + (i * 7) % 512}
+            for i in range(30)
+        ]
+        entries.append({"name": "sym.imp.recv", "addr": 0x9000, "size": 16})
+        survivor_sets = []
+        for seed in (1, 2):
+            understand = _make_understand_for(
+                f"r2-cap-det{seed}-", self.addCleanup)
+            ctx = BinaryContextMap(binary_path=understand.binary)
+            shuffled = list(entries)
+            random.Random(seed).shuffle(shuffled)
+            r2 = MagicMock()
+            r2.cmd.return_value = json.dumps(shuffled)
+            understand._extract_functions(r2, ctx, max_functions=10)
+            survivor_sets.append(sorted(
+                fn.name for fn in
+                [*ctx.interesting_functions, *ctx.imported_functions]
+            ))
+        self.assertEqual(survivor_sets[0], survivor_sets[1])
+        self.assertIn("sym.imp.recv", survivor_sets[0])
+
+    def test_analyse_binary_context_plumbs_max_functions(self):
+        with patch(
+            "packages.binary_analysis.radare2_understand.BinaryUnderstand",
+        ) as mock_understand:
+            mock_understand.return_value.analyse.return_value = (
+                BinaryContextMap(binary_path=Path("./sample")))
+            analyse_binary_context(Path("./sample"), max_functions=123)
+        kwargs = mock_understand.return_value.analyse.call_args.kwargs
+        self.assertEqual(kwargs["max_functions"], 123)
+
 
 class TestExportTypeExtraction(unittest.TestCase):
     def test_export_types_recovered_from_iej(self):
