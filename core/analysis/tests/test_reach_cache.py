@@ -347,7 +347,8 @@ def test_full_index_round_trips_every_field():
     idx = _AdjacencyIndex(
         forward={fn_a: {fn_b, ext}},
         reverse={ext: {fn_a}, fn_b: {fn_a}},
-        uncertain_callers_by_tail={"g": {(fn_a, "wildcard-import")}},
+        uncertain_tail_paths={"g": {"a.py"}},
+        masked_file_callers={"a.py": ("wildcard-import", (fn_a,))},
         method_match={"g": {(fn_a, "Cls"), (fn_b, None)}},
         uncertain_callees={fn_a: {"pkg.mod.h"}},
         has_method_dispatch={fn_a: True, fn_b: False},
@@ -367,7 +368,8 @@ def test_full_index_round_trips_every_field():
     restored = _reach_cache.load_index(fp)
     assert restored is not None
     for field_name in (
-        "forward", "reverse", "uncertain_callers_by_tail",
+        "forward", "reverse", "uncertain_tail_paths",
+        "masked_file_callers",
         "method_match", "uncertain_callees", "has_method_dispatch",
         "definitions", "class_of_method", "class_bases",
         "override_methods", "framework_callable",

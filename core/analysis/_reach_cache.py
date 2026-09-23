@@ -102,7 +102,7 @@ logger = logging.getLogger(__name__)
 # persisted under the full-toolchain fingerprint and served to later
 # full-toolchain runs. Bump flushes any entry persisted under an
 # over-claimed identity.
-_CACHE_VERSION = 11
+_CACHE_VERSION = 12
 
 _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 
@@ -111,7 +111,7 @@ _CACHE_DIR = Path.home() / ".cache" / "raptor" / "reachability"
 # entry of the same name. Also doubles as a cheap "is this a raptor
 # cache file" check before handing bytes to the JSON decoder. The
 # numeric suffix tracks ``_CACHE_VERSION``.
-_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V11\n"
+_HEADER_MAGIC = b"RAPTOR-REACHABILITY-CACHE-V12\n"
 
 # Suffix of current-format entries. Legacy ``.pickle`` entries are
 # never loaded, but eviction / clearing still sweeps them so retired
@@ -299,9 +299,13 @@ def _index_to_jsonable(index: "_AdjacencyIndex") -> dict[str, Any]:
             [enc(dst), [enc(s) for s in srcs]]
             for dst, srcs in index.reverse.items()
         ],
-        "uncertain_callers_by_tail": [
-            [tail, [[enc(fn), ctx] for fn, ctx in pairs]]
-            for tail, pairs in index.uncertain_callers_by_tail.items()
+        "uncertain_tail_paths": [
+            [tail, sorted(paths)]
+            for tail, paths in index.uncertain_tail_paths.items()
+        ],
+        "masked_file_callers": [
+            [path, flag, [enc(fn) for fn in fns]]
+            for path, (flag, fns) in index.masked_file_callers.items()
         ],
         "method_match": [
             [tail, [[enc(fn), cls] for fn, cls in pairs]]
@@ -348,7 +352,8 @@ def _index_to_jsonable(index: "_AdjacencyIndex") -> dict[str, Any]:
 # Every field _index_to_jsonable writes. A well-formed cache entry
 # carries all of them; anything less is foreign/corrupt → miss.
 _MANDATORY_INDEX_FIELDS = frozenset({
-    "forward", "reverse", "uncertain_callers_by_tail", "method_match",
+    "forward", "reverse", "uncertain_tail_paths",
+    "masked_file_callers", "method_match",
     "uncertain_callees", "has_method_dispatch", "definitions",
     "class_of_method", "class_bases", "override_methods",
     "framework_callable", "framework_registered",
@@ -419,11 +424,16 @@ def _index_from_jsonable(data: dict[str, Any]) -> "_AdjacencyIndex":
             dec_node(dst): {dec_internal(s) for s in srcs}
             for dst, srcs in rows("reverse")
         },
-        uncertain_callers_by_tail={
-            str_only(tail): {
-                (dec_internal(fn), str_only(ctx)) for fn, ctx in pairs
-            }
-            for tail, pairs in rows("uncertain_callers_by_tail")
+        uncertain_tail_paths={
+            str_only(tail): {str_only(pp) for pp in paths}
+            for tail, paths in rows("uncertain_tail_paths")
+        },
+        masked_file_callers={
+            str_only(path): (
+                str_only(flag),
+                tuple(dec_internal(fn) for fn in fns),
+            )
+            for path, flag, fns in rows("masked_file_callers")
         },
         method_match={
             str_only(tail): {
