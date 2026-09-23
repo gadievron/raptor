@@ -62,11 +62,23 @@ def extract_conditions_from_flow_trace(
     """
     conditions = []
 
-    for step in trace.get("steps", trace.get("hops", [])):
+    raw_steps = trace.get("steps", trace.get("hops", []))
+    if not isinstance(raw_steps, list):
+        # LLM-authored traces can carry ``steps: null`` or scalar
+        # shapes; degrade to no steps rather than raising.
+        raw_steps = []
+    for step in raw_steps:
         if not isinstance(step, dict):
             # LLM-authored traces can carry malformed steps.
             continue
         raw_conditions = step.get("path_conditions", [])
+        if isinstance(raw_conditions, str):
+            # A bare string char-iterates into one-character
+            # conditions handed to the SMT verb — treat it as a
+            # single condition.
+            raw_conditions = [raw_conditions]
+        elif not isinstance(raw_conditions, list):
+            raw_conditions = []
         for cond in raw_conditions:
             if isinstance(cond, str):
                 conditions.append(PathCondition(
@@ -81,6 +93,10 @@ def extract_conditions_from_flow_trace(
                 ))
 
     top_level = trace.get("path_conditions", [])
+    if isinstance(top_level, str):
+        top_level = [top_level]
+    elif not isinstance(top_level, list):
+        top_level = []
     for cond in top_level:
         if isinstance(cond, str):
             conditions.append(PathCondition(text=cond, source="trace"))
