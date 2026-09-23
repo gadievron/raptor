@@ -1347,38 +1347,17 @@ def _wrapper_ref_hits_exclusion(
     return bool(project_sinks and prefixes & project_sinks)
 
 
-def _is_trivial_wrapper(
-    source: str,
-    lang: str,
-    callees: list[dict[str, Any]] | None,
-    *,
-    project_sinks: frozenset | None = None,
-    extra_dangerous: frozenset = frozenset(),
-) -> tuple[bool, str]:
-    """Detect thin wrapper functions that delegate entirely to one callee.
+def _judged_view_lines(
+    source: str, lang: str,
+) -> tuple[list[str], list[str]] | None:
+    """Cut the two judged views every lexical prefilter tier shares.
 
-    Returns (True, reason) when the function is a trivial pass-through
-    wrapper that cannot itself introduce a vulnerability.
-    """
-    if not source or not source.strip():
-        return False, ""
-
-    # Call-graph veto: when the extraction pipeline already resolved
-    # this function's callees, a dangerous resolved name refuses the
-    # skip regardless of how the body spells the call (macro
-    # indirection, token paste, an alias the textual analysis below
-    # cannot see). Exact-name match, mirroring _is_trivially_clean's
-    # callee check — tail matching here would flip wrappers delegating
-    # to project functions that merely share a bare name with a sink.
-    for c in callees or []:
-        cname = c.get("name", "")
-        if not cname:
-            continue
-        if cname in _WRAPPER_DANGEROUS_CALLEES or cname in extra_dangerous:
-            return False, ""
-        if project_sinks and cname in project_sinks:
-            return False, ""
-
+    One derivation for every consumer (trivial-wrapper AND
+    simple-accessor tiers): a tier with its own raw-text line
+    filter re-minted the one-planted-line suppression class the
+    shared views closed. Returns ``(code_lines, ref_lines)``, or
+    ``None`` when the js/ts ambiguous-slash refusal applies (the
+    shape must not be judged lexically at all)."""
     # Judged views, both cut by the shared sanitized_view chokepoint
     # (escape-aware, multi-line-aware, per-language string grammar —
     # raw strings, template literals, backticks, text blocks,
@@ -1528,7 +1507,49 @@ def _is_trivial_wrapper(
         for rl in ref_lines:
             if (_JS_AMBIGUOUS_SLASH_RE.search(rl)
                     or _JS_INVALID_SLASH_RE.search(rl)):
-                return False, ""
+                return None
+
+    return code_lines, ref_lines
+
+
+def _is_trivial_wrapper(
+    source: str,
+    lang: str,
+    callees: list[dict[str, Any]] | None,
+    *,
+    project_sinks: frozenset | None = None,
+    extra_dangerous: frozenset = frozenset(),
+) -> tuple[bool, str]:
+    """Detect thin wrapper functions that delegate entirely to one callee.
+
+    Returns (True, reason) when the function is a trivial pass-through
+    wrapper that cannot itself introduce a vulnerability.
+    """
+    if not source or not source.strip():
+        return False, ""
+
+    # Call-graph veto: when the extraction pipeline already resolved
+    # this function's callees, a dangerous resolved name refuses the
+    # skip regardless of how the body spells the call (macro
+    # indirection, token paste, an alias the textual analysis below
+    # cannot see). Exact-name match, mirroring _is_trivially_clean's
+    # callee check — tail matching here would flip wrappers delegating
+    # to project functions that merely share a bare name with a sink.
+    for c in callees or []:
+        cname = c.get("name", "")
+        if not cname:
+            continue
+        if cname in _WRAPPER_DANGEROUS_CALLEES or cname in extra_dangerous:
+            return False, ""
+        if project_sinks and cname in project_sinks:
+            return False, ""
+
+    views = _judged_view_lines(source, lang)
+    if views is None:
+        # js/ts ambiguous-slash refusal — the lexer cannot decide
+        # the shape; never judged mechanically clean.
+        return False, ""
+    code_lines, ref_lines = views
 
     if len(code_lines) > 5:
         return False, ""
@@ -1947,104 +1968,195 @@ def _is_sink_unreachable_clean(
     return not _has_integer_arithmetic(source)
 
 
-def _is_simple_accessor(source: str, lang: str) -> bool:
-    """Check if a function is a trivial field accessor or constant return."""
-    stripped = source.strip()
-    lines = [ln.strip() for ln in stripped.splitlines() if ln.strip()]
+def _py_simple_accessor(source: str) -> bool:
+    """AST-shape membership for the python accessor arm.
 
-    code_lines = [
-        ln for ln in lines
-        if not ln.startswith("//") and not ln.startswith("/*")
-        and not ln.startswith("*") and not ln.startswith("#")
+    The function body must be EXACTLY one ``return`` (an optional
+    docstring aside) of a ``self`` field, a gated bare name, or a
+    numeric/boolean/None constant. Anything else — a second
+    statement, a call, a subscript — refuses. The AST judgment
+    replaces the old raw-line prefix filter + suffix-anchored regex,
+    which let a side-effecting statement ride in front of the return
+    and dropped ``#``-prefixed string-continuation lines carrying
+    live code.
+    """
+    # Size cap first (the lexical counting the pre-AST arm used, kept
+    # for parity so the rewrite never skips MORE than before): the
+    # dropped comment/docstring-continuation lines can only
+    # under-count, and honesty never rests on the count — the AST
+    # shape check below is the verdict.
+    stripped = [ln.strip() for ln in source.strip().splitlines()]
+    counted = [
+        ln for ln in stripped
+        if ln
+        and not ln.startswith(("//", "/*", "*", "#"))
         and ln not in ("{", "}")
     ]
+    if len(counted) > 3:
+        return False
+    try:
+        tree = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError):
+        return False
+    funcs = [
+        n for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    if len(funcs) != 1:
+        return False
+    body = list(funcs[0].body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    if len(body) != 1 or not isinstance(body[0], ast.Return):
+        return False
+    val = body[0].value
+    if (
+        isinstance(val, ast.Attribute)
+        and isinstance(val.value, ast.Name)
+        and val.value.id == "self"
+    ):
+        return not _accessor_ref_refused(val.attr)
+    if isinstance(val, ast.Name):
+        return not _accessor_ref_refused(val.id)
+    if isinstance(val, ast.Constant):
+        # int/bool/None only — the parity set the pre-AST arm
+        # accepted (strings and floats always went to review).
+        return isinstance(val.value, (bool, int)) or val.value is None
+    return False
 
-    if len(code_lines) > 3:
+
+def _accessor_ref_refused(returned: str) -> bool:
+    """Gate a returned name/field against the dangerous + sensitive sets.
+
+    The principle the lua arm documented, applied to every arm:
+    ``return os.execute`` hands the sink back as a VALUE — the
+    wrapper path's escape analysis exists to refuse that, and an
+    accessor arm must not bypass it. Security-sensitive field names
+    (password, token, ...) also refuse: over-inclusion costs one
+    review, the documented safe direction.
+    """
+    if not returned:
+        return False
+    ref = re.sub(
+        r"[^\w.]", "", returned.replace("->", ".").replace("::", "."),
+    ).strip(".")
+    if not ref or ref.replace(".", "").isdigit():
+        return False
+    if _wrapper_ref_hits_exclusion(
+        ref, _WRAPPER_DANGEROUS_CALLEES, _WRAPPER_DANGEROUS_TAILS, None,
+    ):
+        return True
+    low = ref.lower()
+    return any(s in low for s in _SECURITY_SENSITIVE_NAMES)
+
+
+#: A bare signature line (K&R `{`-on-next-line form): the parameter
+#: list closes the line, no statement follows.
+_ACCESSOR_SIG_LINE_RE = re.compile(r"^[^=;{}]*\([^;{}]*\)\s*$")
+
+#: Whole-body accessor arms, matched with fullmatch over the
+#: signature-stripped body — a suffix anchor let any side-effecting
+#: statement ride in front of the accessor return.
+_ACCESSOR_ARMS: dict[str, re.Pattern[str]] = {
+    "c": re.compile(
+        r"return\s+(?:(\w+(?:->|\.)\w+)|\d+|NULL)\s*;",
+    ),
+    "go": re.compile(
+        r"return\s+(?:(\w+\.\w+)(?:\s*,\s*nil)?|\d+)",
+    ),
+    "lua": re.compile(
+        r"return\s+(?:(\w+\.\w+)|\d+)",
+    ),
+    "rust": re.compile(
+        r"(?:return\s+)?(?:(self\.\w+(?:\.clone\(\))?)|\d+)\s*;?",
+    ),
+    "php": re.compile(
+        r"return\s+(?:(\$this->\w+|self::\$?\w+)"
+        r"|\d+|true|false|null)\s*;",
+    ),
+    "java": re.compile(
+        r"return\s+(?:this\.(\w+)|(\w+))\s*;",
+    ),
+    "javascript": re.compile(
+        r"return\s+(?:this\.(_?\w+)|\d+)\s*;?",
+    ),
+    "perl": re.compile(
+        r"return\s+(?:\$self->\{\s*(\w+)\s*\}|\$_\[\d+\])\s*;",
+    ),
+}
+_ACCESSOR_ARMS["cpp"] = _ACCESSOR_ARMS["c"]
+_ACCESSOR_ARMS["typescript"] = _ACCESSOR_ARMS["javascript"]
+
+
+def _is_simple_accessor(source: str, lang: str) -> bool:
+    """True only when the WHOLE body is a single accessor return.
+
+    Judged semantically, never on raw prefix-dropped lines or a
+    suffix-anchored arm: python parses to an AST whose body must be
+    exactly one ``return`` of a self-field/name/constant; every other
+    language judges the shared sanitized-view line pair
+    (``_judged_view_lines`` — the wrapper tier's chokepoint, so a
+    string-continuation line can never be dropped as a comment) and
+    anchors its arm over the ENTIRE signature-stripped body, so a
+    side-effecting statement (deref-store, refcount op, sink call)
+    can never ride in front of the return. The returned name is
+    gated against the dangerous callee sets in every arm.
+    """
+    if lang == "python":
+        return _py_simple_accessor(source)
+
+    views = _judged_view_lines(source, lang)
+    if views is None:
+        return False
+    code_lines, _ref_lines = views
+    if not code_lines or len(code_lines) > 3:
         return False
 
     body = " ".join(code_lines)
-
-    if lang in ("c", "cpp"):
-        if re.search(r"return\s+\w+->\w+\s*;$", body):
-            return True
-        if re.search(r"return\s+\w+\.\w+\s*;$", body):
-            return True
-        if re.search(r"return\s+\d+\s*;$", body):
-            return True
-        if re.search(r"return\s+NULL\s*;$", body):
-            return True
-    elif lang == "python":
-        if re.search(r"return\s+self\.\w+$", body):
-            return True
-        m = re.search(r"return\s+(\w+)$", body)
-        if m:
-            returned = m.group(1).lower()
-            if not any(s in returned for s in _SECURITY_SENSITIVE_NAMES):
-                return True
-    elif lang == "go":
-        if re.search(r"return\s+\w+\.\w+$", body):
-            return True
-        if re.search(r"return\s+\w+\.\w+\s*,\s*nil$", body):
-            return True
-        if re.search(r"return\s+\d+$", body):
-            return True
-    elif lang == "lua":
-        # Field / constant return only (`return self.value` … `end`).
-        # Pre-fix these skipped by ACCIDENT: the signature's own
-        # `function get_value(` was the wrapper gate's "one call"
-        # (the self-capture the wrapper path now refuses), so the
-        # honest accessor arm takes over the legitimate shape — with
-        # the returned NAME gated against the dangerous sets:
-        # `return os.execute` hands the sink back as a VALUE, which
-        # the wrapper path's escape analysis exists to refuse, and an
-        # accessor arm must not bypass it.
-        m = re.search(r"return\s+(\w+\.\w+|\d+)\s*(?:end\s*)?$", body)
-        if m and not _wrapper_ref_hits_exclusion(
-            m.group(1), _WRAPPER_DANGEROUS_CALLEES,
-            _WRAPPER_DANGEROUS_TAILS, None,
+    if lang == "lua":
+        body_no_sig = re.sub(
+            r"^\s*(?:local\s+)?function\b[^)]*\)\s*", "", body)
+        body_no_sig = re.sub(r"\s*\bend\s*$", "", body_no_sig).strip()
+    else:
+        sig_end = body.find("{")
+        if sig_end >= 0:
+            body_no_sig = body[sig_end + 1:].strip()
+            # Trailing close-brace only: rfind would cut at an
+            # INTERIOR brace (perl `$self->{name}`) when the
+            # function's own closing brace sits on a dropped
+            # brace-only line.
+            if body_no_sig.endswith("}"):
+                body_no_sig = body_no_sig[:-1].strip()
+        elif (
+            len(code_lines) >= 2
+            and "return" not in code_lines[0]
+            and _ACCESSOR_SIG_LINE_RE.match(code_lines[0])
         ):
-            return True
-    elif lang == "rust":
-        if re.search(r"\bself\.\w+\s*$", body):
-            return True
-        if re.search(r"\bself\.\w+\.clone\(\)\s*$", body):
-            return True
-        if re.search(r"return\s+self\.\w+\s*;?\s*$", body):
-            return True
-        if re.search(r"^\s*\d+\s*$", body):
-            return True
-    elif lang == "php":
-        if re.search(r"return\s+\$this->\w+\s*;$", body):
-            return True
-        if re.search(r"return\s+self::\$?\w+\s*;$", body):
-            return True
-        if re.search(r"return\s+\d+\s*;$", body):
-            return True
-        if re.search(r"return\s+(true|false|null)\s*;$", body):
-            return True
-    elif lang == "java":
-        if re.search(r"return\s+this\.\w+\s*;$", body):
-            return True
-        if re.search(r"return\s+\w+\s*;$", body):
-            m = re.search(r"return\s+(\w+)\s*;$", body)
-            if m:
-                returned = m.group(1).lower()
-                if not any(s in returned for s in _SECURITY_SENSITIVE_NAMES):
-                    return True
-    elif lang in ("javascript", "typescript"):
-        if re.search(r"return\s+this\.\w+\s*;?$", body):
-            return True
-        if re.search(r"return\s+this\._\w+\s*;?$", body):
-            return True
-        if re.search(r"return\s+\d+\s*;?$", body):
-            return True
-    elif lang == "perl":
-        if re.search(r"return\s+\$self->\{\s*\w+\s*\}\s*;$", body):
-            return True
-        if re.search(r"return\s+\$_\[\d+\]\s*;$", body):
-            return True
+            # Brace-only lines are dropped from the judged views, so
+            # a K&R-style `{` on its own line leaves a braceless
+            # body: strip the leading line only when it is
+            # unambiguously a bare signature (ends at its parameter
+            # list). Anything else refuses — never guess at a body.
+            body_no_sig = " ".join(code_lines[1:]).strip()
+        else:
+            return False
+    if not body_no_sig:
+        return False
 
-    return False
+    arm = _ACCESSOR_ARMS.get(lang)
+    if arm is None:
+        return False
+    m = arm.fullmatch(body_no_sig)
+    if m is None:
+        return False
+    returned = next((g for g in m.groups() if g), "")
+    return not _accessor_ref_refused(returned)
+
 
 
 def _check_c_patterns(
