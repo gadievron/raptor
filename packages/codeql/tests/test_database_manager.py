@@ -286,6 +286,43 @@ class TestBuildEnvFilter:
         # ...while the benign declared knob flows through the filter.
         assert env.get("CGO_ENABLED") == "0"
 
+    def test_create_path_injects_raptor_declared_jvm_constants(self, db_manager,
+                                                               tmp_path):
+        """Consumption pin for the RAPTOR-constants contract: the
+        declared MAVEN_OPTS heap constant must reach the spawned
+        build env (it was refused as hostile for as long as the gate
+        believed env_vars was repo-authored)."""
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            if "database" in cmd and "create" in cmd:
+                captured["env"] = dict(kwargs.get("env") or {})
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = "2.16.0\n"
+            r.stderr = "Finalizing database.\n"
+            return r
+
+        from core.build.build_detector import declared_env_constants
+        constants = dict(declared_env_constants())
+        bs = BuildSystem(type="maven", command="mvn compile",
+                         working_dir=tmp_path,
+                         env_vars={"MAVEN_OPTS": constants["MAVEN_OPTS"]},
+                         confidence=1.0, detected_files=[])
+        with patch('core.sandbox.run', side_effect=fake_run), \
+             patch.object(db_manager, '_count_database_files',
+                          return_value=0), \
+             patch.object(db_manager, 'save_metadata'), \
+             patch.object(db_manager, 'get_cached_database',
+                          return_value=None), \
+             patch.object(db_manager, 'compute_repo_hash',
+                          return_value='abc'), \
+             patch.object(db_manager, 'get_database_dir',
+                          return_value=tmp_path / "db"):
+            db_manager.create_database(tmp_path, "java", bs,
+                                       traced_build=True)
+        assert captured["env"].get("MAVEN_OPTS") == constants["MAVEN_OPTS"]
+
 
 class TestFilterBuildEnvVars:
     """Direct tests for the hostile-input gate on repo-declared build
@@ -353,6 +390,35 @@ class TestFilterBuildEnvVars:
             "GNUMAKEFLAGS": "--eval=$(shell touch /tmp/pwned)",
             "gnumakeflags": "CC=./evil-cc",  # case-folded membership
             "MFLAGS": "COMPILE.c=./evil-cc",
+        })
+        assert admitted == {}
+
+    def test_admits_raptor_declared_constants(self):
+        """The BUILD_SYSTEMS env_vars rows are RAPTOR-chosen constants
+        (JVM heap sizing) — the gate admits exactly the declared
+        (name, value) pairs. Refusing them ran every traced
+        maven/gradle/ant build on the default heap."""
+        from core.build.build_detector import declared_env_constants
+
+        constants = dict(declared_env_constants())
+        assert "MAVEN_OPTS" in constants
+        admitted = self._filter({
+            "MAVEN_OPTS": constants["MAVEN_OPTS"],
+            "GRADLE_OPTS": constants["GRADLE_OPTS"],
+            "ANT_OPTS": constants["ANT_OPTS"],
+        })
+        assert admitted == {
+            "MAVEN_OPTS": constants["MAVEN_OPTS"],
+            "GRADLE_OPTS": constants["GRADLE_OPTS"],
+            "ANT_OPTS": constants["ANT_OPTS"],
+        }
+
+    def test_declared_name_with_hostile_value_still_refused(self):
+        """Pair match, not name match: a producer smuggling a
+        different value under a declared name gains nothing."""
+        admitted = self._filter({
+            "MAVEN_OPTS": "-javaagent:./evil.jar",
+            "GRADLE_OPTS": "-Xmx2048m -javaagent:./evil.jar",
         })
         assert admitted == {}
 

@@ -49,12 +49,19 @@ logger = get_logger()
 
 
 def _filter_build_env_vars(env_vars: dict) -> dict:
-    """Admit build-system-reported env vars past the hostile-input gate.
+    """Admit build-system env vars past the hostile-input gate.
 
-    ``build_system.env_vars`` comes from the SCANNED REPO's build
-    metadata — attacker-authored on untrusted targets — and is layered
-    on top of ``get_safe_env()``, so an unblocked name OVERRIDES the
-    baseline (including the ``GIT_ENV_VARS`` pins). Refused:
+    ``build_system.env_vars`` carries RAPTOR-CHOSEN CONSTANTS by
+    contract (the static ``BUILD_SYSTEMS`` table is the only producer
+    — this docstring previously claimed the dict was repo-authored,
+    and the gate built on that premise refused RAPTOR's own JVM heap
+    constants as hostile, so every traced maven/gradle/ant build ran
+    on the default heap). Exactly the DECLARED (name, value) pairs
+    pass; everything else is treated as hostile input, because the
+    dict is layered on top of ``get_safe_env()`` where an unblocked
+    name OVERRIDES the baseline (including the ``GIT_ENV_VARS`` pins)
+    — the gate stays load-bearing against any future producer that
+    routes repo metadata into the field. Refused:
 
     * the DANGEROUS_ENV_VARS + PROXY_ENV_VARS blocklists (LD_PRELOAD /
       BASH_ENV re-injection, proxy redirect);
@@ -81,9 +88,17 @@ def _filter_build_env_vars(env_vars: dict) -> dict:
             | CREDENTIAL_ENV_FAMILY
         )
     }
+    from core.build.build_detector import declared_env_constants
+    raptor_constants = declared_env_constants()
     admitted = {}
     refused = []
     for k, v in env_vars.items():
+        if (k, v) in raptor_constants:
+            # RAPTOR's own declared constant — exact pair match, so a
+            # producer smuggling a DIFFERENT value under a declared
+            # name (MAVEN_OPTS=-javaagent:…) still hits the gate.
+            admitted[k] = v
+            continue
         k_upper = k.upper()
         if (k_upper in blocked_upper
                 or k_upper.startswith(("RAPTOR_", "_RAPTOR"))
@@ -93,7 +108,8 @@ def _filter_build_env_vars(env_vars: dict) -> dict:
         admitted[k] = v
     if refused:
         logger.info(
-            "build env filter: refused repo-declared env vars: %s",
+            "build env filter: refused env vars (not RAPTOR-declared "
+            "constants): %s",
             sorted(refused),
         )
     return admitted

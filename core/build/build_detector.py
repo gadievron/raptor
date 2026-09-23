@@ -81,7 +81,14 @@ class BuildSystem:
     type: str  # maven, gradle, npm, etc.
     command: str  # Build command to use
     working_dir: Path  # Directory to run command in
-    env_vars: dict[str, str]  # Env vars we inject as-is (RAPTOR-chosen constants)
+    # Env vars we inject as-is. RAPTOR-CHOSEN CONSTANTS by contract:
+    # the static BUILD_SYSTEMS table is the only producer of non-empty
+    # content (never repo metadata — repo-derived env must go through
+    # the hostile-input gates instead). Consumers admit these through
+    # the codeql build-env gate by exact declared (name, value) pair —
+    # see declared_env_constants() — so a future producer that copies
+    # repo content in here still meets the gate.
+    env_vars: dict[str, str]
     confidence: float  # 0.0 - 1.0
     detected_files: list[str]  # Files that indicated this build system
     cleanup_paths: list[Path] = field(default_factory=list)  # Temp files/dirs to remove after CodeQL
@@ -2074,6 +2081,26 @@ def main() -> None:
         print(f"Confidence: {build_system.confidence:.2f}")
         if build_system.env_vars:
             print(f"Environment variables: {_sft(str(build_system.env_vars), max_len=300)}")
+
+
+def declared_env_constants() -> frozenset:
+    """Every (name, value) pair RAPTOR itself declares in a
+    BUILD_SYSTEMS ``env_vars`` row.
+
+    ``BuildSystem.env_vars`` carries RAPTOR-chosen constants (JVM heap
+    sizing and the like) — the static class table is the only
+    producer. The codeql build-env gate admits exactly these declared
+    pairs and refuses everything else as hostile input, so the
+    constants reach traced builds while a hypothetical future producer
+    that routes repo content into the field gains nothing: only the
+    literal benign pair RAPTOR would have set anyway can pass.
+    """
+    pairs = set()
+    for lang_configs in BuildDetector.BUILD_SYSTEMS.values():
+        for config in lang_configs.values():
+            for name, value in config.get("env_vars", {}).items():
+                pairs.add((name, value))
+    return frozenset(pairs)
 
 
 if __name__ == "__main__":
