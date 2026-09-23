@@ -88,6 +88,19 @@ def test_joint_insufficient_samples_short_circuits(tmp_path: Path):
     assert report.restarts == []
 
 
+def test_joint_error_arm_keeps_accumulated_notes(tmp_path: Path):
+    """The joint too-few-samples report must carry the
+    ecosystem_filter provenance note gathered before the bail-out
+    (pre-fix the error arm rebuilt notes=[why] and dropped it)."""
+    _write_signals(tmp_path, ["CVE-1"])
+    _write_sample(tmp_path, "PyPI", "p", [_make_finding(cve="CVE-1")])
+    report = joint_grid_search_refit(
+        tmp_path, seed=42, ecosystem_filter="PyPI",
+    )
+    assert report.status == "insufficient_samples"
+    assert any("ecosystem_filter='PyPI'" in n for n in report.notes)
+
+
 def test_joint_no_samples_short_circuits(tmp_path: Path):
     """No samples at all → ``error`` status, no traces."""
     report = joint_grid_search_refit(tmp_path, seed=42)

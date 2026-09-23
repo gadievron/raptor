@@ -368,6 +368,61 @@ def test_refit_rejects_when_improvement_below_threshold(
     assert report.status == "rejected"
 
 
+def test_composition_rejection_is_not_misreported(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """When per-constant variants beat the baseline but their joint
+    composition is inadmissible, the report must say exactly that —
+    pre-fix it ALSO appended the false 'no per-constant variant beat
+    the baseline' note, mis-describing why the refit was rejected."""
+    import packages.sca.risk as risk_mod
+    from packages.sca.calibration import refit as refit_mod
+    from packages.sca.risk import current_constants
+
+    _write_signals(tmp_path, ["CVE-X"])
+    _write_sample(tmp_path, "PyPI", "p", [_make_finding(cve="CVE-X")])
+
+    current = current_constants()
+    real_admissible = risk_mod.is_admissible
+
+    def fake_admissible(values):
+        changed = sum(
+            1 for k, v in values.items() if v != current.get(k)
+        )
+        if changed >= 2:
+            return False, "test: composition inadmissible"
+        return real_admissible(values)
+
+    def fake_metric(samples, *, overrides=None):
+        if overrides and any(
+            v != current.get(k) for k, v in overrides.items()
+        ):
+            return (0.9, 0.9, 0.9)
+        return (0.5, 0.5, 0.5)
+
+    monkeypatch.setattr(risk_mod, "is_admissible", fake_admissible)
+    monkeypatch.setattr(refit_mod, "_search_metric", fake_metric)
+
+    report = refit_mod.grid_search_refit(tmp_path, min_samples=1)
+    assert report.status == "rejected"
+    assert any("joint composition rejected" in n for n in report.notes)
+    assert not any(
+        "no per-constant variant beat the baseline" in n
+        for n in report.notes
+    )
+
+
+def test_error_arm_reports_keep_accumulated_notes(tmp_path: Path):
+    """The too-few-samples report must carry the notes gathered
+    before the bail-out (the ecosystem_filter provenance note) —
+    pre-fix both twins built a fresh notes list and dropped it."""
+    _write_signals(tmp_path, ["CVE-X"])
+    _write_sample(tmp_path, "PyPI", "p", [_make_finding(cve="CVE-X")])
+    report = grid_search_refit(tmp_path, ecosystem_filter="PyPI")
+    assert report.status == "insufficient_samples"
+    assert any("ecosystem_filter='PyPI'" in n for n in report.notes)
+
+
 def test_refit_max_delta_caps_proposed_value(tmp_path: Path):
     """No constant moves more than max_delta of its current
     value, regardless of how strongly the data argues for it."""
