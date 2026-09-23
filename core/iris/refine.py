@@ -396,12 +396,18 @@ def _inject_bypass_candidates(
     for bf in bypass_findings:
         if not bf.via_intermediate:
             continue
-        key = (bf.via_intermediate, bf.caller_file)
+        # The intermediate lives in its OWN defining file, not the
+        # caller's — filing it under caller_file made the synthesis
+        # context read the wrong file. Fall back to caller_file only
+        # for producers that predate the attribution field.
+        via_file = (getattr(bf, "via_intermediate_file", "")
+                    or bf.caller_file)
+        key = (bf.via_intermediate, via_file)
         if key not in existing:
             existing.add(key)
             new_candidates.append(CandidateFunction(
                 function=bf.via_intermediate,
-                file=bf.caller_file,
+                file=via_file,
                 reason=f"bypass intermediate for {bf.assumption.target}",
             ))
 
