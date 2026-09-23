@@ -618,6 +618,69 @@ def _drilldown_hint() -> str:
     return _HINT_PROMPT if sys.stdin.isatty() else _HINT_STANDALONE
 
 
+def _print_tools_drift(auth_tools: list, rows: list) -> None:
+    """Post-baseline drift lane: per-item diffs for the CHANGED items
+    only, each against the baselined entry for that tool NAME.
+
+    A drift review typically has 1-2 changed items among dozens of
+    unchanged ones; printing "✓ Authorized" once per unchanged tool
+    buried the signal, and diffing a changed tool against the globally
+    "closest recorded variant" could pick a different tool's record
+    (misattributing the change). Unchanged and rejected items collapse
+    to one summary line each; a live tool whose name has no baselined
+    entry is an ADDITION — its full definition prints (there is
+    nothing to diff), with the same red-flag scan the bulk lane runs
+    over its description.
+    """
+    total = len(rows)
+    unchanged = sum(1 for _, s in rows if s == AUTHORIZED)
+    denied = sum(1 for _, s in rows if s == DENIED)
+    changed = [(i, v) for i, (v, s) in enumerate(rows, 1) if s == NEW]
+    print(f"  {unchanged} of {total} live tool definition(s) unchanged — "
+          "match the authorized baseline.")
+    if denied:
+        print(f"  {denied} of {total}: ✗ Rejected by operator — the "
+              "guard strips them; nothing pending.")
+    for idx, v in changed:
+        print()
+        name = _tool_name(v)
+        live_txt = json.dumps(v, indent=2)
+        same_name = [a for a in auth_tools if _tool_name(a) == name]
+        if name is not None and same_name:
+            print(f"  {_name_disp(v, idx)}: ⚠ Not Authorized — changed; "
+                  "diff against the baselined entry of this name:")
+            print()
+            recorded = [json.dumps(a, indent=2) for a in same_name]
+            # Several baselined variants can share a name (union
+            # merges across server states) — diff the closest of THAT
+            # NAME, never another tool's record.
+            auth_txt = _closest(live_txt, recorded)
+            diff = difflib.unified_diff(
+                auth_txt.splitlines(), live_txt.splitlines(),
+                "authorized", "live", lineterm="",
+            )
+            for line in diff:
+                print(f"    {_line(line)}")
+        else:
+            print(f"  {_name_disp(v, idx)}: ⚠ Not Authorized — new tool, "
+                  "no baselined entry of this name; full definition:")
+            print()
+            for line in live_txt.splitlines():
+                print(f"    {_line(line)}")
+            desc = v.get("description") if isinstance(v, dict) else None
+            if isinstance(desc, str):
+                try:
+                    hits = _description_red_flags(desc)
+                except Exception as exc:  # loud, never silently green
+                    print(f"    ⚠ description red-flag scan unavailable "
+                          f"({type(exc).__name__}) — review the "
+                          "definition above manually")
+                else:
+                    for label, excerpt in hits:
+                        print(f"    red flag [{_line(label)}]: "
+                              f'"{_line(excerpt)}"')
+
+
 def show_tool(live: dict, name: str) -> int:
     """Print the full (escaped) definition of one live tool.
 
@@ -657,18 +720,23 @@ def _print_compare(guard, auth: dict | None, report: dict) -> None:
             print("  no live variant captured")
             continue
         if (surface == SURFACE_TOOLS
-                and not any(s == UNBASELINED for _, s in rows)
-                and not [
-                    v for v in guard._variant_objects(auth, SURFACE_TOOLS)
-                    if isinstance(v, dict)
-                ]):
-            # First-baseline bulk lane: no authorized tools baseline
-            # exists, so every live definition is a first capture —
-            # render ONE digest, not a full-JSON wall per tool. The
-            # drift lane (baseline exists) keeps the per-item diff
-            # below, where a diff against a recorded variant is real
-            # evidence. The boot surfaces are untouched either way.
-            _print_tools_digest(rows, decision_hint=_drilldown_hint())
+                and not any(s == UNBASELINED for _, s in rows)):
+            auth_tools = [
+                v for v in guard._variant_objects(auth, SURFACE_TOOLS)
+                if isinstance(v, dict)
+            ]
+            if auth_tools:
+                # Drift lane: a baseline exists, so per-item diffs are
+                # real evidence — but only for the items that CHANGED,
+                # each against the baselined entry of the same name.
+                _print_tools_drift(auth_tools, rows)
+            else:
+                # First-baseline bulk lane: no authorized tools
+                # baseline exists, so every live definition is a first
+                # capture — render ONE digest, not a full-JSON wall
+                # per tool. The boot surfaces are untouched either way.
+                _print_tools_digest(rows,
+                                    decision_hint=_drilldown_hint())
             continue
         for i, (variant, status) in enumerate(rows):
             if i:
