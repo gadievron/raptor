@@ -13,9 +13,17 @@ on:
 
 # Don't cancel in-flight releases — two concurrent releases racing on
 # the same artifact upload would corrupt the GitHub Release record.
-# Queue instead, so concurrent dispatches serialize cleanly.
+# Queue instead, so concurrent dispatches serialize cleanly. Keyed on
+# the BARE tag name in both event shapes: a tag-push run's github.ref
+# is refs/tags/<tag> while a workflow_dispatch re-release of the SAME
+# tag carries the dispatch input (the validate step refuses any
+# refs/tags/-prefixed input, so the input is always bare) — a ref-only
+# key put those two runs in different groups and they never
+# serialized despite editing the same tag, stamp targets, and Release
+# record. github.ref_name is the bare tag on tag pushes, so both
+# spellings converge on one group.
 concurrency:
-  group: release-${{ github.workflow }}-${{ github.ref }}
+  group: release-${{ github.workflow }}-${{ github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 permissions:
