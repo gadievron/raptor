@@ -2065,7 +2065,10 @@ def _resolve_cross_family_checker(
     in the role resolution (consensus / fallback); falls back to
     auto-detecting a cheap model from an env-var API key.
     """
-    from core.security.llm_family import family_of, same_family
+    from core.security.llm_family import (
+        family_of,
+        select_cross_family_checker,
+    )
 
     primary_name = analysis_model.model_name
     primary_family = family_of(primary_name)
@@ -2087,10 +2090,36 @@ def _resolve_cross_family_checker(
         + role_resolution.get("consensus_models", [])
         + role_resolution.get("fallback_models", [])
     )
-    for m in candidates:
-        if not same_family(primary_name, m.model_name):
-            logger.debug("Cross-family checker: %s (from resolved roles)", m.model_name)
-            return m
+    # One selector, one rule: llm_family.select_cross_family_checker
+    # owns the cross-family semantics (unknown producer → None,
+    # unknown candidates skipped — "Unprovable is not cross-family").
+    # The private `not same_family(...)` loop this replaces applied a
+    # WEAKER rule at the one consumer that wields conservative-
+    # override authority: an unknown-family primary (a self-hosted or
+    # rebadged id without a recognised stem) made every comparison
+    # True, handing back the FIRST candidate unconditionally —
+    # including a same-lineage variant of the primary.
+    chosen = select_cross_family_checker(
+        primary_name, [m.model_name for m in candidates],
+    )
+    if chosen is not None:
+        for m in candidates:
+            if m.model_name == chosen:
+                logger.debug(
+                    "Cross-family checker: %s (from resolved roles)",
+                    m.model_name,
+                )
+                return m
+    if primary_family == "unknown":
+        # No provable cross-family relation exists for an unknown
+        # producer — the env auto-detect below could only hand back
+        # a model that CANNOT be proven independent of it.
+        logger.info(
+            "Cross-family check skipped: primary model %s has no "
+            "recognised family (unprovable is not cross-family)",
+            primary_name,
+        )
+        return None
 
     return _auto_detect_cross_family_checker(primary_family)
 

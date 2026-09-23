@@ -502,6 +502,46 @@ class TestCrossFamilyCheckTaskAdjudication:
         assert check["intended_model"] == "claude-haiku-4-5-20251001"
 
 
+class TestUnknownFamilyAdjudicationBelt:
+    def test_two_unknowns_never_adjudicate(self):
+        """The same-family fallback guard is void when both families
+        are unknown (same_family returns False for any unknown), so a
+        rebadged same-lineage checker adjudicated pre-fix. Unprovable
+        is not cross-family — record the check, skip adjudication."""
+        prior = {"F-001": _result("F-001", exploitable=False, quality=0.5,
+                                  analysed_by="deepseek-r1")}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": True,
+             "ruling": "validated",
+             "analysed_by": "deepseek-r1-checker"},
+        ]
+        checker = _model("ollama", "deepseek-r1-checker")
+        task = CrossFamilyCheckTask(checker, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"]["is_exploitable"] is False  # no override
+        assert prior["F-001"].get("cross_family_disputed") is None
+        assert prior["F-001"].get("cross_family_agreed") is None
+        check = prior["F-001"]["cross_family_check"]
+        assert "not provable" in check["verdict"]
+
+    def test_unknown_checker_against_known_primary_skipped(self):
+        prior = {"F-001": _result("F-001", exploitable=False, quality=0.5,
+                                  analysed_by="gemini-2.5-pro")}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": True,
+             "ruling": "validated",
+             "analysed_by": "qwen3-coder"},
+        ]
+        checker = _model("ollama", "qwen3-coder")
+        task = CrossFamilyCheckTask(checker, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"]["is_exploitable"] is False
+        check = prior["F-001"]["cross_family_check"]
+        assert "not provable" in check["verdict"]
+
+
 class TestCrossFamilyOverrideSnapshot:
     """The conservative override must never erase the analyst's own
     verdict: downstream stages (consensus tally + stamp, the judge's
@@ -652,6 +692,48 @@ class TestResolveCrossFamilyChecker:
         with patch.dict(os.environ, {}, clear=True):
             result = _resolve_cross_family_checker(GEMINI_PRIMARY, role_res)
         assert result is None
+
+    def test_unknown_primary_refuses(self):
+        # Documented invariant (llm_family.select_cross_family_checker):
+        # an unknown-family producer makes every same_family comparison
+        # False, so ANY candidate — including a same-lineage rebadge of
+        # the primary — would read as "cross-family". Unprovable is not
+        # cross-family: refuse rather than hand conservative-override
+        # authority to a possibly identical model. Pre-fix the resolver
+        # returned the FIRST candidate unconditionally.
+        from packages.llm_analysis.orchestrator import (
+            _resolve_cross_family_checker,
+        )
+        unknown_primary = _model("ollama", "deepseek-r1", role="analysis")
+        rebadged_sibling = _model("ollama", "deepseek-r1-checker")
+        role_res = {
+            "analysis_model": unknown_primary,
+            "consensus_models": [rebadged_sibling, ANTHROPIC_CHECKER],
+            "fallback_models": [],
+        }
+        with patch.dict(
+            os.environ, {"ANTHROPIC_API_KEY": "sk-test"}, clear=True,
+        ):
+            result = _resolve_cross_family_checker(unknown_primary, role_res)
+        # No provable cross-family relation exists for an unknown
+        # producer — auto-detect must not fire either.
+        assert result is None
+
+    def test_unknown_candidate_skipped(self):
+        # A known-family primary must never receive an unknown-family
+        # candidate as its checker (cannot be proven cross-family);
+        # the next provable candidate wins.
+        from packages.llm_analysis.orchestrator import (
+            _resolve_cross_family_checker,
+        )
+        unknown_candidate = _model("ollama", "qwen3-coder")
+        role_res = {
+            "analysis_model": GEMINI_PRIMARY,
+            "consensus_models": [unknown_candidate, ANTHROPIC_CHECKER],
+            "fallback_models": [],
+        }
+        result = _resolve_cross_family_checker(GEMINI_PRIMARY, role_res)
+        assert result is ANTHROPIC_CHECKER
 
 
 # ---------------------------------------------------------------------------
