@@ -505,3 +505,59 @@ class TestLocalBindingNames:
         assert "attr" not in names
         assert "v2" not in names
         assert "l_param" not in names
+
+
+class TestModuleDistrustedRoots:
+    def test_distrust_shapes(self):
+        import ast
+
+        from core.analysis.python_module_callgraph import (
+            module_shadowed_identity_roots,
+        )
+        tree = ast.parse(
+            "import html\n"                     # self-import: trusted
+            "import os.path\n"                  # self-import: trusted
+            "import fakelib as shlex\n"         # alias: distrusted
+            "from fakelib import bleach\n"      # from-import: distrusted
+            "markupsafe = object()\n"           # assignment: distrusted
+            "def werkzeug():\n"
+            "    pass\n"                        # def name: distrusted
+            "class django:\n"
+            "    pass\n"                        # class name: distrusted
+            "def evil():\n"
+            "    global html\n"                 # global decl: distrusted
+            "    html = None\n"
+        )
+        roots = module_shadowed_identity_roots(tree)
+        assert {"shlex", "bleach", "markupsafe", "werkzeug",
+                "django", "html"} <= roots
+        assert "os" not in roots
+        # Import aliases live only in the identity set; the non-import
+        # rebind set resolves them through the import map instead.
+        from core.analysis.python_module_callgraph import (
+            module_distrusted_roots,
+        )
+        nonimport = module_distrusted_roots(tree)
+        assert "shlex" not in nonimport
+        assert "bleach" not in nonimport
+        assert "markupsafe" in nonimport
+
+    def test_import_map_shapes(self):
+        import ast
+
+        from core.analysis.python_module_callgraph import (
+            module_import_map,
+        )
+        tree = ast.parse(
+            "import html\n"
+            "import a.b as c\n"
+            "from functools import lru_cache\n"
+            "from m import n as k\n"
+            "from . import rel\n"
+        )
+        m = module_import_map(tree)
+        assert m["html"] == "html"
+        assert m["c"] == "a.b"
+        assert m["lru_cache"] == "functools.lru_cache"
+        assert m["k"] == "m.n"
+        assert m["rel"].startswith("<relative>")

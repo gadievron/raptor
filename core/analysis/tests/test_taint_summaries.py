@@ -1280,3 +1280,112 @@ class TestClassShadowOfDefPoisoned:
         s = summaries["C.esc"]
         assert not s.summary_unknown
         assert ("html.escape", 0) in s.return_sanitizers_for_param(1)
+
+
+class TestDecoratorIdentityResolved:
+    """The decorator allowlist trusts IDENTITIES, not spellings: the
+    written name must resolve through the module's import map to an
+    allowlisted identity, and a repo-rebound root never matches."""
+
+    def test_repo_defined_staticmethod_poisons(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def staticmethod(f):\n"
+            "    return str\n"
+            "@staticmethod\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+        )
+        assert summaries["esc"].summary_unknown
+
+    def test_lambda_assigned_staticmethod_poisons(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "staticmethod = lambda f: str\n"
+            "@staticmethod\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+        )
+        assert summaries["esc"].summary_unknown
+
+    def test_import_alias_functools_poisons(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "import fakelib as functools\n"
+            "@functools.lru_cache\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+        )
+        assert summaries["esc"].summary_unknown
+
+    def test_from_import_lru_cache_resolves_and_exempts(self):
+        # Precision: the common from-import spelling resolves to the
+        # allowlisted functools identity.
+        _, summaries = _summaries(
+            "import html\n"
+            "from functools import lru_cache\n"
+            "@lru_cache\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+        )
+        s = summaries["esc"]
+        assert not s.summary_unknown
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+
+    def test_builtin_staticmethod_unbound_exempts(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "class C:\n"
+            "    @staticmethod\n"
+            "    def esc(s):\n"
+            "        return html.escape(s)\n"
+        )
+        assert not summaries["C.esc"].summary_unknown
+
+
+class TestNestedNonlocalWriteBack:
+    """A nested def's ``nonlocal`` rebinds the enclosing frame behind
+    the straight-line premise's back — the summary must degrade."""
+
+    def test_nested_nonlocal_poisons_summary(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def _clean(s):\n"
+            "    t = html.escape(s)\n"
+            "    def f():\n"
+            "        nonlocal t\n"
+            "        t = s\n"
+            "    f()\n"
+            "    return t\n"
+        )
+        s = summaries["_clean"]
+        assert s.summary_unknown
+        assert "nonlocal" in s.summary_unknown_reason
+
+    def test_nested_plain_def_does_not_poison(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def _clean(s):\n"
+            "    t = html.escape(s)\n"
+            "    def f():\n"
+            "        return 1\n"
+            "    f()\n"
+            "    return t\n"
+        )
+        assert not summaries["_clean"].summary_unknown
+
+    def test_nested_global_does_not_poison_the_function(self):
+        # A nested def's ``global`` binds the MODULE frame — the
+        # enclosing function's locals are untouched (module
+        # identities degrade through the rebound-names channel).
+        _, summaries = _summaries(
+            "import html\n"
+            "def _clean(s):\n"
+            "    t = html.escape(s)\n"
+            "    def f():\n"
+            "        global counter\n"
+            "        counter = 1\n"
+            "    f()\n"
+            "    return t\n"
+        )
+        assert not summaries["_clean"].summary_unknown

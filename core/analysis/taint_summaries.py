@@ -283,11 +283,23 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     doesn't poison the outer summary.
     """
     for node in ast.walk(fn_ast):
-        if isinstance(node, (ast.Global, ast.Nonlocal)):
-            if _inside_nested_function(node, fn_ast):
-                continue
-            kind = "global" if isinstance(node, ast.Global) else "nonlocal"
+        if isinstance(node, ast.Nonlocal):
+            # A nested def's ``nonlocal`` rebinds an ENCLOSING frame —
+            # possibly this function's locals — behind the
+            # straight-line-locals premise's back (``t = escape(s);
+            # def f(): nonlocal t; t = s; f(); return t``), so it
+            # poisons the summary from ANY nesting depth. The
+            # function's own declaration poisons as before.
+            kind = "nonlocal"
             return f"declares {kind} {', '.join(node.names)}"
+        if isinstance(node, ast.Global):
+            if _inside_nested_function(node, fn_ast):
+                # A nested def's ``global`` binds the MODULE frame —
+                # it cannot rewrite this function's locals (module
+                # identities are poisoned separately via
+                # rebound_names / distrusted_roots).
+                continue
+            return f"declares global {', '.join(node.names)}"
         if not isinstance(node, ast.Call):
             continue
         # Skip calls inside nested function definitions — those will
@@ -315,23 +327,48 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
 # doctrine); kept deliberately small because an over-wide allowlist
 # reopens the forge. ``@property`` is deliberately absent: a property
 # is consumed as an attribute read, never as a call-shaped join, so
-# degrading it costs nothing.
+# degrading it costs nothing. Entries are TRUSTED IDENTITIES, not
+# spellings: bare ``staticmethod`` / ``classmethod`` are builtins;
+# everything else is checked AFTER resolving the written name through
+# the module's import map (``from functools import lru_cache`` →
+# ``functools.lru_cache``), and a root the module itself rebinds
+# (``def staticmethod``, ``import evil as functools``) never matches.
 _SEMANTICS_PRESERVING_DECORATORS = frozenset({
     "staticmethod", "classmethod",
-    "abstractmethod", "abc.abstractmethod",
+    "abc.abstractmethod",
     "functools.wraps", "functools.lru_cache", "functools.cache",
-    "override", "typing.override",
+    "typing.override",
 })
 
 
-def _poisoning_decorator(fn_ast: ast.AST) -> str | None:
+def _poisoning_decorator(
+    fn_ast: ast.AST,
+    import_map: dict[str, str],
+    distrusted_roots: frozenset[str],
+) -> str | None:
     """Name of the first decorator that voids the summary's identity
-    premise, or None when every decorator is semantics-preserving."""
+    premise, or None when every decorator is a trusted
+    semantics-preserving identity.
+
+    The written name only counts when its root is not repo-rebound
+    (``distrusted_roots``) and its import-resolved form is in the
+    allowlist — trusting spellings let a repo define its own
+    ``staticmethod`` (or ``import evil as functools``) and keep a
+    swapped-out def certified."""
     for dec in getattr(fn_ast, "decorator_list", ()) or ():
         target = dec.func if isinstance(dec, ast.Call) else dec
         name = _attribute_chain_str(target)
-        if name is None or name not in _SEMANTICS_PRESERVING_DECORATORS:
-            return name or "<complex decorator>"
+        if name is None:
+            return "<complex decorator>"
+        root = name.split(".", 1)[0]
+        if root in distrusted_roots:
+            return name
+        resolved = name
+        mapped = import_map.get(root)
+        if mapped is not None:
+            resolved = mapped + name[len(root):]
+        if resolved not in _SEMANTICS_PRESERVING_DECORATORS:
+            return name
     return None
 
 
@@ -452,6 +489,7 @@ def _expr_taint(
     in_state_fn,
     summaries: dict[str, TaintSummary],
     local_bindings: frozenset[str] = frozenset(),
+    distrusted_roots: frozenset[str] = frozenset(),
 ) -> TaintState:
     """Compute the :data:`TaintState` produced by evaluating an
     arbitrary expression at ``cfg_node``'s IN.
@@ -535,8 +573,16 @@ def _expr_taint(
         # certification refuses rather than suppresses.
         base_name = callable_name.split(".", 1)[0] if callable_name else ""
         shadowed = bool(base_name) and base_name in local_bindings
+        # Module-scope distrust poisons the STAMP only (the written
+        # name must never match a catalog identity — ``import fakelib
+        # as html`` makes ``html.escape`` the repo's callable), never
+        # the summary JOIN: an in-module helper's own def name is
+        # distrusted by definition, and its join is guarded by the
+        # rebound/unknown poisons instead.
+        distrusted = bool(base_name) and base_name in distrusted_roots
         stamp_name = (
-            f"<shadowed:{callable_name}>" if shadowed else callable_name
+            f"<shadowed:{callable_name}>" if (shadowed or distrusted)
+            else callable_name
         )
         # ``g(*xs)`` makes every later positional index unknowable —
         # taint still flows, but positions can't be trusted.
@@ -546,7 +592,7 @@ def _expr_taint(
         arg_states: list[TaintState] = [
             _expr_taint(
                 a.value if isinstance(a, ast.Starred) else a,
-                cfg_node, in_state_fn, summaries, local_bindings,
+                cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots,
             )
             for a in expr.args
         ]
@@ -554,7 +600,7 @@ def _expr_taint(
         # marks the whole function ``summary_unknown`` upstream).
         kw_states: list[tuple[str | None, TaintState]] = [
             (kw.arg, _expr_taint(kw.value, cfg_node, in_state_fn,
-                                 summaries, local_bindings))
+                                 summaries, local_bindings, distrusted_roots))
             for kw in expr.keywords
         ]
         # Method-call receiver: ``recv.m(...)`` evaluates ``recv`` and
@@ -587,7 +633,7 @@ def _expr_taint(
             recv_stamp = "<lambda>"
         if isinstance(expr.func, ast.Attribute):
             recv_state = _expr_taint(
-                expr.func.value, cfg_node, in_state_fn, summaries, local_bindings,
+                expr.func.value, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots,
             )
             recv_stamp = stamp_name or expr.func.attr
 
@@ -663,7 +709,10 @@ def _expr_taint(
         for arg_idx, arg_state in enumerate(arg_states):
             if not arg_state:
                 continue
-            idx = _OPAQUE_ARG if (has_starred or shadowed) else arg_idx
+            idx = (
+                _OPAQUE_ARG if (has_starred or shadowed or distrusted)
+                else arg_idx
+            )
             stamped = _add_effect(arg_state, stamp_name, idx)
             result = _merge_states(result, stamped)
         for _kw_name, kw_state in kw_states:
@@ -684,37 +733,37 @@ def _expr_taint(
                 # Recurse on the FormattedValue NODE (not just its
                 # value) so nested format specs contribute too.
                 out = _merge_states(
-                    out, _expr_taint(v, cfg_node, in_state_fn, summaries, local_bindings),
+                    out, _expr_taint(v, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
                 )
         return out
     if isinstance(expr, ast.FormattedValue):
-        out = _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings)
+        out = _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots)
         if expr.format_spec is not None:
             # ``f"{v:{width}}"`` — the format spec's interpolations
             # carry their inputs' taint into the rendered result.
             out = _merge_states(out, _expr_taint(
-                expr.format_spec, cfg_node, in_state_fn, summaries, local_bindings,
+                expr.format_spec, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots,
             ))
         return out
     if isinstance(expr, ast.BinOp):
         return _merge_states(
-            _expr_taint(expr.left, cfg_node, in_state_fn, summaries, local_bindings),
-            _expr_taint(expr.right, cfg_node, in_state_fn, summaries, local_bindings),
+            _expr_taint(expr.left, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
+            _expr_taint(expr.right, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
         )
     if isinstance(expr, ast.BoolOp):
         out = _empty_state()
         for v in expr.values:
             out = _merge_states(
-                out, _expr_taint(v, cfg_node, in_state_fn, summaries, local_bindings),
+                out, _expr_taint(v, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
             )
         return out
     if isinstance(expr, ast.IfExp):
         return _merge_states(
-            _expr_taint(expr.body, cfg_node, in_state_fn, summaries, local_bindings),
-            _expr_taint(expr.orelse, cfg_node, in_state_fn, summaries, local_bindings),
+            _expr_taint(expr.body, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
+            _expr_taint(expr.orelse, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
         )
     if isinstance(expr, ast.UnaryOp):
-        return _expr_taint(expr.operand, cfg_node, in_state_fn, summaries, local_bindings)
+        return _expr_taint(expr.operand, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots)
     # Element/container shapes: the contained expressions' taint flows
     # into the result (an element carries its container's taint, a
     # container carries its elements'). Unstamped — same
@@ -722,16 +771,16 @@ def _expr_taint(
     # direct atom makes the consumer refuse, never suppress.
     if isinstance(expr, ast.Subscript):
         return _merge_states(
-            _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings),
-            _expr_taint(expr.slice, cfg_node, in_state_fn, summaries, local_bindings),
+            _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
+            _expr_taint(expr.slice, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
         )
     if isinstance(expr, ast.Starred):
-        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings)
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots)
     if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
         out = _empty_state()
         for e in expr.elts:
             out = _merge_states(
-                out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings),
+                out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
             )
         return out
     if isinstance(expr, ast.Dict):
@@ -739,15 +788,15 @@ def _expr_taint(
         for e in (*expr.keys, *expr.values):
             if e is not None:  # None key = ``**expr`` expansion's slot
                 out = _merge_states(
-                    out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings),
+                    out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
                 )
         return out
     if isinstance(expr, ast.NamedExpr):
         # ``(t := v)`` evaluates to v — keep v's chains intact so a
         # walrus-wrapped sanitizer stays clean.
-        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings)
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots)
     if isinstance(expr, ast.Await):
-        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings)
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots)
     if isinstance(
         expr, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp),
     ):
@@ -765,7 +814,7 @@ def _expr_taint(
         out = _empty_state()
         for e in parts:
             out = _merge_states(
-                out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings),
+                out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings, distrusted_roots),
             )
         return out
     if isinstance(expr, (ast.Constant, ast.Lambda)):
@@ -961,7 +1010,9 @@ def _compute_one_summary(
     # an arbitrary wrapper at import time — certifying the BODY would
     # forge a clean-sanitizer wrapper for a callable the name no
     # longer points at. Semantics-preserving decorators are exempt.
-    poisoning = _poisoning_decorator(fn_ast)
+    poisoning = _poisoning_decorator(
+        fn_ast, cg.import_map, cg.nonimport_distrusted_roots,
+    )
     if poisoning is not None:
         return TaintSummary(
             function=qualified_name,
@@ -1029,8 +1080,11 @@ def _compute_one_summary(
     # the post-fixed-point collection loop below already uses.
     _assign_map = _build_assignment_value_map(fn_ast)
     # Locally bound names — the shadow guard for _expr_taint's
-    # name-keyed callee join (see local_binding_names).
+    # name-keyed callee join (see local_binding_names) — plus the
+    # module-scope distrusted roots that poison external-identity
+    # stamps (see module_distrusted_roots).
     _local_bindings = local_binding_names(fn_ast)
+    _distrusted_roots = cg.distrusted_roots
     max_inner = 4 * max(1, len(list(cfg.nodes())))
     for _ in range(max_inner):
         changed = False
@@ -1055,6 +1109,7 @@ def _compute_one_summary(
                     for value_ast, is_augmented in found:
                         rhs_state = _expr_taint(
                             value_ast, n, _in_state_for, summaries_so_far, _local_bindings,
+                            _distrusted_roots,
                         )
                         if is_augmented:
                             # ``q += rhs`` is ``q = q ⊕ rhs`` — the
@@ -1109,6 +1164,7 @@ def _compute_one_summary(
             else:
                 state = _expr_taint(
                     return_value, n, _in_state_for, summaries_so_far, _local_bindings,
+                            _distrusted_roots,
                 )
                 for pi, effects in state:
                     if not effects:
@@ -1131,6 +1187,7 @@ def _compute_one_summary(
                 for arg_idx, arg_ast in enumerate(ast_n.args):
                     arg_state = _expr_taint(
                         arg_ast, n, _in_state_for, summaries_so_far, _local_bindings,
+                            _distrusted_roots,
                     )
                     for pi, _ in arg_state:
                         call_arg_taint.add((callable_name, arg_idx, pi))

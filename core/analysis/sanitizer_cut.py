@@ -1764,6 +1764,14 @@ def evaluate_finding(
         local_roots: set = set(getattr(graph, "params", ()) or ())
         for _n in graph.nodes():
             local_roots.update(getattr(_n, "defs", ()) or ())
+        # The python builder additionally stamps the full
+        # untrusted-identity set (local imports the CFG defs miss,
+        # module-scope rebinds/import-aliases of the root, global
+        # declarations) — CFG defs alone missed ``import fakelib as
+        # html`` in both local and module positions.
+        local_roots.update(
+            getattr(graph, "shadowed_roots", None) or (),
+        )
         if local_roots:
             matched_bindings = frozenset(
                 b for b in matched_bindings

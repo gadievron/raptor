@@ -143,6 +143,21 @@ class PyModuleCallGraph:
     # summary consumers must treat these identities as unknown — the
     # written name no longer proves which body executes.
     rebound_names: frozenset[str] = frozenset()
+    # Module-scope roots whose binding is repo-controlled (see
+    # :func:`module_shadowed_identity_roots` — non-import rebinds
+    # plus import aliases binding a different source) — consumers
+    # must never let a WRITTEN dotted name whose root is here match a
+    # trusted external identity (catalog sanitizer, chain stamp).
+    distrusted_roots: frozenset[str] = frozenset()
+    # The non-import subset (:func:`module_distrusted_roots`): the
+    # decorator gate refuses these outright but resolves import
+    # aliases through :attr:`import_map` instead — ``from functools
+    # import lru_cache`` is a trusted identity, ``lru_cache = str``
+    # is not.
+    nonimport_distrusted_roots: frozenset[str] = frozenset()
+    # Module-scope import bindings (root → dotted source) for
+    # resolving written names to trusted identities.
+    import_map: dict[str, str] = field(default_factory=dict)
 
     @property
     def entry(self) -> PyCallGraphNode:
@@ -540,6 +555,125 @@ def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
     return frozenset(nondef | global_names | (class_names & def_names))
 
 
+def module_import_map(tree: ast.Module) -> dict[str, str]:
+    """Module-scope import bindings: bound root name → dotted source.
+
+    ``import a.b`` binds ``a`` → ``a``; ``import a.b as c`` binds
+    ``c`` → ``a.b``; ``from m import n as k`` binds ``k`` → ``m.n``.
+    Relative imports resolve outside the module's own vocabulary and
+    map to a ``<relative>``-prefixed source that can never match a
+    trusted dotted name. Later bindings win (runtime order)."""
+    out: dict[str, str] = {}
+
+    def _walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef, ast.Lambda)):
+                continue
+            if isinstance(child, ast.Import):
+                for alias in child.names:
+                    root = alias.name.split(".", 1)[0]
+                    if alias.asname:
+                        out[alias.asname] = alias.name
+                    else:
+                        out[root] = root
+            elif isinstance(child, ast.ImportFrom):
+                module = child.module or ""
+                prefix = "<relative>." * child.level + module
+                for alias in child.names:
+                    if alias.name == "*":
+                        continue
+                    bound = alias.asname or alias.name
+                    src = f"{prefix}.{alias.name}" if prefix else alias.name
+                    out[bound] = src
+            _walk(child)
+
+    _walk(tree)
+    return out
+
+
+def module_distrusted_roots(tree: ast.Module) -> frozenset[str]:
+    """Module-scope names whose binding is REPO-CONTROLLED rather than
+    the same-named external module / builtin.
+
+    The catalog matcher and the decorator allowlist trust WRITTEN
+    names (``html.escape``, ``@staticmethod``); a hostile module can
+    rebind the root of such a name and keep the spelling. Distrusted:
+
+    * every module-scope def / class / lambda-def name (a def named
+      ``html`` or ``staticmethod`` is the repo's object);
+    * every non-import module-scope binding (assignments including
+      destructuring, walrus, ``for``/``with``/``except`` targets);
+    * names declared ``global`` anywhere in the module (any sibling
+      can rewrite the slot);
+    Import bindings are NOT in this set — they resolve exactly
+    through :func:`module_import_map` (a ``from functools import
+    lru_cache`` alias is a trusted identity, not a rebind); consumers
+    that check WRITTEN dotted identities against external catalogs
+    need :func:`module_shadowed_identity_roots`, which unions in the
+    aliases that bind a different source.
+
+    Trusted absences: an unbound root (resolves to builtins or fails
+    at runtime — it cannot be the repo's object) and the plain
+    self-import (``import html``, ``import html.parser``)."""
+    out: set[str] = set()
+
+    def _add_target(t: ast.AST) -> None:
+        if isinstance(t, ast.Name):
+            out.add(t.id)
+        elif isinstance(t, ast.Starred):
+            _add_target(t.value)
+        elif isinstance(t, (ast.Tuple, ast.List)):
+            for e in t.elts:
+                _add_target(e)
+
+    def _walk(node: ast.AST) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                  ast.ClassDef)):
+                out.add(child.name)
+                continue
+            if isinstance(child, ast.Lambda):
+                continue
+            if isinstance(child, ast.Assign):
+                for t in child.targets:
+                    _add_target(t)
+            elif isinstance(child, (ast.AnnAssign, ast.AugAssign)):
+                _add_target(child.target)
+            elif isinstance(child, ast.NamedExpr):
+                _add_target(child.target)
+            elif isinstance(child, (ast.For, ast.AsyncFor)):
+                _add_target(child.target)
+            elif isinstance(child, (ast.With, ast.AsyncWith)):
+                for item in child.items:
+                    if item.optional_vars is not None:
+                        _add_target(item.optional_vars)
+            elif isinstance(child, ast.ExceptHandler):
+                if child.name:
+                    out.add(child.name)
+            _walk(child)
+
+    _walk(tree)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            out.update(node.names)
+
+    return frozenset(out)
+
+
+def module_shadowed_identity_roots(tree: ast.Module) -> frozenset[str]:
+    """Roots a WRITTEN dotted identity must never be trusted through:
+    every non-import rebind (:func:`module_distrusted_roots`) plus
+    import aliases binding a DIFFERENT source (``import fakelib as
+    html``, ``from fakelib import html``). The sanitizer-catalog
+    guard and the summary chain stamps consume this set."""
+    return module_distrusted_roots(tree) | frozenset(
+        root for root, src in module_import_map(tree).items()
+        if src != root
+    )
+
+
 # ---------------------------------------------------------------------------
 # Call resolution
 # ---------------------------------------------------------------------------
@@ -875,6 +1009,9 @@ def build_python_module_callgraph(
         },
         _asts_by_node=asts_by_node,
         rebound_names=rebound,
+        distrusted_roots=module_shadowed_identity_roots(tree),
+        nonimport_distrusted_roots=module_distrusted_roots(tree),
+        import_map=module_import_map(tree),
     )
 
 
@@ -884,4 +1021,7 @@ __all__ = [
     "PyModuleCallGraph",
     "build_python_module_callgraph",
     "local_binding_names",
+    "module_distrusted_roots",
+    "module_import_map",
+    "module_shadowed_identity_roots",
 ]

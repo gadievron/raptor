@@ -1471,6 +1471,81 @@ def build_corpus() -> list[CutFixture]:
         "    y = html.escape(x)\n"
         "    render(y)\n", 3, 6))
     fixtures.append(_fx(
+        "xss_module_import_alias_catalog_root", "xss", "CWE-79",
+        "catalog_root_import_aliased", LABEL_MUST_NOT_SUPPRESS,
+        "import fakelib as html\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 2, 4))
+    fixtures.append(_fx(
+        "xss_local_import_alias_catalog_root", "xss", "CWE-79",
+        "catalog_root_import_aliased_locally", LABEL_MUST_NOT_SUPPRESS,
+        "def handle(x):\n"
+        "    import fakelib as html\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 1, 4))
+    fixtures.append(_fx(
+        "xss_global_sibling_catalog_root", "xss", "CWE-79",
+        "catalog_root_rebound_via_sibling_global",
+        LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def evil():\n"
+        "    global html\n"
+        "    html = object()\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 5, 7))
+    fixtures.append(_fx(
+        "xss_nonlocal_writeback_direct", "xss", "CWE-79",
+        "sanitized_then_nonlocal_writeback", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    def fixup():\n"
+        "        nonlocal y\n"
+        "        y = x\n"
+        "    fixup()\n"
+        "    render(y)\n", 2, 8))
+    fixtures.append(_fx(
+        "xss_nonlocal_writeback_helper", "xss", "CWE-79",
+        "wrapper_sanitized_then_nonlocal_writeback",
+        LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def _clean(s):\n"
+        "    t = html.escape(s)\n"
+        "    def f():\n"
+        "        nonlocal t\n"
+        "        t = s\n"
+        "    f()\n"
+        "    return t\n"
+        "def handle(x):\n"
+        "    y = _clean(x)\n"
+        "    render(y)\n", 9, 11))
+    fixtures.append(_fx(
+        "xss_repo_defined_allowlist_decorator", "xss", "CWE-79",
+        "decorator_allowlist_name_repo_defined",
+        LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def staticmethod(f):\n"
+        "    return str\n"
+        "@staticmethod\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 7, 9))
+    fixtures.append(_fx(
+        "xss_from_import_decorator_still_rescues", "xss", "CWE-79",
+        "decorator_from_import_resolved_identity", LABEL_MAY_SUPPRESS,
+        "import html\n"
+        "from functools import lru_cache\n"
+        "@lru_cache\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 6, 8))
+    fixtures.append(_fx(
         "xss_comprehension_target_not_shadow", "xss", "CWE-79",
         "comprehension_target_scoped_no_shadow", LABEL_MAY_SUPPRESS,
         "import html\n"
