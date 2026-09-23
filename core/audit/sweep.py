@@ -72,17 +72,33 @@ def get_rule_role(rule_path: str) -> str:
     Dynamic per-hypothesis rules (not on disk) bypass this check
     entirely — the orchestrator's ``_is_detection_only`` returns
     False for files not in the stock library.
+
+    The read is bounded by the header GRAMMAR, never a byte count:
+    role directives live in the rule's leading comment block, so the
+    scan consumes exactly that block (``//`` comment and blank lines
+    up to the first SmPL content).  A fixed byte prefix silently
+    demoted a verification rule whose documentation grew past the
+    prefix — verdict machinery went dark with zero diagnostics.  The
+    fixture-closure gate cross-checks this reader against a full-file
+    scan (engine/coccinelle/tests/test_rule_fixture_closure.py), so a
+    directive this reader cannot see fails CI instead of silently
+    defaulting.
     """
+    header_lines: list[str] = []
     try:
         with Path(rule_path).open() as f:
-            head = f.read(2048)
-        m = _ROLE_RE.search(head)
-        if m:
-            role = m.group(1).lower()
-            if role in ("detection", "verification"):
-                return role
+            for line in f:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("//"):
+                    break
+                header_lines.append(line)
     except OSError:
-        pass
+        return "detection"
+    m = _ROLE_RE.search("".join(header_lines))
+    if m:
+        role = m.group(1).lower()
+        if role in ("detection", "verification"):
+            return role
     return "detection"
 
 
