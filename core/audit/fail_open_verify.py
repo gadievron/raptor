@@ -48,8 +48,12 @@ Verdict semantics:
 * ``refuted`` — fail-closed demonstrated with per-site receipts (the
   handler re-raises / returns a restrictive value / aborts, or every
   site checks the result correctly).
-* ``inconclusive`` — one of seven enumerated reasons (each a distinct
-  tested string); never silently dropped.
+* ``inconclusive`` — one of the enumerated reasons (each a distinct
+  tested string); never silently dropped. A refutation additionally
+  requires the leg to have EXAMINED the asserted mechanism: the
+  handler-outcome legs (python/java/JS catch analysis) abstain with
+  ``mechanism-unsupported`` on ignored-return/tri-state phrasings,
+  which they have no adjudicator for.
 
 No LLM calls, no subprocesses.
 """
@@ -134,6 +138,7 @@ REASON_TYPES_UNRESOLVED = "types-unresolved"
 REASON_ASYNC_UNPROVABLE = "async-unprovable"
 REASON_HYPOTHESIS_UNBINDABLE = "hypothesis-unbindable"
 REASON_SPAN_UNRESOLVED = "span-unresolved"
+REASON_MECHANISM_UNSUPPORTED = "mechanism-unsupported"
 
 INCONCLUSIVE_REASONS = frozenset({
     REASON_ROLE_UNBOUND,
@@ -144,6 +149,7 @@ INCONCLUSIVE_REASONS = frozenset({
     REASON_ASYNC_UNPROVABLE,
     REASON_HYPOTHESIS_UNBINDABLE,
     REASON_SPAN_UNRESOLVED,
+    REASON_MECHANISM_UNSUPPORTED,
 })
 
 # CWE families the channel joins via the fallback chain. CWE-248
@@ -175,6 +181,26 @@ _FAIL_OPEN_HYPOTHESIS_RE = re.compile(
     r"|(?:verif|auth|valid|sanitiz|permission)\w*.{0,40}"
     r"(?:error|exception|failure)\w*.{0,30}"
     r"(?:proceed|continue|allow|bypass|ignored|silently))",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Ignored/discarded/unchecked RETURN phrasings (plus tri-state
+# acceptance) — the mechanism the handler-outcome legs (python, java,
+# JS/TS catch analysis) have no adjudicator for. A refutation is only
+# evidence when the leg examined the asserted mechanism: a fail-closed
+# handler says nothing about a return value that is never looked at,
+# so handler legs must abstain instead of refuting these shapes.
+# Deliberately narrower than the routing regex above: bare
+# "error"/"exception" phrasings lean toward the swallow mechanism the
+# handler legs DO examine, and keep their refutation authority.
+_IGNORED_RETURN_HYPOTHESIS_RE = re.compile(
+    r"(?:(?:ignor|discard|unchecked)\w*.{0,30}"
+    r"(?:return\s+(?:value|code)|results?\b|\berr\b"
+    r"|errors?\s+returned\b)"
+    r"|(?:return\s+(?:value|code)|results?\b|\berr\b"
+    r"|errors?\s+returned\b).{0,40}"
+    r"(?:ignor|discard|unchecked|\bnot\s+checked)"
+    r"|tri-?state)",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -445,6 +471,7 @@ def _run_python_check(
     source: str,
     file_path: str,
     function_name: str,
+    hypothesis: str,
     role_context: RoleContext,
     inventory: dict[str, Any] | None,
 ) -> FailOpenResult:
@@ -469,6 +496,24 @@ def _run_python_check(
 
     if not permissive:
         if fail_closed and not undecided:
+            if _IGNORED_RETURN_HYPOTHESIS_RE.search(hypothesis):
+                # Mechanism-bind the refutation: this leg adjudicates
+                # HANDLER outcomes only — it has no ignored-return
+                # adjudicator, so a fail-closed handler elsewhere in
+                # the function is evidence about a mechanism the
+                # hypothesis never asserted. A leg that did not
+                # examine the asserted mechanism must abstain, not
+                # refute (the mechanical verdict carries
+                # verification-grade authority downstream).
+                return _inconclusive(
+                    REASON_MECHANISM_UNSUPPORTED,
+                    "hypothesis asserts an ignored/discarded return "
+                    "value — the python leg adjudicates handler "
+                    "outcomes only and never examined that "
+                    "mechanism; fail-closed handler evidence cannot "
+                    "refute it",
+                    language="python",
+                )
             first = fail_closed[0]
             return FailOpenResult(
                 outcome="refuted",
@@ -596,6 +641,7 @@ def _run_java_check(
     source: str,
     file_path: str,
     function_name: str,
+    hypothesis: str,
     role_context: RoleContext,
     inventory: dict[str, Any] | None,
 ) -> FailOpenResult:
@@ -627,6 +673,20 @@ def _run_java_check(
 
     if not permissive:
         if fail_closed and not undecided:
+            if _IGNORED_RETURN_HYPOTHESIS_RE.search(hypothesis):
+                # Same mechanism-binding as the python leg: no
+                # ignored-return adjudicator here, so a fail-closed
+                # catch clause cannot refute a hypothesis about a
+                # return value nothing examined.
+                return _inconclusive(
+                    REASON_MECHANISM_UNSUPPORTED,
+                    "hypothesis asserts an ignored/discarded return "
+                    "value — the java leg adjudicates catch-clause "
+                    "outcomes only and never examined that "
+                    "mechanism; fail-closed handler evidence cannot "
+                    "refute it",
+                    language="java",
+                )
             first = fail_closed[0]
             return FailOpenResult(
                 outcome="refuted",
@@ -1509,6 +1569,7 @@ def _run_js_handler_check(
     source: str,
     file_path: str,
     function_name: str,
+    hypothesis: str,
     language: str,
     role_context: RoleContext,
     inventory: dict[str, Any] | None,
@@ -1542,6 +1603,21 @@ def _run_js_handler_check(
 
     if not permissive:
         if fail_closed and not undecided:
+            if _IGNORED_RETURN_HYPOTHESIS_RE.search(hypothesis):
+                # Same mechanism-binding as the python/java legs: the
+                # unawaited split has its own code-shape gate in
+                # _run_js_check, but plain ignored-RETURN prose (not
+                # promise-shaped) lands here, where catch-clause
+                # outcomes are the only thing examined.
+                return _inconclusive(
+                    REASON_MECHANISM_UNSUPPORTED,
+                    "hypothesis asserts an ignored/discarded return "
+                    f"value — the {language} handler leg adjudicates "
+                    "catch/`.catch` outcomes only and never examined "
+                    "that mechanism; fail-closed handler evidence "
+                    "cannot refute it",
+                    language=language,
+                )
             first = fail_closed[0]
             return FailOpenResult(
                 outcome="refuted",
@@ -1827,8 +1903,8 @@ def _run_js_check(
         # when the function has no handler to check; any handler-leg
         # answer (either direction, or undecided) supersedes it.
         handler_result = _run_js_handler_check(
-            source, file_path, function_name, language, role_context,
-            inventory,
+            source, file_path, function_name, hypothesis, language,
+            role_context, inventory,
         )
         if (
             handler_result.outcome == "inconclusive"
@@ -1838,8 +1914,8 @@ def _run_js_check(
             return result
         return handler_result
     return _run_js_handler_check(
-        source, file_path, function_name, language, role_context,
-        inventory,
+        source, file_path, function_name, hypothesis, language,
+        role_context, inventory,
     )
 
 
@@ -2153,11 +2229,13 @@ def run_fail_open_check(
 
     if language == "python":
         result = _run_python_check(
-            source, file_path, function_name, ctx, inventory,
+            source, file_path, function_name, hypothesis, ctx,
+            inventory,
         )
     elif language == "java":
         result = _run_java_check(
-            source, file_path, function_name, ctx, inventory,
+            source, file_path, function_name, hypothesis, ctx,
+            inventory,
         )
     elif language == "go":
         result = _run_go_check(

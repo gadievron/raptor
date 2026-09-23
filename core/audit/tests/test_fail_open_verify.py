@@ -48,6 +48,7 @@ from core.audit.fail_open_verify import (
     REASON_HANDLER_UNDECIDED,
     REASON_HYPOTHESIS_UNBINDABLE,
     REASON_LANGUAGE_UNSUPPORTED,
+    REASON_MECHANISM_UNSUPPORTED,
     REASON_ROLE_UNBOUND,
     REASON_TYPES_UNRESOLVED,
     RULE_HANDLER_OUTCOME,
@@ -2370,3 +2371,181 @@ def test_read_source_is_capped(tmp_path, monkeypatch):
     text = _read_source(tmp_path, "big.py")
     assert text is not None
     assert len(text) <= 1024
+
+
+class TestMechanismBoundRefutation:
+    """Handler-outcome legs abstain on ignored-return hypotheses.
+
+    The python/java/JS handler legs adjudicate handler outcomes ONLY —
+    they have no ignored-return adjudicator (C/Go/Rust import their
+    site classifiers; these legs import none). A fail-closed handler
+    elsewhere in the function is evidence about a different mechanism
+    than the one an ignored-return hypothesis asserts, and a
+    mechanical refutation carries verification-grade authority
+    downstream — so a leg that never examined the asserted mechanism
+    must return inconclusive, never refuted."""
+
+    PY_SOURCE = (
+        "import logging\n"
+        "log = logging.getLogger(__name__)\n"
+        "\n"
+        "def check_signature(data):\n"
+        "    raise ValueError('bad')\n"
+        "\n"
+        "def handle(data):\n"
+        "    check_signature(data)   # unchecked return\n"
+        "    try:\n"
+        "        audit_trail(data)\n"
+        "    except OSError:\n"
+        "        raise RuntimeError('audit backend down')\n"
+        "    return True\n"
+        "\n"
+        "def audit_trail(data):\n"
+        "    raise OSError('disk')\n"
+    )
+    HYP_IGNORED = (
+        "the return value of `check_signature` is ignored — "
+        "verification errors are silently discarded and control "
+        "proceeds"
+    )
+    HYP_SWALLOW = (
+        "handle swallows the audit exception and the request proceeds"
+    )
+
+    def test_python_leg_abstains_on_ignored_return_hypothesis(
+            self, tmp_path):
+        assert is_fail_open_hypothesis(self.HYP_IGNORED)
+        _write(tmp_path, "src/authmod.py", self.PY_SOURCE)
+        res = run_fail_open_check(
+            tmp_path, "src/authmod.py", "handle", self.HYP_IGNORED,
+        )
+        assert res.outcome == "inconclusive"
+        assert REASON_MECHANISM_UNSUPPORTED in res.reason
+        assert res.rule_id != RULE_HANDLER_OUTCOME or res.outcome != (
+            "refuted")
+
+    def test_python_leg_still_refutes_handler_shaped_prose(
+            self, tmp_path):
+        # Control: the same fail-closed handler DOES refute a
+        # hypothesis that asserts the handler mechanism.
+        _write(tmp_path, "src/authmod.py", self.PY_SOURCE)
+        res = run_fail_open_check(
+            tmp_path, "src/authmod.py", "handle", self.HYP_SWALLOW,
+        )
+        assert res.outcome == "refuted"
+        assert res.rule_id == RULE_HANDLER_OUTCOME
+
+    def test_python_confirmation_untouched_by_ignored_return_prose(
+            self, tmp_path):
+        # Control: mechanism-binding gates only the REFUTED branch —
+        # a permissive swallow still confirms (the finding direction
+        # is validated downstream, not authority-bearing here).
+        src = TestVerdictsPython.JWT_VULN
+        _write(tmp_path, "src/auth.py", src)
+        out = _out_dir_with_spec(tmp_path, "decode", tier="xref_backed")
+        res = run_fail_open_check(
+            tmp_path, "src/auth.py", "current_user",
+            "the result of jwt.decode is ignored and the broad except "
+            "swallows signature errors",
+            role_context=RoleContext(out_dir=out),
+        )
+        assert res.outcome == "confirmed"
+
+    JAVA_SOURCE = (
+        "public class AuthMod {\n"
+        "    public boolean handle(Request req) {\n"
+        "        authz.check(req);\n"
+        "        try { audit.log(req); }\n"
+        "        catch (IOException e) "
+        "{ throw new RuntimeException(e); }\n"
+        "        return true;\n"
+        "    }\n"
+        "}\n"
+    )
+
+    @requires_ts("java")
+    def test_java_leg_abstains_on_ignored_return_hypothesis(
+            self, tmp_path):
+        hyp = ("the return value of `authz.check` is not checked — "
+               "authorization results are discarded")
+        assert is_fail_open_hypothesis(hyp)
+        _write(tmp_path, "src/AuthMod.java", self.JAVA_SOURCE)
+        res = run_fail_open_check(
+            tmp_path, "src/AuthMod.java", "handle", hyp,
+        )
+        assert res.outcome == "inconclusive"
+        assert REASON_MECHANISM_UNSUPPORTED in res.reason
+
+    @requires_ts("java")
+    def test_java_leg_still_refutes_handler_shaped_prose(
+            self, tmp_path):
+        _write(tmp_path, "src/AuthMod.java", self.JAVA_SOURCE)
+        res = run_fail_open_check(
+            tmp_path, "src/AuthMod.java", "handle",
+            "audit failure swallowed by the catch; the request "
+            "proceeds",
+        )
+        assert res.outcome == "refuted"
+        assert res.rule_id == RULE_HANDLER_OUTCOME
+
+    JS_SOURCE = (
+        "function handle(data) {\n"
+        "    checkSignature(data);   // unchecked return\n"
+        "    try {\n"
+        "        auditTrail(data);\n"
+        "    } catch (e) {\n"
+        "        throw new Error('audit backend down');\n"
+        "    }\n"
+        "    return true;\n"
+        "}\n"
+    )
+
+    @requires_ts("javascript")
+    def test_js_handler_leg_abstains_on_ignored_return_hypothesis(
+            self, tmp_path):
+        # The unawaited split has its own code-shape gate; PLAIN
+        # ignored-return prose (not promise-shaped) lands on the
+        # handler leg, which must abstain the same way.
+        hyp = ("the return value of `checkSignature` is ignored — "
+               "verification results are discarded")
+        assert is_fail_open_hypothesis(hyp)
+        _write(tmp_path, "src/authmod.js", self.JS_SOURCE)
+        res = run_fail_open_check(
+            tmp_path, "src/authmod.js", "handle", hyp,
+        )
+        assert res.outcome == "inconclusive"
+        assert REASON_MECHANISM_UNSUPPORTED in res.reason
+
+    @requires_ts("javascript")
+    def test_js_handler_leg_still_refutes_handler_shaped_prose(
+            self, tmp_path):
+        _write(tmp_path, "src/authmod.js", self.JS_SOURCE)
+        res = run_fail_open_check(
+            tmp_path, "src/authmod.js", "handle",
+            "handle swallows the audit exception and the request "
+            "proceeds",
+        )
+        assert res.outcome == "refuted"
+        assert res.rule_id == RULE_HANDLER_OUTCOME
+
+    def test_phrasing_boundary(self):
+        from core.audit.fail_open_verify import (
+            _IGNORED_RETURN_HYPOTHESIS_RE as rx,
+        )
+        # Ignored-return / tri-state shapes bind the mechanism.
+        assert rx.search("return value of check() is ignored")
+        assert rx.search("the result is discarded silently")
+        assert rx.search("err is not checked before use")
+        assert rx.search("tri-state comparison accepts the error value")
+        # "errors RETURNED by X" is return-flavored prose, not
+        # swallow prose — it must bind the mechanism too.
+        assert rx.search(
+            "errors returned by check_signature() are ignored")
+        assert rx.search("ignores the errors returned by verify()")
+        # Handler-mechanism prose keeps refutation authority.
+        assert not rx.search(
+            "swallows the exception and proceeds")
+        assert not rx.search(
+            "empty catch hides sanitiser failures")
+        assert not rx.search(
+            "verification errors are silently ignored")
