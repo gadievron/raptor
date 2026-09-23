@@ -93,6 +93,28 @@ class TestPositives:
         assert results[0]["line"] == 6
 
 
+    def test_one_record_per_report_site(self, tmp_path):
+        # Both branches allocate, one error return leaks: the report
+        # script used to emit one record per (return, allocation) pair
+        # — same site, near-identical messages — leaving dedup to the
+        # consumer.
+        results = _run_rule(tmp_path, """\
+            int f(int a, int b)
+            {
+                char *p;
+                if (a)
+                    p = kmalloc(8, 1);
+                else
+                    p = kzalloc(16, 1);
+                if (b) {
+                    return -1;
+                }
+                return 0;
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["line"] == 9
+
 class TestNegatives:
     def test_allocation_failure_check_does_not_fire(self, tmp_path):
         # Nothing was allocated on the failure path — the mandatory
