@@ -2031,3 +2031,34 @@ class BudgetConstantSingleHomeTest(unittest.TestCase):
         self.assertEqual(pin.RUN_METADATA_FILE, RUN_METADATA_FILE)
         self.assertEqual(tmp_reaper._RUN_METADATA_FILE,
                          RUN_METADATA_FILE)
+
+
+class PromoteChecklistStreamingTest(unittest.TestCase):
+    """Promotion folds older checklists one at a time (newest is the
+    base) instead of accumulating every sibling in memory; the merged
+    result is unchanged."""
+
+    def test_checked_by_carries_forward_across_three_runs(self):
+        import json as _json
+
+        from core.run.metadata import _promote_checklist
+        with TemporaryDirectory() as d:
+            proj = Path(d)
+            base_cl = {"files": [{"path": "a.c", "lines": 9, "items": [
+                {"name": "f1", "line_start": 1, "line_end": 9}]}]}
+            for i, checked in enumerate((["semgrep"], ["llm"], [])):
+                run = proj / f"scan-2026010{i + 1}_000000"
+                run.mkdir()
+                cl = _json.loads(_json.dumps(base_cl))
+                if checked:
+                    cl["files"][0]["items"][0]["checked_by"] = checked
+                (run / "checklist.json").write_text(_json.dumps(cl))
+                stamp = 1_700_000_000 + i
+                import os as _os
+                _os.utime(run, (stamp, stamp))
+            _promote_checklist(proj)
+            promoted = _json.loads(
+                (proj / "checklist.json").read_text())
+            got = set(promoted["files"][0]["items"][0].get(
+                "checked_by", []))
+            self.assertEqual(got, {"semgrep", "llm"})

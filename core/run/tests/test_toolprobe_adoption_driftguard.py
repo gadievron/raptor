@@ -67,3 +67,26 @@ def test_no_hand_rolled_version_probe(rel_path):
         f"({len(hits)} found, {allowed} allowed); use "
         "core.run.toolprobe.probe"
     )
+
+
+def test_probe_retention_is_capped(monkeypatch):
+    """A hostile PATH tool can answer --version with an arbitrarily
+    large stream — the retained ToolInfo streams are bounded (the
+    first_line consumers never wanted the payload)."""
+    import subprocess as _subprocess
+
+    from core.run import toolprobe
+
+    def fake_run(argv, **kwargs):
+        return _subprocess.CompletedProcess(
+            argv, 0, stdout="v1.0\n" + "A" * (2 * 1024 * 1024),
+            stderr="B" * (2 * 1024 * 1024))
+
+    monkeypatch.setattr(toolprobe.shutil, "which",
+                        lambda name: "/usr/bin/faketool")
+    monkeypatch.setattr(toolprobe.subprocess, "run", fake_run)
+    info = toolprobe.probe("faketool")
+    assert info is not None
+    assert len(info.stdout) <= toolprobe._CAPTURE_RETAIN_CHARS
+    assert len(info.stderr) <= toolprobe._CAPTURE_RETAIN_CHARS
+    assert info.first_line == "v1.0"

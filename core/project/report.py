@@ -300,6 +300,12 @@ def _clear_generated_findings_dir(findings_dir: Path) -> None:
     """Remove prior generated per-finding artifacts without following symlinks."""
     import shutil
 
+    if findings_dir.is_symlink():
+        # rmtree refuses symlinks with OSError (uncaught it crashed
+        # the whole report pass); unlinking the LINK honours the
+        # no-follow contract — the pointed-to tree is not ours.
+        findings_dir.unlink(missing_ok=True)
+        return
     try:
         shutil.rmtree(findings_dir)
     except NotADirectoryError:

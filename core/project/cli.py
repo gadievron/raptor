@@ -948,7 +948,12 @@ def main() -> None:
                                "path — refused (status/list surfaces "
                                "echo the stored path)"))
                     return
-                resolved_path = Path(args.path).expanduser().resolve()
+                # _caller_relative: a relative path means "relative
+                # to the OPERATOR's shell", not the RAPTOR repo dir
+                # the launcher moved cwd to (the same D18-class rule
+                # every other path-taking subcommand applies).
+                resolved_path = Path(
+                    _caller_relative(args.path)).expanduser().resolve()
                 if (resolved_path.suffix != ".gpr"
                         or not resolved_path.is_file()):
                     # Reject at add-time so the operator sees the typo
@@ -980,7 +985,8 @@ def main() -> None:
                 if not args.path:
                     print(_red("remove requires a <path.gpr> argument"))
                     return
-                resolved = str(Path(args.path).expanduser().resolve())
+                resolved = str(Path(
+                    _caller_relative(args.path)).expanduser().resolve())
                 from .project import project_file_lock
                 with project_file_lock(project_file):
                     gproj = mgr.load(name)
