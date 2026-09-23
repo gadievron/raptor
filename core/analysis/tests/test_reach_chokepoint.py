@@ -250,3 +250,25 @@ def test_record_suppression_swallows_unserialisable_extra(tmp_path):
     # No record written, no exception raised.
     p = tmp_path / "suppressions.jsonl"
     assert not p.exists() or "f1" not in p.read_text()
+
+
+def test_non_numeric_line_does_not_raise(tmp_path):
+    """check_suppress(line="N/A") raised ValueError out of the
+    chokepoint into the /agentic + /codeql consumer loops — the one
+    raw coercion on an otherwise shape-tolerated path. A non-numeric
+    line reads as line 0 ("no line")."""
+    from core.analysis.reach_chokepoint import check_suppress
+    checklist = {"files": [{"path": "pkg/mod.py", "items": [
+        {"name": "f", "line_start": 1, "kind": "function"},
+    ], "call_graph": {"calls": [], "imports": {}}}]}
+    for odd_line in ("N/A", "", None, [], {}):
+        result = check_suppress(
+            checklist=checklist,
+            file_path="pkg/mod.py",
+            function_name="f",
+            line=odd_line,
+            repo_root=str(tmp_path),
+        )
+        # Verdict content is classifier-dependent; the contract under
+        # test is only "never raises on a hostile/odd line shape".
+        assert result is None or isinstance(result, tuple)
