@@ -41,6 +41,7 @@ from ..models import (
     SupplyChainFinding,
 )
 from ..parsers import _safe_read
+from ..parsers._base import PARSE_ESCAPE_ERRORS
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -73,7 +74,7 @@ def load_sunset_map(
         return {}
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.supply_chain.gha_sunset: parse failed for %s: %s", p, e,
         )

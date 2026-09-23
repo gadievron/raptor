@@ -31,7 +31,7 @@ import logging
 from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
-from ._base import build_purl, lockfile_confidence
+from ._base import PARSE_ESCAPE_ERRORS, build_purl, lockfile_confidence
 from . import _safe_read, register
 from ._npm_alias import split_npm_alias
 
@@ -59,7 +59,7 @@ def parse(path: Path) -> list[Dependency]:
         return []
     try:
         data = _json.loads(text)
-    except _json.JSONDecodeError as e:
+    except (_json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.parsers.package_lock: JSON parse failed for %s: %s", path, e
         )

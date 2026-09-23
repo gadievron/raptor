@@ -44,6 +44,7 @@ import re
 
 from .models import Confidence, Dependency, PinStyle
 from .parsers import _safe_read
+from .parsers._base import PARSE_ESCAPE_ERRORS
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -112,7 +113,7 @@ def parse_cyclonedx(path: Path) -> tuple[list[Dependency], list[str]]:
 
     try:
         data = json.loads(text)
-    except json.JSONDecodeError as e:
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         msg = f"invalid JSON in SBOM {path}: {e}"
         raise ValueError(msg) from e
 

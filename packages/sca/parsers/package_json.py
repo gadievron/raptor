@@ -74,7 +74,7 @@ import re
 from pathlib import Path
 
 from ..models import Confidence, Dependency, PinStyle
-from ._base import build_purl, manifest_confidence
+from ._base import PARSE_ESCAPE_ERRORS, build_purl, manifest_confidence
 from ..versions import semver
 from . import _safe_read, register
 from ._npm_alias import split_npm_alias as _split_npm_alias
@@ -212,7 +212,7 @@ def _load(path: Path) -> dict[str, object] | None:
 
     try:
         data = _json.loads(text)
-    except _json.JSONDecodeError as e:
+    except (_json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.parsers.package_json: JSON parse failed for %s: %s", path, e
         )

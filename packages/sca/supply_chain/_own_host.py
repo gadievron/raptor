@@ -67,7 +67,7 @@ def _load_json(path: Path) -> dict | None:
         return None
     try:
         data = json.loads(text)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
         return None
     return data if isinstance(data, dict) else None
 

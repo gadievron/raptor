@@ -101,3 +101,28 @@ def test_pyproject_valid_after_hostile(tmp_path: Path) -> None:
     p = tmp_path / "pyproject.toml"
     p.write_text('[project]\nname = "d"\ndependencies = ["django==4.2.7"]\n')
     assert [d.name for d in parse(p)] == ["django"]
+
+
+DEEP_JSON = '{"a":' * 200_000
+HUGE_INT_JSON = '{"x": ' + "9" * 50_000 + "}"
+
+
+def test_package_json_deep_nesting(tmp_path: Path) -> None:
+    from packages.sca.parsers.package_json import parse
+    p = tmp_path / "package.json"
+    p.write_text(DEEP_JSON)
+    assert parse(p) == []
+
+
+def test_package_json_huge_int(tmp_path: Path) -> None:
+    from packages.sca.parsers.package_json import parse
+    p = tmp_path / "package.json"
+    p.write_text(HUGE_INT_JSON)
+    assert parse(p) == []
+
+
+def test_package_lock_json_deep_nesting(tmp_path: Path) -> None:
+    from packages.sca.parsers.package_lock_json import parse
+    p = tmp_path / "package-lock.json"
+    p.write_text(DEEP_JSON)
+    assert parse(p) == []

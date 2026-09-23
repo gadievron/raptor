@@ -38,7 +38,10 @@ _WALL_CEILING_S = 10.0
 # ---------------------------------------------------------------------------
 HOSTILE_CORPUS: list[tuple[str, bytes]] = [
     ("deep-toml-arrays", b"x = " + b"[" * 3000),
-    ("deep-json-objects", b'{"a":' * 3000),
+    # 200k: the json C scanner tolerates thousands of levels before
+    # its recursion guard raises.
+    ("deep-json-objects", b'{"a":' * 200000),
+    ("huge-int-json", b'{"x": ' + b"9" * 50000 + b"}"),
     # 50k: deep enough to overflow the YAML loader C-stack when the
     # flow-depth pre-bound is absent (the guard fires at ~30-40k).
     ("deep-yaml-flow", b"__metadata: {version: 8}\nx: " + b"[" * 50000),

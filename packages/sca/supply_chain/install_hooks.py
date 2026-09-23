@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from ..models import Confidence, Dependency, Manifest
 from ..parsers import _safe_read
 from . import _hook_patterns, _intree_resolve, _own_host
+from ..parsers._base import PARSE_ESCAPE_ERRORS
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -150,7 +151,7 @@ def _scan_one(path: Path, host: Dependency) -> list[InstallHookFinding]:
         return []
     try:
         data = _json.loads(text)
-    except _json.JSONDecodeError:
+    except (_json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
         return []
     if not isinstance(data, dict):
         return []

@@ -312,7 +312,7 @@ def _load_repo_map() -> dict[str, dict[str, str]]:
         return {}
     try:
         data = json.loads(text)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
         return {}
     if not isinstance(data, dict):
         return {}
