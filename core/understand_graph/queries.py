@@ -296,7 +296,9 @@ def graph_diff(
             },
             "new_risks": [
                 edge for edge in added_reachability
-                if edge.get("unchecked") or edge.get("confidence") in {"high", "confirmed"}
+                # Case-folded: upstream producers spell "Confirmed".
+                if edge.get("unchecked")
+                or str(edge.get("confidence") or "").lower() in {"high", "confirmed"}
             ],
             "is_drifted": any(
                 node_diff[k]["added"] or node_diff[k]["removed"]
@@ -1096,7 +1098,13 @@ def _snapshot_reachability_index(conn, snapshot_id: str) -> dict[str, dict[str, 
             "sink": row["dst_name"],
             "sink_file": row["dst_file"],
             "confidence": row["confidence"],
-            "unchecked": bool(isinstance(evidence, dict) and evidence.get("missing_boundary")),
+            # The producer nests the flow under evidence["flow"] — the
+            # top-level read alone rendered every edge unchecked=False.
+            "unchecked": bool(
+                isinstance(evidence, dict)
+                and (evidence.get("missing_boundary")
+                     or (evidence.get("flow") or {}).get("missing_boundary"))
+            ),
             "evidence": evidence,
         }
     return out
