@@ -780,3 +780,24 @@ def test_second_build_push_step_platforms_still_found(tmp_path: Path) -> None:
     archs = {p.arch for p in matrix}
     assert "x86_64" in archs
     assert "ppc64le" in archs
+
+
+def test_arm_runner_labels_resolve_aarch64_with_base_libc(tmp_path: Path) -> None:
+    """``ubuntu-24.04-arm`` is GitHub's hosted arm runner: arch from
+    the mechanical ``-arm``/``-arm64`` suffix, libc from the base
+    label's row. Recorded as x86_64/no-libc, a project whose only
+    aarch64 signal is its CI runner never got the aarch64 wheel-gap
+    check this subsystem exists for."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "ci.yml").write_text(
+        "jobs:\n"
+        "  a:\n    runs-on: ubuntu-24.04-arm\n"
+        "  b:\n    runs-on: ubuntu-22.04-arm64\n"
+        "  c:\n    runs-on: windows-11-arm\n")
+    matrix = discover_platform_matrix(tmp_path)
+    rows = {(p.arch, p.libc, p.os) for p in matrix}
+    assert ("aarch64", LibcVersion("glibc", (2, 39)), "linux") in rows
+    assert ("aarch64", LibcVersion("glibc", (2, 35)), "linux") in rows
+    assert ("aarch64", None, "windows") in rows
+    assert not any(arch == "x86_64" for arch, _, _ in rows)
