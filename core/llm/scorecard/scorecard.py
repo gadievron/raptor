@@ -345,6 +345,15 @@ class DecisionClassStats:
     output_tokens: int = 0
     latency_ms_sum: int = 0
     latency_ms_max: int = 0
+    # Integrity verdict of the locked read this row was materialised
+    # from. False only in the key-unusable clamp, where the sidecar
+    # stays readable for INTROSPECTION (CLI tables, estimators) but is
+    # unverifiable — AUTHORITY consumers (the calibrated-merge
+    # reliability weight) must treat untrusted rows as uninformative
+    # rather than let a forged cell steer routing through the stats
+    # surface. Tampered files under a usable key never materialise
+    # rows at all (discarded at read).
+    trusted: bool = True
 
 def _wilson_upper_bound(successes: int, failures: int, *,
                          z: float = 1.96) -> float:
@@ -1135,6 +1144,8 @@ class ModelScorecard:
         clean integer display."""
         out: list[DecisionClassStats] = []
         with self._with_lock(write=False) as data:
+            # Same in-lock capture rationale as should_short_circuit.
+            trusted = self._last_read_trusted
             for model, by_dc in (data.get("models") or {}).items():
                 # Same isinstance discipline as measure_freshness_impact:
                 # a junk per-model value or cell (readable-but-unverified
@@ -1151,7 +1162,7 @@ class ModelScorecard:
                             f"non-dict cell at {model!r}/{dc!r}")
                         continue
                     out.append(self._cell_to_stats(
-                        model, dc, cell,
+                        model, dc, cell, trusted=trusted,
                         freshness_half_life_days=freshness_half_life_days))
         return out
 
@@ -1161,9 +1172,12 @@ class ModelScorecard:
         """Return one cell's stats, or None if absent."""
         with self._with_lock(write=False) as data:
             cell = self._read_cell(data, model, decision_class)
+            trusted = self._last_read_trusted
             if cell is None:
                 return None
-            return self._cell_to_stats(model, decision_class, cell)
+            return self._cell_to_stats(
+                model, decision_class, cell, trusted=trusted,
+            )
 
     def reset(
         self,
@@ -1467,6 +1481,7 @@ class ModelScorecard:
     def _cell_to_stats(
         self, model: str, decision_class: str, cell: dict,
         *, freshness_half_life_days: float | None = None,
+        trusted: bool = True,
     ) -> DecisionClassStats:
         events = {}
         for et in ALL_EVENT_TYPES:
@@ -1508,6 +1523,7 @@ class ModelScorecard:
             output_tokens=_safe_int(cell.get("output_tokens"), 0),
             latency_ms_sum=_safe_int(cell.get("latency_ms_sum"), 0),
             latency_ms_max=_safe_int(cell.get("latency_ms_max"), 0),
+            trusted=trusted,
         )
 
     # ----- locked read-modify-write helper -----
