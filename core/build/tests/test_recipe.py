@@ -22,6 +22,14 @@ class TestUnknownBuildSystem:
         assert result.steps == []
 
 
+def _x(path, content=""):
+    """Fixture bootstrap script: present AND executable, per the
+    documented candidate contract."""
+    import os
+    path.write_text(content)
+    os.chmod(path, 0o755)
+
+
 class TestAutotoolsRecipe:
     """The headline adversarial test — autotools recipes must
     adapt to what's in the tree."""
@@ -33,7 +41,7 @@ class TestAutotoolsRecipe:
         # then configure + make in build/ subdir) to keep
         # object files out of the source tree.
         (tmp_path / "configure.ac").write_text("")
-        (tmp_path / "autogen.sh").write_text("#!/bin/sh\nautoreconf -fi")
+        _x(tmp_path / "autogen.sh", "#!/bin/sh\nautoreconf -fi")
         recipe = build_recipe(tmp_path, "autotools")
         cmds = [s.command for s in recipe.steps]
         # 2 steps: bootstrap (in source root) + combined
@@ -53,14 +61,14 @@ class TestAutotoolsRecipe:
     def test_clean_checkout_with_bootstrap_script(self, tmp_path):
         # ``bootstrap`` (as monit ships) is also recognised.
         (tmp_path / "configure.ac").write_text("")
-        (tmp_path / "bootstrap").write_text("#!/bin/sh\nautoreconf -fi")
+        _x(tmp_path / "bootstrap", "#!/bin/sh\nautoreconf -fi")
         recipe = build_recipe(tmp_path, "autotools")
         assert "./bootstrap" in recipe.steps[0].command
 
     def test_buildconf_bootstrap_apache_style(self, tmp_path):
         # Apache projects ship ./buildconf rather than bootstrap.
         (tmp_path / "configure.ac").write_text("")
-        (tmp_path / "buildconf").write_text("#!/bin/sh\nautoreconf -fi")
+        _x(tmp_path / "buildconf", "#!/bin/sh\nautoreconf -fi")
         recipe = build_recipe(tmp_path, "autotools")
         assert "./buildconf" in recipe.steps[0].command
 
@@ -137,8 +145,8 @@ class TestAutotoolsRecipe:
         # ``_AUTOTOOLS_BOOTSTRAP_CANDIDATES`` ordering — it's
         # the most common modern convention.
         (tmp_path / "configure.ac").write_text("")
-        (tmp_path / "autogen.sh").write_text("")
-        (tmp_path / "bootstrap").write_text("")
+        _x(tmp_path / "autogen.sh")
+        _x(tmp_path / "bootstrap")
         recipe = build_recipe(tmp_path, "autotools")
         assert "./autogen.sh" in recipe.steps[0].command
 
@@ -270,3 +278,27 @@ class TestRecipeStepDataclass:
         )
         assert step.why == "generates configure"
         assert step.optional is True
+
+
+class TestBootstrapExecutability:
+    """The bootstrap walk documents 'present + executable' — a
+    non-executable ./autogen.sh recommended anyway produces a recipe
+    step that fails at run while autoreconf -fi works."""
+
+    def test_non_executable_bootstrap_falls_back(self, tmp_path):
+        (tmp_path / "configure.ac").write_text("AC_INIT\n")
+        (tmp_path / "autogen.sh").write_text("#!/bin/sh\n")  # 0644
+        recipe = build_recipe(tmp_path, "autotools")
+        joined = " ".join(s.command for s in recipe.steps)
+        assert "autogen.sh" not in joined
+        assert "autoreconf" in joined
+
+    def test_executable_bootstrap_recommended(self, tmp_path):
+        import os
+        (tmp_path / "configure.ac").write_text("AC_INIT\n")
+        script = tmp_path / "autogen.sh"
+        script.write_text("#!/bin/sh\n")
+        os.chmod(script, 0o755)
+        recipe = build_recipe(tmp_path, "autotools")
+        joined = " ".join(s.command for s in recipe.steps)
+        assert "autogen.sh" in joined

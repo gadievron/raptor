@@ -101,3 +101,42 @@ class TestActiveProjectPath:
                    return_value=True):
             got = resolve_build_command(tmp_path / "src")
         assert got == ("make smoke", "project-setting:default")
+
+
+class TestLoneSlotVisibility:
+    def test_cross_language_serve_warns(self, tmp_path, caplog):
+        import logging
+        settings = {"build-command": {"java": "mvn package"}}
+        with caplog.at_level(logging.WARNING, logger="core.build.resolve"):
+            got = resolve_build_command(tmp_path, "cpp", settings=settings)
+        # Behavior unchanged (deliberate, pinned above) — but the
+        # cross-language serve is operator-visible now.
+        assert got == ("mvn package", "project-setting:java")
+        assert any("lone populated slot" in r.message for r in caplog.records)
+
+    def test_matching_slot_serve_stays_quiet(self, tmp_path, caplog):
+        import logging
+        settings = {"build-command": {"c": "make smoke"}}
+        with caplog.at_level(logging.WARNING, logger="core.build.resolve"):
+            resolve_build_command(tmp_path, "c", settings=settings)
+        assert not any("lone populated slot" in r.message
+                       for r in caplog.records)
+
+
+class TestDetectorCandidateList:
+    def test_no_dead_language_warning_per_resolution(self, tmp_path, caplog):
+        import logging
+        # Empty target: nothing detects — the default candidate list
+        # must not include a language the table has no key for (the
+        # dead "c" candidate warned "No build system detection" on
+        # every such resolution).
+        with caplog.at_level(logging.WARNING):
+            got = resolve_build_command(tmp_path)
+        assert got is None
+        assert not any("No build system detection" in r.message
+                       for r in caplog.records)
+
+    def test_makefile_target_still_detected(self, tmp_path):
+        _makefile_target(tmp_path)
+        got = resolve_build_command(tmp_path)
+        assert got is not None and got[1].startswith("detected:")
