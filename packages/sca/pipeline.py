@@ -388,6 +388,20 @@ def run_sca(
                     scan_root_context(target):
                 for m in manifests:
                     raw_deps.extend(parse_manifest(m))
+            # Durable analysis-gap trail: every parse failure is a
+            # file whose dependency set dropped out of SCA. The
+            # report section shows them for this run; the JSONL
+            # record makes the gap visible to run summaries and
+            # cross-run tooling.
+            from core.run.gaps import record_analysis_gap
+            for failure in parse_failures:
+                record_analysis_gap(
+                    output_dir,
+                    file_path=str(failure.path),
+                    reason="parse_error",
+                    tool="sca",
+                    detail=failure.reason,
+                )
     finally:
         # Clear the resolver so test runs of subsequent scans (or
         # libraries that import pom.parse directly after pipeline)
