@@ -72,8 +72,12 @@ class NvdLookupError(Exception):
 # client from advisory-derived data, not just operator input — validate
 # the shape before the value joins a cache key or the request URL, so a
 # crafted "id" can't smuggle extra query parameters, path separators,
-# or control bytes into either.
-_CVE_ID_RE = re.compile(r"^CVE-\d{4}-\d{4,}$", re.IGNORECASE)
+# or control bytes into either. ``re.ASCII`` pins ``\d`` to 0-9 (keep
+# in sync with the core/cve epss / vulnrichment / cwe regexes) — a
+# non-ASCII decimal digit would otherwise mint a junk cache key and
+# URL. ``\A..\Z`` instead of ``^..$``: ``$`` tolerates a trailing
+# newline (regex hygiene; ``get_payload`` strips before matching).
+_CVE_ID_RE = re.compile(r"\ACVE-\d{4}-\d{4,}\Z", re.IGNORECASE | re.ASCII)
 
 _SENTINEL_USE_DEFAULT = object()
 
@@ -124,6 +128,13 @@ class NvdClient:
             # or the request URL. Definitive: the id shape itself is
             # wrong, retrying can't help.
             return None
+        # Case-fold AFTER the shape check: CVE ids are case-
+        # insensitive, and raw-case keys split both the in-memory and
+        # 7-day disk caches — duplicate fetches against NVD's public
+        # 5-req/30s quota, and a definitive miss negative-cached under
+        # one spelling only. Same normalisation as the core/cve
+        # sibling clients.
+        cve_id = cve_id.upper()
         if self.cache_enabled and cve_id in self._cache:
             hit = self._cache[cve_id]
             if hit is _NVD_TRANSIENT_MISS:
