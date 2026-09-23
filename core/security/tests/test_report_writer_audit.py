@@ -1027,3 +1027,193 @@ def test_rule_accepts_safe_for_render_helper():
         "    lines.append(_safe_for_render(issue.get('message', '')))\n"
     )
     assert audit_source(src) == []
+
+
+# ---------------------------------------------------------------------------
+# defensive-return contracts: every scan entry point yields a LIST
+# ---------------------------------------------------------------------------
+
+
+def test_audit_source_returns_empty_list_on_syntax_error():
+    # Callers iterate/extend the result unconditionally (audit_file,
+    # the registry closure gate) — a None here crashes the whole gate
+    # on the first unparseable file instead of skipping it.
+    out = audit_source("def broken(:\n")
+    assert out == []
+    assert isinstance(out, list)
+
+
+def test_audit_source_on_sanitiser_definition_module_returns_list():
+    # The shadow arm exempts the modules that DEFINE the canonical
+    # sanitisers; the exemption must yield an empty list, not None —
+    # audit_source extends violations with it unconditionally.
+    src = "def sanitise_string(s):\n    return s\n"
+    out = audit_source(src, rel="core/security/log_sanitisation.py")
+    assert out == []
+    # The same definition outside the exempted modules IS a shadow.
+    assert any(v.kind == "sanitiser_shadow" for v in audit_source(src))
+
+
+# ---------------------------------------------------------------------------
+# json.dumps ensure_ascii adjudication — the **kwargs smuggle arm
+# ---------------------------------------------------------------------------
+
+
+def test_dumps_with_kwargs_splat_is_not_blessed():
+    # `json.dumps(x, **kw)` can smuggle ensure_ascii=False at runtime;
+    # the ASCII-JSON exemption must refuse it so the naked read is
+    # still reported.
+    src = (
+        "def w(f, kw):\n"
+        "    print(json.dumps(f['title'], **kw))\n"
+    )
+    vs = audit_source(src)
+    assert any(v.detail == "title" for v in vs)
+
+
+def test_dumps_with_explicit_ensure_ascii_false_is_not_blessed():
+    src = (
+        "def w(f):\n"
+        "    print(json.dumps(f['title'], ensure_ascii=False))\n"
+    )
+    assert any(v.detail == "title" for v in audit_source(src))
+
+
+def test_dumps_with_ensure_ascii_true_is_blessed():
+    src = (
+        "def w(f):\n"
+        "    print(json.dumps(f['title'], ensure_ascii=True))\n"
+    )
+    assert audit_source(src) == []
+
+
+# ---------------------------------------------------------------------------
+# sink argument extraction covers KEYWORD arguments on every sink form
+# ---------------------------------------------------------------------------
+
+
+def test_name_sink_keyword_argument_carries_taint():
+    src = (
+        "def w(f):\n"
+        "    print('finding', desc=f['title'])\n"
+    )
+    assert any(v.detail == "title" for v in audit_source(src))
+
+
+def test_report_constructor_keyword_argument_carries_taint():
+    src = (
+        "def w(f):\n"
+        "    return ReportSection(body=f['title'])\n"
+    )
+    assert any(v.detail == "title" for v in audit_source(src))
+
+
+def test_attribute_report_constructor_keyword_argument_carries_taint():
+    src = (
+        "def w(f, sections):\n"
+        "    return sections.ReportSection(body=f['title'])\n"
+    )
+    assert any(v.detail == "title" for v in audit_source(src))
+
+
+# ---------------------------------------------------------------------------
+# terminal-capable sink classification — echo/secho attribute forms
+# ---------------------------------------------------------------------------
+
+
+def test_attribute_echo_is_terminal_capable_for_raw_serialisers():
+    # typer.echo/click.echo reach the terminal exactly like print; a
+    # dumps_display payload there is the C1-passthrough lane the
+    # raw-serialiser arm exists for.
+    src = (
+        "def w(report):\n"
+        "    typer.echo(dumps_display(report))\n"
+    )
+    vs = audit_source(src)
+    assert any(v.kind == "raw_serialiser_at_sink"
+               and v.detail == "dumps_display" for v in vs)
+
+
+# ---------------------------------------------------------------------------
+# tainted-return helpers are recognised on the WIDENED vocabulary
+# ---------------------------------------------------------------------------
+
+
+def test_helper_returning_widened_key_taints_its_callers():
+    # "message" is a widened (sink/return tier) name, not a core taint
+    # name — a helper returning it is a render_json-shape lane and its
+    # call sites must light up at sinks.
+    src = (
+        "def render(f):\n"
+        "    return f['message']\n"
+        "def w(f, lines):\n"
+        "    lines.append(render(f))\n"
+    )
+    assert any(v.detail == "render" for v in audit_source(src))
+
+
+# ---------------------------------------------------------------------------
+# annotated-assignment container stores taint the container base
+# ---------------------------------------------------------------------------
+
+
+def test_annassign_attribute_store_taints_receiver_base():
+    # `rec.note: str = f["title"]` stores a foreign value INSIDE rec —
+    # a later whole-object write of rec must not launder it. Annotated
+    # spelling is the repo's standing practice for new writer code.
+    src = (
+        "def w(f, lines, rec):\n"
+        "    rec.note: str = f['title']\n"
+        "    lines.append(rec)\n"
+    )
+    assert any(v.detail == "rec" for v in audit_source(src))
+
+
+def test_annassign_plain_rebind_still_clears_taint():
+    # Two-direction guard: a sanitised annotated re-bind clears.
+    src = (
+        "def w(f, lines):\n"
+        "    body: str = f['title']\n"
+        "    body = sanitise_string(body)\n"
+        "    lines.append(body)\n"
+    )
+    assert audit_source(src) == []
+
+
+# ---------------------------------------------------------------------------
+# exception-relay arm: keyword-carried exception text + attribution
+# ---------------------------------------------------------------------------
+
+
+def test_relay_scan_flags_keyword_carried_exception_text():
+    src = (
+        "def f():\n"
+        "    try:\n"
+        "        pass\n"
+        "    except Exception as e:\n"
+        "        typer.secho(message=f'boom {e}')\n"
+    )
+    vs = audit_source(src)
+    assert any(v.kind == "unsanitised_exception_text" for v in vs)
+
+
+def test_relay_scan_default_parents_builds_attribution():
+    # _exception_relay_scan's parents map defaults to None (direct
+    # callers) and audit_source shares a prebuilt dict — both paths
+    # must attribute the violation to its enclosing function.
+    import ast as _ast
+
+    from core.security.report_writer_audit import _exception_relay_scan
+
+    src = (
+        "def outer():\n"
+        "    try:\n"
+        "        pass\n"
+        "    except Exception as e:\n"
+        "        print(f'x {e}')\n"
+    )
+    vs = _exception_relay_scan(_ast.parse(src), "x.py")
+    assert vs and vs[0].func_name == "outer"
+    vs2 = [v for v in audit_source(src)
+           if v.kind == "unsanitised_exception_text"]
+    assert vs2 and vs2[0].func_name == "outer"
