@@ -79,12 +79,10 @@ class LifecyclePrecondition:
     ground-truth records, capturing the lifecycle invariant whose
     violation makes the bug shape consume an under-guarded field.
 
-    v1 source_intel verdict policy IGNORES this field. v2 (the future
-    annotation is precomputed during corpus seeding while the kernel
-    patch is in the labeler's head, so the v2 consumer doesn't have
-    to re-derive it later.
-
-    CVE-2026-46333 as the canonical example).
+    v1 source_intel verdict policy IGNORES this field; the annotation
+    is precomputed during corpus seeding, while the kernel patch is in
+    the labeler's head, so a future v2 consumer does not have to
+    re-derive it later (CVE-2026-46333 is the canonical example).
     """
 
     field: str
@@ -155,8 +153,9 @@ class GroundTruth:
     labeled_at: str
     fp_category: str | None = None
     #: Optional forward-compatible annotation for CWE-476 / CWE-416
-    #: fixtures (and structurally-related logic bugs). v1 source_intel
-    #: directly. See `LifecyclePrecondition` for shape.
+    #: fixtures (and structurally-related logic bugs). The v1
+    #: source_intel verdict policy ignores it. See
+    #: `LifecyclePrecondition` for the shape.
     lifecycle_precondition: LifecyclePrecondition | None = None
 
     def __post_init__(self) -> None:

@@ -6,7 +6,6 @@ The earlier draft of this design tried a ``verdict`` field with
 short-circuit behaviour; it was rejected because collapsing the
 suppression decision to a single LLM call is the worst class of
 failure for security tooling.
-for the rationale.
 
 Three records:
 
