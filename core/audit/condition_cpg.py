@@ -692,7 +692,12 @@ def _split_scala_items(text: str) -> list:
 # (``val res0: List[String] = List(...)``).  Intermediate statement
 # binders (``val src: ... = ...`` in the taint query) echo too, so
 # only ``res<N>`` binders anchor the answer and the LAST one wins.
-_VAL_ECHO_RE = re.compile(r"val res\d+: .*? = ")
+# The type window is bounded: unbounded, echo text that repeats
+# ``val res0: `` makes every occurrence re-scan the rest of the line
+# for `` = `` — quadratic on hostile-code-derived output. A real
+# binder type sits far inside 1000 chars (trade-off: a longer type
+# stops matching, versus an unbounded scan).
+_VAL_ECHO_RE = re.compile(r"val res\d+: .{0,1000}? = ")
 
 
 def _extract_list_literal(body: str) -> str | None:

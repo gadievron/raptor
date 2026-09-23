@@ -478,9 +478,14 @@ def _detect_error_conflated_with_empty(
 # ---------------------------------------------------------------------------
 
 # Patterns indicating truncation awareness in a caller
+# The len() argument window is bounded: unbounded, source that
+# repeats ``len(`` makes every occurrence re-scan the rest of the
+# text for the missing ``)`` — quadratic on hostile source. A real
+# len() argument sits far inside 400 chars (trade-off: a longer
+# argument stops matching, versus an unbounded scan).
 _TRUNCATION_AWARE_RE = re.compile(
     r"truncat|\.is_complete|\.is_truncated|total\s*[><=!]+\s*len\("
-    r"|len\([^)]*\)\s*[<>=!]+\s*total"
+    r"|len\([^)]{0,400}\)\s*[<>=!]+\s*total"
     r"|partial|incomplete",
     re.IGNORECASE,
 )

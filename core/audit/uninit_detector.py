@@ -161,9 +161,13 @@ _STRUCT_DECL = re.compile(
     r"^\s*(?:struct|union)\s+(\w+)\s+(\w+)\s*;",
 )
 
+# \b pins the receiver to a word start: unanchored, every position
+# inside a long identifier run starts a fresh scan of the rest of
+# the run — quadratic on hostile source. A mid-word start is a false
+# token (the tail of a longer identifier) either way.
 _FIELD_ASSIGN = re.compile(
-    r"(\w+)\.(\w+)\s*="
-    r"|(\w+)->(\w+)\s*=",
+    r"\b(\w+)\.(\w+)\s*="
+    r"|\b(\w+)->(\w+)\s*=",
 )
 
 

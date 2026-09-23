@@ -108,20 +108,50 @@ _SECURITY_CALLEE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_STRING_OR_BLOCK_COMMENT_RE = re.compile(
+# String tokens plus the block-comment OPENER only: the closer is
+# located with str.find below. The previous single-regex spelling
+# (`/\*.*?\*/` in the alternation) re-scanned the rest of the file
+# from every ``/*`` that never closes — quadratic on hostile source.
+_STRING_OR_COMMENT_OPEN_RE = re.compile(
     r'"(?:[^"\\]|\\.)*"'
     r"|'(?:[^'\\]|\\.)*'"
-    r"|/\*.*?\*/",
-    re.DOTALL,
+    r"|/\*",
+    re.DOTALL,  # an escape may consume a newline (line continuation)
 )
 
 
 def _strip_block_comments(source: str) -> str:
-    def _repl(m: re.Match) -> str:
-        if m.group().startswith("/*"):
-            return ""
-        return m.group()
-    return _STRING_OR_BLOCK_COMMENT_RE.sub(_repl, source)
+    """Remove ``/* ... */`` comments; string literals are matched so
+    a comment-lookalike inside one is kept verbatim.
+
+    Single left-to-right token scan: each character is visited once,
+    a ``/*`` looks up its closer with ``str.find``, and once one
+    opener has no closer no later opener can have one either, so the
+    failed end-of-file lookup happens at most once.
+    """
+    out: list[str] = []
+    pos = 0
+    no_closer = False
+    while True:
+        m = _STRING_OR_COMMENT_OPEN_RE.search(source, pos)
+        if m is None:
+            out.append(source[pos:])
+            return "".join(out)
+        out.append(source[pos : m.start()])
+        token = m.group()
+        if token != "/*":
+            out.append(token)  # string literal: kept verbatim
+            pos = m.end()
+            continue
+        end = -1 if no_closer else source.find("*/", m.end())
+        if end == -1:
+            # Never closes: not a comment. Keep the chars and keep
+            # scanning after the opener (no token starts at '*').
+            no_closer = True
+            out.append(token)
+            pos = m.end()
+        else:
+            pos = end + 2  # drop the comment
 
 
 _KEYWORDS = frozenset({

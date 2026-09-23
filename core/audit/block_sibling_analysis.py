@@ -326,8 +326,14 @@ _IF_ELIF_RE = re.compile(
     re.MULTILINE,
 )
 
+# The Go-style receiver window is bounded: unbounded ``[^)]*``, a
+# source line repeating ``func (`` makes every occurrence re-scan
+# the rest of the line for the missing ``)`` — quadratic on hostile
+# source. A real receiver clause sits far inside 400 chars
+# (trade-off: a longer clause stops matching, versus an unbounded
+# scan).
 _FUNC_RE = re.compile(
-    r"(?:def|func|function|fn)\s+(?:\([^)]*\)\s+)?(\w+)\s*\(",
+    r"(?:def|func|function|fn)\s+(?:\([^)]{0,400}\)\s+)?(\w+)\s*\(",
 )
 
 

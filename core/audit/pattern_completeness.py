@@ -154,8 +154,13 @@ _STARTSWITH_RE = re.compile(
 )
 
 # Matches negated character classes in regexes: [^...].
+# The class body is bounded: unbounded, pattern text repeating
+# ``[^`` without ``]`` re-scans the rest of the text per occurrence
+# — quadratic on hostile source. A real character class sits far
+# inside 1000 chars (trade-off: a longer class stops matching,
+# versus an unbounded scan).
 _NEGATED_CLASS_RE = re.compile(
-    r"""\[\^([^\]]+)\]"""
+    r"""\[\^([^\]]{1,1000})\]"""
 )
 
 

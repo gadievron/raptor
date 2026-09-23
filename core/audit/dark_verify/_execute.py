@@ -313,7 +313,10 @@ _RUST_LET_RE = re.compile(
 # smuggling), `#` (attributes), `?` (early return), `\\`.
 _RUST_EXPR_CHARSET_RE = re.compile(r"^[A-Za-z0-9_:.,&!;()\[\]\s+-]*\Z")
 
-_RUST_MACRO_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*!")
+# \b pins the macro name to a word start: unanchored, every position
+# inside a long identifier is a fresh scan of the rest of the word —
+# quadratic. A mid-word start is a false token either way.
+_RUST_MACRO_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*!")
 
 # Prompt contract for Rust setup_lines: "NO unsafe blocks, NO
 # std::process". `unsafe` has no legitimate spelling in a literal /

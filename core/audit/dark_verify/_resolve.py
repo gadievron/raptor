@@ -52,7 +52,45 @@ if TYPE_CHECKING:
 # file from costing an unbounded read.
 _JAVA_DECL_SCAN_BYTES = 65536
 
-_JAVA_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+# Line comments plus the block-comment OPENER only: the closer is
+# located with str.find in _strip_java_comments. The previous
+# spelling (`/\*.*?\*/`) re-scanned the rest of the window from
+# every ``/*`` that never closes — quadratic even inside the 64 KiB
+# read cap.
+_JAVA_COMMENT_TOKEN_RE = re.compile(r"//[^\n]*|/\*")
+
+
+def _strip_java_comments(head: str) -> str:
+    """Replace ``//`` and ``/* ... */`` comments with a space.
+
+    Single left-to-right token scan: each character is visited once,
+    a ``/*`` looks up its closer with ``str.find``, and once one
+    opener has no closer no later opener can have one either, so the
+    failed end-of-window lookup happens at most once.
+    """
+    out: list[str] = []
+    pos = 0
+    no_closer = False
+    while True:
+        m = _JAVA_COMMENT_TOKEN_RE.search(head, pos)
+        if m is None:
+            out.append(head[pos:])
+            return "".join(out)
+        out.append(head[pos : m.start()])
+        if m.group() != "/*":
+            out.append(" ")  # // comment
+            pos = m.end()
+            continue
+        end = -1 if no_closer else head.find("*/", m.end())
+        if end == -1:
+            # Never closes: not a comment. Keep the chars and keep
+            # scanning after the opener (no token starts at '*').
+            no_closer = True
+            out.append("/*")
+            pos = m.end()
+        else:
+            out.append(" ")
+            pos = end + 2
 _JAVA_PACKAGE_RE = re.compile(
     r"^\s*package\s+"
     r"([A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*)\s*;",
@@ -442,7 +480,7 @@ def _java_package_decl(source_file: Path) -> str | None:
             head = fh.read(_JAVA_DECL_SCAN_BYTES)
     except OSError:
         return None
-    stripped = _JAVA_COMMENT_RE.sub(" ", head)
+    stripped = _strip_java_comments(head)
     m = _JAVA_PACKAGE_RE.match(stripped.lstrip())
     return m.group(1) if m else ""
 

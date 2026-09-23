@@ -1170,8 +1170,12 @@ def _peer_checks(
     domain (``!= 0`` / ``< 0`` / ``>= 0``-style) — recorded as
     corroboration on the witness."""
     peers: list[str] = []
+    # The argument window is bounded: unbounded, source that repeats
+    # the callee name makes every occurrence re-scan the rest of the
+    # text for the closing ``)`` — quadratic on hostile source; a
+    # real argument list sits far inside 400 chars.
     pattern = re.compile(
-        rf"\b{re.escape(callee)}\s*\([^;{{}}]*?\)\s*"
+        rf"\b{re.escape(callee)}\s*\([^;{{}}]{{0,400}}?\)\s*"
         rf"(!=\s*0|<\s*0|>=\s*0)\b",
     )
     for fp, source in source_texts.items():

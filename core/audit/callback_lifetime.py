@@ -132,8 +132,12 @@ def _call_re(names: tuple[str, ...]) -> re.Pattern:
     )
     return re.compile(r"\b(" + alts + r")\s*\(")
 
+# \b pins the assigned variable to a word start: unanchored, every
+# position inside a long identifier run starts a fresh scan of the
+# rest of the run — quadratic on hostile source. A mid-word start is
+# a false token (the tail of a longer identifier) either way.
 _RCU_DEREF_RE = re.compile(
-    r"(\w+)\s*=\s*rcu_dereference\w*\s*\("
+    r"\b(\w+)\s*=\s*rcu_dereference\w*\s*\("
 )
 
 _KFREE_VAR_RE = re.compile(

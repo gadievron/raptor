@@ -67,8 +67,12 @@ class CoAccessorGroup:
         return f"`{self.field}` accessed by {names}{suffix}"
 
 
+# \b pins the receiver to a word start: unanchored, every position
+# inside a long identifier run starts a fresh scan of the rest of
+# the run — quadratic on hostile source. A mid-word start is a false
+# token (the tail of a longer identifier) either way.
 _FIELD_ACCESS_RE = re.compile(
-    r"(?:\w+)\s*(?:->|\.)\s*(\w+)",
+    r"\b(?:\w+)\s*(?:->|\.)\s*(\w+)",
 )
 
 _LOCK_CALL_RE = re.compile(

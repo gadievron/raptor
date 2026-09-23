@@ -24940,8 +24940,40 @@ def _source_has_arithmetic(source: str) -> bool:
     actual arithmetic in the source, the check is vacuously true.
     """
     import re
-    cleaned = re.sub(r'//[^\n]*|/\*.*?\*/|"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'',
-                     " ", source, flags=re.DOTALL)
+    # Token scan instead of one sub(): the single-regex spelling
+    # (`/\*.*?\*/` in the alternation) re-scanned the rest of the
+    # file from every ``/*`` that never closes — quadratic on
+    # hostile source. Each character is visited once; a ``/*`` looks
+    # up its closer with str.find, and once one opener has no closer
+    # no later opener can have one either, so the failed lookup
+    # happens at most once.
+    token_re = re.compile(
+        r'//[^\n]*|/\*|"(?:[^"\\]|\\.)*"' + r"|'(?:[^'\\]|\\.)*'",
+        re.DOTALL)  # an escape may consume a newline
+    parts: list[str] = []
+    pos = 0
+    no_closer = False
+    while True:
+        m = token_re.search(source, pos)
+        if m is None:
+            parts.append(source[pos:])
+            break
+        parts.append(source[pos : m.start()])
+        if m.group() != "/*":
+            parts.append(" ")
+            pos = m.end()
+            continue
+        end = -1 if no_closer else source.find("*/", m.end())
+        if end == -1:
+            # Never closes: not a comment. Keep the chars and keep
+            # scanning after the opener (no token starts at '*').
+            no_closer = True
+            parts.append("/*")
+            pos = m.end()
+        else:
+            parts.append(" ")
+            pos = end + 2
+    cleaned = "".join(parts)
     return bool(_ARITHMETIC_RE.search(cleaned))
 
 
