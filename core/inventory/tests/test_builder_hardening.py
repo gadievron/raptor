@@ -350,3 +350,46 @@ def test_default_cache_dir_accepts_surrogate_paths() -> None:
     # UnicodeEncodeError before any inventory work started.
     p = default_cache_dir("/tmp/bad\udcff-dir")
     assert len(p.name) == 16
+
+
+class TestDecodeViewUnification:
+    """The builder's decode must never DELETE bytes: 'ignore' let
+    attacker-chosen invalid bytes make the decoded view structurally
+    differ from what an interpreter honouring a coding cookie
+    executes, and every text detector ran over the forged view."""
+
+    def test_latin1_cookie_guard_not_marked_lexical_dead(self, tmp_path):
+        import tempfile
+
+        from core.inventory.builder import build_inventory
+
+        # Real python honours the cookie: the guard is the truthy
+        # `False\xc0` global, vuln is defined AND executed (exit 0).
+        # decode-ignore deleted the \xc0 bytes, yielding `if False:` —
+        # a lexical_dead hard-suppress witness on the live function.
+        raw = (b"# -*- coding: latin-1 -*-\n"
+               b"globals()['False\xc0'] = True\n"
+               b"if False\xc0:\n"
+               b"    def vuln(): pass\n"
+               b"vuln()\n")
+        (tmp_path / "forged.py").write_bytes(raw)
+        with tempfile.TemporaryDirectory() as td:
+            inv = build_inventory(str(tmp_path), td, parallel=False)
+        by_path = {f["path"]: f for f in inv["files"]}
+        items = {i["name"]: i for i in by_path["forged.py"]["items"]}
+        assert "vuln" not in items or not items["vuln"].get("lexical_dead")
+
+    def test_replacement_char_never_deletes_bytes(self, tmp_path):
+        import tempfile
+
+        from core.inventory.builder import build_inventory
+
+        # Valid UTF-8 files decode identically under both policies —
+        # inventory content is unchanged for well-formed source.
+        (tmp_path / "ok.py").write_text(
+            "def handler(x):\n    return x\n", encoding="utf-8")
+        with tempfile.TemporaryDirectory() as td:
+            inv = build_inventory(str(tmp_path), td, parallel=False)
+        by_path = {f["path"]: f for f in inv["files"]}
+        assert any(i["name"] == "handler"
+                   for i in by_path["ok.py"]["items"])

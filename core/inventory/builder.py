@@ -1682,7 +1682,18 @@ def _process_single_file(
             return {"path": rel_path, "_excluded": True,
                     "_reason": "too_large_during_read",
                     "_pattern": f"size>{MAX_FILE_BYTES}"}
-        content = raw_bytes.decode('utf-8', errors='ignore')
+        # errors='replace', never 'ignore': 'ignore' DELETES invalid
+        # bytes, so attacker-chosen bytes make this decoded view
+        # structurally differ from what an interpreter honouring a
+        # coding cookie executes (a latin-1 file whose guard name
+        # carries a high byte decoded to `if False:` — every text
+        # detector then ranged a LIVE, executing function as dead, a
+        # hard-suppress witness). U+FFFD keeps every byte represented:
+        # the forged view fails to parse and detectors bail toward no
+        # witness. Also the unit-wide convention — lexical_view and
+        # perlasm already decode with 'replace', so all views of one
+        # file agree by construction.
+        content = raw_bytes.decode('utf-8', errors='replace')
 
         _uncorroborated_generated = False
         if skip_generated and is_generated_file(content):
