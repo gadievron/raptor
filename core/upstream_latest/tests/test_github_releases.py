@@ -338,3 +338,31 @@ def test_tag_is_percent_encoded_in_url() -> None:
     http = _Spy({url: {"object": {"sha": "a" * 40, "type": "commit"}}})
     assert resolve_tag_to_sha("o/r", tag, http=http, cache=None) == "a" * 40
     assert seen == [url]
+
+
+def test_latest_tag_follows_pagination_past_pre_release_page() -> None:
+    """A stable tag beyond a full first page of pre-releases must be
+    found: the tags endpoint is commit-date ordered, so a project that
+    cuts nightlies buries its stable tags pages deep."""
+    base = "https://api.github.com/repos/owner/repo/tags"
+    page1 = [{"name": f"nightly-{i:03d}"} for i in range(100)]
+    page2 = [{"name": "v1.4.0"}, {"name": "v1.2.0"}]
+    http = _StubHttp({
+        f"{base}?per_page=100": page1,
+        f"{base}?per_page=100&page=2": page2,
+    })
+    assert latest_tag("owner/repo", http=http) == "v1.4.0"
+
+
+def test_latest_tag_page_scan_is_bounded() -> None:
+    """All-pre-release repos stop at the page cap, then raise."""
+    base = "https://api.github.com/repos/owner/repo/tags"
+    urls = {f"{base}?per_page=100": [
+        {"name": f"nightly-{i:03d}"} for i in range(100)]}
+    for page in range(2, 10):
+        urls[f"{base}?per_page=100&page={page}"] = [
+            {"name": f"nightly-{page}-{i:03d}"} for i in range(100)]
+    http = _StubHttp(urls)
+    with pytest.raises(NoStableVersionsFound):
+        latest_tag("owner/repo", http=http)
+    assert len(http.calls) <= 3
