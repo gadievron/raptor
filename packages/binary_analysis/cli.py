@@ -170,6 +170,7 @@ def _add_map_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--slice-arch", help="Mach-O slice to deeply analyse, for example arm64 or x86_64")
     parser.add_argument("--max-decompile", type=_positive_int, default=20, help="Maximum functions to decompile and persist")
     parser.add_argument("--decompile-all", action="store_true", help="Persist pseudocode for every recovered function")
+    parser.add_argument("--no-string-anchors", action="store_true", help="Skip the bounded diagnostic-string anchor pass")
     parser.add_argument("--runtime-dir", help="Existing /binary runtime or /frida run to ingest")
     parser.add_argument("--fuzz-dir", help="Existing /binary fuzz or /fuzz run to ingest")
     parser.add_argument("--constraint-file", help="JSON file containing explicit SMT path conditions")
@@ -231,6 +232,7 @@ def _analyse_for_args(
         quick=bool(args.quick),
         max_decompile=(1_000_000 if args.decompile_all else args.max_decompile),
         slice_arch=args.slice_arch,
+        string_anchors=not getattr(args, "no_string_anchors", False),
         runtime_dir=runtime_dir or (Path(args.runtime_dir).expanduser().resolve() if args.runtime_dir else None),
         fuzz_dir=fuzz_dir or (Path(args.fuzz_dir).expanduser().resolve() if args.fuzz_dir else None),
         constraint_file=Path(args.constraint_file).expanduser().resolve() if args.constraint_file else None,

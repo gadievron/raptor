@@ -11,6 +11,7 @@ wishful thinking.
 
 from __future__ import annotations
 
+import re
 import shlex
 from collections import defaultdict
 from pathlib import Path
@@ -228,6 +229,48 @@ def _rank_ingress(context: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(ranked, key=lambda item: (-item["score"], str(item.get("name") or "")))
 
 
+# Link-form breaker for _md_neutral: "](" is the load-bearing
+# adjacency of a markdown link; a backslash between the halves renders
+# literally and kills the link.
+_MD_LINK_RE = re.compile(r"\]\s*\(")
+
+
+def _md_neutral(value: Any) -> str:
+    """Render-site hardening for the string-anchor surfaces.
+
+    Sample strings and anchor function names are hostile-binary
+    content that STRUCTURALLY qualifies for selection, so printable
+    markdown metacharacters survive the capture-time
+    escape_nonprintable: a backtick breaks out of the wrapping
+    ``code-span`` table cells, and a ``[text](url)`` form renders a
+    live link in the prose inference slot. Neutralise both here.
+    Deliberately NOT folded into ``_md_escape``: that helper is a
+    one-home rewrite surface — a local helper composes with either
+    implementation.
+    """
+    text = _md_escape(value).replace("`", "'")
+    return _MD_LINK_RE.sub("]\\(", text)
+
+
+def _rank_string_anchors(context: dict[str, Any]) -> list[dict[str, Any]]:
+    """Order string-anchor leads by anchor density.
+
+    Anchor-dense functions (many diagnostic-shaped strings referenced)
+    are likely parsers/handlers — the only format-aware review signal
+    available on stripped binaries. Structure only; never a finding.
+    """
+    return sorted(
+        [
+            item for item in context.get("string_anchor_functions", [])
+            if isinstance(item, dict)
+        ],
+        key=lambda item: (
+            -int(item.get("anchor_string_count") or 0),
+            str(item.get("name") or ""),
+        ),
+    )
+
+
 def _rank_parser_boundaries(context: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(
         [
@@ -387,6 +430,7 @@ def build_investigation(
     ranked_classes = _rank_classes(context, graph)
     ranked_ingress = _rank_ingress(context)
     ranked_parser_boundaries = _rank_parser_boundaries(context)
+    ranked_string_anchors = _rank_string_anchors(context)
     facts: list[dict[str, Any]] = []
     inferences: list[dict[str, Any]] = []
     hypotheses: list[dict[str, Any]] = []
@@ -463,6 +507,13 @@ def build_investigation(
             tier="xref_backed",
             source="context-map.json",
         )
+    if ranked_string_anchors:
+        _fact(
+            facts,
+            f"Recovered {len(ranked_string_anchors)} anchor-dense function(s) referencing diagnostic-shaped strings.",
+            tier="xref_backed",
+            source="context-map.json",
+        )
     if context.get("fuzz_witnesses"):
         _fact(
             facts,
@@ -510,6 +561,27 @@ def build_investigation(
             "basis": ["class metadata inventory", "method-to-function bindings", "binary graph CALLS query"],
             "confidence": "candidate",
             "not_a_claim": "Class names and method bindings are structure, not a vulnerability verdict.",
+        })
+    if ranked_string_anchors:
+        lead = ranked_string_anchors[0]
+        inferences.append({
+            "id": f"INF-{len(inferences) + 1:03d}",
+            # The name is hostile-binary content embedded in a prose
+            # slot (rendered WITHOUT a wrapping code span) — neutralise
+            # markdown metacharacters here, at composition time.
+            "statement": (
+                f"{_md_neutral(lead.get('name'))} is a likely "
+                f"parser/handler lead: it references "
+                f"{int(lead.get('anchor_string_count') or 0)} "
+                "diagnostic-shaped string(s) — the densest string-anchor "
+                "concentration recovered."
+            ),
+            "basis": ["diagnostic-string selection (structural)", "radare2 string xrefs"],
+            "confidence": "candidate",
+            "not_a_claim": (
+                "Anchor density is structure, not a finding — it does not "
+                "prove attacker-controlled bytes reach the function."
+            ),
         })
     if ranked_parser_boundaries:
         lead = ranked_parser_boundaries[0]
@@ -599,6 +671,7 @@ def build_investigation(
             "ranked_classes": len(ranked_classes),
             "ranked_ingress": len(ranked_ingress),
             "parser_boundary_candidates": len(ranked_parser_boundaries),
+            "string_anchor_leads": len(ranked_string_anchors),
             "discovered_artifacts": len(artifacts),
         },
         "facts": facts,
@@ -608,6 +681,7 @@ def build_investigation(
         "ranked_classes": ranked_classes[:10],
         "ranked_ingress": ranked_ingress[:10],
         "ranked_parser_boundaries": ranked_parser_boundaries[:10],
+        "ranked_string_anchors": ranked_string_anchors[:10],
         "discovered_artifacts": artifacts,
         "component_topology": context.get("component_topology") or {},
         "fuzz_suitability": context.get("fuzz_suitability") or {},
@@ -618,6 +692,7 @@ def build_investigation(
             "A surface ranking is not a finding.",
             "A class name or selector is not proof of reachability.",
             "An xref-backed caller is not taint proof.",
+            "A string-anchor lead marks a likely parser or handler; it is not a finding and not taint proof.",
             "A sibling or helper declaration is not proof of a broken trust boundary.",
         ],
     }
@@ -705,6 +780,32 @@ def render_investigation_report(investigation: dict[str, Any]) -> str:
         )
     if not investigation["ranked_surfaces"]:
         lines.append("| - | none | - | 0 | No ranked surfaces recovered. |")
+
+    string_anchors = investigation.get("ranked_string_anchors") or []
+    if string_anchors:
+        lines.extend([
+            "",
+            "## String-anchor Leads (Not Findings)",
+            "",
+            "| Rank | Function | Anchor strings | Sample |",
+            "|---|---|---:|---|",
+        ])
+        for index, item in enumerate(string_anchors[:5], start=1):
+            samples = item.get("sample_strings") or []
+            sample = samples[0] if samples else ""
+            # _md_neutral, not _md_escape: names and samples are
+            # hostile content whose backticks would break out of the
+            # wrapping code-span cells (see the helper's docstring).
+            lines.append(
+                f"| {index} | `{_md_neutral(item.get('name'))}` | "
+                f"{int(item.get('anchor_string_count') or 0)} | "
+                f"`{_md_neutral(sample)}` |"
+            )
+        lines.append("")
+        lines.append(
+            "Anchor-dense functions are likely parsers or handlers; "
+            "this is structural evidence, not a finding and not taint proof."
+        )
 
     lines.extend(["", "## Facts", ""])
     lines.extend(

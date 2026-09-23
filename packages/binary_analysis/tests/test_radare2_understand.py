@@ -1180,6 +1180,190 @@ class TestMalformedR2Json(unittest.TestCase):
         self.assertEqual(ctx.interesting_functions[0].transitive_distance, 1)
 
 
+class TestStringAnchors(unittest.TestCase):
+    """The bounded string-anchor pass: diagnostic-shaped strings are
+    selected structurally, resolved to referencing functions via
+    xrefs, grouped, bounded, and escaped at capture."""
+
+    def test_diagnostic_selection_is_structural(self):
+        from packages.binary_analysis.radare2_understand import (
+            _is_diagnostic_string,
+        )
+        # printf-style conversions are the strongest marker.
+        self.assertTrue(
+            _is_diagnostic_string("failed to read %s at offset %d"))
+        # Sentence-like punctuation / labelled clause.
+        self.assertTrue(
+            _is_diagnostic_string("invalid magic: expected RIFF header"))
+        self.assertTrue(_is_diagnostic_string("Checksum mismatch."))
+        # Too short.
+        self.assertFalse(_is_diagnostic_string("%s"))
+        # Bare identifiers carry no diagnostic shape.
+        self.assertFalse(_is_diagnostic_string("config_table_entry"))
+        # Mostly non-printable payloads are rejected.
+        self.assertFalse(
+            _is_diagnostic_string("\x01\x02\x03\x04ab\x05\x06\x07\x08"))
+        # Ratio-threshold direction fixture: a real conversion inside
+        # a mostly-control-byte payload is still rejected at the 0.9
+        # floor (a 0.0 floor would accept it via the %d match).
+        self.assertFalse(_is_diagnostic_string("err %d " + "\x01" * 20))
+
+    def _run_anchor_pass(self, understand, ctx, izj, axtj_by_vaddr):
+        r2 = MagicMock()
+        calls = []
+
+        def cmd_response(cmd):
+            calls.append(cmd)
+            if cmd == "izj":
+                return json.dumps(izj)
+            if cmd.startswith("axtj @ "):
+                vaddr = int(cmd.split("@")[-1].strip())
+                return json.dumps(axtj_by_vaddr.get(vaddr, []))
+            return "[]"
+
+        r2.cmd.side_effect = cmd_response
+        understand._extract_string_anchors(r2, ctx)
+        return calls
+
+    def test_grouping_ranks_anchor_dense_functions_first(self):
+        understand = _make_understand_for("r2-anchor-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        ctx.interesting_functions = [
+            FunctionInfo(name="fcn.parse", address=0x1000, size=128),
+            FunctionInfo(name="fcn.other", address=0x2000, size=64),
+        ]
+        izj = [
+            {"string": "failed to parse header: %s", "vaddr": 0x5000},
+            {"string": "bad checksum %d in frame", "vaddr": 0x5010},
+            {"string": "plain_identifier", "vaddr": 0x5020},
+            {"string": "unexpected token in input.", "vaddr": 0x5030},
+        ]
+        axtj = {
+            0x5000: [{"fcn_addr": 0x1000, "fcn_name": "fcn.parse"}],
+            0x5010: [{"fcn_addr": 0x1000, "fcn_name": "fcn.parse"}],
+            0x5030: [{"fcn_addr": 0x2000, "fcn_name": "fcn.other"}],
+        }
+        calls = self._run_anchor_pass(understand, ctx, izj, axtj)
+        # Non-diagnostic strings never cost an xref lookup.
+        self.assertNotIn(f"axtj @ {0x5020}", calls)
+        self.assertEqual(
+            [(item["name"], item["anchor_string_count"])
+             for item in ctx.string_anchor_functions],
+            [("fcn.parse", 2), ("fcn.other", 1)],
+        )
+        # Serialised form carries the anchor surface.
+        d = ctx.to_dict()
+        self.assertEqual(
+            d["string_anchor_functions"][0]["name"], "fcn.parse")
+        self.assertEqual(
+            d["string_anchor_functions"][0]["address"], hex(0x1000))
+
+    def test_top_k_functions_bounded(self):
+        understand = _make_understand_for("r2-anchor-k-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        izj = [
+            {"string": f"error {i}: bad field %d", "vaddr": 0x5000 + i * 0x10}
+            for i in range(3)
+        ]
+        axtj = {
+            0x5000 + i * 0x10: [{"fcn_addr": 0x1000 + i * 0x100,
+                                 "fcn_name": f"fcn.f{i}"}]
+            for i in range(3)
+        }
+        with patch.object(BinaryUnderstand, "_MAX_ANCHOR_FUNCTIONS", 2):
+            self._run_anchor_pass(understand, ctx, izj, axtj)
+        self.assertEqual(len(ctx.string_anchor_functions), 2)
+
+    def test_xref_lookups_bounded(self):
+        understand = _make_understand_for("r2-anchor-x-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        izj = [
+            {"string": f"error {i}: bad field %d", "vaddr": 0x5000 + i * 0x10}
+            for i in range(4)
+        ]
+        with patch.object(BinaryUnderstand, "_MAX_ANCHOR_XREF_LOOKUPS", 1):
+            calls = self._run_anchor_pass(understand, ctx, izj, {})
+        self.assertEqual(
+            sum(1 for cmd in calls if cmd.startswith("axtj")), 1)
+
+    def test_hostile_sample_strings_escaped_at_capture(self):
+        """The sample strings ride into reports and LLM prompts; raw
+        control bytes from the binary must be escaped the moment they
+        are captured."""
+        understand = _make_understand_for("r2-anchor-h-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        hostile = "Fatal: bad header \x1b]0;pwn\x07 near %s"
+        izj = [{"string": hostile, "vaddr": 0x5000}]
+        axtj = {0x5000: [{"fcn_addr": 0x1000, "fcn_name": "fcn.parse"}]}
+        self._run_anchor_pass(understand, ctx, izj, axtj)
+        self.assertEqual(len(ctx.string_anchor_functions), 1)
+        sample = ctx.string_anchor_functions[0]["sample_strings"][0]
+        self.assertNotIn("\x1b", sample)
+        self.assertNotIn("\x07", sample)
+        self.assertIn("\\x1b", sample)
+        self.assertIn("Fatal: bad header", sample)
+
+    def test_analyse_flag_skips_the_pass(self):
+        for flag, expected_calls in ((True, 1), (False, 0)):
+            understand = _make_understand_for(
+                f"r2-anchor-flag{int(flag)}-", self.addCleanup)
+            fake_r2pipe = MagicMock()
+            fake_r2pipe.open.return_value.cmd.return_value = "[]"
+            with patch.object(
+                BinaryUnderstand, "_extract_string_anchors",
+            ) as mock_pass, patch.dict("sys.modules",
+                                       {"r2pipe": fake_r2pipe}):
+                understand.analyse(
+                    max_decompile=0, max_strings=0, string_anchors=flag)
+            self.assertEqual(mock_pass.call_count, expected_calls)
+
+    def test_infinity_vaddr_and_fcn_addr_degrade(self):
+        """json.loads accepts Infinity; int(float('inf')) raises
+        OverflowError. Hostile vaddr / fcn_addr values must skip the
+        one entry, never abort the anchor pass (or the map)."""
+        understand = _make_understand_for("r2-anchor-inf-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        izj = [
+            {"string": "bad frame %d in stream", "vaddr": float("inf")},
+            {"string": "valid error: %s value", "vaddr": 0x5000},
+        ]
+        axtj = {
+            0x5000: [
+                {"fcn_addr": float("inf"), "fcn_name": "fcn.evil"},
+                {"fcn_addr": 0x1000, "fcn_name": "fcn.a"},
+            ],
+        }
+        self._run_anchor_pass(understand, ctx, izj, axtj)  # must not raise
+        self.assertEqual(
+            [(item["name"], item["anchor_string_count"])
+             for item in ctx.string_anchor_functions],
+            [("fcn.a", 1)],
+        )
+
+    def test_hostile_fcn_name_escaped_at_capture(self):
+        """Anchor function names ride into every downstream JSON
+        artifact and report — like the samples, they must be escaped
+        the moment they are captured."""
+        understand = _make_understand_for("r2-anchor-fn-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        izj = [{"string": "parse failure at %s", "vaddr": 0x5000}]
+        axtj = {0x5000: [{"fcn_addr": 0x1000,
+                          "fcn_name": "fcn.\x1b[9Apwn\x07"}]}
+        self._run_anchor_pass(understand, ctx, izj, axtj)
+        name = ctx.string_anchor_functions[0]["name"]
+        self.assertNotIn("\x1b", name)
+        self.assertNotIn("\x07", name)
+        self.assertIn("\\x1b", name)
+
+    def test_malformed_izj_degrades_silently(self):
+        understand = _make_understand_for("r2-anchor-m-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps({"unexpected": "shape"})
+        understand._extract_string_anchors(r2, ctx)  # must not raise
+        self.assertEqual(ctx.string_anchor_functions, [])
+
+
 class TestFunctionInventoryCap(unittest.TestCase):
     def test_cap_is_recorded_in_ctx_notes(self):
         """Capping the aflj inventory must surface in ctx.notes (the

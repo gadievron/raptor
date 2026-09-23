@@ -107,6 +107,106 @@ def test_quick_investigation_does_not_claim_xref_analysis(tmp_path: Path) -> Non
     assert "Deep analysis ran for no architecture" not in report
 
 
+def test_string_anchor_leads_ranked_with_structural_language(tmp_path: Path) -> None:
+    """String-anchor leads flow map -> context map -> investigation as
+    review leads with structural-inference language — a likely
+    parser/handler, never a finding."""
+    binary = _write_binary(tmp_path / "Demo", b"\x7fELF" + b"\x00" * 128)
+    out = tmp_path / "out"
+    ctx = BinaryContextMap(
+        binary_path=binary, arch="x86", bits=64, binary_format="elf",
+    )
+    ctx.interesting_functions = [
+        FunctionInfo(name="fcn.parse", address=0x1000, size=128),
+    ]
+    # Sample strings arrive pre-escaped from the capture chokepoint.
+    ctx.string_anchor_functions = [
+        {"name": "fcn.other", "address": 0x2000, "anchor_string_count": 2,
+         "sample_strings": ["unexpected token in input."]},
+        {"name": "fcn.parse", "address": 0x1000, "anchor_string_count": 7,
+         "sample_strings": ["failed to parse header: %s"]},
+    ]
+
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        result = analyse_blackbox_binary(binary, out_dir=out)
+
+    investigation = write_investigation(result, out)
+
+    leads = investigation["ranked_string_anchors"]
+    assert [item["name"] for item in leads] == ["fcn.parse", "fcn.other"]
+    assert leads[0]["kind"] == "string_anchor"
+    assert leads[0]["anchor_string_count"] == 7
+    assert leads[0]["bound_function_id"] == "BFN-1000"
+    assert leads[0]["evidence_tier"] == "xref_backed"
+    assert investigation["summary"]["string_anchor_leads"] == 2
+    inference = next(
+        item for item in investigation["structural_inferences"]
+        if "fcn.parse" in item["statement"]
+    )
+    assert "likely parser/handler" in inference["statement"]
+    assert "not a finding" in inference["not_a_claim"]
+    assert any(
+        record.kind == "string_anchor_candidate" for record in result.evidence
+    )
+    report = (out / "binary-investigation-report.md").read_text()
+    assert "## String-anchor Leads (Not Findings)" in report
+    assert "fcn.parse" in report
+
+
+def test_string_anchor_markdown_renders_inert(tmp_path: Path) -> None:
+    """Anchor names and sample strings are hostile-binary content
+    containing PRINTABLE markdown metacharacters: backticks must not
+    break out of the wrapping code-span table cells, and [text](url)
+    forms must never render as live links — neither in the table nor
+    in the prose inference slot."""
+    binary = _write_binary(tmp_path / "Demo", b"\x7fELF" + b"\x00" * 128)
+    out = tmp_path / "out"
+    ctx = BinaryContextMap(
+        binary_path=binary, arch="x86", bits=64, binary_format="elf",
+    )
+    ctx.string_anchor_functions = [
+        {"name": "fcn.[evil](http://x.test)", "address": 0x1000,
+         "anchor_string_count": 3,
+         "sample_strings": ["bad `tick` [click](http://e.test) value: %s"]},
+    ]
+
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        result = analyse_blackbox_binary(binary, out_dir=out)
+    write_investigation(result, out)
+
+    report = (out / "binary-investigation-report.md").read_text()
+    # Assert the security PROPERTY, not the neutralisation byte: the
+    # underlying _md_escape implementation is a rewrite surface and
+    # may neutralise backticks differently (replacement vs entity
+    # escape) — either way no live code-span breakout or link form
+    # may survive, while the content itself must stay legible.
+    assert "](http" not in report          # link adjacency broken everywhere
+    assert "`tick`" not in report          # code-span breakout neutralised
+    assert "tick" in report                # ...but the content survives
+    assert "fcn." in report                # the lead itself is still shown
+
+
+def test_report_says_skipped_when_anchor_pass_disabled(tmp_path: Path) -> None:
+    """A skipped anchor pass must not be indistinguishable from
+    'ran and found nothing' in the analysis report."""
+    binary = _write_binary(tmp_path / "Demo", b"\x7fELF" + b"\x00" * 128)
+    out = tmp_path / "out"
+    ctx = BinaryContextMap(
+        binary_path=binary, arch="x86", bits=64, binary_format="elf",
+    )
+
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        analyse_blackbox_binary(binary, out_dir=out, string_anchors=False)
+    report = (out / "binary-analysis-report.md").read_text()
+    assert "- String-anchor function leads: (skipped)" in report
+
+    out2 = tmp_path / "out2"
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        analyse_blackbox_binary(binary, out_dir=out2)
+    report2 = (out2 / "binary-analysis-report.md").read_text()
+    assert "- String-anchor function leads: 0" in report2
+
+
 def test_md_escape_scrubs_control_and_bidi_bytes() -> None:
     from packages.binary_analysis.investigation import _md_escape
 
