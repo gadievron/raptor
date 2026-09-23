@@ -877,6 +877,35 @@ def build_dataflow_validation_bundle(
     )
 
 
+# Per-repo memo for threat-model prompt blocks. The orchestrated
+# dispatch path builds one bundle per finding; without the memo every
+# finding would re-read the project threat model and graph risk
+# context from disk. Successful lookups only — a failed read retries
+# on the next finding.
+_THREAT_MODEL_BLOCK_CACHE: dict[str, tuple[UntrustedBlock, ...]] = {}
+
+
+def _threat_model_blocks_for_repo(
+    repo_path: Any,
+) -> tuple[UntrustedBlock, ...]:
+    """Memoised ``core.threat_model.threat_model_untrusted_blocks``.
+
+    () when the finding carries no ``repo_path`` or the project has no
+    threat model / graph risk context.
+    """
+    if not repo_path:
+        return ()
+    key = str(repo_path)
+    cached = _THREAT_MODEL_BLOCK_CACHE.get(key)
+    if cached is None:
+        from pathlib import Path
+
+        from core.threat_model import threat_model_untrusted_blocks
+        cached = tuple(threat_model_untrusted_blocks(Path(key)))
+        _THREAT_MODEL_BLOCK_CACHE[key] = cached
+    return cached
+
+
 def build_analysis_prompt_bundle_from_finding(
     finding: dict[str, Any],
     *,
@@ -918,6 +947,19 @@ def build_analysis_prompt_bundle_from_finding(
             ghidra_blocks_for_finding(finding))
     except Exception:
         logger.debug("ghidra context injection failed", exc_info=True)
+    # Operator threat model + graph-derived risk context — the same
+    # seam the sequential lane consumes in agent.analyze_vulnerability
+    # and the codeql autonomous analyzer adopted. Without the
+    # injection HERE, none of the orchestrated task classes (analysis,
+    # consensus, judge, retry — all build via this function) ever see
+    # `/project set threat-model`, and verdicts silently diverge
+    # between --sequential and default runs. Best-effort like the
+    # sibling injections above; memoised per repo.
+    try:
+        extra_blocks = tuple(extra_blocks) + _threat_model_blocks_for_repo(
+            finding.get("repo_path"))
+    except Exception:
+        logger.debug("threat-model injection failed", exc_info=True)
     return build_analysis_prompt_bundle(
         rule_id=finding.get("rule_id", "unknown"),
         level=finding.get("level", "warning"),
