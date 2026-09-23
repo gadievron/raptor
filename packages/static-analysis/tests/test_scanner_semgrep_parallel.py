@@ -726,7 +726,10 @@ class TestCodeQLStageTag:
                 name="codeql-stage_0",
             )
             t.start()
-            t.join()
+            # Deadline, not a bare join: a wedged thread must FAIL
+            # the test, not hang the whole suite.
+            t.join(timeout=30)
+            assert not t.is_alive(), "log-emitting thread hung"
         finally:
             attach_to.removeFilter(tag)
             raptor_logger.removeHandler(cap)
