@@ -808,6 +808,42 @@ class ToolUseLoop:
                 tool_calls_made += 1
                 self._emit(ToolCallDispatched(iteration=iteration, call=call))
 
+                # ---- parse-failed call containment ----
+                # A truncated/unparseable streaming call carries a
+                # placeholder {} input, not model-authored arguments.
+                # Never dispatch it (and, via is_error below, never
+                # let it set terminal_tool_input) — synthesise the
+                # re-issue error the model can act on next turn.
+                if getattr(call, "input_parse_error", False):
+                    result = ToolResult(
+                        tool_use_id=call.id,
+                        content=(
+                            f"tool call {call.name!r} was truncated — "
+                            "its JSON arguments did not parse and the "
+                            "call was NOT executed. Re-issue the call "
+                            "with complete arguments (keep them "
+                            "concise if the turn ran out of output "
+                            "tokens)."
+                        ),
+                        is_error=True,
+                    )
+                    duration = 0.0
+                    # Skip x-source validation and dispatch entirely.
+                    raw_content = result.content
+                    self._emit(ToolCallReturned(
+                        iteration=iteration,
+                        call_id=call.id,
+                        result=result,
+                        duration_s=duration,
+                    ))
+                    tool_results.append(ToolResult(
+                        tool_use_id=result.tool_use_id,
+                        content=wrap_tool_result(raw_content, call.name),
+                        is_error=True,
+                        raw_content=raw_content,
+                    ))
+                    continue
+
                 # ---- x-source pre-dispatch validation ----
                 discovered = _get_discovered_fields(
                     self._tools_by_name.get(call.name),
@@ -1209,6 +1245,7 @@ class ToolUseLoop:
                 tc = tool_calls.get(chunk.tool_call_id)
                 if tc:
                     raw = "".join(tc["input_parts"])
+                    parse_error = False
                     try:
                         args = json.loads(raw) if raw else {}
                         if not isinstance(args, dict):
@@ -1222,15 +1259,27 @@ class ToolUseLoop:
                             )
                             raise ValueError(msg)
                     except (ValueError, TypeError):
+                        # Routine per-turn max_tokens truncation cuts
+                        # tool-call JSON mid-argument. The call block
+                        # must still be accumulated (the next turn's
+                        # tool_result needs a matching tool_use), but
+                        # flagged so the dispatch path NEVER invokes
+                        # the handler — dispatching with a synthetic
+                        # {} executes side effects, or 'submits' the
+                        # terminal tool, with arguments the model
+                        # never authored.
                         logger.warning(
                             "stream: unparseable tool-call JSON for "
-                            "%r: %r", tc["name"], raw[:400],
+                            "%r: %r — the call will not be dispatched",
+                            tc["name"], raw[:400],
                         )
                         args = {}
+                        parse_error = True
                     content_blocks.append(ToolCall(
                         id=chunk.tool_call_id,
                         name=tc["name"],
                         input=args,
+                        input_parse_error=parse_error,
                     ))
 
             elif chunk.type == "usage":

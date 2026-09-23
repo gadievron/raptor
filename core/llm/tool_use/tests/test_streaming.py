@@ -417,8 +417,9 @@ class TestLoopStreaming:
     def test_streaming_non_dict_tool_json(self, raw: str):
         """Valid JSON that isn't an object ('null', '[]', '\"str\"')
         parses cleanly but can't be a tool-args dict — it must be
-        treated exactly like malformed JSON (empty input), not flow
-        into ``ToolCall.input`` and crash handler dispatch."""
+        treated exactly like malformed JSON (parse-failed, never
+        dispatched), not flow into ``ToolCall.input`` and crash
+        handler dispatch."""
         chunks = [
             StreamChunk(
                 type="tool_call_start",
@@ -456,7 +457,9 @@ class TestLoopStreaming:
         result = loop.run("test")
         assert result.tool_calls_made == 1
         assert result.terminated_by == "complete"
-        assert seen_inputs == [{}]
+        # Parse-failed calls are never dispatched — the handler must
+        # not run on arguments the model never authored.
+        assert seen_inputs == []
 
     def test_streaming_valid_dict_tool_json_unchanged(self):
         """The non-dict guard must not disturb well-formed object
@@ -510,6 +513,120 @@ class TestLoopStreaming:
         result = loop.run("test")
         assert result.tool_calls_made == 1
         assert result.terminated_by == "complete"
+
+
+# ---------------------------------------------------------------------------
+# Truncated / unparseable tool-call containment
+# ---------------------------------------------------------------------------
+
+
+class TestTruncatedToolCallContainment:
+    """A tool call whose streamed JSON arguments never parsed (per-turn
+    max_tokens truncation is the routine cause) must not be dispatched
+    with ``input={}`` — that invokes a side-effectful handler, or
+    'submits' a terminal tool, with arguments the model never
+    authored. The loop synthesises an ``is_error`` result telling the
+    model to re-issue instead."""
+
+    def _truncated_call_chunks(
+        self, name: str = "echo", raw: str = '{"msg": "trunca',
+    ) -> list[StreamChunk]:
+        return [
+            StreamChunk(
+                type="tool_call_start",
+                tool_call_id="tc_1",
+                tool_call_name=name,
+            ),
+            StreamChunk(
+                type="tool_call_delta",
+                tool_call_id="tc_1",
+                tool_call_input_delta=raw,
+            ),
+            StreamChunk(type="tool_call_end", tool_call_id="tc_1"),
+            StreamChunk(type="usage", input_tokens=10, output_tokens=4096),
+            StreamChunk(type="done", stop_reason=StopReason.MAX_TOKENS),
+        ]
+
+    def _complete_chunks(self) -> list[StreamChunk]:
+        return [
+            StreamChunk(type="text_delta", text="recovered"),
+            StreamChunk(type="usage", input_tokens=5, output_tokens=2),
+            StreamChunk(type="done", stop_reason=StopReason.COMPLETE),
+        ]
+
+    def test_parse_failed_call_never_reaches_handler(self):
+        invocations: list[dict] = []
+
+        def handler(args: dict) -> str:
+            invocations.append(args)
+            return "ok"
+
+        tool = ToolDef(
+            name="echo", description="d",
+            input_schema={"type": "object"},
+            handler=handler,
+        )
+        provider = FakeStreamingProvider([
+            self._truncated_call_chunks(),
+            self._complete_chunks(),
+        ])
+        loop = ToolUseLoop(provider, [tool], stream=True, max_iterations=3)
+        result = loop.run("go")
+        assert invocations == []
+        assert result.terminated_by == "complete"
+
+    def test_model_receives_reissue_error_result(self):
+        from core.llm.tool_use.types import ToolResult
+
+        provider = FakeStreamingProvider([
+            self._truncated_call_chunks(),
+            self._complete_chunks(),
+        ])
+        loop = ToolUseLoop(
+            provider, [_echo_tool()], stream=True, max_iterations=3,
+        )
+        result = loop.run("go")
+        error_results = [
+            b
+            for m in result.messages if m.role == "user"
+            for b in m.content
+            if isinstance(b, ToolResult) and b.is_error
+        ]
+        assert len(error_results) == 1
+        assert error_results[0].tool_use_id == "tc_1"
+        assert "truncated" in error_results[0].content
+
+    def test_truncated_terminal_tool_never_submits(self):
+        invocations: list[dict] = []
+
+        def submit_handler(args: dict) -> str:
+            invocations.append(args)
+            return "submitted"
+
+        submit = ToolDef(
+            name="submit", description="final answer",
+            input_schema={
+                "type": "object",
+                "properties": {"verdict": {"type": "string"}},
+            },
+            handler=submit_handler,
+        )
+        provider = FakeStreamingProvider([
+            self._truncated_call_chunks(
+                name="submit", raw='{"verdict": "exploi',
+            ),
+            self._complete_chunks(),
+        ])
+        loop = ToolUseLoop(
+            provider, [submit], terminal_tool="submit",
+            stream=True, max_iterations=3,
+        )
+        result = loop.run("go")
+        # A parse-failed call must never set terminal_tool_input —
+        # a {} 'submission' the model never authored.
+        assert invocations == []
+        assert result.terminal_tool_input is None
+        assert result.terminated_by != "terminal_tool"
 
 
 # ---------------------------------------------------------------------------

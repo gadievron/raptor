@@ -124,11 +124,22 @@ class ToolDef:
 @dataclass(frozen=True)
 class ToolCall:
     """Model-emitted request to call a tool. Surfaced as one of the
-    content blocks of an assistant-role :class:`Message`."""
+    content blocks of an assistant-role :class:`Message`.
+
+    ``input_parse_error`` marks a streaming call whose accumulated
+    JSON arguments never parsed into an object (per-turn max_tokens
+    truncation is the routine cause). The block still rides in the
+    assistant message so the wire shape stays valid (a tool_result
+    needs a matching tool_use), but the loop NEVER dispatches it —
+    ``input`` is a placeholder ``{}``, not arguments the model
+    authored — and a parse-failed terminal-tool call never sets
+    ``terminal_tool_input``. Additive default: provider-built calls
+    with parsed arguments are unaffected."""
 
     id: str
     name: str
     input: dict[str, Any]
+    input_parse_error: bool = False
 
 
 @dataclass(frozen=True)
