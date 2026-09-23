@@ -1935,8 +1935,12 @@ def _handle_graph(mgr, args: argparse.Namespace) -> None:
         print(f"  Edges: {total_edges}")
         snap = info.get("latest_snapshot")
         if snap:
-            print(f"  Latest snapshot: {snap.get('created_at', '?')}"
-                  f" ({snap.get('producer', '?')})")
+            # Graph-store metadata is a RAPTOR-written artifact, but a
+            # tampered store reaches the terminal here — scrub like
+            # every other artifact-derived render lane.
+            _when = sanitise_for_terminal(str(snap.get('created_at', '?')), max_len=64)
+            _prod = sanitise_for_terminal(str(snap.get('producer', '?')), max_len=64)
+            print(f"  Latest snapshot: {_when} ({_prod})")
 
     elif args.action == "stats":
         if not graph_path.exists():

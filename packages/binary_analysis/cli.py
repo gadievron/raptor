@@ -357,29 +357,30 @@ def _print_investigation_summary(investigation: dict[str, Any], out_dir: Path) -
     parser_boundaries = investigation.get("ranked_parser_boundaries") or []
     # Names come from the analysed binary (symbols, imports, plist
     # strings) — hostile bytes incl. raw ESC/OSC survive r2's iij, so
-    # every name is scrubbed+bounded before it reaches the terminal.
-    _t = sanitise_for_terminal
+    # every name is scrubbed+bounded before it reaches the terminal
+    # (_sft is the audit-recognised conventional alias).
+    _sft = sanitise_for_terminal
     if ingress:
         print("Top ingress:")
         for item in ingress[:3]:
             print(
-                f"  - {_t(str(item['name']))} "
-                f"({_t(str(item['kind']))}, boundary={_t(str(item['boundary']))})"
+                f"  - {_sft(str(item['name']))} "
+                f"({_sft(str(item['kind']))}, boundary={_sft(str(item['boundary']))})"
             )
     if leads:
         print("Top leads:")
         for item in leads[:3]:
             print(
-                f"  - {_t(str(item['name']))} "
-                f"({_t(str(item['category']))}, direct_callers={item['direct_callers']})"
+                f"  - {_sft(str(item['name']))} "
+                f"({_sft(str(item['category']))}, direct_callers={item['direct_callers']})"
             )
     if parser_boundaries:
         print("Top parser boundaries:")
         for item in parser_boundaries[:3]:
             print(
-                f"  - {_t(str(item['boundary_function_name']))} -> "
-                f"{_t(str(item['parser_surface_name']))} "
-                f"(ingress={_t(str(item['ingress_name']))}, depth={item['path']['depth']})"
+                f"  - {_sft(str(item['boundary_function_name']))} -> "
+                f"{_sft(str(item['parser_surface_name']))} "
+                f"(ingress={_sft(str(item['ingress_name']))}, depth={item['path']['depth']})"
             )
     actions = investigation.get("priority_queue") or []
     if actions:
@@ -388,7 +389,7 @@ def _print_investigation_summary(investigation: dict[str, Any], out_dir: Path) -
             # Commands embed shlex.quote()d artifact paths from the
             # hostile bundle — quoting preserves control bytes, so the
             # command needs the same scrub as the names above.
-            print(f"  - {_t(str(item['command']))}")
+            print(f"  - {_sft(str(item['command']))}")
     print(f"Output: {out_dir}")
     print(f"Investigation report: {out_dir / 'binary-investigation-report.md'}")
     print(f"Investigation JSON: {out_dir / 'binary-investigation.json'}")
@@ -752,8 +753,10 @@ def _run_harness(args: argparse.Namespace) -> int:
     print(f"Spec: {spec['artifacts']['spec']}")
     print(f"Report: {spec['artifacts']['report']}")
     if spec.get("generated"):
-        print(f"Source: {spec['generated']['source']}")
-        print(f"Build: {spec['generated']['build_script']}")
+        # Spec artifacts are RAPTOR-written, but the file is re-read
+        # from disk here — scrub like the sibling spec fields above.
+        print(f"Source: {sanitise_for_terminal(str(spec['generated']['source']))}")
+        print(f"Build: {sanitise_for_terminal(str(spec['generated']['build_script']))}")
     return 0
 
 

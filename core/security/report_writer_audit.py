@@ -104,7 +104,7 @@ from __future__ import annotations
 
 import ast
 import re
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -223,9 +223,157 @@ _TOOL_OUTPUT_KEYS = frozenset({
 })
 
 _FOREIGN_KEYS = _LLM_DERIVED_KEYS | _TOOL_OUTPUT_KEYS
+
+
+# ---------------------------------------------------------------------------
+# Schema-derived display-key tier
+# ---------------------------------------------------------------------------
+# The hand-maintained tiers above are curated lists — every key was
+# appended after a lane was found carrying it raw, which means a
+# finding field NOT yet on any list is invisible to the dict-read arm:
+# ``print(f['ecosystem'])`` in a registered writer reads a real,
+# target-derived findings.json field (the SCA row's OSV ecosystem
+# string) and fired nothing, because no tier named it. Appending
+# 'ecosystem' would fix one key and preserve the class. Instead the
+# dict-read tier UNIONS in every field name the tree's own finding
+# schemas declare, extracted from the schema sources' ASTs at import
+# time — a new finding field joins the audit vocabulary the moment it
+# joins a schema, with no list to forget to update.
+#
+# Sources (path -> what is read):
+# * core/run/orchestrated_report_schema.py — ``_FINDING_SCHEMA``'s
+#   ``properties`` key names (the orchestrated-report finding shape);
+# * core/dataflow/finding.py — the ``_FINDING_KEYS`` / ``_STEP_KEYS``
+#   frozenset literals (the normalised dataflow finding shape);
+# * packages/sca/findings.py — ``_row_envelope``'s returned dict keys
+#   plus every ``sca={...}`` block literal passed to it (the
+#   findings.json row contract; per-kind blocks deliberately differ,
+#   so the union is taken).
+#
+# Tier placement matches the label tier: dict reads (subscript / .get
+# / getattr) at sinks and returns only — attribute reads on these
+# ubiquitous names (``.name``, ``.line``, ``.version``) are everywhere
+# on stdlib/dataclass objects and would drown the rule, and the taint
+# engine keeps the pre-widening core vocabulary (the measured
+# amplification trade-off documented at ``_naked_keys``). Nested
+# summary sub-blocks (advisory / exploit-evidence dicts) are NOT
+# walked — their parent field names are, which is the boundary a
+# renderer reads through first; a lane unpacking a sub-block into
+# locals is the same assign-then-print residual the label tier
+# documents.
+#
+# Extraction failure doctrine, two-sided: a source file that is
+# PRESENT but yields no keys raises at import (a restructure that
+# silently stopped contributing would blind the gate exactly like the
+# hand lists it replaces), while a MISSING source is skipped — the
+# closure gate audits scratch trees carrying their own copy of this
+# module (--root), and a minimal tree without the schema sources must
+# degrade to the hand tiers, not crash the whole gate. A rename inside
+# the real repo cannot hide in the skip arm: the per-source
+# non-vacuity sentinels in test_report_writer_audit pin that every
+# source keeps contributing there.
+
+def _schema_keys_orchestrated(tree: ast.Module) -> set[str]:
+    """``_FINDING_SCHEMA``'s ``properties`` key names."""
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "_FINDING_SCHEMA"
+                   for t in node.targets):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            continue
+        for k, v in zip(node.value.keys, node.value.values):
+            if (isinstance(k, ast.Constant) and k.value == "properties"
+                    and isinstance(v, ast.Dict)):
+                out.update(pk.value for pk in v.keys
+                           if isinstance(pk, ast.Constant)
+                           and isinstance(pk.value, str))
+    return out
+
+
+def _schema_keys_dataflow(tree: ast.Module) -> set[str]:
+    """String constants inside the ``_FINDING_KEYS`` / ``_STEP_KEYS``
+    frozenset literals."""
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets: list[ast.expr] = list(node.targets)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        if not any(isinstance(t, ast.Name)
+                   and t.id in ("_FINDING_KEYS", "_STEP_KEYS")
+                   for t in targets):
+            continue
+        for c in ast.walk(value):
+            if isinstance(c, ast.Constant) and isinstance(c.value, str):
+                out.add(c.value)
+    return out
+
+
+def _schema_keys_sca(tree: ast.Module) -> set[str]:
+    """``_row_envelope``'s returned dict keys plus every ``sca={...}``
+    dict-literal keyword's keys (the per-kind block union)."""
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_row_envelope":
+            for c in ast.walk(node):
+                if isinstance(c, ast.Return) and isinstance(c.value, ast.Dict):
+                    out.update(k.value for k in c.value.keys
+                               if isinstance(k, ast.Constant)
+                               and isinstance(k.value, str))
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg == "sca" and isinstance(kw.value, ast.Dict):
+                    out.update(k.value for k in kw.value.keys
+                               if isinstance(k, ast.Constant)
+                               and isinstance(k.value, str))
+    return out
+
+
+_SCHEMA_KEY_SOURCES: tuple[tuple[str, Callable[[ast.Module], set[str]]], ...] = (
+    ("core/run/orchestrated_report_schema.py", _schema_keys_orchestrated),
+    ("core/dataflow/finding.py", _schema_keys_dataflow),
+    ("packages/sca/findings.py", _schema_keys_sca),
+)
+
+
+def _derive_schema_keys(root: Path = _REPO_ROOT) -> frozenset[str]:
+    """Union of finding-field names declared by the tree's own finding
+    schemas. A missing source is skipped (scratch-tree degrade — see
+    the doctrine comment above); a present source whose extraction
+    yields nothing raises (an empty derivation is a blind gate, not a
+    clean one)."""
+    keys: set[str] = set()
+    for rel, extract in _SCHEMA_KEY_SOURCES:
+        path = root / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        got = extract(ast.parse(text))
+        if not got:
+            raise RuntimeError(
+                f"report_writer_audit: schema-key derivation from {rel} "
+                f"yielded no keys — the source moved or was restructured; "
+                f"update _SCHEMA_KEY_SOURCES (the audit must not run with "
+                f"a silently-empty finding vocabulary)"
+            )
+        keys.update(got)
+    return frozenset(keys)
+
+
+_SCHEMA_KEYS = _derive_schema_keys()
+
 # Dict-read (subscript/.get/getattr) vocabulary includes the label
-# tier; attribute reads match only the core vocabulary.
-_SUBSCRIPT_KEYS = _FOREIGN_KEYS | _LABEL_KEYS
+# tier and the schema-derived finding-field tier; attribute reads
+# match only the core vocabulary.
+_SUBSCRIPT_KEYS = _FOREIGN_KEYS | _LABEL_KEYS | _SCHEMA_KEYS
 # Taint-engine vocabulary: the pre-widening core names. The widened
 # and label tiers match at sinks/returns only (see _naked_keys(wide)).
 _CORE_KEYS = frozenset({
@@ -338,6 +486,10 @@ _SANITISERS = frozenset({
     # byte cap — sanitise_for_terminal grade); summary-builder lanes
     # apply it per-field at construction.
     "_clip_str",
+    # core/threat_model's Mermaid label chokepoint: _safe_for_render
+    # (newline/pipe/backtick strip + escape) then quote-escaping, so a
+    # hostile label cannot terminate the node or forge statements.
+    "_mermaid_label",
 })
 
 
@@ -1320,6 +1472,106 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "capability-check detail strings are code-authored; "
             "version fragments come from local trusted-tool probes "
             "(no target input on the describe surface by contract)"
+        ),
+    ),
+    # --- schema-derived tier: adjudicated safe sites ------------------
+    AllowlistEntry(
+        file="core/project/cli.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="name",
+        audit_note=(
+            "import_project charset-validates the registered name via "
+            "ProjectManager._validate_name before returning it — the "
+            "rendered value cannot carry separators or control bytes"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/reporting/findings.py",
+        func_name="findings_summary_line",
+        kind="unsanitised_llm_value",
+        detail="exploitable",
+        audit_note=(
+            "internally-built count dict (count_findings sums ints); "
+            "the rendered value is an integer bucket count, not "
+            "finding text"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/sandbox/triage.py",
+        func_name="_cli_main",
+        kind="unsanitised_llm_value",
+        detail="confidence",
+        audit_note=(
+            "rendered under a :.2f format spec — a non-numeric value "
+            "raises at format time instead of reaching the terminal; "
+            "every string field on the same line is sanitised"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/threat_model/__init__.py",
+        func_name="render_report",
+        kind="unsanitised_llm_value",
+        detail="source",
+        audit_note=(
+            "the raw read feeds _mermaid_id, which renders a sha256 "
+            "hex digest of the value — content-destroying; the label "
+            "render of the same field routes through _mermaid_label"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/threat_model/__init__.py",
+        func_name="render_report",
+        kind="unsanitised_llm_value",
+        detail="sink",
+        audit_note=(
+            "the raw read feeds _mermaid_id, which renders a sha256 "
+            "hex digest of the value — content-destroying; the label "
+            "render of the same field routes through _mermaid_label"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/threat_model/__init__.py",
+        func_name="_derive_domain_packs",
+        kind="unsanitised_llm_value",
+        detail="name",
+        audit_note=(
+            "lowercased text is substring-matched against constant "
+            "pack markers; the function returns constant pack names "
+            "and renders nothing"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/ghidra/decomp_tree.py",
+        func_name="_render_types",
+        kind="unsanitised_llm_value",
+        detail="name",
+        audit_note=(
+            "field names route through the module's _clip at the site "
+            "(match._CONTROL control/bidi scrub + length cap — the "
+            "shared decomp-emission chokepoint); _clip cannot join "
+            "_SANITISERS because it builds on the regex, not a "
+            "canonical primitive, and the shadow arm would refuse it"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/llm_analysis/agent.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="exploitable",
+        audit_note=(
+            "pipeline-built report counter (int of exploitable "
+            "verdicts), not finding text"
+        ),
+    ),
+    AllowlistEntry(
+        file="raptor_agentic.py",
+        func_name="main",
+        kind="unsanitised_llm_value",
+        detail="exploitable",
+        audit_note=(
+            "pipeline-built analysis counter rendered with an int "
+            "default (.get(..., 0)), not finding text"
         ),
     ),
 )

@@ -1419,3 +1419,68 @@ def test_render_lane_writer_files_registered():
     from core.security.report_writer_audit import _REPORT_WRITER_FILES
     for rel in ("core/run/output.py", "core/threat_model/__init__.py"):
         assert rel in _REPORT_WRITER_FILES
+
+
+# ---------------------------------------------------------------------------
+# schema-derived display-key tier
+# ---------------------------------------------------------------------------
+
+
+def test_schema_derived_key_read_fires_at_sink():
+    """A finding field named by a tree schema but by NO hand tier
+    (ecosystem: the SCA row's OSV ecosystem string) must fire on a
+    keyed read at a sink — a planted print(f['ecosystem']) in a
+    registered writer previously escaped both the gate and the render
+    regression file because the hand-curated tiers never named it."""
+    src = (
+        "def show(f):\n"
+        "    print(f['ecosystem'])\n"
+        "    print(f.get('ecosystem', ''))\n"
+    )
+    vs = [v for v in audit_source(src) if v.detail == "ecosystem"]
+    assert len(vs) == 2
+
+
+def test_schema_derived_tier_passes_sanitised_read():
+    # Two-direction guard for the derived tier.
+    src = (
+        "def show(f):\n"
+        "    print(sanitise_for_terminal(str(f['ecosystem'])))\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_schema_key_derivation_nonvacuous_per_source():
+    """Every schema source must contribute its sentinel field names —
+    a restructured source that silently stopped yielding keys would
+    re-open the below-vocabulary blind spot this tier closes."""
+    from core.security.report_writer_audit import _SCHEMA_KEYS
+
+    # packages/sca/findings.py (row envelope + sca blocks)
+    assert {"ecosystem", "purl", "fixed_version"} <= _SCHEMA_KEYS
+    # core/run/orchestrated_report_schema.py (_FINDING_SCHEMA)
+    assert {"skip_reason", "cc_debug_file"} <= _SCHEMA_KEYS
+    # core/dataflow/finding.py (_FINDING_KEYS / _STEP_KEYS)
+    assert {"producer", "intermediate_steps"} <= _SCHEMA_KEYS
+
+
+def test_schema_key_derivation_failure_doctrine(tmp_path):
+    """MISSING sources are skipped (the closure gate audits scratch
+    trees carrying their own module copy, which may lack the schema
+    sources), but a PRESENT source that parses and yields no keys
+    raises — an empty derivation is a blind gate, not a clean one.
+    Renames in the real repo are pinned by the non-vacuity sentinels
+    above."""
+    from core.security.report_writer_audit import (
+        _SCHEMA_KEY_SOURCES,
+        _derive_schema_keys,
+    )
+
+    assert _derive_schema_keys(root=tmp_path) == frozenset()
+
+    for rel, _extract in _SCHEMA_KEY_SOURCES:
+        stub = tmp_path / rel
+        stub.parent.mkdir(parents=True, exist_ok=True)
+        stub.write_text("x = 1\n", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="yielded no keys"):
+        _derive_schema_keys(root=tmp_path)
