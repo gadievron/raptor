@@ -26,7 +26,11 @@ class Annotation:
 
     ``body``: free-form markdown prose. May be empty (a clean-status
     annotation can carry just metadata). The body is preserved
-    verbatim across read-write round-trips.
+    verbatim across read-write round-trips, modulo newline
+    normalisation (``\r\n``/``\r`` become ``\n``) and edge-blank
+    trimming (leading/trailing newlines are dropped by the on-disk
+    section framing); interior lines — including whitespace-only
+    ones — round-trip exactly.
 
     ``metadata``: structured key=value pairs from the HTML-comment
     frontmatter (``<!-- meta: status=clean cwe=CWE-78 -->``).
