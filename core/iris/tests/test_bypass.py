@@ -533,3 +533,55 @@ class TestTypeHierarchyBypasses:
         findings = ana.detect_type_hierarchy_bypasses(a)
         assert len(findings) == 1
         assert findings[0].caller_function == "Sub.validate"
+
+
+class TestDetectionCost:
+    """detect_bypasses pays one backward BFS, not one forward BFS per
+    direct callee per unsafe caller (quadratic on chain graphs)."""
+
+    @staticmethod
+    def _chain_graph(n):
+        # f0 -> f1 -> ... -> f(n-1) -> sink; no enforcer anywhere.
+        calls = [(f"f{i}", f"f{i+1}", i + 1) for i in range(n - 1)]
+        calls.append((f"f{n-1}", "sink", n))
+        return {"chain.c": _graph(calls)}
+
+    def test_no_per_callee_bfs(self, monkeypatch):
+        ana = CompositionalAnalyzer(self._chain_graph(50))
+        calls = {"n": 0}
+        orig = CompositionalAnalyzer.transitive_callees
+
+        def counting(self, name):
+            calls["n"] += 1
+            return orig(self, name)
+
+        monkeypatch.setattr(
+            CompositionalAnalyzer, "transitive_callees", counting)
+        findings = ana.detect_bypasses(_assumption("sink", "check"))
+        assert findings, "chain callers must be reported as bypasses"
+        assert calls["n"] == 0, (
+            f"detect_bypasses ran {calls['n']} forward BFS passes — "
+            "the intermediate search must reuse the one backward BFS"
+        )
+
+    def test_intermediate_still_resolved(self):
+        graphs = {"f.c": _graph([
+            ("outer", "mid", 10),
+            ("mid", "sink", 20),
+            ("direct", "sink", 30),
+        ])}
+        ana = CompositionalAnalyzer(graphs)
+        by_caller = {
+            f.caller_function: f
+            for f in ana.detect_bypasses(_assumption("sink", "check"))
+        }
+        assert by_caller["outer"].via_intermediate == "mid"
+        assert by_caller["outer"].is_transitive
+        assert by_caller["direct"].via_intermediate is None
+
+    def test_bfs_memoised_per_name(self):
+        ana = CompositionalAnalyzer(self._chain_graph(10))
+        first = ana.transitive_callers("sink")
+        assert ana.transitive_callers("sink") is first
+        fwd = ana.transitive_callees("f0")
+        assert ana.transitive_callees("f0") is fwd

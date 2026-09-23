@@ -6,8 +6,13 @@ Given a :class:`SafetyAssumption` ("function *target* is safe IF
 
 The engine operates entirely on RAPTOR's existing per-file call graphs
 (:class:`core.inventory.call_graph.FileCallGraph`).  No external tools
-(Joern, CodeQL) are needed for bypass detection itself.  Sub-millisecond
-on call graphs up to ~10k functions.
+(Joern, CodeQL) are needed for bypass detection itself.  Cost: one
+BFS per distinct queried name (memoised for the analyzer's lifetime)
+plus set membership per caller — linear in graph size per assumption.
+Only the set-difference step itself (given the two BFS results) is
+sub-millisecond; the earlier whole-detection claim measured seconds
+at 10k functions because the per-caller intermediate search re-ran a
+full BFS per direct callee.
 
 Three query shapes:
 
@@ -89,6 +94,13 @@ class CompositionalAnalyzer:
                     self._name_to_keys[call.chain[1]].add(callee_key)
                     self._call_lines[(caller_key, call.chain[1])].append(call.line)
 
+        # The graph is immutable after __init__, so name-keyed BFS
+        # results are memoised for the analyzer's lifetime: the refine
+        # loop re-queries the same targets/enforcers every round, and
+        # detect_bypasses consults reachability per caller.
+        self._trans_callers_memo: dict[str, set[FuncKey]] = {}
+        self._trans_callees_memo: dict[str, set[FuncKey]] = {}
+
         _ROOT_CLASSES = frozenset({"object", "Object", "BaseException", "Exception"})
         self._class_methods: dict[str, set[str]] = defaultdict(set)
         self._parent_to_children: dict[str, set[str]] = defaultdict(set)
@@ -112,7 +124,12 @@ class CompositionalAnalyzer:
 
     def transitive_callers(self, func_name: str) -> set[FuncKey]:
         """BFS over reverse edges: all functions that transitively
-        call any function named *func_name* in any file."""
+        call any function named *func_name* in any file.
+
+        Memoised — the graph is immutable after ``__init__``."""
+        cached = self._trans_callers_memo.get(func_name)
+        if cached is not None:
+            return cached
         seeds: set[FuncKey] = set()
         for key in self._keys_for(func_name):
             seeds |= self.reverse.get(key, set())
@@ -125,11 +142,17 @@ class CompositionalAnalyzer:
                 if caller not in visited:
                     visited.add(caller)
                     queue.append(caller)
+        self._trans_callers_memo[func_name] = visited
         return visited
 
     def transitive_callees(self, func_name: str) -> set[FuncKey]:
         """BFS over forward edges: all functions transitively called
-        by any function named *func_name* in any file."""
+        by any function named *func_name* in any file.
+
+        Memoised — the graph is immutable after ``__init__``."""
+        cached = self._trans_callees_memo.get(func_name)
+        if cached is not None:
+            return cached
         seeds: set[FuncKey] = set()
         for key in self._keys_for(func_name):
             seeds |= self.forward.get(key, set())
@@ -142,6 +165,7 @@ class CompositionalAnalyzer:
                 if callee not in visited:
                     visited.add(callee)
                     queue.append(callee)
+        self._trans_callees_memo[func_name] = visited
         return visited
 
     def detect_bypasses(
@@ -170,7 +194,9 @@ class CompositionalAnalyzer:
             if (file, func) == (assumption.file, assumption.target) or func == "main":
                 continue
 
-            via = self._find_intermediate(file, func, assumption.target)
+            via = self._find_intermediate(
+                file, func, assumption.target, target_callers,
+            )
 
             findings.append(BypassFinding(
                 assumption=assumption,
@@ -352,8 +378,17 @@ class CompositionalAnalyzer:
         file: str,
         func: str,
         target: str,
+        reaches_target: set[FuncKey] | None = None,
     ) -> str | None:
-        """Find which callee of (file, func) transitively reaches *target*."""
+        """Find which callee of (file, func) transitively reaches *target*.
+
+        *reaches_target* is ``transitive_callers(target)`` — the
+        caller passes it in so the whole detection pays ONE backward
+        BFS instead of a forward BFS per direct callee per unsafe
+        caller (the shape that made detection quadratic on deep-chain
+        graphs). A callee reaches the target exactly when one of its
+        name's keys sits in that set.
+        """
         callees = self.forward.get((file, func), set())
         direct_names = {cn for _, cn in callees}
         if target in direct_names:
@@ -363,8 +398,10 @@ class CompositionalAnalyzer:
         if not target_keys:
             return None
 
-        for _, callee_name in callees:
-            reachable = self.transitive_callees(callee_name)
-            if reachable & target_keys:
+        if reaches_target is None:
+            reaches_target = self.transitive_callers(target)
+        for _, callee_name in sorted(callees):
+            if any(k in reaches_target
+                   for k in self._keys_for(callee_name)):
                 return callee_name
         return None
