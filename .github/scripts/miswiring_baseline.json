@@ -619,9 +619,6 @@
     "dead:dead_function:packages/exploit_feasibility/analyzer.py:check_system_exploitability": {
       "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
     },
-    "dead:dead_function:packages/exploit_feasibility/errors.py:reset_error_collector": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
     "dead:dead_method:core/audit/tests/test_return_census.py:TestCpgUsage._fake_server_rows": {
       "note": "test scaffolding kept for the planned CPG-backed census cases; harmless"
     },
@@ -644,33 +641,6 @@
       "note": "kept: feature seed \u2014 autonomous fuzzing loop (operator decision 2026-08-16, reaffirmed 2026-08-17); unwired since introduction"
     },
     "dead:dead_method:packages/exploit_feasibility/analyzer.py:FeasibilityAnalyzer.quick_check": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_binary_error": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_parse_error": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_permission_error": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_tool_failed": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.add_tool_timeout": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.get_by_category": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.get_by_component": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.has_critical": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
-    "dead:dead_method:packages/exploit_feasibility/errors.py:AnalysisErrorCollector.has_errors": {
       "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
     },
     "dead:dead_method:packages/exploit_feasibility/exploit_context.py:ExploitContext.get_with_meta": {

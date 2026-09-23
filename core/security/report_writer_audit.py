@@ -384,10 +384,6 @@ _REPORT_WRITER_FILES = (
     "packages/diagram/flow_trace.py",
     "packages/diagram/hypotheses.py",
     "packages/diagram/renderer.py",
-    # Exploit-feasibility error report: message/suggestion lanes can
-    # quote exception text and paths derived from the analysed binary.
-    # Terminal writer — sanitise_for_terminal grade.
-    "packages/exploit_feasibility/errors.py",
     "packages/exploitability_validation/report.py",
     # Second validation-report.md generator (the orchestrator's
     # inline _generate_report/_render_finding_lines) — same artifact,
