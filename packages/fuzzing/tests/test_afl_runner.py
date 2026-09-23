@@ -290,14 +290,13 @@ class TestSandboxedCampaign:
 
     @staticmethod
     def _instrumented(monkeypatch):
-        import subprocess as sp
-
+        from core.binary.inspect import InspectResult
         from packages.fuzzing import afl_runner as mod
 
-        def fake_trusted(cmd, **kwargs):
-            return sp.CompletedProcess(cmd, 0, stdout="__AFL_SHM_ID", stderr="")
+        def fake_inspect(tool, args, binary, **kwargs):
+            return InspectResult(returncode=0, stdout="__AFL_SHM_ID")
 
-        monkeypatch.setattr(mod, "_run_trusted", fake_trusted)
+        monkeypatch.setattr(mod, "_inspect_binary", fake_inspect)
 
     def test_campaign_routed_through_sandbox(self, tmp_path, monkeypatch):
         import subprocess as sp

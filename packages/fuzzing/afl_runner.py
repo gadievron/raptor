@@ -12,7 +12,9 @@ import signal
 import subprocess
 import threading
 
-# _run_trusted: read-only tools (strings, --help checks) — no namespace overhead.
+# _run_trusted: RAPTOR-chosen tool probes only (afl-fuzz --help
+# checks) — no namespace overhead. Tools that PARSE the target's
+# bytes (strings) go through core.binary.inspect (full sandbox).
 # Full sandbox for afl-showmap AND the afl-fuzz campaign itself (both
 # execute the untrusted target binary): network block + Landlock
 # (target=output=self.output_dir — AFL reads and writes the same
@@ -26,6 +28,7 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
+from core.binary.inspect import inspect_binary as _inspect_binary
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
 from core.sandbox import run as _sandbox_run
@@ -552,16 +555,13 @@ class AFLRunner:
         # buffer). Cap at 60 seconds — well above what a
         # legitimate scan needs (a normal multi-MB binary
         # finishes in << 1 second).
-        try:
-            result = _run_trusted(
-                ["strings", str(self.binary)],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-        except subprocess.TimeoutExpired:
+        # Full sandbox via core.binary.inspect — the bytes strings
+        # parses are the target's. Never raises; a timeout or exec
+        # failure comes back as returncode None.
+        result = _inspect_binary("strings", (), self.binary, timeout=60)
+        if result.returncode is None:
             logger.warning(
-                "strings %s exceeded 60s — assuming not "
+                "strings %s failed or exceeded 60s — assuming not "
                 "AFL-instrumented (treat as needs a binary-only mode)",
                 self.binary,
             )
@@ -689,16 +689,12 @@ class AFLRunner:
         See `check_binary_instrumentation` for the timeout
         rationale — same 60s cap, same DoS class.
         """
-        try:
-            result = _run_trusted(
-                ["strings", str(self.binary)],
-                capture_output=True,
-                text=True,
-                timeout=60,
-            )
-        except subprocess.TimeoutExpired:
+        # Full sandbox via core.binary.inspect (see
+        # check_binary_instrumentation for the posture rationale).
+        result = _inspect_binary("strings", (), self.binary, timeout=60)
+        if result.returncode is None:
             logger.warning(
-                "strings %s exceeded 60s — sanitizer check "
+                "strings %s failed or exceeded 60s — sanitizer check "
                 "skipped, assuming none",
                 self.binary,
             )
