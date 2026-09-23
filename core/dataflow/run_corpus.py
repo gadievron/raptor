@@ -171,6 +171,25 @@ def main(argv: list[str] | None = None) -> int:
         print(f"corpus dir not found: {args.corpus_dir}", file=sys.stderr)
         return 2
 
+    # Labels are written against exact upstream commits: any pinned
+    # fixture clone that IS present must sit at its SOURCES.md pin
+    # before the runner proceeds (absent clones are fine — in-tree
+    # fixtures need none). A drifted clone silently mis-scores every
+    # validator measured against the corpus.
+    from core.dataflow.corpus_sources import (
+        CorpusPinError,
+        verify_present_pinned_clones,
+    )
+    try:
+        verified = verify_present_pinned_clones()
+    except CorpusPinError as exc:
+        print(f"corpus fixture pin verification failed: {exc}",
+              file=sys.stderr)
+        return 2
+    for src_name in verified:
+        print(f"fixture clone verified at pin: {src_name}",
+              file=sys.stderr)
+
     validator: Validator = (
         load_validator(args.validator) if args.validator else TrivialValidator()
     )

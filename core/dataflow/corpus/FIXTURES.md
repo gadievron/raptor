@@ -30,11 +30,15 @@ Real target apps used for tasks #5 and #6:
 - Juice Shop (Node)
 - WebGoat (Spring)
 
-These are NOT committed. A setup script (PR0 task #4 ships it)
-clones each at the commit sha pinned in `SOURCES.md` to
+These are NOT committed. Clone each manually at the commit sha
+pinned in `SOURCES.md` (per-source instructions live there) to
 `out/dataflow-corpus-fixtures/<name>/`. `out/` is gitignored.
-Re-cloning at a different sha invalidates the labels — the script
-verifies sha before letting the corpus runner proceed.
+Re-cloning at a different sha invalidates the labels — the corpus
+runner (`core/dataflow/run_corpus.py`, via
+`core/dataflow/corpus_sources.py`) verifies every pinned clone that
+is PRESENT against its `SOURCES.md` pin before proceeding, and
+refuses on a mismatch. Absent clones are skipped: the in-tree
+fixtures need no clone.
 
 ## Why split this way
 
