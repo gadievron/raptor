@@ -2146,6 +2146,12 @@ def _short(token: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Injected headers that HONOUR a caller-supplied value (setdefault
+# semantics at the forward site). Only protocol-negotiation headers
+# belong here — never credentials, which must always replace the
+# worker's placeholders.
+_CALLER_WINS_INJECT_HEADERS = frozenset({"anthropic-version"})
+
 _PROVIDER_FROM_PATH_PREFIX = {
     "/anthropic/":    "anthropic",
     "/openai/":       "openai",
@@ -2591,7 +2597,21 @@ def _make_request_handler(
                     if k.lower() in ("host", "content-length", _TOKEN_HEADER.lower()):
                         continue
                     forwarded[k] = v
-                forwarded.update(rule.inject_headers())
+                # Credential headers always overwrite the worker's
+                # placeholders, but protocol-NEGOTIATION headers use
+                # setdefault semantics: Claude Code negotiates
+                # ``anthropic-version`` (and betas) per request, and
+                # the Bedrock ``prepare_request`` leg already honours
+                # the caller's value — a blanket update() silently
+                # clobbered it on the static anthropic rule only.
+                present = {k.lower() for k in forwarded}
+                for k, v in rule.inject_headers().items():
+                    if (
+                        k.lower() in _CALLER_WINS_INJECT_HEADERS
+                        and k.lower() in present
+                    ):
+                        continue
+                    forwarded[k] = v
                 url = rule.upstream_base_url + upstream_path
 
             # Scoped tokens are spend-capped from the upstream-reported

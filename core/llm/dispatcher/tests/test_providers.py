@@ -136,6 +136,34 @@ class TestAnthropicProvider:
             upstream.shutdown()
             d.shutdown()
 
+    def test_caller_anthropic_version_honoured(
+        self, all_providers_creds, tmp_path,
+    ):
+        """Claude Code negotiates anthropic-version per request; the
+        static rule's injected default must not clobber a
+        worker-supplied value (the Bedrock leg already honours it —
+        sibling parity). The credential header still always wins."""
+        upstream = _CaptiveUpstream()
+        d = _setup_with_provider_redirected(
+            all_providers_creds, tmp_path, "anthropic", upstream.base_url,
+        )
+        try:
+            _, fd = d.allocate_worker(label="anthropic-version-test")
+            token = os.read(fd, 64).decode().strip()
+            os.close(fd)
+            _post_via_dispatcher(
+                d, token, "http://_/anthropic/v1/messages",
+                b'{"x":1}',
+                {"x-api-key": "dummy-stripped-please",
+                 "anthropic-version": "2024-10-22"},
+            )
+            sent = {k.lower(): v for k, v in upstream.captured["headers"].items()}
+            assert sent.get("anthropic-version") == "2024-10-22"
+            assert sent.get("x-api-key") == "anthropic-real-NOT-LEAKED"
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
 
 class TestOpenAIProvider:
 
