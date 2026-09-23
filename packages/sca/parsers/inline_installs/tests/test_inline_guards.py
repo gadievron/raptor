@@ -218,3 +218,19 @@ def test_fd_variable_redirect_prefix_stripped(tmp_path: Path) -> None:
     )
     deps = parse_shell_script(sh)
     assert {d.name for d in deps} == {"uv"}
+
+
+def test_background_ampersand_splits_commands(tmp_path: Path) -> None:
+    """``cmd & cmd`` runs two commands; unsplit, the second parsed as
+    install arguments of the first ('pip' and 'install' are real
+    registry names — live phantom rows). Operator-glued ampersands
+    (``2>&1``, ``&> log``) are untouched."""
+    sh = tmp_path / "setup.sh"
+    sh.write_text(
+        "pip install requests==2.31.0 & pip install flask==3.0.3\n"
+        "pip install uv==0.12.6 >> log 2>&1 &\n",
+        encoding="utf-8",
+    )
+    deps = parse_shell_script(sh)
+    names = {d.name for d in deps}
+    assert names == {"requests", "flask", "uv"}, names

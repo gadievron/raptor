@@ -187,9 +187,11 @@ _GHA_EXPR_RE = re.compile(r"\$\{\{(?:[^}]|\}(?!\})){0,400}\}\}")
 # ``[><]{1,3}$`` check) leak their targets through as phantom
 # packages. The operator may carry an IO-number prefix (``2>``) or
 # bash's ``{varname}`` fd-variable prefix (``{log}>out.txt``). The
-# single-char ``<`` / ``>`` arms refuse a following ``=`` so version
-# comparators split out of quoted specs (``'foo >= 1.2'`` tokenises
-# as ``'foo``, ``>=``, ``1.2'``) keep their meaning.
+# single-char ``<`` / ``>`` arms refuse a following ``=`` so a bare
+# ``>=`` / ``<=`` comparator token is never treated as a redirect —
+# spaced quoted specs (``'foo >= 1.2'``) parse exactly as they did
+# before this grammar (the quote-blind tokenisation itself is a
+# separate, pre-existing bound).
 _REDIRECT_OP_RE = re.compile(
     r"^(?:(?:\d*|\{\w+\})"
     r"(?:<<<|<<-|<<|<>|<&|>&|>>|>\||<(?!=)|>(?!=))|&>>|&>)"
@@ -297,7 +299,7 @@ def _scan_shell_lines(
 
 def _split_compound(line: str) -> list[str]:
     """Split a shell line on ``&&`` / ``||`` / ``;`` / ``|`` / ``|&``
-    outside quotes.
+    / background ``&`` outside quotes.
 
     A pipeline is a command sequence like any other compound: without
     the ``|`` split, everything after the pipe parsed as arguments of
@@ -340,6 +342,22 @@ def _split_compound(line: str) -> list[str]:
                 out.append("".join(buf))
                 buf = []
                 i += 2 if line[i:i + 2] == "|&" else 1
+                continue
+            if ch == "&":
+                # Background / sequence separator (`cmd & cmd`) — the
+                # post-& command otherwise parsed as install
+                # arguments, the fixed pipe bug's sibling. Not a
+                # separator when the `&` is glued into an operator:
+                # `&&` never reaches here (consumed above), `>&`/`<&`
+                # fd-duplication keeps its `&` (previous char), and
+                # `&>`/`&>>` redirects keep theirs (next char).
+                if (i > 0 and line[i - 1] in "<>") or line[i + 1:i + 2] == ">":
+                    buf.append(ch)
+                    i += 1
+                    continue
+                out.append("".join(buf))
+                buf = []
+                i += 1
                 continue
         buf.append(ch)
         i += 1
