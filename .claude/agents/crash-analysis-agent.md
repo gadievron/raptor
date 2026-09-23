@@ -63,7 +63,7 @@ When invoked with a bug tracker URL and a git repository URL:
     rr record -o <working-dir>/rr-trace <crashing-command>
     rr pack <working-dir>/rr-trace
     ```
-    **Sandbox exemption (documented decision):** rr needs `ptrace` and perf counters, which `libexec/raptor-run-sandboxed` denies, so this step runs unsandboxed. The exposure is bounded: by this point the same binary and inputs have already been built and reproduced under the sandbox in steps 8-9.
+    **Sandbox exemption (documented decision):** rr needs `ptrace` and perf counters, which `libexec/raptor-run-sandboxed` denies, so this step runs the untrusted binary unsandboxed. The residual is NOT bounded by the sandboxed runs in steps 8-9: behavior observed under network-deny/write-restrict says nothing about behavior outside it — a payload can unconditionally attempt network egress or persistence that steps 8-9 silently blocked and this step permits (no sandbox detection needed). The operator consented to this residual by invoking /crash-analysis on the report; keep the recording step to exactly the reproduced crash command, and treat any unexpected network/filesystem activity during recording as a finding in itself.
 
 13. **Root-Cause Analysis**: Invoke the "crash-analyzer" agent with all collected data. Provide:
     - Repository path
