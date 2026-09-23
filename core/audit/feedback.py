@@ -177,9 +177,13 @@ def _mechanical_disqualifier(
     - ``smt_paths_infeasible`` — the Stage-B SMT sweep proved every
       linked attack path's conditions jointly unsatisfiable.
     - ``sanity_check_failed+structural`` — Stage C's ruling is
-      corroborated by a mechanical structural fact (Coccinelle
-      ``function_exists=False`` or the C0 checklist lookup failing);
-      a bare ``sanity_check_failed`` is LLM output and does not count.
+      corroborated by a mechanical structural fact: a positive
+      Coccinelle absence witness (see :func:`_cocci_absence_witness`
+      — the producer's applicable, non-skipped record with
+      ``checks.function_exists`` False) or the C0 checklist lookup
+      failing. A bare ``sanity_check_failed`` is LLM output and does
+      not count; neither does an abstained or forged-flat cocci
+      record.
     """
     ruling = finding.get("ruling")
     if not isinstance(ruling, dict):
@@ -204,16 +208,38 @@ def _mechanical_disqualifier(
             return "smt_paths_infeasible"
 
     if disqualifier == "sanity_check_failed":
-        cocci = finding.get("cocci_prereqs")
-        if not isinstance(cocci, dict):
-            cocci = {}
         if (
-            cocci.get("function_exists") is False
+            _cocci_absence_witness(finding.get("cocci_prereqs"))
             or finding.get("checklist_verified") is False
         ):
             return "sanity_check_failed+structural"
 
     return None
+
+
+def _cocci_absence_witness(cocci: Any) -> bool:
+    """True only for a POSITIVE absence witness in the producer's
+    own shape (packages.coccinelle.prereqs.evaluate_finding):
+    an applicable, non-skipped record whose nested
+    ``checks.function_exists`` is exactly False.
+
+    A bare/flat ``{"function_exists": false}`` — a shape no
+    mechanical producer emits — must not count: accepting it let a
+    hand-rolled field upgrade a bare LLM ``sanity_check_failed``
+    into the accepted mechanical-refutation class. Abstentions
+    (``null`` from a partial sweep or an uncovered file class) and
+    skipped records never corroborate either.
+    """
+    if not isinstance(cocci, dict):
+        return False
+    if cocci.get("applicable") is not True:
+        return False
+    if cocci.get("skipped_reason") is not None:
+        return False
+    checks = cocci.get("checks")
+    if not isinstance(checks, dict):
+        return False
+    return checks.get("function_exists") is False
 
 
 def import_validation_results(
