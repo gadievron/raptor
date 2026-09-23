@@ -45,3 +45,16 @@ class TestCopyPreparedContract:
         (dst / "p.rep").mkdir()
         with pytest.raises(GhidraError, match="already exists"):
             import_enrichments(gpr, tmp_path / "e.json", dst / "p.gpr")
+
+
+class TestCmdLogScrubbing:
+    def test_both_running_log_sites_scrub_the_argv(self):
+        # The argv embeds project/program names from the hostile
+        # project database; both "running:" log sites must route
+        # through the terminal sanitiser (drift guard).
+        import inspect
+
+        from packages.ghidra import headless
+        src = inspect.getsource(headless)
+        assert 'logger.info("running: %s", " ".join(cmd))' not in src
+        assert src.count('sanitise_for_terminal(" ".join(cmd)') == 2

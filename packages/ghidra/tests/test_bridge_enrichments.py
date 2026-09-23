@@ -174,3 +174,30 @@ class TestWalkProgramPaths(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExceptionTextScrubbing(unittest.TestCase):
+    def test_hostile_program_names_scrubbed_from_error(self):
+        # The "has:" list embeds names from the hostile project's own
+        # database; the exception text reaches the operator's terminal.
+        root = _FakeFolder(files=["prog\x1b[2J\x07name"])
+        bridge = _bridge("prog_missing")
+        project = MagicMock()
+        project.getProjectData.return_value.getRootFolder.return_value = root
+        fake_api = MagicMock()
+        fake_api.open_project.return_value = project
+        fake_pyghidra = MagicMock()
+        fake_pyghidra.api = fake_api
+        with patch.object(GhidraSession, "ensure_jvm"), patch(
+            "packages.ghidra.detect.get_project_name",
+            return_value="proj",
+        ), patch.dict(
+            "sys.modules",
+            {"pyghidra": fake_pyghidra, "pyghidra.api": fake_api},
+        ), self.assertRaises(GhidraSessionError) as cm:
+            bridge._apply_enrichments_pyghidra(
+                Path("/nonexistent/proj.gpr"), {},
+            )
+        text = str(cm.exception)
+        self.assertNotIn("\x1b", text)
+        self.assertNotIn("\x07", text)

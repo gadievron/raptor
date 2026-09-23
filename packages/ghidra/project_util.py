@@ -25,7 +25,10 @@ def _get_xml_parser():
         import defusedxml.ElementTree as ET
         return ET
     except ImportError:
-        logger.debug(
+        # WARNING, not debug: entity-expansion protection for hostile
+        # .gpr/.prp XML then depends entirely on the host expat — the
+        # operator should see the degradation, not discover it.
+        logger.warning(
             "defusedxml not installed — falling back to stdlib XML "
             "(install defusedxml for XXE-safe parsing of .gpr projects)"
         )

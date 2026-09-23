@@ -312,10 +312,17 @@ class GhidraBridge:
                     "(empty, dash-leading, or traversal component)"
                 )
             if target not in programs:
+                # Program names come from the hostile project's own
+                # database and this exception text reaches the
+                # operator's terminal — scrub control bytes and bound
+                # the length.
+                from core.security.log_sanitisation import (
+                    sanitise_for_terminal,
+                )
                 raise GhidraSessionError(
                     f"cannot apply enrichments: program {target!r} not "
                     f"found in project {project_name} "
-                    f"(has: {', '.join(programs)})"
+                    f"(has: {sanitise_for_terminal(', '.join(programs))})"
                 )
             program, consumer = consume_program(project, f"/{target}")
         except BaseException:

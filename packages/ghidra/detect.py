@@ -5,14 +5,22 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-try:
-    import defusedxml.ElementTree as ET
-except ImportError:
-    import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+try:
+    import defusedxml.ElementTree as ET
+except ImportError:
+    import xml.etree.ElementTree as ET
+    # WARNING, not silence (same rule as project_util._get_xml_parser):
+    # this module parses the hostile project's .gpr/.prp XML, and the
+    # fallback leaves entity-expansion protection to the host expat.
+    logger.warning(
+        "defusedxml not installed — falling back to stdlib XML "
+        "(install defusedxml for XXE-safe parsing of .gpr projects)"
+    )
 
 GHIDRA_MIN_MAJOR = 10
 
