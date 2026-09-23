@@ -325,6 +325,30 @@ class TestCrossFile:
         assert collection_guard_reason(
             src, 5, "x", "CWE-79", source_root=root)
 
+    def test_chain_head_obscured_by_local_refuses(self, tmp_path):
+        # JLS 6.4.2 obscuring: a local variable named like the class
+        # makes 'Utils.COMMON' read the LOCAL's field at runtime; the
+        # guard must not bind the cross-file class's literal set.
+        helpers = tmp_path / "org" / "example" / "helpers"
+        helpers.mkdir(parents=True)
+        (helpers / "Utils.java").write_text(
+            "package org.example.helpers;\n"
+            "import java.util.*;\n"
+            "public class Utils {\n"
+            "    public static final Set<String> COMMON =\n"
+            '            new HashSet<>(Arrays.asList("accept"));\n'
+            "}\n", encoding="utf-8")
+        src = ("public class T {\n"
+               "    static class Evil { public java.util.Set<String>"
+               " COMMON = null; }\n"
+               "    public void handle(String x, "
+               "java.io.PrintWriter out) {\n"
+               "        Evil Utils = new Evil();\n"
+               "        if (!Utils.COMMON.contains(x)) { return; }\n"
+               "        out.println(x);\n    }\n}\n")
+        assert collection_guard_reason(
+            src, 6, "x", "CWE-79", source_root=str(tmp_path)) is None
+
     def test_cross_file_mutator_anywhere_refuses(self, tmp_path):
         src, root = self._tree(tmp_path, mutator='add("evil")')
         assert collection_guard_reason(

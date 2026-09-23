@@ -535,7 +535,11 @@ def derive_wrapper_summaries(
         return {}, ["parse failure"]
     root = tree.root_node
     types, statics = build_import_map(root)
-    resolver = _NameResolver(types, statics)
+    # Positional vouch: a local obscuring an imported catalog class
+    # must not lend its name's static identity to helper-body calls.
+    from core.analysis.cfg_builder_java import _FileLocalScopes
+    resolver = _NameResolver(types, statics,
+                             local_scopes=_FileLocalScopes(root))
 
     by_name, extended = _class_inventory(root)
 
@@ -634,6 +638,8 @@ def _index_calls(
     except Exception:  # noqa: BLE001
         return {}
     out: dict[tuple[int, int], _CallInfo] = {}
+    from core.analysis.cfg_builder_java import _FileLocalScopes
+    scopes = _FileLocalScopes(tree.root_node)
     for cur in _iter_named(tree.root_node):
         if cur.type != _METHOD_INVOCATION:
             continue
@@ -649,7 +655,11 @@ def _index_calls(
         obj_u = _unwrap(obj)
         if obj_u is None:
             continue
-        if obj_u.type == _IDENT and _text(obj_u) in class_names:
+        # Positional vouch before the static form: a local variable
+        # named like the summarised class (JLS 6.4.2 obscuring)
+        # dispatches to ITS runtime type — never binds.
+        if obj_u.type == _IDENT and _text(obj_u) in class_names \
+                and not scopes.vouches(_text(obj_u), obj_u.start_byte):
             out[key] = _CallInfo(
                 form="static", owner=_text(obj_u),
                 args=_positional_args(cur))
@@ -1187,6 +1197,8 @@ def _index_conduit_calls(
         return {}
     out: dict[tuple[int, int],
               tuple[ConduitSummary, tuple[str | None, ...]]] = {}
+    from core.analysis.cfg_builder_java import _FileLocalScopes
+    scopes = _FileLocalScopes(tree.root_node)
     for cur in _iter_named(tree.root_node):
         if cur.type != _METHOD_INVOCATION:
             continue
@@ -1210,7 +1222,10 @@ def _index_conduit_calls(
             obj_u = _unwrap(obj)
             if obj_u is None:
                 continue
-            if obj_u.type == _IDENT and _text(obj_u) in class_names:
+            if obj_u.type == _IDENT and _text(obj_u) in class_names \
+                    and not scopes.vouches(
+                        _text(obj_u), obj_u.start_byte):
+                # (vouched local receivers never bind — obscuring)
                 s = summaries.get((_text(obj_u), method, arity))
                 summary = s if (s is not None and s.is_static) else None
             elif obj_u.type == _OBJECT_CREATION:

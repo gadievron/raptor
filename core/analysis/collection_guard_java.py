@@ -698,6 +698,17 @@ def collection_guard_reason(
                 if not head or not field:
                     msg = "unresolvable collection chain"
                     raise _Refused(msg)
+                # JLS 6.4.2 obscuring: a local/param named like the
+                # chain head makes the runtime read the LOCAL's
+                # field, not the class's — binding the class's
+                # literal set would vouch for a different collection.
+                head_ident = head.split(".", 1)[0]
+                if scopes.vouches(head_ident, recv_u.start_byte):
+                    msg = (
+                        "collection chain head is a local variable "
+                        "(obscures the type name)"
+                    )
+                    raise _Refused(msg)
                 resolved_head = resolver._resolve_chain(head)
                 if source_root is None:
                     msg = "cross-file collection needs a source root"

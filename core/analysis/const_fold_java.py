@@ -157,17 +157,12 @@ def _parser():
     return _get_parser()
 
 
-# Scope shapes whose bodies bind their own locals. Lambdas are their
-# own scope too: a bare-name store inside one is either a lambda
-# local (its params/declarators) or a field — never an enclosing-
-# method local (Java's effectively-final rule forbids that write).
-_METHOD_SCOPE_TYPES = frozenset({
-    "method_declaration",
-    "constructor_declaration",
-    "compact_constructor_declaration",
-    "static_initializer",
-    "lambda_expression",
-})
+def _method_scope_types() -> frozenset[str]:
+    """Single-homed in the CFG builder (the scope oracle's owner) so
+    the index and the builder can never disagree on what counts as a
+    method-like scope."""
+    from core.analysis.cfg_builder_java import METHOD_SCOPE_TYPES
+    return METHOD_SCOPE_TYPES
 
 
 def _collect_local_scopes(
@@ -181,10 +176,11 @@ def _collect_local_scopes(
     as a local."""
     from core.analysis.cfg_builder_java import _declared_local_scopes
     out: list[tuple[int, int, Any]] = []
+    scope_types = _method_scope_types()
     stack = [root]
     while stack:
         n = stack.pop()
-        if n.type in _METHOD_SCOPE_TYPES:
+        if n.type in scope_types:
             out.append(
                 (n.start_byte, n.end_byte, _declared_local_scopes(n)),
             )
