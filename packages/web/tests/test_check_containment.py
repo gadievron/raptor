@@ -114,3 +114,103 @@ class TestOptionsProbeStaysOnOrigin:
             )
         assert len(findings) == 1
         assert "TRACE" in findings[0].evidence
+
+
+class TestRawExchangeIsBounded:
+    """The smuggling probe's raw read loop faces a hostile endpoint
+    with neither the WebClient response cap nor a request deadline —
+    it must bound itself in BOTH bytes and wall time."""
+
+    def _raw_server(self, feeder):
+        import socket as socket_module
+
+        server = socket_module.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+
+        def _serve():
+            conn, _addr = server.accept()
+            try:
+                conn.recv(65536)
+                feeder(conn)
+            except OSError:
+                pass
+            finally:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+
+        thread = threading.Thread(target=_serve, daemon=True)
+        thread.start()
+        return server, server.getsockname()[1]
+
+    def test_flood_response_stops_at_the_byte_cap(self, monkeypatch):
+        import time
+
+        from packages.web.checks.cache import RequestSmugglingCheck
+
+        block = b"x" * 65536
+
+        def flood(conn):
+            deadline = time.monotonic() + 10
+            try:
+                while time.monotonic() < deadline:
+                    conn.sendall(block)
+            except OSError:
+                pass  # reader hung up: the cap fired
+
+        server, port = self._raw_server(flood)
+        try:
+            data, _duration, truncated = RequestSmugglingCheck._raw_exchange(
+                "127.0.0.1", port, False, "GET / HTTP/1.1\r\n\r\n",
+            )
+        finally:
+            server.close()
+        assert truncated is True
+        # Bounded near the cap (may overshoot by one recv chunk).
+        assert len(data) <= RequestSmugglingCheck._RAW_MAX_BYTES + 4096
+
+    def test_drip_fed_response_hits_the_wall_clock_deadline(self, monkeypatch):
+        import time
+
+        from packages.web.checks.cache import RequestSmugglingCheck
+
+        # Compressed clock: deadline semantics are under test, not the
+        # production constant's literal value.
+        monkeypatch.setattr(RequestSmugglingCheck, "_RAW_DEADLINE_S", 1.5)
+
+        def drip(conn):
+            # One byte per 0.3s for ~4s: each recv succeeds, so the
+            # per-recv socket timeout alone never ends the loop.
+            for _ in range(14):
+                try:
+                    conn.sendall(b"y")
+                except OSError:
+                    return
+                time.sleep(0.3)
+
+        server, port = self._raw_server(drip)
+        start = time.monotonic()
+        try:
+            data, duration, truncated = RequestSmugglingCheck._raw_exchange(
+                "127.0.0.1", port, False, "GET / HTTP/1.1\r\n\r\n",
+            )
+        finally:
+            server.close()
+        wall = time.monotonic() - start
+        assert truncated is True
+        assert wall < 3.5, f"read loop ran {wall:.1f}s past the deadline"
+        assert data is not None
+
+    def test_truncated_exchange_counts_as_degraded_coverage(self):
+        from packages.web.checks.cache import RequestSmugglingCheck
+
+        class _Client:
+            transport_errors = 0
+
+        check = RequestSmugglingCheck()
+        check._raw_exchange = lambda *args: ("junk\r\n", 0.1, True)
+        client = _Client()
+        assert check.run(client, "https://t.example") == []
+        assert client.transport_errors == 3  # one per probe variant

@@ -647,7 +647,7 @@ def test_raw_socket_smuggling_probe_failures_count_as_degradation():
     from packages.web.checks.cache import RequestSmugglingCheck
 
     check = RequestSmugglingCheck()
-    check._raw_exchange = lambda *args: (None, 0.0)  # target unreachable
+    check._raw_exchange = lambda *args: (None, 0.0, False)  # target unreachable
     client = _CountingClient(lambda *a, **k: FakeResponse(200, "ok"))
     assert check.run(client, "https://t.example") == []
     assert client.transport_errors == 3  # one per probe variant
