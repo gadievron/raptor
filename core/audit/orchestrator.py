@@ -5319,7 +5319,8 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     # failure surface spans OSError, sqlite errors, shape errors, and
     # bind overflows — any of them must degrade to this warning lane
     # instead of crashing prep for an optional signal.
-    except Exception:
+    except Exception as _gexc:
+        logger.warning("graph hypothesis_seeds skipped: %s", _gexc)
         logger.debug("graph hypothesis_seeds skipped", exc_info=True)
 
     if getattr(config, "rank_gaps", False):
@@ -5359,18 +5360,30 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
     _phase("prep_context_sets")
     entry_points = extract_context_map_set(context_map, "entry_points")
 
+    # ── Shared prep source-text map ──────────────────────────────────
+    # Five prep channels each built their own {file: text} dict over
+    # the same gap files (one retained run-long as
+    # config.consistency_source_texts) — several redundant in-memory
+    # copies of every gap file. One shared read-through map instead,
+    # topped up on demand as the gap list evolves between phases.
+    _prep_source_texts: dict[str, str] = {}
+
+    def _gap_source_texts() -> dict[str, str]:
+        for _gsrc_gap in gaps:
+            _gsrc_fp = _gsrc_gap.get("file", "")
+            if _gsrc_fp and _gsrc_fp not in _prep_source_texts:
+                _gsrc_text = _contained_source_text(
+                    config.target_path, _gsrc_fp,
+                )
+                if _gsrc_text is not None:
+                    _prep_source_texts[_gsrc_fp] = _gsrc_text
+        return _prep_source_texts
+
     _ops_eps: set = set()
     try:
         from .ops_struct import collect_ops_entry_points
 
-        _ops_srcs: dict[str, str] = {}
-        for gap in gaps:
-            fp = gap.get("file", "")
-            if fp and fp not in _ops_srcs:
-                _ops_text = _contained_source_text(config.target_path, fp)
-                if _ops_text is not None:
-                    _ops_srcs[fp] = _ops_text
-        _ops_eps = collect_ops_entry_points(_ops_srcs)
+        _ops_eps = collect_ops_entry_points(_gap_source_texts())
         if _ops_eps:
             entry_points = entry_points | _ops_eps
             logger.info(
@@ -5770,13 +5783,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             seed_fail_open_handoffs,
         )
 
-        prepass_texts: dict[str, str] = {}
-        for gap in gaps:
-            fp = gap.get("file", "")
-            if fp and fp not in prepass_texts:
-                _pp_text = _contained_source_text(config.target_path, fp)
-                if _pp_text is not None:
-                    prepass_texts[fp] = _pp_text
+        prepass_texts = _gap_source_texts()
         if prepass_texts:
             consistency_prepass = run_consistency_prepass(
                 prepass_texts,
@@ -5845,13 +5852,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             seed_fail_open_leads,
         )
 
-        fo_texts: dict[str, str] = {}
-        for gap in gaps:
-            fp = gap.get("file", "")
-            if fp and fp not in fo_texts:
-                _fo_text = _contained_source_text(config.target_path, fp)
-                if _fo_text is not None:
-                    fo_texts[fp] = _fo_text
+        fo_texts = _gap_source_texts()
         if fo_texts:
             fail_open_census = run_fail_open_census(
                 fo_texts,
@@ -5897,13 +5898,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         from .lock_region import run_lock_region_prepass
         from .ptr_lifecycle import run_ptr_lifecycle_prepass
 
-        census_texts: dict[str, str] = {}
-        for gap in gaps:
-            fp = gap.get("file", "")
-            if fp and fp not in census_texts:
-                _cs_text = _contained_source_text(config.target_path, fp)
-                if _cs_text is not None:
-                    census_texts[fp] = _cs_text
+        census_texts = _gap_source_texts()
         if census_texts:
             channel_vocab = DomainVocabulary.from_domain_model(
                 prep_domain_model, target_path=config.target_path,
@@ -6011,15 +6006,7 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             )
             _ch_run = getattr(_ch_mod, _ch_fn)
 
-            _ch_texts: dict[str, str] = {}
-            for gap in gaps:
-                fp = gap.get("file", "")
-                if fp and fp not in _ch_texts:
-                    _ch_text = _contained_source_text(
-                        config.target_path, fp,
-                    )
-                    if _ch_text is not None:
-                        _ch_texts[fp] = _ch_text
+            _ch_texts = _gap_source_texts()
             if not _ch_texts:
                 continue
             from .fail_open_roles import RoleContext as _ChRoleCtx
@@ -9853,7 +9840,8 @@ def _run_audit_body(
         # errors, and bind overflows — any of them must degrade to
         # this warning lane, not revoke an otherwise-successful audit
         # at its final optional step.
-        except Exception:
+        except Exception as _gexc:
+            logger.warning("graph store enrichment skipped: %s", _gexc)
             logger.debug("graph store enrichment skipped", exc_info=True)
 
     return result
@@ -29790,8 +29778,20 @@ def _run_dark_verification(
         """Fold one witness verdict into the outcome + counters."""
         prior = outcome.status
         if verify_result.verdict == "confirmed":
+            from .evidence_grade import is_tool_evidence as _is_tool_ev
+
             outcome.status = "finding"
-            outcome.evidence_tool = "dark_verify:confirmed"
+            # EXTEND the receipt chain, never replace it: the refuted
+            # branch already preserves a prior deterministic receipt
+            # ("+dark_verify:refuted"), while a plain assignment here
+            # erased engine provenance from the exported record.
+            _prior_ev = outcome.evidence_tool or ""
+            if "dark_verify:confirmed" in _prior_ev:
+                pass
+            elif _prior_ev and _is_tool_ev(_prior_ev):
+                outcome.evidence_tool = f"{_prior_ev}+dark_verify:confirmed"
+            else:
+                outcome.evidence_tool = "dark_verify:confirmed"
             if prior != "finding":
                 result.findings += 1
                 if prior in ("dark", "dormant"):
