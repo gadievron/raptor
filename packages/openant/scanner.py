@@ -43,6 +43,11 @@ STDERR_MAX_BYTES = 1_000_000  # 1 MiB
 # persist) even where the lane's own pipe buffering stays transient.
 _CAPTURE_MAX_BYTES = 8 * 1024 * 1024
 
+# Ceiling on a single commit/tree object read by the verified walk
+# (and the provenance check's commit read). Genuine git metadata
+# objects are kilobytes; the read is over an attacker-shipped store.
+_OBJECT_MAX_BYTES = 64 * 1024 * 1024
+
 # Languages exposed by OpenAnt's --language CLI flag.
 # Zig and others may be auto-detected but are not valid --language values.
 # Source: `openant scan --help` → `--language {auto,python,javascript,go,c,ruby,php}`
@@ -166,6 +171,15 @@ def checkout_provenance(core_path: Path) -> dict[str, Any]:
     else:
         return _warn_unpinned_provenance(result, core_path)
     try:
+        # Size precheck first: a multi-GB fake object under the pin
+        # name must fail closed unread, not buffer into this process.
+        size_proc = _git("cat-file", "-s", head)
+        try:
+            size = int(size_proc.stdout.strip())
+        except ValueError:
+            return _warn_unpinned_provenance(result, core_path)
+        if size_proc.returncode != 0 or size > _OBJECT_MAX_BYTES:
+            return _warn_unpinned_provenance(result, core_path)
         raw = subprocess.run(
             safe_git_readonly_command(
                 "-C", str(core_path), "cat-file", "commit", head),
@@ -209,6 +223,18 @@ def _read_verified_object(
     """
     import hashlib
 
+    # Size precheck BEFORE the content read: the store is hostile, so
+    # a multi-GB fake object stored under a genuine name would be
+    # fully buffered here before the self-hash refuses it — a
+    # gate-memory DoS. Genuine commits and trees are tiny; anything
+    # claiming otherwise fails closed unread.
+    size_proc = git(top, "cat-file", "-s", oid)
+    try:
+        size = int(size_proc.stdout.decode("ascii", "replace").strip())
+    except ValueError:
+        return None
+    if size_proc.returncode != 0 or size > _OBJECT_MAX_BYTES:
+        return None
     proc = git(top, "cat-file", otype, oid)
     if proc.returncode != 0:
         return None
