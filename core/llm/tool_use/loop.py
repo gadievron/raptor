@@ -1228,6 +1228,17 @@ class ToolUseLoop:
             if chunk.type in (
                 "text_delta", "tool_call_start",
                 "tool_call_delta", "tool_call_end",
+                # ``usage`` counts as consumed too: its StreamDelta
+                # has already reached subscribers, so a silent retry
+                # would double-emit it and a delta-summing subscriber
+                # would double-count tokens against the loop's own
+                # accounting. Forfeits pre-content retries only for a
+                # provider that emits usage BEFORE content — all
+                # three in-repo providers accumulate usage and emit
+                # it after the content loop, so this costs nothing
+                # today; it is the loop-contract guard for any future
+                # provider ordering.
+                "usage",
             ):
                 content_seen[0] = True
             self._emit(StreamDelta(iteration=iteration, chunk=chunk))
