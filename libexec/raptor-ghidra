@@ -59,6 +59,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_attach.add_argument("--program", default=None, help="Program name in multi-binary project")
     p_attach.add_argument("--binary", type=Path, help="Binary path for r2 enrichment")
     p_attach.add_argument(
+        "--timeout", type=int, default=None,
+        help="Headless import timeout in seconds "
+             "(default: 300, or 3600 with --decompile-all)",
+    )
+    p_attach.add_argument(
         "--wait", action="store_true",
         help="Block on a busy project lock instead of failing fast",
     )
@@ -91,6 +96,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_import.add_argument("--decompile-all", action="store_true", help="Decompile every function")
     p_import.add_argument("--program", default=None, help="Program name in multi-binary project")
     p_import.add_argument("--binary", type=Path, help="Binary path for r2 enrichment")
+    p_import.add_argument(
+        "--timeout", type=int, default=None,
+        help="Headless import timeout in seconds "
+             "(default: 300, or 3600 with --decompile-all)",
+    )
 
     # diff
     p_diff = sub.add_parser("diff", help="Cross-version comparison of two Ghidra projects")
@@ -112,6 +122,11 @@ def _build_parser() -> argparse.ArgumentParser:
                              "instead of by name — required for stripped "
                              "or renamed binaries; writes binary-match.json")
     p_diff.add_argument("--json", action="store_true", help="JSON output to stdout")
+    p_diff.add_argument(
+        "--timeout", type=int, default=None,
+        help="Headless import timeout in seconds, per side "
+             "(default: 300, or 3600 with --decompile-all)",
+    )
 
     # decompile
     p_decomp = sub.add_parser("decompile", help="Decompile a single function")
@@ -209,10 +224,12 @@ def _do_import(gpr: Path, args: argparse.Namespace, out_dir: Path):
             db = bridge.import_and_enrich(
                 out_dir,
                 binary_path=args.binary.resolve() if args.binary else None,
+                timeout=args.timeout,
             )
         else:
             db = bridge.import_project(
-                out_dir, decompile=args.decompile_all)
+                out_dir, decompile=args.decompile_all,
+                timeout=args.timeout)
     return db
 
 
@@ -501,13 +518,15 @@ def _cmd_diff(args: argparse.Namespace) -> int:
     print(f"importing: {old_gpr.name}", file=sys.stderr)
     bridge_old = GhidraBridge(old_gpr, program_name=args.program)
     db_old = bridge_old.import_project(out_dir / "old",
-                                       decompile=args.decompile_all)
+                                       decompile=args.decompile_all,
+                                       timeout=args.timeout)
     bridge_old.close()
 
     print(f"importing: {new_gpr.name}", file=sys.stderr)
     bridge_new = GhidraBridge(new_gpr, program_name=args.program)
     db_new = bridge_new.import_project(out_dir / "new",
-                                       decompile=args.decompile_all)
+                                       decompile=args.decompile_all,
+                                       timeout=args.timeout)
     bridge_new.close()
 
     label_old = args.label_old or db_old.metadata.get("program_name", old_gpr.stem)

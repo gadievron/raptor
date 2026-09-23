@@ -1107,12 +1107,13 @@ class TestGhidraCliStatusAndWarnings:
             def __exit__(self, *exc):
                 pass
 
-            def import_project(self, out_dir, decompile=False):
+            def import_project(self, out_dir, decompile=False,
+                               timeout=None):
                 return _test_db()
 
         args = _ap.Namespace(gpr=gpr_project, enrich=False,
                              decompile_all=False, program=None,
-                             binary=None, wait=False)
+                             binary=None, wait=False, timeout=None)
         with patch("packages.ghidra.bridge.GhidraBridge", FakeBridge):
             rc = mod._cmd_attach(args)
         err = capsys.readouterr().err
@@ -1273,7 +1274,7 @@ class TestGhidraCliScrubbedOutput:
         monkeypatch.setattr(attach_mod, "detach", fake_detach)
         args = _ap.Namespace(gpr=Path("/tmp/x.gpr"), enrich=False,
                              decompile_all=False, program=None,
-                             binary=None, wait=True)
+                             binary=None, wait=True, timeout=None)
         mod._cmd_attach(args)
         mod._cmd_detach(_ap.Namespace(gpr=None, wait=True))
         assert seen == {"attach_wait": True, "detach_wait": True}

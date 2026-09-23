@@ -194,6 +194,51 @@ class TestBridgeOrchestration:
         assert len(re_db["functions"]) == 2
 
 
+class TestImportTimeoutDefaults:
+    """The work-scaled timeout default must reach the headless
+    subprocess wrapper itself — not just the CLI layer above it."""
+
+    def _import_timeout(self, gpr, tmp_path, monkeypatch, **kwargs):
+        from packages.ghidra.bridge import GhidraBridge
+        from packages.ghidra.model import REDatabase
+
+        seen: dict = {}
+
+        def fake_export(gpr_path, out_json, *, program_name=None,
+                        decompile=False, timeout=300):
+            seen["timeout"] = timeout
+            return out_json
+
+        # Pin the headless route: the in-process (pyghidra) path has
+        # no subprocess and ignores the timeout by design.
+        monkeypatch.setattr(
+            "packages.ghidra.detect.prefer_in_process", lambda: False)
+        monkeypatch.setattr(
+            "packages.ghidra.headless.export_project", fake_export)
+        monkeypatch.setattr(
+            "packages.ghidra.parser.parse_export",
+            lambda p: REDatabase(source_tool="ghidra"))
+        bridge = GhidraBridge(gpr)
+        bridge.import_project(tmp_path / "out", **kwargs)
+        return seen["timeout"]
+
+    def test_metadata_only_defaults_to_300(
+            self, gpr_project, monkeypatch, tmp_path):
+        assert self._import_timeout(
+            gpr_project, tmp_path, monkeypatch) == 300
+
+    def test_decompile_scales_default_to_3600(
+            self, gpr_project, monkeypatch, tmp_path):
+        assert self._import_timeout(
+            gpr_project, tmp_path, monkeypatch, decompile=True) == 3600
+
+    def test_operator_value_passes_verbatim(
+            self, gpr_project, monkeypatch, tmp_path):
+        assert self._import_timeout(
+            gpr_project, tmp_path, monkeypatch,
+            decompile=True, timeout=42) == 42
+
+
 class TestEnrichMetadataBinaryPath:
     """The project-metadata binary path is a free string inside the
     (attacker-controlled) project. A RELATIVE value is relative to the
@@ -208,7 +253,8 @@ class TestEnrichMetadataBinaryPath:
         bridge = GhidraBridge(gpr)
         db = REDatabase(source_tool="ghidra", binary_path=metadata_path)
         monkeypatch.setattr(
-            bridge, "import_project", lambda out: db, raising=True)
+            bridge, "import_project",
+            lambda out, timeout=None: db, raising=True)
         seen = []
 
         def fake_r2(bin_path, out):
