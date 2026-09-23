@@ -1300,6 +1300,65 @@ class TestFindingFunctionInDb:
         mock_adapter_cls.assert_not_called()
 
 
+class TestDbSourceReadBudget:
+    """src.zip member reads serve a function-name word-boundary scan —
+    they get a scan-appropriate byte budget and a size-bounded memo,
+    not the substrate's general 64 MB cap retained 128 entries deep."""
+
+    def _fresh_cache(self, monkeypatch):
+        import packages.llm_analysis.dataflow_validation as dv
+        monkeypatch.setattr(dv, "_db_source_cache", {})
+        monkeypatch.setattr(dv, "_db_source_cache_chars", 0)
+        return dv
+
+    def _make_db(self, tmp_path, members):
+        import zipfile
+        db = tmp_path / "db"
+        db.mkdir()
+        with zipfile.ZipFile(db / "src.zip", "w") as zf:
+            for name, text in members.items():
+                # ZIP_STORED: keeps the oversized member's size honest
+                # (a deflated run of one byte would trip the
+                # compression-ratio check instead of the size budget).
+                zf.writestr(name, text, compress_type=zipfile.ZIP_STORED)
+        return db
+
+    def test_oversized_member_refuses_to_read(self, tmp_path, monkeypatch):
+        dv = self._fresh_cache(monkeypatch)
+        big = "x" * (dv._DB_SOURCE_MEMBER_CAP + 4096)
+        db = self._make_db(tmp_path, {"repo/big.c": big, "repo/ok.c": "int f;"})
+        assert dv._read_db_source(db, "repo/big.c") is None
+        # Two-direction: ordinary members still read.
+        assert dv._read_db_source(db, "repo/ok.c") == "int f;"
+
+    def test_oversized_member_blocks_refutation_not_confirmation(
+        self, tmp_path, monkeypatch,
+    ):
+        # The None read means 'can't verify' → the function-coverage
+        # layer conservatively passes (it blocks refutation only on
+        # POSITIVE evidence of absence) — no cascade-block.
+        import packages.llm_analysis.dataflow_validation as dv
+        self._fresh_cache(monkeypatch)
+        big = "x" * (dv._DB_SOURCE_MEMBER_CAP + 4096)
+        db = self._make_db(tmp_path, {"repo/big.c": big})
+        dv._db_indexed_files.cache_clear()
+        finding = {"file_path": "repo/big.c", "function_name": "handler"}
+        assert dv._finding_function_in_db(finding, db) is True
+
+    def test_memo_is_size_bounded(self, tmp_path, monkeypatch):
+        dv = self._fresh_cache(monkeypatch)
+        monkeypatch.setattr(dv, "_DB_SOURCE_CACHE_BUDGET", 2500)
+        members = {f"repo/f{i}.c": ("x" * 1000) for i in range(6)}
+        db = self._make_db(tmp_path, members)
+        for name in members:
+            assert dv._read_db_source(db, name) == "x" * 1000
+        retained = sum(
+            len(v) for v in dv._db_source_cache.values() if v
+        )
+        assert retained <= 2500 + 1000  # budget + at most the newest entry
+        assert len(dv._db_source_cache) < 6  # old entries evicted
+
+
 class TestCallableInventoryProbe:
     """Layer 3 (Java only) — authoritative coverage check via a CodeQL
     callable-inventory probe. Catches the bytecode-extraction failure

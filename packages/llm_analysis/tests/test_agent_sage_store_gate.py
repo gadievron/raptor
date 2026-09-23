@@ -71,7 +71,8 @@ _ANALYSIS = {
 }
 
 
-def _run(agent, monkeypatch, *, analysis_crashes: bool):
+def _run(agent, monkeypatch, *, analysis_crashes: bool,
+         finding: dict | None = None):
     import core.llm.response_validation as rv
     import core.sage.hooks as hooks
 
@@ -111,8 +112,9 @@ def _run(agent, monkeypatch, *, analysis_crashes: bool):
         lambda *a, **k: (stored.append(a), True)[1],
     )
 
+    the_finding = finding if finding is not None else _finding()
     monkeypatch.setattr(
-        agent_mod, "parse_sarif_findings", lambda _p: [_finding()],
+        agent_mod, "parse_sarif_findings", lambda _p: [the_finding],
     )
     monkeypatch.setattr(agent_mod, "deduplicate_findings", lambda fs: fs)
     report = agent.process_findings(
@@ -194,3 +196,29 @@ class TestSageStoreAbstainedVerdicts:
                    if r.get("finding_id") == "F1")
         assert rec.get("status") != "error"          # clean run
         assert stored == []                          # no durable verdict
+
+
+class TestSageHashReadBounded:
+    def test_line0_fallback_hash_uses_capped_prefix(
+        self, tmp_path, monkeypatch,
+    ):
+        """The whole-file hash fallback (finding with no line anchor)
+        reads a target-repo file — bounded like every other read of
+        that class. The stored identity is the hash of the capped
+        prefix, so a giant mislabeled source file costs at most the
+        cap instead of its full size."""
+        from core.hash import sha256_string
+        from core.source import DEFAULT_MAX_SOURCE_CHARS
+
+        agent = _make_agent(tmp_path)
+        big_text = "y" * (DEFAULT_MAX_SOURCE_CHARS + 4096)
+        (tmp_path / "repo" / "src" / "auth.c").write_text(big_text)
+        f = _finding()
+        f["startLine"] = 0
+        f["endLine"] = 0
+        _report, stored = _run(
+            agent, monkeypatch, analysis_crashes=False, finding=f,
+        )
+        assert len(stored) == 1
+        expected = sha256_string(big_text[:DEFAULT_MAX_SOURCE_CHARS])[:12]
+        assert stored[0][4] == expected
