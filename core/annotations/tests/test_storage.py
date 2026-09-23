@@ -694,6 +694,62 @@ class TestLockSymlinkDefence:
 # ---------------------------------------------------------------------------
 
 
+class TestLockPermissions:
+    """flock needs no write permission; the lock open must not.
+    (The genuine two-UID shared-group tree is not constructible in a
+    single-uid test run; chmod on the caller's own lock file pins the
+    open-mode mechanism and the failure shape.)"""
+
+    def test_read_only_lock_file_does_not_block_writes(self, tmp_path):
+        import os
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="x",
+        ))
+        lock = tmp_path / "a.py.md.lock"
+        os.chmod(lock, 0o400)
+        try:
+            assert write_annotation(tmp_path, Annotation(
+                file="a.py", function="g", body="y",
+            )) is not None
+        finally:
+            os.chmod(lock, 0o600)
+        assert len(read_file_annotations(tmp_path, "a.py")) == 2
+
+    @pytest.mark.skipif(
+        os.geteuid() == 0, reason="root bypasses file permissions",
+    )
+    def test_unreadable_lock_file_fails_with_clear_error(self, tmp_path):
+        import os as _os
+        from core.annotations import AnnotationFileError
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="x",
+        ))
+        lock = tmp_path / "a.py.md.lock"
+        _os.chmod(lock, 0o000)
+        try:
+            with pytest.raises(AnnotationFileError, match="lock file"):
+                write_annotation(tmp_path, Annotation(
+                    file="a.py", function="g", body="y",
+                ))
+        finally:
+            _os.chmod(lock, 0o600)
+
+    def test_fresh_lock_file_is_group_and_world_readable(self, tmp_path):
+        import os, stat
+        old_umask = os.umask(0)
+        try:
+            write_annotation(tmp_path, Annotation(
+                file="a.py", function="f", body="x",
+            ))
+        finally:
+            os.umask(old_umask)
+        mode = stat.S_IMODE((tmp_path / "a.py.md.lock").stat().st_mode)
+        # Modulo the honoured umask, the creation mode must allow
+        # other writers' read-open (the cross-UID two-operator
+        # scenario the module documents).
+        assert mode & 0o044 == 0o044
+
+
 class TestBodySplicePrimitives:
     r"""A ``\r``-spliced body passed the ``\n``-anchored forged-structure
     regexes, landed raw on disk, and ``read_text()``'s universal-newline

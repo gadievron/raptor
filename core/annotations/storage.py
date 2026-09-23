@@ -514,11 +514,30 @@ def _file_lock(path: Path):
     # O_NOFOLLOW: the lock file has a predictable sibling name; a
     # symlink squatted there must fail loudly (ELOOP) rather than be
     # followed to an attacker-chosen target.
-    fd = os.open(
-        str(lock_path),
-        os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW,
-        0o600,
-    )
+    # O_RDONLY: flock() needs no write permission, and the previous
+    # O_WRONLY open crashed the write path with an unhandled
+    # PermissionError whenever the existing lock file wasn't writable
+    # by this caller — exactly the documented two-operator scenario,
+    # where operator B meets operator A's lock file across UIDs.
+    # Mode 0o666 (umask applies) for the same reason: a 0600 lock
+    # would still deny B the read-open. The file is empty and carries
+    # no content — it only serialises the RMW window — so the wide
+    # mode grants nothing beyond the ability to take the lock, which
+    # any same-tree writer legitimately needs.
+    try:
+        fd = os.open(
+            str(lock_path),
+            os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW,
+            0o666,
+        )
+    except PermissionError as e:
+        msg = (
+            f"cannot open annotation lock file {lock_path} ({e}); "
+            f"fix its permissions (it only serialises writers and "
+            f"holds no content — safe to delete when no write is in "
+            f"flight), then retry"
+        )
+        raise AnnotationFileError(msg) from e
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         try:
