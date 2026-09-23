@@ -834,14 +834,16 @@ def _caller_bound_search(
     limit_names: frozenset[str],
     language: str,
     deadline: float | None = None,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], bool]:
     """Depth-bounded reverse walk: a dominating count guard in a
     caller before the call refutes (``bound-in-caller``). Returns
-    ``(witness_receipt | None, per_caller_receipts)`` — the receipt
-    list records how far the search went (the honesty requirement).
-    *deadline* (``time.monotonic()`` epoch, ``None`` = unbounded)
-    stops the walk early; the receipts stay honest about the smaller
-    searched set."""
+    ``(witness_receipt | None, per_caller_receipts, truncated)`` —
+    the receipt list records how far the search went (the honesty
+    requirement). *deadline* (``time.monotonic()`` epoch, ``None`` =
+    unbounded) stops the walk early; ``truncated=True`` marks that
+    early stop so the caller can refuse to CONFIRM on a walk that
+    never finished (a no-witness result from a truncated search says
+    nothing about the unsearched callers)."""
     per_caller: list[dict[str, Any]] = []
     spans_cache: dict[str, list[tuple[str, int, int]]] = {}
     views_cache: dict[str, list[str]] = {}
@@ -870,7 +872,7 @@ def _caller_bound_search(
             for fp, source in source_texts.items():
                 if deadline is not None and \
                         time.monotonic() > deadline:
-                    return None, per_caller
+                    return None, per_caller, True
                 if callee not in source:
                     continue
                 for m_line, raw in enumerate(_view(fp), start=1):
@@ -909,7 +911,7 @@ def _caller_bound_search(
                             if witness and not witness.get("undecided"):
                                 receipt["bound"] = witness
                                 per_caller.append(receipt)
-                                return witness, per_caller
+                                return witness, per_caller, False
                     per_caller.append(receipt)
                     if (
                         caller_name not in visited
@@ -920,7 +922,7 @@ def _caller_bound_search(
         frontier = next_frontier
         if not frontier:
             break
-    return None, per_caller
+    return None, per_caller, False
 
 
 # ── verdict assembly ────────────────────────────────────────────────
@@ -1048,11 +1050,12 @@ def _adjudicate_site(
 
     # 2. Caller-side bound (bounded reverse walk, depth ≤ 3).
     texts = source_texts or {file_path: source}
-    caller_witness, per_caller = _caller_bound_search(
+    caller_witness, per_caller, walk_truncated = _caller_bound_search(
         function_name, texts, file_path, constants, limit_names,
         language, deadline=deadline,
     )
     bound_search["callers"] = per_caller
+    bound_search["truncated"] = walk_truncated
     if caller_witness is not None:
         return BoundEvidence(
             outcome="refuted",
@@ -1062,6 +1065,26 @@ def _adjudicate_site(
                 f"({caller_witness['bound_source']}); searched "
                 f"{len(per_caller)} caller site(s), depth ≤ "
                 f"{_CALLER_MAX_DEPTH}"
+            ),
+            resource=resource,
+            site=site_receipt,
+            bound_search=bound_search,
+        )
+
+    if walk_truncated:
+        # The deadline expired INSIDE the caller-bound walk: the
+        # no-witness result covers only the searched prefix, and the
+        # module contract forbids confirming (or refuting) on work
+        # not done — a hostile repo that merely slows the walk must
+        # not convert bounded sites into confirmed findings. Cap at
+        # inconclusive; the receipts stay honest about the prefix.
+        return BoundEvidence(
+            outcome="inconclusive",
+            reason=(
+                f"{REASON_BUDGET_EXHAUSTED}: deadline expired inside "
+                f"the caller-bound walk after "
+                f"{len(per_caller)} caller site(s) — a truncated "
+                f"search cannot confirm"
             ),
             resource=resource,
             site=site_receipt,
@@ -1281,6 +1304,11 @@ def run_resource_bounds_check(
             collection_pairs=collection_pairs,
             context=context,
             inventory=inventory,
+            # Thread the run's own deadline INTO the site walk (the
+            # prepass path already does): the between-sites check
+            # above bounds only site boundaries, so one slow site
+            # overran the documented budget unbounded.
+            deadline=deadline,
         )
         if res.outcome == "confirmed":
             return res
