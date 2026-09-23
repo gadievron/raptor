@@ -295,6 +295,34 @@ def _relay_deadline_s() -> int:
     )
 
 
+# Pre-auth bounds. Until a request's headers have parsed and its token
+# has cleared, the peer has proven nothing — so the header read gets a
+# short bespoke deadline instead of the relay deadline (3600 s), and
+# the TCP loopback plane (no peer-UID gate: any local UID connects)
+# caps concurrent connections. Without both, tokenless slow-header
+# clients pin one uncapped ThreadingMixIn thread each for up to an
+# hour per recv, wedging the credential dispatcher — and with it every
+# LLM call in the run. Ten seconds clears any legitimate client (a CLI
+# child on loopback sends its header block in one write); the cap
+# clears the largest legitimate CC child fan-out.
+_PREAUTH_HEADER_DEADLINE_S_DEFAULT = 10
+_TCP_MAX_CONNECTIONS_DEFAULT = 32
+
+
+def _preauth_header_deadline_s() -> int:
+    return _env_int(
+        "RAPTOR_LLM_DISPATCHER_PREAUTH_DEADLINE_S",
+        _PREAUTH_HEADER_DEADLINE_S_DEFAULT,
+    )
+
+
+def _tcp_max_connections() -> int:
+    return _env_int(
+        "RAPTOR_LLM_DISPATCHER_TCP_MAX_CONNECTIONS",
+        _TCP_MAX_CONNECTIONS_DEFAULT,
+    )
+
+
 class RelayLimitExceeded(OSError):
     """Upstream response exceeded the relay byte cap or total deadline.
 
@@ -1723,6 +1751,18 @@ class LLMDispatcher:
                 daemon_threads = True
                 allow_reuse_address = True
 
+                def server_activate(self) -> None:
+                    # Concurrency cap for the TCP plane: unlike the
+                    # UDS planes there is no peer-UID gate — any local
+                    # UID connects — and ThreadingMixIn spawns one
+                    # uncapped daemon thread per accepted connection,
+                    # so tokenless idle connections could pin handler
+                    # threads without ever authenticating. Sized at
+                    # activation so the env knob applies per listener.
+                    self._conn_slots = threading.BoundedSemaphore(
+                        _tcp_max_connections())
+                    super().server_activate()
+
                 def verify_request(self, request, client_address) -> bool:
                     # Loopback-only peers. The bind address already
                     # guarantees this; the check defends against a
@@ -1737,6 +1777,42 @@ class LLMDispatcher:
                         ))
                         return False
                     return True
+
+                def process_request(self, request, client_address) -> None:
+                    # Over-cap connections are refused pre-thread —
+                    # fail closed with an audit row rather than
+                    # queueing an unbounded thread per socket.
+                    if not self._conn_slots.acquire(blocking=False):
+                        dispatcher._audit(AuditEvent(
+                            ts=time.time(), event="peer.reject",
+                            peer_pid=None, peer_uid=None,
+                            token_id=None, worker_label=None,
+                            status="reject",
+                            reason=(
+                                "tcp connection cap reached "
+                                f"({_tcp_max_connections()})"
+                            ),
+                        ))
+                        self.shutdown_request(request)
+                        return
+                    try:
+                        super().process_request(request, client_address)
+                    except BaseException:
+                        self._conn_slots.release()
+                        raise
+
+                def process_request_thread(
+                    self, request, client_address,
+                ) -> None:
+                    # The slot is held for the handler thread's whole
+                    # life; ThreadingMixIn's finish/shutdown pairing
+                    # runs inside this frame, so the finally is the
+                    # one release point on the success path.
+                    try:
+                        super().process_request_thread(
+                            request, client_address)
+                    finally:
+                        self._conn_slots.release()
 
             handler_cls = _make_request_handler(dispatcher, plane="tcp")
             self._tcp_server = _LoopbackHTTPServer(
@@ -2120,20 +2196,39 @@ def _make_request_handler(
             # blocking, so a client that declares Content-Length N and
             # sends N-1 bytes — or stops reading its response — pins
             # the handler thread, its upstream pool connection, and
-            # any child-token reservation forever. Bound = the relay's
-            # total-deadline knob (``_relay_deadline_s``, read per
-            # connection so the env override applies without a
+            # any child-token reservation forever.
+            #
+            # The bound is STAGED by authentication state. Until the
+            # token clears, the peer gets the short pre-auth deadline
+            # (``_preauth_header_deadline_s``) — with the relay
+            # deadline here instead, a tokenless slow-header client
+            # held the handler thread for up to 3600 s per recv.
+            # ``_dispatch`` stretches the accepted connection to the
+            # relay's total-deadline knob (``_relay_deadline_s``, read
+            # per connection so env overrides apply without a
             # dispatcher rebuild): as a PER-IO cap it is generous — no
             # legitimate client-leg stall approaches the whole-relay
-            # deadline — while a smaller bespoke value would need its
-            # own knob and could cut streams whose consumer lawfully
-            # pauses between reads. A timeout raises
+            # deadline — while a smaller value could cut streams whose
+            # consumer lawfully pauses between reads. A timeout raises
             # ``TimeoutError``/``socket.timeout`` (an OSError), which
             # the relay's abort path handles exactly like
             # RelayLimitExceeded: aborted usage is booked and the
             # caller's ``finally`` releases the reservation.
-            self.timeout = float(_relay_deadline_s())
+            self.timeout = float(_preauth_header_deadline_s())
             super().setup()
+
+        def handle_one_request(self) -> None:
+            # Re-arm the pre-auth deadline for EVERY request on the
+            # connection: _dispatch stretches the socket to the relay
+            # deadline once a token clears, and without the reset a
+            # keep-alive peer could authenticate once and then
+            # slow-header the NEXT request at the relay bound.
+            try:
+                self.connection.settimeout(
+                    float(_preauth_header_deadline_s()))
+            except OSError:
+                pass
+            super().handle_one_request()
 
         # Disable BaseHTTPRequestHandler's reverse DNS log spam — peer
         # is always the local socket on UDS anyway.
@@ -2237,6 +2332,14 @@ def _make_request_handler(
                 ))
                 self._send_simple(401, reason or "unauthorized")
                 return
+
+            # Token cleared — stretch the per-IO bound from the
+            # pre-auth header deadline to the relay deadline for the
+            # body read and response relay (see ``setup``).
+            try:
+                self.connection.settimeout(float(_relay_deadline_s()))
+            except OSError:
+                pass
 
             # ---- worker-token renewal (/_token/renew) ----
             if self.path.split("?", 1)[0] == _TOKEN_RENEW_PATH:
