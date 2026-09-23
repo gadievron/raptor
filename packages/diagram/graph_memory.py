@@ -9,6 +9,12 @@ from .sanitize import sanitize as _sanitize, sanitize_id as _sid
 
 def generate_priority_paths(paths: list[dict[str, Any]], *, limit: int = 20) -> str:
     """Render graph-priority-paths.json as a compact risk flowchart."""
+    # flow_trace's ingestion idiom: malformed elements drop, the rest
+    # still renders (one junk element otherwise lost the section).
+    if isinstance(paths, list):
+        paths = [p for p in paths if isinstance(p, dict)]
+    else:
+        paths = []
     lines = ["flowchart LR"]
     if not paths:
         lines.append('    EMPTY["No graph-priority paths"]')

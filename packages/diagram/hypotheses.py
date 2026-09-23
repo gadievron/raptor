@@ -70,6 +70,10 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
     if not hypotheses:
         return 'flowchart TD\n    EMPTY["No hypotheses"]'
 
+    # flow_trace's ingestion idiom: malformed elements drop, the rest
+    # still renders (the renderer's per-section try/except otherwise
+    # loses the WHOLE section to one junk element).
+    hypotheses = [h for h in hypotheses if isinstance(h, dict)]
     hypotheses, dropped_hyps = cap_elements(hypotheses, _MAX_HYPOTHESES)
     dropped_preds = 0
 
@@ -108,9 +112,12 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
         else:
             lines.append(f'{indent}{nid}{{"{label}"}}')
 
-        # Predictions
+        # Predictions — same drop-malformed idiom as the top-level list.
         nonlocal dropped_preds
         preds = hyp.get("predictions", [])
+        if not isinstance(preds, list):
+            preds = []
+        preds = [p for p in preds if isinstance(p, dict)]
         preds, over = cap_elements(preds, _MAX_PREDICTIONS_PER_HYP)
         dropped_preds += over
         for pred in preds:

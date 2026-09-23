@@ -131,6 +131,9 @@ def generate(data: dict[str, Any]) -> str:
     branches = data.get("branches", [])
     if not isinstance(branches, list):
         branches = []
+    # Same drop-malformed idiom as steps above: `branch.get` on a
+    # non-dict element lost the whole trace to "Could not render".
+    branches = [b for b in branches if isinstance(b, dict)]
     branches, truncated_branches = cap_elements(branches, _MAX_BRANCHES)
     attacker_control = data.get("attacker_control") or {}
 

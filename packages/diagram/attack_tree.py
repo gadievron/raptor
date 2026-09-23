@@ -54,6 +54,8 @@ def _build_proximity_index(attack_paths: list[dict]) -> dict[str, int]:
     """
     index: dict[str, int] = {}
     for path in attack_paths:
+        if not isinstance(path, dict):
+            continue  # malformed companion element — drop, keep the rest
         fid = path.get("finding") or path.get("finding_id", "")
         score = path.get("proximity", 0)
         try:
@@ -71,6 +73,8 @@ def _build_disproven_index(disproven_list: list[dict]) -> dict[str, str]:
     """Return finding_id → why_wrong (first entry wins)."""
     index: dict[str, str] = {}
     for entry in disproven_list:
+        if not isinstance(entry, dict):
+            continue  # malformed companion element — drop, keep the rest
         fid = entry.get("finding", "")
         if fid:
             fid = _sid(str(fid))  # match sanitized node ids (see above)
@@ -84,11 +88,15 @@ def _build_hypothesis_index(hypotheses: list[dict]) -> dict[str, str]:
     """Return finding_id → hypothesis status summary."""
     index: dict[str, str] = {}
     for h in hypotheses:
+        if not isinstance(h, dict):
+            continue  # malformed companion element — drop, keep the rest
         fid = h.get("finding") or h.get("finding_id", "")
         if fid:
             fid = _sid(str(fid))  # match sanitized node ids (see above)
         status = _sanitize(h.get("status", ""))
-        claim = h.get("claim") or h.get("hypothesis", "")
+        # str-coerce BEFORE slicing: a dict claim raised KeyError on
+        # the slice and lost the whole Attack Tree section.
+        claim = str(h.get("claim") or h.get("hypothesis", "") or "")
         if fid and fid not in index:
             index[fid] = f"{status}: {_sanitize(claim[:60])}" if claim else status
     return index
@@ -203,6 +211,12 @@ def generate(
 ) -> str:
     root_id = _sid(data.get("root", "ROOT"))
     raw_nodes: list[dict] = data.get("nodes", [])
+    if not isinstance(raw_nodes, list):
+        raw_nodes = []
+    # flow_trace's ingestion idiom: malformed elements drop, the rest
+    # still renders (dict(n) below raised on a non-dict node and lost
+    # the whole section).
+    raw_nodes = [n for n in raw_nodes if isinstance(n, dict)]
 
     if not raw_nodes:
         return 'flowchart TD\n    EMPTY["No attack tree nodes"]'
