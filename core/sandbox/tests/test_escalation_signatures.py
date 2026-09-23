@@ -111,9 +111,20 @@ class TestSyscallArgDecoding:
         assert sigs.hostile_arg_label(
             "ioctl", [0, 0x5412 | high]) == "ioctl(TIOCSTI)"
 
+    def test_two_arg_records_decode(self):
+        # The arity guard is "at least the two filtered args": a record
+        # truncated to exactly family+type (socket) or fd+cmd (ioctl)
+        # still decodes — the decoder never requires registers it does
+        # not read.
+        assert sigs.decode_syscall_args("socket", [17, 3]) == {
+            "socket_family": "AF_PACKET", "socket_type": "SOCK_RAW"}
+        assert sigs.decode_syscall_args("ioctl", [0, 0x5412]) == {
+            "ioctl_cmd": "TIOCSTI"}
+
     def test_other_syscalls_and_malformed_args_empty(self):
         assert sigs.decode_syscall_args("openat", [1, 2, 3]) == {}
         assert sigs.decode_syscall_args("socket", []) == {}
+        assert sigs.decode_syscall_args("socket", [1]) == {}
         assert sigs.decode_syscall_args("ioctl", [0, "junk"]) == {}
 
     def test_hostile_labels(self):
