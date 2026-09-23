@@ -19567,6 +19567,14 @@ def _run_tool_chain(
                         # declared prototype) elsewhere is not
                         # coverage of THIS checklist item.
                         file_path=file_path,
+                        # Same CPG-scaled, deadline-clamped budget as
+                        # the live query this probe gates: the 10s
+                        # def-time default times out on a loaded
+                        # shared REPL, and each per-function timeout
+                        # books a channel error — 8 distinct keys
+                        # trip the health gate and the whole joern
+                        # lane goes dark for the run.
+                        timeout=_live_timeout,
                     )):
                         _record_joern_outcome(config, error=False)
                         if tier_counters:

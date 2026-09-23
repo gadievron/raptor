@@ -548,7 +548,7 @@ def _shares_affix(candidate: str, existing_keys: set[str], min_affix: int = 3) -
 
 
 def _key_shape(key: str) -> str:
-    """Classify a key's shape: 'lower', 'upper', 'mixed', 'other'."""
+    """Classify a key's shape: 'lower', 'upper', 'title', 'mixed'."""
     if key.islower() or ("_" in key and key.replace("_", "").islower()):
         return "lower"
     if key.isupper() or ("_" in key and key.replace("_", "").isupper()):

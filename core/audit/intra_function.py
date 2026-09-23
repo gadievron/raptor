@@ -196,7 +196,12 @@ def check_cleanup_consistency(
         if (domain_model or target_path) else _CLEANUP_CALLS
     )
 
-    segments: list[tuple[int, set[str]]] = []
+    # (segment start line, RETURN line, cleanups seen in between).
+    # The return line is what reports: it is the flagged path's exit
+    # site, while the segment start is merely the line after the
+    # PREVIOUS return — a hint anchored there can point a whole
+    # segment away from the return it describes.
+    segments: list[tuple[int, int, frozenset[str]]] = []
     current_cleanups: set[str] = set()
     segment_start = 1
 
@@ -204,7 +209,7 @@ def check_cleanup_consistency(
         for m in cleanup_re.finditer(line):
             current_cleanups.add(m.group(1).lower())
         if _RETURN_RE.search(line):
-            segments.append((segment_start, frozenset(current_cleanups)))
+            segments.append((segment_start, i, frozenset(current_cleanups)))
             current_cleanups = set()
             segment_start = i + 1
 
@@ -212,7 +217,7 @@ def check_cleanup_consistency(
         return []
 
     all_cleanups: Counter[str] = Counter()
-    for _, cleanups in segments:
+    for _, _, cleanups in segments:
         for c in cleanups:
             all_cleanups[c] += 1
 
@@ -222,16 +227,16 @@ def check_cleanup_consistency(
     for cleanup_fn, count in all_cleanups.items():
         if count < majority_threshold:
             continue
-        for line_no, cleanups in segments:
+        for _start, return_line, cleanups in segments:
             if cleanup_fn not in cleanups:
                 results.append(IntraFunctionAsymmetry(
                     kind="cleanup",
                     description=(
                         f"{count}/{len(segments)} return paths call "
-                        f"{cleanup_fn}(), but the path at line {line_no} "
-                        f"does not"
+                        f"{cleanup_fn}(), but the path returning at "
+                        f"line {return_line} does not"
                     ),
-                    line=line_no,
+                    line=return_line,
                 ))
 
     return results

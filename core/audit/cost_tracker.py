@@ -226,12 +226,18 @@ class PhaseCostLedger:
         silently replacing it with segment-local numbers.
         """
         amount = max(0.0, float(spend_usd))
-        pc = self._ensure_phase(PRIOR_SEGMENTS_PHASE)
-        pc.cost_usd += amount
-        self.segments.append({
-            "segment": segment,
-            "prior_spend_usd": round(amount, 4),
-        })
+        # Locked like record_call: these end-of-run bookings usually
+        # run serially after the workers drain, but ``phases`` is the
+        # same map the lock-protected hot path mutates — an unlocked
+        # read-modify-write here silently loses increments if any
+        # worker is still in flight.
+        with self._lock:
+            pc = self._ensure_phase(PRIOR_SEGMENTS_PHASE)
+            pc.cost_usd += amount
+            self.segments.append({
+                "segment": segment,
+                "prior_spend_usd": round(amount, 4),
+            })
 
     @property
     def prior_segments_spend_usd(self) -> float:
@@ -263,15 +269,18 @@ class PhaseCostLedger:
         Returns ``{class: cost}`` for the classes booked.
         """
         booked: dict[str, float] = {}
-        for cls, (calls, cost) in sorted(class_costs.items()):
-            if calls <= 0 and cost <= 0:
-                continue
-            if cls in self._OUTCOME_BOOKED_CLASSES or cls in self.phases:
-                continue
-            pc = self._ensure_phase(cls)
-            pc.calls += max(0, int(calls))
-            pc.cost_usd += max(0.0, float(cost))
-            booked[cls] = float(cost)
+        # Locked like record_call (see book_prior_segments).
+        with self._lock:
+            for cls, (calls, cost) in sorted(class_costs.items()):
+                if calls <= 0 and cost <= 0:
+                    continue
+                if (cls in self._OUTCOME_BOOKED_CLASSES
+                        or cls in self.phases):
+                    continue
+                pc = self._ensure_phase(cls)
+                pc.calls += max(0, int(calls))
+                pc.cost_usd += max(0.0, float(cost))
+                booked[cls] = float(cost)
         return booked
 
     @property
@@ -325,6 +334,14 @@ class PhaseCostLedger:
         return sum(p.cache_write_tokens for p in self.phases.values())
 
     def to_dict(self) -> dict[str, Any]:
+        # Snapshot under the same lock the hot path takes: the totals
+        # properties iterate ``phases`` while record_call mutates it
+        # from workers, and the mid-run cadence tick serialises this
+        # dict while the loop is still reviewing.
+        with self._lock:
+            return self._to_dict_locked()
+
+    def _to_dict_locked(self) -> dict[str, Any]:
         totals: dict[str, Any] = {
             "cost_usd": round(self.total_cost_usd, 4),
             "wall_time_s": round(self.total_wall_time_s, 2),

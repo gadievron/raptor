@@ -717,3 +717,16 @@ class TestCacheUnitSeams:
         assert gap_spans_digest(a) == gap_spans_digest(
             [dict(a[0], priority=99)],
         ), "scheduling fields must not invalidate the cache"
+
+
+class TestDigestFraming:
+    def test_nul_in_parts_cannot_collide(self):
+        # A bare NUL joint hashed ("a\0","b") and ("a","\0b") to the
+        # same byte stream; length-prefixed framing separates them.
+        from core.audit.detector_cache import digest_strings
+        assert (digest_strings(["a\x00", "b"])
+                != digest_strings(["a", "\x00b"]))
+
+    def test_part_boundaries_framed(self):
+        from core.audit.detector_cache import digest_strings
+        assert digest_strings(["ab"]) != digest_strings(["a", "b"])
