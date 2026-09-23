@@ -345,3 +345,52 @@ class TestCheckoutPinRefForgery(unittest.TestCase):
                     prov = scanner.checkout_provenance(core)
             self.assertIs(prov["matches"], True)
             self.assertEqual(prov["head"], head)
+class TestFromEnvValidatesKnobs(unittest.TestCase):
+    """OpenAntConfig.from_env read OPENANT_MODEL / OPENANT_LEVEL raw
+    beside the module's own env_choice validator — any get_config()
+    consumer that did not overwrite from validated argparse inherited
+    the unvalidated lane. The choice tuples are single-sourced."""
+
+    def _from_env(self, env: dict):
+        from unittest.mock import patch as _patch
+        from packages.openant.config import OpenAntConfig
+        with tempfile.TemporaryDirectory() as td:
+            core = Path(td) / "core-dir"
+            (core / "core").mkdir(parents=True)
+            (core / "core" / "scanner.py").touch()
+            with _patch.dict(os.environ,
+                             {"OPENANT_CORE": str(core), **env}):
+                return OpenAntConfig.from_env()
+
+    def test_garbage_env_values_fall_back_with_warning(self):
+        import contextlib
+        import io
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            cfg = self._from_env({"OPENANT_MODEL": "garbage-model",
+                                  "OPENANT_LEVEL": "bogus"})
+        self.assertEqual(cfg.model, "sonnet")
+        self.assertEqual(cfg.level, "reachable")
+        self.assertIn("Ignoring invalid", stderr.getvalue())
+
+    def test_valid_env_values_kept(self):
+        cfg = self._from_env({"OPENANT_MODEL": "opus",
+                              "OPENANT_LEVEL": "exploitable"})
+        self.assertEqual(cfg.model, "opus")
+        self.assertEqual(cfg.level, "exploitable")
+
+    def test_choice_tuples_single_sourced(self):
+        """The argparse surfaces consume the config module's tuples
+        instead of respelling them."""
+        from packages.openant.config import (
+            OPENANT_LEVEL_CHOICES,
+            OPENANT_MODEL_CHOICES,
+        )
+        self.assertEqual(OPENANT_MODEL_CHOICES, ("opus", "sonnet"))
+        self.assertEqual(OPENANT_LEVEL_CHOICES,
+                         ("all", "reachable", "codeql", "exploitable"))
+        for launcher in ("raptor_openant.py", "raptor_agentic.py"):
+            src = (Path(__file__).parents[3] / launcher).read_text()
+            self.assertIn("OPENANT_MODEL_CHOICES", src, launcher)
+            self.assertIn("OPENANT_LEVEL_CHOICES", src, launcher)
+            self.assertNotIn('("opus", "sonnet")', src, launcher)

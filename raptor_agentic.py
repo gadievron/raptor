@@ -2239,17 +2239,24 @@ Examples:
                              "provenance (unverified external code executes with "
                              "network access); the project 'config' trust marker "
                              "grants the same standing consent")
-    from packages.openant.config import env_choice
+    from packages.openant.config import (
+        OPENANT_LEVEL_CHOICES,
+        OPENANT_LEVEL_DEFAULT,
+        OPENANT_MODEL_CHOICES,
+        OPENANT_MODEL_DEFAULT,
+        env_choice,
+    )
     parser.add_argument("--openant-model",
                         default=env_choice("OPENANT_MODEL",
-                                           ("opus", "sonnet"), "sonnet"),
-                        choices=["opus", "sonnet"],
+                                           OPENANT_MODEL_CHOICES,
+                                           OPENANT_MODEL_DEFAULT),
+                        choices=list(OPENANT_MODEL_CHOICES),
                         help="OpenAnt LLM model (default: $OPENANT_MODEL or sonnet)")
     parser.add_argument("--openant-level",
                         default=env_choice("OPENANT_LEVEL",
-                                           ("all", "reachable", "codeql",
-                                            "exploitable"), "reachable"),
-                        choices=["all", "reachable", "codeql", "exploitable"],
+                                           OPENANT_LEVEL_CHOICES,
+                                           OPENANT_LEVEL_DEFAULT),
+                        choices=list(OPENANT_LEVEL_CHOICES),
                         help="OpenAnt analysis depth (default: $OPENANT_LEVEL or reachable)")
 
     parser.add_argument(

@@ -20,6 +20,16 @@ OPENANT_CORE_ENV = "OPENANT_CORE"
 OPENANT_MODEL_ENV = "OPENANT_MODEL"
 OPENANT_LEVEL_ENV = "OPENANT_LEVEL"
 
+# Single source for the two operator-knob choice universes. These
+# existed spelled out three times (here, raptor_openant.py argparse,
+# raptor_agentic.py argparse); a divergence would let one surface
+# accept what another validates away.
+OPENANT_MODEL_CHOICES: tuple[str, ...] = ("opus", "sonnet")
+OPENANT_MODEL_DEFAULT = "sonnet"
+OPENANT_LEVEL_CHOICES: tuple[str, ...] = (
+    "all", "reachable", "codeql", "exploitable")
+OPENANT_LEVEL_DEFAULT = "reachable"
+
 # Supply-chain pin for the external OpenAnt checkout. Pin by commit
 # id, not tag or branch name: refs are movable, git object ids are
 # not. This is the upstream master commit the bridge's schema
@@ -99,9 +109,16 @@ class OpenAntConfig:
 
     @classmethod
     def from_env(cls, raptor_dir: Optional[Path] = None) -> "OpenAntConfig":
+        # Env knobs route through env_choice like the argparse
+        # surfaces: raw os.environ reads sat one import away from the
+        # module's own validator, and any get_config() consumer that
+        # did not overwrite from validated argparse inherited the
+        # unvalidated lane (both current callers masked it).
         core_path = _discover_core(raptor_dir)
-        model = os.environ.get(OPENANT_MODEL_ENV, "sonnet")
-        level = os.environ.get(OPENANT_LEVEL_ENV, "reachable")
+        model = env_choice(
+            OPENANT_MODEL_ENV, OPENANT_MODEL_CHOICES, OPENANT_MODEL_DEFAULT)
+        level = env_choice(
+            OPENANT_LEVEL_ENV, OPENANT_LEVEL_CHOICES, OPENANT_LEVEL_DEFAULT)
         config = cls(core_path=core_path, model=model, level=level)
         config.validate()
         return config
