@@ -380,9 +380,12 @@ def _guard_on_line(text: str) -> tuple[str, str | None, str]:
 #: Statement shapes that leave the enclosing flow — a guard whose arm
 #: ENDS in one of these makes the fall-through path require the guard
 #: condition to be FALSE (the ubiquitous C early-exit idiom).
+# Seed set (<= 9 names, C control flow + libc noreturn): a missing
+# spelling only drops a negation opportunity — the condition is then
+# dropped entirely, which weakens the prune toward keep.
 _EXIT_STMT_RE = re.compile(
     r"^(?:return\b|goto\s+\w|break$|continue$"
-    r"|(?:exit|_exit|_Exit|abort|longjmp|siglongjmp|panic)\s*\()"
+    r"|(?:exit|abort|longjmp|panic)\s*\()"
 )
 
 
