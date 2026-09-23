@@ -438,3 +438,16 @@ def test_hash_grammar_matches_stamped_hash_alphabet(tmp_path: Path):
     row = sage_evidence_row(Evidence(type="code_path", file="x.c",
                                      line=1, observation="o", hash=h))
     assert _extract_evidence_hashes(row) == {h}
+
+
+def test_line_zero_evidence_keeps_its_anchor():
+    """line=0 is a real anchor (whole-file evidence): the writer must
+    render it, or the parser round-trip loses the hash anchor."""
+    from core.concepts.model import Evidence, sage_evidence_row
+
+    row = sage_evidence_row(Evidence(
+        type="code_path", file="a.c", observation="obs",
+        line=0, hash="beef1234",
+    ))
+    assert "a.c:0" in row
+    assert "[h=beef1234]" in row

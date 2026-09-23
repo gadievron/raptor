@@ -11,7 +11,6 @@ domain-model.json.
 
 from __future__ import annotations
 
-import concurrent.futures
 import contextlib
 import logging
 import os
@@ -2706,39 +2705,53 @@ def _run_one_batch(
         doc_context=doc_context, correlate=correlate,
     )
 
-    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = ex.submit(
-        llm_client.generate_structured,
-        prompt, _RESPONSE_SCHEMA,
-        system_prompt=_SYSTEM_PROMPT, task_type="study",
-        max_tokens=_study_max_output_tokens(),
-        # Study batches are the canonical long structured call —
-        # per-call streaming opt-in (SSE-capable surfaces honour it,
-        # others ignore it).
-        stream=True,
+    # Daemon worker thread, not a ThreadPoolExecutor: a wall-timeout
+    # cannot cancel the RUNNING call either way (the thread lives
+    # until the call returns), but executor threads are non-daemon and
+    # joined at interpreter exit — one hung API call per timed-out
+    # batch used to block study process exit indefinitely. A daemon
+    # thread leaks only until the stray call returns and never holds
+    # the process hostage.
+    import queue as _queue
+    import threading as _threading
+
+    result_q: _queue.Queue = _queue.Queue(maxsize=1)
+
+    def _call() -> None:
+        try:
+            result_q.put(("ok", llm_client.generate_structured(
+                prompt, _RESPONSE_SCHEMA,
+                system_prompt=_SYSTEM_PROMPT, task_type="study",
+                max_tokens=_study_max_output_tokens(),
+                # Study batches are the canonical long structured
+                # call — per-call streaming opt-in (SSE-capable
+                # surfaces honour it, others ignore it).
+                stream=True,
+            )))
+        except BaseException as exc:  # noqa: BLE001 — marshalled to caller
+            result_q.put(("err", exc))
+
+    worker = _threading.Thread(
+        target=_call, daemon=True, name=f"study-batch-{idx + 1}",
     )
+    worker.start()
     try:
-        response = future.result(timeout=_BATCH_WALL_TIMEOUT)
-        result = structured_result(response)
-    except concurrent.futures.TimeoutError:
-        future.cancel()
-        ex.shutdown(wait=False, cancel_futures=True)
+        kind, payload = result_q.get(timeout=_BATCH_WALL_TIMEOUT)
+    except _queue.Empty:
         logger.warning(
             "Phase 2 batch %d/%d wall-timeout (%ds)",
             idx + 1, total, _BATCH_WALL_TIMEOUT,
         )
         msg = f"batch {idx + 1}/{total} wall-timeout"
-        raise _BatchLLMError(msg)
-    except Exception as exc:
-        ex.shutdown(wait=False)
+        raise _BatchLLMError(msg) from None
+    if kind == "err":
         logger.warning(
             "Phase 2 batch %d/%d failed", idx + 1, total,
-            exc_info=True,
+            exc_info=payload,
         )
-        msg = f"batch {idx + 1}/{total}: {exc}"
-        raise _BatchLLMError(msg) from exc
-    else:
-        ex.shutdown(wait=False)
+        msg = f"batch {idx + 1}/{total}: {payload}"
+        raise _BatchLLMError(msg) from payload
+    result = structured_result(payload)
 
     if not isinstance(result, dict):
         logger.warning("Phase 2 batch %d: non-dict response", idx + 1)
@@ -3881,6 +3894,11 @@ def _derive_threat_frame_invariants(
                 + f" [threat-frame derived from "
                   f"{raw.get('derived_from_function', '?')} contract]"
             ).strip(),
+            # "derived" is deliberately OUTSIDE CONFIDENCE_GRADES:
+            # threat-frame invariants are LLM inference over contract
+            # text, and the grade ladder gates rule compilation — a
+            # derived invariant must never compile into a mechanical
+            # checker. Consumers render it as a hint tier instead.
             confidence="derived",
             relevant_cwes=[
                 str(x) for x in (raw.get("relevant_cwes") or [])
