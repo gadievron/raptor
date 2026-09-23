@@ -108,15 +108,22 @@ class TestArgv:
 
 
 class TestRunPipeline:
-    def _proc(self, stdout="", rc=0):
-        return SimpleNamespace(stdout=stdout, stderr="", returncode=rc)
+    def _proc(self, stdout="", rc=0, stderr=""):
+        """side_effect for the streamed subprocess.run call shape:
+        writes the fake pipeline output to the passed stdout/stderr
+        files (the runner no longer buffers the streams)."""
+        def _run(argv, **kw):
+            kw["stdout"].write(stdout.encode("utf-8"))
+            kw["stderr"].write(stderr.encode("utf-8"))
+            return SimpleNamespace(returncode=rc)
+        return _run
 
     def test_sentinel_parsed_and_log_written(self, tmp_path):
         out = tmp_path / "run_out"
         out.mkdir()
         log = tmp_path / "pipeline.log"
         with patch("core.recall.runner.subprocess.run",
-                   return_value=self._proc(f"noise\nOUTPUT_DIR={out}\n")):
+                   side_effect=self._proc(f"noise\nOUTPUT_DIR={out}\n")):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
         assert got == out
         assert "OUTPUT_DIR" in log.read_text(encoding="utf-8")
@@ -132,14 +139,14 @@ class TestRunPipeline:
         log = tmp_path / "pipeline.log"
         stdout = f"OUTPUT_DIR={early}\nprogress\nOUTPUT_DIR={final}\n"
         with patch("core.recall.runner.subprocess.run",
-                   return_value=self._proc(stdout)):
+                   side_effect=self._proc(stdout)):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
         assert got == final
 
     def test_missing_sentinel_errors(self, tmp_path):
         log = tmp_path / "pipeline.log"
         with patch("core.recall.runner.subprocess.run",
-                   return_value=self._proc("no sentinel here", rc=3)), \
+                   side_effect=self._proc("no sentinel here", rc=3)), \
              pytest.raises(RunnerError, match="OUTPUT_DIR"):
             run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
 
@@ -156,7 +163,7 @@ class TestRunPipeline:
         elsewhere = tmp_path / "project_dir"
         elsewhere.mkdir()
         with patch("core.recall.runner.subprocess.run",
-                   return_value=self._proc(f"OUTPUT_DIR={elsewhere}\n")):
+                   side_effect=self._proc(f"OUTPUT_DIR={elsewhere}\n")):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path, log)
         assert got == pinned
         assert "diverges" in caplog.text
@@ -165,7 +172,7 @@ class TestRunPipeline:
         out = tmp_path / "run_out"
         out.mkdir()
         with patch("core.recall.runner.subprocess.run",
-                   return_value=self._proc(f"OUTPUT_DIR={out}\n", rc=1)):
+                   side_effect=self._proc(f"OUTPUT_DIR={out}\n", rc=1)):
             got = run_pipeline(_manifest(), tmp_path / "t", tmp_path,
                                tmp_path / "l.log")
         assert got == out
@@ -174,7 +181,7 @@ class TestRunPipeline:
         out = tmp_path / "run_out"
         out.mkdir()
         with patch("core.recall.runner.subprocess.run",
-                   return_value=self._proc(f"OUTPUT_DIR={out}\n")), \
+                   side_effect=self._proc(f"OUTPUT_DIR={out}\n")), \
              caplog.at_level("WARNING"):
             run_pipeline(_manifest("agentic"), tmp_path / "t", tmp_path,
                          tmp_path / "l.log")
@@ -246,3 +253,39 @@ class TestCollectFindings:
 
     def test_empty_dir(self, tmp_path):
         assert collect_findings(tmp_path) == []
+
+
+class TestStreamedPipelineOutput:
+    """The pipeline's stdout/stderr stream to disk — a multi-hour
+    run's output is never buffered in memory to grep one sentinel."""
+
+    def test_run_called_with_file_streams(self, tmp_path):
+        out = tmp_path / "run_out"
+        out.mkdir()
+        log = tmp_path / "pipeline.log"
+        seen = {}
+
+        def _run(argv, **kw):
+            seen.update(kw)
+            kw["stdout"].write(f"OUTPUT_DIR={out}\n".encode())
+            kw["stderr"].write(b"warn: something\n")
+            return SimpleNamespace(returncode=0)
+
+        with patch("core.recall.runner.subprocess.run",
+                   side_effect=_run):
+            got = run_pipeline(_manifest(), tmp_path / "t", tmp_path,
+                               log)
+        assert got == out
+        assert not seen.get("capture_output"), (
+            "pipeline output buffered in memory"
+        )
+        assert hasattr(seen.get("stdout"), "write")
+        assert hasattr(seen.get("stderr"), "write")
+        body = log.read_text(encoding="utf-8")
+        # Log keeps its historical shape: stdout, separator, stderr.
+        assert f"OUTPUT_DIR={out}" in body
+        assert "--- stderr ---" in body
+        assert "warn: something" in body
+        assert body.index("OUTPUT_DIR") < body.index("--- stderr ---")
+        # No temp stream file left behind.
+        assert not list(tmp_path.glob("*.stderr.tmp"))

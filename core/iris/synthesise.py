@@ -356,17 +356,21 @@ def _read_candidate_source(
     if not full_path.is_file():
         return f"# file not found: {cand.file}"
 
-    try:
-        text = full_path.read_text(encoding="utf-8", errors="replace")
-        lines = text.splitlines()
-        if (cand.line_start or 0) > 0 and (cand.line_end or 0) > 0:
-            start = max(0, cand.line_start - 1)
-            end = min(len(lines), cand.line_end)
-            lines = lines[start:end]
-        lines = lines[:max_lines]
-        return "\n".join(lines)
-    except OSError:
+    # Capped read: the candidate file is scanned-target content and
+    # only a line window is wanted — a whole-file read let one planted
+    # huge file balloon memory before the slice.
+    from core.source import read_text_capped
+
+    got = read_text_capped(full_path)
+    if got is None:
         return f"# read error: {cand.file}"
+    lines = got[0].splitlines()
+    if (cand.line_start or 0) > 0 and (cand.line_end or 0) > 0:
+        start = max(0, cand.line_start - 1)
+        end = min(len(lines), cand.line_end)
+        lines = lines[start:end]
+    lines = lines[:max_lines]
+    return "\n".join(lines)
 
 
 def _build_user_prompt(

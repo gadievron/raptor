@@ -774,3 +774,30 @@ class TestSkipSentinelLogging:
             assert isinstance(exc, _BatchSkip)
             assert str(exc).strip()
             assert "no LLM call" in str(exc)
+
+
+class TestCandidateSourceReadCapped:
+    def test_line_window_read_routes_through_capped_reader(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.source as core_source
+        from core.iris.synthesise import _read_candidate_source
+
+        f = tmp_path / "a.c"
+        f.write_text("".join(f"line{i}\n" for i in range(50)),
+                     encoding="utf-8")
+        from types import SimpleNamespace
+
+        calls = {"n": 0}
+        orig = core_source.read_text_capped
+
+        def spy(path, *a, **kw):
+            calls["n"] += 1
+            return orig(path, *a, **kw)
+
+        monkeypatch.setattr(core_source, "read_text_capped", spy)
+        cand = SimpleNamespace(source="", file="a.c", function="f",
+                               line_start=10, line_end=12)
+        text = _read_candidate_source(cand, tmp_path, 40)
+        assert text.splitlines() == ["line9", "line10", "line11"]
+        assert calls["n"] == 1
