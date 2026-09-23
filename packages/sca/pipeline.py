@@ -741,8 +741,20 @@ def run_sca(
             db_path = SCA_CACHE_ROOT / "osv.sqlite"
         offline_db = OsvOfflineDB(db_path, http=http)
         # Refresh per-ecosystem zips for the ecosystems we discovered.
+        # Warn-and-degrade on refresh failure: the DB is shared across
+        # processes, and an unguarded crash here (e.g. a concurrent
+        # refresh still holding the write lock past the busy timeout)
+        # aborted the WHOLE scan. Degrading to the possibly-stale DB /
+        # per-query cache loses freshness, not the run.
         ecosystems_in_use = {d.ecosystem for d in canonical}
-        offline_db.ensure_fresh(ecosystems_in_use)
+        try:
+            offline_db.ensure_fresh(ecosystems_in_use)
+        except Exception:                       # noqa: BLE001
+            logger.warning(
+                "sca.pipeline: offline-DB refresh failed — continuing "
+                "with existing cached advisories (possibly stale)",
+                exc_info=True,
+            )
 
     progress.stage("osv", total=len(canonical))
     osv_client = OsvClient(
