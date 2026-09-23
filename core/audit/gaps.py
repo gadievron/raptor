@@ -15,12 +15,14 @@ Gaps are sorted by priority:
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from collections.abc import Callable, Iterable
 from typing import Any
 
 from core.artifacts.context_map_budget import CONTEXT_MAP_CONSUMER_MAX_BYTES
 from core.coverage.journal import make_function_key
+from core.inventory.languages import SCRIPT_PER_FILE_LANGUAGES
 from core.json import load_json, save_json
 
 from ._util import extract_context_map_set, safe_join
@@ -53,6 +55,116 @@ _REVIEWABLE_KINDS = frozenset({"function", "method", ""})
 # them burned full LLM review + tool sweeps on items with nothing to
 # review. Operators can opt in via a positive --include-kinds list.
 _DEFAULT_EXTRA_KINDS = frozenset({"top_level", "macro", "global"})
+
+
+def _script_interstitials_enabled(include_kinds: set | None) -> bool:
+    """Whether script-per-file HANDLER interstitials are gap-eligible
+    (the per-item language + content gate in ``compute_gaps``).
+
+    Mirrors ``_resolve_reviewable_kinds``' override semantics: the
+    default is ON; ``{"none"}`` and any positive kind list turn it
+    off (the operator chose the exact extra kinds — naming
+    ``interstitial`` positively admits the whole kind, ungated, via
+    the reviewable set instead); a ``-interstitial`` entry opts out
+    explicitly.
+    """
+    if not include_kinds:
+        return True
+    if include_kinds == {"none"} or "-interstitial" in include_kinds:
+        return False
+    positive = {k for k in include_kinds
+                if k and not k.startswith("-") and k != "none"}
+    return not positive
+
+
+# File-scope PHP statements that are wiring, not handler logic:
+# namespace/strictness declarations and scope declarations. The
+# include family is handled separately — it is wiring ONLY with a
+# literal-string argument. Everything else (assignments, superglobal
+# reads, echo/output, control flow, calls) counts as handler code.
+_PHP_WIRING_STMT_RE = re.compile(
+    r"^(?:use|namespace|global)\b|^declare\s*\(",
+)
+_PHP_INCLUDE_KEYWORD_RE = re.compile(
+    r"^(?:include|include_once|require|require_once)\b",
+)
+# include/require with a single literal-string argument (parens
+# optional). A non-literal argument — variable, concatenation,
+# constant — makes the statement a request-controllable dispatcher
+# (``include($_GET['page'] . '.php')`` is the classic local-file-
+# inclusion shape), which is exactly handler code, never wiring.
+_PHP_LITERAL_INCLUDE_RE = re.compile(
+    r"^(?:include|include_once|require|require_once)\b\s*\(?\s*"
+    r"(?:'[^'\n]*'|\"[^\"\n]*\")\s*\)?\s*$",
+)
+
+
+def _php_wiring_statement(stmt: str) -> bool:
+    """Whether one ``;``-delimited file-scope statement is wiring."""
+    if _PHP_INCLUDE_KEYWORD_RE.match(stmt):
+        return bool(_PHP_LITERAL_INCLUDE_RE.match(stmt))
+    return bool(_PHP_WIRING_STMT_RE.match(stmt))
+
+
+def _php_interstitial_is_handler(source: str | None) -> bool:
+    """True when a PHP file-scope span carries statements beyond
+    include/require-style boilerplate.
+
+    Comment-aware, statement-wise (``;``-split, so a boilerplate
+    keyword opening the line cannot swallow a second statement —
+    ``global $x; $x = $_GET['q'];`` is handler code) classifier,
+    deliberately biased toward inclusion: an unrecognised line
+    (including raw markup — output surface) counts as handler code,
+    as does a ``;`` inside a string literal splitting a wiring
+    statement apart. The cost of a false positive is one review slot;
+    a false negative writes off a request handler.
+    """
+    if not source:
+        return False
+    in_comment = False
+    for raw in source.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if in_comment:
+            end = line.find("*/")
+            if end < 0:
+                continue
+            in_comment = False
+            line = line[end + 2:].strip()
+            if not line:
+                continue
+        # Peel tag markers so ``<?php status_handler();`` classifies
+        # its statement (and ``<?= $x ?>`` its expression).
+        for marker in ("<?php", "<?=", "<?"):
+            if line.startswith(marker):
+                line = line[len(marker):].strip()
+                break
+        if line.endswith("?>"):
+            line = line[:-2].strip()
+        if not line:
+            continue
+        if line.startswith(("//", "#")):
+            continue
+        if line.startswith("/*"):
+            end = line.find("*/", 2)
+            if end < 0:
+                in_comment = True
+                continue
+            line = line[end + 2:].strip()
+            if not line:
+                continue
+        if line.startswith("*"):
+            continue  # docblock body
+        for stmt in line.split(";"):
+            stmt = stmt.strip()
+            if not stmt:
+                continue
+            if stmt.startswith(("//", "#")):
+                break  # trailing comment: rest of the line is prose
+            if not _php_wiring_statement(stmt):
+                return True
+    return False
 
 
 def _resolve_reviewable_kinds(include_kinds: set | None) -> frozenset:
@@ -429,6 +541,7 @@ def compute_gaps(
 
     gaps: list[dict[str, Any]] = []
     reviewable_kinds = _resolve_reviewable_kinds(include_kinds)
+    script_interstitials = _script_interstitials_enabled(include_kinds)
     consumed_covered: dict[str, int] = {}
 
     # Single-slot source cache for the parser-shape classifier: gap
@@ -484,15 +597,48 @@ def compute_gaps(
         items = file_info.get("items", file_info.get("functions", []))
 
         file_coverage = file_tool_coverage.get(file_path, set())
+        file_language = (file_info.get("language") or "").lower()
 
         for item in items:
             name = item.get("name", "")
             item_kind = item.get("kind", "")
 
+            # Script-per-file targets: where file-scope code IS the
+            # program (classic PHP request handlers), an interstitial
+            # span carrying more than include/require boilerplate is
+            # the handler, not extraction residue — on script-heavy
+            # trees the interstitial share is half the attack surface,
+            # so writing it off wrote off the code the requests
+            # actually execute. Compiled/object languages keep the
+            # residue exclusion below: their interstitial spans are
+            # declarations-and-braces glue, and reviewing those burned
+            # full review slots on items with nothing to review.
+            script_handler = False
+            if (
+                item_kind == "interstitial"
+                and file_language in SCRIPT_PER_FILE_LANGUAGES
+            ):
+                _ls = item.get("line_start", 0)
+                if (
+                    isinstance(_ls, int)
+                    and not isinstance(_ls, bool)
+                    and _ls > 0
+                ):
+                    script_handler = _php_interstitial_is_handler(
+                        _function_source(
+                            file_path, _ls, item.get("line_end"),
+                        ),
+                    )
+
             # Functions/methods plus top_level/macro/global by default
             # (see _resolve_reviewable_kinds); --include-kinds narrows
-            # or widens the set. Interstitial residue stays out.
-            if item_kind not in reviewable_kinds:
+            # or widens the set. Interstitial stays out EXCEPT the
+            # script-per-file handler spans gated above (default-on;
+            # opt out via --include-kinds -interstitial; a positive
+            # "interstitial" entry admits the kind wholesale instead).
+            if item_kind not in reviewable_kinds and not (
+                script_handler and script_interstitials
+            ):
                 continue
 
             # CI workflow jobs/steps carry kind "function" (the
@@ -594,6 +740,7 @@ def compute_gaps(
                 fuzz_iterations=fuzz_info[0],
                 fuzz_crashes=fuzz_info[1],
                 parser_shaped=bool(shape and shape.parser_shaped),
+                script_handler=script_handler,
             )
 
             gap = {
@@ -2637,6 +2784,14 @@ def _derive_entry_points(checklist: dict[str, Any]) -> set:
             name = item.get("name", "")
             if not name:
                 continue
+            if item.get("kind", "") == "interstitial":
+                # The visibility fallback below reads "not static" as
+                # exported API, but an interstitial span has no
+                # linkage at all — deriving an entry point from it let
+                # file-scope residue bypass the dead-code demotion via
+                # the entry-point tier whenever the kind reached
+                # priority computation.
+                continue
             metadata = item.get("metadata") or {}
             visibility = metadata.get("visibility", "")
 
@@ -2682,6 +2837,7 @@ def _compute_priority(
     fuzz_iterations: int = 0,
     fuzz_crashes: int = 0,
     parser_shaped: bool = False,
+    script_handler: bool = False,
 ) -> int:
     """Assign priority (lower = higher priority).
 
@@ -2698,6 +2854,11 @@ def _compute_priority(
     header-API membership, so the ``static`` decode workhorse that
     actually walks the untrusted bytes used to compete on SLOC alone
     while its thin exported siblings claimed the file's review slots.
+
+    ``script_handler`` marks an interstitial item that compute_gaps'
+    language + content gate classified as script-per-file handler
+    code: it competes on the normal tiers instead of the dead-code
+    demotion.
     """
     if is_entry_point:
         # ``sloc`` 0 means UNMEASURED (no line_end in the checklist),
@@ -2713,7 +2874,16 @@ def _compute_priority(
     # large the body is or what sinks it lexically mentions — the
     # large-sloc arm used to hand oracle-absent functions the TOP
     # tier.
-    if binary_absent or item_kind == "interstitial":
+    #
+    # The interstitial arm is language-conditional in both directions:
+    # for compiled/object languages the file-scope residue really is
+    # declarations-and-braces glue — the demotion is earned, and
+    # lifting it would re-buy full review slots on items with nothing
+    # to review. For script-per-file languages the top-level span IS
+    # the request handler (``script_handler``, set by compute_gaps'
+    # content gate), and a blanket demotion wrote off the code the
+    # requests actually execute.
+    if binary_absent or (item_kind == "interstitial" and not script_handler):
         return PRIORITY_DEAD_CODE
 
     if sloc >= _LARGE_SLOC:
