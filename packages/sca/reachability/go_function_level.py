@@ -380,6 +380,30 @@ def refine_go_verdicts(
                 if respelled not in queries:
                     queries.append(respelled)
             if rem:
+                if "/" in rem:
+                    # TRAILING-PATH spelling riding the blindly-
+                    # prefixed reading (``<module>.foo/bar.Parse``
+                    # from flat entry ``foo/bar.Parse``): a realistic
+                    # human spelling of the import path by its tail.
+                    # Rebind the slashy head onto the module or any
+                    # imported sub-package whose path ends with it at
+                    # a ``/`` boundary — still restricted to THIS
+                    # dep's module, so a fully-qualified FOREIGN
+                    # module spelling derives nothing and the
+                    # downgrade arm stays honest.
+                    trail_end = rem.find(".", rem.rfind("/"))
+                    if trail_end > 0 and rem[trail_end + 1:]:
+                        p_head = rem[:trail_end]
+                        sym_rest = rem[trail_end + 1:]
+                        for pth in universe:
+                            if not (pth == dep_module
+                                    or pth.startswith(dep_module + "/")):
+                                continue
+                            if (pth == p_head
+                                    or pth.endswith("/" + p_head)):
+                                twin = f"{pth}.{sym_rest}"
+                                if twin not in queries:
+                                    queries.append(twin)
                 head, _, rest = rem.partition(".")
                 for pth in universe:
                     twin: str | None = None

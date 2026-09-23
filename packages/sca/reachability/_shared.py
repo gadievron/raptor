@@ -165,6 +165,14 @@ def extract_qualified_symbols(
             out.append(ns)
             if prefix_ok and not ns.startswith(dep_head + "."):
                 out.append(f"{dep_head}.{ns}")
+            elif dep_folds and ns.startswith(dep_head + "."):
+                # Qualified entry spelled with the RAW hyphenated
+                # package head (``my-crate::from_str``): the fold
+                # REBINDS the head — prefixing the fold in front
+                # would compose double-headed garbage while the
+                # verbatim reading pairs NOT_CALLED.
+                rest = ns[len(dep_head) + 1:]
+                out.extend(f"{h}.{rest}" for h in dep_folds)
             else:
                 out.extend(
                     f"{h}.{ns}" for h in dep_folds
