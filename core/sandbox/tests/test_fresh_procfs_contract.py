@@ -81,20 +81,40 @@ def test_scrub_names_cover_credentials_and_provider_keys():
     target strip set, the LLM provider credentials, RAPTOR_DIR, and —
     derived from the canonical credential vocabulary, not hand-typed —
     the credential-bearing tier (the first-party session credentials
-    live there; the enumerated LLM_API_KEY_VARS list misses them)."""
+    live there; the enumerated LLM_API_KEY_VARS list misses them)
+    plus the model-traffic redirect knobs (the gateway endpoint
+    identifies the deployment even when every key is elsewhere; the
+    hand-typed endpoint sub-list once re-grew exactly the enumerated
+    shape the credential fix removed, missing ANTHROPIC_*BASE_URL /
+    AWS_ENDPOINT_URL* while listing OLLAMA_HOST)."""
     src = (_REPO_ROOT / "core" / "sandbox" / "_spawn.py").read_text(
         encoding="utf-8")
     import_at = src.index(
         "from core.security.credential_env import",
         src.index("def run_sandboxed"))
-    block = src[import_at:][:2600]
+    block = src[import_at:][:4500]
     assert "CREDENTIAL_BEARING_ENV_VARS" in block
     assert "is_credential_shaped" in block
+    assert "is_model_traffic_redirect_shaped" in block
     assert "/proc/self/environ" in block
     assert "_env_image_scrub_names = tuple" in block
     assert "TARGET_ENV_STRIP_SET" in block
     assert "LLM_API_KEY_VARS" in block
     assert '"RAPTOR_DIR"' in block
+    # The derived predicate must be applied in the image sweep, not
+    # merely imported: the sweep condition names both predicates.
+    assert "_is_redirect_shaped(_nm_s)" in block
+    # And the vocabulary actually covers the family the scrub relies
+    # on it for (drift pin against credential_env).
+    from core.security.credential_env import (
+        is_model_traffic_redirect_shaped,
+    )
+    for name in ("ANTHROPIC_BASE_URL",
+                 "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+                 "ANTHROPIC_VERTEX_BASE_URL",
+                 "AWS_ENDPOINT_URL",
+                 "AWS_ENDPOINT_URL_BEDROCK_RUNTIME"):
+        assert is_model_traffic_redirect_shaped(name), name
 
 
 def test_layer_install_ordering_source_pin():
