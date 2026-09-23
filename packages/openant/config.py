@@ -80,6 +80,13 @@ class OpenAntConfig:
     # re-deriving a content-blind one. None on the env / auto-detect
     # lanes, where no gate runs.
     gate_provenance: Optional[dict] = None
+    # True when the gate admitted this core as a CLEAN PINNED checkout
+    # (no operator consent on file): the scanner re-verifies that
+    # content right before spawning — the gate runs at argv parse, the
+    # spawn can be an entire pattern-scan phase later, and unconsented
+    # execution must not rest on a minutes-old verdict. Consented runs
+    # skip the recheck (the operator accepted non-pinned content).
+    expect_clean_pinned: bool = False
 
     def validate(self) -> None:
         marker = self.core_path / _CORE_MARKER

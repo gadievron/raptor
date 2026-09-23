@@ -268,5 +268,98 @@ class TestProvenanceRecordThreading(unittest.TestCase):
                 self.assertEqual(prov["consent"], "trust-marker")
 
 
+class TestSpawnRecheckClosesConsentToctou(unittest.TestCase):
+    """Consent gate TOCTOU: content was verified once at argv parse
+    and executed at spawn (in /agentic an entire pattern-scan phase
+    later) with no re-verification. A run the gate admitted as a
+    CLEAN PINNED checkout must re-verify that content right before
+    spawn and refuse hard when it drifted; consented runs skip the
+    recheck (the operator accepted non-pinned content)."""
+
+    @staticmethod
+    def _pinned(td):
+        from packages.openant.tests.test_phase1b_integration import (
+            TestOpenantCoreConsentGate,
+        )
+        return TestOpenantCoreConsentGate.__dict__[
+            "_pinned_repo"].__func__(td)
+
+    def _scan(self, cfg, td: Path):
+        from unittest import mock
+        from packages.openant import scanner
+        stub = {"pipeline_output_path": None,
+                "pipeline_output": {"findings": []},
+                "token_usage": {}, "error": None, "skipped": False}
+        spawned = []
+        def probe(*a, **k):
+            spawned.append(True)
+            return dict(stub)
+        with mock.patch.object(scanner, "_run_subprocess", probe):
+            res = scanner.run_openant_scan(td / "repo", td / "out", cfg)
+        return res, bool(spawned)
+
+    def test_content_swap_after_clean_gate_refuses_hard(self):
+        from unittest import mock
+        from packages.openant import scanner
+        from packages.openant.config import OpenAntConfig
+        with tempfile.TemporaryDirectory() as td_s:
+            td = Path(td_s)
+            repo, core, head = self._pinned(td)
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                prov = scanner.enforce_core_consent(
+                    core, consented=False, target_path=td_s)
+                self.assertEqual(prov["consent"], "clean-pinned")
+                # The swap: hostile content lands AFTER the gate.
+                (core / "core" / "scanner.py").write_text(
+                    "hostile = True\n")
+                cfg = OpenAntConfig(core_path=core, gate_provenance=prov,
+                                    expect_clean_pinned=True)
+                res, spawned = self._scan(cfg, td)
+        self.assertTrue(res.get("hard_error"), res)
+        self.assertIn("consent gate", str(res.get("error")))
+        self.assertFalse(spawned,
+                         "subprocess spawned despite drifted content")
+
+    def test_unchanged_clean_core_still_spawns(self):
+        from unittest import mock
+        from packages.openant import scanner
+        from packages.openant.config import OpenAntConfig
+        with tempfile.TemporaryDirectory() as td_s:
+            td = Path(td_s)
+            repo, core, head = self._pinned(td)
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                prov = scanner.enforce_core_consent(
+                    core, consented=False, target_path=td_s)
+                cfg = OpenAntConfig(core_path=core, gate_provenance=prov,
+                                    expect_clean_pinned=True)
+                res, spawned = self._scan(cfg, td)
+        self.assertIsNone(res.get("error"))
+        self.assertTrue(spawned)
+
+    def test_consented_run_skips_recheck(self):
+        from unittest import mock
+        from packages.openant import scanner
+        from packages.openant.config import OpenAntConfig
+        with tempfile.TemporaryDirectory() as td_s:
+            td = Path(td_s)
+            repo, core, head = self._pinned(td)
+            (core / "core" / "scanner.py").write_text("tampered\n")
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                with self.assertLogs("raptor", level="WARNING"):
+                    prov = scanner.enforce_core_consent(
+                        core, consented=True, target_path=td_s)
+                cfg = OpenAntConfig(core_path=core, gate_provenance=prov,
+                                    expect_clean_pinned=False)
+                res, spawned = self._scan(cfg, td)
+        self.assertIsNone(res.get("error"))
+        self.assertTrue(spawned)
+
+    def test_both_entry_points_wire_the_recheck(self):
+        for launcher in ("raptor_openant.py", "raptor_agentic.py"):
+            src = (Path(__file__).parents[3] / launcher).read_text()
+            self.assertIn("expect_clean_pinned", src, launcher)
+            self.assertIn('== "clean-pinned"', src, launcher)
+
+
 if __name__ == "__main__":
     unittest.main()

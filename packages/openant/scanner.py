@@ -606,9 +606,49 @@ def run_openant_scan(
         # content survey never executed: the record must say so
         # instead of reading as clean.
         provenance.setdefault("worktree_clean", "unknown")
+    if config.expect_clean_pinned:
+        drift = _spawn_recheck_failure(config.core_path)
+        if drift is not None:
+            result = _empty_result(drift, hard_error=True)
+            result["core_provenance"] = provenance
+            return result
     result = _run_subprocess(repo_path, out_dir, config)
     result["core_provenance"] = provenance
     return result
+
+
+def _spawn_recheck_failure(core_path: Path) -> str | None:
+    """Spawn-time re-verification for a run the consent gate admitted
+    as a CLEAN PINNED checkout (no operator consent on file).
+
+    The gate's verdict is computed at argv parse; the subprocess env
+    is built at spawn — in /agentic an entire pattern-scan phase
+    later. Content swapped in that window (shared or removable
+    storage, any same-host writer) executed with network access and
+    the API key on the strength of the stale verdict. Re-running the
+    survey immediately before spawn narrows that window from
+    minutes-to-hours to the recheck->exec instant (the residual race
+    against a live concurrent writer is the attacker model, not a
+    verification gap this function can close).
+
+    Returns ``None`` when the core still verifies as a clean pinned
+    checkout, else a hard-error message (the scan must NOT run).
+    """
+    prov = checkout_provenance(core_path)
+    if prov["matches"] is not True:
+        return (
+            "OpenAnt core is no longer at the pinned commit at spawn "
+            "time (it was a clean pinned checkout at the consent "
+            "gate) — refusing to execute"
+        )
+    dirty = _pinned_tree_deviations(core_path)
+    if dirty is None or dirty["modified"] or dirty["untracked"]:
+        return (
+            "OpenAnt core content changed between the consent gate "
+            "and spawn — no longer a clean pinned checkout; refusing "
+            "to execute"
+        )
+    return None
 
 
 def _run_subprocess(
