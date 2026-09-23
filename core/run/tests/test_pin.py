@@ -590,13 +590,28 @@ class OneTargetGateTest(_PinCase):
         self.assertFalse(pinned_write_target_ok(d))
         self.assertIsNone(_journal_project_dir(d))
 
-    def test_no_recorded_target_passes(self):
+    def test_pinned_marker_without_target_fails_closed(self):
+        # Every pin-era start_run seals target_path beside the pin —
+        # a pin WITHOUT it is the deletion forgery (a wrong-typed
+        # value already failed closed; dropping the field was the
+        # remaining pass-through), not legacy tolerance.
         from core.run.pin import pinned_write_target_ok
         d = self.root / "out" / "pinned" / "audit_1"
         d.mkdir(parents=True)
         save_json(d / RUN_METADATA_FILE, {
             "status": "completed", "project": "pinned",
             "project_source": "session",
+        })
+        self.assertFalse(pinned_write_target_ok(d))
+
+    def test_legacy_marker_without_pin_still_passes(self):
+        # Pre-series markers carry neither pin nor target — the gate
+        # must not regress their projections.
+        from core.run.pin import pinned_write_target_ok
+        d = self.root / "out" / "loose" / "audit_1"
+        d.mkdir(parents=True)
+        save_json(d / RUN_METADATA_FILE, {
+            "status": "completed", "command": "audit",
         })
         self.assertTrue(pinned_write_target_ok(d))
 

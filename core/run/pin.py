@@ -532,14 +532,21 @@ def pinned_write_target_ok(out_dir: str | os.PathLike[str],
     marker. Callers pass the target they independently know when they
     have one; otherwise the run's recorded ``target_path`` is used.
     Runs with no recorded target (legacy dirs) pass — the gate must
-    not regress pre-series projections.
+    not regress pre-series projections. Legacy means NO PIN either:
+    every pin-era ``start_run`` seals ``target_path`` beside the
+    ``project`` field, so a marker that carries a pin but not the
+    target is tamper-shaped (the field was DELETED — the cheapest
+    forgery, since a wrong-typed value already fails closed), not
+    legacy-shaped, and fails closed too.
     """
     if target is None:
+        pinned = False
         try:
             from core.json import load_json
             meta = load_json(Path(out_dir) / RUN_METADATA_FILE,
                              max_bytes=_MAX_RUN_META_BYTES)
             target = (meta or {}).get("target_path")
+            pinned = isinstance(meta, dict) and "project" in meta
         except Exception:  # noqa: BLE001 — unreadable metadata: no target
             target = None
         if target is not None and not isinstance(target, str):
@@ -548,6 +555,13 @@ def pinned_write_target_ok(out_dir: str | os.PathLike[str],
             logger.warning(
                 "pin: run %s records a non-string target_path %r — "
                 "suppressing the project-store write", out_dir, target)
+            return False
+        if not target and pinned:
+            logger.warning(
+                "pin: run %s carries a project pin but no recorded "
+                "target_path — every pinned marker is written with "
+                "one, so its absence is tamper-shaped; suppressing "
+                "the project-store write (fail closed)", out_dir)
             return False
     if not target:
         return True
