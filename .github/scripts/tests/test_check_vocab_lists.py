@@ -154,6 +154,34 @@ class TestBaselineSemantics:
         assert rc == 0
         assert "WARN grown" in out
 
+    def test_shrink_warns_but_passes(self, det, tmp_path, capsys):
+        """A baseline count above the measured count is silent growth
+        headroom (the list can grow back to the recorded count with no
+        tripwire) — the shrunk lane makes it warn, exit 0."""
+        root = _tree(tmp_path, "core/foo.py", BIG_LIST)
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps({
+            "core/foo.py::_SINKS": {"kind": "literal", "count": 35},
+        }), encoding="utf-8")
+        rc, out = self._run(det, root, baseline, capsys)
+        assert rc == 0
+        assert "WARN shrunk" in out
+        assert "35 -> 12" in out
+
+    def test_exact_count_is_silent(self, det, tmp_path, capsys):
+        """The other direction of the shrunk lane: a count-accurate
+        baseline row emits neither grown nor shrunk warnings."""
+        root = _tree(tmp_path, "core/foo.py", BIG_LIST)
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps({
+            "core/foo.py::_SINKS": {"kind": "literal", "count": 12},
+        }), encoding="utf-8")
+        rc, out = self._run(det, root, baseline, capsys)
+        assert rc == 0
+        assert "WARN shrunk" not in out
+        assert "WARN grown" not in out
+        assert "0 grown, 0 shrunk" in out
+
     def test_stale_entry_warns_but_passes(self, det, tmp_path, capsys):
         root = _tree(tmp_path, "core/foo.py", SEED_LIST)
         baseline = tmp_path / "baseline.json"

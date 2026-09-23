@@ -426,7 +426,7 @@
     "kind": "literal"
   },
   "core/audit/cross_function_verify.py::_VERIFIER_DISPATCH": {
-    "count": 35,
+    "count": 11,
     "kind": "alternation"
   },
   "core/audit/cross_function_verify.py::alloc_sinks": {

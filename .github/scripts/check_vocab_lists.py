@@ -29,7 +29,9 @@ compared against ``vocab_baseline.json`` next to this script. A key
 not in the baseline fails the run — route the vocabulary through the
 learned seams or a data pack, or (deliberately, with a note) add the
 key to the baseline. Baselined lists that GROW past their recorded
-size warn; baseline entries that no longer fire warn as stale.
+size warn; lists that SHRINK below it warn too (a stale high count is
+silent growth headroom); baseline entries that no longer fire warn as
+stale.
 
 Usage:
     python3 .github/scripts/check_vocab_lists.py            # CI mode
@@ -37,8 +39,8 @@ Usage:
     python3 .github/scripts/check_vocab_lists.py --write-baseline
     python3 .github/scripts/check_vocab_lists.py --json out.json
 
-Exit codes: 0 clean (stale/growth warnings only), 1 new findings,
-2 usage error.
+Exit codes: 0 clean (stale/growth/shrink warnings only), 1 new
+findings, 2 usage error.
 """
 
 from __future__ import annotations
@@ -360,12 +362,32 @@ def main() -> int:
         for k, f in sorted(by_key.items())
         if k in baseline and f.count > baseline[k].get("count", 0)
     ]
+    # Shrunk lane, symmetric to grown: a baseline count above the
+    # measured count is silent headroom — the list can grow back to
+    # the recorded count with no tripwire firing anywhere, so the
+    # count-accurate-baseline rule warns on ANY shrink. Threshold
+    # trade-off, both directions: warning only past a slack margin
+    # would re-open exactly the headroom this lane exists to close
+    # (a census found one row sitting at 3.2x for months, silently);
+    # any-shrink stays noise-free because shrinks are rare (that
+    # census: 1 row of 646) and each warn is retired by one
+    # note-preserving --write-baseline refresh.
+    shrunk = [
+        (f, baseline[k].get("count", 0))
+        for k, f in sorted(by_key.items())
+        if k in baseline and f.count < baseline[k].get("count", 0)
+    ]
     stale = sorted(set(baseline) - set(by_key))
 
     for f, old_count in grown:
         print(f"[vocab] WARN grown: {f.key} ({old_count} -> {f.count} "
               f"names) — route additions through DomainVocabulary/IRIS "
               f"or a data pack")
+    for f, old_count in shrunk:
+        print(f"[vocab] WARN shrunk: {f.key} ({old_count} -> {f.count} "
+              f"names) — the recorded count is silent growth headroom; "
+              f"run --write-baseline (review notes are preserved) and "
+              f"commit the refresh")
     for k in stale:
         print(f"[vocab] WARN stale baseline entry (no longer fires): {k}")
 
@@ -409,7 +431,8 @@ def main() -> int:
         return 1
 
     print(f"[vocab] clean: {len(by_key)} baselined vocabulary lists, "
-          f"no new ones ({len(stale)} stale, {len(grown)} grown).")
+          f"no new ones ({len(stale)} stale, {len(grown)} grown, "
+          f"{len(shrunk)} shrunk).")
     return 0
 
 
