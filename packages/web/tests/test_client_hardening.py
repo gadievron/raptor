@@ -293,6 +293,7 @@ def test_idn_pin_serves_the_punycode_lookup_and_blocks_the_rebind():
     "XN--FA-HIA.DE",        # mixed case
     "faß。de",              # ideographic full stop U+3002
     "faß．de",              # fullwidth full stop U+FF0E
+    b"xn--fa-hia.de",       # bytes punycode (pre-encoded resolver path)
 ])
 def test_pin_hit_for_every_spelling_of_the_pinned_host(lookup_spelling):
     sentinel = [("PINNED",)]

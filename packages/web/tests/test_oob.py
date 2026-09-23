@@ -469,3 +469,27 @@ class TestCallbackVerifiedHeaderSsrf(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCanaryWireShapeWithDuplicatedParams(unittest.TestCase):
+    """Adversarial cell shape: the crawler can record a URL that
+    already carries the parameter TWICE (`?u=1&u=2`). Both original
+    occurrences must be stripped — first-wins AND last-wins (PHP-style)
+    backends must each see only the canary."""
+
+    def test_all_original_occurrences_are_replaced(self):
+        import requests
+        from urllib.parse import parse_qsl
+
+        from packages.web.oracle import _strip_query_params
+
+        cell = "http://t.example/p?u=1&x=1&u=2"
+        canary = "http://cb.example/tok"
+        stripped = _strip_query_params(cell, {"u": canary})
+        prepared = requests.Request(
+            "GET", stripped, params={"u": canary},
+        ).prepare()
+        pairs = parse_qsl(urlparse(prepared.url).query)
+        u_values = [v for k, v in pairs if k == "u"]
+        self.assertEqual(u_values, [canary])   # first-wins == last-wins
+        self.assertIn(("x", "1"), pairs)
