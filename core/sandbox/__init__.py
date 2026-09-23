@@ -285,8 +285,9 @@ Threat model — what the sandbox DOES protect against:
 - Fork bombs — RLIMIT_NPROC=1024 applied inside the user namespace
   (the spawn grandchild's setrlimit; the ns-local UID has zero
   pre-existing processes so the limit bounds the sandbox without
-  affecting host work); the no-namespace fallback bounds growth
-  relative to current same-UID usage. Configurable via
+  affecting host work); BOTH no-namespace lanes — the plain
+  subprocess fallback and the Landlock-only audit/observe lane —
+  bound growth relative to current same-UID usage. Configurable via
   `~/.config/raptor/sandbox.json`.
 - Privilege escalation via setuid binaries (PR_SET_NO_NEW_PRIVS).
 - Core-dump credential exfil — RLIMIT_CORE=0 suppresses core dumps; a

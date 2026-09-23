@@ -6375,11 +6375,25 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                             # Landlock — we install it separately
                             # post-sync), the Landlock preexec, and
                             # the seccomp preexec with audit_mode=True.
+                            # host_nproc_cap rides along: the audit
+                            # lane runs the payload with no pid-ns,
+                            # so the RLIMIT_NPROC fork-bomb bound is
+                            # the only growth limit here exactly as
+                            # on the plain no-namespace lane —
+                            # omitting it ran audited targets at the
+                            # host's per-UID ceiling. reaper_cell is
+                            # deliberately None: teardown containment
+                            # on this lane is the tracer's
+                            # PTRACE_O_EXITKILL (see
+                            # run_landlock_audit), not the plain
+                            # lane's reaper-sweeper split.
                             _rlimit_only = _make_preexec_fn(
                                 effective_limits,
                                 writable_paths=None,
                                 readable_paths=None,
                                 allowed_tcp_ports=None,
+                                host_nproc_cap=_host_nproc_cap,
+                                reaper_cell=None,
                             )
                             _wp = list(
                                 _demoted_call_writable
