@@ -125,3 +125,18 @@ def test_e2e_allocation_evidence_carries_size_source(tmp_path):
         f"expected user_controlled size_source; got "
         f"{[(a.allocator, a.size_source) for a in r.allocations]!r}"
     )
+
+
+def test_classify_size_source_ignores_comment_content(tmp_path):
+    """A comment on the alloc line must not steer the shape class:
+    `kmalloc(8 /* n * len */, ...)` is a literal-8 allocation, not a
+    user-controlled multiplication. The classifier reads the shared
+    sanitized view."""
+    f = tmp_path / "a.c"
+    f.write_text(
+        "void op(void)\n"
+        "{\n"
+        "    p = kmalloc(8 /* n * len */, GFP_KERNEL);\n"
+        "}\n"
+    )
+    assert _classify_size_source(str(f), 3, "kmalloc") == "literal"

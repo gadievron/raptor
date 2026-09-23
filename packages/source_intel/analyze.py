@@ -1255,10 +1255,12 @@ def _classify_size_source(
     """
     if not file_path or not line_no:
         return None
-    try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
+    # Sanitized view: a comment on the alloc line (`kmalloc(8
+    # /* n * len */, ...)`) must not steer the shape class — the
+    # classification feeds the axis-3 verdict.
+    from packages.source_intel._source_view import sanitized_lines
+    lines = sanitized_lines(file_path)
+    if lines is None:
         return None
     if line_no < 1 or line_no > len(lines):
         return None
@@ -1444,13 +1446,22 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
 
     Conservative on file-read failure or unparseable shape — returns
     SAME_FUNCTION.
+
+    The walk reads the shared sanitized view, never the raw text:
+    DOMINATES is the adapter's strongest NOT_EXPLOITABLE lever (no
+    proximity gate), and the per-line regex stripping this used to do
+    removed only SAME-LINE comments — interior lines of a multi-line
+    block comment fed their braces into the depth walk, so one
+    planted ``/*\\n}\\n*/`` (or an organic unbalanced brace in ASCII
+    art) minted DOMINATES for a branch-local abort and suppressed
+    every memory-corruption finding below it. Preprocessor lines are
+    skipped too: a ``#define OPEN {`` is not control flow.
     """
     if not file_path or not call_line:
         return GRADE_SAME_FUNCTION
-    try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
+    from packages.source_intel._source_view import sanitized_lines
+    lines = sanitized_lines(file_path)
+    if lines is None:
         return GRADE_SAME_FUNCTION
     if call_line < 1 or call_line > len(lines):
         return GRADE_SAME_FUNCTION
@@ -1465,12 +1476,12 @@ def _classify_call_site_grade(file_path: str, call_line: int) -> str:
     bypass_re = re.compile(r"\b(?:return\b|goto\b)")
 
     for i in range(call_idx + 1):
-        line = lines[i]
-        # Strip comments and string literals (rough)
-        stripped = re.sub(r"/\*.*?\*/", "", line, flags=re.DOTALL)
-        stripped = re.sub(r"//.*$", "", stripped, flags=re.MULTILINE)
-        stripped = re.sub(r'"(?:[^"\\]|\\.)*"', '""', stripped)
-        stripped = re.sub(r"'(?:[^'\\]|\\.)*'", "''", stripped)
+        stripped = lines[i]
+        # Comment / string content is already blanked by the
+        # sanitized view. Preprocessor directives take no part in
+        # the brace/exit walk.
+        if stripped.lstrip().startswith("#"):
+            continue
 
         # Look for `return` / `goto` BEFORE the call line at depth 1
         # (function body), which would mean a normal exit path
@@ -2151,10 +2162,14 @@ def _enclosing_function(file_path: str, line: int) -> str | None:
     if via_inv is not None:
         return via_inv
     # 2. Regex fallback (only path when no inventory is cached).
-    try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
+    # Sanitized view: an opener-shaped line on the INTERIOR of a
+    # block comment would otherwise win the backward walk (the
+    # prefix skip below only catches lines that start with comment
+    # tokens), misattributing the enclosing function — which flips
+    # same-function abort/capability matching.
+    from packages.source_intel._source_view import sanitized_lines
+    lines = sanitized_lines(file_path)
+    if lines is None:
         return None
     if line < 1 or line > len(lines):
         return None
@@ -2933,11 +2948,13 @@ def _local_line_uses_privileged_cap(file_path: str, line_no: int) -> bool:
     """Fallback used only when adapter.py isn't importable. Reads the
     line at ``file_path:line_no`` and checks for any privileged cap
     constant. Functionally equivalent to adapter's helper but
-    duplicated here to break the import cycle in minimal installs."""
-    try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
+    duplicated here to break the import cycle in minimal installs —
+    including the forgery defence: the check runs on the sanitized
+    view so a constant planted in a comment or string cannot mint
+    privilege-gate evidence."""
+    from packages.source_intel._source_view import sanitized_lines
+    lines = sanitized_lines(file_path)
+    if lines is None:
         return False
     if line_no < 1 or line_no > len(lines):
         return False

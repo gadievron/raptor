@@ -112,3 +112,72 @@ def test_classifier_dominates_nested_braces(tmp_path):
     )
     grade = _classify_abort_grade(str(f), 4)
     assert grade == GRADE_SAME_PATH
+
+
+def test_classifier_ignores_braces_inside_block_comments(tmp_path):
+    """A brace on an interior line of a multi-line block comment must
+    not close the if-body: DOMINATES is the adapter's strongest
+    NOT_EXPLOITABLE lever (no proximity gate), so a comment-planted
+    `}` in a hostile repo would suppress every memory-corruption
+    finding below a branch-local abort. The classifier reads the
+    shared sanitized view, exactly like the adapter's own lexical
+    helpers."""
+    control = tmp_path / "control.c"
+    hostile = tmp_path / "hostile.c"
+    filler = "".join(f"    /* filler {i} */\n" for i in range(6))
+    for path, comment in (
+        (control, "        /* benign */\n"),
+        (hostile, "        /*\n}\n        */\n"),
+    ):
+        path.write_text(
+            "int victim(char *src, unsigned long n)\n"
+            "{\n"
+            "    if (rare_debug_cond) {\n"
+            + comment +
+            "        BUG_ON(bad_state);\n"
+            "    }\n"
+            + filler +
+            "    memcpy(dst, src, n);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+    control_line = next(
+        i for i, ln in enumerate(
+            control.read_text().splitlines(), 1) if "BUG_ON" in ln
+    )
+    hostile_line = next(
+        i for i, ln in enumerate(
+            hostile.read_text().splitlines(), 1) if "BUG_ON" in ln
+    )
+    assert _classify_abort_grade(str(control), control_line) == GRADE_SAME_PATH
+    assert _classify_abort_grade(str(hostile), hostile_line) == GRADE_SAME_PATH, (
+        "comment-planted brace forged the grade"
+    )
+
+
+def test_classifier_ignores_braces_in_strings(tmp_path):
+    f = tmp_path / "s.c"
+    f.write_text(
+        'void op(int x)\n'                    # 1
+        '{\n'                                 # 2
+        '    if (x) {\n'                      # 3
+        '        log("closing } brace");\n'   # 4
+        '        BUG();\n'                    # 5 — still depth 2
+        '    }\n'                             # 6
+        '}\n'                                 # 7
+    )
+    assert _classify_abort_grade(str(f), 5) == GRADE_SAME_PATH
+
+
+def test_classifier_skips_preprocessor_lines(tmp_path):
+    """`#define X { ... }`-style directives are not control flow;
+    their braces must not skew the depth walk."""
+    f = tmp_path / "pp.c"
+    f.write_text(
+        "#define OPEN {\n"        # 1 — unbalanced brace in a directive
+        "void op(void)\n"         # 2
+        "{\n"                     # 3
+        "    BUG();\n"            # 4 — depth 1 of the real function
+        "}\n"                     # 5
+    )
+    assert _classify_abort_grade(str(f), 4) == GRADE_DOMINATES
