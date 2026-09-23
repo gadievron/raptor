@@ -3895,6 +3895,44 @@ class TestAnchoredCapture:
         assert at_sentinel < at_report, "stream order must be preserved"
 
 
+class TestCapArtifactPlantRefusal:
+    """The capture artifacts live in the child-writable output dir —
+    dark-verify witnesses execute target-derived code by design, so
+    the child can unlink the parent-created cap file and plant a
+    symlink (exfil into persisted witness stdout) or a FIFO (the
+    unsandboxed parent blocks forever). The capped reader must refuse
+    both, reading them as an unreadable (empty) stream."""
+
+    def test_symlink_plant_reads_as_unreadable(self, tmp_path):
+        secret = tmp_path / "secret"
+        secret.write_text("KEY-MATERIAL-OUTSIDE-THE-SANDBOX\n")
+        plant = tmp_path / "raptor-cap-stdout"
+        plant.symlink_to(secret)
+        text, truncated = ex._read_capped(plant, keep_tail=False)
+        assert text == ""
+        assert truncated is False
+
+    def test_fifo_plant_does_not_block(self, tmp_path):
+        import time
+
+        fifo = tmp_path / "raptor-cap-stderr"
+        os.mkfifo(fifo)
+        t0 = time.monotonic()
+        text, truncated = ex._read_capped(
+            fifo, keep_tail=True, anchors=(ex._SANITIZER_ANCHOR,),
+        )
+        assert time.monotonic() - t0 < 2.0, "FIFO plant blocked the read"
+        assert text == ""
+        assert truncated is False
+
+    def test_regular_file_reads_as_before(self, tmp_path):
+        p = tmp_path / "raptor-cap-stdout"
+        p.write_bytes(b"hello witness")
+        text, truncated = ex._read_capped(p, keep_tail=False)
+        assert text == "hello witness"
+        assert truncated is False
+
+
 class TestSandboxFailClosed:
     """No core.sandbox → error verdict, never a bare-subprocess fallback."""
 
