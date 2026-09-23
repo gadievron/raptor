@@ -674,8 +674,11 @@ _HASH_COLLISION_GUARD = re.compile(
 )
 
 _RECURSIVE_CALL = re.compile(
-    r"def\s+(\w+)\s*\([^)]*\).*?\b\1\s*\(",
-    re.DOTALL,
+    # Bounded span: DOTALL .*? paired a def with a same-named call
+    # arbitrarily far away (trailing-span class) — 4000 chars covers
+    # a recursive function's own body without crossing into
+    # unrelated later text.
+    r"def\s+(\w+)\s*\([^)]*\)[\s\S]{0,4000}?\b\1\s*\(",
 )
 
 _RECURSION_GUARD = re.compile(
@@ -1134,7 +1137,14 @@ _UB_PATTERNS = [
         "CWE-843",
     ),
     (
-        re.compile(r"union\s+\w+\s*\{[^}]*\b(?:int|float|double|long|short|char)\b[^}]*\}"),
+        re.compile(
+            # Bounded runs: unbounded [^}]* spans newlines to the
+            # next } anywhere in the text (trailing-span class) —
+            # 400 chars comfortably covers a type-punning union body
+            # while keeping the match inside one construct.
+            r"union\s+\w+\s*\{[^}]{0,400}"
+            r"\b(?:int|float|double|long|short|char)\b[^}]{0,400}\}",
+        ),
         "Union used for type punning (strict aliasing violation candidate)",
         "CWE-843",
     ),

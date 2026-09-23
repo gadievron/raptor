@@ -67,7 +67,10 @@ _CURSOR_ADVANCE_RE = re.compile(
     r"|\b[A-Za-z_]\w*\s*\[\s*\w+\s*\+\+\s*\]",  # buf[i++]
 )
 
-_LEN_ID = rf"[A-Za-z_]\w*(?:{_LEN_MORPHS})\w*"
+# Bare morphemes match too (`len - 8`), keeping the arithmetic scan
+# on the SAME morpheme set as the parameter-name check — requiring a
+# leading character silently dropped bare `len`/`size` sites.
+_LEN_ID = rf"\w*(?:{_LEN_MORPHS})\w*"
 _LEN_ARITH_RE = re.compile(
     rf"\b(?:{_LEN_ID})\s*(?:[-+*]|<<|>>|[<>]=?|==|!=)"
     rf"|(?:[-+*]|<<|>>)\s*\b(?:{_LEN_ID})\b",

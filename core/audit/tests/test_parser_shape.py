@@ -360,3 +360,20 @@ class TestPvkfmtShapeSlotSelection:
         gaps, _ = self._ordered_keys(tmp_path)
         selected = truncate_gaps_to_budget(gaps, 2, None)
         assert "body_key_material" in {g["name"] for g in selected}
+
+
+class TestBareMorphemeArithSites:
+    def test_bare_len_matches_like_the_name_check(self):
+        # The comment declares ONE seed morpheme set shared by the
+        # parameter-name check and the arithmetic-site scan, but
+        # _LEN_ID required at least one character before the
+        # morpheme: `len - 8` never counted as a length-arithmetic
+        # site while the name check accepted a parameter named `len`.
+        from core.audit.parser_shape import _LEN_ARITH_RE
+        assert _LEN_ARITH_RE.search("x = len - 8;")
+        assert _LEN_ARITH_RE.search("x = keylen - 8;")
+        assert _LEN_ARITH_RE.search("x = buf + size;")
+
+    def test_non_length_identifiers_still_ignored(self):
+        from core.audit.parser_shape import _LEN_ARITH_RE
+        assert not _LEN_ARITH_RE.search("x = value - 8;")
