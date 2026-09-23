@@ -46,7 +46,7 @@ spring-boot-starter = { module = "org.springframework.boot:spring-boot-starter",
 def test_versions_value_mismatch(tmp_path: Path):
     p = _write(tmp_path, """\
 [versions]
-spring = "3.2.0"
+spring = "3.3.0"
 """)
     results = rewrite_libs_versions_toml(p, [RewriteEdit(
         locator="version:spring",
@@ -54,6 +54,23 @@ spring = "3.2.0"
     )])
     assert results[0].applied is False
     assert "value_mismatch" in results[0].reason
+
+
+def test_versions_idempotent_rerun_is_no_change(tmp_path: Path):
+    """A catalog already at the NEW value is an idempotent re-run —
+    ``no_change``, matching the shared driver's verdict ladder. The
+    old ``value_mismatch`` made a successful prior apply look like a
+    stale plan."""
+    p = _write(tmp_path, """\
+[versions]
+spring = "3.2.0"
+""")
+    results = rewrite_libs_versions_toml(p, [RewriteEdit(
+        locator="version:spring",
+        old_value="3.1.0", new_value="3.2.0",
+    )])
+    assert results[0].applied is False
+    assert results[0].reason == "no_change"
 
 
 def test_versions_not_found(tmp_path: Path):

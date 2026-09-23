@@ -231,10 +231,27 @@ def _apply_one(text: str, edit: RewriteEdit) -> tuple[str, RewriteResult]:
     view = _blank_toml_multiline_strings(text)
     for build_pat in candidates:
         pat = build_pat(key)
+        # Single-occurrence ``search`` by DESIGN: valid TOML forbids
+        # duplicate keys and duplicate table headers, so the first
+        # match is the only live declaration a catalog can carry.
+        # Invalid-but-matchable input (a duplicated ``[versions]``
+        # table) gets its FIRST occurrence edited and the rest left —
+        # a deliberate trade against guessing semantics for a file
+        # Gradle itself would refuse; the regex rewriter never
+        # validates TOML, so this is the recorded rationale rather
+        # than an all-occurrence sweep.
         match = pat.search(view)
         if match is None:
             continue
         current = match.group("version")
+        if current == edit.new_value:
+            # Idempotent re-run: aligned with the shared driver's
+            # verdict ladder — every sibling reports ``no_change``
+            # here, and a ``value_mismatch`` made a successful prior
+            # apply look like a stale plan.
+            return text, RewriteResult(
+                edit=edit, applied=False, reason="no_change",
+            )
         if current != edit.old_value:
             return text, RewriteResult(
                 edit=edit, applied=False,

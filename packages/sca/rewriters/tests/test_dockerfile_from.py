@@ -201,3 +201,23 @@ def test_blank_line_run_is_fast(tmp_path: Path) -> None:
     assert time.monotonic() - start < 5.0
     assert results[0].applied
     assert "FROM python:3.12" in dockerfile.read_text()
+
+
+def test_mixed_tags_report_partial_apply(tmp_path):
+    """When other-valued occurrences of the same image remain after
+    the bump, the verdict is an explicit ``partial`` — the bare
+    ``applied`` reported a clean rewrite over a mixed file (verdict
+    parity with the shared apply_version_edit driver)."""
+    f = tmp_path / "Dockerfile"
+    f.write_text(
+        "FROM python:3.11-slim\n"
+        "FROM python:3.10-slim AS other\n",
+        encoding="utf-8",
+    )
+    results = rewrite(f, [RewriteEdit(
+        locator="docker.io/library/python",
+        old_value="3.11-slim", new_value="3.12-slim",
+    )])
+    assert results[0].applied is True
+    assert results[0].reason.startswith("partial:")
+    assert "3.10-slim" in results[0].reason
