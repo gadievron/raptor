@@ -436,3 +436,35 @@ def test_overlay_skip_list_cannot_drift_from_discovery(
     assert (dst / "requirements.txt").exists()
     assert not (dst / "codeql_dbs").exists()
     assert not (dst / ".claude").exists()
+
+
+# ---------------------------------------------------------------------------
+# OSV degradation — verdict availability
+# ---------------------------------------------------------------------------
+
+def test_osv_degraded_run_exits_4_not_clean(tmp_path: Path) -> None:
+    """An OSV outage during the analyse runs makes every advisory
+    invisible, so the delta reads "clean" while the vulnerable pin is
+    untouched — the patch-safety gate must refuse to conclude (distinct
+    exit 4 + explicit degraded section), never report resolution."""
+    from core.http import HttpError
+
+    class OutageHttp(StubHttp):
+        def post_json(self, url, body, timeout=30):
+            raise HttpError(f"simulated OSV outage: {url}")
+
+    target = _build_target(tmp_path)
+    proposed = _build_proposed(tmp_path, "2.0.0")
+    out = tmp_path / "out"
+    rc = verify.main(
+        [str(target), "--proposed", str(proposed), "--out", str(out)],
+        http=OutageHttp(), cache=JsonCache(root=tmp_path / "cache"),
+    )
+    assert rc == 4
+    delta_md = (out / "delta.md").read_text()
+    assert "OSV lookups degraded" in delta_md
+    assert "verdict unavailable" in delta_md
+    # The verdict line itself reflects the degradation — no
+    # "Verdict: clean" above the refusal section.
+    assert "**Verdict: unavailable**" in delta_md
+    assert "Verdict: clean" not in delta_md
