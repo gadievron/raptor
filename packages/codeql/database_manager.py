@@ -854,12 +854,12 @@ class DatabaseManager:
         falls back to copy-then-delete which is non-atomic and would let
         readers see partial state.
 
-        **Process-safe, NOT thread-safe.** Two threads in the same process
-        share PID and thus get the same staging path; concurrent writes
-        within the staging dir would race. RAPTOR's parallelism model uses
-        processes (not threads) so this is fine in practice; a future
-        thread-based caller would need a different staging key (e.g.,
-        include thread.get_ident()).
+        **Unique per call** — PID plus a 4-byte random suffix — so
+        concurrent writers never share a staging dir whether they are
+        separate processes OR threads in one process
+        (create_databases_parallel runs create_database on a
+        ThreadPoolExecutor; each submission gets its own path from
+        its own call).
 
         Uniqueness suffix: PID alone is NOT sufficient when two writers
         live in DIFFERENT PID namespaces (containers) but share a

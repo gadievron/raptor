@@ -865,3 +865,35 @@ class TestExtractorProbeFailureNotCached:
             assert det._extractor_available("rust") is True
         finally:
             self._reset()
+
+
+class TestNoExtractorUnambiguousMembers:
+    def test_scala_primary_repo_warns_not_silent(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        """A Scala-primary repo must trip the unsupported-primary
+        warning — the enumerated NO_EXTRACTOR set silently omitted
+        several unambiguous no-extractor languages, so such repos
+        read clean-by-silence."""
+        for i in range(5):
+            _write(tmp_path, f"src/M{i}.scala", "object M {}\n")
+        _write(tmp_path, "util.py", "x = 1\n")
+        det = LanguageDetector(tmp_path)
+        mock_logger = MagicMock()
+        monkeypatch.setattr(ld_mod, "logger", mock_logger)
+        det.detect_languages(min_files=1)
+        warning_calls = [
+            c.args[0] % c.args[1:] if c.args[1:] else c.args[0]
+            for c in mock_logger.warning.call_args_list
+        ]
+        assert any("scala" in m for m in warning_calls), (
+            f"scala-primary repo produced no unsupported-primary "
+            f"warning; got: {warning_calls}"
+        )
+
+    def test_new_members_mapped(self):
+        for ext, lang in ((".scala", "scala"), (".groovy", "groovy"),
+                          (".clj", "clojure"), (".zig", "zig"),
+                          (".nim", "nim"), (".jl", "julia"),
+                          (".f90", "fortran")):
+            assert LanguageDetector.NO_EXTRACTOR_EXTENSIONS[ext] == lang

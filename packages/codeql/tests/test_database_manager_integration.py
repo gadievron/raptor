@@ -61,19 +61,21 @@ def _concurrent_create_worker(args):
         staging.mkdir(parents=True, exist_ok=True)
         time.sleep(random.uniform(sleep_min, sleep_max))
         # codeql-database.yml is the legacy marker validate_database
-        # checked for. Batch 399 added a stricter check: at least one
-        # `db-<lang>/` subdirectory must exist and hold > 100KB of
-        # content (real codeql databases write per-language tries
-        # under db-cpp/, db-java/, db-python/, etc.). The fixture
-        # mimics that shape so validate_database accepts it.
+        # checked for. The minimal-substance check additionally
+        # requires at least one `db-<lang>/` subdirectory holding
+        # > 10KB of content (retuned from the original 100KB — the
+        # rationale lives at the check site; real codeql databases
+        # write per-language tries under db-cpp/, db-java/,
+        # db-python/, etc.). The fixture mimics that shape so
+        # validate_database accepts it.
         (staging / "codeql-database.yml").write_text(
             "sourceLocationPrefix: /repo\nlanguage: python\n"
         )
         (staging / "db-info.json").write_text(f'{{"pid": {os.getpid()}}}')
         db_subdir = staging / "db-python"
         db_subdir.mkdir(exist_ok=True)
-        # > 100KB of "trie" content under db-python/ to pass the
-        # validate_database minimum-substance check.
+        # Comfortably above the 10KB validate_database
+        # minimum-substance floor.
         for i in range(3):
             (db_subdir / f"chunk-{i}.bin").write_bytes(b"x" * 50_000)
         r = MagicMock()

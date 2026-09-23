@@ -1020,8 +1020,12 @@ class TestRepoHashDirtyTree:
         repo = self._git_repo(tmp_path)
         (repo / "a.py").write_text("x = 2\n")
         first = db_manager.compute_repo_hash(repo)
-        time.sleep(0.02)  # ensure mtime_ns moves
         (repo / "a.py").write_text("x = 3\n")
+        # Deterministic mtime bump: a sleep-based "ensure mtime_ns
+        # moves" fails on filesystems with 1s timestamp granularity.
+        st = (repo / "a.py").stat()
+        os.utime(repo / "a.py",
+                 ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
         second = db_manager.compute_repo_hash(repo)
         assert first != second
 

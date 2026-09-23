@@ -133,7 +133,7 @@ Phase 2 takes the SARIF output from Phase 1 (CodeQL scanning) and performs **ful
 │                       ▼                                          │
 │  ┌────────────────────────────────────────────────────────────┐ │
 │  │ 7. Save Artifacts                                         │ │
-│  │    - analysis/{rule_id}_{line}_analysis.json             │ │
+│  │    - analysis/{rule_id}_{basename}_{digest}_{line}_analysis.json             │ │
 │  │    - exploits/{rule_id}_{line}_exploit.{java|py}         │ │
 │  └────────────────────────────────────────────────────────────┘ │
 │                                                                  │
@@ -401,7 +401,7 @@ $ javac SqlInjectionExploit.java
 Result:
 {
   "success": true,
-  "exploit_path": "exploits/java-sql-injection_78_exploit.java"
+  "exploit_path": "exploits/java-sql-injection_UserDao.java_1a2b3c4d_78_exploit.java"
 }
 ```
 
@@ -413,13 +413,13 @@ out/codeql_acme-access_20251114_123456/
 ├── codeql_java.sarif                                    # Phase 1
 ├── autonomous/
 │   ├── analysis/
-│   │   └── java-sql-injection_78_analysis.json         # Phase 2
+│   │   └── java-sql-injection_UserDao.java_1a2b3c4d_78_analysis.json         # Phase 2
 │   └── exploits/
-│       └── java-sql-injection_78_exploit.java          # Phase 2 ✓ Compiled
+│       └── java-sql-injection_UserDao.java_1a2b3c4d_78_exploit.java          # Phase 2 ✓ Compiled
 └── autonomous_summary.json
 ```
 
-**Analysis JSON** (`java-sql-injection_78_analysis.json`):
+**Analysis JSON** (`java-sql-injection_UserDao.java_1a2b3c4d_78_analysis.json`):
 ```json
 {
   "finding": {

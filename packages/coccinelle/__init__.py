@@ -1,4 +1,9 @@
-"""Coccinelle integration — semantic patching and inconsistency detection for C/C++.
+"""Coccinelle integration — semantic patching and inconsistency detection for C.
+
+C only: the runner's directory walk enumerates ``*.c``/``*.h`` and
+spatch parses C translation units — C++ sources (``.cc``/``.cpp``/
+``.hpp``…) are never examined, and the prereqs evaluator skips
+findings on them rather than answering from a blind fact base.
 
 Public API:
     from packages.coccinelle import run_rule, run_rules, SpatchMatch, SpatchResult
