@@ -1,5 +1,11 @@
 """Service-health probes.
 
+SIBLING MODULE: ``cve_diff/infra/service_health.py`` — same
+``HealthResult``/``as_row``/``render_table`` substrate over a
+different probe set. A substrate fix here usually applies there
+(``tests/unit/infra/test_service_health.py`` in cve-diff pins the
+shared shapes).
+
 For each external service the bench depends on, a fast (≤10s) probe that:
 
 * Confirms the service is reachable
@@ -172,7 +178,14 @@ def probe_osv() -> HealthResult:
 
 def _resolve_github_token_for_probe() -> str:
     """Inline copy of resolve_github_token's logic — but we don't import it
-    here to avoid pulling tools/* into the infra layer."""
+    here to avoid pulling tools/* into the infra layer.
+
+    SIBLINGS (a fix here usually applies there):
+    ``cve_env/tools/github_fetch.py::resolve_github_token`` and
+    ``cve_diff/infra/service_health.py::probe_github`` — all three fork
+    ``gh auth token`` and must do it with a sanitised env (an inherited
+    HTTPS_PROXY / loader pre-load var must not steer the token lookup).
+    """
     token = os.environ.get("GITHUB_TOKEN", "").strip()
     if token:
         return token
@@ -180,8 +193,11 @@ def _resolve_github_token_for_probe() -> str:
     # TimeoutExpired, OSError) into outcome.returncode=None on transport
     # failure → "". The rc==0 path returns the token.
     from cve_env.utils.run import run_with_timeout
+    from cve_env.utils.safe_env import safe_subprocess_env
 
-    outcome = run_with_timeout(["gh", "auth", "token"], timeout=2.0)
+    outcome = run_with_timeout(
+        ["gh", "auth", "token"], timeout=2.0, env=safe_subprocess_env(),
+    )
     if outcome.returncode == 0:
         return outcome.stdout.strip()
     return ""

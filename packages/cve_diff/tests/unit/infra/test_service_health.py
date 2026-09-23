@@ -500,3 +500,57 @@ def test_probe_anthropic_recognises_auth_token_spelling(monkeypatch):
     assert result.ok is True
     assert "not set" not in result.detail
     assert "AUTH_TOKEN" in result.detail
+
+
+# ── sibling-drift sync guards (cve_env twin) ──────────────────────────
+
+
+def _load_env_twin():
+    import sys
+    from pathlib import Path
+
+    pkg = Path(__file__).resolve().parents[4] / "cve_env"
+    if not pkg.is_dir():
+        pytest.skip("cve_env package not present in this checkout")
+    if str(pkg) not in sys.path:
+        sys.path.insert(0, str(pkg))
+    from cve_env.infra import service_health as env_sh
+
+    return env_sh
+
+
+def test_health_result_substrate_stays_in_sync_with_cve_env_twin():
+    """The HealthResult dataclass + as_row rendering are the shared
+    substrate of the two service_health twins. This alarm fires when
+    one side's substrate drifts — port the fix to the sibling (named
+    in both module docstrings) or split the substrate deliberately."""
+    import dataclasses
+    import inspect
+
+    from cve_diff.infra import service_health as diff_sh
+
+    env_sh = _load_env_twin()
+    env_fields = [(f.name, f.default) for f in
+                  dataclasses.fields(env_sh.HealthResult)]
+    diff_fields = [(f.name, f.default) for f in
+                   dataclasses.fields(diff_sh.HealthResult)]
+    assert env_fields == diff_fields
+    assert inspect.getsource(env_sh.HealthResult.as_row) == (
+        inspect.getsource(diff_sh.HealthResult.as_row)
+    )
+
+
+def test_grounding_pair_warning_present_in_both_twins():
+    """Either of NVD/OSV suffices to ground a CVE; both twins must warn
+    when BOTH are down (the rule had drifted: only the cve-env copy
+    carried it)."""
+    from cve_diff.infra import service_health as diff_sh
+
+    env_sh = _load_env_twin()
+    for sh in (diff_sh, env_sh):
+        results = [
+            sh.HealthResult("NVD API", False, 1.0, detail="down"),
+            sh.HealthResult("OSV API", False, 1.0, detail="down"),
+        ]
+        table = sh.render_table(results)
+        assert "Both NVD and OSV are unhealthy" in table, sh.__name__

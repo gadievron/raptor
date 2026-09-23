@@ -1,5 +1,10 @@
 """Service health probes.
 
+SIBLING MODULE: ``cve_env/infra/service_health.py`` — same
+``HealthResult``/``as_row``/``render_table`` substrate over a
+different probe set. A substrate fix here usually applies there
+(``tests/unit/infra/test_service_health.py`` pins the shared shapes).
+
 For each external service the pipeline depends on, a fast (≤ 10s)
 probe that:
   - Confirms the service is reachable
@@ -211,6 +216,10 @@ def probe_osv() -> HealthResult:
 
 
 def probe_github() -> HealthResult:
+    # SIBLINGS (a fix here usually applies there):
+    # cve_env/tools/github_fetch.py::resolve_github_token and
+    # cve_env/infra/service_health.py::_resolve_github_token_for_probe —
+    # all three fork `gh auth token` with a sanitised env.
     # `gh auth token` returns non-zero with an empty stdout when the user
     # isn't logged in (no exception raised). The previous code only fell
     # back to $GITHUB_TOKEN on exec failure (TimeoutExpired/FileNotFoundError),
@@ -338,6 +347,17 @@ def render_table(results: list[HealthResult]) -> str:
     lines.extend(r.as_row() for r in results)
     lines.append("")
     failing_critical = [r.name for r in results if not r.ok and r.name in CRITICAL_NAMES]
+    # NVD/OSV grounding-pair rule (ported from the cve-env sibling):
+    # either source suffices to ground a CVE, so the pair-level outage
+    # deserves its own warning — the agent has no working grounding
+    # source at all when BOTH are down.
+    nvd_ok = any(r.ok and r.name == "NVD API" for r in results)
+    osv_ok = any(r.ok and r.name == "OSV API" for r in results)
+    if not nvd_ok and not osv_ok:
+        lines.append(
+            "⚠ Both NVD and OSV are unhealthy. Agent has no working "
+            "CVE-grounding source."
+        )
     if failing_critical:
         lines.append(
             f"⚠ {len(failing_critical)} CRITICAL service(s) unhealthy: "
