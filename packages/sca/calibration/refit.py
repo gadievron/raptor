@@ -658,24 +658,18 @@ def joint_grid_search_refit(
 
     # Always run the single-pass per-constant search first so we
     # can compare joint to single. Cheap (~50 evals); gives a
-    # fallback when joint doesn't improve.
-    single_tmp = corpus_dir / "refit" / f".{snapshot}.single.tmp"
-    try:
-        single_pass = grid_search_refit(
-            corpus_dir, max_delta=max_delta,
-            improvement_threshold=improvement_threshold,
-            min_samples=min_samples,
-            # Suppress the default disk write — we'll emit our own
-            # joint report. ``out_path=`` to /dev/null isn't
-            # supported on Windows, so the in-line call writes to a
-            # throwaway path that the ``finally`` removes on every
-            # exit — including a raise inside the search, which
-            # previously leaked the tmp file.
-            out_path=single_tmp,
-            ecosystem_filter=ecosystem_filter,
-        )
-    finally:
-        single_tmp.unlink(missing_ok=True)
+    # fallback when joint doesn't improve. Metrics-only: the joint
+    # run emits its own report, so the in-line single pass writes
+    # nothing — pre-fix it wrote a fixed-name throwaway file under
+    # the (repo-committed, possibly read-only) corpus dir, where a
+    # read-only checkout failed the whole joint run and two
+    # same-day joint runs could unlink each other's in-flight file.
+    single_pass = grid_search_refit(
+        corpus_dir, max_delta=max_delta,
+        improvement_threshold=improvement_threshold,
+        min_samples=min_samples,
+        ecosystem_filter=ecosystem_filter,
+    )
     single_pass_overrides = {
         c.name: c.proposed for c in single_pass.per_constant if c.changed
     }
