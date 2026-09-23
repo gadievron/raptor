@@ -1,6 +1,8 @@
 """Tests for the ToolUseLoop's tool-result injection defence.
 
-The loop wraps every non-error ToolResult in an envelope before
+The loop wraps every ToolResult — error content included: handler
+exception messages can carry attacker text via
+``raise ValueError(target_content)`` — in an envelope before
 appending it to the conversation, so the LLM consistently treats
 tool-result content as data rather than instructions. Preflight runs
 on the raw content to surface advisory pattern indicators via the

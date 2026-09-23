@@ -404,6 +404,14 @@ class ToolUseLoop:
         # ``max_tokens_nudges`` constructor docstring.
         mt_nudges_left = self._max_tokens_nudges
         wall_start = time.monotonic()
+        # Effective cache opt-ins for THIS run. ``history_through_index``
+        # is a message index; context truncation pops head messages, so
+        # the frozen constructor value must be remapped as messages
+        # drop — otherwise the cache breakpoint silently lands on an
+        # unintended message (cache-efficiency loss, misleading
+        # TurnStarted telemetry; the bounds check prevents a crash).
+        # A local copy: the caller's CacheControl is never mutated.
+        cache_control = self._cache_control
 
         # x-source: seed known_values from prompt + history. History
         # seeding applies the SAME trust rule as in-run discovery:
@@ -627,11 +635,28 @@ class ToolUseLoop:
                 # so a ContextOverflow raised from inside truncation
                 # carries the same partial-state count as the other
                 # raise sites in this loop.
+                before = len(messages)
                 messages = self._truncate_oldest(
                     messages, window, tool_calls_made=tool_calls_made,
                 )
+                # _truncate_oldest pops from the HEAD only, so the
+                # index shifts down by exactly the drop count; a
+                # breakpoint whose message was itself dropped is gone.
+                dropped = before - len(messages)
+                idx = cache_control.history_through_index
+                if dropped and idx is not None:
+                    from dataclasses import replace as _dc_replace
+                    new_idx = idx - dropped
+                    cache_control = _dc_replace(
+                        cache_control,
+                        history_through_index=(
+                            new_idx if new_idx >= 0 else None
+                        ),
+                    )
 
-            cache_breakpoints = self._count_cache_breakpoints(messages)
+            cache_breakpoints = self._count_cache_breakpoints(
+                messages, cache_control,
+            )
             self._emit(TurnStarted(
                 iteration=iteration,
                 input_token_estimate=request_estimate,
@@ -642,7 +667,7 @@ class ToolUseLoop:
             try:
                 if self._stream:
                     response = self._consume_stream(
-                        iteration, messages,
+                        iteration, messages, cache_control,
                     )
                 else:
                     response = self._provider.turn(
@@ -650,7 +675,7 @@ class ToolUseLoop:
                         self._tools,
                         system=self._system,
                         max_tokens=self._max_tokens_per_turn,
-                        cache_control=self._cache_control,
+                        cache_control=cache_control,
                         **self._provider_specific,
                     )
             except Exception as exc:
@@ -1165,6 +1190,7 @@ class ToolUseLoop:
         self,
         iteration: int,
         messages: list[Message],
+        cache_control: CacheControl,
     ) -> TurnResponse:
         """Call ``turn_stream()`` and accumulate chunks into a
         :class:`TurnResponse`, with bounded pre-content retry.
@@ -1180,7 +1206,7 @@ class ToolUseLoop:
             content_seen = [False]
             try:
                 return self._consume_stream_once(
-                    iteration, messages, content_seen,
+                    iteration, messages, content_seen, cache_control,
                 )
             except Exception as exc:
                 from core.llm.providers import is_credit_exhausted
@@ -1204,6 +1230,7 @@ class ToolUseLoop:
         iteration: int,
         messages: list[Message],
         content_seen: list[bool],
+        cache_control: CacheControl,
     ) -> TurnResponse:
         """One ``turn_stream()`` pass. ``content_seen[0]`` flips to
         True as soon as a content-bearing chunk arrives, so the caller
@@ -1222,7 +1249,7 @@ class ToolUseLoop:
             self._tools,
             system=self._system,
             max_tokens=self._max_tokens_per_turn,
-            cache_control=self._cache_control,
+            cache_control=cache_control,
             **self._provider_specific,
         ):
             if chunk.type in (
@@ -1487,20 +1514,27 @@ class ToolUseLoop:
             self._estimate_message_tokens(m) for m in messages
         )
 
-    def _count_cache_breakpoints(self, messages: Sequence[Message]) -> int:
+    def _count_cache_breakpoints(
+        self,
+        messages: Sequence[Message],
+        cache_control: CacheControl | None = None,
+    ) -> int:
         """How many regions opted in for caching this turn. Reported in
         :class:`TurnStarted` events for telemetry; doesn't drive
-        behaviour."""
+        behaviour. ``cache_control`` is the run's EFFECTIVE (possibly
+        truncation-remapped) opt-ins; defaults to the constructor
+        value for direct callers."""
+        cc = cache_control if cache_control is not None else self._cache_control
         if not self._provider.supports_prompt_caching():
             return 0
         n = 0
-        if self._cache_control.system and self._system:
+        if cc.system and self._system:
             n += 1
-        if self._cache_control.tools and self._tools:
+        if cc.tools and self._tools:
             n += 1
         if (
-            self._cache_control.history_through_index is not None
-            and 0 <= self._cache_control.history_through_index < len(messages)
+            cc.history_through_index is not None
+            and 0 <= cc.history_through_index < len(messages)
         ):
             n += 1
         return n

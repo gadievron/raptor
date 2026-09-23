@@ -1946,3 +1946,64 @@ class TestPerTurnTokensScope:
         assert n_assistant == 3
         # One tuple for the one turn THIS run added.
         assert result.per_turn_tokens == ((7, 3),)
+
+
+class TestCacheBreakpointRemapOnTruncation:
+    """``cache_control.history_through_index`` is a message index;
+    truncation pops head messages, so the frozen constructor value
+    must shift down with them — otherwise the breakpoint silently
+    lands on an unintended message (cache-efficiency/telemetry only;
+    the bounds check prevents a crash). The caller's CacheControl is
+    never mutated."""
+
+    def test_index_remapped_after_head_drop(self):
+        provider = _FakeProvider(
+            [_text_response("done", 5, 2)], ctx_window=200,
+        )
+        big = "x" * 2000  # ~500 tokens — forces truncation at window 200
+        history = [
+            Message(role="user", content=[TextBlock(text=big)]),
+            Message(role="assistant", content=[TextBlock(text="a1")]),
+            Message(role="user", content=[TextBlock(text="keep-me")]),
+            Message(role="assistant", content=[TextBlock(text="a2")]),
+        ]
+        cc = CacheControl(history_through_index=3)
+        loop = ToolUseLoop(
+            provider, [_echo_tool()],
+            context_policy=ContextPolicy.TRUNCATE_OLDEST,
+            cache_control=cc, max_iterations=1,
+        )
+        result = loop.run_with_history(list(history), "resume")
+        assert result.terminated_by == "complete"
+        sent = provider.calls[0]
+        dropped = 5 - len(sent["messages"])  # history(4) + next(1)
+        assert dropped >= 2  # the oversized head pair went
+        received = sent["cache_control"]
+        assert received.history_through_index == 3 - dropped
+        # The breakpoint still names the message it originally named.
+        target = sent["messages"][received.history_through_index]
+        assert target.content[0].text == "a2"
+        # Caller's object untouched.
+        assert cc.history_through_index == 3
+
+    def test_breakpoint_dropped_with_its_message(self):
+        provider = _FakeProvider(
+            [_text_response("done", 5, 2)], ctx_window=200,
+        )
+        big = "x" * 2000
+        history = [
+            Message(role="user", content=[TextBlock(text=big)]),
+            Message(role="assistant", content=[TextBlock(text="a1")]),
+            Message(role="user", content=[TextBlock(text="q2")]),
+        ]
+        cc = CacheControl(history_through_index=0)
+        loop = ToolUseLoop(
+            provider, [_echo_tool()],
+            context_policy=ContextPolicy.TRUNCATE_OLDEST,
+            cache_control=cc, max_iterations=1,
+        )
+        loop.run_with_history(list(history), "resume")
+        received = provider.calls[0]["cache_control"]
+        # The indexed message was itself truncated away — no history
+        # breakpoint survives.
+        assert received.history_through_index is None
