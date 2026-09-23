@@ -107,6 +107,7 @@ from core.annotations import (  # noqa: E402
     read_annotation,
     read_file_annotations,
     remove_annotation,
+    restamp_annotation,
     write_annotation,
 )
 from core.json import load_json  # noqa: E402
@@ -549,31 +550,27 @@ def cmd_edit(opts: argparse.Namespace) -> int:
     if rc != 0:
         sys.stderr.write(f"raptor-annotate: editor exited with {rc}\n")
         return rc
-    # Re-parse to verify the user didn't break the format.
-    anns = read_file_annotations(base, opts.file)
     # An edit is a write: re-stamp the addressed function's section
     # with THIS invocation's context. A non-interactive edit of a
     # human note (the laundering shape) thereby demotes its own
     # provenance; ``source`` is left untouched (editing doesn't
-    # re-assert authorship).
-    target = next((a for a in anns if a.function == opts.function), None)
-    if target is not None:
-        meta = dict(target.metadata)
-        meta.update(detect_invocation_context())
-        try:
-            write_annotation(base, Annotation(
-                file=opts.file, function=target.function,
-                body=target.body, metadata=meta,
-            ))
-        except ValueError as e:
-            # Editor-introduced metadata failed write validation
-            # (e.g. a typoed source enum). Surface it — the edited
-            # text is still on disk, only the re-stamp was refused.
-            sys.stderr.write(
-                f"raptor-annotate: warning — could not re-stamp "
-                f"provenance after edit: {e}\n"
-            )
-        anns = read_file_annotations(base, opts.file)
+    # re-assert authorship). restamp_annotation is a single LOCKED
+    # read-modify-write — the previous read-here-then-write flow left
+    # a window where a concurrent same-function writer was
+    # overwritten with the stale copy.
+    try:
+        restamp_annotation(
+            base, opts.file, opts.function, detect_invocation_context(),
+        )
+    except ValueError as e:
+        # Editor-introduced content failed write validation (e.g. a
+        # typoed source enum). Surface it — the edited text is still
+        # on disk, only the re-stamp was refused.
+        sys.stderr.write(
+            f"raptor-annotate: warning — could not re-stamp "
+            f"provenance after edit: {e}\n"
+        )
+    anns = read_file_annotations(base, opts.file)
     print(f"saved {path} ({len(anns)} annotation(s))")
     return 0
 

@@ -486,6 +486,98 @@ class TestAdversarialInputs:
         assert all_ == []
 
 
+class TestRestamp:
+    def test_restamp_updates_only_the_stamp(self, tmp_path):
+        from core.annotations import restamp_annotation
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="the body",
+            metadata={"source": "human", "status": "clean",
+                      "provenance": "non-tty", "tty": "none"},
+        ))
+        assert restamp_annotation(tmp_path, "a.py", "f", {
+            "provenance": "interactive-tty", "tty": "stdin",
+            "sid": "inherited", "envm": "trusted", "parents": "bash",
+        })
+        ann = read_annotation(tmp_path, "a.py", "f")
+        assert ann.body == "the body"
+        assert ann.metadata["status"] == "clean"
+        assert ann.metadata["source"] == "human"
+        assert ann.metadata["provenance"] == "interactive-tty"
+
+    def test_restamp_reads_current_state_under_the_lock(self, tmp_path):
+        # The old edit flow read the file, then wrote the copy it had
+        # read — a concurrent same-function write in between was
+        # clobbered with stale content. restamp takes only the
+        # function NAME, so the concurrent body survives.
+        from core.annotations import restamp_annotation
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="original",
+        ))
+        # "concurrent" writer lands after the caller decided to
+        # restamp but before the restamp executes:
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="concurrent update",
+            metadata={"source": "agent"},
+        ))
+        assert restamp_annotation(tmp_path, "a.py", "f", {
+            "provenance": "non-tty", "tty": "none",
+            "sid": "inherited", "envm": "trusted", "parents": "bash",
+        })
+        assert read_annotation(tmp_path, "a.py", "f").body == \
+            "concurrent update"
+
+    def test_restamp_missing_function_returns_false(self, tmp_path):
+        from core.annotations import restamp_annotation
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="x",
+        ))
+        assert not restamp_annotation(tmp_path, "a.py", "ghost", {
+            "provenance": "non-tty", "tty": "none",
+        })
+
+    def test_restamp_drops_stale_corroboration_marker(self, tmp_path):
+        from core.annotations import restamp_annotation
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="x",
+            metadata={"source": "human", "provenance": "interactive-tty",
+                      "tty": "stdin", "corroboration": "pre-era"},
+        ))
+        assert restamp_annotation(tmp_path, "a.py", "f", {
+            "provenance": "interactive-tty", "tty": "stdin",
+            "sid": "self", "envm": "trusted", "parents": "script",
+        })
+        meta = read_annotation(tmp_path, "a.py", "f").metadata
+        assert "corroboration" not in meta
+        from core.annotations import is_human_grade
+        assert not is_human_grade(meta)
+
+    def test_restamp_preserves_preamble(self, tmp_path):
+        from core.annotations import restamp_annotation
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="x",
+        ))
+        path = annotation_path(tmp_path, "a.py")
+        lines = path.read_text().splitlines(keepends=True)
+        lines.insert(2, "file-level prose\n")
+        path.write_text("".join(lines))
+        assert restamp_annotation(tmp_path, "a.py", "f", {
+            "provenance": "non-tty", "tty": "none",
+        })
+        assert "file-level prose" in path.read_text()
+
+    def test_restamp_refuses_corrupt_file(self, tmp_path):
+        from core.annotations import AnnotationFileError, restamp_annotation
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="x",
+        ))
+        path = annotation_path(tmp_path, "a.py")
+        path.write_bytes(path.read_bytes() + b"\xff\xfe")
+        with pytest.raises(AnnotationFileError):
+            restamp_annotation(tmp_path, "a.py", "f", {
+                "provenance": "non-tty", "tty": "none",
+            })
+
+
 class TestNitSweep:
     def test_remove_surfaces_unlink_failure(self, tmp_path):
         """remove_annotation swallowed the unlink OSError and still

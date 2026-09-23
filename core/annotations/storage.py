@@ -1065,6 +1065,63 @@ def write_annotation(
     return path
 
 
+def restamp_annotation(
+    base_dir: Path, source_file: str, function: str,
+    context: dict[str, str],
+) -> bool:
+    """Apply a fresh invocation-context stamp to one annotation as a
+    single locked read-modify-write.
+
+    The CLI's edit flow previously read the file, then called
+    ``write_annotation`` with the annotation it had read — an
+    UNLOCKED read-modify-write: a concurrent writer updating the same
+    function between those two steps was overwritten with the stale
+    copy (``_file_lock`` being private, the CLI could not serialise
+    its own cycle). This primitive takes only the addressed
+    function's name plus the fresh stamp and re-reads the current
+    state under the lock, so no stale content can ride in.
+
+    ``source`` is left untouched (re-stamping doesn't re-assert
+    authorship); a stale materialised ``corroboration`` marker is
+    dropped — the fresh facts replace it. Returns ``False`` when the
+    function has no annotation. Raises the same validation errors as
+    ``write_annotation`` when the on-disk section can no longer be
+    re-serialised (e.g. editor-introduced metadata that fails the
+    write validators)."""
+    _validate_function_name(function)
+    _validate_metadata(context)
+    path = annotation_path(base_dir, source_file)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(path):
+        _assert_parent_contained(base_dir, path)
+        state = _load_file_state(base_dir, source_file, strict=True)
+        pre_mtime = annotation_file_mtime(base_dir, source_file)
+        existing = [
+            _materialise_era_markers(a, pre_mtime)
+            for a in state.annotations
+        ]
+        target = next(
+            (a for a in existing if a.function == function), None,
+        )
+        if target is None:
+            return False
+        meta = {
+            k: v for k, v in dict(target.metadata).items()
+            if k != CORROBORATION_KEY
+        }
+        meta.update(context)
+        _validate_metadata(meta)
+        _validate_body(target.body)
+        updated = dataclasses.replace(target, metadata=meta)
+        by_name = {a.function: a for a in existing}
+        by_name[function] = updated
+        rendered = _render_file(
+            source_file, by_name.values(), extra=state.extra,
+        )
+        write_text_atomically(path, rendered, tmp_prefix=".annotation-")
+    return True
+
+
 def remove_annotation(
     base_dir: Path, source_file: str, function: str,
 ) -> bool:
