@@ -859,3 +859,71 @@ class TestReviewSubcommand(ReviewerBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHostileCaptureBudgets(ReviewerBase):
+    """The capture is SERVER-EMITTED — the hostile party in this
+    module's own threat model. Pre-fix the read was unbounded (a
+    multi-hundred-MB capture buffered whole) and the closest-variant
+    selection fed whole variants to SequenceMatcher (quadratic on
+    diverse-codepoint content that defeats autojunk — minutes per MB
+    on an operator consent surface)."""
+
+    def test_oversize_capture_refused_loudly(self):
+        import contextlib
+        import io
+        auth = self._write("auth", v1_stamp(INIT_CLEAN, MSG_CLEAN))
+        live = self.dir / "live"
+        with live.open("w", encoding="utf-8") as fh:
+            fh.write("### initialize.instructions\n")
+            chunk = "x" * 65536 + "\n"
+            for _ in range(bpr._MAX_CAPTURE_CHARS // len(chunk) + 2):
+                fh.write(chunk)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = bpr.main(["compare", "--authorized", str(auth),
+                           "--live", str(live)])
+        self.assertEqual(rc, 3)
+        self.assertIn("exceeds", err.getvalue())
+
+    def test_closest_feeds_capped_text_to_sequencematcher(self):
+        import difflib as real_difflib
+        seen = []
+        real = real_difflib.SequenceMatcher
+
+        class Spy(real):
+            def __init__(self, isjunk, a, b, *args, **kw):
+                seen.append((len(a), len(b)))
+                super().__init__(isjunk, a[:100], b[:100], *args, **kw)
+
+        old = bpr.difflib.SequenceMatcher
+        bpr.difflib.SequenceMatcher = Spy
+        try:
+            big = "y" * (bpr._MAX_DIFF_CHARS * 3)
+            bpr._closest(big, ["z" * (bpr._MAX_DIFF_CHARS * 3), "small"])
+        finally:
+            bpr.difflib.SequenceMatcher = old
+        self.assertTrue(seen)
+        for a_len, b_len in seen:
+            self.assertLessEqual(a_len, bpr._MAX_DIFF_CHARS)
+            self.assertLessEqual(b_len, bpr._MAX_DIFF_CHARS)
+
+    def test_truncated_diff_carries_marker(self):
+        import contextlib
+        import io
+        auth = self._write("auth", v1_stamp(INIT_CLEAN, MSG_CLEAN))
+        big_variant = INIT_CLEAN + "Z" * (bpr._MAX_DIFF_CHARS + 100)
+        live = self._write("live", live_capture([big_variant],
+                                                 [CONTENT_CLEAN]))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            bpr.main(["compare", "--authorized", str(auth),
+                      "--live", str(live)])
+        self.assertIn("diff truncated", out.getvalue())
+
+    def test_in_cap_capture_reviews_unchanged(self):
+        auth = self._write("auth", v1_stamp(INIT_CLEAN, MSG_CLEAN))
+        live = self._write("live", live_capture([INIT_CLEAN],
+                                                 [CONTENT_CLEAN]))
+        rc, out = self._main("compare", auth, live)
+        self.assertNotIn("diff truncated", out)
