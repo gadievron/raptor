@@ -99,6 +99,23 @@ _MAX_SHSTRNDX_BOUND = 100_000
 # is a 64-bit field in ELF64, so a hostile value would otherwise
 # drive a per-entry padding read of up to ~2**64 bytes (MemoryError).
 _MAX_SYM_ENTSIZE = 4096
+# Longest string a strtab lookup will materialise. Real symbol names
+# top out around a few KB (deeply nested C++ template manglings);
+# anything longer — or a name with NO NUL terminator inside the
+# window — is malformed. Without this bound a crafted .dynstr
+# containing no NUL byte makes every st_name lookup retain a whole
+# distinct tail-suffix of the section (~O(entries x section_size)
+# total: unbounded memory amplification from a small file, and
+# MemoryError is deliberately NOT in parse_elf's malformed-input
+# except set).
+_MAX_STRTAB_NAME_BYTES = 4096
+# Total name bytes one binary's import walk may retain. Generous —
+# real binaries stay under a few hundred KB of import names — while
+# keeping the worst crafted case (every entry at the per-name cap)
+# bounded. On breach the walk stops LOUDLY: the capability
+# fingerprint for such a binary would be junk either way, so the
+# analysis gap is surfaced, never silent.
+_MAX_TOTAL_NAME_BYTES = 8 * 1024 * 1024
 
 
 @dataclass
@@ -244,20 +261,24 @@ def _parse_elf_stream(f) -> ElfMetadata | None:
     if shstrtab is None:
         return _bail()
 
-    # Resolve section names so we can find .dynsym + .dynstr
-    named_sections: list[tuple[str, _SectionHeader]] = []
-    for sh in sections:
-        name = _read_strtab_string(shstrtab, sh.sh_name)
-        named_sections.append((name, sh))
-
     # --- Find .dynsym and .dynstr ------------------------------
+    # Resolve names inline and retain NOTHING: only .dynsym/.dynstr
+    # matter, and keeping a (per-name-capped) string per header let a
+    # crafted many-section ELF with a no-NUL shstrtab fan a few KB
+    # into ~150 MB of transient allocations (u16 e_shnum x the 4 KB
+    # per-name cap). The type filter also skips the lookup entirely
+    # for headers that could never match.
     dynsym = None
     dynstr = None
-    for name, sh in named_sections:
-        if name == ".dynsym" and sh.sh_type == _SHT_DYNSYM:
+    for sh in sections:
+        if (dynsym is None and sh.sh_type == _SHT_DYNSYM
+                and _read_strtab_string(shstrtab, sh.sh_name) == ".dynsym"):
             dynsym = sh
-        elif name == ".dynstr" and sh.sh_type == _SHT_STRTAB:
+        elif (dynstr is None and sh.sh_type == _SHT_STRTAB
+                and _read_strtab_string(shstrtab, sh.sh_name) == ".dynstr"):
             dynstr = sh
+        if dynsym is not None and dynstr is not None:
+            break
 
     if dynsym is None or dynstr is None:
         # No .dynsym/.dynstr sections. Truly static binaries have
@@ -359,12 +380,16 @@ def _read_section_bytes(f, sh: _SectionHeader) -> bytes | None:
 
 def _read_strtab_string(strtab: bytes, offset: int) -> str:
     """Read a NUL-terminated string at ``offset`` in ``strtab``.
-    Returns ``""`` for any out-of-bounds / malformed input."""
+    Returns ``""`` for any out-of-bounds / malformed input —
+    including a string longer than ``_MAX_STRTAB_NAME_BYTES`` or one
+    whose NUL terminator is missing (a crafted no-NUL strtab must not
+    materialise a whole section tail per lookup)."""
     if offset < 0 or offset >= len(strtab):
         return ""
-    end = strtab.find(b"\x00", offset)
+    end = strtab.find(b"\x00", offset,
+                      offset + _MAX_STRTAB_NAME_BYTES + 1)
     if end < 0:
-        end = len(strtab)
+        return ""
     raw = strtab[offset:end]
     try:
         return raw.decode("utf-8")
@@ -402,6 +427,8 @@ def _read_dynsym_imports(
         return set()
 
     imports: set[str] = set()
+    total_name_bytes = 0
+    dropped_malformed = 0
     f.seek(dynsym.sh_offset)
     for _ in range(entries):
         buf = f.read(record_size)
@@ -424,8 +451,30 @@ def _read_dynsym_imports(
         if st_name == 0:
             continue
         name = _read_strtab_string(dynstr_bytes, st_name)
-        if name:
+        if not name:
+            # In-bounds st_name that still produced nothing means the
+            # strtab entry was malformed (over-cap / unterminated) —
+            # count it so the gap is surfaced once, not per entry.
+            if 0 < st_name < len(dynstr_bytes):
+                dropped_malformed += 1
+            continue
+        if name not in imports:
+            total_name_bytes += len(name)
+            if total_name_bytes > _MAX_TOTAL_NAME_BYTES:
+                logger.warning(
+                    "core.binary.elf: import-name volume exceeded %d "
+                    "bytes — malformed/hostile .dynstr; import list "
+                    "truncated at %d names (capability fingerprint "
+                    "for this binary is incomplete)",
+                    _MAX_TOTAL_NAME_BYTES, len(imports))
+                break
             imports.add(name)
+    if dropped_malformed:
+        logger.warning(
+            "core.binary.elf: dropped %d malformed .dynsym name(s) "
+            "(unterminated or over %d bytes) — capability fingerprint "
+            "for this binary may be incomplete",
+            dropped_malformed, _MAX_STRTAB_NAME_BYTES)
     return imports
 
 
