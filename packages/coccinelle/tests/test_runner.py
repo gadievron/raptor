@@ -2111,3 +2111,77 @@ class TestBatchNonzeroExitVisibility:
         out = self._run_batch(tmp_path, returncode=0)
         assert any(f.endswith("test.c")
                    for f in out["rule_x"].files_examined)
+
+
+class TestUndecodableRuleFiles:
+    """A non-UTF-8 (or unreadable) rule file must degrade to a
+    structured SpatchResult like every other failure shape in this
+    runner — pre-fix it raised UnicodeDecodeError out of run_rule /
+    run_rules / run_rules_batched, aborting the whole multi-rule
+    sweep and losing every already-computed result."""
+
+    LATIN1_RULE = (
+        b"// commentaire op\xe9rateur (latin-1, not UTF-8)\n"
+        b"@r@\nposition p;\n@@\nreturn@p 0;\n"
+    )
+
+    def _bad_rule(self, tmp_path):
+        bad = tmp_path / "bad.cocci"
+        bad.write_bytes(self.LATIN1_RULE)
+        return bad
+
+    def test_run_rule_returns_structured_error(self, tmp_path):
+        target = tmp_path / "a.c"
+        target.write_text("int f(void) { return 0; }\n")
+        with patch.object(runner_mod, "is_available", return_value=True):
+            result = run_rule(target, self._bad_rule(tmp_path))
+        assert result.returncode == -1
+        assert result.ok is False
+        assert any("unreadable" in e for e in result.errors)
+
+    @pytest.mark.skipif(not is_available(), reason="spatch not installed")
+    def test_run_rules_keeps_good_rules_results(self, tmp_path):
+        """The good rule's result survives a sweep containing an
+        undecodable sibling."""
+        target = tmp_path / "src"
+        target.mkdir()
+        (target / "a.c").write_text("int f(void) { return 0; }\n")
+        rules = tmp_path / "rules"
+        rules.mkdir()
+        (rules / "aa_good.cocci").write_text(
+            "@r@\nposition p;\n@@\nreturn@p 0;\n", encoding="utf-8",
+        )
+        self._bad_rule(rules)
+        results = run_rules(target, rules, no_includes=True)
+        by_rule = {r.rule: r for r in results}
+        assert "bad" in by_rule and by_rule["bad"].returncode == -1
+        assert any("unreadable" in e for e in by_rule["bad"].errors)
+        assert "aa_good" in by_rule
+        assert by_rule["aa_good"].returncode == 0
+
+    @pytest.mark.skipif(not is_available(), reason="spatch not installed")
+    def test_run_rules_batched_isolates_bad_rule(self, tmp_path):
+        target = tmp_path / "a.c"
+        target.write_text("int f(void) { return 0; }\n")
+        good = tmp_path / "good.cocci"
+        good.write_text(
+            "@good@\n@@\n- return 0;\n+ return 1;\n", encoding="utf-8",
+        )
+        out = run_rules_batched(
+            target, [good, self._bad_rule(tmp_path)],
+        )
+        assert out["bad"].returncode == -1
+        assert any("unreadable" in e for e in out["bad"].errors)
+        assert out["good"].returncode == 0
+
+    def test_run_rule_oserror_is_structured(self, tmp_path):
+        """Unreadable-by-permissions is the same degradation class."""
+        target = tmp_path / "a.c"
+        target.write_text("int f(void) { return 0; }\n")
+        bad = self._bad_rule(tmp_path)
+        with patch.object(runner_mod, "is_available", return_value=True), \
+             patch.object(Path, "read_text",
+                          side_effect=OSError("EIO mid-read")):
+            result = run_rule(target, bad)
+        assert result.returncode == -1
+        assert any("unreadable" in e for e in result.errors)
