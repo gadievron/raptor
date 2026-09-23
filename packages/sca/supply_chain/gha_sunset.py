@@ -29,9 +29,10 @@ operator workflows.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
+
+from core.json import load_json_bounded
 
 from ..kinds import SUPPLYCHAIN_ID_PREFIX
 from ..models import (
@@ -40,7 +41,6 @@ from ..models import (
     Severity,
     SupplyChainFinding,
 )
-from ..parsers import _safe_read
 from ..parsers._base import PARSE_ESCAPE_ERRORS
 from typing import TYPE_CHECKING
 
@@ -68,15 +68,18 @@ def load_sunset_map(
     findings, never crashes.
     """
     p = path or _SUNSET_DATA_PATH
-    text = _safe_read.read_bounded(p)
-    if text is None:
-        # ``read_bounded`` already logged the underlying reason.
-        return {}
     try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+        # Repo-bundled data file — the shared bounded loader the
+        # sibling data-file consumers use (stat-size gate BEFORE the
+        # read; ValueError covers malformed JSON and the byte-budget
+        # refusal, and subsumes JSONDecodeError). The hostile-input
+        # escape classes stay guarded through the loader swap:
+        # RecursionError rides PARSE_ESCAPE_ERRORS, unreadable files
+        # raise OSError.
+        data = load_json_bounded(p, max_bytes=8 * 1024 * 1024)
+    except (OSError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
-            "sca.supply_chain.gha_sunset: parse failed for %s: %s", p, e,
+            "sca.supply_chain.gha_sunset: cannot load %s: %s", p, e,
         )
         return {}
     if not isinstance(data, dict):
