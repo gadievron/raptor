@@ -22,6 +22,27 @@
 
 'use strict';
 
+// Per-function emission cap (the exec-and-load idiom): this template
+// hooks HOT functions (read/write/recv) and takes an ACCURATE
+// backtrace per event — a hostile or merely busy target would
+// otherwise flood events.jsonl for the whole session on the DEFAULT
+// observe path. The cap is loud (one _meta marker per hook), and a
+// capped hook stops paying the backtrace cost too.
+var MAX_EVENTS_PER_FN = 500;
+const emitted = Object.create(null);   // null-proto: cap must be unpoisonable
+
+function capReached(fn, label) {
+  emitted[fn] = (emitted[fn] || 0) + 1;
+  if (emitted[fn] > MAX_EVENTS_PER_FN) {
+    if (emitted[fn] === MAX_EVENTS_PER_FN + 1) {
+      // Never truncate silently: one loud marker per hook.
+      send({ _meta: label + ' cap reached', fn: fn, cap: MAX_EVENTS_PER_FN });
+    }
+    return true;
+  }
+  return false;
+}
+
 function safeStr(ptr, maxLen) {
   // NULL or unreadable pointers return '<null>' / '<unreadable>'
   // rather than crashing the agent. Defensive because attacker-
@@ -105,6 +126,11 @@ function hook(name, category, argHandler) {
   if (addr === null) return;
   Interceptor.attach(addr, {
     onEnter: function (args) {
+      if (capReached(name, 'api-trace')) {
+        this.capped = true;
+        return;   // skip the backtrace work too
+      }
+      this.capped = false;
       try {
         this.captured = argHandler(args);
       } catch (e) {
@@ -113,6 +139,7 @@ function hook(name, category, argHandler) {
       this.site = callsite(this.context, this.returnAddress);
     },
     onLeave: function (retval) {
+      if (this.capped) return;
       emit(category, name, Object.assign({ ret: retval.toInt32() }, this.captured), this.site);
     },
   });
