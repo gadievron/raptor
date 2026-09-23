@@ -181,54 +181,82 @@ def _is_digit_separator(line: str, i: int) -> bool:
     return j + 1 < i and line[j + 1].isdigit()
 
 
-def _pp_directive_line_mask(content: str, language: str = "c") -> list[bool]:
-    r"""Per physical line: can a ``#`` directive starting on this line
-    be honoured by the compiler?
+# Translation phase 2: a backslash at end of line splices the next
+# physical line onto it. GCC and Clang additionally splice when
+# horizontal whitespace (or a CR left behind by CRLF content split on
+# "\n") separates the backslash from the newline — diagnostics only,
+# semantics unchanged. Matching only a bare trailing "\\" made every
+# backslash-space and backslash-CRLF splice a divergence the compiler
+# resolves the other way (blanking compiled functions out of the
+# parse view). A strict-standard compiler that refuses the
+# whitespace-separated splice diverges only toward under-blanking
+# (dead code stays visible — the cheap failure).
+_PP_SPLICE_RE = re.compile(r"\\[ \t\r]*$")
+
+
+def _ends_with_splice(line: str) -> bool:
+    return _PP_SPLICE_RE.search(line) is not None
+
+
+def _pp_directive_line_view(
+    content: str, language: str = "c",
+) -> list[str | None]:
+    r"""Per physical line: the translation-phase-3 view the compiler's
+    directive processor sees, or ``None`` when no directive starting
+    on this line can be honoured.
 
     Comments are removed in translation phase 3, BEFORE phase-4
-    directive processing, so a directive-shaped line inside a
-    ``/* */`` block comment is comment text — honouring it lets a
-    hostile repo blank live code out of the parse view (``/*\n#if 0\n*/``
-    around a live function: the function compiles but never reaches
-    the inventory). The same holds for a line spliced onto the
-    previous one by a trailing backslash (including a spliced ``//``
-    comment) and — in C++ — for lines inside a raw string.
+    directive processing — so a directive-shaped line inside a
+    ``/* */`` block comment is comment text (honouring it lets a
+    hostile repo blank live code out of the parse view:
+    ``/*\n#if 0\n*/`` around a live function), while a directive
+    AFTER a comment close on the same line (``*/ #endif``) IS
+    honoured (the comment becomes whitespace, leaving ``#`` the
+    line's first token). Emitting the per-line phase-3 text — comment
+    content blanked to spaces, string/char literal text kept — gives
+    the range detector both facts at once instead of a line-start
+    boolean that could only represent the first.
 
-    The scan tracks block comments, string/char literals (with the
-    digit-separator carve-out), line splices, and raw strings for
-    ``language == "cpp"`` ONLY: C has no raw strings (``R"(…`` is an
-    identifier followed by a plain string there), and hallucinating a
-    never-closing raw string inside a real ``#if 0`` arm would mask
-    the arm's real ``#endif`` and over-blank the live code after it.
-    Divergence doctrine: outside that raw-string case, hallucinating
-    an opener the compiler doesn't see only masks directives
-    (under-blank — dead code stays visible, the cheap failure); the
-    scanner must never MISS an opener the compiler sees, which is
-    what the literal/raw-string tracking is for."""
+    ``None`` marks the lines no directive can start on: a line
+    spliced onto the previous logical line by a trailing backslash
+    (see ``_PP_SPLICE_RE``; includes spliced ``//`` comments), and —
+    in C++ — a line beginning inside a raw string. Raw strings are
+    tracked for ``language == "cpp"`` ONLY: C has no raw strings
+    (``R"(…`` is an identifier followed by a plain string there), and
+    hallucinating a never-closing raw string inside a real ``#if 0``
+    arm would mask the arm's real ``#endif`` and over-blank the live
+    code after it. Divergence doctrine: outside that raw-string case,
+    hallucinating an opener the compiler doesn't see only masks
+    directives (under-blank — dead code stays visible, the cheap
+    failure); the scanner must never MISS an opener the compiler
+    sees, which is what the literal/raw-string tracking is for."""
     lines = content.split("\n")
-    mask = [True] * len(lines)
+    view: list[str | None] = [None] * len(lines)
     raw_strings = language == "cpp"
     in_comment = False
     raw_delim: str | None = None
-    continued = False          # previous physical line ended with '\'
+    continued = False          # previous physical line ends in a splice
     in_line_comment = False    # …and that line was inside a // comment
     for idx, line in enumerate(lines):
         if in_line_comment:
             # Spliced continuation of a // comment: the whole line is
             # comment text.
-            mask[idx] = False
-            in_line_comment = line.endswith("\\")
+            view[idx] = None
+            in_line_comment = _ends_with_splice(line)
             continue
-        mask[idx] = not in_comment and raw_delim is None and not continued
-        continued = line.endswith("\\")
+        capable = raw_delim is None and not continued
+        continued = _ends_with_splice(line)
+        p3: list[str] = []
         i = 0
         n = len(line)
         while i < n:
             if in_comment:
                 e = line.find("*/", i)
                 if e == -1:
+                    p3.append(" " * (n - i))
                     i = n
                     continue
+                p3.append(" " * (e + 2 - i))
                 in_comment = False
                 i = e + 2
                 continue
@@ -236,17 +264,21 @@ def _pp_directive_line_mask(content: str, language: str = "c") -> list[bool]:
                 needle = ")" + raw_delim + '"'
                 e = line.find(needle, i)
                 if e == -1:
+                    p3.append(line[i:])
                     i = n
                     continue
+                p3.append(line[i:e + len(needle)])
                 raw_delim = None
                 i = e + len(needle)
                 continue
             c = line[i]
             if c == "/" and i + 1 < n and line[i + 1] == "/":
                 in_line_comment = continued
+                p3.append(" " * (n - i))
                 break
             if c == "/" and i + 1 < n and line[i + 1] == "*":
                 in_comment = True
+                p3.append("  ")
                 i += 2
                 continue
             if raw_strings and c in "uULR":
@@ -258,18 +290,25 @@ def _pp_directive_line_mask(content: str, language: str = "c") -> list[bool]:
                     m = _PP_RAW_STRING_OPEN.match(line, i)
                     if m:
                         raw_delim = m.group(1)
+                        p3.append(line[i:m.end()])
                         i = m.end()
                         continue
+                p3.append(c)
                 i += 1
                 continue
             if c == "'" and _is_digit_separator(line, i):
+                p3.append(c)
                 i += 1
                 continue
             if c in "\"'":
-                i = _skip_line_literal(line, i)
+                j = _skip_line_literal(line, i)
+                p3.append(line[i:j])
+                i = j
                 continue
+            p3.append(c)
             i += 1
-    return mask
+        view[idx] = "".join(p3) if capable else None
+    return view
 
 
 def detect_preprocessor_dead_ranges(
@@ -290,18 +329,32 @@ def detect_preprocessor_dead_ranges(
 
     Directive recognition is comment/splice-aware — and raw-string
     aware when ``language == "cpp"`` (see
-    :func:`_pp_directive_line_mask`) — a ``#if 0`` inside a ``/* */``
+    :func:`_pp_directive_line_view`) — a ``#if 0`` inside a ``/* */``
     comment is comment text to the compiler and must not blank the
-    live code that follows.
+    live code that follows, while a directive after a same-line
+    comment close (``*/ #endif``) IS honoured (phase 3 turns the
+    comment into whitespace before phase 4 processes the line).
 
     Nesting-aware: anything inside a dead arm is dead.
     """
     lines = content.split("\n")
-    directive_ok = _pp_directive_line_mask(content, language)
+    p3_lines = _pp_directive_line_view(content, language)
     stack: list[dict] = []
     dead: set[int] = set()
     for i, line in enumerate(lines, 1):
-        m = _PP_DIRECTIVE.match(line) if directive_ok[i - 1] else None
+        p3 = p3_lines[i - 1]
+        m = _PP_DIRECTIVE.match(p3) if p3 is not None else None
+        if m is not None:
+            # Condition text: prefer the RAW line's match when the raw
+            # line is directive-shaped — its rest (comments included,
+            # handled by _strip_pp_comments exactly as before) keeps
+            # every previously-honoured directive's evaluation
+            # byte-identical. The phase-3 rest only feeds the NEWLY
+            # honoured comment-close shape, where the raw line can't
+            # match at all.
+            raw_m = _PP_DIRECTIVE.match(line)
+            if raw_m is not None:
+                m = raw_m
         if not m:
             if stack and stack[-1]["effective_dead"]:
                 dead.add(i)
@@ -405,7 +458,13 @@ def detect_macro_call_targets(content: str) -> set:
     """
     if not content or "define" not in content:
         return set()
-    joined = content.replace("\\\n", " ")     # fold line-continuations
+    # Fold line-continuations with the same splice grammar the
+    # directive scanner honours (_PP_SPLICE_RE): a backslash-CRLF or
+    # backslash-space splice is how every CRLF file spells multi-line
+    # macros, and folding only "\\\n" made detection silently lose the
+    # UNCERTAIN rescue for macro-only-reachable functions there (the
+    # false NOT_CALLED direction).
+    joined = re.sub(r"\\[ \t\r]*\n", " ", content)
     targets: set = set()
     for m in _FUNC_MACRO_DEF.finditer(joined):
         macro_name = m.group(1)
