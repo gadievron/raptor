@@ -40,13 +40,162 @@ _MOD_DECL = re.compile(
     r'(?:pub\s*(?:\([^)]*\)\s*)?)?'                  # optional pub / pub(...)
     r'\bmod\s+([A-Za-z_]\w*)\s*;',
 )
-_LINE_COMMENT = re.compile(r"//[^\n]*")
-_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
 _SPECIAL_ROOT_NAMES = frozenset({"lib.rs", "main.rs", "mod.rs"})
 
+# Non-code region openers for the fallback scanner: comments, raw
+# strings with the FULL prefix family from the Rust reference grammar
+# — ``r`` (raw), ``br`` (raw byte, RFC 1552), ``cr`` (raw C-string,
+# Rust 1.77) at any # count — plain / byte / C strings, char / byte
+# literals. The family must be complete: a missing raw prefix
+# (``cr#"…"#``) half-matches as identifier + plain string, and the
+# phantom string swallows trailing code — dropping real ``mod`` edges
+# (demote-direction for the consumer's witness). Longer alternatives
+# first so ``br#"`` never half-matches as its shorter forms.
+_NONCODE_OPEN = re.compile(r'//|/\*|(?:br|cr|r)#*"|[bc]?"|b?\'')
+_CHAR_LIT = re.compile(r"'(?:\\[^\n]|[^\\'\n])'")
+_NON_NL = re.compile(r"[^\n]")
 
-def _strip_comments(text: str) -> str:
-    return _LINE_COMMENT.sub("", _BLOCK_COMMENT.sub("", text))
+
+def _blank(span: str) -> str:
+    """Spaces for everything but newlines — offsets and line counts
+    survive blanking."""
+    return _NON_NL.sub(" ", span)
+
+
+def _strip_noncode(text: str) -> str:  # noqa: C901 — one lexer, one home
+    """Blank comments and string/char-literal interiors to spaces.
+
+    Linear fallback scanner for when the validated shared lexer can't
+    vouch a view: every region is skipped with ``str.find`` from its
+    opener — no lazy-dotall backtracking (the regex stripper this
+    replaces re-scanned to end-of-string once per ``/*`` on
+    unclosed-comment input: quadratic, extrapolating to ~an hour per
+    planted 2 MiB file in the unsandboxed parent), and the
+    nested-comment loop memoizes its forward-only delimiter scans so
+    a run of openers against one far closer costs one pass, not one
+    scan per depth level. Rust block comments
+    NEST; ``//`` inside a string is data (it used to delete a
+    same-line ``mod`` decl); a ``mod x;`` inside a string is not a
+    module edge. Unterminated regions blank to end-of-file (rustc
+    rejects such a file anyway; blanking errs toward fewer edges —
+    inclusion-tier noise, never suppression, because the consumer's
+    witness is demote-only).
+    """
+    out: list = []
+    pos = 0
+    n = len(text)
+    while pos < n:
+        m = _NONCODE_OPEN.search(text, pos)
+        if m is None:
+            out.append(text[pos:])
+            break
+        start, tok = m.start(), m.group()
+        if (tok[0] in "brc" and start > 0
+                and (text[start - 1].isalnum() or text[start - 1] == "_")):
+            # Identifier tail (``abr#"…``): not a literal prefix.
+            out.append(text[pos:start + 1])
+            pos = start + 1
+            continue
+        out.append(text[pos:start])
+        if tok == "//":
+            end = text.find("\n", start)
+            end = n if end == -1 else end
+            out.append(" " * (end - start))
+            pos = end
+        elif tok == "/*":
+            depth, p = 1, start + 2
+            # Memoized delimiter positions: both only ever move
+            # FORWARD (str.find returns the first occurrence at or
+            # after p, and p only advances), so one cached scan
+            # serves every depth iteration. Recomputing per
+            # iteration is quadratic in both directions — a far
+            # closer behind a run of openers re-scans toward the
+            # closer once per opener, and a run of closers re-scans
+            # to end-of-string for the absent opener once per
+            # closer. -1 is terminal (no later occurrence exists).
+            nxt_close = nxt_open = -2  # -2: not yet computed
+            while depth:
+                if nxt_close != -1 and nxt_close < p:
+                    nxt_close = text.find("*/", p)
+                if nxt_close == -1:
+                    p = n
+                    break
+                if nxt_open != -1 and nxt_open < p:
+                    nxt_open = text.find("/*", p)
+                if nxt_open != -1 and nxt_open < nxt_close:
+                    depth += 1
+                    p = nxt_open + 2
+                else:
+                    depth -= 1
+                    p = nxt_close + 2
+            out.append(_blank(text[start:p]))
+            pos = p
+        elif tok.endswith('"') and tok not in ('"', 'b"', 'c"'):
+            # Raw string: closes only on `"` + the opener's # count.
+            # Delimiters survive blanking (the shared lexer's edges
+            # mode does the same) so shapes like ``#[path = "…"]``
+            # keep their structure in the view.
+            closer = '"' + "#" * tok.count("#")
+            end = text.find(closer, m.end())
+            if end == -1:
+                out.append(tok + _blank(text[m.end():]))
+                pos = n
+            else:
+                out.append(tok + _blank(text[m.end():end]) + closer)
+                pos = end + len(closer)
+        elif tok.endswith('"'):
+            p = m.end()
+            closed = False
+            while True:
+                q = text.find('"', p)
+                if q == -1:
+                    p = n
+                    break
+                backslashes = 0
+                k = q - 1
+                while k >= 0 and text[k] == "\\":
+                    backslashes += 1
+                    k -= 1
+                p = q + 1
+                if backslashes % 2 == 0:
+                    closed = True
+                    break
+            if closed:
+                out.append(tok + _blank(text[m.end():p - 1]) + '"')
+            else:
+                out.append(tok + _blank(text[m.end():p]))
+            pos = p
+        else:  # ' or b' — char/byte literal vs lifetime
+            quote = start + tok.index("'")
+            lit = _CHAR_LIT.match(text, quote)
+            if lit is None:
+                # Lifetime (``'a``) or stray quote: code, keep it.
+                out.append(text[start:quote + 1])
+                pos = quote + 1
+            else:
+                out.append(text[start:quote])
+                out.append("'" + _blank(lit.group()[1:-1]) + "'")
+                pos = lit.end()
+    return "".join(out)
+
+
+def _code_view(text: str) -> str:
+    """Comments + literal interiors blanked, code preserved.
+
+    The shared validated lexer first (nested-block-comment- and
+    string-aware by grammar — replacing hand-rolled strippers of
+    exactly this class is what it exists for); the linear fallback
+    scanner when no grammar is installed or the file doesn't parse.
+    """
+    from core.inventory.lexical_view import LexicalRefusal, blank_noncode
+
+    try:
+        view = blank_noncode("rust", text)
+    except LexicalRefusal:
+        view = None
+    if view is not None:
+        return view
+    return _strip_noncode(text)
 
 
 def _crate_roots(target: Path) -> list[Path]:
@@ -135,8 +284,25 @@ def _file_mods(file: Path) -> list[tuple[str | None, str]]:
     got = read_text_capped(file, _MAX_RS_BYTES)
     if got is None:
         return []
-    text = _strip_comments(got[0])
-    return [(m.group(1), m.group(2)) for m in _MOD_DECL.finditer(text)]
+    text = got[0]
+    view = _code_view(text)
+    if len(view) != len(text):
+        # The shared lexer blanks per BYTE, so multi-byte characters
+        # can shift decoded offsets; the fallback scanner is
+        # char-length-preserving by construction and keeps the
+        # span-recovery below sound.
+        view = _strip_noncode(text)
+    mods: list = []
+    for m in _MOD_DECL.finditer(view):
+        # The VIEW decides which declarations are code (strings and
+        # comments blanked); the ORIGINAL text supplies the values —
+        # a ``#[path = "…"]`` attribute value is itself a string
+        # literal the view blanked. Spans align (length-preserving
+        # blanking), so re-matching the original slice recovers it.
+        m_orig = _MOD_DECL.search(text, m.start(), m.end())
+        use = m_orig if m_orig is not None else m
+        mods.append((use.group(1), use.group(2)))
+    return mods
 
 
 def extract_rust_crate_modules(target: Path) -> frozenset | None:

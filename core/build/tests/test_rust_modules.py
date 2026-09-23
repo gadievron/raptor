@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 from core.build.rust_modules import extract_rust_crate_modules
 
 _CARGO = '[package]\nname = "x"\nversion = "0.1.0"\n'
@@ -288,3 +290,148 @@ def test_reachable_cap_degrades_to_unknown(tmp_path, monkeypatch):
     for name in "abc":
         (src / f"{name}.rs").write_text("")
     assert rust_modules.extract_rust_crate_modules(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# Code-view fidelity: the mod scan must see code the compiler sees and
+# nothing it doesn't — strings are data, block comments nest, and the
+# fallback scanner is linear on hostile input.
+# ---------------------------------------------------------------------------
+
+class TestCodeViewFidelity:
+    def test_line_comment_inside_string_keeps_the_mod_edge(self, tmp_path):
+        """`//` inside a string literal is data: a same-line ``mod``
+        decl after it is compiled by rustc and must stay a member —
+        the string-blind stripper marked real.rs build-excluded."""
+        _crate(tmp_path, {
+            "Cargo.toml": _CARGO,
+            "src/lib.rs": 'const U: &str = "see https://x"; mod real;\n'
+                          "mod plain;\n",
+            "src/real.rs": "",
+            "src/plain.rs": "",
+        })
+        mods = extract_rust_crate_modules(tmp_path)
+        assert _r(tmp_path, "src/real.rs") in mods
+        assert _r(tmp_path, "src/plain.rs") in mods
+
+    def test_mod_inside_string_is_not_an_edge(self, tmp_path):
+        _crate(tmp_path, {
+            "Cargo.toml": _CARGO,
+            "src/lib.rs": 'const S: &str = "mod fake;";\nmod real;\n',
+            "src/fake.rs": "",
+            "src/real.rs": "",
+        })
+        mods = extract_rust_crate_modules(tmp_path)
+        assert _r(tmp_path, "src/real.rs") in mods
+        assert _r(tmp_path, "src/fake.rs") not in mods
+
+    def test_nested_block_comment_hides_its_mod(self, tmp_path):
+        """Rust block comments NEST: the non-greedy `/* … */` stripper
+        closed at the INNER terminator and leaked the still-commented
+        ``mod hidden;`` back into the scan."""
+        _crate(tmp_path, {
+            "Cargo.toml": _CARGO,
+            "src/lib.rs": "/* /* inner */ mod hidden; */\nmod real;\n",
+            "src/hidden.rs": "",
+            "src/real.rs": "",
+        })
+        mods = extract_rust_crate_modules(tmp_path)
+        assert _r(tmp_path, "src/real.rs") in mods
+        assert _r(tmp_path, "src/hidden.rs") not in mods
+
+
+class TestFallbackScanner:
+    """The linear scanner used when the shared lexer can't vouch a
+    view (no grammar installed, or the file doesn't parse — every
+    hostile shape lands here)."""
+
+    def test_string_and_comment_awareness(self):
+        from core.build.rust_modules import _strip_noncode
+        src = (
+            'const U: &str = "see https://x"; mod real;\n'
+            'const S: &str = "mod fake;";\n'
+            "/* /* inner */ mod hidden; */ mod after;\n"
+            "// mod line_commented;\n"
+            'const R: &str = r#"mod raw_fake; " still raw"#; mod raw_ok;\n'
+            "const E: &str = \"esc \\\" mod esc_fake;\"; mod esc_ok;\n"
+            "fn f<'a>(x: &'a str) {} mod lifetime_ok;\n"
+            "const C: char = ','; mod char_ok;\n"
+        )
+        view = _strip_noncode(src)
+        kept = {"real", "after", "raw_ok", "esc_ok", "lifetime_ok",
+                "char_ok"}
+        dropped = {"fake", "hidden", "line_commented", "raw_fake",
+                   "esc_fake"}
+        for name in kept:
+            assert f"mod {name};" in view, name
+        for name in dropped:
+            assert f"mod {name};" not in view, name
+        # Blanking preserves layout: newline count survives.
+        assert view.count("\n") == src.count("\n")
+
+    @pytest.mark.parametrize("shape", [
+        # Closer-less: one find to EOF per opener run.
+        "/*x" * (512 * 1024 // 3),
+        # Far closer: a run of nested openers whose single closer
+        # sits at EOF — a depth loop that recomputes its closer scan
+        # per iteration re-scans toward it once per opener (measured
+        # ×4 per size doubling, ~19 s at this size, ~310 s per file
+        # at the 2 MiB cap).
+        "/*x" * (512 * 1024 // 3) + "*/",
+        # Balanced runs: the closer half makes an unmemoized loop
+        # re-scan to EOF for the absent next opener once per closer
+        # (the separators keep the delimiters from overlapping into
+        # accidental locality).
+        "/*x" * (256 * 1024 // 3) + "x*/" * (256 * 1024 // 3),
+    ], ids=["closer-less", "far-closer", "balanced-runs"])
+    def test_unclosed_comment_input_is_linear(self, shape):
+        """The lazy-dotall stripper re-scanned to end-of-string once
+        per `/*` — 3.8s at 64 KiB, ~an hour extrapolated at the 2 MiB
+        per-file cap. The find-driven scanner memoizes its
+        forward-only delimiter positions, so every shape above is
+        linear (~40 ms measured); the bound below carries
+        loaded-runner headroom yet sits orders of magnitude under
+        the quadratic cost at this size."""
+        import time
+        from core.build.rust_modules import _strip_noncode
+        t0 = time.monotonic()
+        view = _strip_noncode(shape)
+        elapsed = time.monotonic() - t0
+        assert elapsed < 5.0, f"non-linear strip: {elapsed:.2f}s"
+        # Two-direction: the whole span is comment — nothing survives.
+        assert view.strip() == ""
+
+    def test_c_and_raw_c_string_family(self):
+        """Rust 1.77 C-string literals: the raw prefix family must be
+        COMPLETE. A ``cr`` missing from the opener set half-matches
+        as identifier + plain string, and the phantom string swallows
+        the trailing code — dropping a real ``mod`` edge on a
+        rustc-compiled file (the consumer's witness demotes findings
+        in files without an edge, so the miss is suppress-direction).
+        """
+        from core.build.rust_modules import _strip_noncode
+        # The real edge after a cr raw string survives; the interior
+        # (with its unescaped quote) is blanked, not a string opener.
+        view = _strip_noncode('const A: &CStr = cr#"a " b"#; mod real;')
+        assert "mod real;" in view
+        # Zero-hash cr string: raw semantics — backslash is data, not
+        # an escape, so the first quote closes it.
+        view = _strip_noncode('const A: &CStr = cr"x\\"; mod real2;')
+        assert "mod real2;" in view
+        # Plain c-string: escape-aware like a plain string.
+        view = _strip_noncode(
+            'const A: &CStr = c"mod fake; \\" still"; mod real3;')
+        assert "mod real3;" in view
+        assert "mod fake;" not in view
+        # In-string decls stay non-edges across the raw family.
+        for src in ('const S = cr#"mod fake;"#; mod ok;',
+                    'const S = r#"mod fake;"#; mod ok;',
+                    'const S = br#"mod fake;"#; mod ok;'):
+            view = _strip_noncode(src)
+            assert "mod ok;" in view, src
+            assert "mod fake;" not in view, src
+
+    def test_unclosed_string_blanks_to_eof_not_hang(self):
+        from core.build.rust_modules import _strip_noncode
+        view = _strip_noncode('const S: &str = "never closed... mod x;\n')
+        assert "mod x;" not in view
