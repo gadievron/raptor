@@ -1020,6 +1020,21 @@ def start_run(output_dir: Path, command: str,
             pin_project, pin_source = resolve_pin_for_start()
         metadata["project"] = pin_project
         metadata["project_source"] = pin_source
+        if pin_project is not None and not target:
+            # A PINNED marker always seals a target witness: the
+            # one-target write gate (pinned_write_target_ok) treats a
+            # pin without target_path as tamper-shaped — the deletion
+            # forgery — so a target-less start inherits the pinned
+            # project's own target (which is also what the run is
+            # implicitly pointed at under DEFAULT TARGET resolution).
+            try:
+                from core.project.project import ProjectManager
+                _pinned_proj = ProjectManager().load(pin_project)
+                if _pinned_proj is not None and _pinned_proj.target:
+                    metadata["target_path"] = str(_pinned_proj.target)
+            except Exception:  # noqa: BLE001 — witness is best-effort
+                logger.debug("pin: could not seal the project target "
+                             "into the run marker", exc_info=True)
         freeze_run_pin(output_dir, pin_project, pin_source)
         # Order: persist metadata FIRST, then mark as active.
         #
