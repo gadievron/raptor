@@ -301,6 +301,28 @@ def _load_re_type_fields(
     return known
 
 
+def struct_sites_present(
+    source: str,
+    re_types: Optional[List[Dict[str, Any]]] = None,
+    xref_source: Optional[str] = None,
+) -> bool:
+    """Whether any struct layout, offset-shaped access, or bound
+    RE-typed field appears in the checker's search space — the
+    structural precondition ``check_struct_field_copy`` requires
+    before it can test anything. Consulted by the sweep wrapper so a
+    model miss maps to inconclusive, never refuted."""
+    search_source = source
+    if xref_source:
+        search_source = source + "\n" + xref_source
+    if _extract_struct_layouts(search_source):
+        return True
+    if _extract_offset_accesses(search_source):
+        return True
+    if re_types:
+        return bool(_load_re_type_fields(re_types, search_source))
+    return False
+
+
 def check_struct_field_copy(
     function_name: str,
     source: str,

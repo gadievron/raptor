@@ -200,6 +200,23 @@ def _var_has_upper_bound(
     return None
 
 
+def length_sites_present(
+    source: str, xref_source: str | None = None,
+) -> bool:
+    """Whether any length-candidate site (byte-order conversion or
+    struct/buffer field read) appears in the checker's search space —
+    the structural precondition ``check_proto_length`` requires
+    before it can test anything. Consulted by the sweep wrapper so a
+    model miss maps to inconclusive, never refuted."""
+    search_source = source
+    if xref_source:
+        search_source = source + "\n" + xref_source
+    return bool(
+        _BYTE_EXTRACT_RE.search(search_source)
+        or _FIELD_READ_RE.search(search_source)
+    )
+
+
 def check_proto_length(
     function_name: str,
     source: str,

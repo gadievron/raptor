@@ -87,6 +87,86 @@ class TestAppliedDetectorStillRefutesOrConfirms:
         assert r.outcome == "confirmed"
 
 
+class TestCheckerWrapperApplicability:
+    """The four checker-sweep wrappers follow the same doctrine as
+    the SMT verbs: a checker whose structural precondition never
+    matched (no copy sites, no narrowing, no length candidates, no
+    struct layouts) never tested the hypothesis — inconclusive, not
+    refuted."""
+
+    _NO_SITES = "int f(void) { return 1; }"
+
+    def test_heap_copy_no_sites_inconclusive(self):
+        from core.audit.sweep import run_heap_copy_sweep
+
+        r = run_heap_copy_sweep(
+            file_path="a.c", function_name="f",
+            source=self._NO_SITES, cwe="CWE-122",
+        )
+        assert r.outcome == "inconclusive"
+        assert any("prerequisites never matched" in e for e in r.errors)
+
+    def test_integer_truncation_no_sites_inconclusive(self):
+        from core.audit.sweep import run_integer_truncation_sweep
+
+        r = run_integer_truncation_sweep(
+            file_path="a.c", function_name="f",
+            source=self._NO_SITES, cwe="CWE-190",
+        )
+        assert r.outcome == "inconclusive"
+
+    def test_proto_length_no_sites_inconclusive(self):
+        from core.audit.sweep import run_proto_length_sweep
+
+        r = run_proto_length_sweep(
+            file_path="a.c", function_name="f",
+            source=self._NO_SITES, cwe="CWE-120",
+        )
+        assert r.outcome == "inconclusive"
+
+    def test_struct_field_no_sites_inconclusive(self):
+        from core.audit.sweep import run_struct_field_sweep
+
+        r = run_struct_field_sweep(
+            file_path="a.c", function_name="f",
+            source=self._NO_SITES, cwe="CWE-120",
+        )
+        assert r.outcome == "inconclusive"
+
+    def test_heap_copy_applied_negative_still_refutes(self):
+        from core.audit.sweep import run_heap_copy_sweep
+
+        src = (
+            "int f(char *dst) {\n"
+            "    char buf[64];\n"
+            "    memcpy(buf, dst, 8);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        r = run_heap_copy_sweep(
+            file_path="a.c", function_name="f", source=src,
+            cwe="CWE-122",
+        )
+        assert r.outcome == "refuted"
+
+    def test_integer_truncation_applied_negative_still_refutes(self):
+        from core.audit.sweep import run_integer_truncation_sweep
+
+        # A narrowing site exists (prerequisite matched) but never
+        # reaches an allocation — applied and negative.
+        src = (
+            "void f(unsigned long n) {\n"
+            "    unsigned short s = (unsigned short)n;\n"
+            "    log_len(s);\n"
+            "}\n"
+        )
+        r = run_integer_truncation_sweep(
+            file_path="a.c", function_name="f", source=src,
+            cwe="CWE-190",
+        )
+        assert r.outcome == "refuted"
+
+
 class TestNegativeOutcomeHelper:
     def test_applicable_default_true(self):
         class R:

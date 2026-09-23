@@ -157,6 +157,23 @@ def _is_network_tainted(source: str, var_name: str) -> bool:
     return False
 
 
+def narrowing_sites_present(
+    source: str, xref_source: str | None = None,
+) -> bool:
+    """Whether any narrowing site (explicit cast or implicit narrow
+    declaration) appears in the checker's search space — the
+    structural precondition ``check_integer_truncation`` requires
+    before it can test anything. Consulted by the sweep wrapper so a
+    model miss maps to inconclusive, never refuted."""
+    search_source = source
+    if xref_source:
+        search_source = source + "\n" + xref_source
+    return bool(
+        _EXPLICIT_CAST_RE.search(search_source)
+        or _IMPLICIT_NARROW_DECL_RE.search(search_source)
+    )
+
+
 def check_integer_truncation(
     function_name: str,
     source: str,
