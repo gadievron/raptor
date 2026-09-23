@@ -181,7 +181,8 @@ def _run_target_path(run_dir: Path) -> Path | str | None:
     meta_path = Path(run_dir) / ".raptor-run.json"
     if not meta_path.is_file():
         return None
-    meta = load_json(meta_path, max_bytes=1024 * 1024)
+    from core.run.metadata import load_run_metadata
+    meta = load_run_metadata(Path(run_dir))  # budget single-homed there
     raw = meta.get("target_path") if isinstance(meta, dict) else None
     if not raw or not isinstance(raw, str):
         return None
@@ -1634,9 +1635,8 @@ class ProjectManager:
                 # reaches for, and skipping silently left the run's
                 # projections suppressed with no discoverable remedy.
                 try:
-                    from core.json import load_json as _lj
-                    _m = _lj(dest / ".raptor-run.json",
-                             max_bytes=1024 * 1024)
+                    from core.run.metadata import load_run_metadata
+                    _m = load_run_metadata(dest)
                     _pin = (_m.get("project")
                             if isinstance(_m, dict) else None)
                     # Repair ONLY a pin naming a MISSING project (the
