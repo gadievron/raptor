@@ -378,6 +378,37 @@ def test_dispatch_distinguishes_empty_match_from_spatch_error(tmp_path):
     assert "bad rule syntax" in out[0]["error"]
 
 
+def test_dispatch_partial_matches_carry_degradation_note(tmp_path):
+    """spatch errored but still matched (a file failed to parse, a
+    per-file timeout hit): the incomplete match set must not read as
+    a complete answer. Each variant carries a degradation note — an
+    appended error ENTRY would be stripped by the substrate's error
+    filter and surface nowhere."""
+    (tmp_path / "x.c").write_text("\n")
+    fake_provider = mock.Mock()
+    fake_provider.generate.return_value = _fake_response(
+        "```cocci\n@r@\n@@\n@@\n```"
+    )
+    partial = SpatchResult(
+        rule="r",
+        matches=[SpatchMatch(file="x.c", line=3, message="hit")],
+        errors=["y.c: parse error"],
+        returncode=1,
+    )
+    with mock.patch.object(mod, "spatch_is_available", return_value=True), \
+         mock.patch.object(mod, "create_provider",
+                           return_value=fake_provider), \
+         mock.patch.object(mod, "spatch_run_rule",
+                           return_value=partial):
+        out = mod.cocci_hunt_dispatch(
+            _fake_model(), "p", str(tmp_path),
+        )
+    assert out, "partial matches must still be returned"
+    assert all("error" not in v for v in out)
+    assert all("match set may be partial" in v["degradation"] for v in out)
+    assert "y.c: parse error" in out[0]["degradation"]
+
+
 def test_dispatch_uses_sandbox_runner_by_default(tmp_path):
     """Critical adversarial finding: cocci rules CAN embed
     ``script:python`` blocks that execute in the spatch process.
