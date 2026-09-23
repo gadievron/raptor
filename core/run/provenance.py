@@ -537,15 +537,59 @@ def public_view(run_metadata: dict[str, Any] | None) -> dict[str, Any]:
     dirty flag, diff *hash* (never content), coarse env, engine versions, and
     model snapshots — so it is forwarded under an explicit field allowlist.
     """
-    md = run_metadata or {}
+    # Value validation, not just key allowlists: the underlying
+    # ``.raptor-run.json`` is sandbox-child-writable mid-run and
+    # import-restored verbatim, so every FORWARDED VALUE is
+    # type-checked per field and strings pass the same L1-strict
+    # rejection ``finding_public_view`` applies (control bytes / ANSI
+    # escapes / unicode C*). A failing value is DROPPED — the rest of
+    # the projection survives, and nothing nested or wrong-typed can
+    # ride an allowlisted key out.
+    from core.run.findings import _publish_string as _l1
+
+    _drop = object()
+
+    def _pub_str(value: Any) -> Any:
+        if not isinstance(value, str):
+            return _drop
+        cleaned = _l1(value)
+        return _drop if not isinstance(cleaned, str) else cleaned
+
+    def _pub_num(value: Any) -> Any:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return _drop
+        return value
+
+    def _pub_bool(value: Any) -> Any:
+        return value if isinstance(value, (bool, type(None))) else _drop
+
+    def _pub_opt_str(value: Any) -> Any:
+        return None if value is None else _pub_str(value)
+
+    def _fill(dst: dict[str, Any], src: dict[str, Any],
+              spec: dict[str, Any]) -> None:
+        for key, validator in spec.items():
+            if key not in src:
+                continue
+            cleaned = validator(src[key])
+            if cleaned is not _drop:
+                dst[key] = cleaned
+
+    md = run_metadata if isinstance(run_metadata, dict) else {}
     out: dict[str, Any] = {}
+    _fill(out, md, {
+        "command": _pub_str,
+        "timestamp": _pub_str,
+        "end_timestamp": _pub_str,
+        "duration_seconds": _pub_num,
+        "status": _pub_str,
+        "version": lambda v: v if (isinstance(v, int)
+                                   and not isinstance(v, bool))
+        else _pub_str(v),
+    })
 
-    for key in _PUBLIC_TOPLEVEL_FIELDS:
-        if key in md:
-            out[key] = md[key]
-
-    manifest = md.get("manifest") or {}
-    if not manifest:
+    manifest = md.get("manifest")
+    if not isinstance(manifest, dict) or not manifest:
         return out
 
     if manifest.get("provenance") == "unavailable":
@@ -553,14 +597,17 @@ def public_view(run_metadata: dict[str, Any] | None) -> dict[str, Any]:
         return out
 
     pub: dict[str, Any] = {}
-    sc = manifest.get("source_control") or {}
-    if sc:
-        pub["source_control"] = {
-            "base_sha": sc.get("base_sha"),
-            "dirty": sc.get("dirty"),
+    sc = manifest.get("source_control")
+    if isinstance(sc, dict) and sc:
+        sc_pub: dict[str, Any] = {}
+        _fill(sc_pub, sc, {
+            "base_sha": _pub_opt_str,
+            "dirty": _pub_bool,
             # Hash only — the diff content is never stored, so this is safe.
-            "diff_sha256": sc.get("diff_sha256"),
-        }
+            "diff_sha256": _pub_opt_str,
+        })
+        if sc_pub:
+            pub["source_control"] = sc_pub
     # Target block: a git target carries commit/branch (possibly a private
     # engagement) → dropped. A non-git target (archive / directory) is an
     # acquisition stamp — hashes + names only → publish-safe, the attribution a
@@ -568,38 +615,55 @@ def public_view(run_metadata: dict[str, Any] | None) -> dict[str, Any]:
     # content-equivalence id is the coverage store's, not published here.
     tgt = manifest.get("target")
     if isinstance(tgt, dict) and not tgt.get("commit"):
-        safe_tgt = {
-            k: tgt[k] for k in
-            ("source", "archive_sha256", "archive_name", "format")
-            if k in tgt
-        }
+        safe_tgt: dict[str, Any] = {}
+        _fill(safe_tgt, tgt, {
+            "source": _pub_str,
+            "archive_sha256": _pub_str,
+            "archive_name": _pub_str,
+            "format": _pub_str,
+        })
         if safe_tgt:
             pub["target"] = safe_tgt
-    # Field-allowlist INSIDE each sub-dict too — never forward verbatim, so a
-    # crafted/imported manifest can't smuggle a path or secret under an extra
-    # key in environment / engines / models.
-    env = manifest.get("environment") or {}
+    env = manifest.get("environment")
     if isinstance(env, dict):
-        env_pub = {k: env[k] for k in ("python", "os", "arch") if k in env}
+        env_pub: dict[str, Any] = {}
+        _fill(env_pub, env, {
+            "python": _pub_str, "os": _pub_str, "arch": _pub_str,
+        })
         if env_pub:
             pub["environment"] = env_pub
     engines = manifest.get("engines")
     if isinstance(engines, dict) and engines:
         # name -> version string. Richer engine metadata (rulesets/queries),
         # if ever added, must be re-allowlisted here — don't pass dicts through.
-        pub["engines"] = {
-            str(name): ver
-            for name, ver in engines.items()
-            if isinstance(name, str) and (ver is None or isinstance(ver, str))
-        }
+        eng_pub = {}
+        for name, ver in engines.items():
+            k = _pub_str(name)
+            v = _pub_opt_str(ver)
+            if k is not _drop and v is not _drop:
+                eng_pub[k] = v
+        if eng_pub:
+            pub["engines"] = eng_pub
     models = manifest.get("models")
     if isinstance(models, list) and models:
-        pub["models"] = [
-            {k: m.get(k) for k in ("provider", "alias", "resolved", "role", "calls")}
-            for m in models if isinstance(m, dict)
-        ]
-    if "deterministically_reproducible" in manifest:
-        pub["deterministically_reproducible"] = manifest["deterministically_reproducible"]
+        pub_models = []
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            m_pub: dict[str, Any] = {}
+            _fill(m_pub, m, {
+                "provider": _pub_opt_str,
+                "alias": _pub_opt_str,
+                "resolved": _pub_opt_str,
+                "role": _pub_opt_str,
+                "calls": _pub_num,
+            })
+            pub_models.append(m_pub)
+        if pub_models:
+            pub["models"] = pub_models
+    dr = manifest.get("deterministically_reproducible", _drop)
+    if dr is not _drop and isinstance(dr, (bool, type(None))):
+        pub["deterministically_reproducible"] = dr
     if pub:
         out["manifest"] = pub
     return out
