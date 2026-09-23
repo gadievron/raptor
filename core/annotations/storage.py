@@ -120,8 +120,17 @@ _SECTION_HEADING_RE = re.compile(r"^##[ \t]+(.+?)\s*$", re.MULTILINE)
 # Metadata HTML comment, anchored to immediately after a heading.
 # Format: ``<!-- meta: key=value key2=value2 -->``. Values may
 # contain spaces if quoted: ``key="value with spaces"``.
+# The body group is ``\S``-delimited and carries its own trailing
+# whitespace inside the optional group: the naive trim spelling
+# ``\s*(.*?)\s*-->`` overlaps three unbounded repeats on horizontal
+# whitespace, and a ``<!-- meta:`` line ending in a long whitespace
+# run with no ``-->`` makes the engine try every split of the run —
+# cubic in the annotation-file line length. Match set unchanged
+# (group trimmed exactly as before; an all-whitespace body now
+# reports ``None`` instead of ``''`` and the parser reads both as
+# empty).
 _META_RE = re.compile(
-    r"^<!--\s*meta:\s*(.*?)\s*-->\s*$",
+    r"^<!--\s*meta:\s*(?:(\S(?:.*\S)?)\s*)?-->\s*$",
     re.MULTILINE,
 )
 _META_KV_RE = re.compile(
@@ -693,7 +702,7 @@ def _parse_section(
         head = rest if line_end == -1 else rest[:line_end]
         meta_match = _META_RE.match(head)
         if meta_match:
-            meta_search = meta_match.group(1)
+            meta_search = meta_match.group(1) or ""
             body = "" if line_end == -1 else rest[line_end + 1:]
         else:
             meta_search = ""
