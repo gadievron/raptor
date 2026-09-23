@@ -36,6 +36,27 @@ def _attach_caplog_to_raptor_logger(caplog):
         raptor_logger.removeHandler(caplog.handler)
 
 
+@pytest.fixture(autouse=True)
+def _pin_llm_availability(monkeypatch):
+    """Pin the constructor's availability health-check to "external LLM
+    present". On hosts with no keys, no config file, no Ollama server
+    and no claude CLI, LLMClient init emits the "No external LLM
+    available (... no Ollama ...)" health warning — which the loose
+    ``_ollama_warnings`` filter matches, failing the cloud-provider
+    negative pin and double-counting the once-only pin, both on
+    ambient environment rather than the precision-caveat behaviour
+    under test. The caveat sites key on the configured provider name
+    only, so pinning availability leaves them untouched."""
+    from core.llm import detection
+
+    monkeypatch.setattr(
+        detection, "detect_llm_availability",
+        lambda: detection.LLMAvailability(
+            external_llm=True, claude_code=False, llm_available=True,
+        ),
+    )
+
+
 def _ollama_config() -> LLMConfig:
     return LLMConfig(
         primary_model=ModelConfig(
