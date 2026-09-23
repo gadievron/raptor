@@ -41,7 +41,8 @@ def _value_patterns(name: str) -> list[re.Pattern]:
     esc = re.escape(name)
     return [
         # #define NAME value
-        re.compile(rf"#\s*define\s+{esc}\s+\(?\s*{_VALUE}"),
+        # gated optional paren (the \(?\s* pair was quadratic)
+        re.compile(rf"#\s*define\s+{esc}\s+(?:\(\s*)?{_VALUE}"),
         # NAME [: type] = value  (C/Go/Python/Rust/TS const forms all
         # reduce to this once the definition line is isolated).  The
         # '=' must directly follow the identifier or a ': type'
@@ -131,9 +132,12 @@ _FALLBACK_STOPWORDS = frozenset({
 # scan below instead of asserting a value match against an unrelated
 # same-named global (spot_check_question applies the same stopword
 # test both paths).
+# The optional verb gates its own trailing whitespace — the naive
+# ``\s*(?:VERB)?\s*`` put two whitespace spans around it, quadratic
+# on a claim ending in a whitespace run.
 _QUESTION_VALUE_RE = re.compile(
     r"[`'\"]?([A-Za-z_][\w.:]*)[`'\"]?\s*"
-    r"(?:is|==|equals?|equal to|set to|defined as)?\s*"
+    r"(?:(?:is|==|equals?|equal to|set to|defined as)\s*)?"
     rf"[`'\"]?{_VALUE}[`'\"]?",
     re.IGNORECASE,
 )

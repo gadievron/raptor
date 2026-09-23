@@ -509,11 +509,14 @@ _CONSECUTIVE_FAIL_LIMIT = 3  # abort run after N consecutive batch failures
 
 class _BatchLLMError(Exception):
     """LLM call failed for a batch — lets callers distinguish from empty-but-ok."""
+# The optional slash gates its own trailing whitespace — the naive
+# ``\s*/?\s*`` put two whitespace spans around it, quadratic on a
+# '<'-opening run.
 _INJECTION_RE = re.compile(
     r"(?:ignore|disregard|forget)\s+(?:all\s+)?(?:previous|above|prior)"
     r"|you\s+are\s+now"
     r"|system\s*(?:prompt|message|instruction)"
-    r"|<\s*/?\s*(?:system|instruction|prompt)",
+    r"|<\s*(?:/\s*)?(?:system|instruction|prompt)",
     re.IGNORECASE,
 )
 
@@ -4418,7 +4421,9 @@ def _reconstruct_from_sage(
 
     # First line is "Concept [id] in scope: description"
     first = row_lines[0][0]
-    m = re.match(r"Concept\s+\[([^\]]+)\]\s+in\s+.+?:\s+(.*)", first)
+    # (?=\S) pins the whitespace run before the lazy scope (same
+    # language — the lazy tail absorbed any remainder).
+    m = re.match(r"Concept\s+\[([^\]]+)\]\s+in\s+(?=\S).+?:\s+(.*)", first)
     if not m:
         return None
 

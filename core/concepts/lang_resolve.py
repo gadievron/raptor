@@ -465,9 +465,14 @@ def _const_pattern(language: str, name: str) -> re.Pattern | None:
     if language == "python":
         return re.compile(rf"^{esc}[ \t]*(?::[^=\n]+)?=[ \t]*\S", re.MULTILINE)
     if language == "go":
+        # The assignment branch's separator is subsumed by the value
+        # class ([^=\n] includes horizontal whitespace) — the naive
+        # ``[ \t]+[^=\n]*`` overlapped two spans, quadratic on a
+        # name followed by a whitespace run with no '='. Same
+        # language.
         return re.compile(
             rf"^[ \t]*(?:const|var)\s+(?:\([ \t]*)?{esc}\b|"
-            rf"^[ \t]*{esc}[ \t]+[^=\n]*=",
+            rf"^[ \t]*{esc}[ \t][^=\n]*=",
             re.MULTILINE,
         )
     if language == "rust":
@@ -549,9 +554,13 @@ def _type_pattern(language: str, name: str) -> re.Pattern | None:
             re.MULTILINE,
         )
     if language in ("javascript", "typescript", "tsx"):
+        # Bounded keyword gaps (\s{1,64}): unbounded ``\s+`` let
+        # every line anchor re-scan a shared whitespace run before
+        # failing at the name — quadratic over planted keyword lines.
+        # 64 whitespace chars per gap sits far above real code.
         return re.compile(
-            rf"^[ \t]*(?:export\s+)?(?:abstract\s+)?"
-            rf"(?:class|interface|enum|type)\s+{esc}\b",
+            rf"^[ \t]*(?:export\s{{1,64}})?(?:abstract\s{{1,64}})?"
+            rf"(?:class|interface|enum|type)\s{{1,64}}{esc}\b",
             re.MULTILINE,
         )
     if language == "php":
