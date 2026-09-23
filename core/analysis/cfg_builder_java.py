@@ -1152,8 +1152,21 @@ class _JavaCFGBuilder:
         # through the whole body, hiding the "sanitizer skipped via
         # continue" route — a missing path, the unsound direction for
         # the vertex cut. The C/C++ leg already targets the condition.
+        #
+        # ``break`` transfers past the WHOLE do statement (JLS 14.15)
+        # — the tail condition is never evaluated on that path.
+        # Targeting the condition instead made it falsely DOMINATE
+        # post-loop code, and dominance consumers (SMT branch-guard
+        # collection) then asserted the condition at sinks reached
+        # via break — a guard the code does not have. break targets
+        # a payload-free after-loop join instead; the condition's
+        # normal exit joins there too, so dominance survives exactly
+        # when no break can bypass the test.
+        after = self._make_node(
+            lineno=stmt.end_point[0] + 1, label="do-while-join",
+        )
         self._loop_stack.append((header, header))
-        self._break_targets.append(header)
+        self._break_targets.append(after)
         body = stmt.child_by_field_name("body")
         body_out = self._build_stmts(body, [head]) \
             if body is not None else [head]
@@ -1162,7 +1175,8 @@ class _JavaCFGBuilder:
         self._link_many(body_out, header)
         self._ambient_catch_link(header)
         self._link(header, head)
-        return [header]
+        self._link(header, after)
+        return [after]
 
     def _build_for(self, stmt: Node, incoming):
         init = stmt.child_by_field_name("init")
@@ -1302,10 +1316,16 @@ class _JavaCFGBuilder:
         if not self._break_targets:
             self._link(node, self.exit)
             return []
-        # break exits the innermost loop OR switch: for a loop the
-        # header stands in for the after-set (break must NOT re-test
-        # the condition, but the extra edge is only an extra path —
-        # conservative); for a switch the target is its join node.
+        # break exits the innermost loop OR switch. For while/for
+        # loops the header stands in for the after-set: break must
+        # NOT re-test the condition, but the header was genuinely
+        # evaluated on loop entry, so the extra path only adds facts
+        # already on every real path (conservative). That argument
+        # does NOT hold for do-while — its body precedes the first
+        # evaluation, so routing break through the condition would
+        # invent condition dominance over post-loop code; do-while
+        # therefore pushes its payload-free after-loop join instead.
+        # A switch pushes its join node.
         self._link(node, self._break_targets[-1])
         return []
 

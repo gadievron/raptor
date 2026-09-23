@@ -205,6 +205,62 @@ class TestControlFlowSoundness:
             "do-while continue→condition path missing: false suppression"
         )
 
+    def test_do_while_break_exits_without_evaluating_condition(self):
+        # JLS 14.15: ``break`` transfers past the whole do statement —
+        # the tail condition is NEVER evaluated on that path. Routing
+        # break through the condition node made the condition falsely
+        # DOMINATE post-loop code, and dominance consumers (SMT guard
+        # collection) then asserted a guard the code does not have at
+        # sinks reached via break.
+        cfg, _ = _cfg(
+            "        do {\n"
+            "            step(x);\n"
+            "            if (cond(x)) break;\n"
+            "        } while (retry(x));\n"
+            "        out.println(x);\n",
+        )
+        assert cfg is not None
+        from core.analysis.dominators import build_dom_tree
+        dom = build_dom_tree(cfg)
+        cond = next(n for n in cfg.nodes()
+                    if n.label.startswith("do-while "))
+        sink = next(n for n in cfg.nodes() if "println" in n.label)
+        assert not dom.dominates(cond, sink), (
+            "do-while condition must not dominate post-loop code: the "
+            "break path never evaluates it"
+        )
+        brk = next(n for n in cfg.nodes() if n.label == "break;")
+        assert cond not in cfg.successors(brk), (
+            "break must not route through the loop condition"
+        )
+        # The exit path is still connected.
+        reach = {cfg.entry_node}
+        stack = [cfg.entry_node]
+        while stack:
+            for s2 in cfg.successors(stack.pop()):
+                if s2 not in reach:
+                    reach.add(s2)
+                    stack.append(s2)
+        assert sink in reach and cfg.exit_node in reach
+
+    def test_do_while_without_break_condition_dominates_after(self):
+        # Control (two directions): with no break, every exit from the
+        # loop goes through the condition — dominance must survive the
+        # break fix (real guards must not be lost).
+        cfg, _ = _cfg(
+            "        do {\n"
+            "            step(x);\n"
+            "        } while (retry(x));\n"
+            "        out.println(x);\n",
+        )
+        assert cfg is not None
+        from core.analysis.dominators import build_dom_tree
+        dom = build_dom_tree(cfg)
+        cond = next(n for n in cfg.nodes()
+                    if n.label.startswith("do-while "))
+        sink = next(n for n in cfg.nodes() if "println" in n.label)
+        assert dom.dominates(cond, sink)
+
     def test_try_body_statement_reaches_catch(self):
         cfg, _ = _cfg(
             "        try {\n"
