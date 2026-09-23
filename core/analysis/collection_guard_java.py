@@ -69,6 +69,13 @@ logger = logging.getLogger(__name__)
 
 _MAX_DECLARING_CANDIDATES = 8
 _MAX_TREE_FILES = 5000
+
+# Loop statements carry a back edge — inside one, textual order stops
+# implying execution order (the writer-interval extension below).
+_LOOP_STATEMENT_TYPES = frozenset({
+    "while_statement", "do_statement", "for_statement",
+    "enhanced_for_statement",
+})
 _MAX_REFERENCING_FILES = 64
 _MAX_ELEMENTS = 64
 
@@ -671,8 +678,26 @@ def collection_guard_reason(
                 continue
         # Writer interval: from the guard's start to the END of the
         # sink line — a same-line writer after the sink call refuses
-        # too (conservative direction).
-        interval = (n.start_byte, sink_line_end)
+        # too (conservative direction). Byte order is NOT execution
+        # order under a back edge: a writer textually after the sink
+        # but inside a loop enclosing it executes BEFORE the sink on
+        # iteration >= 2, so the interval extends to the end of every
+        # loop that encloses the sink but not the guard. A loop
+        # enclosing BOTH re-tests the guard each iteration before the
+        # sink reruns, so the loop-carried write is re-vouched there
+        # and needs no extension.
+        interval_end = sink_line_end
+        for loop in _iter_named(method):
+            if loop.type not in _LOOP_STATEMENT_TYPES:
+                continue
+            if not (loop.start_point[0] + 1 <= sink_line
+                    <= loop.end_point[0] + 1):
+                continue
+            if loop.start_byte <= n.start_byte \
+                    and n.end_byte <= loop.end_byte:
+                continue
+            interval_end = max(interval_end, loop.end_byte)
+        interval = (n.start_byte, interval_end)
         writers = _writers_of(method, sink_arg)
         if any(interval[0] < w < interval[1] for w in writers):
             decisions.append(
