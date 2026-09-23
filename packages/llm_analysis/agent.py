@@ -2244,12 +2244,20 @@ class AutonomousSecurityAgentV2:
 
         logger.info("   ✓ Reading full file for context...")
 
-        try:
-            with open(file_path, encoding="utf-8", errors="replace") as f:
-                full_file_content = f.read()
-        except OSError as e:
-            logger.error("   ✗ Failed to read source: %s", e)
+        # Capped read — same target-repo file class (and the same
+        # hostile-giant-file OOM rationale) as read_vulnerable_code
+        # above. Behaviour-preserving for the prompt: the patch prompt
+        # keeps only the first 5000 chars of this content.
+        got = read_text_capped(file_path)
+        if got is None:
+            logger.error("   ✗ Failed to read source: %s", file_path)
             return False
+        full_file_content, truncated = got
+        if truncated:
+            logger.warning(
+                "   ⚠️ Source file truncated for patch context: %s",
+                file_path,
+            )
 
         from packages.llm_analysis.prompts.patch import build_patch_prompt_bundle
         from packages.llm_analysis.source_intel_inject import (
@@ -3384,12 +3392,18 @@ class AutonomousSecurityAgentV2:
                                     _fpath, _line)
                             else:
                                 from core.hash import sha256_string
-                                try:
-                                    _ftxt = _fpath.read_text(
-                                        encoding="utf-8", errors="replace")
-                                    _src_hash = sha256_string(_ftxt)[:12]
-                                except OSError:
+                                # Capped read: this hashes a target-repo
+                                # file (the same hostile-giant-file class
+                                # the windowed _line>0 branch avoids by
+                                # construction). Hashing the capped
+                                # prefix is a stable identity for the
+                                # verdict store — a >10 MB file changes
+                                # hash iff its first 10 MB change.
+                                _got = read_text_capped(_fpath)
+                                if _got is None:
                                     _src_hash = ""
+                                else:
+                                    _src_hash = sha256_string(_got[0])[:12]
                             if _src_hash:
                                 is_tp = vuln.analysis.get(
                                     "is_true_positive")

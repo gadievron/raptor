@@ -34,6 +34,14 @@ CHECKER_MATCHES_FILE = "checker-matches.jsonl"
 # LLM analysis call on top of the synthesis spend that produced it.
 MAX_VARIANT_REVIEWS_PER_RUN = 10
 
+# Byte budget for the checker-matches artifact read. Run dirs are
+# target-writable during dynamic phases, so this is a hostile-input
+# surface, not just an our-own-artifact one; the in-unit convention
+# is flow_context_inject's 64 MB artifact cap. A truncated read drops
+# the trailing candidates — bounded loss on a file that should be
+# orders of magnitude smaller.
+_MAX_MATCHES_BYTES = 64 * 1024 * 1024
+
 
 def _llm_callable_from_client(
     llm_client, cost_tracker=None,
@@ -533,11 +541,18 @@ def load_variant_candidates(
 
     candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set(exclude_keys)
-    try:
-        lines = matches_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        logger.debug("checker-matches read failed", exc_info=True)
+    from core.source import read_text_capped
+    got = read_text_capped(matches_path, _MAX_MATCHES_BYTES)
+    if got is None:
+        logger.debug("checker-matches read failed: %s", matches_path)
         return []
+    text, truncated = got
+    if truncated:
+        logger.warning(
+            "checker-matches.jsonl over the %d-byte budget — trailing "
+            "candidates ignored", _MAX_MATCHES_BYTES,
+        )
+    lines = text.splitlines()
 
     for raw in lines:
         if len(candidates) >= max_candidates:

@@ -2026,15 +2026,64 @@ def _finding_file_in_db(finding: dict, db_path: Path) -> bool:
     return _resolve_finding_in_db(finding, db_path) is not None
 
 
-@functools.lru_cache(maxsize=128)
+# Per-member read budget for src.zip source texts. The only consumer
+# is the word-boundary function-name scan in `_finding_function_in_db`
+# — it does not need the substrate's general 64 MB member cap, and an
+# adversarial DB with many huge ZIP_STORED "source" members would
+# otherwise materialise each of them in full. A member over this
+# budget reads as None → the coverage gate refuses to refute
+# (condemn-toward-abstain, same direction as every other read failure
+# here).
+_DB_SOURCE_MEMBER_CAP = 10 * 1024 * 1024
+
+# Total characters the memo below may retain. The old
+# lru_cache(maxsize=128) bounded ENTRIES, not bytes — 128 entries of
+# 64 MB members retained ~8 GB for process lifetime.
+_DB_SOURCE_CACHE_BUDGET = 64 * 1024 * 1024
+
+_db_source_cache: dict[tuple[str, str], str | None] = {}
+_db_source_cache_chars = 0
+
+
 def _read_db_source(db_path: Path, indexed_path: str) -> str | None:
     """Read a single indexed source file's text from `<db>/src.zip`.
 
-    Returns None on any error — caller treats that as 'can't verify'
-    and biases away from refutation. Cached per (db, path) so repeat
-    findings in the same file don't re-open the zip.
+    Returns None on any error or on an over-budget member — caller
+    treats that as 'can't verify' and biases away from refutation.
+    Cached per (db, path) so repeat findings in the same file don't
+    re-open the zip; the memo is bounded by total retained characters
+    (insertion-order eviction), not just entry count.
     """
-    src_zip = Path(db_path) / "src.zip"
+    global _db_source_cache_chars
+    key = (str(db_path), indexed_path)
+    if key in _db_source_cache:
+        return _db_source_cache[key]
+    text = _read_db_source_uncached(Path(db_path), indexed_path)
+    _db_source_cache[key] = text
+    _db_source_cache_chars += len(text) if text else 0
+    while (_db_source_cache_chars > _DB_SOURCE_CACHE_BUDGET
+           and len(_db_source_cache) > 1):
+        old_key = next(iter(_db_source_cache))
+        if old_key == key:
+            break
+        old_text = _db_source_cache.pop(old_key)
+        _db_source_cache_chars -= len(old_text) if old_text else 0
+    return text
+
+
+def _db_source_cache_clear() -> None:
+    """Reset the memo — mirrors the lru_cache API this replaced so
+    existing ``_read_db_source.cache_clear()`` callers keep working."""
+    global _db_source_cache_chars
+    _db_source_cache.clear()
+    _db_source_cache_chars = 0
+
+
+_read_db_source.cache_clear = _db_source_cache_clear  # type: ignore[attr-defined]
+
+
+def _read_db_source_uncached(db_path: Path, indexed_path: str) -> str | None:
+    src_zip = db_path / "src.zip"
     if not src_zip.is_file():
         return None
     try:
@@ -2047,8 +2096,14 @@ def _read_db_source(db_path: Path, indexed_path: str) -> str | None:
             # ``_db_indexed_files`` which already filtered via
             # ``safe_member_reason``, but re-check at the read site
             # so a future caller that constructs ``indexed_path`` by
-            # other means is still gated.
-            if safe_member_reason(info) != UnsafeMemberReason.SAFE:
+            # other means is still gated — with the tighter
+            # scan-appropriate member budget on top.
+            reason = safe_member_reason(info, max_size=_DB_SOURCE_MEMBER_CAP)
+            if reason != UnsafeMemberReason.SAFE:
+                logger.debug(
+                    "declining to read %s from %s: %s",
+                    indexed_path, src_zip, reason.value,
+                )
                 return None
             with zf.open(info) as f:
                 return f.read().decode("utf-8", errors="replace")
