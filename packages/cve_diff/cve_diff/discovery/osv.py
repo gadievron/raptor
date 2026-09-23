@@ -269,6 +269,13 @@ class OSVDiscoverer:
             return ""
         if parts.fragment:
             return ""
+        if parts.query:
+            # The docstring's own worked example
+            # (``repo: "git@evil.com/cred-stealer:path?token="``) is the
+            # query-smuggling shape: a live query string would ride the
+            # "canonical" URL into ``PatchTuple.repository_url`` and
+            # every downstream consumer (clone argv included).
+            return ""
         host = parts.hostname or ""
         if not host:
             return ""
