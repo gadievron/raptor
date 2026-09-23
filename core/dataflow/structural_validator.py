@@ -65,15 +65,6 @@ _SANITIZER_RE = re.compile(
     r'|parameteriz|prepared|bind)',
 )
 
-_CONDITION_NODE_TYPES = frozenset({
-    "if_statement", "elif_clause", "else_clause",
-    "switch_statement", "case_clause", "match_statement",
-    "ternary_expression", "conditional_expression",
-    "while_statement", "for_statement",
-    "guard_statement", "if_expression",
-})
-
-
 @dataclass
 class StepVerification:
     """Result of verifying one step in a dataflow path."""
@@ -402,8 +393,10 @@ def _extract_branch_guards_from_content(
 ) -> list[str]:
     """Extract branch guard conditions enclosing the given line.
 
-    Uses tree-sitter when available, falls back to regex for
-    simple ``if (...)`` patterns.
+    Regex + indentation scan only: walks up to 30 preceding lines and
+    collects ``if``/``elif``/``else if``/``while``/``for`` headers at
+    strictly shallower indent. No tree-sitter — best-effort textual
+    evidence for SMT Tier 4, not a parse.
     """
     guards: list[str] = []
     lines = content.splitlines()

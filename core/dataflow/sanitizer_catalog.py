@@ -1,9 +1,9 @@
 """Sanitizer catalog and CFG-aware recognizer — Phase 6 of the sanitizer-cut arc.
 
-Layered on top of :mod:`core.dataflow.known_safe_calls` (the existing
-24-entry curated table — sink classes ``xss`` / ``sqli`` / ``cmdi`` /
-``pathtrav``; languages Python / Java / JavaScript / TypeScript). The
-known-safe table stays the single source of truth for *which* calls are
+Layered on top of :mod:`core.dataflow.known_safe_calls` (the curated
+table — ``all_entries()`` is the live census of entries, sink classes
+and languages; hardcoding counts here drifted twice). The known-safe
+table stays the single source of truth for *which* calls are
 sanitizers; this module adds two things on top:
 
 1. A CWE → sink-class mapping so a finding tagged with a CWE
@@ -149,7 +149,7 @@ def _normalize_cwe(cwe: str) -> str:
     unchanged when it doesn't look like a CWE id so unknown lookups
     return a clean empty set rather than raising.
 
-    Delegates to :func:`core.cwe.canonicalize_cwe` with a
+    Delegates to :func:`core.cve.cwe.canonicalize_cwe` with a
     bare-number fallback (the shared canonicaliser rejects plain
     ``"79"`` since it isn't prefixed) and preserves the
     return-raw-on-unknown semantics the catalog's lookup depends on.
