@@ -194,9 +194,10 @@ class CompositionalAnalyzer:
             if (file, func) == (assumption.file, assumption.target) or func == "main":
                 continue
 
-            via = self._find_intermediate(
+            hit = self._find_intermediate(
                 file, func, assumption.target, target_callers,
             )
+            via, via_file = hit if hit is not None else (None, "")
 
             findings.append(BypassFinding(
                 assumption=assumption,
@@ -204,6 +205,7 @@ class CompositionalAnalyzer:
                 caller_function=func,
                 missing_enforcer=assumption.enforced_by[0] if assumption.enforced_by else "",
                 via_intermediate=via,
+                via_intermediate_file=via_file,
                 is_transitive=via is not None,
             ))
         return findings
@@ -379,8 +381,9 @@ class CompositionalAnalyzer:
         func: str,
         target: str,
         reaches_target: set[FuncKey] | None = None,
-    ) -> str | None:
-        """Find which callee of (file, func) transitively reaches *target*.
+    ) -> tuple[str, str] | None:
+        """Find which callee of (file, func) transitively reaches
+        *target*; returns ``(name, defining_file)``.
 
         *reaches_target* is ``transitive_callers(target)`` — the
         caller passes it in so the whole detection pays ONE backward
@@ -400,8 +403,16 @@ class CompositionalAnalyzer:
 
         if reaches_target is None:
             reaches_target = self.transitive_callers(target)
-        for _, callee_name in sorted(callees):
-            if any(k in reaches_target
-                   for k in self._keys_for(callee_name)):
-                return callee_name
+        for callee_file, callee_name in sorted(callees):
+            hit_keys = [
+                k for k in self._keys_for(callee_name)
+                if k in reaches_target
+            ]
+            if hit_keys:
+                # Prefer the reaching key co-located with the call
+                # edge; else the first reaching definition.
+                for k_file, _ in hit_keys:
+                    if k_file == callee_file:
+                        return callee_name, k_file
+                return callee_name, hit_keys[0][0]
         return None

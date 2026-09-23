@@ -85,6 +85,11 @@ class BypassFinding:
     caller_function: str
     missing_enforcer: str = ""
     via_intermediate: str | None = None
+    #: File defining the intermediate (best-known key from the call
+    #: graph). The intermediate is a DIFFERENT function from the
+    #: caller — filing it under caller_file made downstream source
+    #: reads (synthesis context) open the wrong file.
+    via_intermediate_file: str = ""
     is_transitive: bool = False
     ordering_violation: bool = False
     line_info: dict[str, int] = field(default_factory=dict)
@@ -95,6 +100,7 @@ class BypassFinding:
             "caller_file": self.caller_file,
             "caller_function": self.caller_function,
             "missing_enforcer": self.missing_enforcer,
+            "via_intermediate_file": self.via_intermediate_file,
             "is_transitive": self.is_transitive,
             "ordering_violation": self.ordering_violation,
             "evidence_tier": self.evidence_tier.value,

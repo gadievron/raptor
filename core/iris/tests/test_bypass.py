@@ -585,3 +585,34 @@ class TestDetectionCost:
         assert ana.transitive_callers("sink") is first
         fwd = ana.transitive_callees("f0")
         assert ana.transitive_callees("f0") is fwd
+
+
+class TestIntermediateFileAttribution:
+    """The intermediate is filed under ITS defining file, not the
+    caller's — downstream source reads open the intermediate's file."""
+
+    def test_cross_file_intermediate_carries_own_file(self):
+        graphs = {
+            "outer.c": _graph([("outer", "mid", 10)]),
+            "mid.c": _graph([("mid", "sink", 20)]),
+        }
+        ana = CompositionalAnalyzer(graphs)
+        findings = ana.detect_bypasses(_assumption("sink", "check"))
+        outer = next(f for f in findings
+                     if f.caller_function == "outer")
+        assert outer.via_intermediate == "mid"
+        assert outer.via_intermediate_file == "mid.c"
+        assert outer.to_dict()["via_intermediate_file"] == "mid.c"
+
+    def test_refine_injection_uses_intermediate_file(self):
+        from core.iris.refine import _inject_bypass_candidates
+        from core.iris.assumptions import BypassFinding
+
+        bf = BypassFinding(
+            assumption=_assumption("sink", "check"),
+            caller_file="outer.c", caller_function="outer",
+            via_intermediate="mid", via_intermediate_file="mid.c",
+            is_transitive=True,
+        )
+        out = _inject_bypass_candidates([], [bf])
+        assert [(c.function, c.file) for c in out] == [("mid", "mid.c")]
