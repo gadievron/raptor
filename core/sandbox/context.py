@@ -1572,10 +1572,19 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             sys.platform != "darwin" and check_net_available()
             # The forwarder rides the spawn backend: engaged only when
             # the mount-ns tier will be used for this context (same
-            # condition as `use_mount` below, which cannot be computed
-            # yet — `effectively_disabled` resolves after profile
-            # parsing; a disabled sandbox never reaches enforcement).
+            # condition as `use_mount` below).
             and bool(target or output) and check_mount_available()
+            # An operator-disabled sandbox never reaches enforcement:
+            # its children run in the HOST netns against the proxy's
+            # main TCP listener, so binding a per-context unix lane
+            # here subscribed the run's event buffer to a lane the
+            # child never used — a forensic reader of a disabled-run
+            # bisect saw zero proxy events where egress happened.
+            # Disabled runs take the TCP-lane / run-global telemetry
+            # view instead (_effectively_disabled is the same
+            # construction-time resolution the audit-mode gate above
+            # uses; the run body re-resolves its own copy later).
+            and not _effectively_disabled
         )
         if _proxy_netns_capable:
             _use_proxy_netns = True
