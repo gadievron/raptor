@@ -551,24 +551,29 @@ def _walk_gha_workflows(
 
         # Collect all bare runs-on: values (scalar form).
         # The matrix os/platform list is scanned ONCE per file and
-        # reused: re-running the whole-file scan per ``${{``-bearing
-        # ``runs-on:`` match multiplied the scan cost by the number
-        # of such matches (a hostile workflow stacked them).
-        matrix_items: list[str] | None = None
+        # its items REGISTERED once: re-running the whole-file scan
+        # per ``${{``-bearing ``runs-on:`` match multiplied the scan
+        # cost by the number of such matches, and even a hoisted scan
+        # re-adds k*m runner entries when a hostile workflow stacks k
+        # variable runs-on lines against an m-item list — quadratic
+        # WORK for a set the dedup collapses anyway (every add stamps
+        # the identical per-file source string, so once is
+        # equivalent).
+        matrix_items_added = False
         for m in runs_on_re.finditer(text):
             value = m.group(1).strip().strip("'\"")
             if "${{" in value:
                 # Variable reference — look for matrix.os list.
-                if matrix_items is None:
-                    matrix_items = [
-                        s.strip().strip("'\"")
-                        for body in _iter_bracket_list_bodies(
-                            text, matrix_os_anchor_re)
-                        if body  # old body class was [^\]]+ (non-empty)
-                        for s in body.split(",")
-                    ]
-                for item in matrix_items:
-                    _add_runner(item, matrix, wf)
+                if not matrix_items_added:
+                    matrix_items_added = True
+                    for body in _iter_bracket_list_bodies(
+                            text, matrix_os_anchor_re):
+                        if not body:  # old body class was [^\]]+
+                            continue
+                        for s in body.split(","):
+                            _add_runner(
+                                s.strip().strip("'\""), matrix, wf,
+                            )
                 continue
             _add_runner(value, matrix, wf)
 

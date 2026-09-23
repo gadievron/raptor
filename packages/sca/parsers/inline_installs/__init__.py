@@ -185,11 +185,14 @@ _GHA_EXPR_RE = re.compile(r"\$\{\{(?:[^}]|\}(?!\})){0,400}\}\}")
 # spellings: the previous enumeration let ``&>>`` (startswith ``&>``
 # but != ``&>``, so its target survived) and ``>|`` (fails a bare
 # ``[><]{1,3}$`` check) leak their targets through as phantom
-# packages. The single-char ``<`` / ``>`` arms refuse a following
-# ``=`` so version comparators split out of quoted specs (``'foo >=
-# 1.2'`` tokenises as ``'foo``, ``>=``, ``1.2'``) keep their meaning.
+# packages. The operator may carry an IO-number prefix (``2>``) or
+# bash's ``{varname}`` fd-variable prefix (``{log}>out.txt``). The
+# single-char ``<`` / ``>`` arms refuse a following ``=`` so version
+# comparators split out of quoted specs (``'foo >= 1.2'`` tokenises
+# as ``'foo``, ``>=``, ``1.2'``) keep their meaning.
 _REDIRECT_OP_RE = re.compile(
-    r"^(?:\d*(?:<<<|<<-|<<|<>|<&|>&|>>|>\||<(?!=)|>(?!=))|&>>|&>)"
+    r"^(?:(?:\d*|\{\w+\})"
+    r"(?:<<<|<<-|<<|<>|<&|>&|>>|>\||<(?!=)|>(?!=))|&>>|&>)"
 )
 
 
