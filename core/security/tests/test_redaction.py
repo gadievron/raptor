@@ -336,3 +336,71 @@ class TestProsePreservingGates:
         out = redact_secrets(text)
         assert secret not in out, out
         assert "[REDACTED]" in out
+
+
+class TestFragmentSecrets:
+    """OAuth implicit-flow tokens live in the URL FRAGMENT (that's the
+    spec's point — the fragment never crosses the wire), so fragment
+    key=value pairs get the same secret-name redaction as the query."""
+
+    def test_fragment_access_token_redacted(self):
+        out = redact_secrets(
+            "cb https://app.example/cb#access_token=abcdef123456&state=ok")
+        assert "abcdef123456" not in out
+        assert "access_token=[REDACTED]" in out
+        assert "state=ok" in out
+
+    def test_blank_valued_fragment_secret_pair_survives_redaction(self):
+        # A blank-valued pair must round-trip (key visible, value
+        # redacted-in-place) — dropping blank pairs would silently
+        # rewrite the URL shape in artifacts.
+        out = redact_secrets("see https://app.example/#id_token=&next=/home")
+        assert "id_token=[REDACTED]" in out
+        assert "next=/home" in out
+
+    def test_fragment_without_pairs_untouched(self):
+        out = redact_secrets("doc https://app.example/page#section-2 end")
+        assert "https://app.example/page#section-2" in out
+
+
+class TestBlankQueryValues:
+    def test_blank_valued_query_secret_pair_survives_redaction(self):
+        out = redact_secrets("GET https://api.example/v1?token=&page=2")
+        assert "token=[REDACTED]" in out
+        assert "page=2" in out
+
+
+class TestUserinfoEdgeShapes:
+    def test_multi_at_userinfo_redacts_password_keeps_host(self):
+        # '@' is legal (percent-encoding-optional in practice) inside
+        # userinfo passwords; the HOST is everything after the LAST
+        # '@'. The password — '@'s included — must be redacted whole.
+        out = redact_secrets("dsn https://user:p@ss@db.example/base")
+        assert out == "dsn https://user:[REDACTED]@db.example/base"
+
+
+class TestBalancedParenUrls:
+    def test_balanced_paren_url_not_peeled(self):
+        # Balanced parens are URL content (wikipedia-style paths,
+        # tracking params): the trailing ')' belongs to the URL and is
+        # NOT split off as a prose wrapper. The query value round-trips
+        # percent-encoded by the redaction re-serialisation.
+        out = redact_secrets("go https://api.example/?q=(x) end")
+        assert "https://api.example/?q=%28x%29 end" in out
+
+
+class TestCodeShapedAssignmentValues:
+    def test_call_expression_value_not_redacted(self):
+        # `password = get_pass(ctx)` is a code snippet quoted into a
+        # diagnostic — the "value" is a function call, not a credential.
+        s = "password = get_pass(ctx)"
+        assert redact_secrets(s) == s
+
+    def test_dotted_path_value_not_redacted(self):
+        s = "auth_token = request.headers.auth"
+        assert redact_secrets(s) == s
+
+    def test_literal_secret_value_still_redacted(self):
+        out = redact_secrets("password = hunter2hunter2")
+        assert "hunter2hunter2" not in out
+        assert "[REDACTED]" in out
