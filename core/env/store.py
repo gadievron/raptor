@@ -15,11 +15,14 @@ recall only — the disk store is always authoritative):
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
 from core.atomic_fs import write_text_atomically
 from core.env.spec import EnvironmentSpec
+
+logger = logging.getLogger(__name__)
 
 RUN_SPEC_FILENAME = "environment-spec.json"
 
@@ -61,6 +64,23 @@ class SpecStore:
     def save(self, spec: EnvironmentSpec) -> Path:
         self.root.mkdir(parents=True, exist_ok=True)
         path = self.path_for(spec.name)
+        # Slug-collision guard: distinct names can share a slug
+        # ("Foo Bar" vs "foo-bar"), and the overwrite used to be
+        # silent — one spec vanished with zero signal. Same-name
+        # re-save stays the quiet update it always was; an unreadable
+        # existing file is overwritten (that IS the fix for it).
+        if path.is_file():
+            try:
+                existing = EnvironmentSpec.from_json(
+                    path.read_text(encoding="utf-8"))
+            except Exception:  # noqa: BLE001
+                existing = None
+            if existing is not None and existing.name != spec.name:
+                logger.warning(
+                    "spec store: saving %r overwrites existing spec %r "
+                    "(both slug to %s)",
+                    spec.name, existing.name, path.name,
+                )
         write_text_atomically(path, spec.to_json() + "\n")
         return path
 
