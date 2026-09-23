@@ -935,7 +935,20 @@ def iter_all_annotations(base_dir: Path) -> Iterator[Annotation]:
         # rel.with_suffix("") drops the final .md, leaving e.g.
         # "packages/foo/bar.py" for "packages/foo/bar.py.md".
         source_file = str(rel.with_suffix(""))
-        yield from read_file_annotations(base_dir, source_file)
+        try:
+            anns = read_file_annotations(base_dir, source_file)
+        except ValueError as e:
+            # A directory entry whose recovered source path fails
+            # validation (control characters, symlinked final
+            # component, ...) is one bad file — the tolerant-walk
+            # contract says it must not take the whole tree's
+            # readers down with it. Same degrade-with-a-warning
+            # semantics as an unreadable file.
+            logger.warning(
+                "skipping annotation file %r: %s", str(md), e,
+            )
+            continue
+        yield from anns
 
 
 def compute_function_hash(
