@@ -758,64 +758,27 @@ class BuildDetector:
 
         The manifest lives in the SCANNED (untrusted) repo and this
         method runs in the unsandboxed parent, so the bytes are gated
-        BEFORE any parse: open with ``O_NOFOLLOW`` (a package.json
-        symlinked at /dev/zero would otherwise be slurped until OOM)
-        and ``O_NONBLOCK`` (a FIFO would otherwise block ``open``
-        forever), then require ``fstat`` to report a regular file
-        under the size cap. Anything failing the gate degrades to
-        "no build script", same as a malformed manifest.
+        BEFORE any parse — via the shared hardened reader
+        (``macro_config._read_bounded``: O_NOFOLLOW so a package.json
+        symlinked at /dev/zero is refused, O_NONBLOCK so a FIFO can't
+        block ``open`` forever, fstat regular-file + size gate before
+        any read, grew-past-cap re-check). This method used to carry
+        its own inline copy of that whole gate. Anything failing it
+        degrades to "no build script", same as a malformed manifest.
         """
         import json
-        import stat as _stat
-        flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+
+        from core.build.macro_config import _read_bounded
         try:
-            fd = os.open(str(package_json), flags)
-        except OSError as e:
-            logger.debug("Cannot open package.json: %s", e)
+            raw = _read_bounded(package_json, self._PACKAGE_JSON_MAX_BYTES)
+        except (OSError, ValueError) as e:
+            logger.debug("Cannot read package.json: %s", e)
             return False
         try:
-            st = os.fstat(fd)
-            if not _stat.S_ISREG(st.st_mode):
-                logger.debug(
-                    "package.json at %s is not a regular file — ignoring",
-                    package_json,
-                )
-                return False
-            if st.st_size > self._PACKAGE_JSON_MAX_BYTES:
-                logger.debug(
-                    "package.json at %s is %d bytes (cap %d) — ignoring",
-                    package_json, st.st_size, self._PACKAGE_JSON_MAX_BYTES,
-                )
-                return False
-            chunks = []
-            remaining = self._PACKAGE_JSON_MAX_BYTES + 1
-            while remaining > 0:
-                buf = os.read(fd, min(remaining, 1 << 20))
-                if not buf:
-                    break
-                chunks.append(buf)
-                remaining -= len(buf)
-            if remaining <= 0:
-                # File grew past the cap between fstat and the reads.
-                logger.debug(
-                    "package.json at %s exceeded the size cap during "
-                    "read — ignoring", package_json,
-                )
-                return False
-            raw = b"".join(chunks)
-        except OSError as e:
-            logger.debug("Error reading package.json: %s", e)
-            return False
-        finally:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        try:
-            # utf-8-sig: transparently strip a UTF-8 BOM (same contract
-            # as core.json.load_json, which this replaced — load_json
-            # has no pre-parse size/file-type gate).
-            data = json.loads(raw.decode("utf-8-sig"))
+            # Leading U+FEFF: the utf-8 BOM under the reader's
+            # errors="replace" decode (same contract the previous
+            # utf-8-sig decode provided).
+            data = json.loads(raw.lstrip("\ufeff"))
             if not isinstance(data, dict):
                 return False
             scripts = data.get("scripts", {})
@@ -823,6 +786,7 @@ class BuildDetector:
         except Exception as e:  # noqa: BLE001 — malformed manifest degrades to no-build-script
             logger.debug("Error parsing package.json: %s", e)
             return False
+
     # Version probes run from the filesystem root — NEVER from inside
     # the scanned repo. Build tools auto-load configuration relative
     # to cwd (or an ancestor found by walking upward), even for bare

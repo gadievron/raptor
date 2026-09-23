@@ -229,11 +229,20 @@ def _from_compile_commands(path: Path) -> MacroConfig:
                        source="compile_commands.json")
 
 
+# Kconfig line grammar — ONE home for the pair (build_flags carried a
+# byte-identical copy; duplicated grammar is the drift substrate this
+# unit's adoption gaps grew from).
+_KCONFIG_SET_RE = re.compile(r"^(CONFIG_[A-Z0-9_]+)=([ym])\s*$",
+                             re.MULTILINE)
+_KCONFIG_NOT_SET_RE = re.compile(
+    r"^#\s*(CONFIG_[A-Z0-9_]+)\s+is\s+not\s+set\s*$", re.MULTILINE)
+
+
 def _from_kconfig(path: Path) -> MacroConfig:
     text = _read_bounded(path, _MAX_KCONFIG_BYTES)
     defined: dict[str, str] = {}
     undefined: set = set()
-    for m in re.finditer(r"^(CONFIG_[A-Z0-9_]+)=([ym])\s*$", text, re.MULTILINE):
+    for m in _KCONFIG_SET_RE.finditer(text):
         name = m.group(1)
         if m.group(2) == "y":
             defined[name] = "1"
@@ -246,8 +255,7 @@ def _from_kconfig(path: Path) -> MacroConfig:
             # this module's allowlist design exists to prevent.
             defined[name + "_MODULE"] = "1"
             undefined.add(name)
-    for m in re.finditer(r"^#\s*(CONFIG_[A-Z0-9_]+)\s+is\s+not\s+set\s*$",
-                         text, re.MULTILINE):
+    for m in _KCONFIG_NOT_SET_RE.finditer(text):
         undefined.add(m.group(1))
     # A CONFIG_X seen both defined (=y) and undefined (=m duplicate or
     # "is not set" line) shouldn't happen in a real .config, but be
