@@ -1960,6 +1960,26 @@ def _finalize_run(
 
     from core.audit.report import generate_report, write_report
 
+    # Startup refusal: the orchestrator found a checklist with ZERO
+    # reviewable items and never entered the review loop. Do NOT print
+    # the "Audit complete: ... 0 findings" summary (the silent-no-op
+    # shape this guard exists to kill) or stamp the lifecycle
+    # completed — fail it so the run is visibly broken, not a clean
+    # bill of health. The orchestrator already logged the detailed
+    # cause (checklist path, item count, recorded target_path).
+    if result.terminated_by == "empty_inventory":
+        print(
+            "Audit refused: the inventory (checklist.json) holds zero "
+            "reviewable items — nothing was reviewed. See the error "
+            "above for the checklist path, its recorded target_path, "
+            "and likely causes.",
+            file=sys.stderr, flush=True,
+        )
+        _lifecycle_fail(
+            out_dir, "empty inventory — checklist has no reviewable items",
+        )
+        return 1
+
     # The lifecycle transition below stamps "interrupted" for a
     # SIGTERM drain or an environment-fault conclusion and "completed"
     # otherwise — tell the report which, so its completeness block
