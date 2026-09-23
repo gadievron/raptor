@@ -12432,7 +12432,12 @@ def _classify_error(
     msg = str(exc).lower()
     if "content filter" in msg or "blocked" in msg:
         return "content_filter"
-    if "budget exceeded" in msg:
+    # Chokepoint, not a bare substring: exception text can quote
+    # model-chosen content, and the "budget" class drops the row from
+    # the recoverable retry lanes — the classifier vetoes shape
+    # failures on the causal chain.
+    from core.llm.client import is_budget_exceeded_error
+    if is_budget_exceeded_error(exc):
         return "budget"
     # Environmental failures (see environment.marks_row_environment:
     # chain-walked disk/fd/memory errnos always; network/auth only
