@@ -64,7 +64,9 @@ _REQUIRE_RE = re.compile(
       # run.
       | \bimport\s+(?=\S)(?:[^'";]+?\bfrom\s+)?['"`]([^'"`]+)['"`]
                                                           # static import
-      | \bexport\s+(?:(?:[^'";]|"[^"\n;]*"|'[^'\n;]*')*?\bfrom\s+)
+      # (?=\S) pins the keyword gap here too — the lazy token loop
+      # admits whitespace, so an unpinned run split against it.
+      | \bexport\s+(?=\S)(?:(?:[^'";]|"[^"\n;]*"|'[^'\n;]*')*?\bfrom\s+)
             ['"`]([^'"`]+)['"`]                               # re-export
             # The quoted-string alternatives keep ES2022 string-named
             # re-exports (``export { a as "x y" } from 'm'``) matched

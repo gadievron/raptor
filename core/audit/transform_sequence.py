@@ -588,8 +588,10 @@ _CONTROL_FLOW_NAMES = frozenset(
     {"if", "for", "while", "switch", "catch", "do", "else", "return"}
 )
 
+# \b keeps the unanchored scan from restarting inside an identifier
+# run (quadratic); earliest-start matches and captures unchanged.
 _CALL_RE = re.compile(
-    r"(\w+(?:\.\w+)*)\s*\(",
+    r"\b(\w+(?:\.\w+)*)\s*\(",
 )
 
 

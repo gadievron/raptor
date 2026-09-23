@@ -2517,9 +2517,13 @@ def _line_has_c_source_call(line: str, name: str) -> bool:
         # Bounded qualifier loop and parameter window (the loop
         # overlapped the star/whitespace span and the window let the
         # anchored call re-scan a paren-less tail — quadratic).
+        # Star tokens ride the qualifier loop and the residual
+        # pointer span is stars-only (the old ``[*\s]*`` duplicated
+        # the loop's whitespace separator and split against it —
+        # quadratic).
         re.match(
             r"^\s*(?:extern\s+|static\s+|inline\s+|"
-            r"[A-Za-z_][\w_]*\s+){1,24}[*\s]*"
+            r"[A-Za-z_][\w_]*\s+|\*\s+){1,24}\**"
             + re.escape(name)
             + r"\s*\([^;{}]{0,4096}\)\s*;\s*$",
             line,

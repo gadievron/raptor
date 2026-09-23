@@ -539,7 +539,10 @@ def _walk_gha_workflows(
     # single-anchor fix bounded the whitespace competition, not the
     # per-anchor tail scan). The body keeps its surrounding
     # whitespace (consumers strip each item).
-    runs_on_re = re.compile(r"^[^\S\n]*runs-on:\s*([^\n#]+)", re.MULTILINE)
+    # Bounded key/value gap (same rationale as _PLATFORMS_INPUT_RE).
+    runs_on_re = re.compile(
+        r"^[^\S\n]*runs-on:\s{0,64}([^\n#]+)", re.MULTILINE,
+    )
     matrix_os_anchor_re = re.compile(
         r"^[^\S\n]*(?:os|platform):\s*\[", re.MULTILINE,
     )
@@ -610,8 +613,13 @@ _BUILD_PUSH_USES_RE = re.compile(
 _NEXT_STEP_BOUNDARY_RE = re.compile(
     r"^[^\S\n]*-\s*(?:uses|run|name):", re.MULTILINE,
 )
+# Bounded key/value gap (\s{0,64}): the unbounded ``\s*`` let every
+# 'platforms:' anchor re-scan a shared whitespace run before failing
+# at the value — quadratic over planted key lines. 64 whitespace
+# chars keeps the next-line-value shape while capping per-anchor
+# reach.
 _PLATFORMS_INPUT_RE = re.compile(
-    r"^[^\S\n]*platforms:\s*([^\n#]+)", re.MULTILINE,
+    r"^[^\S\n]*platforms:\s{0,64}([^\n#]+)", re.MULTILINE,
 )
 
 
