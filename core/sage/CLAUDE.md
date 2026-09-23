@@ -121,10 +121,13 @@ available. Structured choice:
 - "Review and approve the SAGE tools surface now (Recommended)":
   tell the operator to run `! libexec/raptor-sage-setup review` at
   their own terminal (the `!` prefix hands the command their TTY).
-  The review tool itself displays each pending tool definition as an
-  escaped per-surface diff and THEN prompts approve/reject at their
-  terminal — the decision happens inside the review tool, after the
-  operator has seen the definitions. NEVER run the approval from your
+  The review tool itself displays the pending tools surface through
+  its escaped lane — a first baseline renders as one digest (names,
+  description lengths, schema size+hash, a description red-flag scan)
+  with per-tool drill-down; post-baseline drift renders per-tool
+  diffs against the baselined entries — and THEN prompts
+  approve/reject at their terminal — the decision happens inside the
+  review tool, after the operator has seen the evidence. NEVER run the approval from your
   own shell (the CLI hard-refuses a non-TTY `--approve`; approval
   must stay TTY-stamped), and never offer an approve shortcut that
   skips the review display. Do not quote or paraphrase the

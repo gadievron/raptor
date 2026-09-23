@@ -1335,6 +1335,19 @@ review_boot_payload() {
     fi
     echo "The variants marked \"Not Authorized\" above are undecided: the MCP"
     echo "guard strips them from live agent sessions until you decide."
+    # First-baseline honesty: with no tools baseline in the stamp, the
+    # tools digest above is a trust-on-first-use decision (the guard
+    # currently FORWARDS tools/list with an unverified notice — it has
+    # nothing to strip against), which the generic strip-wording does
+    # not cover. Wording only; enforcement reads the stamp, not this.
+    if ! grep -qxF '### tools.list' "$AUTHORIZED_PAYLOAD"; then
+        echo
+        echo "tools.list has no baseline yet: sessions currently receive the server's"
+        echo "tools/list with only an unverified notice. Approving baselines the"
+        echo "CURRENT live tool surface (trust-on-first-use — the digest above is the"
+        echo "evidence being approved) and the guard then enforces it; rejecting"
+        echo "records every captured definition as denied."
+    fi
     echo
     local decision=""
     if [ "$APPROVE" = "1" ]; then
@@ -1344,17 +1357,26 @@ review_boot_payload() {
         decision=deny
         echo "Rejecting (--reject)."
     elif [ -t 0 ]; then
+        # One decision for the whole reviewed capture, with a
+        # drill-down that renders a single full tool definition
+        # (escaped) and re-prompts — inspection is never a decision.
         local answer
-        read -r -p "Approve or reject these variants? [a=approve / r=reject / N=decide later] " answer
-        case "$answer" in
-            a|A) decision=merge ;;
-            r|R) decision=deny ;;
-            *)
-                echo "No decision recorded. The stamp is unchanged; review will" >&2
-                echo "flag these variants again." >&2
-                return 4
-                ;;
-        esac
+        while true; do
+            read -r -p "Approve or reject these variants? [a=approve / r=reject / d <tool>=show full definition / N=decide later] " answer || answer=""
+            case "$answer" in
+                a|A) decision=merge; break ;;
+                r|R) decision=deny; break ;;
+                [dD]\ ?*)
+                    python3 "$reviewer" show-tool --live "$tmp_live" \
+                        --name "${answer#[dD] }" || true
+                    ;;
+                *)
+                    echo "No decision recorded. The stamp is unchanged; review will" >&2
+                    echo "flag these variants again." >&2
+                    return 4
+                    ;;
+            esac
+        done
     else
         echo "Non-interactive and no decision flag: the stamp is unchanged." >&2
         echo "  approve: libexec/raptor-sage-setup review --approve" >&2

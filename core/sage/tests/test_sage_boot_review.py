@@ -942,12 +942,14 @@ class TestParseSectionsInjection(ReviewerBase):
 
 class TestReviewSubcommand(ReviewerBase):
     def _run(self, fake_payload, approve=False, reject=False, stamp=None,
-             tty_stdin=None):
+             tty_stdin=None, pty_input=None):
         # --approve requires stdin to be a TTY (the anti-laundering
         # gate), so approve runs get a PTY slave as stdin by default;
         # pass tty_stdin=False to exercise the refusal path.
+        # pty_input feeds the interactive prompt loop (drill-down and
+        # the final decision) through the PTY.
         if tty_stdin is None:
-            tty_stdin = approve
+            tty_stdin = approve or pty_input is not None
         authorized = self.dir / ".sage" / "boot-payload.authorized"
         authorized.parent.mkdir(parents=True, exist_ok=True)
         if stamp is not None:
@@ -968,6 +970,10 @@ class TestReviewSubcommand(ReviewerBase):
             import pty
             master, slave = pty.openpty()
             try:
+                if pty_input is not None:
+                    # Queued in the line-discipline buffer before the
+                    # child starts; read -r consumes it line by line.
+                    os.write(master, pty_input.encode("utf-8"))
                 proc = subprocess.run(
                     ["bash", "-c", driver], capture_output=True,
                     text=True, env=env, stdin=slave,
@@ -1078,6 +1084,66 @@ class TestReviewSubcommand(ReviewerBase):
         msg = {"result": {"tools": [json.loads(json.dumps(TOOL_TAMPERED))]}}
         self.assertTrue(guard._check_tools_list(msg, surfaces))
         self.assertIn("WARNING", msg["result"]["tools"][0]["description"])
+
+    def test_first_baseline_wording_is_trust_on_first_use(self):
+        """No tools baseline in the stamp: the consent wording must be
+        honest — the guard is FORWARDING tools/list with a notice (not
+        stripping), and an approve baselines the current live surface
+        sight-on-digest, trust-on-first-use."""
+        proc, _ = self._run(
+            live_capture([INIT_CLEAN], [CONTENT_CLEAN],
+                         tools=[TOOL_RECALL, TOOL_TURN]),
+            stamp=v1_stamp(INIT_CLEAN, MSG_CLEAN))
+        self.assertEqual(proc.returncode, 4)
+        self.assertIn("trust-on-first-use", proc.stdout)
+        self.assertIn("unverified notice", proc.stdout)
+        # Baselined stamp: the first-capture wording must NOT appear.
+        proc2, _ = self._run(
+            live_capture([INIT_CLEAN, INIT_SAFEGUARDS],
+                         [CONTENT_CLEAN],
+                         tools=[TOOL_RECALL]),
+            stamp=stamp_with_tools(INIT_CLEAN, MSG_CLEAN,
+                                   [TOOL_RECALL]))
+        self.assertEqual(proc2.returncode, 4)
+        self.assertNotIn("trust-on-first-use", proc2.stdout)
+
+    def test_drilldown_shows_definition_and_is_not_a_decision(self):
+        """`d <tool>` renders the full definition (the digest itself
+        never dumps schemas) and re-prompts; ending without a/r leaves
+        the stamp untouched."""
+        stamp = v1_stamp(INIT_CLEAN, MSG_CLEAN)
+        proc, authorized = self._run(
+            live_capture([INIT_CLEAN], [CONTENT_CLEAN],
+                         tools=[TOOL_RECALL]),
+            stamp=stamp, pty_input="d sage_recall\nn\n")
+        self.assertEqual(proc.returncode, 4, proc.stderr)
+        self.assertIn('"inputSchema"', proc.stdout)
+        self.assertIn("live tool #1", proc.stdout)
+        self.assertEqual(
+            authorized.read_text(encoding="utf-8"), stamp,
+            "drill-down must never change the stamp")
+
+    def test_drilldown_then_approve_records_baseline(self):
+        proc, authorized = self._run(
+            live_capture([INIT_CLEAN], [CONTENT_CLEAN],
+                         tools=[TOOL_RECALL]),
+            stamp=v1_stamp(INIT_CLEAN, MSG_CLEAN),
+            pty_input="d sage_recall\na\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        surfaces = guard._parse_authorized(str(authorized))
+        msg = {"result": {"tools": [json.loads(json.dumps(TOOL_RECALL))]}}
+        guard._check_tools_list(msg, surfaces)
+        self.assertEqual(msg["result"]["tools"], [TOOL_RECALL])
+
+    def test_unknown_drilldown_name_reprompts_honestly(self):
+        stamp = v1_stamp(INIT_CLEAN, MSG_CLEAN)
+        proc, authorized = self._run(
+            live_capture([INIT_CLEAN], [CONTENT_CLEAN],
+                         tools=[TOOL_RECALL]),
+            stamp=stamp, pty_input="d nope\nn\n")
+        self.assertEqual(proc.returncode, 4, proc.stderr)
+        self.assertIn("no live tool definition", proc.stderr)
+        self.assertEqual(authorized.read_text(encoding="utf-8"), stamp)
 
     def test_approve_and_reject_conflict(self):
         proc, _ = self._run(
