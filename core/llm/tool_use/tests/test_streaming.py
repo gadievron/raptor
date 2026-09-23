@@ -724,3 +724,83 @@ class TestStreamFailureContainment:
         assert out.terminated_by == "complete"
         assert out.final_text == "final"
         assert p.calls == 1
+
+
+class TestUsageChunkRetryContainment:
+    """A stream that yields its usage chunk BEFORE failing pre-content
+    must not be silently retried: the usage StreamDelta was already
+    emitted to subscribers, so a retry double-emits it and a
+    delta-summing subscriber double-counts tokens against the loop's
+    own accounting. No in-repo provider emits usage before content
+    (all three accumulate and emit post-content), so this costs no
+    retries today — it is the loop-contract guard for any future
+    provider that does."""
+
+    def test_usage_chunk_marks_content_seen(self):
+        attempt = [0]
+
+        class UsageThenDropProvider(_FakeBase):
+            def supports_streaming(self):
+                return True
+
+            def turn(self, messages, tools, **kw):
+                raise NotImplementedError
+
+            def turn_stream(self, messages, tools, **kw):
+                attempt[0] += 1
+                yield StreamChunk(
+                    type="usage", input_tokens=1000, output_tokens=0,
+                )
+                if attempt[0] == 1:
+                    raise ConnectionError("transient drop before content")
+                yield StreamChunk(type="text_delta", text="done")
+                yield StreamChunk(
+                    type="done", stop_reason=StopReason.COMPLETE,
+                )
+
+        usage_events: list[int] = []
+
+        def events(ev):
+            if isinstance(ev, StreamDelta) and ev.chunk.type == "usage":
+                usage_events.append(ev.chunk.input_tokens)
+
+        loop = ToolUseLoop(
+            UsageThenDropProvider(_cfg()), [_echo_tool()],
+            stream=True, events=events, max_iterations=2,
+        )
+        with pytest.raises(Exception):
+            loop.run("go")
+        # The failed attempt emitted exactly one usage delta and was
+        # NOT retried — subscribers never see a duplicate.
+        assert usage_events == [1000]
+        assert attempt[0] == 1
+
+    def test_pre_usage_failure_still_retries(self):
+        attempt = [0]
+
+        class DropThenHealthyProvider(_FakeBase):
+            def supports_streaming(self):
+                return True
+
+            def turn(self, messages, tools, **kw):
+                raise NotImplementedError
+
+            def turn_stream(self, messages, tools, **kw):
+                attempt[0] += 1
+                if attempt[0] == 1:
+                    raise ConnectionError("drop before ANY chunk")
+                yield StreamChunk(type="text_delta", text="done")
+                yield StreamChunk(
+                    type="usage", input_tokens=10, output_tokens=2,
+                )
+                yield StreamChunk(
+                    type="done", stop_reason=StopReason.COMPLETE,
+                )
+
+        loop = ToolUseLoop(
+            DropThenHealthyProvider(_cfg()), [_echo_tool()],
+            stream=True, max_iterations=2,
+        )
+        result = loop.run("go")
+        assert result.terminated_by == "complete"
+        assert attempt[0] == 2
