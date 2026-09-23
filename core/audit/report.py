@@ -204,6 +204,17 @@ def generate_report(
     if vendored_triage:
         report["vendored_triage"] = vendored_triage
 
+    # Analysis gaps: files a parser abandoned (budget exceeded,
+    # escaped parse error). Counted here so a crafted file that
+    # defeats a parser is visible in the report, never a silent skip.
+    from core.run.gaps import gap_summary
+    analysis_gaps = gap_summary(out_dir)
+    if analysis_gaps:
+        report["analysis_gaps"] = {
+            "count": sum(analysis_gaps.values()),
+            "reasons": analysis_gaps,
+        }
+
     # Cross-function edge obligations (--edges runs): tier counts,
     # unreviewed tier-1 edges, and the blind-spot list — the
     # 2026-05-29 design's headline output. Absent file -> absent key.
@@ -632,6 +643,22 @@ def write_markdown_report(
             f"(function absent from binary)."
         )
         lines.append("See suppressions.jsonl for details.")
+        lines.append("")
+
+    # Analysis gaps
+    analysis_gaps = report.get("analysis_gaps")
+    if analysis_gaps:
+        lines.append("## Analysis Gaps")
+        lines.append("")
+        lines.append(
+            f"{analysis_gaps['count']} file record(s) NOT analysed — "
+            "a parser abandoned them:"
+        )
+        lines.append("")
+        for reason, count in sorted(analysis_gaps["reasons"].items()):
+            lines.append(f"- {_cell(reason, max_chars=80)}: {count}")
+        lines.append("")
+        lines.append("See analysis-gaps.jsonl for the per-file records.")
         lines.append("")
 
     # Measurement evaluation

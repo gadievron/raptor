@@ -4726,6 +4726,21 @@ def main() -> int:
                     f"{_candidates} candidates ({_pct:.0f}%, see "
                     f"suppressions.jsonl)"
                 )
+    # Analysis gaps: files a parser abandoned (budget exceeded,
+    # stalled worker, escaped parse error). Loud by contract — a
+    # crafted file that defeats a parser must be visible in the run
+    # summary, never a silent skip.
+    from core.run.gaps import gap_summary as _gap_summary
+    _gap_counts = _gap_summary(out_dir)
+    if _gap_counts:
+        _gap_total = sum(_gap_counts.values())
+        _gap_desc = ", ".join(
+            f"{n} {reason}" for reason, n in sorted(_gap_counts.items())
+        )
+        print(
+            f"   ⚠️  Analysis gaps: {_gap_total} record(s) — files NOT "
+            f"analysed ({_gap_desc}); see analysis-gaps.jsonl"
+        )
     print(f"   Exploitable: {exploitable_count}")
     if inconsistent_count > 0:
         # Findings the LLM marked exploitable but whose own reasoning
@@ -4988,6 +5003,18 @@ def main() -> int:
         warnings.append(f"{len(severity_mismatches)} high-severity finding(s) ruled as false positive — review recommended")
     if contradictions > 0:
         warnings.append(f"{contradictions} self-contradictory verdict(s) — reasoning conflicts with conclusion")
+    from core.run.gaps import gap_summary as _report_gap_summary
+    _report_gaps = _report_gap_summary(out_dir)
+    if _report_gaps:
+        _rg_total = sum(_report_gaps.values())
+        _rg_desc = ", ".join(
+            f"{n} {reason}"
+            for reason, n in sorted(_report_gaps.items())
+        )
+        warnings.append(
+            f"{_rg_total} analysis-gap record(s) — files NOT analysed "
+            f"({_rg_desc}); see analysis-gaps.jsonl"
+        )
     if orch_phase.get("weakened_defenses"):
         warnings.append(
             "Model-dependent defenses disabled (--accept-weakened-defenses). "
