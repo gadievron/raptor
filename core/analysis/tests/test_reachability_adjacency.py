@@ -1650,3 +1650,57 @@ def test_shallow_import_bound_indexing_unchanged():
     }}]}
     result = function_called(inv, "numpy.solve")
     assert result.verdict == Verdict.CALLED
+
+
+# ---------------------------------------------------------------------------
+# Masked-file uncertain-caller factoring (lazy tails × functions join)
+# ---------------------------------------------------------------------------
+
+
+def _masked_inventory(tails, fns):
+    items = [
+        {"name": f"fn_{i}", "line_start": i + 1, "kind": "function"}
+        for i in range(fns)
+    ]
+    calls = [{"chain": ["obj", f"tail_{t}"]} for t in range(tails)]
+    return {"files": [{"path": "m.py", "items": items, "call_graph": {
+        "calls": calls, "imports": {}, "indirection": ["getattr"],
+        "getattr_targets": [],
+    }}]}
+
+
+def test_masked_file_records_are_factored_not_cross_producted():
+    """ONE masked file with T mentioned tails and F defs stored T×F
+    tuples (4M tuples / 520MB / 65s at 2000×2000) — the index must
+    hold T tail→path entries and one F-function record instead, and
+    the join happens per lookup."""
+    from core.analysis.reachability import _get_or_build_index
+    inv = _masked_inventory(tails=50, fns=40)
+    idx = _get_or_build_index(inv, exclude_test_files=False)
+    assert len(idx.uncertain_tail_paths) == 50
+    flag, fns = idx.masked_file_callers["m.py"]
+    assert flag == "getattr"
+    assert len(fns) == 40
+    # Lazy join yields the full pair set for one tail.
+    pairs = idx.uncertain_caller_pairs("tail_7")
+    assert len(pairs) == 40
+    assert all(f == "getattr" for _fn, f in pairs)
+
+
+def test_masked_file_uncertain_callers_reach_callers_of():
+    """End-to-end direction pin: callers_of still reports every
+    function of the masked file as an uncertain caller for a
+    mentioned tail."""
+    from core.analysis.reachability import (
+        InternalFunction,
+        callers_of,
+    )
+    inv = _masked_inventory(tails=5, fns=3)
+    # A definition somewhere else named like a mentioned tail.
+    inv["files"].append({"path": "t.py", "items": [
+        {"name": "tail_2", "line_start": 1, "kind": "function"},
+    ], "call_graph": {"calls": [], "imports": {}}})
+    target = InternalFunction("t.py", "tail_2", 1)
+    res = callers_of(inv, target, exclude_test_files=False)
+    assert len(res.uncertain) == 3
+    assert {fn.file_path for fn in res.uncertain} == {"m.py"}

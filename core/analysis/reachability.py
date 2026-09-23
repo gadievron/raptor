@@ -999,14 +999,20 @@ class _AdjacencyIndex:
 
     forward: dict[InternalFunction, set[FunctionId]] = field(default_factory=dict)
     reverse: dict[FunctionId, set[InternalFunction]] = field(default_factory=dict)
-    # Uncertain callers are stashed by *target tail name*, not target
-    # FunctionId, because the same file-level masking flag taints
-    # every internal function in that file as a possible caller for
-    # any target the file mentions by tail. callers_of() looks up by
-    # the target's tail when assembling its result.
-    uncertain_callers_by_tail: dict[str, set[tuple[InternalFunction, str]]] = (
-        field(default_factory=dict)
-    )
+    # Uncertain callers are a PER-FILE property: a file-level masking
+    # flag taints every internal function in that file as a possible
+    # caller for any target the file mentions by tail. Stored
+    # factored — tail → masked file paths, and per masked file its
+    # (flag_label, functions) record — and joined lazily in
+    # :meth:`uncertain_caller_pairs` (callers_of is the only
+    # consumer). The eager tails × functions tuple expansion this
+    # replaces was quadratic per masked file: ONE planted file with
+    # 2000 mentioned tails × 2000 defs materialised 4M tuples / 520MB
+    # / 65s at index build.
+    uncertain_tail_paths: dict[str, set[str]] = field(default_factory=dict)
+    masked_file_callers: dict[
+        str, tuple[str, tuple[InternalFunction, ...]],
+    ] = field(default_factory=dict)
     # ``method_match[tail]`` entries pair a candidate caller with an
     # optional receiver-class name. The receiver class is set when
     # the call site is a ``self.foo()`` / ``cls.foo()`` inside a
@@ -1076,6 +1082,21 @@ class _AdjacencyIndex:
     ] = field(default_factory=dict)
     # Set of file paths classified as test files (cached).
     test_paths: frozenset[str] = frozenset()
+
+    def uncertain_caller_pairs(
+        self, tail: str,
+    ) -> set[tuple[InternalFunction, str]]:
+        """(function, flag_label) pairs of possible uncertain callers
+        for ``tail`` — the lazy join over the factored per-file
+        records (see the field comments above)."""
+        out: set[tuple[InternalFunction, str]] = set()
+        for path in self.uncertain_tail_paths.get(tail, ()):
+            entry = self.masked_file_callers.get(path)
+            if entry is None:
+                continue
+            flag_label, fns = entry
+            out.update((fn, flag_label) for fn in fns)
+        return out
 
 
 # Memoisation: keyed on ``id(inventory)``. Cache entries hold a
@@ -1423,6 +1444,13 @@ def _get_or_build_index(
         tuple[InternalFunction, FunctionId], set[int],
     ] = {}
 
+    # Per-path function grouping (one pass over the completed
+    # ``definitions`` map) — the masking arm below reads it per file;
+    # scanning ALL definitions per masked file was O(files × defs).
+    fns_by_path: dict[str, list[InternalFunction]] = {}
+    for (def_path, _def_name), def_fns in idx.definitions.items():
+        fns_by_path.setdefault(def_path, []).extend(def_fns)
+
     # Pass 2: walk every call site, resolve to a callee FunctionId
     # (Internal or External), record forward + reverse edges.
     for file_record in inventory.get("files", []):
@@ -1538,15 +1566,16 @@ def _get_or_build_index(
 
         # Indirection flags on the file → every internal function
         # defined IN this file inherits "uncertain caller" status
-        # for any target the file mentions by tail. We record this
-        # at file level: the keys we care about are tail names that
-        # appear in (a) call chains tail-side, (b) getattr_targets,
-        # (c) imports' tail components.
+        # for any target the file mentions by tail. Recorded
+        # FACTORED at file level (tail → path, path → (flag, fns));
+        # the tails × functions pairs are joined lazily at lookup in
+        # ``uncertain_caller_pairs`` — the eager cross-product was
+        # quadratic per masked file (4M tuples / 520MB / 65s for one
+        # planted 2000×2000 file). The keys we care about are tail
+        # names that appear in (a) call chains tail-side, (b)
+        # getattr_targets, (c) imports' tail components.
         if non_wildcard_masking or has_wildcard:
-            file_internal_fns = [
-                fn for (p, _name), fns in idx.definitions.items()
-                if p == path for fn in fns
-            ]
+            file_internal_fns = fns_by_path.get(path, ())
             mentioned_tails: set[str] = set(getattr_targets)
             for call in cg.get("calls") or []:
                 chain = list(call.get("chain") or [])
@@ -1556,20 +1585,23 @@ def _get_or_build_index(
                 if not qualified:
                     continue
                 mentioned_tails.add(qualified.rsplit(".", 1)[-1])
-            for tail in mentioned_tails:
-                for fn in file_internal_fns:
-                    # We don't know the *target* yet — that's keyed
-                    # on the lookup. Stash the (caller, tail, flag)
-                    # tuple under tail so callers_of can pick it
-                    # up.
-                    flag_label = (
-                        sorted(non_wildcard_masking)[0]
-                        if non_wildcard_masking
-                        else INDIRECTION_WILDCARD_IMPORT
-                    )
-                    idx.uncertain_callers_by_tail.setdefault(
+            if file_internal_fns and mentioned_tails:
+                flag_label = (
+                    sorted(non_wildcard_masking)[0]
+                    if non_wildcard_masking
+                    else INDIRECTION_WILDCARD_IMPORT
+                )
+                idx.masked_file_callers[path] = (
+                    flag_label,
+                    tuple(sorted(
+                        file_internal_fns,
+                        key=lambda f: (f.name, f.line),
+                    )),
+                )
+                for tail in mentioned_tails:
+                    idx.uncertain_tail_paths.setdefault(
                         tail, set(),
-                    ).add((fn, flag_label))
+                    ).add(path)
 
     # Freeze the staged call-line sets into the index's documented
     # sorted-tuple form (one pass; consumers never see the sets).
@@ -2306,7 +2338,7 @@ def callers_of(
         target.name if isinstance(target, InternalFunction)
         else target.qualified_name.rsplit(".", 1)[-1]
     )
-    uncertain_pairs = idx.uncertain_callers_by_tail.get(target_tail, set())
+    uncertain_pairs = idx.uncertain_caller_pairs(target_tail)
     # Drop callers that are already definitive — uncertain only
     # matters when there's NO definitive evidence in that file. But
     # uncertain is per-fn, not per-file, so we filter by fn.
