@@ -48,6 +48,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
+from collections.abc import Callable
 from types import FrameType
 
 _CLONE_NEWUSER = getattr(os, "CLONE_NEWUSER", 0x10000000)
@@ -186,6 +188,19 @@ class Forwarder:
         self._active: set[socket.socket] = set()
         self._active_lock = threading.Lock()
         self._accept_thread: threading.Thread | None = None
+        # Client-activity clock for the orphan watchdog: refreshed at
+        # every connection open/close, and "an open connection exists"
+        # itself reads as active (a long joern query holds one for its
+        # whole duration).
+        self._last_activity = time.monotonic()
+
+    def idle_seconds(self) -> float | None:
+        """Seconds since the last client activity, or ``None`` while
+        any client connection is open (open == active)."""
+        with self._active_lock:
+            if self._active:
+                return None
+            return time.monotonic() - self._last_activity
 
     def start(self) -> None:
         t = threading.Thread(
@@ -235,6 +250,7 @@ class Forwarder:
         # after its sweep joins a set nobody sweeps again — the peer
         # then hangs until its own timeout instead of seeing EOF.
         with self._active_lock:
+            self._last_activity = time.monotonic()
             if self._stopping.is_set():
                 with contextlib.suppress(OSError):
                     sock.shutdown(socket.SHUT_RDWR)
@@ -245,6 +261,7 @@ class Forwarder:
 
     def _untrack(self, sock: socket.socket) -> None:
         with self._active_lock:
+            self._last_activity = time.monotonic()
             self._active.discard(sock)
 
     def _accept_loop(self) -> None:
@@ -295,6 +312,89 @@ class Forwarder:
                 self._untrack(sock)
                 with contextlib.suppress(OSError):
                     sock.close()
+
+
+#: Orphan-watchdog cadence / SIGTERM→SIGKILL escalation grace.
+_PARENT_POLL_S = 5.0
+_PARENT_KILL_GRACE_S = 10.0
+#: How long an ORPHANED server may sit with no client activity before
+#: the watchdog reaps the pair. Parent death alone is NORMAL here —
+#: the lifecycle layer keeps warm servers alive across RAPTOR runs
+#: precisely so later acquires skip the 30-120s JVM boot — so this
+#: mirrors the acquire-side recycle horizon for unreferenced servers
+#: (packages/joern/lifecycle.py ``_STALE_THRESHOLD_S``; keep in sync):
+#: a warm server the next run would still reuse survives, one nothing
+#: touched for the same horizon is reaped instead of squatting on
+#: multi-GB of RAM forever.
+_ORPHAN_IDLE_TTL_S = 3600 * 8
+
+
+def _start_orphan_watchdog(
+    get_child: Callable[[], subprocess.Popen | None],
+    forwarder: Forwarder,
+    *,
+    poll_s: float = _PARENT_POLL_S,
+    grace_s: float = _PARENT_KILL_GRACE_S,
+    idle_ttl_s: float = _ORPHAN_IDLE_TTL_S,
+) -> threading.Thread:
+    """Reap the supervised group once it is orphaned AND idle.
+
+    No spawn-side parent-death signal can work for this pair:
+    PR_SET_PDEATHSIG is cleared by :func:`enter_private_netns`'s
+    ``unshare(CLONE_NEWUSER)`` and would bind to the spawning THREAD
+    besides — and parent death is not even sufficient grounds to die,
+    because the lifecycle layer deliberately hands warm servers to
+    later runs. But with the parent gone AND no client activity for
+    the lifecycle's own staleness horizon, nobody is coming back: the
+    pair used to live forever (each stranded JVM ~2 GB RSS — the
+    boot-time workspace sweep reclaims a dead server's *directories*,
+    but nothing reaped its *processes*).
+
+    A daemon thread polls ``os.getppid()`` (robust under subreapers:
+    any change means the recorded parent is gone), then waits out the
+    idle horizon — any client connection resets it, and an OPEN
+    connection blocks it outright. To reap, it SIGTERMs the wrapped
+    child — the JVM exits, ``main()``'s ``wait`` unblocks, and the
+    normal socket/dir cleanup runs — escalating to SIGKILL of the
+    forwarder's own process group (we lead it, so the JVM and any
+    launcher-shell stragglers go too) if the child ignores the grace.
+    """
+    parent = os.getppid()
+
+    def _watch() -> None:
+        while os.getppid() == parent:
+            time.sleep(poll_s)
+        while True:
+            idle = forwarder.idle_seconds()
+            if idle is not None and idle >= idle_ttl_s:
+                break
+            time.sleep(poll_s)
+        with contextlib.suppress(OSError):
+            os.write(
+                2,
+                b"netns_forwarder: parent gone and no client activity "
+                b"within the idle horizon; reaping the supervised "
+                b"group\n",
+            )
+        child = get_child()
+        if child is not None:
+            with contextlib.suppress(OSError):
+                child.terminate()
+            deadline = time.monotonic() + grace_s
+            while time.monotonic() < deadline:
+                if child.poll() is not None:
+                    # main()'s wait() unblocks; normal cleanup runs.
+                    return
+                time.sleep(0.2)
+        with contextlib.suppress(OSError):
+            os.killpg(0, signal.SIGKILL)
+        os._exit(1)  # unreachable when the killpg landed
+
+    t = threading.Thread(
+        target=_watch, name="orphan-watchdog", daemon=True,
+    )
+    t.start()
+    return t
 
 
 def self_probe() -> int:
@@ -366,6 +466,10 @@ def main(argv: list[str] | None = None) -> int:
 
     signal.signal(signal.SIGTERM, _forward_signal)
     signal.signal(signal.SIGINT, _forward_signal)
+
+    # Armed BEFORE the child exists so a parent death inside the spawn
+    # window is covered; the closure reads main()'s current binding.
+    _start_orphan_watchdog(lambda: child, forwarder)
 
     # stdio, env, cwd, and the namespace are inherited: the wrapped
     # server's stderr keeps flowing to the parent's boot-failure pipe.
