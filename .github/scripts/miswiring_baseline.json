@@ -193,6 +193,9 @@
     "artifacts:write_only_artifact::adversarial-matrix.json": {
       "note": "operator-facing run artifact from --adversarial (adversarial_test.write_matrix); surfaced when the atomic-write idiom became visible to the writer classifier"
     },
+    "artifacts:write_only_artifact::analysis-gaps.jsonl": {
+      "note": "durable analysis-gap trail in the run directory (binary-study child-timeout records): operator-facing evidence for humans/jq, same class as suppressions.jsonl; additive schema, consumers must tolerate unknown keys"
+    },
     "artifacts:write_only_artifact::agentic-report.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },

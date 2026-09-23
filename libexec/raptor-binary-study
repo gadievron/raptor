@@ -122,11 +122,60 @@ def _load_db(redb_path: Path):
     return REDatabase.from_dict(raw)
 
 
-def _run(cmd: list[str], verbose: bool) -> int:
+#: Per-child wall bound, mirroring raptor-study-loop's subprocess
+#: timeout. The children here scan fully attacker-shaped input (a
+#: decompilation tree derived from the analysed binary), so an
+#: unbounded child turns one pathological file into an indefinite
+#: hang of the whole binary-study run.
+_CHILD_TIMEOUT_S = 3600
+
+
+def _record_analysis_gap(gap_dir: "Path | None", tool: str,
+                         detail: str) -> None:
+    """Append a durable analysis-gap record to the run directory.
+
+    One JSON object per line in ``analysis-gaps.jsonl`` (additive
+    schema — consumers must tolerate unknown keys, the
+    ``suppressions.jsonl`` rule). Best-effort: a failed append never
+    masks the failure being recorded.
+    """
+    if gap_dir is None:
+        return
+    from datetime import datetime, timezone
+    record = {
+        "event": "analysis-gap",
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "file_path": "",
+        "reason": "child-timeout",
+        "tool": tool,
+        "detail": detail,
+    }
+    try:
+        import json as _json
+        with (gap_dir / "analysis-gaps.jsonl").open(
+                "a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(record, sort_keys=True) + "\n")
+    except OSError as exc:
+        print(f"binary-study: could not record analysis gap: {exc}",
+              file=sys.stderr)
+
+
+def _run(cmd: list[str], verbose: bool,
+         gap_dir: "Path | None" = None) -> int:
     printable = " ".join(str(c) for c in cmd)
     print(f"binary-study: running {printable}", file=sys.stderr)
     try:
-        result = subprocess.run(cmd, check=False)
+        result = subprocess.run(cmd, check=False,
+                                timeout=_CHILD_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        tool = Path(cmd[1]).name if len(cmd) > 1 else str(cmd[0])
+        detail = (f"child produced no exit within {_CHILD_TIMEOUT_S}s "
+                  "and was killed; study output for this pass is "
+                  "missing or incomplete")
+        print(f"binary-study: subprocess timed out after "
+              f"{_CHILD_TIMEOUT_S}s: {tool}", file=sys.stderr)
+        _record_analysis_gap(gap_dir, tool, detail)
+        return 1
     except OSError as exc:
         print(f"binary-study: failed to run {cmd[0]}: {exc}",
               file=sys.stderr)
@@ -460,7 +509,7 @@ def main() -> int:
             cmd.extend(["--identifier", parsed.identifier])
         if parsed.concept:
             cmd.extend(["--concept", parsed.concept])
-        rc = _run(cmd, parsed.verbose)
+        rc = _run(cmd, parsed.verbose, gap_dir=output_dir)
         if rc == 0:
             print(
                 "binary-study: prep complete — study-list.json is "
@@ -495,7 +544,7 @@ def main() -> int:
             cmd.extend(["--model", parsed.model])
         if parsed.verbose:
             cmd.append("-v")
-        rc = _run(cmd, parsed.verbose)
+        rc = _run(cmd, parsed.verbose, gap_dir=output_dir)
         if rc != 0:
             print(f"binary-study: study-loop failed on pass "
                   f"{pass_no} (exit {rc})", file=sys.stderr)
