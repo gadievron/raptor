@@ -477,12 +477,29 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None)
             props["status"] = status
             vo_id = _upsert_node(conn, snap_id, "verified_outcome", key, props)
             if finding_ref:
+                # Exact-identity join, never substring LIKE: a short
+                # or numeric finding id used to substring-match an
+                # unrelated unchecked_flow, minting a VALIDATES edge
+                # that falsely suppressed a never-validated path from
+                # coverage_residual (the query-side comment there
+                # names this exact idiom). Identity = the composed
+                # stable_key or a props-extracted id; a rule id shared
+                # across findings is NOT an identity, so no exact
+                # match mints no edge.
+                ref = str(finding_ref)
                 for kind in ("scan_finding", "codeql_result", "unchecked_flow"):
-                    rows = conn.execute(
-                        "SELECT id FROM nodes WHERE stable_key LIKE ? ESCAPE '\\' AND stale=0 LIMIT 1",
-                        (f"{kind}://%{_like_escape(str(finding_ref))}%",),
-                    ).fetchall()
-                    for row in rows:
+                    row = conn.execute(
+                        """
+                        SELECT id FROM nodes
+                        WHERE kind=? AND stale=0
+                          AND (stable_key=?
+                               OR json_extract(props_json, '$.id')=?
+                               OR json_extract(props_json, '$.finding_id')=?)
+                        LIMIT 1
+                        """,
+                        (kind, stable_key(kind, ref), ref, ref),
+                    ).fetchone()
+                    if row:
                         _upsert_edge(conn, snap_id, "VALIDATES", vo_id, row["id"])
         conn.execute("COMMIT")
     except (sqlite3.Error, KeyError, TypeError, ValueError) as exc:
@@ -632,11 +649,6 @@ def _ingest_journal_row(conn, snap_id: str, entry: Any, provenance: str) -> int:
 # ---------------------------------------------------------------------------
 # Private helpers for new producers
 # ---------------------------------------------------------------------------
-
-
-def _like_escape(value: str) -> str:
-    r"""Escape LIKE wildcards using backslash as escape char."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _upsert_snapshot(conn, snap_id: str, target: str, run_dir: Path, *, producer: str = "understand") -> None:

@@ -20,7 +20,7 @@ from core.understand_graph import (
     query_graph,
     scan_dedup_chains,
 )
-from core.understand_graph.ingest import _like_escape
+from core.understand_graph.schema import _like_escape
 from core.understand_graph.schema import SCHEMA_VERSION, content_hash
 from core.understand_graph.store import open_graph
 
@@ -82,6 +82,7 @@ def _write_scan_findings(run_dir: Path) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     save_json(run_dir / "findings.json", [
         {
+            "id": "SCAN-1",
             "rule_id": "command-injection",
             "file": "server.c",
             "line": 2,
@@ -136,7 +137,9 @@ def _write_validation_outcomes(run_dir: Path) -> None:
             "description": "System call reachable from network input",
         },
         {
-            "finding_id": "command-injection",
+            # Exact identity of the scan finding (its props id) — a
+            # bare rule id is shared across findings and never joins.
+            "finding_id": "SCAN-1",
             "status": "exploitable",
             "verdict": "exploitable",
             "description": "Scan finding confirmed",

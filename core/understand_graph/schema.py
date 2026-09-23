@@ -52,6 +52,15 @@ EDGE_KINDS = {
 }
 
 
+def _like_escape(value: str) -> str:
+    r"""Escape LIKE wildcards using backslash as escape char.
+
+    THE one home — queries (and any future ingest LIKE) import it
+    here instead of keeping byte-identical per-module copies.
+    """
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def json_dumps(value: Any) -> str:
     return json.dumps(value if value is not None else {}, sort_keys=True, separators=(",", ":"))
 
