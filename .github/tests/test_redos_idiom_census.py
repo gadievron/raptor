@@ -1664,6 +1664,68 @@ def _first_set(nodes, flags: int) -> set[int]:
     return first
 
 
+def _is_word_ord(char: int) -> bool:
+    return chr(char).isalnum() or char == 95
+
+
+def _leading_guards(seq, flags: int) -> tuple[bool, set[int], set[int]]:
+    """The pattern's leading zero-width guards: (has a word-boundary
+    assertion, chars a negative lookbehind rejects as the PRECEDING
+    char, charset of the first consuming atom)."""
+    boundary = False
+    rejected: set[int] = set()
+    nodes = list(seq)
+    while nodes:
+        node = nodes.pop(0)
+        op, arg = node
+        if op is sre_parse.AT:
+            if str(arg).endswith("AT_BOUNDARY"):
+                boundary = True
+            continue
+        if op is sre_parse.ASSERT_NOT:
+            if arg[0] < 0:
+                rejected |= _seq_charset(arg[1], flags)
+            continue
+        if op is sre_parse.ASSERT:
+            continue
+        if op is sre_parse.SUBPATTERN:
+            nodes = list(arg[3]) + nodes
+            continue
+        if op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT) \
+                and arg[0] == 0:
+            continue
+        return boundary, rejected, _charset(node, flags)
+    return boundary, rejected, set()
+
+
+def _guard_breaking_fill(parsed, flags: int, entry: str,
+                         fills: list[int],
+                         primary: str) -> str | None:
+    """A fill that keeps the pattern's leading word-boundary or
+    negative-lookbehind guard LIVE at every pumped entry.  The
+    primary fill prefers alphanumerics, which FUSE a `\b`- or
+    lookbehind-pinned pump into one long word — the pin then leaves
+    a single attempt position and measures itself as if it held.
+    Derived from the guard itself: outside any lookbehind class,
+    and of opposite wordness to the entry head when a boundary
+    assertion guards it — never a hardcoded separator."""
+    boundary, rejected, head = _leading_guards(parsed, flags)
+    reference = entry[0] if entry else (
+        chr(min(head)) if head else primary)
+    candidates = [c for c in fills if c not in rejected]
+    if boundary:
+        want_word = not _is_word_ord(ord(reference))
+        candidates = [c for c in candidates
+                      if _is_word_ord(c) == want_word]
+    choice = next(
+        (c for c in (46, 45, 32) if c in candidates),
+        min(candidates) if candidates else None,
+    )
+    if choice is None or chr(choice) == primary:
+        return None
+    return chr(choice)
+
+
 def _find_scan_restart_lanes(parsed, flags: int) -> list[dict]:
     """Rule S lanes: for an unbounded repeat R on the concatenation
     spine with a REQUIRED consuming continuation after it, the site
@@ -1735,6 +1797,14 @@ def _find_scan_restart_lanes(parsed, flags: int) -> list[dict]:
                             "entry": entry, "fill": fill,
                             "poison": poison or "",
                         })
+                        boundary_fill = _guard_breaking_fill(
+                            parsed, flags, entry, fills, fill,
+                        )
+                        if boundary_fill is not None:
+                            lanes.append({
+                                "entry": entry, "fill": boundary_fill,
+                                "poison": poison or "",
+                            })
                         # Body-unit lane: a repeat whose BODY spans
                         # several chars (member-access links, dotted
                         # segments) only exposes its per-position
@@ -1884,7 +1954,7 @@ def _scan_oracle_classify(pattern: str,
     lanes = _find_scan_restart_lanes(parsed, parsed.state.flags)
     worst: float | None = None
     synthesized = False
-    for index in range(min(len(lanes), 9)):
+    for index in range(min(len(lanes), 12)):
         exponent, status = _oracle_lane(
             pattern, flags, "search", "scan", index, "",
         )
@@ -2848,6 +2918,19 @@ class ScanRestartCensus(unittest.TestCase):
         exponent, _ = _scan_oracle_classify(r"(?<![\w.])" + chain, 0)
         self.assertLess(exponent if exponent is not None else 1.0,
                         _SUPERLINEAR_EXP)
+        # The boundary-maker exemplar: an alphanumeric fill FUSES a
+        # \b-pinned pump into one word and measures the pin as if it
+        # held — the guard-breaking fill (derived from the pin's own
+        # negated class) keeps every planted head a live attempt.
+        exponent, synthesized = _scan_oracle_classify(
+            r"\b\w[\w.]*\(", 0,
+        )
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        exponent, _ = _scan_oracle_classify(r"\b\w[\w.]{0,32}\(", 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
 
     def test_members_match_the_pinned_verdicts(self) -> None:
         """Default-tier closure: the live Rule S proposal set equals
@@ -2969,7 +3052,7 @@ class ScanRestartCensus(unittest.TestCase):
         Current noattack lane, one member, manually adjudicated
         LINEAR: struct_field_checker ``_STRUCT_FIELD_RE`` — its
         starved-density routing is a FIRST-SET over-approximation
-        (the ``(?:\s|(?=\*))`` gate's lookahead constrains the
+        (the ``(?:backslash-s|(?=*))`` gate's lookahead constrains the
         following atoms to '*', which the assert-blind first-set
         cannot see), and by inspection no fill can pass the
         ws-or-star gate: a word-char run costs one O(1)-per-split
