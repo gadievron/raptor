@@ -470,7 +470,17 @@ def cmd_record(args: argparse.Namespace) -> int:
                 )
                 classify = _channel_detection_classifier(base_tool)
                 if classify is not None:
-                    return not classify(f"{base_tool}:{rid}")
+                    # The sweep log's rule_id is usually ALREADY
+                    # namespaced (smt:check-toctou, joern:flow) —
+                    # re-prefixing minted smt:smt:* stamps no
+                    # classifier recognises, so every detection-grade
+                    # receipt graded as verification and could ground
+                    # --status finding alone. Prefix only bare ids.
+                    stamp = (
+                        rid if rid.startswith(f"{base_tool}:")
+                        else f"{base_tool}:{rid}"
+                    )
+                    return not classify(stamp)
             except Exception:
                 pass
             return True
