@@ -224,6 +224,52 @@ def _class_fixtures(sink_class, cwe, sanitizer, wrong_sanitizer,
             f"    if not x.isalnum():\n"
             f"        log('bad')\n"
             f"    {sink}(x)\n", 1, 4),
+        # Same-line statement pairs: two writes to one name on ONE
+        # physical line collide any (lineno, name)-keyed machinery —
+        # the multi-line rebinds above structurally cannot see the
+        # shape (caller and helper positions both covered).
+        _fx(f"{c}_sameline_rebind", c, cwe,
+            "sanitized_then_rebound_same_line",
+            LABEL_MUST_NOT_SUPPRESS,
+            f"def handle(x):\n"
+            f"    y = {sanitizer}(x); y = x\n"
+            f"    {sink}(y)\n", 1, 3),
+        _fx(f"{c}_sameline_augassign", c, cwe,
+            "sanitized_then_augmented_same_line",
+            LABEL_MUST_NOT_SUPPRESS,
+            f"def handle(x):\n"
+            f"    y = {sanitizer}(x); y += x\n"
+            f"    {sink}(y)\n", 1, 3),
+        _fx(f"{c}_helper_sameline_rebind", c, cwe,
+            "wrapper_sanitized_then_rebound_same_line",
+            LABEL_MUST_NOT_SUPPRESS,
+            f"def _clean(s):\n"
+            f"    t = {sanitizer}(s); t = s\n"
+            f"    return t\n"
+            f"def handle(x):\n"
+            f"    y = _clean(x)\n"
+            f"    {sink}(y)\n", 4, 6),
+        _fx(f"{c}_helper_sameline_augassign", c, cwe,
+            "wrapper_sanitized_then_augmented_same_line",
+            LABEL_MUST_NOT_SUPPRESS,
+            f"def _clean(s):\n"
+            f"    t = {sanitizer}(s); t += s\n"
+            f"    return t\n"
+            f"def handle(x):\n"
+            f"    y = _clean(x)\n"
+            f"    {sink}(y)\n", 4, 6),
+        # Callee-shadow: the caller locally rebinds the helper's name,
+        # so the runtime callee is a raw pass-through while the module
+        # table still holds the clean wrapper.
+        _fx(f"{c}_shadowed_callable", c, cwe,
+            "callee_shadowed_by_local_rebind",
+            LABEL_MUST_NOT_SUPPRESS,
+            f"def esc(s):\n"
+            f"    return {sanitizer}(s)\n"
+            f"def handle(x):\n"
+            f"    esc = str\n"
+            f"    y = esc(x)\n"
+            f"    {sink}(y)\n", 3, 6),
     ]
 
 
@@ -1331,6 +1377,108 @@ def build_corpus() -> list[CutFixture]:
         "def handle(x):\n"
         "    y = _maybe(x)\n"
         "    render(y)\n", 5, 7))
+    # Rebindable-identity battery: every way a hostile module makes a
+    # written callable name stop meaning the certified body. Each is
+    # a distinct join collision (parameter shadow, nested-def shadow,
+    # walrus, module-level rebind, sibling global, decorator swap,
+    # catalog-root local shadow); the two trailing may_suppress pins
+    # hold the guards to their scope rules (comprehension targets and
+    # class attributes do NOT shadow at runtime).
+    fixtures.append(_fx(
+        "xss_param_shadowed_callable", "xss", "CWE-79",
+        "callee_shadowed_by_parameter", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x, esc):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 4, 6))
+    fixtures.append(_fx(
+        "xss_nested_def_shadowed_callable", "xss", "CWE-79",
+        "callee_shadowed_by_nested_def", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    def esc(s):\n"
+        "        return s\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 4, 8))
+    fixtures.append(_fx(
+        "xss_walrus_shadowed_callable", "xss", "CWE-79",
+        "callee_shadowed_by_walrus", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    if (esc := str):\n"
+        "        y = esc(x)\n"
+        "    render(y)\n", 4, 7))
+    fixtures.append(_fx(
+        "xss_module_level_rebound_callable", "xss", "CWE-79",
+        "callee_rebound_at_module_level", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "esc = str\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 5, 7))
+    fixtures.append(_fx(
+        "xss_global_sibling_rebound_callable", "xss", "CWE-79",
+        "callee_rebound_via_sibling_global", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def evil():\n"
+        "    global esc\n"
+        "    esc = str\n"
+        "evil()\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 8, 10))
+    fixtures.append(_fx(
+        "xss_decorator_rebound_callable", "xss", "CWE-79",
+        "callee_swapped_by_decorator", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def nullify(f):\n"
+        "    return str\n"
+        "@nullify\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 7, 9))
+    fixtures.append(_fx(
+        "xss_catalog_root_local_shadow", "xss", "CWE-79",
+        "catalog_root_shadowed_by_local", LABEL_MUST_NOT_SUPPRESS,
+        "class FakeHtml:\n"
+        "    escape = staticmethod(str)\n"
+        "def handle(x):\n"
+        "    html = FakeHtml\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 3, 6))
+    fixtures.append(_fx(
+        "xss_comprehension_target_not_shadow", "xss", "CWE-79",
+        "comprehension_target_scoped_no_shadow", LABEL_MAY_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    items = [esc for esc in [str]]\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 4, 7))
+    fixtures.append(_fx(
+        "xss_class_attr_not_shadow", "xss", "CWE-79",
+        "class_attribute_no_bare_name_shadow", LABEL_MAY_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "class C:\n"
+        "    esc = str\n"
+        "    def m(self, x):\n"
+        "        y = esc(x)\n"
+        "        render(y)\n", 6, 8))
     # Catalog-empty class: python has no sqli sanitizer entries, so
     # nothing may EVER suppress a CWE-89 python finding — including a
     # plausible-looking wrong-class escape.
