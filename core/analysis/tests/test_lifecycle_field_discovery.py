@@ -412,3 +412,31 @@ class TestHostileSourceScale:
         checklist = {"files": [{"path": "big.c"}]}
         assert lfd.discover_state_fields(
             checklist, tmp_path, min_score=0.0) == []
+
+
+class TestCFieldWhitespaceRun:
+    def test_field_token_run_is_fast(self):
+        """Hostile struct body of field-shaped tokens with no ';':
+        the previous spelling chained overlapping whitespace-capable
+        spans around optional atoms — cubic in the body length. The
+        bounded type window with gated atoms is linear."""
+        from core.analysis.lifecycle_field_discovery import _C_FIELD_RE
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "unsigned x" + " " * (1 << 16) + "!"
+        with cpu_budget(1.0, what="field token-run scan"):
+            assert _C_FIELD_RE.search(hostile) is None
+
+    def test_field_forms_still_match(self):
+        from core.analysis.lifecycle_field_discovery import _C_FIELD_RE
+
+        for decl, name in (
+            ("unsigned long flags;", "flags"),
+            ("struct page *first_page;", "first_page"),
+            ("const char * name ;", "name"),
+            ("atomic_t _refcount;", "_refcount"),
+            ("int arr[MAX] ;", "arr"),
+        ):
+            m = _C_FIELD_RE.search(decl)
+            assert m is not None, decl
+            assert m.group(2) == name, (decl, m.groups())
