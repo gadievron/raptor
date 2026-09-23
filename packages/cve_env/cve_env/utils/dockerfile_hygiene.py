@@ -187,14 +187,24 @@ def _collect_stage_aliases(logical_lines: list[str]) -> frozenset[str]:
 _P17_RUN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         # chmod u+s / g+s / +s / a+rws — symbolic setuid/setgid grant.
-        re.compile(r"\bchmod\b[^;&|]*\s[ugoa]*\+[rwxXt]*s"),
+        # Bounded spans: the unbounded flag/argument run made every
+        # planted ``chmod`` re-scan the rest of a hostile RUN line
+        # (quadratic), and the who/perm runs were ambiguous against
+        # it. 200 chars of options before the mode and 4/16-char
+        # who/perm runs are far above real chmod invocations; a
+        # longer decoy simply stops matching (the refusal direction
+        # stays: real grants are unchanged).
+        re.compile(r"\bchmod\b[^;&|]{0,200}\s[ugoa]{0,4}\+[rwxXt]{0,16}s"),
         "setuid/setgid bit grant (chmod +s)",
     ),
     (
         # chmod 4755 / 2755 / 6755 — numeric modes whose leading digit
         # sets suid/sgid (alone or sticky-combined). `0*` keeps
         # `chmod 0755` (leading-zero, no special bits) out of the match.
-        re.compile(r"\bchmod\b[^;&|]*\s0*[2-7][0-7]{3}\b"),
+        # Bounded like the symbolic arm above (same hostile-RUN-line
+        # rescan), and the leading-zero run is capped — real modes
+        # carry at most one.
+        re.compile(r"\bchmod\b[^;&|]{0,200}\s0{0,4}[2-7][0-7]{3}\b"),
         "setuid/setgid numeric mode (chmod 2xxx/4xxx/6xxx)",
     ),
     (re.compile(r"/etc/sudoers"), "sudoers modification"),
