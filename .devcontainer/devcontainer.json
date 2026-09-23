@@ -16,7 +16,22 @@
       "NO_PROXY": "${localEnv:NO_PROXY}"
     }
   },
-  "runArgs": ["--privileged"],
+  // Default posture: UNPRIVILEGED. RAPTOR's threat model treats
+  // scanned repos as hostile — under --privileged + passwordless sudo
+  // + host-secret bind mounts, one in-container escalation was
+  // host-equivalent by configuration. SYS_PTRACE + seccomp=unconfined
+  // cover the standing needs (gdb/strace, rr REPLAY, the namespace +
+  // Landlock sandbox machinery) without all-capabilities and host
+  // device access.
+  //
+  // rr RECORDING profile (opt-in, local edit): recording needs
+  // hardware perf counters — replace the line below with
+  //   "runArgs": ["--privileged"],
+  // and rebuild; the postStartCommand's perf_event_paranoid write
+  // only succeeds under that profile (it degrades silently
+  // otherwise). Pinned by .github/tests/test_devcontainer_config.py:
+  // --privileged must never be the default again.
+  "runArgs": ["--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined"],
   "features": {
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
