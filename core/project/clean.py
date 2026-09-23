@@ -46,16 +46,16 @@ def run_is_live(d: Path) -> bool:
     write activity inside the run dir reads as live — instead of
     falling open to deletable.
     """
-    from core.json import load_json
     from core.run.metadata import (
-        RUN_METADATA_FILE,
         _run_recently_active,
         _session_alive_for_meta,
         _tool_pid_alive,
+        load_run_metadata,
     )
     try:
-        meta = load_json(Path(d) / RUN_METADATA_FILE,
-                         max_bytes=1024 * 1024)
+        # The budgeted metadata loader — the shared 1 MiB budget stays
+        # single-homed in core.run.metadata instead of re-spelled here.
+        meta = load_run_metadata(Path(d))
     except Exception:  # noqa: BLE001 — unreadable metadata is not live
         meta = None
     if not (isinstance(meta, dict) and meta.get("status") == "running"):

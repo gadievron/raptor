@@ -2006,3 +2006,28 @@ class TerminalFinaliserPreCheckTest(unittest.TestCase):
             self.assertEqual(
                 load_json(run / RUN_METADATA_FILE)["status"],
                 "interrupted")
+
+
+class BudgetConstantSingleHomeTest(unittest.TestCase):
+    """metadata.py declares the run-metadata read budget
+    "single-homed" — but pin.py, tmp_reaper.py, and sessions.py carry
+    deliberate import-light mirrors (metadata imports them at run
+    time, so they cannot import it back at module init). The mirrors'
+    VALUES agreed only by coincidence; this pins them, so a budget or
+    filename change fails here until every spelling moves together."""
+
+    def test_budget_mirrors_agree(self):
+        from core.project import sessions
+        from core.run import pin, tmp_reaper
+        from core.run.metadata import RUN_METADATA_MAX_BYTES
+        self.assertEqual(pin._MAX_RUN_META_BYTES, RUN_METADATA_MAX_BYTES)
+        self.assertEqual(tmp_reaper._RUN_METADATA_MAX_BYTES,
+                         RUN_METADATA_MAX_BYTES)
+        self.assertEqual(sessions._MAX_ENTRY_BYTES * 16,
+                         RUN_METADATA_MAX_BYTES)
+
+    def test_filename_mirrors_agree(self):
+        from core.run import pin, tmp_reaper
+        self.assertEqual(pin.RUN_METADATA_FILE, RUN_METADATA_FILE)
+        self.assertEqual(tmp_reaper._RUN_METADATA_FILE,
+                         RUN_METADATA_FILE)
