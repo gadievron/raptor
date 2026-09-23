@@ -57,6 +57,19 @@ LANGUAGE_MAP = {
 # an operator can see the recall loss in ``excluded_files``.
 RECORD_ONLY_EXTENSIONS = frozenset({'.y', '.l', '.inl', '.sol'})
 
+# Script-per-file languages: file-scope statements ARE the program. A
+# classic PHP page/module executes its top level per request, so the
+# top-level span is the request handler — not glue between functions.
+# Consumers (gap selection, priority) treat interstitial checklist
+# items in these languages as reviewable code rather than extraction
+# residue. Deliberately a SEED (php only): Python/JS/TS module-scope
+# executable code is already extracted as named ``top_level`` items,
+# so their interstitial remainder really is import/definition residue,
+# and compiled/object languages have no executable file scope at all.
+# Grow this set only with the same evidence — an extractor that leaves
+# the language's executable file scope inside interstitial spans.
+SCRIPT_PER_FILE_LANGUAGES = frozenset({'php'})
+
 
 @functools.lru_cache(maxsize=64)
 def detect_language(filepath: str) -> str | None:
