@@ -8,7 +8,9 @@ including validation, deduplication, and merging.
 import hashlib
 import json
 import math
+import os
 import re
+import stat as stat_mod
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -482,8 +484,10 @@ def load_sarif(sarif_path: Path) -> dict[str, Any] | None:
     """
     Load a SARIF file with safety guards.
 
-    Handles existence check, size guard (100 MiB), and JSON decode errors.
-    All SARIF file I/O should go through this function.
+    Handles existence check, regular-file gate (a planted FIFO or
+    device node is refused instead of blocking the reader), size
+    guard (100 MiB, enforced on the fd actually read), and JSON
+    decode errors. All SARIF file I/O should go through this function.
 
     Args:
         sarif_path: Path to SARIF file
@@ -497,30 +501,53 @@ def load_sarif(sarif_path: Path) -> dict[str, Any] | None:
 
     max_size = SARIF_MAX_BYTES  # trade-off comment at the constant
 
-    # Stat-then-bounded-read. Pre-fix the function used
+    # Gated read on the OPEN fd. Pre-fix the function used
     # `sarif_path.read_text()` followed by `if len(content) > max_size`
     # — the WHOLE file was loaded into memory BEFORE the size check,
     # so a 10 GB malformed/hostile SARIF file OOM-killed the process
-    # instead of being rejected. The "avoids TOCTOU" comment was
-    # technically true but irrelevant: the real risk here is memory
-    # exhaustion, not stat/read size-skew (a few KB drift between
-    # stat and read doesn't matter for the cap decision).
-    #
-    # Bounded read of `max_size + 1` bytes lets us detect "too large"
-    # without ever loading more than the cap into memory. Reading
-    # one extra byte is the standard "did we hit the limit" sentinel.
+    # instead of being rejected. A later revision stat'ed BY NAME and
+    # opened BY NAME with a bounded read — but the size gate never
+    # checked the file TYPE, so a FIFO planted at the SARIF path
+    # (stats as 0 bytes, passing any cap) blocked the reader forever
+    # at the open; no swap race needed. SARIF paths include run-dir
+    # artifacts producible under another principal's write grant —
+    # the exact plantable-hang class core.json's gated read closes,
+    # so the same fd discipline applies here: O_NONBLOCK makes a
+    # FIFO/device open return instead of blocking (no effect on
+    # regular-file reads), fstat the fd actually being read, require
+    # a regular file, and bound the read at `max_size + 1` bytes (the
+    # standard one-extra-byte "did we hit the limit" sentinel) with a
+    # post-read re-check so growth during the read is refused too.
+    # Symlink-to-regular still resolves; symlink-to-FIFO is refused
+    # with the FIFO.
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
-        st = sarif_path.stat()
+        fd = os.open(str(sarif_path), flags)
+    except OSError as e:
+        logger.warning("SARIF: could not read %s: %s", sarif_path, e)
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat_mod.S_ISREG(st.st_mode):
+            logger.error(
+                "SARIF: not a regular file: %s", sarif_path,
+            )
+            return None
         if st.st_size > max_size:
             logger.error(
                 "SARIF: file too large (%.0f MiB): %s",
                 st.st_size / 1024 / 1024, sarif_path,
             )
             return None
-        with sarif_path.open("rb") as f:
+        with os.fdopen(fd, "rb") as f:
+            fd = -1  # fdopen owns it now
             raw = f.read(max_size + 1)
         if len(raw) > max_size:
-            # Race: file grew between stat and read.
+            # Race: file grew between fstat and read.
             logger.error(
                 "SARIF: file grew past %.0f MiB during read: %s",
                 max_size / 1024 / 1024, sarif_path,
@@ -530,6 +557,12 @@ def load_sarif(sarif_path: Path) -> dict[str, Any] | None:
     except OSError as e:
         logger.warning("SARIF: could not read %s: %s", sarif_path, e)
         return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
     try:
         # core.json.loads: shared backend (orjson when installed) —

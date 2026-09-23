@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import os
+import signal
 import tempfile
 import unittest
 from pathlib import Path
@@ -185,6 +187,49 @@ class TestLoadSarif(unittest.TestCase):
             path.write_text(doc)
 
             self.assertIsNone(load_sarif(path))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "platform lacks mkfifo")
+    @unittest.skipUnless(hasattr(signal, "SIGALRM"), "platform lacks SIGALRM")
+    def test_fifo_refused_not_hung(self):
+        # A FIFO stats as 0 bytes — it passes any size cap — and then
+        # blocks the reader forever at the open (no writer ever
+        # arrives). SARIF paths include run-dir artifacts producible
+        # under another principal's write grant, so the safe-load
+        # boundary must refuse non-regular files on the fd it reads
+        # instead of wedging the pipeline stage. Alarm-guarded so a
+        # regression fails instead of hanging the suite.
+        from core.sarif.parser import load_sarif
+
+        def _on_alarm(signum: int, frame) -> None:
+            msg = "load_sarif blocked on a planted FIFO"
+            raise AssertionError(msg)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "planted.sarif"
+            os.mkfifo(path)
+            old = signal.signal(signal.SIGALRM, _on_alarm)
+            signal.alarm(30)
+            try:
+                self.assertIsNone(load_sarif(path))
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old)
+
+    def test_symlink_to_regular_still_loads(self):
+        # Keep-direction: run-dir artifacts are legitimately reached
+        # through symlinks; only non-regular TARGETS are refused.
+        from core.sarif.parser import load_sarif
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            real = Path(tmpdir) / "real.sarif"
+            real.write_text('{"version": "2.1.0", "runs": []}')
+            link = Path(tmpdir) / "link.sarif"
+            try:
+                link.symlink_to(real)
+            except OSError:
+                self.skipTest("platform lacks symlinks")
+            result = load_sarif(link)
+            self.assertIsInstance(result, dict)
 
 
 class TestMergeSarif(unittest.TestCase):
