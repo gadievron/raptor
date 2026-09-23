@@ -276,8 +276,8 @@ _SANITISERS = frozenset({
     "_err",
     "_md_heading",
     # binary_analysis' shared markdown-cell chokepoint
-    # (investigation._md_escape: escape_nonprintable + pipe/newline
-    # escaping — table-cell grade for binary-derived names).
+    # (investigation._md_escape: thin wrapper over md_inline —
+    # table-cell grade for binary-derived names).
     "_md_escape",
     # packages/diagram's Mermaid chokepoints: sanitize.sanitize
     # (imported as _sanitize; Mermaid-structure neutralisation +
@@ -367,6 +367,7 @@ _REPORT_WRITER_FILES = (
     "core/reporting/findings.py",
     "core/sandbox/calibrate_cli.py",
     "core/sandbox/triage.py",
+    "packages/binary_analysis/blamed_lines.py",
     "packages/binary_analysis/cli.py",
     "packages/binary_analysis/harness.py",
     "packages/binary_analysis/investigation.py",

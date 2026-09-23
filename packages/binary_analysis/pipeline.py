@@ -25,7 +25,7 @@ from core.artifacts.provenance import (
 from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 from core.hash import sha256_file
 from core.json import load_json, save_json
-from core.security.log_sanitisation import escape_nonprintable
+from core.security.markdown_render import md_inline
 
 from ._symbols import symbol_base_name
 from .constraints import validate_constraint_file
@@ -1115,12 +1115,16 @@ def _context_map(
 
 
 def _esc(value: Any) -> str:
-    """Escape control/bidi bytes in binary-derived strings bound for
-    the operator-facing report. A hostile binary controls names and
-    Info.plist strings end-to-end (plistlib and r2's iij preserve raw
-    ESC/BEL); the report is catted to terminals, so those bytes must
-    be neutralised at this emission chokepoint."""
-    return escape_nonprintable(str(value))
+    """Defang binary-derived strings bound for the operator-facing
+    report — a thin projection of the core.security.markdown_render
+    one-home. A hostile binary controls names and Info.plist strings
+    end-to-end (plistlib and r2's iij preserve raw ESC/BEL); the
+    report is catted to terminals AND read by LLM agents in later
+    passes, so md_inline's control/bidi escaping, newline flattening,
+    in-slot structure entity-escaping (| and backtick — a raw
+    backtick closed the wrapping code span and let markdown/autofetch
+    payloads go live), and autofetch stripping all apply here."""
+    return md_inline(value)
 
 
 def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from core.json import save_json
-from core.security.log_sanitisation import escape_nonprintable
+from core.security.markdown_render import md_inline
 
 if TYPE_CHECKING:
     from .pipeline import BinaryAnalysisResult
@@ -624,12 +624,15 @@ def build_investigation(
 
 
 def _md_escape(value: Any) -> str:
-    # escape_nonprintable is load-bearing: a hostile binary controls
-    # symbol/import names end-to-end (r2's iij preserves raw ESC/BEL
-    # bytes from ELF dynstr) and this report is catted to operator
-    # terminals — control/bidi bytes must never survive into it.
-    text = escape_nonprintable(str(value))
-    return text.replace("|", "\\|").replace("\n", " ")
+    # Thin projection of the core.security.markdown_render one-home:
+    # a hostile binary controls symbol/import names end-to-end (r2's
+    # iij preserves raw ESC/BEL bytes from ELF dynstr) and this report
+    # is catted to operator terminals AND read by LLM agents in later
+    # passes. md_inline escapes control/bidi bytes, flattens newlines,
+    # entity-escapes in-slot structure (| and backtick — a raw
+    # backtick closed the wrapping code span and let **[..](..)**
+    # payloads go live), and strips autofetch markup.
+    return md_inline(value)
 
 
 def render_investigation_report(investigation: dict[str, Any]) -> str:

@@ -448,9 +448,6 @@
     "libexec/raptor-zkpox::_cmd_reproduce::unsanitised_llm_value::reason": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
     },
-    "packages/binary_analysis/blamed_lines.py::check_report::unsanitised_llm_value::results": {
-      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
-    },
     "packages/binary_analysis/crash_analyser.py::CrashAnalyser._get_disassembly::unsanitised_llm_value::line": {
       "note": "disassembly lines feed the analysis data structure (artifact); the rendering chokepoints in this package are registered"
     },

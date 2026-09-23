@@ -230,6 +230,21 @@ class TestCheckerProvenance:
 
 
 class TestRenderAndStamp:
+    def test_hostile_reason_cell_defanged(self):
+        """The reason cell carries up to 200 chars of checker stderr —
+        hostile-gcov-derived bytes. A raw pipe breaks the table row, a
+        newline splits the line, image markup autofetches on render."""
+        section = render_section([
+            BlamedLineResult(
+                "x.c", 10, "unknown",
+                reason="a|b\nc ![x](http://evil.example/x)"),
+        ])
+        row = next(ln for ln in section.splitlines()
+                   if ln.startswith("| ") and "x.c" in ln)
+        assert row.count("|") == 3, "raw pipe broke the table row"
+        assert "](http://evil.example/x)" not in section, (
+            "live image/link markup survives into the report")
+
     def test_not_executed_prominent(self):
         section = render_section([
             BlamedLineResult("a.c", 1, "executed", count=2),

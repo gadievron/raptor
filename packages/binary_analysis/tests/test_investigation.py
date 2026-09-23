@@ -114,7 +114,32 @@ def test_md_escape_scrubs_control_and_bidi_bytes() -> None:
     assert "\x1b" not in escaped and "\x07" not in escaped
     assert "evil" in escaped and "name" in escaped
     assert "‮" not in _md_escape("a‮b")
-    assert _md_escape("a|b") == "a\\|b"
+    escaped = _md_escape("a|b")
+    assert "|" not in escaped and "a" in escaped and "b" in escaped
+
+
+def test_md_escape_defangs_code_span_breakout_and_autofetch() -> None:
+    """A hostile symbol name carrying a backtick closes the wrapping
+    inline-code span, turning the rest of the cell into live markdown;
+    image/link markup then autofetches when the report is rendered.
+    Both must be defanged by the md_inline one-home."""
+    from packages.binary_analysis.investigation import _md_escape
+
+    payload = "x` **[pwn](https://evil.example)** `y"
+    escaped = _md_escape(payload)
+    assert "`" not in escaped, "backtick survives — code-span breakout"
+    assert "](https://evil.example)" not in escaped, (
+        "live link markup survives into the report")
+
+
+def test_pipeline_esc_defangs_code_span_breakout_and_autofetch() -> None:
+    from packages.binary_analysis.pipeline import _esc
+
+    payload = "x` ![pwn](https://evil.example) `y"
+    escaped = _esc(payload)
+    assert "`" not in escaped
+    assert "](https://evil.example)" not in escaped
+    assert "\n" not in _esc("a\nb")
 
 
 @pytest.mark.slow
