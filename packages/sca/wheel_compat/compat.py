@@ -95,7 +95,16 @@ def wheel_matrix_for_version(
     if not isinstance(meta, dict):
         return None
     releases = meta.get("releases") or {}
-    files = releases.get(version)
+    return _wheel_matrix_from_files(name, version, releases.get(version))
+
+
+def _wheel_matrix_from_files(
+    name: str, version: str, files: object,
+) -> WheelMatrix | None:
+    """Build the matrix from one version's release-file list — the
+    fetch-free half of :func:`wheel_matrix_for_version`, shared with
+    the version walker so a caller already holding the package's
+    ``releases`` dict doesn't re-fetch metadata once per version."""
     if not isinstance(files, list) or not files:
         return None
 
@@ -452,7 +461,12 @@ def find_compatible_version(
     stable.sort(key=_version_key, reverse=True)
 
     for version in stable[:max_versions_walked]:
-        wm = wheel_matrix_for_version(pypi_client, name, version)
+        # The releases dict in hand already carries every version's
+        # file list — building the matrix from it directly avoids one
+        # identical get_metadata fetch PER WALKED VERSION (up to 20;
+        # client-side caching sometimes masked the cost, never the
+        # dependency on it).
+        wm = _wheel_matrix_from_files(name, version, releases.get(version))
         if wm is None:
             continue
         verdicts = check_compat(matrix, wm)
@@ -467,7 +481,7 @@ def find_compatible_version(
 
 
 _STABLE_VERSION_RE = re.compile(
-    r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:\.post\d+)?$"
+    r"^v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:\.(\d+))?(?:\.post(\d+))?$"
 )
 
 
@@ -480,7 +494,10 @@ def _is_stable_version(v: str) -> bool:
 
 
 def _version_key(v: str) -> tuple:
-    """Numeric-component sort key. Treats missing components as 0."""
+    """Numeric-component sort key. Treats missing components as 0.
+    The ``.postN`` number is the LAST component so a post-release
+    ranks above its base version (PEP 440) instead of tying with it
+    — a tie let the walk recommend the superseded base build."""
     m = _STABLE_VERSION_RE.match(v)
     if not m:
         return (0,)
