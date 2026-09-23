@@ -422,3 +422,39 @@ class TestDocumentedMisses:
         """)
         assert len(results) == 1
         assert results[0]["line"] == 3
+
+
+class TestAsprintfFamily:
+    """asprintf/vasprintf are printf-family CWE-134 vectors (format is
+    the second argument); the rule covered neither and documented no
+    limitation."""
+
+    def test_asprintf_with_user_format_fires(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            void render(char **out, char *user)
+            {
+                asprintf(out, user);
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["line"] == 3
+
+    def test_vasprintf_with_user_format_fires(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            void render(char **out, char *user, void *ap)
+            {
+                vasprintf(out, user, ap);
+            }
+        """)
+        assert len(results) == 1
+
+    def test_asprintf_literal_and_const_local_do_not_fire(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            void render(char **out, int n)
+            {
+                const char *fmt = "x %d";
+                asprintf(out, "ok %d", n);
+                asprintf(out, fmt, n);
+            }
+        """)
+        assert results == []
