@@ -218,3 +218,49 @@ class TestModelFields:
         e = Evidence(type="code_path", file="a.py", observation="o",
                      quote="def f():")
         assert json.loads(json.dumps(asdict(e)))["quote"] == "def f():"
+
+
+class TestStaleDocDecidableOnly:
+    """Check (c) fires only on decidable mismatches: negated claims
+    and multi-line returns must not flag a CORRECT doc as stale."""
+
+    def test_negated_claim_not_flagged(self):
+        from core.concepts.receipts import detect_stale_doc
+        reason = detect_stale_doc(
+            "This helper never returns NULL on any path.",
+            "struct foo *get(void) {\n    return &g_foo;\n}",
+            "get",
+        )
+        assert reason == "", f"correct negated doc flagged: {reason}"
+
+    def test_does_not_return_none_not_flagged(self):
+        from core.concepts.receipts import detect_stale_doc
+        reason = detect_stale_doc(
+            "Does not return None; raises on failure.",
+            "def get(x):\n    return x\n",
+            "get",
+        )
+        assert reason == ""
+
+    def test_multiline_return_not_flagged(self):
+        from core.concepts.receipts import detect_stale_doc
+        reason = detect_stale_doc(
+            "Returns NULL on failure.",
+            "void *get(int x) {\n"
+            "    if (x < 0)\n"
+            "        return (\n"
+            "            NULL);\n"
+            "    return p;\n"
+            "}",
+            "get",
+        )
+        assert reason == "", f"multi-line NULL return flagged: {reason}"
+
+    def test_true_mismatch_still_fires(self):
+        from core.concepts.receipts import detect_stale_doc
+        reason = detect_stale_doc(
+            "Returns NULL on failure.",
+            "int get(void) {\n    return -1;\n}",
+            "get",
+        )
+        assert "NULL" in reason

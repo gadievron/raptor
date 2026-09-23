@@ -200,6 +200,16 @@ _PARAM_DOC_RE = re.compile(
 _RETURNS_NULL_DOC_RE = re.compile(
     r"\breturns?\s+(?:``)?(NULL|None|nil|null)\b", re.IGNORECASE,
 )
+# Negated claims ("never returns NULL", "does not return None") are
+# the OPPOSITE contract — matching them as a NULL-return claim flagged
+# correct docs as stale. Presence anywhere in the doc disables check
+# (c): a mixed doc is not a decidable mismatch, and the check's own
+# contract is "only fire on decidable mismatches".
+_NEGATED_RETURNS_RE = re.compile(
+    r"\b(?:never|not|cannot|can't|won't|doesn't|don't|no)\s+"
+    r"(?:\w+\s+){0,2}returns?\b",
+    re.IGNORECASE,
+)
 _GO_LEADING_IDENT_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9]+)\b")
 
 
@@ -256,11 +266,21 @@ def detect_stale_doc(
 
     # (c) doc claims NULL/None/nil return the body never produces
     m = _RETURNS_NULL_DOC_RE.search(doc_comment)
-    if m and "return" in definition:
+    if m and "return" in definition \
+            and not _NEGATED_RETURNS_RE.search(doc_comment):
         token = m.group(1)
         variants = {"NULL", "None", "nil", "null"}
+        # The body scan spans line breaks with a bounded window:
+        # multi-line returns (``return (\n    NULL);``) are routine
+        # in kernel style, and per-line matching flagged a CORRECT doc
+        # as stale. The window errs toward NOT flagging (a distant
+        # token counting as a NULL return suppresses the flag), which
+        # is the conservative direction for this check.
         if not any(
-            re.search(rf"return\s+.*\b{re.escape(v)}\b", definition)
+            re.search(
+                rf"\breturn\b[\s\S]{{0,120}}?\b{re.escape(v)}\b",
+                definition,
+            )
             for v in variants
         ):
             return (
