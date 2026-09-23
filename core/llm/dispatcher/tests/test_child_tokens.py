@@ -21,6 +21,7 @@ import pytest
 from core.llm.dispatcher.auth import CredentialStore, ProviderRule
 from core.llm.dispatcher.client import (
     child_token_spend,
+    enable_child_loopback,
     mint_child_token,
     reconcile_child_spend,
     revoke_child_token,
@@ -1094,6 +1095,184 @@ class TestPlanes:
                 socket_path=str(dead_socket), token="whatever",
             )
         assert time.monotonic() - t0 < 5.0  # fail fast, not a hang
+
+    def test_loopback_admin_op_returns_usable_shared_port(
+        self, fake_creds, tmp_path,
+    ):
+        """POST /_child/loopback (worker token, UDS) enables the TCP
+        plane and returns its port — idempotently, so concurrent
+        workers share one listener — and a scoped child token
+        authenticates on that port."""
+        upstream = _Upstream("json")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            worker = _worker_token(d)
+            port = enable_child_loopback(
+                socket_path=str(d.socket_path), token=worker,
+            )
+            assert 0 < port < 65536
+            # Idempotent: the second enable is the SAME listener.
+            assert enable_child_loopback(
+                socket_path=str(d.socket_path), token=worker,
+            ) == port
+            token, _ = d.allocate_child("loopback-child", budget_usd=1.0)
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}", timeout=10.0,
+            ) as client:
+                resp = _messages_post(
+                    client, token, url="/anthropic/v1/messages",
+                )
+            assert resp.status_code == 200
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_loopback_admin_op_refused_for_child_tokens(
+        self, fake_creds, tmp_path,
+    ):
+        """A scoped child token cannot open the TCP plane — on the
+        UDS or on the (already-open) TCP plane itself."""
+        upstream = _Upstream("json")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token, _ = d.allocate_child("cc-esc", budget_usd=1.0)
+            for client, url in (
+                (_uds_client(d), "http://_/_child/loopback"),
+                (_tcp_client(d), "/_child/loopback"),
+            ):
+                with client:
+                    r = client.post(
+                        url,
+                        headers={"Authorization": f"Bearer {token}"},
+                        content=b"{}",
+                    )
+                assert r.status_code == 403, url
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_mint_request_budget_travels_and_enforces(
+        self, fake_creds, tmp_path,
+    ):
+        """The client's ``request_budget`` reaches allocate_child:
+        request N+1 against an N-request token is refused without an
+        upstream forward."""
+        upstream = _Upstream("json")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            worker = _worker_token(d)
+            minted = mint_child_token(
+                budget_usd=1.0, models=[_PRICED_MODEL], ttl_s=120,
+                request_budget=1, label="one-shot",
+                socket_path=str(d.socket_path), token=worker,
+            )
+            assert minted["request_budget"] == 1
+            with _uds_client(d) as client:
+                assert _messages_post(
+                    client, minted["token"],
+                ).status_code == 200
+                resp = _messages_post(client, minted["token"])
+            assert resp.status_code == 401
+            assert len(upstream.requests) == 1
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+
+class TestAnthropicSDKDialect:
+    """Wire-shape pins for the base-URL SDK children the TCP plane
+    fronts (Claude CLI, OpenAnt's pinned anthropic adapter): the
+    anthropic SDK called with ``base_url=http://127.0.0.1:<port>/
+    anthropic`` POSTs ``/anthropic/v1/messages`` with the credential
+    in ``x-api-key`` (no Authorization header) plus its own
+    ``anthropic-version``. Verified against anthropic SDK 1.7.0 —
+    httpx-style base-URL merge keeps the path prefix."""
+
+    def _sdk_shaped_post(self, client, token, path="/anthropic/v1/messages",
+                         model=_PRICED_MODEL):
+        return client.post(
+            path,
+            headers={
+                "x-api-key": token,
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+                "Accept-Encoding": "gzip, deflate, zstd",
+            },
+            content=json.dumps({
+                "model": model, "max_tokens": 100, "messages": [],
+            }).encode(),
+        )
+
+    def test_x_api_key_dialect_books_once_and_releases_reservation(
+        self, fake_creds, tmp_path,
+    ):
+        upstream = _Upstream("json")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token, info = d.allocate_child("sdk-child", budget_usd=1.0)
+            with _tcp_client(d) as client:
+                resp = self._sdk_shaped_post(client, token)
+            assert resp.status_code == 200
+            spend = _wait_spend(d, info["token_id"])
+            assert spend["requests_made"] == 1
+            assert spend["spent_usd"] == pytest.approx(_expected_cost())
+            with d._tokens_lock:
+                rec = d._child_by_id_locked(info["token_id"])
+                assert rec.reserved_usd == 0.0
+            # The forwarded request carries the REAL key, never the
+            # child token, and identity encoding for the usage scan.
+            sent = upstream.requests[0]["headers"]
+            assert sent.get("x-api-key") == \
+                "real-secret-anthropic-key-NOT-LEAKED"
+            assert token not in json.dumps(upstream.requests[0]["headers"])
+            assert sent.get("Accept-Encoding") == "identity"
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_x_api_key_dialect_scope_still_enforced(
+        self, fake_creds, tmp_path,
+    ):
+        """The dialect earns no scope: a non-allowlisted upstream path
+        is 403'd unforwarded, and a revoked token's reuse is 401'd."""
+        upstream = _Upstream("json")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token, info = d.allocate_child("sdk-esc", budget_usd=1.0)
+            with _tcp_client(d) as client:
+                resp = self._sdk_shaped_post(
+                    client, token, path="/anthropic/v1/complete",
+                )
+                assert resp.status_code == 403
+                assert upstream.requests == []
+                d.revoke_child(info["token_id"])
+                resp = self._sdk_shaped_post(client, token)
+            assert resp.status_code == 401
+            assert upstream.requests == []
+        finally:
+            upstream.shutdown()
+            d.shutdown()
+
+    def test_x_api_key_dialect_budget_exhaustion_402(
+        self, fake_creds, tmp_path,
+    ):
+        """Overspend surfaces as a 402 the SDK raises as a typed API
+        error — the child reports it, never silently retries free."""
+        upstream = _Upstream("json")
+        d = _make_dispatcher(fake_creds, tmp_path, upstream)
+        try:
+            token, info = d.allocate_child("sdk-poor", budget_usd=0.02)
+            with d._tokens_lock:
+                rec = d._child_by_id_locked(info["token_id"])
+                rec.spent_usd = 0.02  # ledger already at budget
+            with _tcp_client(d) as client:
+                resp = self._sdk_shaped_post(client, token)
+            assert resp.status_code == 402
+            assert "budget exhausted" in resp.json()["error"]
+            assert upstream.requests == []
+        finally:
+            upstream.shutdown()
+            d.shutdown()
 
 
 # ---------------------------------------------------------------------------

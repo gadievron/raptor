@@ -2968,6 +2968,27 @@ def _make_request_handler(
                     return
                 self._send_json(200, snapshot)
                 return
+            if op == "loopback":
+                # Enable (idempotently) the loopback TCP plane and
+                # report its port. Same worker-plane-only gate as the
+                # other ops (the caller already refused non-UDS planes
+                # and child tokens before dispatching here). The op
+                # exists for workers whose CLI/SDK children speak
+                # plain HTTP to a base URL (``claude`` reads
+                # ``ANTHROPIC_BASE_URL``; OpenAnt's anthropic provider
+                # takes ``base_url``) but run in a DIFFERENT process
+                # than the dispatcher, where
+                # ``enable_loopback_listener()`` cannot be called on
+                # the instance. Capability-neutral for the caller: the
+                # plane it opens only ever authenticates scoped child
+                # tokens (worker tokens are refused there), and a
+                # worker can already mint those. One shared listener —
+                # concurrent workers each get the same port and scope
+                # their own tokens; the dispatcher's ``shutdown()``
+                # owns the teardown.
+                port = dispatcher.enable_loopback_listener()
+                self._send_json(200, {"port": port})
+                return
             self._send_simple(404, f"unknown child-admin op: {op!r}")
 
         # Wire all common methods to the dispatch path. Anthropic /

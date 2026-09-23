@@ -677,6 +677,7 @@ def mint_child_token(
     budget_usd: float,
     models: list | None = None,
     ttl_s: int | None = None,
+    request_budget: int | None = None,
     label: str = "cc-child",
     socket_path: str | None = None,
     token: str | None = None,
@@ -688,18 +689,47 @@ def mint_child_token(
     credential — hand it ONLY to the spawned child's env, never log it
     (``token_id`` is the loggable correlation id).
     """
-    # ``is None`` (not falsy) gates: an explicit ``models=[]`` or
-    # ``ttl_s=0`` must travel to the dispatcher and be REJECTED there
-    # (allocate_child raises ValueError), never silently dropped here
-    # and replaced by a default granting more than the caller asked.
+    # ``is None`` (not falsy) gates: an explicit ``models=[]``,
+    # ``ttl_s=0``, or ``request_budget=0`` must travel to the
+    # dispatcher and be REJECTED there (allocate_child raises
+    # ValueError), never silently dropped here and replaced by a
+    # default granting more than the caller asked.
     payload: dict = {"budget_usd": budget_usd, "label": label}
     if models is not None:
         payload["models"] = list(models)
     if ttl_s is not None:
         payload["ttl_s"] = int(ttl_s)
+    if request_budget is not None:
+        payload["request_budget"] = int(request_budget)
     return _child_admin_request(
         "mint", payload, socket_path=socket_path, token=token,
     )
+
+
+def enable_child_loopback(
+    *,
+    socket_path: str | None = None,
+    token: str | None = None,
+) -> int:
+    """Enable (idempotently) the dispatcher's loopback TCP plane and
+    return its port.
+
+    The plane is the base-URL transport for CLI/SDK children that
+    cannot speak HTTP-over-UDS; it authenticates scoped child tokens
+    only. One listener is shared dispatcher-wide (repeat calls return
+    the same port) and the dispatcher's own shutdown tears it down —
+    callers scope PER-RUN authority through the child token they mint,
+    not through listener lifetime.
+    """
+    data = _child_admin_request(
+        "loopback", {}, socket_path=socket_path, token=token,
+    )
+    port = data.get("port")
+    if not isinstance(port, int) or isinstance(port, bool) \
+            or not (0 < port < 65536):
+        msg = f"child-token loopback: malformed port {port!r}"
+        raise RuntimeError(msg)
+    return port
 
 
 def revoke_child_token(
