@@ -1665,9 +1665,10 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # is always False, so an unscoped guard would wrongly refuse every
         # macOS untrusted-egress caller. macOS egress scoping is out of
         # this finding's scope and unchanged here.
-        _degraded_ok = os.environ.get(
-            'RAPTOR_ALLOW_DEGRADED_UNTRUSTED', '',
-        ).strip().lower() in ('1', 'true', 'yes', 'on')
+        # One parse, owned by _degraded_untrusted_waiver — the AXIS
+        # semantics (network waiver, not a tier floor) stay this
+        # site's; only the value grammar is shared.
+        _degraded_ok = _degraded_untrusted_waiver()
         if (
             sys.platform != 'darwin'
             and use_egress_proxy
@@ -2144,9 +2145,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                     " The supplied allowed_tcp_ports allowlist is "
                     "equally unenforceable (Landlock TCP rules need "
                     "ABI v4+)." if allowed_tcp_ports else "")
-            _degraded_ok = os.environ.get(
-                "RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "",
-            ).strip().lower() in ("1", "true", "yes", "on")
+            # Shared parse (see _degraded_untrusted_waiver); the
+            # network-axis meaning stays this site's.
+            _degraded_ok = _degraded_untrusted_waiver()
             if _degraded_ok:
                 if state.warn_once("_degraded_net_open_override_warned"):
                     logger.warning(
@@ -7984,9 +7985,7 @@ def _require_userns_or_optin(entry: str, restrict_reads: bool = True,
     if sys.platform == "darwin":
         if check_seatbelt_available():
             return False
-        if os.environ.get(
-            "RAPTOR_ALLOW_DEGRADED_UNTRUSTED", "",
-        ).strip().lower() in ("1", "true", "yes", "on"):
+        if _degraded_untrusted_waiver():
             logger.warning(
                 "%s: sandbox-exec unavailable or failed its smoke "
                 "test — running UNTRUSTED code with rlimits-only "
@@ -8490,9 +8489,11 @@ def _degraded_untrusted_waiver() -> bool:
     escape-hatch alias; all new consent semantics ship only on the
     explicit surfaces (``--sandbox-floor`` / project ``sandbox-floor``),
     which win over it on disagreement, with a banner naming both.
-    The network-axis waivers (degraded net-deny, proxy tier) keep
-    their own reads of this var by design — a tier floor never
-    consents the network axis.
+    The network-axis waivers (degraded net-deny, proxy tier, the
+    darwin rlimits-only arm) consume the same PARSE through this
+    helper while keeping their own axis semantics — a tier floor
+    never consents the network axis; sharing the value grammar just
+    prevents the three inline copies drifting on what "set" means.
     """
     return os.environ.get(
         "RAPTOR_ALLOW_DEGRADED_UNTRUSTED", ""
