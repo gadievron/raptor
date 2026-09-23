@@ -619,11 +619,18 @@ class BuildDetector:
         )
         # Cap at 200 files to bound scan time on huge targets.
         for src in sorted(sources, key=lambda p: (len(p.parts), str(p)))[:200]:
-            try:
-                with src.open("rb") as f:
-                    text = f.read(65536).decode("utf-8", "replace")
-            except OSError:
+            # Hardened head read: this scan runs in the UNSANDBOXED
+            # parent over untrusted directory entries, and _walk_files
+            # yields every file type — a raw open() on a writer-less
+            # FIFO named `a.c` blocks forever with nothing to kill it
+            # but the operator. read_text_capped opens O_NOFOLLOW +
+            # O_NONBLOCK and refuses non-regular files, degrading to
+            # skip — the same answer an unreadable file already got.
+            from core.source import read_text_capped
+            got = read_text_capped(src, 65536)
+            if got is None:
                 continue
+            text = got[0]
             for m in pattern.finditer(text):
                 header = m.group(1)
                 if header in existing_header_names:
@@ -653,11 +660,14 @@ class BuildDetector:
         (first 64 KB) — real CMakeLists files rarely exceed this;
         the cap protects against pathological inputs.
         """
-        try:
-            with cmakelists.open("rb") as f:
-                head = f.read(65536).decode("utf-8", "replace")
-        except OSError:
+        # Hardened head read (unsandboxed parent, untrusted entry): a
+        # FIFO or device node planted at a CMakeLists.txt path must
+        # degrade to "not a project root", never block the open.
+        from core.source import read_text_capped
+        got = read_text_capped(cmakelists, 65536)
+        if got is None:
             return False
+        head = got[0]
         for raw in head.splitlines():
             line = raw.lstrip().lower()
             if line.startswith(("cmake_minimum_required", "project(")):
