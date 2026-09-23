@@ -891,3 +891,62 @@ def test_review_markdown_keeps_link_and_image_syntax_inert() -> None:
         if beacon in line:
             before = line.split(beacon, 1)[0]
             assert before.endswith("`"), line
+
+
+# ---------------------------------------------------------------------------
+# OSV degradation — verdict availability
+# ---------------------------------------------------------------------------
+
+def test_osv_outage_never_mints_clean(tmp_path: Path, capsys) -> None:
+    """A transient OSV outage must not read as "no known advisories"
+    with exit 0 — a network blip would wave a vulnerable package
+    through any pre-install gate built on this command. Mirrors the
+    whatif degraded refusal: explicit degraded section + exit 2."""
+    from core.http import HttpError
+
+    class OutageHttp(StubHttp):
+        def post_json(self, url, body, timeout=30, **kwargs):
+            raise HttpError(f"simulated OSV outage: {url}")
+
+    http = OutageHttp(gets={
+        "https://registry.npmjs.org/lodash/4.17.4": {"name": "lodash"},
+    })
+    rc = review.main(
+        ["npm", "lodash", "4.17.4", "--no-kev", "--no-epss",
+         "--no-transitive"],
+        http=http, cache=JsonCache(root=tmp_path),
+    )
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "OSV lookups degraded" in out
+    assert "verdict unavailable" in out
+    # The human-readable verdict reflects the degradation too — a
+    # "Clean" label above the exit-2 refusal would contradict it.
+    assert "**Verdict:** Degraded" in out
+    assert "**Verdict:** Clean" not in out
+
+
+def test_osv_degraded_block_verdict_keeps_exit_2(tmp_path: Path, capsys) -> None:
+    """Degradation never DOWNGRADES a verdict: a block-tier signal that
+    survived the outage still exits 2, with the degraded section
+    appended for visibility."""
+    from core.http import HttpError
+
+    class OutageHttp(StubHttp):
+        def post_json(self, url, body, timeout=30, **kwargs):
+            raise HttpError(f"simulated OSV outage: {url}")
+
+    # distance-1 typosquat of "lodash" — block-tier without OSV.
+    http = OutageHttp(gets={
+        "https://registry.npmjs.org/lodahs/4.17.4": {"name": "lodahs"},
+    })
+    rc = review.main(
+        ["npm", "lodahs", "4.17.4", "--no-kev", "--no-epss",
+         "--no-transitive"],
+        http=http, cache=JsonCache(root=tmp_path),
+    )
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "OSV lookups degraded" in out
+    # Degradation never DOWNGRADES: the block verdict label survives.
+    assert "**Verdict:** Block" in out

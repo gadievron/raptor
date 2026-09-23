@@ -22,6 +22,9 @@ Exit codes:
     0  — clean: no advisories, no supply-chain hits.
     1  — review: advisories with available fixes, or distance-2 typosquat.
     2  — block: KEV-listed CVE, critical without fix, or distance-1 typosquat.
+         Also returned when OSV lookups degraded transiently — the
+         verdict is unavailable, never Clean (mirror of the whatif
+         degraded refusal).
     3  — invalid arguments / internal error.
 """
 
@@ -211,7 +214,29 @@ def _checked_main(
         transitive_walk_supported=transitive_walk_supported,
         seed_metadata_unverifiable=seed_metadata_unverifiable,
         slop_findings=slop_findings,
+        osv_degraded=osv.degraded,
     )
+
+    exit_code = {_VERDICT_CLEAN: 0, _VERDICT_REVIEW: 1, _VERDICT_BLOCK: 2}[verdict]
+    if osv.degraded:
+        # A transient OSV failure must never read as "no known
+        # advisories" with exit 0 — a network outage would wave a
+        # vulnerable package through any pre-install gate built on
+        # this command. Refuse to conclude instead (the whatif
+        # degraded-refusal shape).
+        sample = ", ".join(
+            neutralize_inline(k, limit=60)
+            for k in osv.failed_dep_keys[:5]
+        )
+        report += (
+            "\n## OSV lookups degraded — verdict unavailable\n\n"
+            f"{osv.failed_lookups} advisory lookup(s) failed "
+            "transiently"
+            + (f" (e.g. {sample})" if sample else "")
+            + "; the verdict above may be missing real advisories. "
+            "Re-run when the network/OSV recovers.\n"
+        )
+        exit_code = 2
 
     if args.out:
         out = Path(args.out).resolve()
@@ -220,7 +245,7 @@ def _checked_main(
     sys.stdout.write(report)
     sys.stdout.flush()
 
-    return {_VERDICT_CLEAN: 0, _VERDICT_REVIEW: 1, _VERDICT_BLOCK: 2}[verdict]
+    return exit_code
 
 
 # ---------------------------------------------------------------------------
@@ -420,10 +445,17 @@ def _render_review_markdown(
     transitive_walk_supported: bool = False,
     seed_metadata_unverifiable: bool = False,
     slop_findings: list[SlopsquatFinding] | None = None,
+    osv_degraded: bool = False,
 ) -> str:
     label = {_VERDICT_CLEAN: "Clean",
              _VERDICT_REVIEW: "Review",
              _VERDICT_BLOCK: "Block"}[verdict]
+    if osv_degraded and verdict != _VERDICT_BLOCK:
+        # The advisory picture is incomplete — a Clean/Review label
+        # would contradict the degraded refusal (exit 2) below it.
+        # Block survives: degradation never downgrades a verdict that
+        # tripped on the signals that DID arrive.
+        label = "Degraded"
     buf = StringIO()
     buf.write(f"# raptor-sca check — {neutralize_inline(dep.purl)}\n\n")
     buf.write(f"**Verdict:** {label}\n\n")
@@ -618,6 +650,13 @@ def _render_review_markdown(
             "(KEV-listed CVE, unfixable critical, high-EPSS critical, "
             "multiple criticals, near-typosquat, high-severity "
             "slopsquat, or compound supply-chain red flags).\n"
+        )
+    elif osv_degraded:
+        buf.write(
+            "## Recommendation\n\n"
+            "Verdict unavailable — advisory lookups degraded "
+            "transiently, so this version is unvetted. Re-run when "
+            "the network/OSV recovers before installing.\n"
         )
     elif verdict == _VERDICT_REVIEW:
         buf.write(
