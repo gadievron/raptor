@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import logging
 import json
 import sys
@@ -55,8 +56,12 @@ def _repo_root() -> Path:
 
 
 def _default_out() -> Path:
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    return Path("out/recall-measure/runs") / ts
+    # Microseconds + pid: recall sweeps are exactly the parallel
+    # workload where second-granularity default dirs collide and one
+    # run's report silently overwrites another's (mkdir(exist_ok) hid
+    # the collision).
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    return Path("out/recall-measure/runs") / f"{ts}_p{os.getpid()}"
 
 
 def _cmd_run(args: argparse.Namespace) -> int:

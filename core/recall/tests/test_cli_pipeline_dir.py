@@ -93,3 +93,16 @@ class TestPipelineDirFlag:
                        "--out", str(tmp_path / "out")])
         assert rc == 0
         assert (seen["repo_root"] / "core" / "recall").is_dir()
+
+
+class TestDefaultOutDirUnique:
+    def test_default_out_dirs_do_not_collide(self):
+        """Recall sweeps run in parallel; second-granularity default
+        dirs collided and mkdir(exist_ok=True) hid the overwrite."""
+        from core.recall.cli import _default_out
+
+        import os
+        a = _default_out()
+        b = _default_out()
+        assert a != b
+        assert f"p{os.getpid()}" in a.name

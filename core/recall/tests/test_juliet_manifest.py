@@ -302,3 +302,30 @@ class TestGenerateB:
         assert rc == 0
         assert "refused" in capsys.readouterr().out
         assert json.loads(out.read_text())["name"] == "juliet-b-multifile"
+
+
+class TestSingleLetterLeftoverCounted:
+    def test_leftover_refused_by_reason(self, tmp_path, monkeypatch):
+        """A chain with only one letter present is not a multi-file
+        case — it must join the refused-by-reason counts, never drop
+        silently (the module's coverage-honesty posture)."""
+        clone = _make_clone_b(tmp_path)
+        d = clone / "src/testcases/CWE89_SQL_Injection/s01"
+        (d / "CWE89_SQL_Injection__t_99a.java").write_text(
+            _CHAIN_A, encoding="utf-8")
+        subprocess.run(["git", "-C", str(clone), "add", "-A"],
+                       check=True)
+        subprocess.run(
+            ["git", "-C", str(clone), "-c", "user.email=t@example.org",
+             "-c", "user.name=t", "commit", "-qm", "leftover"],
+            check=True)
+        head = subprocess.run(
+            ["git", "-C", str(clone), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        monkeypatch.setattr(
+            "core.recall.juliet_manifest.JULIET_PINNED_SHA", head)
+        manifest = generate_manifest_b(clone)
+        refused = manifest["notes"]["refused"]
+        assert refused.get("single_letter_chain_leftover", 0) >= 1
+        ids = {e["id"] for e in manifest["expected"]}
+        assert "CWE89_SQL_Injection__t_99" not in ids

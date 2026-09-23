@@ -361,7 +361,12 @@ def generate_manifest_b(clone_dir: Path, *, cwes: list[int] | None = None,
 
         for key, members in sorted(chains.items()):
             if len(members) < 2:
-                continue  # single-letter leftovers are not multi-file
+                # Single-letter leftovers are not multi-file cases —
+                # refused BY REASON like every other drop (the
+                # module's coverage-honesty posture: counted, never
+                # silent).
+                _refuse("single_letter_chain_leftover")
+                continue
             if limit is not None and per_cwe_count.get(cwe, 0) >= limit:
                 continue
             texts = {letter: p.read_text(encoding="utf-8",
