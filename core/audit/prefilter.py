@@ -2004,7 +2004,34 @@ def _py_simple_accessor(source: str) -> bool:
     ]
     if len(funcs) != 1:
         return False
-    body = list(funcs[0].body)
+    fn = funcs[0]
+    # Def-time-executed expressions are live code the body-shape
+    # check below never sees: a Call in a decorator, a default
+    # argument, or an annotation (`@reg(os.system(c))`,
+    # `n=(m := f(c))`, `-> f(c)`) runs when the def executes and
+    # would ride an otherwise-trivial body into the skip. Plain
+    # decorators (@property) and literal defaults/annotations keep
+    # their skip.
+    def_time: list[ast.expr] = list(fn.decorator_list)
+    def_time.extend(fn.args.defaults)
+    def_time.extend(d for d in fn.args.kw_defaults if d is not None)
+    if fn.returns is not None:
+        def_time.append(fn.returns)
+    annotated = list(fn.args.args) + list(fn.args.posonlyargs) + list(
+        fn.args.kwonlyargs,
+    )
+    if fn.args.vararg is not None:
+        annotated.append(fn.args.vararg)
+    if fn.args.kwarg is not None:
+        annotated.append(fn.args.kwarg)
+    def_time.extend(
+        a.annotation for a in annotated if a.annotation is not None
+    )
+    for expr in def_time:
+        for sub in ast.walk(expr):
+            if isinstance(sub, (ast.Call, ast.NamedExpr, ast.Await)):
+                return False
+    body = list(fn.body)
     if (
         body
         and isinstance(body[0], ast.Expr)
@@ -2058,6 +2085,13 @@ def _accessor_ref_refused(returned: str) -> bool:
 #: A bare signature line (K&R `{`-on-next-line form): the parameter
 #: list closes the line, no statement follows.
 _ACCESSOR_SIG_LINE_RE = re.compile(r"^[^=;{}]*\([^;{}]*\)\s*$")
+
+#: A return-type-only line (the BSD/kernel `int\nname(...)` split
+#: signature): qualifier/type identifiers and pointer stars only —
+#: no punctuation a statement would carry.
+_ACCESSOR_TYPE_LINE_RE = re.compile(
+    r"^(?:[A-Za-z_]\w*\s+)*[A-Za-z_]\w*(?:\s*\*+)?\s*$"
+)
 
 #: Whole-body accessor arms, matched with fullmatch over the
 #: signature-stripped body — a suffix anchor let any side-effecting
@@ -2143,6 +2177,20 @@ def _is_simple_accessor(source: str, lang: str) -> bool:
             # unambiguously a bare signature (ends at its parameter
             # list). Anything else refuses — never guess at a body.
             body_no_sig = " ".join(code_lines[1:]).strip()
+        elif (
+            len(code_lines) >= 3
+            and code_lines[0].split()[0] != "return"
+            and _ACCESSOR_TYPE_LINE_RE.match(code_lines[0])
+            and "return" not in code_lines[1]
+            and _ACCESSOR_SIG_LINE_RE.match(code_lines[1])
+        ):
+            # The BSD/kernel split-signature idiom — the return type
+            # on its OWN line above the name (`int\ndiskmapopen(...)
+            # \n{`). Without this join the dominant kernel style lost
+            # its accessor skip wholesale (refusal-direction cost);
+            # honesty still rests entirely on the whole-body arm
+            # below.
+            body_no_sig = " ".join(code_lines[2:]).strip()
         else:
             return False
     if not body_no_sig:
