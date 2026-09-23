@@ -9968,6 +9968,37 @@ def _reconcile_cost_ledgers(config, result) -> None:
                     f"{c}=${v:.2f}" for c, v in sorted(booked.items())
                 ),
             )
+        # Failed-attempt spend, itemised per class: paid generations
+        # whose response the shape/truncation guards rejected carry
+        # their cost on the telemetry record (the guard books the
+        # provider ledger and stamps the row). Booking it here puts a
+        # burn loop's real money into cost-breakdown.json as its own
+        # line instead of leaving it as an unattributed gap between
+        # the telemetry and summary ledgers. count_call=False: the
+        # attempts are itemised in telemetry, and call-site bookings
+        # (the review path's per-failure record) already count them.
+        # getattr-probed like every telemetry read — a test double
+        # installed as the sink is not obliged to grow new methods.
+        _fcc = getattr(sink, "failed_class_costs", None)
+        failed_costs = _fcc() if callable(_fcc) else {}
+        _failed_booked = 0.0
+        for cls, (_n, cost) in sorted(failed_costs.items()):
+            if cost > 0:
+                result.cost_tracker.record_failed_attempt(
+                    cls, cost_usd=cost, count_call=False,
+                )
+                _failed_booked += cost
+        if _failed_booked > 0:
+            logger.info(
+                "cost: booked $%.2f failed-attempt spend from "
+                "telemetry: %s",
+                _failed_booked,
+                ", ".join(
+                    f"{c}=${v:.2f} ({n} attempts)"
+                    for c, (n, v) in sorted(failed_costs.items())
+                    if v > 0
+                ),
+            )
     # Same-run resume: book the prior segments' spend BEFORE injecting
     # this segment's client ledger, so the rewritten
     # cost-breakdown.json covers the whole run (the budget client only

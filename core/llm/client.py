@@ -906,6 +906,30 @@ def _failure_disposition(error: Exception) -> str:
     return "fatal"
 
 
+def _billed_failure_usage(error: Exception) -> tuple[float, int, int]:
+    """(cost_usd, tokens_in, tokens_out) a failed attempt already paid.
+
+    Provider shape/truncation guards stamp ``billed_*`` attributes on
+    the exception when the failure followed a completed, billed
+    generation (see ``providers._attach_billed_usage``). Chain-walked
+    because wrappers re-raise ``from`` the original. Returns zeros
+    when no guard stamped anything — transport failures that never
+    reached generation genuinely cost nothing (input-side billing on
+    refused/errored requests is not surfaced by the SDKs)."""
+    for e in _exception_chain(error):
+        cost = getattr(e, "billed_cost_usd", None)
+        if cost is not None:
+            try:
+                return (
+                    float(cost or 0.0),
+                    int(getattr(e, "billed_tokens_in", 0) or 0),
+                    int(getattr(e, "billed_tokens_out", 0) or 0),
+                )
+            except (TypeError, ValueError):
+                return 0.0, 0, 0
+    return 0.0, 0, 0
+
+
 def _is_response_shape_failure(error: Exception) -> bool:
     """True when a failed structured attempt points at the RESPONSE
     SHAPE (parse failure / schema mismatch / validation) — the only
@@ -3118,6 +3142,15 @@ class LLMClient:
                             e, model.provider, model.model_name,
                         )
 
+                        # Paid usage the raising guard stamped on the
+                        # exception rides the row: without it a burn
+                        # loop's rows all read $0 while the run bleeds
+                        # full-price generations (the ledger booking
+                        # happens provider-side; this is per-attempt
+                        # attribution only).
+                        _paid_cost, _paid_in, _paid_out = (
+                            _billed_failure_usage(e)
+                        )
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
                             event="attempt_failed",
@@ -3133,6 +3166,15 @@ class LLMClient:
                                 time.monotonic() - attempt_start, 3),
                             http_version=_transport_http_version(),
                             error=_safe_e[:200],
+                            **(
+                                {
+                                    "cost_usd": _paid_cost,
+                                    "tokens_in": _paid_in,
+                                    "tokens_out": _paid_out,
+                                }
+                                if _paid_cost > 0 or _paid_out > 0
+                                else {}
+                            ),
                         )
 
                         if _veto is not None:
@@ -3773,6 +3815,13 @@ class LLMClient:
                             e, model.provider, model.model_name,
                         )
 
+                        # Same paid-usage attribution as the generate
+                        # loop above — the structured path is where
+                        # the observed burn shapes (truncation,
+                        # thinking-only max_tokens) actually live.
+                        _paid_cost, _paid_in, _paid_out = (
+                            _billed_failure_usage(e)
+                        )
                         from core.llm.telemetry import emit as _t_emit
                         _t_emit(
                             event="attempt_failed",
@@ -3789,6 +3838,15 @@ class LLMClient:
                                 time.monotonic() - attempt_start, 3),
                             http_version=_transport_http_version(),
                             error=_safe_e[:200],
+                            **(
+                                {
+                                    "cost_usd": _paid_cost,
+                                    "tokens_in": _paid_in,
+                                    "tokens_out": _paid_out,
+                                }
+                                if _paid_cost > 0 or _paid_out > 0
+                                else {}
+                            ),
                         )
 
                         if _veto is not None:
