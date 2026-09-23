@@ -50,15 +50,17 @@ def test_analysis_result_matches_expected_output():
 
 
 def test_precomputed_map_equivalent_to_per_query_lookup():
-    # The map must return exactly what the reference per-(lineno,
-    # name) AST-walk helper returns, for every def site.
+    # The map's FIRST entry per key must return exactly what the
+    # reference per-(lineno, name) AST-walk helper returns (first
+    # match in walk order), for every def site.
     tree = ast.parse(_FIXTURE_SRC)
     for fn_ast in tree.body:
         amap = ts_mod._build_assignment_value_map(fn_ast)
         for (lineno, name), found in amap.items():
+            assert found  # never an empty candidate list
             assert ts_mod._find_assignment_value_at(
                 fn_ast, lineno, name,
-            ) == found
+            ) == found[0]
         # And the reference finds nothing the map lacks.
         for node in ast.walk(fn_ast):
             lineno = getattr(node, "lineno", None)
@@ -66,7 +68,41 @@ def test_precomputed_map_equivalent_to_per_query_lookup():
                 continue
             for name in ("out", "y", "z", "w", "x", "xs", "item", "v"):
                 ref = ts_mod._find_assignment_value_at(fn_ast, lineno, name)
-                assert amap.get((lineno, name)) == ref
+                entries = amap.get((lineno, name))
+                assert (entries[0] if entries else None) == ref
+
+
+def test_same_line_rebind_keeps_every_candidate():
+    # Two writes to one name on ONE physical line must BOTH be in the
+    # map — the first-match ``setdefault`` collision minted a false
+    # clean-sanitizer wrapper the enforced sanitizer-cut consumed.
+    src = (
+        "def _clean(s):\n"
+        "    t = html.escape(s); t = s\n"
+        "    return t\n"
+    )
+    fn_ast = ast.parse(src).body[0]
+    amap = ts_mod._build_assignment_value_map(fn_ast)
+    entries = amap[(2, "t")]
+    assert len(entries) == 2
+    assert isinstance(entries[0][0], ast.Call)          # html.escape(s)
+    assert entries[0][1] is False
+    assert isinstance(entries[1][0], ast.Name)          # raw s
+    assert entries[1][1] is False
+
+
+def test_same_line_augassign_rebind_keeps_every_candidate():
+    src = (
+        "def _clean(s):\n"
+        "    t = html.escape(s); t += s\n"
+        "    return t\n"
+    )
+    fn_ast = ast.parse(src).body[0]
+    amap = ts_mod._build_assignment_value_map(fn_ast)
+    entries = amap[(2, "t")]
+    assert len(entries) == 2
+    assert entries[0][1] is False
+    assert entries[1][1] is True                        # the AugAssign
 
 
 def test_fixed_point_loop_no_longer_walks_ast_per_query(monkeypatch):
