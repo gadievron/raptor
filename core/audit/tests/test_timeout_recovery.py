@@ -110,7 +110,6 @@ class TestTimeoutClassification:
         # transport's full timeout (cap honoured by the claudecode
         # transport).
         assert captured["timeout_s"] == _TIMEOUT_RETRY_TIMEOUT_S
-        assert captured["error_retry"] is True
         # Provenance: the recovered verdict came from stripped
         # context — same tag the inline reduced retry stamps, so the
         # journaled entry is refused by cross-run verdict reuse and
@@ -171,7 +170,9 @@ class TestTimeoutReducedRetry:
 
         for key in _TRUNCATION_STRIP_KEYS:
             assert key not in captured
-        assert captured["error_retry"] is True
+        # ctx["error_retry"] was a write-only marker (no runtime
+        # consumer) and is gone; the strip + timeout cap + tag are
+        # the observable behavior.
         assert captured["timeout_s"] == _TIMEOUT_RETRY_TIMEOUT_S
         assert outcome.status == "clean"
         assert outcome.context_reduced is True

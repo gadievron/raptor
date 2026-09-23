@@ -220,6 +220,11 @@ def assemble_context(
     }
 
     ctx["target_path"] = str(target_path)
+    # The renderer's language-specific pattern blocks key off
+    # ctx["language"]; nothing produced it, so the go/python exemplar
+    # sections never rendered outside system-prompt mode.
+    from core.audit.prefilter import detect_language
+    ctx["language"] = detect_language(file_path)
     ctx["source"] = _read_source(target_path, file_path, line_start, line_end)
     ctx["metadata"] = _extract_metadata(checklist, file_path, function_name)
     ctx["callers"] = _find_callers(
@@ -895,6 +900,14 @@ def format_context_for_prompt(
         sections.append(PromptSection(
             "role", "\n### Role & reachability\n" + rc["reachability_note"], 1))
 
+    if ctx.get("threat_model"):
+        # Operator-authored project threat model (assemble_context
+        # loads the prompt block; it was computed for every review
+        # but never rendered).
+        sections.append(PromptSection(
+            "threat_model", "\n" + str(ctx["threat_model"]), 1,
+        ))
+
     if ctx.get("edge_contracts"):
         ec = [
             "\n### Edge contracts to verdict",
@@ -1116,6 +1129,185 @@ def format_context_for_prompt(
         )
         sections.append(PromptSection(
             "mechanical_detector_findings", "\n".join(lines_mdf), 1,
+        ))
+
+    # ── Mechanical gate + enrichment annotations ─────────────────────
+    # Producer↔renderer closure: every ctx enrichment key the
+    # orchestrator computes must have a section here (or a documented
+    # non-prompt consumer) — 15 paid enrichments once had no renderer
+    # at all. Two-direction oracle: test_context_key_closure.py.
+    if ctx.get("entry_point_provenance"):
+        # Pre-formatted by format_provenance_for_context (fields go
+        # through defend_prompt_field there) — instruction-position
+        # trusted structure.
+        sections.append(PromptSection(
+            "entry_point_provenance",
+            "\n### Input provenance (mechanical)\n"
+            + str(ctx["entry_point_provenance"]),
+            1,
+        ))
+
+    if ctx.get("is_security_decision"):
+        sections.append(PromptSection(
+            "is_security_decision",
+            "\n### Security-decision point\nThis function IS a "
+            "security decision point (auth / crypto / access-control "
+            "naming). A correctness bug here has SECURITY impact — do "
+            "not dismiss as non-security.",
+            1,
+        ))
+
+    if ctx.get("feeds_security_decision"):
+        from .mechanical_gates import format_security_decision_for_context
+        sd_text = format_security_decision_for_context(True)
+        if sd_text:
+            sections.append(PromptSection(
+                "feeds_security_decision", "\n" + sd_text, 1,
+            ))
+
+    if ctx.get("constant_dangerous_calls"):
+        from .mechanical_gates import format_constant_dangerous_calls
+        cdc_text = format_constant_dangerous_calls(
+            ctx["constant_dangerous_calls"],
+        )
+        if cdc_text:
+            sections.append(PromptSection(
+                "constant_dangerous_calls", "\n" + cdc_text, 2,
+            ))
+
+    if ctx.get("type_constraints"):
+        from .mechanical_gates import format_type_constraints
+        tc_text = format_type_constraints(ctx["type_constraints"])
+        if tc_text:
+            sections.append(PromptSection(
+                "type_constraints", "\n" + tc_text, 2,
+            ))
+
+    if ctx.get("universal_preconditions"):
+        from .mechanical_gates import format_universal_preconditions
+        up_text = format_universal_preconditions(
+            ctx["universal_preconditions"],
+        )
+        if up_text:
+            sections.append(PromptSection(
+                "universal_preconditions", "\n" + up_text, 2,
+            ))
+
+    if ctx.get("interprocedural_guards"):
+        ipg = ctx["interprocedural_guards"]
+        total = ipg.get("total_callers", 0)
+        unguarded = ipg.get("unguarded_callers", 0)
+        guarded = ipg.get("guarded_callers", 0)
+        ipg_lines = [
+            "\n### Interprocedural guards (Joern CPG)",
+            f"- {guarded} of {total} callers guard this call site; "
+            f"{unguarded} do NOT — an unguarded caller reaches this "
+            f"function without the precondition a guarded caller "
+            f"establishes.",
+        ]
+        for cg in (ipg.get("caller_guards") or [])[:5]:
+            ipg_lines.append(
+                f"  - guarded by "
+                f"`{_defend_identifier(str(cg.get('caller_function', '?')), max_length=200)}` "
+                f"(line {cg.get('caller_line', 0)}): "
+                f"{_defend_identifier(str(cg.get('guard_text', ''))[:120], max_length=160)}"
+            )
+        sections.append(PromptSection(
+            "interprocedural_guards", "\n".join(ipg_lines), 1,
+        ))
+
+    if ctx.get("smt_pre_evidence"):
+        sections.append(PromptSection(
+            "smt_pre_evidence",
+            "\n### SMT pre-pass evidence\n- "
+            + _defend_identifier(str(ctx["smt_pre_evidence"]),
+                                 max_length=300),
+            1,
+        ))
+
+    if ctx.get("postcondition_violations"):
+        from .postcondition_verify import format_postcondition_context
+        pv_text = format_postcondition_context(
+            [], ctx["postcondition_violations"],
+        )
+        if pv_text:
+            sections.append(PromptSection(
+                "postcondition_violations", "\n" + pv_text, 1,
+            ))
+
+    if ctx.get("fused_evidence"):
+        sections.append(PromptSection(
+            "fused_evidence",
+            "\n### Fused evidence (cross-source corroboration)\n"
+            + wrap_untrusted(
+                str(ctx["fused_evidence"]),
+                kind="fused-evidence",
+                origin="audit-evidence-fusion",
+            ),
+            1,
+        ))
+
+    if ctx.get("capability_displacement"):
+        sections.append(PromptSection(
+            "capability_displacement",
+            "\n### Capability displacement\n"
+            + wrap_untrusted(
+                str(ctx["capability_displacement"]),
+                kind="capability-displacement",
+                origin="audit-dispatch-table",
+            ),
+            2,
+        ))
+
+    if ctx.get("co_accessor_analysis"):
+        sections.append(PromptSection(
+            "co_accessor_analysis",
+            "\n### Co-accessor analysis\n"
+            + wrap_untrusted(
+                str(ctx["co_accessor_analysis"]),
+                kind="co-accessor-analysis",
+                origin="audit-struct-accessor-index",
+            ),
+            2,
+        ))
+
+    if ctx.get("intra_function_analysis"):
+        sections.append(PromptSection(
+            "intra_function_analysis",
+            "\n### Intra-function sibling analysis\n"
+            + wrap_untrusted(
+                str(ctx["intra_function_analysis"]),
+                kind="intra-function-analysis",
+                origin="audit-intra-function",
+            ),
+            2,
+        ))
+
+    if ctx.get("live_sinks"):
+        ls_lines = [
+            "\n### Live sinks (dynamic classification)",
+            ("These sinks were classified LIVE for this run — this "
+             "re-review runs at DEEP_DIVE depth because the function "
+             "can reach one of them:"),
+        ]
+        ls_lines.extend(
+            f"- {_defend_identifier(str(s), max_length=200)}"
+            for s in ctx["live_sinks"][:15]
+        )
+        sections.append(PromptSection(
+            "live_sinks", "\n".join(ls_lines), 1,
+        ))
+
+    if ctx.get("exploit_feedback"):
+        sections.append(PromptSection(
+            "exploit_feedback",
+            "\n"
+            + wrap_untrusted(
+                str(ctx["exploit_feedback"]),
+                kind="exploit-feedback",
+                origin="audit-exploit-feedback",
+            ),
+            3,
         ))
 
     if ctx.get("consistency_leads"):
@@ -1379,6 +1571,43 @@ def format_context_for_prompt(
             ep.append(f"\n**{ex['cve']}** ({ex['strategy']}): {ex['title']}")
             ep.append(ex["reasoning"])
         sections.append(PromptSection("strategy_exemplars", "\n".join(ep), 3))
+
+    if ctx.get("flow_hops"):
+        # Whole-flow review context (orchestrator flow pass): every
+        # hop was reviewed clean individually — the prompt must show
+        # the composed chain it is being asked to judge (the pass
+        # once sent only the source, its distinguishing context
+        # unrendered).
+        fh = ["\n### Flow under review"]
+        tid = ctx.get("trace_id")
+        if tid:
+            fh.append(
+                f"Trace `{_defend_identifier(str(tid), max_length=120)}`: "
+                "every hop below was reviewed clean individually — judge "
+                "the COMPOSED source→sink flow."
+            )
+        for hop in ctx["flow_hops"][:12]:
+            ident = _defend_identifier(
+                f"{hop.get('file', '?')}:{hop.get('name', '?')}",
+                max_length=300,
+            )
+            row = f"- `{ident}` (line {hop.get('line', 0)})"
+            tainted = ", ".join(
+                _defend_identifier(str(v), max_length=80)
+                for v in (hop.get("tainted_vars") or [])[:5]
+            )
+            if tainted:
+                row += f" — tainted: {tainted}"
+            control = hop.get("attacker_control")
+            if control:
+                row += (
+                    f" — control: "
+                    f"{_defend_identifier(str(control), max_length=160)}"
+                )
+            if hop.get("has_evidence"):
+                row += " [mechanical evidence]"
+            fh.append(row)
+        sections.append(PromptSection("flow_hops", "\n".join(fh), 1))
 
     if ctx.get("flow_traces"):
         is_auto = all(t.get("auto_trace") for t in ctx["flow_traces"])

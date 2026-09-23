@@ -268,7 +268,10 @@ class TestRetryErrorOutcomes:
             result, config, mock_review_fn, checklist, None,
             None, time.monotonic(), None,
         )
-        assert captured_ctx.get("error_retry") is True
+        # The retry pass strips the bulky optional sections; the old
+        # ctx["error_retry"] marker was write-only (no runtime
+        # consumer) and is gone — the strip is the observable
+        # behavior.
         assert "block_analysis" not in captured_ctx
         assert "sibling_ns" not in captured_ctx
         assert "type_constraints" not in captured_ctx
