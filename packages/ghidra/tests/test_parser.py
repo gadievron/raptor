@@ -269,3 +269,37 @@ class TestLooksAutoNamed:
 
     def test_empty(self):
         assert _looks_auto_named("") is True
+
+
+class TestExportReadBudget:
+    """parse_export materialises the attacker-influenced export FIRST,
+    in the unsandboxed parent — it must be budgeted like every sibling
+    reader of the same data class (which cap at 64 MiB), with a larger
+    named ceiling because --decompile exports can legitimately exceed
+    theirs."""
+
+    def test_oversize_export_refused(self, tmp_path, monkeypatch):
+        import pytest
+        from packages.ghidra import parser as parser_mod
+        from packages.ghidra.parser import parse_export
+        big = tmp_path / "export.json"
+        big.write_text('{"functions": [' + ",".join(
+            ['{"name": "f", "address": 1}'] * 64) + "]}")
+        monkeypatch.setattr(parser_mod, "_MAX_EXPORT_BYTES", 128)
+        with pytest.raises(ValueError, match="over 128 bytes"):
+            parse_export(big)
+
+    def test_bounded_export_parses(self, tmp_path):
+        from packages.ghidra.parser import parse_export
+        small = tmp_path / "export.json"
+        small.write_text(
+            '{"functions": [{"name": "f", "address": 4096, "size": 8}]}',
+        )
+        db = parse_export(small)
+        assert [f.name for f in db.functions] == ["f"]
+
+    def test_missing_export_still_raises_value_error(self, tmp_path):
+        import pytest
+        from packages.ghidra.parser import parse_export
+        with pytest.raises(ValueError, match="failed to read"):
+            parse_export(tmp_path / "absent.json")
