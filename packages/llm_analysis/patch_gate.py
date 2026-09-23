@@ -8,9 +8,17 @@ diffs is not closable — but a mechanical plausibility gate is. Four
 deterministic checks, each with an honest "couldn't check" annotation
 when its precondition is missing:
 
-* **format** — the response must contain one strictly parseable unified
-  diff (``format: unified-diff`` / ``not-a-unified-diff``). No diff →
-  every downstream check is skipped; the patch is still saved for the
+* **format** — the response's FULL apply payload is scanned the way
+  ``git apply`` consumes it (prose and fences are junk between
+  fragments): every parseable unified diff is collected wherever it
+  sits (``format: unified-diff`` / ``not-a-unified-diff``), and
+  apply-actionable content the strict parser cannot inspect (unparsed
+  header pairs, mode-change / rename / copy headers, hunkless
+  new/deleted-file sections, binary patch blocks, and GNU-patch-only
+  context-format sections) is flagged
+  (``unified-diff+unparsed-diff-content``) rather than left to ride
+  the saved artifact uninspected. No diff → every
+  downstream check is skipped; the patch is still saved for the
   operator exactly as before.
 * **scope** — pure Python: every hunk must target the finding's file
   and fall within ``scope_slack`` lines of the finding span
@@ -85,16 +93,6 @@ _SANDBOX_REFUSAL = (
 _HUNK_HEADER_RE = re.compile(
     r"^@@ -(?P<old_start>\d+)(?:,(?P<old_count>\d+))?"
     r" \+(?P<new_start>\d+)(?:,(?P<new_count>\d+))? @@"
-)
-
-# Same anchoring rationale as agent.py's _CODE_FENCE_RE: fences must
-# open at line start and the language tag must end cleanly, so prose
-# mentioning ```diff inline doesn't count as a block.
-_FENCE_RE = re.compile(
-    r"^```(?P<lang>[a-zA-Z0-9_+-]*)\s*\n"
-    r"(?P<body>.*?)"
-    r"^```\s*$",
-    re.MULTILINE | re.DOTALL,
 )
 
 # git-style noise lines tolerated between file sections.
@@ -208,19 +206,25 @@ def _parse_hunks(lines: list[str], i: int) -> tuple[list[DiffHunk], int, bool]:
     return hunks, i, bool(hunks)
 
 
-def _parse_unified_diff(text: str) -> ParsedDiff | None:
-    """Strictly parse ``text`` as a unified diff, or return None.
+def _parse_unified_diff_at(
+    lines: list[str], start: int,
+) -> tuple[ParsedDiff | None, int]:
+    """Strictly parse one run of file sections beginning at ``lines[start]``.
 
     Accepts one or more file sections (``--- `` / ``+++ `` header pair
     followed by well-formed hunks). Trailing prose AFTER at least one
     complete file section is tolerated and excluded from the normalised
     text; anything malformed before or inside a section rejects.
+
+    Returns ``(parsed, next_index)`` where ``next_index`` is the line
+    index just past the parsed content, so a caller scanning a whole
+    response can resume the header search there (``start`` when nothing
+    parsed).
     """
-    lines = text.splitlines()
     n = len(lines)
-    i = 0
+    i = start
     files: list[FileDiff] = []
-    consumed_end = 0
+    consumed_end = start
     while i < n:
         line = lines[i]
         if not line.strip() or line.startswith(_NOISE_PREFIXES):
@@ -231,72 +235,216 @@ def _parse_unified_diff(text: str) -> ParsedDiff | None:
             new_path = lines[i + 1][4:].split("\t")[0].strip()
             hunks, i, ok = _parse_hunks(lines, i + 2)
             if not ok:
-                return None
+                if files:
+                    # A later malformed section must not erase the
+                    # complete sections already parsed — stop before
+                    # its header so the response scanner resumes
+                    # there and records it as an unparsed residue.
+                    break
+                return None, start
             files.append(FileDiff(old_path=old_path, new_path=new_path, hunks=hunks))
             consumed_end = i
             continue
         if files:
             # Prose after a complete diff — stop, keep what parsed.
             break
-        return None
+        return None, start
     if not files:
-        return None
-    normalised = "\n".join(lines[:consumed_end]) + "\n"
-    return ParsedDiff(files=files, text=normalised)
+        return None, start
+    normalised = "\n".join(lines[start:consumed_end]) + "\n"
+    return ParsedDiff(files=files, text=normalised), consumed_end
+
+
+def _split_lines(text: str) -> list[str]:
+    r"""Split patch text on ``\n`` ONLY — git apply's line model.
+
+    Shared rule for everything that scans or measures patch/target
+    text: the scanner must consume lines exactly the way the apply
+    tool will. ``str.splitlines()`` additionally splits on \x0b \x0c
+    \x1c-\x1e \x85 U+2028 U+2029, so a diff header carrying one of
+    those characters mid-path fragments into non-header parser lines —
+    invisible to a splitlines()-based scanner while staying fully
+    actionable by ``git apply`` (which sees one intact header line).
+    """
+    return text.split("\n")
+
+
+def _parse_unified_diff(text: str) -> ParsedDiff | None:
+    """Strictly parse ``text`` as a unified diff, or return None."""
+    parsed, _ = _parse_unified_diff_at(_split_lines(text), 0)
+    return parsed
+
+
+# Line prefixes ``git apply`` acts on WITHOUT any ``@@`` hunk the scope
+# check could inspect. A response smuggling one of these next to a
+# benign hunked diff would chmod/rename/rewrite content the gate never
+# examined, so their mere presence is flagged as a residue. Ordinary
+# section headers that accompany hunks (``diff --git``, ``index``) stay
+# tolerated noise; ``new file mode`` / ``deleted file mode`` are only
+# tolerated when their section actually carries hunks — the hunkless
+# spelling (empty-file create/delete) is checked separately below.
+_ACTIONABLE_NONHUNK_MARKERS: tuple[tuple[str, str], ...] = (
+    ("old mode ", "mode-change header"),
+    ("new mode ", "mode-change header"),
+    ("rename from ", "rename header"),
+    ("rename to ", "rename header"),
+    ("copy from ", "copy header"),
+    ("copy to ", "copy header"),
+    ("GIT binary patch", "binary patch block"),
+    ("Binary files ", "binary file marker"),
+)
+
+_FILE_MODE_PREFIXES = ("new file mode ", "deleted file mode ")
+
+
+def _mode_section_is_hunkless(lines: list[str], idx: int) -> bool:
+    """True when the new/deleted-file-mode header at ``lines[idx]``
+    belongs to a section with no ``--- `` / ``+++ `` header pair.
+
+    Empty-file creates and deletes are exactly that shape: git apply
+    creates/removes the file with no hunk for the scope check to see.
+    Ordinary hunked new/deleted-file diffs have their header pair
+    immediately after the noise lines and stay tolerated. Anything
+    else ending the section (another ``diff --git``, prose, a blank
+    line, EOF) means hunkless — fail closed.
+    """
+    j = idx + 1
+    n = len(lines)
+    while j < n:
+        line = lines[j]
+        if line.startswith("--- ") and j + 1 < n and lines[j + 1].startswith("+++ "):
+            return False
+        if line.startswith("diff --git"):
+            return True
+        if line.strip() and line.startswith(_NOISE_PREFIXES):
+            j += 1
+            continue
+        return True
+    return True
+
+# GNU-patch-only formats. ``git apply`` ignores context-format
+# sections, but ``patch -p1`` applies them — and the saved artifact is
+# free-form operator input, so the gate flags them rather than
+# sanctioning one apply tool silently. A ``*** `` line only counts as
+# a context header when a ``--- `` line follows within two lines (the
+# old/new file header pair); the hunk separator line is unambiguous.
+_CONTEXT_HUNK_SEP = "***************"
+_CONTEXT_FORMAT_LABEL = (
+    "context-format diff section (ignored by git apply but applied by "
+    "GNU patch)"
+)
+
+
+def scan_patch_response(response: str) -> tuple[list[ParsedDiff], list[str]]:
+    """Scan the FULL response the way ``git apply`` consumes it.
+
+    The saved patch artifact is the whole LLM response, and ``git
+    apply`` treats prose and code fences alike as junk between
+    fragments — it acts on EVERY diff fragment anywhere in the text,
+    fenced or not. The gate therefore may not stop at the first parsed
+    diff (or privilege fenced blocks): a bare rider diff after prose,
+    or outside the fences, would ride an otherwise-clean gate block
+    into the saved artifact uninspected.
+
+    Returns ``(diffs, residues)``:
+
+    * ``diffs`` — every strictly parseable unified diff, in document
+      order, deduplicated on normalised text (LLMs frequently restate
+      the same diff while explaining it).
+    * ``residues`` — descriptions of apply-actionable content the
+      strict parser could NOT turn into scope-checkable hunks:
+      ``--- `` / ``+++ `` header pairs whose body fails the strict
+      parse, non-hunk constructs ``git apply`` acts on without any
+      ``@@`` hunk (mode-change / rename / copy headers, hunkless
+      new/deleted-file sections, binary patch blocks), and
+      context-format sections (GNU-patch-only). Callers must surface
+      these — an empty list is the only clean result.
+
+    Line discipline: the response is split on ``\\n`` only
+    (:func:`_split_lines`) — the scanner's line model must equal git
+    apply's or a rider header carrying an exotic line separator hides
+    from the scan while staying applyable.
+    """
+    diffs: list[ParsedDiff] = []
+    residues: list[str] = []
+    if not response or not response.strip():
+        return diffs, residues
+
+    lines = _split_lines(response)
+    n = len(lines)
+    seen_texts: set[str] = set()
+    i = 0
+    while i < n:
+        line = lines[i]
+        if line.startswith("--- ") and i + 1 < n and lines[i + 1].startswith("+++ "):
+            parsed, end = _parse_unified_diff_at(lines, i)
+            if parsed is not None:
+                if parsed.text not in seen_texts:
+                    seen_texts.add(parsed.text)
+                    diffs.append(parsed)
+                i = end
+                continue
+            residues.append(
+                f"line {i + 1}: '--- / +++' diff header whose body "
+                "does not parse as a strict unified diff"
+            )
+            i += 2
+            continue
+        i += 1
+
+    # Independent full pass: the markers are actionable wherever they
+    # sit — between fragments, or consumed as leading/trailing noise
+    # inside a parsed section (where the gate's own apply step would
+    # execute them while the scope check never saw them).
+    seen_markers: set[str] = set()
+    for idx, raw in enumerate(lines):
+        if raw.startswith(_FILE_MODE_PREFIXES):
+            label = "hunkless file-mode header"
+            if (label not in seen_markers
+                    and _mode_section_is_hunkless(lines, idx)):
+                seen_markers.add(label)
+                residues.append(
+                    f"line {idx + 1}: {label} (empty-file create/delete "
+                    "— git apply acts on this without any "
+                    "scope-checkable hunk)"
+                )
+            continue
+        if (raw.startswith(_CONTEXT_HUNK_SEP)
+                or (raw.startswith("*** ") and any(
+                    lines[k].startswith("--- ")
+                    for k in (idx + 1, idx + 2) if k < n))):
+            if _CONTEXT_FORMAT_LABEL not in seen_markers:
+                seen_markers.add(_CONTEXT_FORMAT_LABEL)
+                residues.append(
+                    f"line {idx + 1}: {_CONTEXT_FORMAT_LABEL}"
+                )
+            continue
+        for prefix, label in _ACTIONABLE_NONHUNK_MARKERS:
+            if raw.startswith(prefix) and label not in seen_markers:
+                seen_markers.add(label)
+                residues.append(
+                    f"line {idx + 1}: {label} — git apply acts on this "
+                    "without any scope-checkable hunk"
+                )
+                break
+    return diffs, residues
 
 
 def extract_unified_diffs(response: str) -> list[ParsedDiff]:
     """Extract EVERY parseable unified diff from an LLM patch response.
 
-    Preference order: fenced ```diff / ```patch blocks, then any fenced
-    block whose body looks diff-shaped, then (only when no fence
-    parsed) the raw response from its first diff header onward.
-
-    ALL parseable fenced blocks are returned, not just the first: the
-    gate must scope-check the response's full diff content — a
-    response leading with a benign in-scope decoy diff and following
-    with a second fenced diff touching unrelated code would otherwise
-    earn a clean gate block while the saved artifact (the whole
-    response) carried the unexamined payload. Byte-identical repeats
-    (LLMs frequently restate the same diff while explaining it) are
-    deduplicated so they don't read as two conflicting patches.
+    Thin wrapper over :func:`scan_patch_response` — the full apply
+    payload is scanned in document order, so a bare diff after prose,
+    a second ``--- ``/``+++ `` section, or a diff outside the fences
+    is collected exactly like a fenced one. Gating anything less than
+    the full payload lets a benign in-scope decoy diff front for an
+    unexamined rider in the saved artifact (the whole response), which
+    ``git apply`` would happily apply alongside the gated content.
 
     Empty list when nothing parses — the caller annotates
     ``format: not-a-unified-diff`` and skips the rest.
     """
-    if not response or not response.strip():
-        return []
-
-    tagged: list[str] = []
-    untagged: list[str] = []
-    for m in _FENCE_RE.finditer(response):
-        lang = (m.group("lang") or "").lower()
-        body = m.group("body")
-        if lang in ("diff", "patch", "udiff"):
-            tagged.append(body)
-        elif "--- " in body and "@@" in body:
-            untagged.append(body)
-    results: list[ParsedDiff] = []
-    seen_texts: set[str] = set()
-    for body in tagged + untagged:
-        parsed = _parse_unified_diff(body)
-        if parsed is not None and parsed.text not in seen_texts:
-            seen_texts.add(parsed.text)
-            results.append(parsed)
-    if results:
-        return results
-
-    # Raw fallback: response contains a bare diff outside any fence.
-    lines = response.splitlines()
-    for idx, line in enumerate(lines):
-        if line.startswith("diff --git") or (
-            line.startswith("--- ")
-            and idx + 1 < len(lines)
-            and lines[idx + 1].startswith("+++ ")
-        ):
-            parsed = _parse_unified_diff("\n".join(lines[idx:]))
-            return [parsed] if parsed is not None else []
-    return []
+    return scan_patch_response(response)[0]
 
 
 def extract_unified_diff(response: str) -> ParsedDiff | None:
@@ -316,7 +464,12 @@ def extract_unified_diff(response: str) -> ParsedDiff | None:
 class GateResult:
     """Annotation vocabulary for one gated patch.
 
-    * ``format``: ``unified-diff`` | ``not-a-unified-diff``
+    * ``format``: ``unified-diff`` | ``not-a-unified-diff`` |
+      ``unified-diff+unparsed-diff-content`` (diffs parsed, but the
+      response ALSO carries apply-actionable content the strict parser
+      could not turn into scope-checkable hunks — see
+      :func:`scan_patch_response`; the residues are surfaced in
+      ``notes`` / ``out_of_scope_hunks`` and ``reliable`` drops)
     * ``gate``: ``ran`` | ``unavailable`` | ``skipped``
     * ``scope``: ``in-bounds`` | ``OUT-OF-SCOPE HUNKS`` |
       ``skipped (no finding span)`` (finding carries no usable line
@@ -327,7 +480,9 @@ class GateResult:
     * ``control``: ``ok`` | ``FAILED`` | ``skipped``
     * ``compile``: ``ok`` | ``failed`` | ``skipped``
     * ``reliable``: False when a failed negative control or a detector
-      error means the detector/control lines cannot be trusted.
+      error means the detector/control lines cannot be trusted, or
+      when unparsed apply-actionable residues mean the format/scope
+      lines cannot vouch for the whole artifact.
 
     ``None`` for a stage means the pipeline never reached it (e.g. no
     parseable diff).
@@ -775,7 +930,16 @@ def run_patch_gate(
     result = GateResult()
     slack = scope_slack if scope_slack is not None else _env_scope_slack()
 
-    diffs = extract_unified_diffs(response_text)
+    diffs, residues = scan_patch_response(response_text)
+    if residues:
+        # Fail closed on the annotation surface: the response carries
+        # content ``git apply`` would act on that the strict parser
+        # could not turn into scope-checkable hunks. A clean gate
+        # block over a partially-inspected artifact would be a lie.
+        result.reliable = False
+        result.notes.extend(
+            f"unparsed apply-actionable content: {r}" for r in residues[:5]
+        )
     if not diffs:
         result.format = "not-a-unified-diff"
         result.notes.append(
@@ -783,7 +947,9 @@ def run_patch_gate(
             "checks skipped"
         )
         return result
-    result.format = "unified-diff"
+    result.format = (
+        "unified-diff+unparsed-diff-content" if residues else "unified-diff"
+    )
     if len(diffs) == 1:
         diff = diffs[0]
     else:
@@ -815,9 +981,15 @@ def run_patch_gate(
         return result
     has_span = start_line >= 1
 
-    # Scope: pure Python, no sandbox needed.
+    # Scope: pure Python, no sandbox needed. Unparsed apply-actionable
+    # residues join the out-of-scope list — by definition nothing
+    # placed them inside the finding span, and the scope line is the
+    # tamper indicator the operator reads.
     if has_span:
         oos = _scope_check(diff, file_path, start_line, end_line, slack)
+        oos.extend(
+            f"unparsed apply-actionable content ({r})" for r in residues[:5]
+        )
         result.out_of_scope_hunks = oos
         result.scope = "OUT-OF-SCOPE HUNKS" if oos else "in-bounds"
     else:
