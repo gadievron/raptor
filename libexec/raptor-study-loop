@@ -105,6 +105,37 @@ def _run(cmd: list[str], *, verbose: bool = False) -> int:
     return result.returncode
 
 
+def _struct_definitions(sl: dict) -> list[dict]:
+    """Struct-definition report entries from a study-list payload.
+
+    Study-list items are LLM-adjacent artifacts: tolerate a missing
+    name (skip the item) and a junk relevance tier (keep the item —
+    fail toward review). A malformed item must not raise here — this
+    runs in main() AFTER the paid study completed, before the report,
+    project promotion, and SAGE storage, so an escaping KeyError
+    throws all of that away.
+    """
+    struct_defs: list[dict] = []
+    for item in sl.get("items", []):
+        if not isinstance(item, dict) or item.get("kind") != "struct":
+            continue
+        tier = item.get("relevance_tier")
+        if isinstance(tier, (int, float)) and tier > 2:
+            continue
+        name = item.get("name")
+        if not name:
+            continue
+        struct_defs.append({
+            "name": name,
+            "file": item.get("file", ""),
+            "definition": item.get("definition", ""),
+            "fields": item.get("fields", []),
+            "relevance_tier": tier,
+            "doc_comment": item.get("doc_comment", ""),
+        })
+    return struct_defs
+
+
 def _load_pending_reading_list(output_dir: Path) -> list[dict]:
     rl_path = output_dir / "reading-list.json"
     if not rl_path.is_file():
@@ -1255,21 +1286,7 @@ def main() -> int:
                         study_list_path, strict=True,
                         max_bytes=_MAX_STUDY_ARTIFACT_BYTES,
                     ) or {}
-                    struct_defs = []
-                    for item in sl.get("items", []):
-                        if item.get("kind") != "struct":
-                            continue
-                        tier = item.get("relevance_tier")
-                        if tier is not None and tier > 2:
-                            continue
-                        struct_defs.append({
-                            "name": item["name"],
-                            "file": item.get("file", ""),
-                            "definition": item.get("definition", ""),
-                            "fields": item.get("fields", []),
-                            "relevance_tier": tier,
-                            "doc_comment": item.get("doc_comment", ""),
-                        })
+                    struct_defs = _struct_definitions(sl)
                     if struct_defs:
                         dm_data["struct_definitions"] = struct_defs
                 except (OSError, ValueError):
