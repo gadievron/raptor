@@ -60,6 +60,22 @@ _UNISTD_CANDIDATES = (
 )
 
 
+# UAPI bits frozen at introduction, backfilled ONLY when the installed
+# header PREDATES them: distro headers track the distro kernel, not the
+# newest ABI — e.g. 6.8-era headers lack the ABI-5 IOCTL_DEV right
+# (kernel 6.10) and the ABI-6 scope bits (kernel 6.12), and dict access
+# on the parsed header KeyError'd the pins there. A released Landlock
+# bit never changes value, so the literal is as authoritative as the
+# header line it mirrors; header values always win (setdefault), so
+# drift between a real header and the module under test still trips
+# the pins.
+_UAPI_BACKFILL = {
+    "LANDLOCK_ACCESS_FS_IOCTL_DEV": 1 << 15,        # ABI 5, kernel 6.10
+    "LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET": 1 << 0,  # ABI 6, kernel 6.12
+    "LANDLOCK_SCOPE_SIGNAL": 1 << 1,                # ABI 6, kernel 6.12
+}
+
+
 def _header_defines(path: Path) -> dict[str, int]:
     """Parse ``#define NAME (1ULL << N)`` / ``#define NAME N`` pairs."""
     out: dict[str, int] = {}
@@ -72,6 +88,8 @@ def _header_defines(path: Path) -> dict[str, int]:
         m = re.match(r"#define\s+(\w+)\s+(\d+)\s*$", line)
         if m:
             out[m.group(1)] = int(m.group(2))
+    for name, bit in _UAPI_BACKFILL.items():
+        out.setdefault(name, bit)
     return out
 
 
