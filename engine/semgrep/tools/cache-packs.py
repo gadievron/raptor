@@ -25,7 +25,9 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import os
 import re
+import tempfile
 import zipfile
 import zlib
 from datetime import datetime, timezone
@@ -94,15 +96,41 @@ def cache_filename(pack_id: str) -> str:
     return f"c.p.{pack_id}.json"
 
 
+def _write_atomic(dest: Path, data: bytes) -> None:
+    """Write a cache file via tempfile + rename (repo idiom).
+
+    The cache is read by concurrent scans; an in-place write_bytes
+    leaves a torn half-written pack visible during the write. The
+    rename is atomic on the same filesystem, and a failed write never
+    replaces the previous content or leaks the temp file.
+    """
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(dest.parent), prefix=dest.name + ".", suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp_name, dest)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
 def fetch_pack(pack_id: str) -> bytes:
     """Fetch a pack from the Semgrep registry, return JSON bytes."""
     url = REGISTRY_URL.format(pack_id=pack_id)
     req = Request(url, headers={"Accept": "application/json"})
     try:
         resp = urlopen(req, timeout=FETCH_TIMEOUT)
-        # Bounded read: one extra byte past the cap detects "too
-        # large" without ever buffering an unbounded response.
-        data = resp.read(MAX_PACK_BYTES + 1)
+        try:
+            # Bounded read: one extra byte past the cap detects "too
+            # large" without ever buffering an unbounded response.
+            data = resp.read(MAX_PACK_BYTES + 1)
+        finally:
+            resp.close()
     except OSError as exc:
         # OSError covers URLError/HTTPError plus the socket-level
         # timeouts and resets that resp.read() raises directly —
@@ -163,7 +191,17 @@ def cmd_list(args: argparse.Namespace) -> None:
         cached_path = CACHE_DIR / cache_filename(pid)
         if cached_path.exists():
             try:
-                d = json.loads(cached_path.read_bytes())
+                # Bounded read, mirroring the fetch/import caps — the
+                # listing must not buffer an unbounded cache file.
+                with cached_path.open("rb") as fh:
+                    raw = fh.read(MAX_PACK_BYTES + 1)
+                if len(raw) > MAX_PACK_BYTES:
+                    print(
+                        f"  p/{pid:<23} {'yes':<10} {'?':<8} "
+                        f"oversize (exceeds pack cap)"
+                    )
+                    continue
+                d = json.loads(raw)
                 rules = d.get("rules", d) if isinstance(d, dict) else d
                 count = len(rules) if isinstance(rules, list) else "?"
                 lics = set()
@@ -329,7 +367,7 @@ def cmd_import(args: argparse.Namespace) -> None:
                 skipped += 1
                 continue
             existed = dest.exists()
-            dest.write_bytes(data)
+            _write_atomic(dest, data)
             status = "updated" if existed else "added"
             print(f"  {status}: {name}")
             imported += 1
@@ -372,7 +410,7 @@ def cmd_update(args: argparse.Namespace) -> None:
             continue
         dest = CACHE_DIR / cache_filename(pid)
         existed = dest.exists()
-        dest.write_bytes(data)
+        _write_atomic(dest, data)
         try:
             parsed = json.loads(data)
             rules = parsed.get("rules", parsed) if isinstance(parsed, dict) else parsed
