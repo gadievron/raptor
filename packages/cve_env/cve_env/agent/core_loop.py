@@ -135,10 +135,16 @@ def _resolve_provider(model: str):
 
     provider_name = provider_of(model) or "anthropic"
     via_dispatcher = bool(os.environ.get("RAPTOR_LLM_SOCKET"))
+    # Direct SDK auth means EITHER first-party spelling (member sites
+    # of core.security.credential_env.ANTHROPIC_FIRST_PARTY_AUTH_VARS;
+    # CLAUDE_CODE_OAUTH_TOKEN excluded — the SDK does not read it): a
+    # bearer-token-only operator must not be demoted to the claudecode
+    # subprocess route.
     if (
         provider_name == "anthropic"
         and not via_dispatcher
         and not os.environ.get("ANTHROPIC_API_KEY")
+        and not os.environ.get("ANTHROPIC_AUTH_TOKEN")
     ):
         provider_name = "claudecode"
     mc = ModelConfig(provider=provider_name, model_name=model)

@@ -482,3 +482,21 @@ def test_run_all_returns_one_result_per_probe(monkeypatch) -> None:
     results = service_health.run_all()
     assert len(results) == 8
     assert results[0].name == "probe_dns"  # DNS first invariant
+
+
+def test_probe_anthropic_recognises_auth_token_spelling(monkeypatch):
+    """A bearer-token-only operator must not see a false
+    'ANTHROPIC_API_KEY not set' health warning."""
+    from cve_diff.infra import service_health as sh
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-test-bearer")
+    monkeypatch.setattr(sh, "_health_model", lambda: "claude-sonnet-4-6")
+    monkeypatch.setattr(
+        "cve_diff.llm.auth.default_model_id", lambda: "claude-sonnet-4-6"
+    )
+    result = sh.probe_anthropic()
+    assert result.ok is True
+    assert "not set" not in result.detail
+    assert "AUTH_TOKEN" in result.detail
