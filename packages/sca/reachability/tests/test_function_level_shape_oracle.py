@@ -1059,3 +1059,138 @@ def test_symbols_container_junk_degrades_to_counted_marker():
             f"the suppression"
         )
         assert verdict == "imported", (module_name, verdict)
+
+
+def test_go_trailing_path_suffix_spelling_binds():
+    """A flat Go advisory entry naming the package by a TRAILING PATH
+    (``foo/bar.Parse`` under ``github.com/foo/bar``, or
+    ``lib/sub.Parse`` for an imported sub-package) is a realistic
+    human spelling of the import path. Every composed reading was
+    garbage — pairing NOT_CALLED into the suppression on a
+    genuinely-called function. The refine pass now rebinds a slashy
+    head onto the module (or any imported sub-package) whose path it
+    trail-matches at a ``/`` boundary."""
+    module_trail = _Scenario(
+        {"affected_functions": ["foo/bar.Parse"]}, None,
+        {"bar": "github.com/foo/bar"}, (("bar", "Parse"),),
+        expected="likely_called",
+    )
+    assert (
+        _run_named("go_function_level", "github.com/foo/bar", "Go",
+                   module_trail)
+        == "likely_called"
+    )
+
+    sub_trail = _Scenario(
+        {"affected_functions": ["lib/sub.Parse"]}, None,
+        {"sub": "example.com/lib/sub"}, (("sub", "Parse"),),
+        expected="likely_called",
+    )
+    assert _run_tier("go_function_level", sub_trail) == "likely_called"
+
+    # The trail match is /-boundary-guarded: a head that only
+    # string-matches across a "." boundary derives nothing and the
+    # honest downgrade fires.
+    dot_boundary = _Scenario(
+        {"affected_functions": ["com/foo/bar.Parse"]}, None,
+        {"bar": "github.com/foo/bar"}, (("bar", "Parse"),),
+        expected="not_function_reachable",
+    )
+    assert (
+        _run_named("go_function_level", "github.com/foo/bar", "Go",
+                   dot_boundary)
+        == "not_function_reachable"
+    )
+
+    # Counter-direction: uncalled trail-spelled entry still
+    # downgrades.
+    trail_uncalled = _Scenario(
+        {"affected_functions": ["foo/bar.Absent"]}, None,
+        {"bar": "github.com/foo/bar"}, (("bar", "Parse"),),
+        expected="not_function_reachable",
+    )
+    assert (
+        _run_named("go_function_level", "github.com/foo/bar", "Go",
+                   trail_uncalled)
+        == "not_function_reachable"
+    )
+
+
+def test_raw_hyphen_head_qualified_entry_rebinds_through_fold():
+    """A QUALIFIED advisory entry spelled with the raw hyphenated
+    package head (``my-crate::from_str``, ``My-Pkg.Widget.Run``) is
+    the package-name spelling of the module path — prefixing the
+    fold in FRONT of it composed double-headed garbage while the
+    verbatim reading paired NOT_CALLED into the suppression. The
+    fold now REBINDS the raw head instead."""
+    cargo_raw_head = _Scenario(
+        {"affected_symbols": ["my-crate::from_str"]}, None,
+        {"my_crate": "my_crate"}, (("my_crate", "from_str"),),
+        expected="likely_called",
+    )
+    assert (
+        _run_named("cargo_function_level", "my-crate", "Cargo",
+                   cargo_raw_head)
+        == "likely_called"
+    )
+
+    nuget_raw_head = _Scenario(
+        None, {"affected_symbols": ["My-Pkg.Widget.Run"]},
+        {"Widget": "MyPkg.Widget"}, (("Widget", "Run"),),
+        expected="likely_called",
+    )
+    assert (
+        _run_named("nuget_function_level", "My-Pkg", "NuGet",
+                   nuget_raw_head)
+        == "likely_called"
+    )
+
+    # Counter-direction: uncalled raw-head entries still downgrade
+    # under the exact Cargo fold.
+    cargo_uncalled = _Scenario(
+        {"affected_symbols": ["my-crate::absent"]}, None,
+        {"my_crate": "my_crate"}, (("my_crate", "from_str"),),
+        expected="not_function_reachable",
+    )
+    assert (
+        _run_named("cargo_function_level", "my-crate", "Cargo",
+                   cargo_uncalled)
+        == "not_function_reachable"
+    )
+
+
+def test_go_dot_versioned_module_tail_binds():
+    """gopkg.in-style DOT-VERSIONED modules (``gopkg.in/yaml.v2``)
+    declare the pre-version package name (``yaml``) — the convention
+    for every gopkg.in path, among the most-advisoried Go modules.
+    The literal last segment is ``yaml.v2``, so the flat
+    source-level spelling minted garbage on genuinely-called
+    functions until the shared binding-name authority learned the
+    convention."""
+    dep = "gopkg.in/yaml.v2"
+    # Inventory shape per the extractor's own conventions: the bare
+    # import binds BOTH the literal segment and the pre-version
+    # alias; call sites read ``yaml.Unmarshal``.
+    called = {"yaml.v2": dep, "yaml": dep}
+    chain = (("yaml", "Unmarshal"),)
+
+    flat_tail = _Scenario(
+        {"affected_functions": ["yaml.Unmarshal"]}, None,
+        called, chain, expected="likely_called",
+    )
+    assert _run_go(dep, flat_tail) == "likely_called"
+
+    via_imports_arm = _Scenario(
+        {"imports": [{"path": "gopkg.in/yaml.v2",
+                      "symbols": ["Unmarshal"]}]}, None,
+        called, chain, expected="likely_called",
+    )
+    assert _run_go(dep, via_imports_arm) == "likely_called"
+
+    # Counter-direction: uncalled convention-spelled entry still
+    # downgrades.
+    uncalled = _Scenario(
+        {"affected_functions": ["yaml.Absent"]}, None,
+        called, chain, expected="not_function_reachable",
+    )
+    assert _run_go(dep, uncalled) == "not_function_reachable"
