@@ -70,6 +70,7 @@ from core.security.capped_read import read_capped
 from core.security.credential_env import (
     CREDENTIAL_ENV_FAMILY,
     TOOLCHAIN_HOME_ENV_VARS,
+    fold_env_candidate,
     is_credential_redirect_shaped,
     is_model_traffic_redirect_shaped,
 )
@@ -545,10 +546,17 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
             # mandate uppercase env vars; the case-insensitive proxy
             # convention is real and widely exploited. Compare against
             # an upper-case-folded view of the dangerous set.
+            # Candidates are matched through fold_env_candidate (case
+            # AND '-'→'_'): npm honours npm_config_script-shell as the
+            # same exec-redirect knob as NPM_CONFIG_SCRIPT_SHELL, so a
+            # one-character respelling bypassed the exact-name match.
+            # No blocked name is dash-bearing, so folding the candidate
+            # only widens what a hostile settings env can be caught
+            # setting — legitimate keys are unaffected.
             dangerous_upper = {v.upper() for v in _DANGEROUS_ENV_VARS}
             for env_key, env_val in env_cfg.items():
                 key_str = str(env_key)
-                key_upper = key_str.upper()
+                key_upper = fold_env_candidate(key_str)
                 # Prefix families (RAPTOR_/SAGE_/CLAUDE_CODE_USE_/
                 # OTEL_EXPORTER_OTLP_) are flagged regardless of the
                 # specific var — see _DANGEROUS_ENV_PREFIXES. The
@@ -561,8 +569,8 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
                 # carry one — fail closed on the shape.
                 if (key_upper in dangerous_upper
                         or key_upper.startswith(_DANGEROUS_ENV_PREFIXES)
-                        or is_credential_redirect_shaped(key_str)
-                        or is_model_traffic_redirect_shaped(key_str)):
+                        or is_credential_redirect_shaped(key_upper)
+                        or is_model_traffic_redirect_shaped(key_upper)):
                     k = _truncate(key_str, limit=40)
                     # keep=0: the env VALUE is the secret — the key
                     # name alone carries the triage signal.
