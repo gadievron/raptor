@@ -2454,15 +2454,29 @@ def cmd_resume(args: argparse.Namespace) -> int:
     # chain, not just the immediately-prior segment's ledger.
     prior_breakdown = load_prior_cost_breakdown(out_dir)
     booked, ledger_note = resolve_prior_spend(out_dir)
-    original_cap = run_cfg.get("max_cost_usd")
+    original_cap, cap_overridden = _resume_cost_cap(args.max_cost, run_cfg)
     from core.audit.resume import (
         EXHAUSTED_BUDGET_EPSILON_USD,
         remaining_budget_usd,
     )
     remaining = remaining_budget_usd(original_cap, booked)
+    if cap_overridden:
+        _orig = run_cfg.get("max_cost_usd")
+        _orig_s = f"${float(_orig):.2f}" if _orig is not None else "none"
+        _new_s = (
+            f"${float(original_cap):.2f}" if original_cap is not None
+            else "removed (uncapped)"
+        )
+        print(
+            f"--max-cost override for THIS segment: cap {_new_s} "
+            f"(original run cap: {_orig_s}; booked spend still counts "
+            f"against the new cap; the persisted config is unchanged)",
+            flush=True,
+        )
+    _cap_word = "override cap" if cap_overridden else "original cap"
     if original_cap is not None:
         print(
-            f"Resume budget: original cap ${float(original_cap):.2f}, "
+            f"Resume budget: {_cap_word} ${float(original_cap):.2f}, "
             f"booked ${booked:.2f} ({ledger_note}), "
             f"remaining ${max(0.0, float(original_cap) - booked):.2f}",
             flush=True,
@@ -2473,6 +2487,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
                 "finalising the report only (no new LLM reviews).",
                 flush=True,
             )
+    elif cap_overridden:
+        print(
+            f"Resume budget: cap removed for this segment "
+            f"(booked ${booked:.2f}, {ledger_note})",
+            flush=True,
+        )
     else:
         print(
             f"Resume budget: no cap on the original run "
@@ -2675,6 +2695,55 @@ def _apply_supervisor_bound(
         flush=True,
     )
     return bound.bound_s
+
+
+def _resume_cost_cap(
+    cli_value: float | None,
+    run_cfg: dict,
+) -> tuple[float | None, bool]:
+    """Whole-run cost cap for a resume segment: ``(cap, overridden)``.
+
+    An explicit ``--max-cost`` on the resume invocation wins for THIS
+    segment only (the persisted run config is untouched — the next
+    segment defaults back to the original cap, same contract as
+    ``--max-time`` / ``--max-workers``); otherwise the original run's
+    persisted cap applies. ``0`` REMOVES the cap by mapping to
+    ``None``, the "no cap" representation ``remaining_budget_usd``
+    passes through. The two zeros live at different layers and must
+    not be conflated: a literal 0.0 fed INTO ``remaining_budget_usd``
+    as the cap hits its exhausted-budget clamp (0 minus booked spend
+    is <= 0 → the epsilon cap, finalize-only), whereas
+    ``max_cost_usd=0`` handed downstream to the orchestrator reads as
+    uncapped — which is exactly why ``remaining_budget_usd`` never
+    RETURNS 0 for an exhausted cap (see its docstring). Mapping the
+    operator's 0 to ``None`` here sidesteps both hazards.
+    """
+    if cli_value is not None:
+        return (None if cli_value == 0 else cli_value), True
+    return run_cfg.get("max_cost_usd"), False
+
+
+def _max_cost_resume_arg(value: str) -> float:
+    """Parse resume ``--max-cost``: a FINITE float >= 0 (0 removes
+    the cap).
+
+    Negatives are refused at parse time — downstream they would read
+    as an instantly-exhausted budget, which no operator means. Non-
+    finite values are refused too: nan would flow through every
+    remaining-budget comparison as an effectively-uncapped segment
+    behind a "$nan" banner, and inf is just --max-cost 0 spelled
+    dishonestly.
+    """
+    import math
+    try:
+        cost = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"invalid float value: {value!r}") from exc
+    if not math.isfinite(cost) or cost < 0:
+        raise argparse.ArgumentTypeError(
+            "--max-cost must be a finite value >= 0")
+    return cost
 
 
 def _resume_max_workers(cli_value: int | None, run_cfg: dict) -> int:
@@ -3225,6 +3294,17 @@ def main() -> int:
         "--max-time", type=float, default=None,
         help="Wall-clock cap for THIS segment (default: the original "
              "run's --max-time)",
+    )
+    p_resume.add_argument(
+        "--max-cost", type=_max_cost_resume_arg, default=None,
+        metavar="USD",
+        help="Whole-run cost cap for THIS segment (default: the "
+             "original run's --max-cost); booked spend from prior "
+             "segments still counts against it. Pass 0 to REMOVE the "
+             "cap. The persisted run config is unchanged — a later "
+             "resume defaults back to the original cap. Overrides "
+             "carry the same budget ownership as on `run`: the "
+             "operator owns the spend consequences",
     )
     p_resume.add_argument(
         "--max-workers", type=_max_workers_arg, default=None, metavar="N",

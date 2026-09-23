@@ -48,7 +48,7 @@ full flag table.
 | `--pre-scan` | Bounded Semgrep baseline when the run has no scan SARIF (feeds the SARIF-corroboration channels) |
 | `--out <dir>` | Output directory |
 | `--codeql-db <path>` | CodeQL database for query dispatch and pre-sweep (repeatable — one per language; dispatch routes by file language) |
-| `--max-cost <USD>` | Stop after spending this many dollars on LLM calls |
+| `--max-cost <USD>` | Stop after spending this many dollars on LLM calls. Also accepted by `resume` for a single segment (overrides the original cap; booked spend from prior segments still counts against it; `0` removes the cap) |
 | `--deepen-reserve <fraction>` | Slice of `--max-cost` held back for the deepen phase so announced re-reviews can execute (default 0.15; 0 disables) |
 | `--max-time <seconds>` | Wall-clock time limit |
 | `--no-supervisor-bound` | Do not default a wall budget under a capped Claude subagent shell (see [Running long audits](#running-long-audits)) |
@@ -321,12 +321,14 @@ SIGKILL, OOM) leaves coherent artifacts and can be re-entered **as the
 same run**:
 
 ```bash
-libexec/raptor-audit resume "$OUTPUT_DIR" [--allow-drift] [--max-time <s>] [--no-supervisor-bound]
+libexec/raptor-audit resume "$OUTPUT_DIR" [--allow-drift] [--max-time <s>] [--max-cost <usd>] [--no-supervisor-bound]
 ```
 
 Prior verdicts are re-imported at $0 (hash-verified), the remaining
 gaps are recomputed against the original checklist/scope/pins, the
-remaining budget is the original cap minus booked spend, and one final
+remaining budget is the original cap minus booked spend (or a
+per-segment `--max-cost` override minus booked spend; `0` removes
+the cap for that segment), and one final
 report covers all segments (segment provenance noted in the report and
 run metadata).
 
