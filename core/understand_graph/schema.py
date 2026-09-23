@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 SCHEMA_VERSION = 3
@@ -59,6 +60,14 @@ def _like_escape(value: str) -> str:
     here instead of keeping byte-identical per-module copies.
     """
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def utc_now_iso() -> str:
+    """THE created_at mint. snapshots order lexicographically on this
+    column, and 'T' sorts above ' ' — a second space-separated
+    datetime('now') mint made same-day snapshots from one producer
+    always rank older than everyone else's regardless of time."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 def json_dumps(value: Any) -> str:

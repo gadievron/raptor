@@ -6,7 +6,6 @@ import hashlib
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
@@ -36,6 +35,7 @@ from .schema import (
     stable_edge_id,
     stable_key,
     stable_node_id,
+    utc_now_iso,
 )
 from .store import (
     INGEST_SKIP_EXCEPTIONS,
@@ -114,7 +114,7 @@ def ingest_run(run_dir: Path, target_path: Optional[str] = None,
                     _target_hash(checklist),
                     str(checklist.get("git_sha") or checklist.get("commit") or ""),
                     checklist_hash,
-                    datetime.now(timezone.utc).isoformat(),
+                    utc_now_iso(),
                     str(run_dir.resolve()),
                     json_dumps({"total_files": checklist.get("total_files"), "total_items": checklist.get("total_items")}),
                 ),
@@ -371,7 +371,7 @@ def _artifact(conn, snapshot_id: str, kind: str, path: Path, run_dir: Path,
             str(run_dir.resolve()),
             snapshot_id,
             digest,
-            datetime.now(timezone.utc).isoformat(),
+            utc_now_iso(),
             "{}",
         ),
     )
@@ -668,7 +668,7 @@ def _upsert_snapshot(conn, snap_id: str, target: str, run_dir: Path, *, producer
         (id, target_path, target_hash, git_sha, checklist_hash, created_at, producer_run, props_json, producer)
         VALUES (?, ?, '', '', '', ?, ?, '{}', ?)
         """,
-        (snap_id, target, datetime.now(timezone.utc).isoformat(), str(run_dir.resolve()), producer),
+        (snap_id, target, utc_now_iso(), str(run_dir.resolve()), producer),
     )
 
 
