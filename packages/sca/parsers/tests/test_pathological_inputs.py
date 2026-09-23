@@ -475,14 +475,24 @@ def test_gemfile_version_spec_pathological_input_is_fast(tmp_path) -> None:
 def test_gemfile_spec_extraction_unchanged() -> None:
     from packages.sca.parsers.gemfile import _parse_version_specs
 
-    assert _parse_version_specs("'7.1.2'") == (PinStyle.EXACT, "7.1.2")
-    assert _parse_version_specs("'= 7.1.2'") == (PinStyle.EXACT, "7.1.2")
-    assert _parse_version_specs("'~> 7.1'") == (PinStyle.TILDE, "7.1")
-    assert _parse_version_specs("'>= 7.0'") == (PinStyle.RANGE, "7.0")
-    assert _parse_version_specs("'>=7.0'") == (PinStyle.RANGE, "7.0")
-    assert _parse_version_specs("'>= 7.0', '< 8.0'") == (PinStyle.RANGE, None)
-    assert _parse_version_specs("") == (PinStyle.WILDCARD, None)
-    assert _parse_version_specs("'IBM_DB'") == (PinStyle.WILDCARD, None)
+    # (pin_style, version, version_floor, version_ceiling) — ranges
+    # carry their corridor bounds; pins and wildcards carry none.
+    assert _parse_version_specs("'7.1.2'") == (
+        PinStyle.EXACT, "7.1.2", None, None)
+    assert _parse_version_specs("'= 7.1.2'") == (
+        PinStyle.EXACT, "7.1.2", None, None)
+    assert _parse_version_specs("'~> 7.1'") == (
+        PinStyle.TILDE, "7.1", None, None)
+    assert _parse_version_specs("'>= 7.0'") == (
+        PinStyle.RANGE, "7.0", "7.0", None)
+    assert _parse_version_specs("'>=7.0'") == (
+        PinStyle.RANGE, "7.0", "7.0", None)
+    assert _parse_version_specs("'>= 7.0', '< 8.0'") == (
+        PinStyle.RANGE, None, "7.0", "8.0")
+    assert _parse_version_specs("") == (
+        PinStyle.WILDCARD, None, None, None)
+    assert _parse_version_specs("'IBM_DB'") == (
+        PinStyle.WILDCARD, None, None, None)
 
 
 # ---------------------------------------------------------------------------

@@ -976,21 +976,34 @@ def _load_jsonc(text: str) -> dict:
     return load_jsonc(text)
 
 
-def _flatten_command(val) -> list[str]:
+def _flatten_command(val: object) -> list[str]:
     """devcontainer command fields can be string, list-of-strings, or
     object (dict of named parallel commands, each again a string or
     array).
 
     Per the devcontainer spec a STRING runs via the shell but an
-    ARRAY is one argv exec'd directly — so a list joins into a single
-    command line. Yielding each element as its own line meant no
-    manager pattern ever saw verb+args together and every dep in the
-    spec's primary array shape was silently lost. (Joining and
-    scanning with the shell-line machinery is a safe approximation:
-    an exec argv contains no shell operators to misparse.)"""
+    ARRAY is one argv exec'd directly — a true argv list joins into a
+    single command line (yielding each element as its own line meant
+    no manager pattern ever saw verb+args together, and every dep in
+    the spec's primary array shape was silently lost). Elements that
+    THEMSELVES carry whitespace mark the other in-the-wild array
+    shape — full command strings per element — which keeps
+    per-element scanning; see ``_join`` for the discriminator."""
     def _join(items: list) -> list[str]:
         parts = [v for v in items if isinstance(v, str)]
-        return [" ".join(parts)] if parts else []
+        if not parts:
+            return []
+        # Discriminate the two array shapes seen in the wild: a true
+        # exec ARGV splits the verb across elements (no element
+        # carries whitespace) and joins into ONE command line; an
+        # array of FULL command strings (spec-invalid but common —
+        # each element already reads "pip install x") keeps
+        # per-element scanning, which also handles the
+        # ["bash", "-c", "<script>"] shape by scanning the script
+        # element on its own line.
+        if any(" " in part or "\t" in part for part in parts):
+            return parts
+        return [" ".join(parts)]
 
     if isinstance(val, str):
         return [val]

@@ -187,3 +187,22 @@ def test_value_taking_pip_flags_do_not_mint_phantom_values(
     deps = parse_shell_script(sh)
     names = {d.name for d in deps}
     assert names == {"requests", "flask"}, names
+
+
+def test_devcontainer_command_string_array_scans_per_element(
+    tmp_path: Path,
+) -> None:
+    """The OTHER in-the-wild array shape: full command strings per
+    element (spec-invalid, common). Elements carrying whitespace keep
+    per-element scanning — joining them minted phantoms ('pip',
+    'install' are real registry names) and lost the first command's
+    dep to the latest-match rule."""
+    dc = tmp_path / "devcontainer.json"
+    dc.write_text(
+        '{"postCreateCommand": ['
+        '"pip install django==4.2.7", "pip install requests==2.31.0"'
+        "]}",
+        encoding="utf-8",
+    )
+    deps = parse_devcontainer_json(dc)
+    assert sorted(d.name for d in deps) == ["django", "requests"]
