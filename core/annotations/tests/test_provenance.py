@@ -130,6 +130,20 @@ class TestClassifyProvenance:
         assert classify_provenance({"provenance": "trusted"}) == NON_TTY
         assert classify_provenance({"tty": "definitely-a-tty"}) == NON_TTY
 
+    def test_garbage_tag_with_valid_tty_still_demotes(self):
+        # Partial tamper: an unrecognised ``provenance`` value beside
+        # a well-formed ``tty`` key must NOT fall through to the tty
+        # interpretation — a garbage tag is tamper evidence, and the
+        # elevated tier is never granted on tampered stamps.
+        meta = {"provenance": "garbage-tag", "tty": "stdin",
+                "source": "human"}
+        assert classify_provenance(meta) == NON_TTY
+        assert not is_human_grade(meta)
+        # tty=none variant: still non-tty, still not human grade.
+        meta_none = {"provenance": "garbage-tag", "tty": "none",
+                     "source": "human"}
+        assert classify_provenance(meta_none) == NON_TTY
+
     def test_imported_stamp_classifies_imported(self):
         assert classify_provenance({"provenance": IMPORTED}) == IMPORTED
 
