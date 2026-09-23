@@ -600,6 +600,79 @@ class TestMakeDefaultDatabaseCrossCheck:
             f"adjudicate them (member or _ADJUDICATED_OUT): {sorted(uncovered)}"
         )
 
+    # Variable NAMES the default database DEFINES (assignment lines in
+    # the `make -p` dump: `NAME = …` / `NAME := …` / `NAME ?= …`).
+    # Same [A-Za-z]-start rule as _REF_RE (dot-prefixed specials like
+    # .VARIABLES are make-internal, not env surface).
+    _DEF_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_.]*)\s*[:+?]{0,3}=",
+                         re.MULTILINE)
+
+    def test_every_env_option_injecting_variable_is_covered(self):
+        """Behavioral arm for the env-read-only class.
+
+        The reference arm above is structurally blind to names make
+        CONSUMES from the environment without ever referencing them as
+        ``$(VAR)`` — GNUMAKEFLAGS perturbs every make run yet appears
+        in the database only as a definition, never a reference.
+
+        Universe (mechanical): every variable name the default
+        database DEFINES, extracted from the same ``make -p`` dump the
+        reference arm transcribes. Predicate (behavioral): set the
+        name — alone, in an otherwise-scrubbed environment — to a
+        no-op option word (``--eval=$(info <marker>)``, no whitespace,
+        so word-splitting carriers still deliver it) and observe
+        whether make consumed the value AS OPTIONS: the marker prints
+        only when the value reached make's flag parsing, which is the
+        exact wrapper power the belts must refuse. Every injector must
+        be an exec-tier family member (exact row or pattern).
+        """
+        import shutil
+        import subprocess
+
+        make = shutil.which("make")
+        if make is None:
+            pytest.skip("make not installed")
+        base_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "LC_ALL": "C"}
+        proc = subprocess.run(
+            [make, "-p", "-f", os.devnull],
+            capture_output=True, text=True, timeout=60, env=base_env,
+        )
+        if "# Make data base" not in proc.stdout:
+            pytest.skip("unrecognised make -p output shape")
+        defined = sorted(set(self._DEF_RE.findall(proc.stdout)))
+        # Non-vacuity of the UNIVERSE: the database must define the
+        # names this arm exists for, or the extraction regressed.
+        assert "MAKEFLAGS" in defined
+        assert "GNUMAKEFLAGS" in defined
+
+        injectors = set()
+        for name in defined:
+            marker = f"U_ENV_OPT_INJECT_{name}"
+            env = dict(base_env)
+            env[name] = f"--eval=$(info {marker})"
+            probe = subprocess.run(
+                [make, "-f", os.devnull],
+                capture_output=True, text=True, timeout=30, env=env,
+            )
+            if marker in probe.stdout or marker in probe.stderr:
+                injectors.add(name)
+        # Non-vacuity of the PREDICATE: GNU make documents both option
+        # carriers as environment-consumed; a probe that stops firing
+        # means the mechanic changed and this arm needs re-derivation,
+        # not silence.
+        assert {"MAKEFLAGS", "GNUMAKEFLAGS"} <= injectors, injectors
+        uncovered = {
+            name for name in injectors
+            if name not in CREDENTIAL_EXEC_REDIRECT_ENV_VARS
+            and not is_credential_env_pattern_member(name)
+            and name not in self._ADJUDICATED_OUT
+        }
+        assert uncovered == set(), (
+            "environment option-injecting make variables escaped the "
+            f"family — adjudicate them: {sorted(uncovered)}"
+        )
+
     def test_adjudicated_out_rows_are_live(self):
         # A row for a name the database no longer references is stale.
         for name in self._ADJUDICATED_OUT:
