@@ -495,17 +495,26 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
     Interior corrupt lines are also skipped with warnings.
     """
     journal_path = out_dir / JOURNAL_FILENAME
-    if journal_path.is_symlink() or not journal_path.is_file():
-        # A planted symlink reads a FOREIGN journal (another
-        # project's, or any file) into this run's merge.
+    # fd-discipline open (core.source.open_regular): the journal sits
+    # in the sandbox-writable run dir, and the previous
+    # is_symlink()/is_file() probes raced a swap — a symlink swapped
+    # in between check and open read a FOREIGN journal into this
+    # run's merge, and a planted FIFO blocked the open forever.
+    # O_NOFOLLOW + O_NONBLOCK + fstat(S_ISREG) on the OPENED fd close
+    # both windows.
+    from core.source import open_regular
+    fh = open_regular(journal_path, "rb")
+    if fh is None:
         return []
 
-    # Size gate before the read buffers the whole journal.
+    # Size gate on the OPENED fd, before the read buffers anything.
     try:
-        size = journal_path.stat().st_size
+        size = os.fstat(fh.fileno()).st_size
     except OSError:
+        fh.close()
         return []
     if size > _MAX_JOURNAL_BYTES:
+        fh.close()
         logger.warning(
             "journal: %s is %d bytes (over the %d byte cap); "
             "refusing to load", journal_path, size, _MAX_JOURNAL_BYTES,
@@ -550,11 +559,21 @@ def load_entries(out_dir: Path) -> list[ReviewJournalEntry]:
             logger.debug(msg, *args)
 
     try:
-        with journal_path.open("rb") as fh:
-            for i, line in enumerate(fh):
-                # Running byte budget: the stat() gate above races a
-                # writer that grows the file after the check;
-                # re-enforce the cap on the bytes actually read.
+        with fh:
+            i = -1
+            while True:
+                # Bounded readline: the fstat gate above races a
+                # writer that grows the file after the check, so the
+                # cap is re-enforced on the bytes actually read — and
+                # at LINE granularity too: a plain ``for line in fh``
+                # materialised one multi-GiB line whole before the
+                # budget check fired, so the cap held only between
+                # lines. readline(budget + 1) bounds the worst case
+                # to one capped chunk.
+                line = fh.readline(budget + 1)
+                if not line:
+                    break
+                i += 1
                 budget -= len(line)
                 if budget < 0:
                     logger.warning(

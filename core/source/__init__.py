@@ -13,6 +13,7 @@ Two concerns:
 
 from core.source.contained import (
     DEFAULT_MAX_SOURCE_CHARS,
+    open_regular,
     read_bytes_capped,
     read_contained,
     read_text_capped,
@@ -36,6 +37,7 @@ __all__ = [
     "C_FAMILY_SUFFIXES",
     "DEFAULT_MAX_SOURCE_CHARS",
     "number_lines",
+    "open_regular",
     "read_bytes_capped",
     "read_contained",
     "read_context",

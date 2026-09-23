@@ -5,7 +5,6 @@ Built from the reads manifest (populated by the PostToolUse hook),
 Semgrep JSON output, CodeQL SARIF, and findings.json.
 """
 
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -80,37 +79,46 @@ def read_manifest_lines(manifest_path: Path) -> set[str]:
     unreadable.
     """
     files: set[str] = set()
-    if not manifest_path.exists():
-        return files
-    try:
-        import stat as _stat_mod
-        st = os.lstat(manifest_path)
-        if not _stat_mod.S_ISREG(st.st_mode):
-            # A FIFO here blocks the open/read forever and a symlink
-            # reads a foreign file into the coverage record — the
-            # manifest is inside the sandbox write grant.
+    # fd-discipline open (core.source.open_regular): the manifest is
+    # inside the sandbox write grant, so any check-by-name probe
+    # races a swap — the pre-fix lstat→open window ingested a
+    # swapped-in symlink's FOREIGN file into the coverage record, and
+    # a planted FIFO blocked the open forever. O_NOFOLLOW +
+    # O_NONBLOCK + fstat(S_ISREG) on the OPENED fd close both.
+    from core.source import open_regular
+    f = open_regular(manifest_path, "rb")
+    if f is None:
+        if manifest_path.exists():
+            # Existed but refused: FIFO/device/symlink plant (or a
+            # vanish race). Loud — same message class as before.
             import logging
             logging.getLogger(__name__).warning(
                 "reads-manifest at %s is not a regular file — ignored",
                 manifest_path)
-            return files
-    except OSError:
         return files
     try:
         try:
             import fcntl as _fcntl
         except ImportError:
             _fcntl = None
-        with Path(manifest_path).open(encoding="utf-8", errors="replace") as f:
+        with f:
             if _fcntl is not None:
                 try:
                     _fcntl.flock(f, _fcntl.LOCK_SH)
                 except OSError:
                     pass
-            bytes_read = 0
-            for line in f:
-                bytes_read += len(line)
-                if bytes_read > _MANIFEST_CAP:
+            # Byte-counted (binary read): the previous text-mode loop
+            # counted decoded CHARS against the cap (~4x overshoot on
+            # multi-byte content), and a single over-long line was
+            # materialised whole before the cap fired — the bounded
+            # readline keeps one capped chunk the worst case.
+            budget = _MANIFEST_CAP
+            while True:
+                line = f.readline(budget + 1)
+                if not line:
+                    break
+                budget -= len(line)
+                if budget < 0:
                     # Cap hit — log and stop. The remaining entries
                     # don't make it into the coverage record.
                     import logging
@@ -120,9 +128,9 @@ def read_manifest_lines(manifest_path: Path) -> set[str]:
                         manifest_path, _MANIFEST_CAP, len(files),
                     )
                     break
-                line = line.rstrip("\r\n")
-                if line:
-                    files.add(line)
+                text = line.rstrip(b"\r\n").decode("utf-8", "replace")
+                if text:
+                    files.add(text)
             # The flock releases when the file is closed.
     except OSError:
         pass

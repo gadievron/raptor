@@ -54,6 +54,7 @@ from core.paths import confine
 
 __all__ = [
     "DEFAULT_MAX_SOURCE_CHARS",
+    "open_regular",
     "read_bytes_capped",
     "read_contained",
     "read_text_capped",
@@ -69,7 +70,7 @@ __all__ = [
 DEFAULT_MAX_SOURCE_CHARS = 10 * 1024 * 1024
 
 
-def _open_regular(path: str | Path, mode: str, **kwargs) -> IO | None:
+def open_regular(path: str | Path, mode: str, **kwargs) -> IO | None:
     """Open *path* for reading iff it is a regular file, without ever
     blocking or following a final-component symlink.
 
@@ -80,6 +81,13 @@ def _open_regular(path: str | Path, mode: str, **kwargs) -> IO | None:
     component. Regular-file reads ignore ``O_NONBLOCK``, so the flag
     costs nothing on the accept path. Mirrors
     ``core.license.detector._read_license_full``.
+
+    Public (not just the capped readers' plumbing): readers that need
+    their own streaming/locking over an untrusted-dir file consume
+    the same discipline instead of re-growing check-by-name
+    ``lstat``/``is_file`` probes that race a swap — the coverage
+    manifest reader ingested a foreign file through exactly that
+    check-then-open window.
     """
     try:
         fd = os.open(
@@ -115,7 +123,7 @@ def read_text_capped(
     text is kept — returning ``""`` would turn a pathological
     single-line file into a silent empty read.
     """
-    f = _open_regular(path, "r", encoding="utf-8", errors=errors)
+    f = open_regular(path, "r", encoding="utf-8", errors=errors)
     if f is None:
         return None
     try:
@@ -145,7 +153,7 @@ def read_bytes_capped(
     ``truncated=True``; callers with degrade semantics keep the
     prefix.
     """
-    f = _open_regular(path, "rb")
+    f = open_regular(path, "rb")
     if f is None:
         return None
     try:
