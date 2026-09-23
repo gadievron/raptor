@@ -1322,6 +1322,15 @@ Examples:
     args = parser.parse_args()
     apply_cli_args(args, parser=parser)
 
+    # Orphan containment: when the spawner opted this agent in (the
+    # agentic pipeline and the scanner's codeql stage pair the env var
+    # with start_new_session), a dead parent takes this whole process
+    # group down instead of stranding codeql children holding cache
+    # locks and gigabytes of memory. Direct operator invocations (no
+    # env var) are untouched.
+    from core.run.parent_liveness import maybe_start_orphan_watchdog
+    maybe_start_orphan_watchdog("codeql-agent")
+
     if getattr(args, "out", None):
         # Child of a run: adopt the owning run's pin as the process
         # override so ambient consumers (IRIS store, trust) follow it
