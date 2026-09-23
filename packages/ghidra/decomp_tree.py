@@ -437,6 +437,10 @@ def write_decomp_tree(db: REDatabase, root: Path) -> DecompTree:
                 "function": _clip(func.name, _MAX_NAME_CHARS),
                 "address": func.address
                 if isinstance(func.address, int) else None,
+                # Normalized identity minted at the import seam;
+                # additive — absent on base-less producers.
+                **({"fid": func.fid}
+                   if getattr(func, "fid", None) else {}),
                 "start_line": line_no,
                 "end_line": line_no + n_lines - 1,
                 "decompiled": bool(func.decompilation),

@@ -17,6 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.binary.addrmap import passthrough_fid
 from core.json import save_json
 from core.security.markdown_render import md_inline
 
@@ -126,6 +127,10 @@ def _rank_surfaces(context: dict[str, Any], graph: dict[str, Any]) -> list[dict[
         ranked.append({
             "id": surface_id,
             "name": surface.get("name"),
+            # Additive passthrough of the normalized function
+            # identity through the strict parser — the context map
+            # is disk-loadable, junk collapses to absent.
+            **passthrough_fid(surface),
             "category": surface.get("category"),
             "role": surface.get("role"),
             "is_sink": bool(surface.get("is_sink")),

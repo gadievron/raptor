@@ -19,6 +19,7 @@ import hashlib
 from collections import deque
 from typing import Any
 
+from core.binary.addrmap import passthrough_fid as _fid_passthrough
 from core.evidence import BinaryEvidenceRecord, EvidenceTier, make_evidence
 
 _MAX_PATH_DEPTH = 6
@@ -203,6 +204,10 @@ def extract_parser_boundaries(
                 "boundary_function_id": boundary_id,
                 "boundary_function_name": function.get("name"),
                 "address": function.get("address"),
+                # Additive passthrough through the strict parser: the
+                # context map is disk-loadable (hostile-run-dir
+                # surface), so a junk fid collapses to absent.
+                **_fid_passthrough(function),
                 "parser_surface_id": parser_surface.get("id"),
                 "parser_surface_name": parser_surface.get("name"),
                 "path": {
@@ -283,6 +288,8 @@ def extract_parser_boundaries(
                     "boundary_function_id": function_id,
                     "boundary_function_name": function.get("name"),
                     "address": function.get("address"),
+                    # Additive passthrough (see the static-path twin).
+                    **_fid_passthrough(function),
                     "parser_surface_id": parser_surface.get("id"),
                     "parser_surface_name": parser_surface.get("name"),
                     "path": {

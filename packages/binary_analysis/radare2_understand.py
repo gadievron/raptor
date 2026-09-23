@@ -403,6 +403,15 @@ class BinaryContextMap:
     bits: int = 0
     binary_format: str = ""     # 'elf', 'mach-o', 'pe'
     image_base: int = 0
+    # fid gate: image_base defaults to 0 and 0 is also a legitimate
+    # base, so "metadata extraction succeeded" is tracked separately —
+    # a degraded run must not mint base-0 identities for a
+    # 0x400000-based binary (a wrong fid joins evidence to the wrong
+    # function; no fid merely falls back to name matching).
+    image_base_recorded: bool = False
+    # Module content anchor (core.binary.addrmap): build-id else
+    # sha256 prefix. Empty when never derived — fids are not minted.
+    content_anchor: str = ""
     analysis_depth: str = "full"
 
     entry_points: list[FunctionInfo] = field(default_factory=list)
@@ -445,6 +454,15 @@ class BinaryContextMap:
     decompilation_limit: int = 0
     decompilation_attempted: int = 0
 
+    def _fid(self, address: int | None) -> str | None:
+        """Normalized function identity, or ``None`` when it cannot
+        be minted honestly (no anchor, base never recorded, junk
+        address) — fail-closed per core.binary.addrmap."""
+        if not self.content_anchor or not self.image_base_recorded:
+            return None
+        from core.binary.addrmap import make_fid
+        return make_fid(self.content_anchor, address, self.image_base)
+
     def to_dict(self) -> dict[str, Any]:
         def fn_dict(f: FunctionInfo, prefix: str = "FN") -> dict[str, Any]:
             # Address 0 is a valid address (especially for relocatable code
@@ -456,6 +474,9 @@ class BinaryContextMap:
                 {"cyclomatic": f.cyclomatic} if f.cyclomatic is not None
                 else {}
             )
+            fid = self._fid(f.address)
+            if fid is not None:
+                extra["fid"] = fid
             return {
                 "id": f"{prefix}-{f.address:x}",
                 "name": f.name,
@@ -484,6 +505,8 @@ class BinaryContextMap:
             "bits": self.bits,
             "binary_format": self.binary_format,
             "image_base": hex(self.image_base) if self.image_base is not None else "",
+            "image_base_recorded": self.image_base_recorded,
+            "content_anchor": self.content_anchor,
             "analysis_depth": self.analysis_depth,
             "entry_points": entry_points,
             "dangerous_sinks": sink_details,
@@ -994,11 +1017,23 @@ class BinaryUnderstand:
             ctx.bits = int(bin_info.get("bits", 0) or 0)
             fmt = str(bin_info.get("bintype", "")).lower()
             ctx.binary_format = fmt
-            ctx.image_base = int(bin_info.get("baddr", 0) or 0)
+            # Recorded, not defaulted: only a bin block that actually
+            # CARRIES baddr authorises fid minting — an empty/degraded
+            # ij reply (or one without baddr) must not record base 0
+            # as a fact and mint stable wrong identities (see the
+            # field's rationale).
+            if isinstance(bin_info, dict) and "baddr" in bin_info:
+                ctx.image_base = int(bin_info.get("baddr") or 0)
+                ctx.image_base_recorded = True
         except R2SessionLost:
             raise
         except Exception as e:  # noqa: BLE001 — r2 output is hostile; degrade
             logger.debug("metadata extraction failed: %s", e)
+        try:
+            from core.binary.addrmap import content_anchor
+            ctx.content_anchor = content_anchor(ctx.binary_path) or ""
+        except Exception as e:  # noqa: BLE001 — anchor is enrichment; records stay fid-free
+            logger.debug("content-anchor derivation failed: %s", e)
 
     def _extract_imports_exports(self, r2, ctx: BinaryContextMap) -> None:
         try:
