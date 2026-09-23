@@ -555,3 +555,56 @@ class TestMergeHostileCommandType(unittest.TestCase):
                       if p.is_dir() and p.name.startswith("scan-")]
             self.assertEqual(len(merged), 1)
             self.assertFalse((out / "scan-1").exists())
+
+
+class TestMergeDeleteTimeLivenessRecheck(unittest.TestCase):
+    """The plan-time live split is arbitrarily stale by delete time —
+    an unbounded operator confirm sits between them, and a planned
+    run can be RESUMED in the gap. /project clean re-checks per dir
+    immediately before its rmtree; merge deleted on the stale plan
+    and rmtree'd an in-flight run."""
+
+    def _run(self, out: Path, name: str) -> Path:
+        d = out / name
+        d.mkdir(parents=True)
+        (d / ".raptor-run.json").write_text(json.dumps({
+            "version": 2, "command": "scan", "status": "completed",
+            "project": None, "project_source": "none",
+        }), encoding="utf-8")
+        (d / "findings.json").write_text("[]", encoding="utf-8")
+        return d
+
+    def test_run_resumed_during_confirm_is_not_deleted(self):
+        from core.project.cli import _do_merge
+        from core.project.project import Project
+        with TemporaryDirectory() as td:
+            tmp = Path(td)
+            out = tmp / "proj-out"
+            out.mkdir()
+            project = Project(name="p", target=str(tmp / "code"),
+                              output_dir=str(out))
+            d1 = self._run(out, "scan-1")
+            self._run(out, "scan-2")
+
+            resumed = {"flag": False}
+
+            def confirm_resumes(prompt):
+                # Operator sits on the prompt; scan-1 resumes.
+                resumed["flag"] = True
+                return True
+
+            def live_after_resume(d):
+                return resumed["flag"] and Path(d).name == "scan-1"
+
+            buf = io.StringIO()
+            with patch("core.project.cli._confirm", confirm_resumes), \
+                    patch("core.project.clean.run_is_live",
+                          live_after_resume), \
+                    contextlib.redirect_stdout(buf):
+                _do_merge(project, "all", yes=False)
+            self.assertTrue(d1.exists(),
+                            "run resumed during the confirm gap was "
+                            "rmtree'd in flight")
+            self.assertIn("skipped delete", buf.getvalue())
+            # The non-live sibling still merged and got deleted.
+            self.assertFalse((out / "scan-2").exists())
