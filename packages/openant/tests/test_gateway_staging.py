@@ -425,6 +425,41 @@ class TestGatewayRouteResolution(_GatewayHarness):
         self.assertEqual(mint["models"], ["anthropic.claude-fable-5"])
 
 
+class TestRunCostReconciliation(unittest.TestCase):
+    """The run report's cost line is max-of-ledgers: OpenAnt's own
+    tracker (blind to models absent from its catalog) vs the gateway
+    ledger settlement (absent on direct-credential runs)."""
+
+    def _reconcile(self, oa_out, usage):
+        import raptor_openant
+        return raptor_openant._reconcile_run_cost(oa_out, usage)
+
+    def test_gateway_ledger_covers_openant_zero(self):
+        with tempfile.TemporaryDirectory() as td:
+            oa_out = Path(td)
+            (oa_out / "openant-gateway-spend.json").write_text(
+                json.dumps({"dispatcher_spent_usd": 0.43}))
+            cost = self._reconcile(oa_out, {"total_cost_usd": 0.0})
+            self.assertEqual(cost["total_usd"], 0.43)
+            self.assertEqual(cost["gateway_ledger_usd"], 0.43)
+
+    def test_direct_run_uses_openant_ledger(self):
+        with tempfile.TemporaryDirectory() as td:
+            cost = self._reconcile(Path(td), {"total_cost_usd": 0.17})
+            self.assertEqual(cost["total_usd"], 0.17)
+            self.assertEqual(cost["gateway_ledger_usd"], 0.0)
+
+    def test_max_never_sum_and_garbage_tolerated(self):
+        with tempfile.TemporaryDirectory() as td:
+            oa_out = Path(td)
+            (oa_out / "openant-gateway-spend.json").write_text(
+                json.dumps({"dispatcher_spent_usd": 0.10}))
+            cost = self._reconcile(oa_out, {"total_cost_usd": 0.25})
+            self.assertEqual(cost["total_usd"], 0.25)
+            cost = self._reconcile(oa_out, {"total_cost_usd": "bogus"})
+            self.assertEqual(cost["total_usd"], 0.10)
+
+
 class TestGatewayAgainstRealDispatcher(unittest.TestCase):
     """Hermetic end-to-end: a real ``LLMDispatcher`` (captive upstream,
     no network) mints through the scanner's own seam, the staged
