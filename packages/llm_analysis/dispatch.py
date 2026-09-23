@@ -445,7 +445,11 @@ def _dispatch_inner(
             try:
                 dispatch_result = future.result()
                 payload = getattr(dispatch_result, "result", None)
-                if isinstance(payload, dict) and payload.get("error"):
+                # Key-presence check, per _ErrorDictResult's contract
+                # (dicts with an ``error`` key): a truthiness check
+                # let an ``{"error": ""}`` envelope ride the success
+                # path and reset the circuit breaker.
+                if isinstance(payload, dict) and "error" in payload:
                     # Error envelope from a non-raising dispatch path —
                     # book any cost the failed call still burned (a CC
                     # timeout can bill before dying), then route the

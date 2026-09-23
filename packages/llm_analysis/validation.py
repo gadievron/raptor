@@ -6,6 +6,7 @@ text contradicts the boolean verdict fields.
 
 import logging
 import re
+import unicodedata
 
 from core.run.finding_status import read_verdict
 
@@ -126,6 +127,11 @@ def check_self_contradiction(results_by_id: dict[str, dict]) -> int:
         # Text contradictions — word-boundary matched (see module
         # docstring for the rationale on `\b`).
         if reasoning:
+            # NFKC-fold first: the signal patterns are ASCII with
+            # IGNORECASE, so fullwidth/compatibility spellings of the
+            # same phrases would otherwise sail past this self-QA
+            # heuristic (fewer targeted retries, not a gate bypass).
+            reasoning = unicodedata.normalize("NFKC", reasoning)
             if is_tp:
                 for signal, pat in _SIGNAL_PATTERNS["false_positive"]:
                     if pat.search(reasoning):

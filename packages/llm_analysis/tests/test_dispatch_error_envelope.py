@@ -110,6 +110,32 @@ class TestErrorDictRoutedToFailurePath:
             for r in errored
         )
 
+    def test_empty_error_string_still_routes_to_failure_path(self):
+        """{"error": ""} is an error ENVELOPE per _ErrorDictResult's
+        contract (dicts with an ``error`` key) — a truthiness check
+        let it ride the success path and reset the breaker."""
+        findings = [_make_finding("f-000")]
+
+        def empty_error(prompt, schema, system_prompt, temperature, model):
+            return DispatchResult(result={"error": ""}, model="claude-code")
+
+        results = dispatch_task(
+            task=AnalysisTask(),
+            items=findings,
+            dispatch_fn=empty_error,
+            role_resolution={},
+            prior_results={},
+            cost_tracker=CostTracker(0),
+            max_parallel=1,
+        )
+        assert len(results) == 1
+        assert "error" in results[0]
+        # The discriminator: only the FAILURE machinery classifies the
+        # error — the success path copies the envelope through
+        # verbatim (with a _quality stamp) and resets the breaker.
+        assert "error_type" in results[0]
+        assert "_quality" not in results[0]
+
     def test_successful_results_still_succeed(self):
         # Two-direction: healthy payloads keep flowing through the
         # success path untouched.

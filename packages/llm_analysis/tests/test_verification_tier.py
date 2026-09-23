@@ -110,6 +110,15 @@ class TestDeriveVerificationTier:
         )
         assert derive_verification_tier(f) == "tool_backed"
 
+    def test_non_string_fail_open_rule_id_does_not_raise(self):
+        # "Pure inspection — safe on partial dicts": a non-string
+        # rule_id in a (mechanically written) receipt grades like a
+        # missing one instead of raising AttributeError.
+        f = _finding(
+            analysis={"fail_open": {"outcome": "refuted", "rule_id": 123}},
+        )
+        assert derive_verification_tier(f) == "tool_backed"
+
     def test_llm_authored_template_verdict_stays_llm_only(self):
         # Tier 2/3/fallback verdicts run through CodeQL, but the QUERY
         # is LLM-written from finding context — the honest producer
