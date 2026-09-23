@@ -101,11 +101,26 @@ def load_exploit_feedback(out_dir: Path, load_feedback_state, FeedbackState):
 
 
 def load_fuzz_coverage(out_dir: Path) -> dict[str, Any] | None:
-    """Load fuzz coverage data if present."""
+    """Load fuzz coverage data if present.
+
+    Shape-gated: coverage-fuzz.json is a run-dir artifact, so a
+    malformed or tampered non-dict root must load as absent — one
+    list-shaped file made every review of the run raise at
+    per-function context assembly.
+    """
     path = out_dir / "coverage-fuzz.json"
     if not path.exists():
         return None
-    return load_json(path, max_bytes=64 * 1024 * 1024)
+    data = load_json(path, max_bytes=64 * 1024 * 1024)
+    if not isinstance(data, dict):
+        if data is not None:
+            logger.warning(
+                "coverage-fuzz.json in %s is %s-shaped, expected object "
+                "— ignoring the artifact",
+                out_dir, type(data).__name__,
+            )
+        return None
+    return data
 
 
 def load_fuzz_coverage_any(
@@ -145,12 +160,27 @@ def fuzz_coverage_for(
     file_path: str,
     function_name: str,
 ) -> dict[str, Any] | None:
-    """Extract fuzz coverage for a specific function."""
+    """Extract fuzz coverage for a specific function.
+
+    Tolerates non-dict roots and containers: the artifact may come
+    from an older producer or be tampered, and this runs inside every
+    review's context assembly.
+    """
+    if not isinstance(fuzz_data, dict):
+        return None
     flat_key = f"{file_path}:{function_name}"
     if flat_key in fuzz_data:
         return fuzz_data[flat_key]
-    file_data = fuzz_data.get("files", {}).get(file_path, {})
-    func_data = file_data.get("functions", {}).get(function_name)
+    files = fuzz_data.get("files")
+    if not isinstance(files, dict):
+        return None
+    file_data = files.get(file_path)
+    if not isinstance(file_data, dict):
+        return None
+    functions = file_data.get("functions")
+    if not isinstance(functions, dict):
+        return None
+    func_data = functions.get(function_name)
     if func_data:
         return func_data
     return None
