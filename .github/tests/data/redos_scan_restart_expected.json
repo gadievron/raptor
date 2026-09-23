@@ -59,13 +59,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/analysis/summaries.py\u001f_CALL_SHAPED_NAME_RE": {
-   "digests": [
-    "ba13be356eb2"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/analysis/taint_multi_lang.py\u001f_JAVA_FUNC": {
    "digests": [
     "84f2036db20e"
@@ -138,7 +131,7 @@
   },
   "core/audit/api_boundary.py\u001f\\b(?:struct|union|enum|const|unsigned|si": {
    "digests": [
-    "4fc561e893e5"
+    "c68b5361170f"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -161,7 +154,7 @@
    "digests": [
     "7bac92ef17b0"
    ],
-   "exp": 1.03,
+   "exp": 0.98,
    "verdict": "linear"
   },
   "core/audit/auth_witnesses.py\u001f_KEYED_GET_RE": {
@@ -175,7 +168,7 @@
    "digests": [
     "c8f8ffc78d2c"
    ],
-   "exp": 1.0,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/audit/binary_layer0.py\u001f_CALLEE_RE": {
@@ -210,7 +203,7 @@
    "digests": [
     "65ffe561ec4e"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/caller_lock.py\u001f\\b(?:X|X)\\w*\\s*\\(": {
@@ -301,14 +294,14 @@
    "digests": [
     "aa7b1d8b05bf"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_DETERMINE_BUILTIN_RE": {
    "digests": [
     "35c6628de792"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_IDENT_EXPR_RE": {
@@ -322,7 +315,7 @@
    "digests": [
     "0f64f014c82d"
    ],
-   "exp": 1.96,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/audit/compiler_sweep.py\u001f_DIAG_SUPPRESSION_RE": {
@@ -483,7 +476,7 @@
    "digests": [
     "be592db3fa7b"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001f_GO_ATOI_RE": {
@@ -510,13 +503,6 @@
   "core/audit/condition_smt.py\u001f_GO_READ_RE": {
    "digests": [
     "99ab2520309a"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "core/audit/condition_smt.py\u001f_PARSED_INT_CALL_ARG_RE": {
-   "digests": [
-    "5cc2f8b7e1ea"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -596,7 +582,7 @@
    "digests": [
     "a56ab90d3d8a"
    ],
-   "exp": 1.02,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001fwrapper_re": {
@@ -694,14 +680,14 @@
    "digests": [
     "c7576fa032bf"
    ],
-   "exp": 2.0,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[3]": {
    "digests": [
     "9337696cf86c"
    ],
-   "exp": 1.97,
+   "exp": 1.89,
    "verdict": "adjudicated"
   },
   "core/audit/decompiler_sanitise.py\u001f_CLASS_MEMBER_RE": {
@@ -778,7 +764,7 @@
    "digests": [
     "7ebd359a4d82"
    ],
-   "exp": 1.01,
+   "exp": 0.98,
    "verdict": "linear"
   },
   "core/audit/integer_truncation_checker.py\u001f_ALLOC_RE": {
@@ -887,13 +873,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/audit/negative_space.py\u001f_AMR_CALL_RE": {
-   "digests": [
-    "b74e81b7935d"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/audit/negative_space.py\u001f_CALL_SITE_RE": {
    "digests": [
     "809bb4069fbf"
@@ -975,7 +954,7 @@
    "digests": [
     "ae40fb5f77d0"
    ],
-   "exp": 0.99,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/path_feasibility.py\u001fif_patterns": {
@@ -1045,7 +1024,7 @@
    "digests": [
     "d017fec15766"
    ],
-   "exp": 0.99,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}size\\w*\\s*[<>=!]+": {
@@ -1181,6 +1160,13 @@
    "exp": 1.0,
    "verdict": "linear"
   },
+  "core/audit/protocol_state.py\u001f_FIELD_CHAIN_AFTER_CLOSER_RE": {
+   "digests": [
+    "7a2c76045745"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
   "core/audit/protocol_state.py\u001f_FIELD_CHAIN_RE": {
    "digests": [
     "5628f99021a4"
@@ -1199,7 +1185,7 @@
    "digests": [
     "6791b0fd26a9"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
@@ -1234,7 +1220,7 @@
    "digests": [
     "87a22b640da8"
    ],
-   "exp": 1.02,
+   "exp": 1.04,
    "verdict": "linear"
   },
   "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
@@ -1276,7 +1262,7 @@
    "digests": [
     "a0cc73423185"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/return_contracts.py\u001fdecl_re": {
@@ -1522,7 +1508,7 @@
    "digests": [
     "a99a1964e15b"
    ],
-   "exp": 1.03,
+   "exp": 0.98,
    "verdict": "linear"
   },
   "core/binary/glibc_versions.py\u001f_SEARCH_RE": {
@@ -1564,7 +1550,7 @@
    "digests": [
     "8fe688d1a940"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/concepts/study.py\u001f\\b(struct\\s+\\w+|[A-Za-z_]\\w{3,}_[A-Za-z_": {
@@ -1637,13 +1623,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/dataflow/tier1_llm.py\u001f\\b([A-Za-z_][\\w.]*)\\s*\\(": {
-   "digests": [
-    "b74e81b7935d"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/dockerfile/parser.py\u001f_FROM_AS_RE": {
    "digests": [
     "4b0fe0a20190"
@@ -1683,7 +1662,7 @@
    "digests": [
     "37de29a408f1"
    ],
-   "exp": 1.99,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/inventory/extractors.py\u001fPATTERNS[1]": {
@@ -1830,7 +1809,7 @@
    "digests": [
     "44a2e5aa9242"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/inventory/translation_view.py\u001f_CALL_IN_BODY": {
@@ -1851,21 +1830,21 @@
    "digests": [
     "74f670123f14"
    ],
-   "exp": 2.0,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[3]": {
    "digests": [
     "0fb08c380bf3"
    ],
-   "exp": 2.02,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[4]": {
    "digests": [
     "70e776e25c31"
    ],
-   "exp": 2.01,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[5]": {
@@ -1879,7 +1858,7 @@
    "digests": [
     "29eb48db7b62"
    ],
-   "exp": 1.94,
+   "exp": 2.02,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[7]": {
@@ -2143,13 +2122,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "core/security/redaction.py\u001f\\be[wy][A-Za-z0-9_-]{7,}\\.[A-Za-z0-9_-]{": {
-   "digests": [
-    "e9dd27e731bb"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "core/security/report_writer_audit.py\u001f_ALLOWLIST[394]": {
    "digests": [
     "c315f8693625"
@@ -2361,20 +2333,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/cve_env/cve_env/utils/dockerfile_hygiene.py\u001f\\bchmod\\b[^;&|]*\\s0*[2-7][0-7]{3}\\b": {
-   "digests": [
-    "7456688bf9de"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "packages/cve_env/cve_env/utils/dockerfile_hygiene.py\u001f\\bchmod\\b[^;&|]*\\s[ugoa]*\\+[rwxXt]*s": {
-   "digests": [
-    "387842237144"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f,?\\s{0,16}leading to (?:a |an )?(?:[a-zA": {
    "digests": [
     "731fe2e6e9dc"
@@ -2506,7 +2464,7 @@
    "digests": [
     "db21eb0cc688"
    ],
-   "exp": 2.01,
+   "exp": 2.04,
    "verdict": "adjudicated"
   },
   "packages/joern/runner.py\u001f_CALL_RE": {
@@ -2635,13 +2593,6 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/sca/supply_chain/_hook_patterns.py\u001f\\bnc\\s+(?:-\\S+\\s+)*[\\w.\\-]+\\s+\\d+": {
-   "digests": [
-    "8c24bcc0af07"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "packages/sca/supply_chain/_hook_patterns.py\u001fhttps?://[\\w.\\-]*(?:bit\\.ly|tinyurl|past": {
    "digests": [
     "9e58adcb4fab"
@@ -2691,23 +2642,9 @@
    "exp": 1.0,
    "verdict": "linear"
   },
-  "packages/sca/update.py\u001fbare": {
-   "digests": [
-    "c3d564a3b591"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
   "packages/sca/update.py\u001fparts": {
    "digests": [
     "0b557ee90566"
-   ],
-   "exp": 1.0,
-   "verdict": "linear"
-  },
-  "packages/sca/update.py\u001fspec_re": {
-   "digests": [
-    "368ecfe41b1c"
    ],
    "exp": 1.0,
    "verdict": "linear"
