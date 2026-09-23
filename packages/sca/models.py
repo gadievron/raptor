@@ -242,7 +242,10 @@ class Advisory:
     osv_id: str                  # "GHSA-jfh8-c2jp-5v3q" or "PYSEC-2024-..."
     aliases: list[str]           # ["CVE-2021-44228", ...]
     summary: str                 # one-line summary
-    details: str                 # full markdown details (length-bounded)
+    details: str                 # full markdown details — registry-
+                                 # supplied, NOT length-bounded at
+                                 # parse (packages/osv/parser applies
+                                 # no cap); renderers sanitise/trim
     affected: list[AffectedRange]
     severity: CVSSScore | None
     fixed_versions: list[str]    # extracted from affected.ranges.events.fixed
@@ -306,7 +309,10 @@ def canonical_cve_id(candidate: object) -> str | None:
     """
     if not isinstance(candidate, str):
         return None
-    candidate = candidate.upper()
+    # ``.strip()`` before the fold: a whitespace-padded feed spelling
+    # was otherwise admitted verbatim (trailing ws — failing every
+    # uppercase-keyed join) or dropped entirely (leading ws).
+    candidate = candidate.strip().upper()
     if candidate.startswith("CVE-"):
         return candidate
     m = _DISTRO_CVE_PRIMARY_RE.match(candidate)

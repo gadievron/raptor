@@ -25,8 +25,10 @@ def test_maven_with_colon_in_name(capsys) -> None:
 
 
 def test_scoped_npm_package(capsys) -> None:
+    # purl-spec: the scope's ``@`` is percent-encoded in a canonical
+    # purl (see test_scoped_npm_purl_percent_encodes_the_scope_at).
     purl.main(["npm", "@types/node", "20.10.5"])
-    assert capsys.readouterr().out.strip() == "pkg:npm/@types/node@20.10.5"
+    assert capsys.readouterr().out.strip() == "pkg:npm/%40types/node@20.10.5"
 
 
 def test_missing_args_returns_2() -> None:
@@ -58,3 +60,19 @@ def test_ecosystem_canonicalisation(capsys) -> None:
     """Lowercase ecosystem name is normalised to canonical form."""
     purl.main(["pypi", "django", "4.2.10"])
     assert capsys.readouterr().out.strip() == "pkg:pypi/django@4.2.10"
+
+
+def test_scoped_npm_purl_percent_encodes_the_scope_at() -> None:
+    """purl-spec requires the scope's ``@`` as ``%40``
+    (pkg:npm/%40types/node@...) — the raw spelling is not a canonical
+    purl, which is this utility's whole claim."""
+    import contextlib
+    import io
+
+    from packages.sca.purl import main
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = main(["npm", "@types/node", "20.10.5"])
+    assert rc == 0
+    assert buf.getvalue().strip() == "pkg:npm/%40types/node@20.10.5"

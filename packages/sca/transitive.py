@@ -709,11 +709,17 @@ def _typosquat_dirs(
     return out
 
 
-def _common_ancestor(paths: Sequence[Path]) -> Path:
+def _common_ancestor(paths: Sequence[Path]) -> Path | None:
     """Common-prefix path that every input is under. Used by the
     cascade batch to size the sandbox cwd to cover all manifests in
     one session. Single-input collapses to that input's parent (so
-    behaviour matches the sequential per-manifest path)."""
+    behaviour matches the sequential per-manifest path).
+
+    Returns ``None`` when the only shared prefix is the filesystem
+    root: sizing the batch sandbox cwd to ``/`` would grant the
+    resolver session filesystem-wide reads. ``None`` makes the batch
+    resolvers take their documented sequential per-dir fallback
+    (each sandboxed to its own manifest dir) instead."""
     if len(paths) == 1:
         return paths[0]
     parts_lists = [p.resolve().parts for p in paths]
@@ -725,9 +731,10 @@ def _common_ancestor(paths: Sequence[Path]) -> Path:
             common.append(seg)
         else:
             break
-    if not common:
-        return Path("/")
-    return Path(*common)
+    ancestor = Path(*common) if common else None
+    if ancestor is None or ancestor == Path(ancestor.anchor or "/"):
+        return None
+    return ancestor
 
 
 # ---------------------------------------------------------------------------

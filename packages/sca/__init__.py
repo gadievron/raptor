@@ -41,8 +41,9 @@ SCA_CACHE_ROOT = Path.home() / ".raptor" / "cache" / "sca"
 # The full set of hosts /sca needs to reach for vuln data + registry
 # metadata. Ordered by purpose for readability; the egress proxy treats
 # the set as flat. Every host appears verbatim in at least one client's
-# URL constant under packages/sca/{osv,kev,epss}.py or
-# packages/sca/registries/.
+# URL constant: packages/osv/client.py (OSV API), core/cve/kev.py and
+# core/cve/epss.py (KEV / EPSS feeds), packages/sca/osv_offline.py
+# (OSV zip mirror), or packages/sca/registries/.
 SCA_ALLOWED_HOSTS = (
     # Vulnerability feeds
     "api.osv.dev",
@@ -217,7 +218,10 @@ def _operator_extra_ports() -> frozenset:
         tok = tok.strip()
         if not tok:
             continue
-        if tok.isdigit() and 1 <= int(tok) <= 65535:
+        # ``isascii()`` first: Unicode digits ('²') pass isdigit()
+        # but crash int(), and that ValueError escaped to the
+        # per-source handler and dropped the whole derivation source.
+        if tok.isascii() and tok.isdigit() and 1 <= int(tok) <= 65535:
             ports.add(tok)
         else:
             logger.warning(

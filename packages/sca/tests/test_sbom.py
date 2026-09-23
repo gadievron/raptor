@@ -514,3 +514,25 @@ def test_vex_justification_enum_conformant() -> None:
             analysis = vuln.get("analysis") or {}
             j = analysis.get("justification")
             assert j is None or j in valid, (verdict, analysis)
+
+
+def test_in_triage_state_carries_no_justification() -> None:
+    """The justification enum SEMANTICALLY pairs with not_affected
+    only — the likely_called branch's own comment forbids exactly
+    this shape. A dead-code verdict surfaces state=in_triage for
+    human review; the reasoning belongs in detail, not in a
+    not-affected justification the state contradicts."""
+    d = _dep()
+    findings = build_vuln_findings(
+        [d], [OsvResult(d.key(), [_adv()])],
+        reachability={d.key(): Reachability(
+            verdict="called_in_dead_code",
+            confidence=Confidence("medium", reason="t"),
+            evidence=[],
+        )},
+    )
+    bom = build_bom(deps=[d], vuln_findings=findings)
+    for vuln in bom.get("vulnerabilities", []):
+        analysis = vuln.get("analysis") or {}
+        if analysis.get("state") == "in_triage":
+            assert "justification" not in analysis, analysis

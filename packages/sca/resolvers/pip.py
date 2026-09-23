@@ -421,7 +421,11 @@ class PipResolver:
         # forged plaintext marker shifted every following section,
         # attributing attacker-chosen 'lockfiles' to other
         # manifests. Fresh randomness per run is unforgeable from
-        # inside the batch.
+        # inside the batch — EXCEPT under ``--allow-sdist-builds``,
+        # where a build backend executes with enough access to read
+        # the batch script (e.g. via /proc) and recover the nonce;
+        # that opt-in already grants code execution, so the residual
+        # is attribution shuffling inside an accepted trust grant.
         nonce = secrets.token_hex(16)
         script = self._build_batch_script(venv_dir, manifests, nonce)
         try:

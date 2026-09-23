@@ -568,10 +568,10 @@
       "title": "Osv lookup failed",
       "description": "OSV lookups failed transiently for 1 ecosystem",
       "sca": {
-        "kind": "osv_lookup_failed",
         "failed_ecosystems": [
           "Cargo"
-        ]
+        ],
+        "kind": "osv_lookup_failed"
       }
     }
   ],

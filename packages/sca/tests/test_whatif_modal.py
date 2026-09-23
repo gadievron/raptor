@@ -131,3 +131,18 @@ def test_no_specs_emits_helpful_message() -> None:
         adds=[], removes=[], from_file=None, findings_path=None, osv=osv,
     )
     assert "no add/remove specs supplied" in report
+
+
+def test_findings_advisory_map_tolerates_non_list_document(tmp_path):
+    """A findings path whose top level is a JSON object (hand-edited /
+    foreign artifact) must read as \"no advisory map\", not iterate the
+    mapping's keys as rows."""
+    import json
+
+    from packages.sca.whatif import _findings_clearing
+
+    p = tmp_path / "findings.json"
+    # A dict silently iterates its keys; a scalar CRASHES the arm.
+    for doc in ({"rows": []}, 42, "text"):
+        p.write_text(json.dumps(doc), encoding="utf-8")
+        assert _findings_clearing(str(p), removes=[]) == {}

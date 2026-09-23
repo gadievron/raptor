@@ -91,3 +91,20 @@ class TestTrimCause:
     def test_bounded(self):
         out = health_mod._trim_cause("x" * 500)
         assert len(out) <= 220 and out.endswith("…")
+
+
+def test_offline_flag_is_refused() -> None:
+    """health is a LIVE reachability check that deliberately probes
+    against a throwaway scratch cache — under --offline every probe
+    misses by construction, so the flag reported a vacuous all-fail
+    table. Refuse it loudly instead."""
+    import contextlib
+    import io
+
+    from packages.sca import health
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        rc = health.main(["--offline"])
+    assert rc == 2
+    assert "live reachability check" in err.getvalue()

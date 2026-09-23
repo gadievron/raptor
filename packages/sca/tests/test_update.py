@@ -1529,3 +1529,23 @@ def test_dpkg_epoch_and_tilde_targets_pass_gate() -> None:
         p = _hostile_plan("requirements.txt", "Debian", "nginx",
                           "1.22.1-9", bad)
         assert update.refuse_unsafe_target(p) is not None
+
+
+def test_change_key_folds_case_only_where_the_registry_does() -> None:
+    """PyPI names are case-insensitive (PEP 503) so folding is
+    correct there; npm names are case-SENSITIVE, and lowercasing made
+    case-distinct packages share one compat report — the package.json
+    rewriter explicitly refuses that conflation."""
+    from packages.sca.update import UpgradeChange, _change_key
+
+    def _chg(eco: str, name: str) -> UpgradeChange:
+        return UpgradeChange(
+            ecosystem=eco, name=name, manifest=Path("/m"),
+            old_version="1.0", new_version="2.0",
+            advisory_ids=("GHSA-x",),
+        )
+
+    assert (_change_key(_chg("npm", "JSONStream"))
+            != _change_key(_chg("npm", "jsonstream")))
+    assert (_change_key(_chg("PyPI", "Django"))
+            == _change_key(_chg("PyPI", "django")))

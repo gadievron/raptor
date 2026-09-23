@@ -218,11 +218,11 @@ def cached_dry_run(
     declare ``MANIFEST_FILES``), runs the subprocess and caches
     successful results.
 
-    Failed resolves (``success=False``) are cached too — a manifest
-    that consistently fails to resolve fails just as fast on rerun.
-    The cache persists until TTL or until the manifest content
-    changes; an operator who fixes the manifest gets a fresh attempt
-    via the new content hash.
+    Failed resolves (``success=False``) are NEVER cached — a failure
+    is often environmental (network, missing tool) and a cached one
+    would keep reporting stale failures after the environment
+    recovered; each rerun retries. Successful results persist until
+    TTL or until the manifest content changes (fresh content hash).
     """
     hsh = manifest_hash(resolver, project_dir)
     if hsh is None:

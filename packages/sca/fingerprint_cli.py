@@ -109,8 +109,12 @@ def _cmd_save(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
 def _cmd_check(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
     """Compare current fingerprint against stored baseline. Prints
     the drift summary and exits:
-      * 0 — no baseline OR no drift
+      * 0 — no drift
       * 1 — drift detected (use for CI gates)
+      * 2 — no baseline stored for the ref (seed one with --save).
+            Distinct and non-zero: exiting 0 here made every
+            baseline-loss path (wiped cache root, renamed ref) turn
+            the CI drift gate silently green.
       * 3 — fingerprinting failed (infrastructure error,
             distinguishable from drift)
     """
@@ -132,7 +136,7 @@ def _cmd_check(fp_input, args: argparse.Namespace, *, store_dir: Path) -> int:
             f"use --save to seed one",
             file=sys.stderr,
         )
-        return 0
+        return 2
 
     drift = detect_drift(baseline, fp)
     if drift.is_empty():

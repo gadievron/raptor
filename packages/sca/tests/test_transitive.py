@@ -450,10 +450,12 @@ def test_common_ancestor_multiple_paths_finds_shared_prefix(tmp_path):
     assert common == (tmp_path / "a").resolve()
 
 
-def test_common_ancestor_disjoint_paths_returns_root():
+def test_common_ancestor_disjoint_paths_refused():
+    """Disjoint inputs share only the filesystem root — returning
+    ``/`` sized the batch sandbox cwd filesystem-wide; ``None`` makes
+    the batch resolvers fall back to sequential per-dir sessions."""
     from packages.sca.transitive import _common_ancestor
-    common = _common_ancestor([Path("/x/y"), Path("/p/q")])
-    assert common == Path("/")
+    assert _common_ancestor([Path("/x/y"), Path("/p/q")]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -1115,3 +1117,18 @@ def test_cargo_workspace_probe_refuses_symlink(tmp_path) -> None:
     link = tmp_path / "Cargo.toml"
     link.symlink_to(outside)
     assert _is_cargo_workspace_root(link) is False
+
+
+def test_common_ancestor_refuses_rootless_batches() -> None:
+    """Manifests whose only shared prefix is the filesystem root must
+    NOT size the batch sandbox cwd to "/" (filesystem-wide reads for
+    the whole resolver session). ``None`` makes the batch resolvers
+    take their documented sequential per-dir fallback instead."""
+    from pathlib import Path as _P
+
+    from packages.sca.transitive import _common_ancestor
+
+    assert _common_ancestor([_P("/srv/app"), _P("/opt/other")]) is None
+    # A real shared prefix still batches.
+    assert _common_ancestor(
+        [_P("/srv/app/a"), _P("/srv/app/b")]) == _P("/srv/app")

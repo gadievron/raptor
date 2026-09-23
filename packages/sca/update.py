@@ -2380,9 +2380,12 @@ def _change_to_dict(
 def _change_key(c: UpgradeChange) -> tuple[str, str, str, str]:
     """Stable identity for a change so multiple manifests bumping the
     same dep share the same compat report (the risk is per X→Y, not
-    per file)."""
-    return (c.ecosystem, c.name.lower(),
-            c.old_version, c.new_version)
+    per file). Case folds only where the registry does: PyPI names
+    are case-insensitive (PEP 503); npm names are case-SENSITIVE, and
+    folding them made case-distinct packages share one compat report
+    — the package.json rewriter explicitly refuses that conflation."""
+    name = c.name.lower() if c.ecosystem == "PyPI" else c.name
+    return (c.ecosystem, name, c.old_version, c.new_version)
 
 
 def _compute_compat_reports(
