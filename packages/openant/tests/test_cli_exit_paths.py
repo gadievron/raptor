@@ -201,6 +201,103 @@ class TestCleanScanUnchanged(unittest.TestCase):
             self.assertEqual(findings, [])
 
 
+_FAKE_MAIN_60_FINDINGS = """\
+import json
+import sys
+
+out = None
+for i, a in enumerate(sys.argv):
+    if a == "--output" and i + 1 < len(sys.argv):
+        out = sys.argv[i + 1]
+findings = []
+for n in range(55):
+    findings.append({
+        "id": "VULN-%03d" % n,
+        "stage1_verdict": "vulnerable",
+        "location": {"file": "src/app.py", "function": "f%d" % n},
+        "cwe_id": 78,
+        "description": "warning-level finding",
+    })
+for n in range(55, 60):
+    findings.append({
+        "id": "VULN-%03d" % n,
+        "stage1_verdict": "vulnerable",
+        "stage2_verdict": "confirmed",
+        "location": {"file": "src/app.py", "function": "f%d" % n},
+        "cwe_id": 78,
+        "description": "error-level finding emitted LAST",
+    })
+if out:
+    with open(out + "/pipeline_output.json", "w") as f:
+        json.dump({"findings": findings, "pipeline_stats": {}}, f)
+sys.exit(1)
+"""
+
+
+class TestMaxFindingsArtifactHonesty(unittest.TestCase):
+    """--max-findings caps only the markdown report (severity-first,
+    truncation stated). The durable openant_findings.json artifact —
+    what /validate, merged views and cross-run correlation consume —
+    is NEVER capped: the pipeline-order slice dropped whatever OpenAnt
+    emitted last, including every error-level finding, while the
+    terminal, the JSON report and all doc surfaces claimed the full
+    count."""
+
+    def _scan_60(self, td: Path) -> Path:
+        base = Path(td)
+        src = _make_repo(base)
+        core = _make_fake_core(src, _FAKE_MAIN_60_FINDINGS)
+        out_dir = base / "out"
+        proc = _run(
+            [sys.executable, str(_REPO_ROOT / "raptor.py"), "openant",
+             "--repo", str(src), "--out", str(out_dir),
+             "--openant-core", str(core),
+             "--openant-core-unpinned"],
+            {},
+        )
+        self.assertEqual(proc.returncode, 0,
+                         f"stdout={proc.stdout}\nstderr={proc.stderr}")
+        return out_dir
+
+    def test_artifact_uncapped_and_report_severity_first(self):
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = self._scan_60(Path(td))
+            findings = json.loads(
+                (out_dir / "openant_findings.json").read_text())
+            self.assertEqual(len(findings), 60)
+            errors = [f for f in findings if f.get("level") == "error"]
+            self.assertEqual(len(errors), 5)
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            phase = report["phases"]["openant_scan"]
+            self.assertEqual(phase["translated_findings"], 60)
+            self.assertEqual(phase["report_findings"], 50)
+            self.assertEqual(phase["report_truncated"], 10)
+            md = (out_dir / "openant-report.md").read_text()
+            self.assertIn("**Findings:** 60", md)
+            self.assertIn("Report truncated", md)
+            self.assertIn("top 50 of 60", md)
+            # Severity-first: ALL FIVE error-level findings (emitted
+            # last by the scanner) survive the cut.
+            self.assertIn("## High (5)", md)
+
+    def test_negative_max_findings_refused_at_parse(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = _make_repo(base)
+            core = _make_fake_core(src, _FAKE_MAIN_60_FINDINGS)
+            proc = _run(
+                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                 "--repo", str(src), "--out", str(base / "out"),
+                 "--openant-core", str(core),
+                 "--openant-core-unpinned",
+                 "--max-findings", "-5"],
+                {},
+            )
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("positive integer", proc.stderr)
+
+
 class TestScannerResultShape(unittest.TestCase):
     """The scanner's skipped result carries the structured hard_error
     distinction consumers key off."""

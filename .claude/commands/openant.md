@@ -77,7 +77,7 @@ operator's behalf.
 | `--no-enhance` | off | Skip OpenAnt enhance phase (faster, less accurate) |
 | `--verify` | off | Enable stage-2 LLM verification pass |
 | `--workers <n>` | `4` | Parallel analysis workers |
-| `--max-findings <n>` | `50` | Cap findings in report |
+| `--max-findings <n>` | `50` | Cap findings rendered in the markdown report (severity-first, truncation stated; must be >= 1). `openant_findings.json` is never capped |
 | `--openant-core <path>` | `$OPENANT_CORE` | Path to openant-core (flag surface is consent-gated: a core that is not a clean pinned checkout refuses at startup) |
 | `--openant-core-unpinned` | off | Consent to run a `--openant-core` checkout that is not a clean pinned checkout this run (the project `config` trust marker grants the same, standing) |
 
