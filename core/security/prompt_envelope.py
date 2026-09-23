@@ -205,6 +205,15 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     # unanchored) fetches exactly like `url(` — the arm must not
     # require the one function name.
     r'|style\s*=\s*[^>]{0,8192}?(?:url|image-set)\s*\('
+    # CSS fetch functions with an ABSOLUTE or scheme-relative target,
+    # wherever they appear — the <style> element arm below strips the
+    # open tag only (the old body+close alternative was quadratic),
+    # so a fetch inside what was the style body must be caught by the
+    # function call itself. The URL body is consumed so the target
+    # host never survives into the rendered text; relative url(x.png)
+    # references carry no exfil target and stay untouched.
+    r'|\b(?:url|image-set)\s{0,8}\(\s{0,8}[\'"]?\s{0,8}'
+    r'(?:https?:|ht%74ps?:|//)[^)\'"\s]{0,8192}'
     # `<style>` open tag, bounded like every other tag arm. The old
     # body+close alternative (`<style\b[^>]*>.*?</style>` under
     # DOTALL) was quadratic on repeated unclosed opens: at each
