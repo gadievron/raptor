@@ -574,9 +574,6 @@
     "packages/llm_analysis/scripts/e2e_verify_exploit.py::main::raw_serialiser_at_sink::dumps_display": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
-    "packages/openant/scanner.py::_run_subprocess::unsanitised_llm_value::stderr_to_write": {
-      "note": "openant scanner: stderr relay from tool subprocess \u2014 operator-launched tool output, not raw LLM text"
-    },
     "packages/sca/bump/cli.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },

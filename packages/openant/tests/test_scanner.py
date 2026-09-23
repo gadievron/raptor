@@ -409,5 +409,42 @@ class TestVenvFallbackVisibility(unittest.TestCase):
         self.assertTrue(result.endswith("/python3"), result)
 
 
+class TestBoundedCaptureAndByteTrueStderrCap(unittest.TestCase):
+    """The 1 MiB cap bounded only the disk write (measured in CHARS,
+    up to 4x the budget in UTF-8, with the notice appended PAST the
+    cap), and nothing bounded the parent-buffered streams at all —
+    stdout was json.loads'd whole. The scanner now passes the
+    sandbox's max_capture_bytes ceiling and persists stderr
+    byte-true."""
+
+    def test_stderr_cap_is_byte_true_with_notice_inside(self):
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td)
+            scanner._persist_stderr(out_dir, "é" * scanner.STDERR_MAX_BYTES)
+            data = (out_dir / "openant.stderr.log").read_bytes()
+        self.assertLessEqual(len(data), scanner.STDERR_MAX_BYTES)
+        self.assertIn(b"[truncated", data)
+
+    def test_under_cap_stderr_untouched(self):
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td)
+            scanner._persist_stderr(out_dir, "short error\n")
+            data = (out_dir / "openant.stderr.log").read_text(
+                encoding="utf-8")
+        self.assertEqual(data, "short error\n")
+        self.assertNotIn("[truncated", data)
+
+    def test_subprocess_capture_ceiling_wired(self):
+        """The sandbox_run invocation must carry the capture ceiling
+        (fork backend: transient bound; other lanes: result clamp that
+        bounds the parse and persist paths)."""
+        scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
+        call = scanner_src.split("proc = sandbox_run(")[1]
+        call = call.split("except subprocess.TimeoutExpired")[0]
+        self.assertIn("max_capture_bytes=_CAPTURE_MAX_BYTES", call)
+
+
 if __name__ == "__main__":
     unittest.main()

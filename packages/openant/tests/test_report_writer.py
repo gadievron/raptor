@@ -158,7 +158,9 @@ class TestReportWriteSurvivesCLocale(unittest.TestCase):
 
     def test_stderr_log_write_names_utf8(self):
         scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
-        block = scanner_src.split("openant.stderr.log")[1][:200]
+        block = scanner_src.split("def _persist_stderr")[1].split(
+            "def _find_venv_python")[0]
+        self.assertIn("openant.stderr.log", block)
         self.assertIn('encoding="utf-8"', block)
 
 
