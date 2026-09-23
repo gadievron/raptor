@@ -291,3 +291,119 @@ def test_mark_unreachable_no_write_when_nothing_marked(
     assert _mark_unreachable_low_priority(out_dir, tmp_path) == 0
     assert path.read_text() == before
     assert path.stat().st_mtime_ns == mtime_before
+
+
+# ---------------------------------------------------------------------------
+# Lock scope: heavy discovery stays outside the checklist flock
+# ---------------------------------------------------------------------------
+
+
+def test_heavy_discovery_runs_outside_checklist_flock(tmp_path, monkeypatch):
+    """Frida evidence discovery and the per-function reverse-closure
+    walk must run BEFORE update_checklist takes the cross-process
+    flock — the flock is the contention point for every checklist
+    writer in the run family, and those passes scale with target size
+    x run-dir count. Only cheap field application belongs under the
+    lock."""
+    import core.analysis.reachability as reach_mod
+    import core.inventory as inv_mod
+    import core.orchestration.frida_validation_bridge as fvb
+
+    target = _project(tmp_path, {
+        "src/vuln.py": (
+            "def dead(): pass\n"
+            "def alive(): pass\n"
+        ),
+        "src/main.py": (
+            "from src.vuln import alive\nalive()\n"
+        ),
+    })
+    out_dir = tmp_path / "agentic-out"
+    _write_checklist(out_dir, {
+        "src/vuln.py": [
+            {"name": "dead", "kind": "function", "line_start": 1},
+            {"name": "alive", "kind": "function", "line_start": 2},
+        ],
+    })
+
+    in_transform = {"active": False}
+    seen = {"evidence": [], "closure": []}
+
+    real_update = inv_mod.update_checklist
+
+    def tracking_update(output_dir, transform_fn):
+        def wrapped(current):
+            in_transform["active"] = True
+            try:
+                return transform_fn(current)
+            finally:
+                in_transform["active"] = False
+        return real_update(output_dir, wrapped)
+
+    def tracking_collect(*_a, **_k):
+        seen["evidence"].append(in_transform["active"])
+        return {}
+
+    real_closure = reach_mod.reverse_closure
+
+    def tracking_closure(*args, **kwargs):
+        seen["closure"].append(in_transform["active"])
+        return real_closure(*args, **kwargs)
+
+    monkeypatch.setattr(inv_mod, "update_checklist", tracking_update)
+    monkeypatch.setattr(fvb, "collect_runtime_evidence", tracking_collect)
+    monkeypatch.setattr(reach_mod, "reverse_closure", tracking_closure)
+
+    result = run_reachability_prepass(target, out_dir)
+    assert result.ran is True
+
+    assert seen["evidence"], "frida evidence discovery never ran"
+    assert seen["closure"], "reverse-closure walk never ran"
+    assert not any(seen["evidence"]), (
+        "frida evidence discovery ran under the checklist flock")
+    assert not any(seen["closure"]), (
+        "reverse-closure walk ran under the checklist flock")
+
+    # The lock-protected application still lands the enrichment.
+    saved = json.loads((out_dir / "checklist.json").read_text())
+    funcs = {f["name"]: f for f in saved["files"][0]["items"]}
+    assert funcs["alive"].get("caller_count_direct") is not None
+
+
+def test_precomputed_caller_context_matches_lazy_path(tmp_path):
+    """compute_caller_context + apply produces the same fields as the
+    lazy in-place computation (the pre-split behaviour)."""
+    import copy
+
+    from core.orchestration.reachability_enrichment import (
+        compute_caller_context,
+        enrich_with_caller_context,
+    )
+
+    target = _project(tmp_path, {
+        "src/vuln.py": (
+            "def helper(): pass\n"
+            "def alive(): helper()\n"
+        ),
+        "src/main.py": (
+            "from src.vuln import alive\nalive()\n"
+        ),
+    })
+    checklist = {
+        "files": [
+            {"path": "src/vuln.py", "items": [
+                {"name": "helper", "kind": "function", "line_start": 1},
+                {"name": "alive", "kind": "function", "line_start": 2},
+            ]},
+        ],
+    }
+    lazy = copy.deepcopy(checklist)
+    n_lazy = enrich_with_caller_context(lazy, target)
+
+    applied = copy.deepcopy(checklist)
+    computed = compute_caller_context(applied, target)
+    n_applied = enrich_with_caller_context(
+        applied, target, precomputed=computed)
+
+    assert n_lazy == n_applied
+    assert lazy == applied

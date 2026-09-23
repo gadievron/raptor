@@ -861,8 +861,10 @@ def run_reachability_prepass(
             )
 
     try:
-        from core.inventory import update_checklist
+        from core.inventory import read_checklist, update_checklist
         from core.orchestration.reachability_enrichment import (
+            collect_frida_call_edges,
+            compute_caller_context,
             enrich_with_caller_context,
             enrich_with_frida_call_edges,
             enrich_with_frida_traces,
@@ -872,10 +874,39 @@ def run_reachability_prepass(
             from core.analysis.reach_audit import set_joern_server
             set_joern_server(joern_server)
 
-        # All three enrichment passes run inside the accessor's
-        # transform so the read-modify-write happens under the flock
-        # (concurrent writers can't drop each other's markers) and
-        # against the symlink-resolved project checklist.
+        # Heavy discovery runs BEFORE the flock: the events.jsonl
+        # parses + sandboxed addr2line behind the frida evidence maps
+        # and the per-function reverse-closure walk all scale with
+        # target size x run-dir count, and the checklist flock is the
+        # contention point for every writer in the run family — a
+        # concurrent save_checklist must never block behind them. The
+        # caller-context walk uses a snapshot read; functions that
+        # change between snapshot and lock are simply not enriched
+        # (same effect as any pre-existing writer race). The transform
+        # below then does only cheap field application under the
+        # flock, keeping the read-modify-write atomic (concurrent
+        # writers still can't drop each other's markers).
+        search_dirs = [agentic_out_dir, agentic_out_dir.parent]
+        evidence_map: dict = {}
+        try:
+            from core.orchestration.frida_validation_bridge import (
+                collect_runtime_evidence,
+            )
+            evidence_map = collect_runtime_evidence(
+                [Path(d) for d in search_dirs], target_path=str(target),
+            ) or {}
+        except Exception:  # noqa: BLE001 — enrichment is additive
+            logger.debug("frida evidence collection failed", exc_info=True)
+        edge_map: dict = {}
+        try:
+            edge_map = collect_frida_call_edges(
+                search_dirs, str(target)) or {}
+        except Exception:  # noqa: BLE001 — enrichment is additive
+            logger.debug("frida call-edge collection failed", exc_info=True)
+        caller_context = compute_caller_context(
+            read_checklist(agentic_out_dir), target, inventory=inventory,
+        )
+
         state = {"marked": 0, "malformed": False}
 
         def _transform(current: dict[str, Any]) -> dict[str, Any]:
@@ -888,16 +919,17 @@ def run_reachability_prepass(
             )
             enriched_frida = enrich_with_frida_traces(
                 current, target,
-                search_dirs=[agentic_out_dir, agentic_out_dir.parent],
                 inventory=inventory,
+                evidence_map=evidence_map,
             )
             enriched_frida += enrich_with_frida_call_edges(
                 current, target,
-                search_dirs=[agentic_out_dir, agentic_out_dir.parent],
                 inventory=inventory,
+                edge_map=edge_map,
             )
             enriched_caller_ctx = enrich_with_caller_context(
                 current, target, inventory=inventory,
+                precomputed=caller_context,
             )
             if not (state["marked"] or enriched_caller_ctx or enriched_frida):
                 raise _ChecklistWriteSkipped
