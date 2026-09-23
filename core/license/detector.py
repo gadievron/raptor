@@ -592,6 +592,11 @@ def detect_target_license(target_dir: Path) -> TargetLicense:
 # detection allocate forever.
 _INDIRECTION_DEPTH_LIMIT = 2          # root LICENSE → linked → linked-of-linked
 _INDIRECTION_PATH_LIMIT = 8           # cap referenced paths per file
+# Total files read per chain walk. Needed because directory children
+# enqueue at the SAME depth as the reference that named the directory
+# (the dir is enumerated, not classified), so depth alone no longer
+# bounds a hostile chain of alternating dir references — this cap does.
+_INDIRECTION_TOTAL_FILES = 32
 _INDIRECTION_FILE_BYTES = 256 * 1024  # cap per-file read at 256 KB
 
 
@@ -736,10 +741,14 @@ def _follow_license_indirection(
     visited: set = set()
     visited.add(source_file.resolve())
 
+    files_read = 0
     while queue:
         current_file, depth, is_root = queue.pop(0)
         if depth > _INDIRECTION_DEPTH_LIMIT:
             continue
+        if files_read >= _INDIRECTION_TOTAL_FILES:
+            break
+        files_read += 1
 
         # Read the file ONCE — classify_text AND extract refs
         # both consume the same body. Pre-fix this read each
@@ -810,10 +819,13 @@ def _follow_license_indirection(
             # Directory reference: enqueue every license-named
             # file inside it. Same-depth, NOT depth+1 — the dir
             # itself isn't being classified, just enumerated;
-            # each file inside is the same hop as if it had been
-            # referenced directly. Otherwise a real chain like
-            # "LICENSE → see LICENSES/ directory → MIT.txt" hits
-            # the depth limit at the contents step.
+            # following INTO the directory's contents is the one
+            # hop this reference costs, charged when the child is
+            # classified at the enqueue depth. Charging an extra
+            # hop made a chain whose directory reference sits at
+            # the depth boundary ("LICENSE → ... → see LICENSES/
+            # directory → MIT.txt") silently drop the contents
+            # step past the limit.
             #
             # Capped at ``_INDIRECTION_PATH_LIMIT`` children too —
             # otherwise a hostile target with 10k files in
@@ -830,7 +842,7 @@ def _follow_license_indirection(
                         if child.suffix.lower() in (".txt", ".md", ".rst", ".html", ".htm") or "license" in child.name.lower() or "copying" in child.name.lower():
                             if child.resolve() not in visited:
                                 visited.add(child.resolve())
-                                queue.append((child, depth + 1, False))
+                                queue.append((child, depth, False))
                                 enqueued_from_dir += 1
                 except OSError:
                     pass
