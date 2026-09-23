@@ -177,3 +177,37 @@ class TestNormalizeKind:
     def test_rejects_empty(self):
         with pytest.raises(ValueError, match="non-empty"):
             _normalize_kind("")
+
+
+class TestStrictJsonNoNaN:
+    """wrap_model_output promises strict JSON for dict/list content —
+    but json.dumps defaults allow_nan=True, so a float('nan')/inf leaf
+    rendered a literal NaN token that breaks any downstream re-parse
+    of the promised-strict block."""
+
+    def test_nan_leaf_raises_typeerror(self):
+        import math
+        with pytest.raises(TypeError, match="serialize"):
+            wrap_model_output({"score": math.nan}, "model-a", "analysis")
+
+    def test_infinity_leaf_raises_typeerror(self):
+        import math
+        with pytest.raises(TypeError, match="serialize"):
+            wrap_model_output({"score": math.inf}, "model-a", "analysis")
+
+    def test_finite_floats_unaffected(self):
+        block = wrap_model_output({"score": 0.75}, "model-a", "analysis")
+        assert "0.75" in block.content
+
+
+class TestNormalizeKindUnicodeDoc:
+    def test_casefold_expanding_letters_accepted(self):
+        """Unicode letters whose uppercase form lands inside [A-Z_]
+        are accepted (documented behaviour — the output stays
+        tag-safe ASCII either way)."""
+        assert _normalize_kind("straße") == "STRASSE"
+        assert _normalize_kind("ﬁle-check") == "FILE_CHECK"
+
+    def test_nonfolding_unicode_still_rejected(self):
+        with pytest.raises(ValueError):
+            _normalize_kind("目的")
