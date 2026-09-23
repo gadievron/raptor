@@ -162,8 +162,17 @@ _TABLE_MIN_LINES = 200
 _TABLE_MIN_RATIO = 0.5
 
 _NUM = r"(?:0[xX][0-9a-fA-F]+[uUlL]*|-?\d+(?:\.\d+)?[uUlLfF]*|'(?:\\.|[^'\\])')"
+# Every optional tail atom (``{``, ``,``, ``}``-run) gates its OWN
+# trailing whitespace span. The naive spelling
+# ``\s*\{?\s*…\s*,?\s*\}*\s*,?\s*$`` stacks unbounded whitespace
+# spans around optional atoms: on a hostile row that opens like a
+# table line and ends in a long whitespace run with no line end, the
+# engine tries every split of the run between the adjacent spans —
+# worse than quadratic. The match set is unchanged: with an optional
+# atom absent, its folded span collapses into the preceding one.
 _TABLE_LINE_RE = re.compile(
-    rf"^\s*\{{?\s*{_NUM}(?:\s*,\s*{_NUM})*\s*,?\s*\}}*\s*,?\s*$"
+    rf"^\s*(?:\{{\s*)?{_NUM}(?:\s*,\s*{_NUM})*"
+    rf"\s*(?:,\s*)?(?:\}}+\s*)?(?:,\s*)?$"
 )
 _DEFINE_CONST_RE = re.compile(
     r"^\s*#\s*define\s+\w+\s+\(?\s*(?:0[xX][0-9a-fA-F]+|\d+)"
