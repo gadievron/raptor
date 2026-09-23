@@ -32,7 +32,14 @@ AST (constants, module-level constant names, f-string/concat parts)
 and parsed with ``re``'s own parser, so spellings like ``^[\\s#]*``,
 ``(?m)`` inline flags, and branch-embedded anchors like
 ``(?:^|;)\\s*`` are members too, and per-line ``^\\s*`` WITHOUT
-``re.MULTILINE`` (bounded by one line) is not.
+``re.MULTILINE`` (bounded by one line) is not.  Constant resolution
+covers plain, annotated (``_P: str = ...``), and multi-target
+(``_A = _B = ...``) assignments plus bytes patterns (decoded
+latin-1); flag resolution covers the ``re.MULTILINE``/``re.M``
+attributes, module-level flag constants bound to them
+(``_FLAGS = re.MULTILINE``), and bare names bound by ``from re
+import`` — every one of these spellings smuggled a planted member
+past the census before it was resolved.
 
 Allowlisting a member requires a justification string; the only
 acceptable justifications are structural (the pattern is applied
@@ -70,10 +77,13 @@ _RE_FUNCS = {
 }
 
 # Raw-text gate applied before the AST pass: a member REQUIRES
-# re.MULTILINE in effect, which can only arrive two ways — a flag
-# ATTRIBUTE named ``MULTILINE`` or ``M`` at the call site
-# (``_flags_has_multiline`` matches the AST attribute name), or an
-# inline ``(?m…)`` flag group inside the pattern string.  A file whose
+# re.MULTILINE in effect, and every arrival route spells a gate
+# token — a flag ATTRIBUTE named ``MULTILINE`` or ``M`` at the call
+# site or bound to a module flag constant (both spell ``MULTILINE``
+# or the ``.M`` token), an inline ``(?m…)`` flag group inside the
+# pattern string, a bare NAME bound by ``from re import`` (which
+# spells the import statement), or a decimal integer flag literal
+# (the numeric arms below).  A file whose
 # raw text contains none of these spellings cannot produce a member,
 # so the census skips its parse+walk — the whole-tree cost was
 # dominated by files that never set MULTILINE at all (a bare ``\bM\b``
@@ -99,6 +109,7 @@ _MULTILINE_SOURCE_GATE = re.compile(
     r"MULTILINE"          # re.MULTILINE / _rx.MULTILINE
     r"|\.\s*M\b"          # re.M / _rx.M (attribute-shaped token)
     r"|\(\?[a-zA-Z-]*m"   # inline flags: (?m) (?im) (?m:...) ...
+    r"|\bfrom\s+re\s+import\b"  # from re import compile, M, ...
     # Numeric flag literals: ``re.compile(p, 8)`` / ``flags=8`` set
     # MULTILINE with no MULTILINE/M/(?m spelling anywhere in the file,
     # so the gate must admit the decimal-literal shapes (a positional
@@ -133,9 +144,16 @@ def _const_str_parts(node: ast.AST, consts: dict[str, str]) -> str | None:
     is always spelled literally, and dropping the whole pattern for
     one dynamic operand hid real members. A dynamic operand that
     EXPANDS to the idiom stays invisible — spell anchors literally.
+
+    Bytes patterns are decoded latin-1 (lossless byte→codepoint map):
+    ``rb'^\\s*...'`` compiled with MULTILINE re-scans a blank run
+    exactly like its str twin, and the anchor/quantifier prefix under
+    test is ASCII either way.
     """
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
+    if isinstance(node, ast.Constant) and isinstance(node.value, bytes):
+        return node.value.decode("latin-1")
     if isinstance(node, ast.JoinedStr):
         parts: list[str] = []
         for value in node.values:
@@ -156,15 +174,19 @@ def _const_str_parts(node: ast.AST, consts: dict[str, str]) -> str | None:
     return None
 
 
-def _flags_has_multiline(node: ast.AST) -> bool:
-    """Does a flags-position expression set MULTILINE? Two spellings:
-    the attribute (``re.MULTILINE`` / ``re.M``, wherever it sits in a
-    ``|`` expression), and a plain integer literal with the MULTILINE
-    bit set (``re.compile(p, 8)`` — the flag values are stable API).
-    The numeric arm checks the BIT, not equality, so combined numeric
-    flags (``10`` = I|M) count too. Bool is excluded: ``True`` in a
-    flags expression is not a flag spelling, and int-subclass bools
-    would otherwise smuggle bit 0-3 checks."""
+def _flags_has_multiline(
+    node: ast.AST, flag_names: frozenset[str] | set[str] = frozenset(),
+) -> bool:
+    """Does a flags-position expression set MULTILINE? Three
+    spellings: the attribute (``re.MULTILINE`` / ``re.M``, wherever
+    it sits in a ``|`` expression); a plain integer literal with the
+    MULTILINE bit set (``re.compile(p, 8)`` — the flag values are
+    stable API; the numeric arm checks the BIT, not equality, so
+    combined numeric flags (``10`` = I|M) count too, and bool is
+    excluded so ``True`` cannot smuggle bit checks); and bare NAMES
+    known to carry it — module flag constants
+    (``_FLAGS = re.MULTILINE``) and ``from re import`` bindings —
+    which the attribute-only walk silently missed."""
     for sub in ast.walk(node):
         if isinstance(sub, ast.Attribute) and sub.attr in ("MULTILINE", "M"):
             return True
@@ -172,6 +194,8 @@ def _flags_has_multiline(node: ast.AST) -> bool:
                 and isinstance(sub.value, int)
                 and not isinstance(sub.value, bool)
                 and sub.value & re.MULTILINE):
+            return True
+        if isinstance(sub, ast.Name) and sub.id in flag_names:
             return True
     return False
 
@@ -410,54 +434,108 @@ def _scan_file(path: Path) -> list[tuple[tuple[str, str], int]]:
     #  * re_names — names the ``re`` module is bound to in this file,
     #    module-level or function-local ``import re`` / ``import re
     #    as _re``;
-    #  * consts — single-target constant-ish assignments, resolved
-    #    with an empty namespace exactly as before (chained constant
-    #    references stay unresolved by design);
+    #  * from_funcs — bare names bound to ``re`` functions by ``from
+    #    re import compile as _rc``: their call sites are Name-shaped,
+    #    not Attribute-shaped, so the receiver check cannot see them;
+    #  * flag_names — bare names carrying re.MULTILINE: ``from re
+    #    import MULTILINE as _ML`` bindings, closed after the walk
+    #    over module flag constants (``_FLAGS = re.MULTILINE``);
+    #  * consts — constant-ish assignments (plain single- and
+    #    multi-target, and annotated), resolved with an empty
+    #    namespace exactly as before (chained constant references
+    #    stay unresolved by design);
     #  * assign_of — the name each call is assigned to (stable keys);
     #  * calls — candidate ``re``-function call sites, judged against
-    #    the COMPLETE re_names set after the walk (an ``import re``
+    #    the COMPLETE binding sets after the walk (an ``import re``
     #    later in walk order than a call site must still count).
     re_names: set[str] = set()
+    from_funcs: set[str] = set()
+    flag_names: set[str] = set()
+    flag_assigns: list[tuple[list[str], ast.expr]] = []
     consts: dict[str, str] = {}
     assign_of: dict[ast.Call, str] = {}
-    calls: list[tuple[ast.Call, str]] = []
+    attr_calls: list[tuple[ast.Call, str]] = []
+    name_calls: list[tuple[ast.Call, str]] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == "re":
                     re_names.add(alias.asname or "re")
-        elif isinstance(node, ast.Assign) and len(node.targets) == 1 \
-                and isinstance(node.targets[0], ast.Name):
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "re" and not node.level:
+                for alias in node.names:
+                    bound = alias.asname or alias.name
+                    if alias.name in _RE_FUNCS:
+                        from_funcs.add(bound)
+                    elif alias.name in ("MULTILINE", "M"):
+                        flag_names.add(bound)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            if isinstance(node, ast.Assign):
+                targets = [t.id for t in node.targets
+                           if isinstance(t, ast.Name)]
+            else:
+                targets = ([node.target.id]
+                           if isinstance(node.target, ast.Name) else [])
+            if not targets or node.value is None:
+                continue
             if isinstance(node.value, ast.Call):
-                assign_of[node.value] = node.targets[0].id
-            elif isinstance(node.value,
-                            (ast.Constant, ast.JoinedStr, ast.BinOp)):
+                assign_of[node.value] = targets[0]
+                continue
+            if isinstance(node.value,
+                          (ast.Constant, ast.JoinedStr, ast.BinOp)):
                 value = _const_str_parts(node.value, {})
                 if value is not None:
-                    consts[node.targets[0].id] = value
-        elif (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr in _RE_FUNCS
-                and isinstance(node.func.value, ast.Name)
-                and node.args):
-            calls.append((node, node.func.value.id))
+                    for name in targets:
+                        consts[name] = value
+            # Every non-call assignment is a flag-constant candidate
+            # (``_FLAGS = re.MULTILINE`` is an Attribute value;
+            # ``re.M | re.S`` a BinOp) — judged after the walk.
+            flag_assigns.append((targets, node.value))
+        elif isinstance(node, ast.Call) and node.args:
+            if (isinstance(node.func, ast.Attribute)
+                    and node.func.attr in _RE_FUNCS
+                    and isinstance(node.func.value, ast.Name)):
+                attr_calls.append((node, node.func.value.id))
+            elif isinstance(node.func, ast.Name):
+                name_calls.append((node, node.func.id))
+
+    # Close flag_names over module flag constants — iterated so a
+    # flag constant bound to ANOTHER flag constant still resolves
+    # (each pass adds at least one name or stops, so this terminates).
+    changed = True
+    while changed:
+        changed = False
+        for bound_names, flag_expr in flag_assigns:
+            if _flags_has_multiline(flag_expr, flag_names):
+                for name in bound_names:
+                    if name not in flag_names:
+                        flag_names.add(name)
+                        changed = True
 
     members: list[tuple[tuple[str, str], int]] = []
-    for node, receiver in calls:
-        if receiver not in re_names:
-            continue
+
+    def _judge(node: ast.Call) -> None:
         pattern = _const_str_parts(node.args[0], consts)
         if pattern is None:
-            continue
+            return
         flag_nodes = list(node.args[1:]) + [
             kw.value for kw in node.keywords if kw.arg == "flags"
         ]
-        multiline = any(_flags_has_multiline(f) for f in flag_nodes)
+        multiline = any(
+            _flags_has_multiline(f, flag_names) for f in flag_nodes
+        )
         if _pattern_is_member(pattern, multiline):
             members.append(
                 (_census_key(path, pattern, assign_of.get(node)),
                  node.lineno),
             )
+
+    for node, receiver in attr_calls:
+        if receiver in re_names:
+            _judge(node)
+    for node, func_name in name_calls:
+        if func_name in from_funcs:
+            _judge(node)
     return members
 
 
@@ -558,6 +636,28 @@ class RedosIdiomCensus(unittest.TestCase):
              "p = re.compile(r'^\\s*planted', 10)\n", "p"),
             ("import re\n"
              "p = re.compile(r'^\\s*planted', flags=8)\n", "p"),
+            # Annotated constant: the repo's type-annotation practice
+            # steers new pattern constants into exactly this spelling.
+            ("import re\n"
+             "_P: str = r'^\\s*planted'\n"
+             "p = re.compile(_P, re.MULTILINE)\n", "p"),
+            # Multi-target constant assignment.
+            ("import re\n"
+             "_A = _B = r'^\\s*planted'\n"
+             "p = re.compile(_B, re.MULTILINE)\n", "p"),
+            # Name-bound flag constant ("extract shared flags" is a
+            # natural refactor; the raw-text gate passes on the
+            # MULTILINE token, so this miss was silent).
+            ("import re\n"
+             "_FLAGS = re.MULTILINE\n"
+             "p = re.compile(r'^\\s*planted', _FLAGS)\n", "p"),
+            # Bytes pattern (decoded latin-1 for the structural test).
+            ("import re\n"
+             "p = re.compile(rb'^\\s*planted', re.MULTILINE)\n", "p"),
+            # from-import bindings: Name-shaped call site AND a bare
+            # flag name — neither Attribute-shaped spelling appears.
+            ("from re import compile as _rc, MULTILINE as _ML\n"
+             "p = _rc(r'^\\s*planted', _ML)\n", "p"),
         ]
         for source, name in plants:
             with tempfile.NamedTemporaryFile(
