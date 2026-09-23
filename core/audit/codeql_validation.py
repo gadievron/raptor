@@ -391,7 +391,11 @@ _EXIT_STMT_RE = re.compile(
 
 #: Statement-leading label (goto target / case arm). `(?!:)` keeps
 #: C++ scope tokens (`std::x`) from matching.
-_LABEL_RE = re.compile(r"^\s*(?:case\b[^:]*|[A-Za-z_]\w*)\s*:(?!:)")
+#: The case-arm expression is gated to end on non-whitespace
+#: ((?:[^:]*[^:\s])?) so the trailing ``\s*`` owns the whitespace run
+#: alone — ``[^:]*\s*`` overlapped on spaces: quadratic on a
+#: 'case'-opening line ending in a space run with no ':'.
+_LABEL_RE = re.compile(r"^\s*(?:case\b(?:[^:]*[^:\s])?|[A-Za-z_]\w*)\s*:(?!:)")
 
 
 def _exit_only_body(body: str) -> bool:

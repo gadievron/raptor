@@ -172,7 +172,14 @@ TIERS: dict[str, dict] = {
         # follow — the trigger set stays derived from the universe
         # definition, never hand-drifted.
         "test_files": [".github/tests/test_redos_idiom_census.py"],
-        "extra_triggers": ["core", "packages", "engine", "libexec"],
+        "extra_triggers": [
+            "core", "packages", "engine", "libexec",
+            # The census universe also walks the coverage plugin's
+            # launcher and the repo-root entry scripts.
+            "plugins",
+            "raptor.py", "raptor_agentic.py", "raptor_codeql.py",
+            "raptor_fuzzing.py", "raptor_openant.py",
+        ],
         "outside_graph": True,
     },
     "ci_lint": {
