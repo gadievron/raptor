@@ -387,3 +387,66 @@ class TestStandaloneReadIsCapped:
         got = extract_nosemgrep(f, 1)
         assert got is not None and got["suppressed"] is True
         assert calls["n"] == 1
+
+
+class TestLineModelDesync:
+    r"""Suppression lookups speak semgrep's \n line model.
+
+    Semgrep counts \n only; splitlines() also breaks on \f — legal
+    inside a string literal.  The shifted index read a standalone
+    nosemgrep comment TWO physical lines above the finding (which per
+    semgrep's spec suppresses nothing at the finding line: semgrep's
+    own nosem enforcement still reports it) and forged a
+    developer-suppressed annotation for downstream consumers.
+    """
+
+    TARGET = (
+        'S = "a\x0cb"\n'          # 1: form feed inside a string literal
+        "x = input()\n"           # 2
+        "# nosemgrep: x1-eval\n"  # 3: suppresses line 4 only
+        "y = 1\n"                 # 4
+        "z = eval(x)\n"           # 5: the finding (semgrep says line 5)
+    )
+
+    def test_string_literal_form_feed_cannot_forge_suppression(
+        self, tmp_path,
+    ):
+        src = tmp_path / "a.py"
+        src.write_bytes(self.TARGET.encode())
+        assert extract_nosemgrep(src, 5) is None
+
+    def test_the_comment_still_suppresses_its_own_next_line(self, tmp_path):
+        src = tmp_path / "a.py"
+        src.write_bytes(self.TARGET.encode())
+        got = extract_nosemgrep(src, 4)
+        assert got is not None and got["suppressed"] is True
+        assert got["rule_ids"] == ["x1-eval"]
+        assert got["comment_line"] == 3
+
+    def test_annotate_sarif_cache_path_shares_the_model(self, tmp_path):
+        src = tmp_path / "a.py"
+        src.write_bytes(self.TARGET.encode())
+        sarif = {
+            "runs": [{"results": [{
+                "ruleId": "x1-eval",
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": "a.py"},
+                    "region": {"startLine": 5},
+                }}],
+            }]}],
+        }
+        assert annotate_sarif(sarif, tmp_path) == 0
+        props = sarif["runs"][0]["results"][0].get("properties", {})
+        assert "nosemgrep" not in props
+
+    def test_bare_carriage_return_cannot_forge_suppression(self, tmp_path):
+        # Same forgery with the OTHER plantable byte: semgrep keeps a
+        # bare \r inside the line (it is not a line break), so the
+        # eval is its \n-line 4 — the read must not translate the \r
+        # into a break either.
+        src = tmp_path / "a.py"
+        src.write_bytes(
+            b's = "a\rb"\n# nosemgrep: x1-eval\ny = 1\nz = eval(x)\n')
+        assert extract_nosemgrep(src, 4) is None
+        got = extract_nosemgrep(src, 3)
+        assert got is not None and got["comment_line"] == 2

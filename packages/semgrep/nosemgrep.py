@@ -25,7 +25,7 @@ import re
 from pathlib import Path
 
 from core.paths import confine, strip_file_uri
-from core.source import read_text_capped
+from core.source import read_text_capped, split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,10 @@ class _FileCache:
         # Capped read (shared 10 MB default): a pathological
         # generated/planted file yields its truncated prefix instead
         # of loading whole per annotation pass.
-        got = read_text_capped(path)
-        result = None if got is None else got[0].splitlines()
+        got = read_text_capped(path, newline="")
+        # \n-model split: the indexing line numbers are
+        # semgrep's, which count \n only (see extract_nosemgrep).
+        result = None if got is None else split_lines(got[0])
         self._store[path] = result
         return result
 
@@ -93,10 +95,15 @@ def extract_nosemgrep(
         # Same capped read as the annotate_sarif path's _FileCache —
         # the standalone entry point read files unbounded, the
         # uncapped-read shape the shared reader exists to close.
-        got = read_text_capped(file_path)
+        got = read_text_capped(file_path, newline="")
         if got is None:
             return None
-        _lines = got[0].splitlines()
+        # \n-model split (core.source.lines contract): *line* is the
+        # semgrep-reported line number, which counts \n only. A
+        # splitlines() view let one string-literal form feed shift the
+        # index so a standalone nosemgrep comment two physical lines
+        # above the finding forged a developer-suppression annotation.
+        _lines = split_lines(got[0])
 
     for offset in (0, -1):
         idx = line - 1 + offset  # 1-indexed → 0-indexed
