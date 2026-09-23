@@ -19595,6 +19595,7 @@ def _run_tool_chain(
                             )
                         continue
                     _live_errors: list = []
+                    _cov_errors: list = []
                     _live_timeout = _joern_live_timeout_s(
                         config, joern_server,
                     )
@@ -19651,6 +19652,7 @@ def _run_tool_chain(
                         # trip the health gate and the whole joern
                         # lane goes dark for the run.
                         timeout=_live_timeout,
+                        errors_out=_cov_errors,
                     )):
                         _record_joern_outcome(config, error=False)
                         if tier_counters:
@@ -19669,6 +19671,22 @@ def _run_tool_chain(
                             # trip for the channel-health gate, same
                             # as pre-gate silence accounting.
                             _record_joern_outcome(config, error=False)
+                        elif any("timed out" in str(_e)
+                                 for _e in _cov_errors):
+                            # Probe timeout = REPL contention, not
+                            # channel sickness: a stuck/dead channel
+                            # already feeds the gate through the live
+                            # queries' own timeouts. Booking one error
+                            # per probed function here tripped the
+                            # gate off a healthy-but-busy server and
+                            # took the whole joern lane dark for the
+                            # run. The step still skips (no verdict);
+                            # the health gate just doesn't hear it.
+                            logger.debug(
+                                "joern coverage probe timed out for "
+                                "%s:%s — skipping without a health "
+                                "booking", file_path, function_name,
+                            )
                         else:
                             _record_joern_outcome(
                                 config, error=True,
@@ -20886,6 +20904,7 @@ def _proactive_validate(
             else:
                 ran.add("joern")
                 _live_errors: list = []
+                _cov_errors: list = []
                 live_hits = _joern_live_query(
                     joern_server,
                     outcome.function,
@@ -20916,6 +20935,12 @@ def _proactive_validate(
                         _increment_tier_dict(tier_counters, "joern", "errors")
                 elif (_cov := _joern_function_in_cpg(
                     joern_server, outcome.function,
+                    # Same CPG-scaled, deadline-clamped budget as the
+                    # live query this probe gates — mirror of the
+                    # tool-chain leg (the def-time 10s default times
+                    # out on a loaded shared REPL).
+                    timeout=_live_timeout,
+                    errors_out=_cov_errors,
                 )):
                     _record_joern_outcome(config, error=False)
                     if tier_counters:
@@ -20932,6 +20957,20 @@ def _proactive_validate(
                     if _cov is False:
                         # The probe ANSWERED — a healthy round trip.
                         _record_joern_outcome(config, error=False)
+                    elif any("timed out" in str(_e)
+                             for _e in _cov_errors):
+                        # Probe timeout = REPL contention, not channel
+                        # sickness — same carve-out as the tool-chain
+                        # leg: a stuck channel already feeds the gate
+                        # through the live queries' own timeouts, and
+                        # booking one error per probed function here
+                        # would trip the gate off a healthy-but-busy
+                        # server through THIS leg too.
+                        logger.debug(
+                            "cwe-dispatch coverage probe timed out "
+                            "for %s:%s — skipping without a health "
+                            "booking", outcome.file, outcome.function,
+                        )
                     else:
                         _record_joern_outcome(
                             config, error=True,

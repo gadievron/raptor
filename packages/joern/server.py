@@ -1470,8 +1470,20 @@ class JoernServer:
         timeout: int | None = None,
         validate: bool = True,
         check_length: bool = True,
+        no_restart: bool = False,
     ) -> JoernResult:
-        """Execute a CPGQL query and return parsed results."""
+        """Execute a CPGQL query and return parsed results.
+
+        ``no_restart``: opt out of the timeout-triggered ``restart()``
+        below. For cheap SIDE-CHANNEL queries (coverage probes): the
+        restart ladder is the stuck-REPL recovery mechanism, and only
+        queries whose timeout actually evidences a stuck REPL should
+        wield it — a short probe queued behind a sibling's
+        minutes-long taint query times out on a HEALTHY server, and
+        restarting then SIGKILLs the shared JVM, destroys the
+        sibling's in-flight evidence, and pays a boot + CPG re-import
+        for nothing.
+        """
         if timeout is None:
             timeout = self._query_timeout_s
 
@@ -1513,7 +1525,7 @@ class JoernServer:
             # A timeout means the single-threaded REPL is stuck on this
             # query (or a prior one).  Restart so subsequent queries
             # don't queue behind the stuck one indefinitely.
-            if "timed out" in detail:
+            if "timed out" in detail and not no_restart:
                 self.restart()
             return JoernResult(
                 query=cpgql,

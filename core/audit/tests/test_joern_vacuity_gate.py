@@ -51,13 +51,16 @@ class _Server:
     def __init__(self, covers: bool | None):
         self._covers = covers
         self.queries: list[str] = []
+        self.no_restart_flags: list[bool] = []
 
     def run_taint_queries_batch(self, pairs, timeout=0, errors_out=None,
                                 **kwargs):
         return []
 
     def query(self, query: str, timeout: int = 0,
-              check_length: bool = False) -> _QueryResult:
+              check_length: bool = False,
+              no_restart: bool = False) -> _QueryResult:
+        self.no_restart_flags.append(no_restart)
         self.queries.append(query)
         if self._covers is None:
             raise RuntimeError("transport lost")
@@ -407,7 +410,8 @@ class TestCoverageProbeAnchoring:
             self.queries: list[str] = []
 
         def query(self, query: str, timeout: int = 0,
-                  check_length: bool = False) -> _QueryResult:
+                  check_length: bool = False,
+                  no_restart: bool = False) -> _QueryResult:
             self.queries.append(query)
             last = query.strip().rsplit("\n", 1)[-1]
             nonce = last.split('"')[1]  # '<nonce>:'
@@ -555,10 +559,12 @@ class TestCoverageProbeTimeout:
             self.timeouts: list[int] = []
 
         def query(self, query: str, timeout: int = 0,
-                  check_length: bool = False) -> _QueryResult:
+                  check_length: bool = False,
+                  no_restart: bool = False) -> _QueryResult:
             self.timeouts.append(timeout)
             return super().query(query, timeout=timeout,
-                                 check_length=check_length)
+                                 check_length=check_length,
+                                 no_restart=no_restart)
 
     def test_probe_timeout_matches_live_query_budget(self, tmp_path):
         from core.audit.orchestrator import _joern_live_timeout_s
@@ -578,3 +584,196 @@ class TestCoverageProbeTimeout:
         # run_taint_queries_batch, not query()).
         assert srv.timeouts
         assert srv.timeouts[-1] == expected
+
+
+class TestProbeRestartDecoupling:
+    """The probe must never wield query()'s timeout-triggered restart,
+    and a probe TIMEOUT must not book a channel error into the shared
+    health gate.
+
+    Both halves of the same coupling: the REPL is single-threaded and
+    shared across sweep threads, live taint timeouts are scaled to
+    minutes, so a short probe queued behind a sibling's taint query
+    times out on a HEALTHY server. Pre-fix that timeout (a) dispatched
+    restart() — SIGKILL ladder, JVM boot, CPG re-import, the sibling's
+    in-flight evidence destroyed — and (b) booked one health-gate
+    error per probed function, tripping the gate (8 distinct keys) and
+    taking the whole joern lane dark for the run.
+    """
+
+    class _TimeoutServer(_Server):
+        """Silent taint batches; every probe post times out."""
+
+        def __init__(self) -> None:
+            super().__init__(covers=True)
+
+        def query(self, query: str, timeout: int = 0,
+                  check_length: bool = False,
+                  no_restart: bool = False) -> object:
+            self.no_restart_flags.append(no_restart)
+            self.queries.append(query)
+            from packages.joern.models import JoernResult
+            return JoernResult(
+                query=query,
+                errors=[f"query timed out after {timeout}s"],
+            )
+
+    class _StrictLegacyServer:
+        """No no_restart seam, no **kwargs — the fallback target."""
+
+        def __init__(self) -> None:
+            self.queries: list[str] = []
+
+        def query(self, query: str, timeout: int = 0,
+                  check_length: bool = False) -> _QueryResult:
+            self.queries.append(query)
+            last = query.strip().rsplit("\n", 1)[-1]
+            nonce = last.split('"')[1]
+            return _QueryResult(f'res0: String = "{nonce}true"')
+
+    def test_probe_posts_with_no_restart(self):
+        srv = _Server(covers=True)
+        assert joern_function_in_cpg(srv, "f") is True
+        assert srv.no_restart_flags == [True]
+
+    def test_probe_falls_back_without_the_seam(self):
+        # A duck-typed server without the seam still answers — the
+        # probe re-posts plainly (read-only, idempotent).
+        srv = self._StrictLegacyServer()
+        assert joern_function_in_cpg(srv, "f") is True
+        assert len(srv.queries) == 1
+
+    def test_probe_timeout_reported_via_errors_out(self):
+        srv = self._TimeoutServer()
+        errors: list = []
+        assert joern_function_in_cpg(srv, "f", errors_out=errors) is None
+        assert any("timed out" in str(e) for e in errors)
+
+    def test_timeout_none_is_not_memoised(self):
+        # With no_restart a probe timeout no longer bumps the load
+        # epoch via a restart — memoising it would let ONE contention
+        # timeout silence this function's lane until a reload that
+        # may never come. Contention clears on its own: re-ask.
+        srv = self._TimeoutServer()
+        setattr(srv, _FN_COVERAGE_CACHE_ATTR, {})
+        assert joern_function_in_cpg(srv, "f") is None
+        assert getattr(srv, _FN_COVERAGE_CACHE_ATTR) == {}
+        assert joern_function_in_cpg(srv, "f") is None
+        assert len(srv.queries) == 2  # re-asked, not replayed
+
+    def test_transport_dead_none_stays_memoised(self):
+        # The carve-out must not widen: a non-timeout unanswerable
+        # transport does not heal within one load — still memoised.
+        srv = _Server(covers=None)
+        setattr(srv, _FN_COVERAGE_CACHE_ATTR, {})
+        assert joern_function_in_cpg(srv, "f") is None
+        assert joern_function_in_cpg(srv, "f") is None
+        assert len(srv.queries) == 1
+
+    def _run_proactive(self, tmp_path, server):
+        from core.audit.orchestrator import (
+            ReviewOutcome,
+            _proactive_validate,
+        )
+        cfg = _Cfg(tmp_path)
+        cfg.joern_health = _Health()
+        _write_tree(tmp_path)
+        tiers = {"joern": TierCounters(), "smt": TierCounters(),
+                 "codeql": TierCounters(), "semgrep": TierCounters()}
+        outcome = ReviewOutcome(
+            file="src/a.c", function="f", status="suspicious",
+            body="looks off",
+            hypothesis="attacker data reaches system()", line=3,
+        )
+        outcome.review_result = {
+            "cwe": "CWE-78", "mechanism": "command injection",
+        }
+        result = _proactive_validate(
+            outcome, cfg, tier_counters=tiers, joern_server=server,
+        )
+        return cfg, tiers["joern"], result
+
+    def test_proactive_probe_timeout_skips_without_health_error(
+            self, tmp_path):
+        # The CWE-dispatch verification leg is the SECOND probe
+        # booking site — the timeout carve-out must cover it too, or
+        # the health-gate poisoning returns through this leg.
+        srv = self._TimeoutServer()
+        cfg, tc, result = self._run_proactive(tmp_path, srv)
+        assert tc.refuted == 0
+        assert tc.skipped == 1
+        assert "joern" not in (result.tools_dispatched or set())
+        assert cfg.joern_health.errors == []
+        assert cfg.joern_health.successes == 0
+
+    def test_proactive_unparseable_still_books_channel_error(
+            self, tmp_path):
+        # Carve-out must not widen on this leg either.
+        cfg, tc, _result = self._run_proactive(
+            tmp_path, _Server(covers=None),
+        )
+        assert tc.skipped == 1
+        assert cfg.joern_health.errors == ["coverage probe unanswerable"]
+
+    def test_proactive_probe_rides_the_live_budget(self, tmp_path):
+        # Mirror of the tool-chain leg's timeout inheritance: the
+        # def-time 10s default times out on a loaded shared REPL.
+        from core.audit.orchestrator import _joern_live_timeout_s
+
+        class _Recorder(_Server):
+            def __init__(self) -> None:
+                super().__init__(covers=True)
+                self.timeouts: list[int] = []
+
+            def query(self, query: str, timeout: int = 0,
+                      check_length: bool = False,
+                      no_restart: bool = False) -> _QueryResult:
+                self.timeouts.append(timeout)
+                return super().query(query, timeout=timeout,
+                                     check_length=check_length,
+                                     no_restart=no_restart)
+
+        srv = _Recorder()
+        cfg, _tc, _result = self._run_proactive(tmp_path, srv)
+        expected = _joern_live_timeout_s(cfg, srv)
+        assert expected > 0
+        assert srv.timeouts
+        assert srv.timeouts[-1] == expected
+
+    def test_probe_timeout_skips_without_health_error(self, tmp_path):
+        cfg = _Cfg(tmp_path)
+        cfg.joern_health = _Health()
+        _write_tree(tmp_path)
+        tiers = {"joern": TierCounters()}
+        skipped: set = set()
+        _run_tool_chain(
+            [{"type": "joern", "config": {"sinks": ["memcpy"]}}],
+            config=cfg, file_path="src/a.c", function_name="f",
+            source="int f(void){}", hypothesis="taint reaches memcpy",
+            line_start=1, tier_counters=tiers,
+            joern_server=self._TimeoutServer(), skipped_types=skipped,
+        )
+        # Still a skip (no verdict, out of the dispatch record)...
+        assert tiers["joern"].refuted == 0
+        assert tiers["joern"].skipped == 1
+        assert "joern" in skipped
+        # ...but the health gate hears NOTHING: contention is not
+        # channel sickness (a stuck channel feeds the gate through the
+        # live queries' own timeouts).
+        assert cfg.joern_health.errors == []
+        assert cfg.joern_health.successes == 0
+
+    def test_unparseable_echo_still_books_channel_error(self, tmp_path):
+        # The timeout carve-out must not widen: a non-timeout
+        # unanswerable probe keeps booking the channel error.
+        cfg = _Cfg(tmp_path)
+        cfg.joern_health = _Health()
+        _write_tree(tmp_path)
+        _run_tool_chain(
+            [{"type": "joern", "config": {"sinks": ["memcpy"]}}],
+            config=cfg, file_path="src/a.c", function_name="f",
+            source="int f(void){}", hypothesis="taint reaches memcpy",
+            line_start=1, tier_counters={"joern": TierCounters()},
+            joern_server=_Server(covers=None), skipped_types=set(),
+        )
+        assert cfg.joern_health.errors == ["coverage probe unanswerable"]
