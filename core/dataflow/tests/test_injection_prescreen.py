@@ -120,7 +120,10 @@ def _write_app(tmp_path, body: str, name: str = "app.py"):
 class TestSinkClassMapping:
     @pytest.mark.parametrize("rule_id,expected", [
         ("py/path-injection", {"pathtrav"}),
-        ("py/command-line-injection", {"cmdi"}),
+        # command-LINE-injection families flag argv-element sinks too,
+        # so the argv-context danger model joins the shell model.
+        ("py/command-line-injection", {"cmdi", "cmdi_argv"}),
+        ("py/command-injection", {"cmdi"}),
         ("js/xss", {"xss"}),
         ("js/reflected-xss", {"xss"}),
         ("java/sql-injection", {"sqli"}),
@@ -194,9 +197,12 @@ class TestGuardFormRefutation:
     def test_fullmatch_refutes_cmdi(self, tmp_path):
         # fullmatch has no trailing-newline quirk, so a charset
         # excluding every cmdi danger char may refute a cmdi finding.
+        # Dotted, dash-free: the command-line-injection rule family
+        # also puts the argv-context model in play, and '-' is an argv
+        # danger char (option injection).
         app = GUARD_APP.replace(
             "re.match(r'^[A-Za-z0-9_+-]+$', name)",
-            "re.fullmatch(r'[A-Za-z0-9_+-]+', name)",
+            "re.fullmatch(r'[A-Za-z0-9_.]+', name)",
         ).replace("os.path.join('/etc/app', name)", "'ls ' + name")
         repo = _write_app(tmp_path, app)
         verdict = prescreen_finding(
@@ -734,7 +740,8 @@ class TestNestedScopeRebindKill:
             "\n"
             "def handler(request):\n"
             "    y = request.args.get('name')\n"
-            "    if not re.fullmatch(r'[A-Za-z0-9_+-]+', y):\n"
+            # Dash-free: the rule family puts the argv model in play.
+            "    if not re.fullmatch(r'[A-Za-z0-9_.]+', y):\n"
             "        return None\n"
             "    def helper():\n"
             "        y = 'local-only'\n"
@@ -833,3 +840,52 @@ class TestBalancedPhantomPairE2E:
             rule_id="js/command-line-injection", cwe="CWE-78",
         )
         assert verdict is None
+class TestArgvContextDangerModel:
+    """Argument-position command sinks (CWE-88 / *-command-line-
+    injection rules): a charset admitting space/dash/quote blocks none
+    of the argv attack characters, so it must never refute such a
+    finding — even though it excludes every shell metachar."""
+
+    ARGV_JAVA = (
+        "class R {\n"
+        "  void run(String x) throws Exception {\n"
+        '    if (!x.matches("[A-Za-z0-9 ._\'-]+")) return;\n'  # line 3
+        '    new ProcessBuilder("tool", x).start();\n'          # line 4
+        "  }\n"
+        "}\n"
+    )
+    CLEAN_JAVA = (
+        "class R {\n"
+        "  void run(String x) throws Exception {\n"
+        '    if (!x.matches("[A-Za-z0-9_.]+")) return;\n'       # line 3
+        '    new ProcessBuilder("tool", x).start();\n'          # line 4
+        "  }\n"
+        "}\n"
+    )
+
+    def test_rule_and_cwe_put_argv_class_in_play(self):
+        classes = sink_classes_for_rule(
+            "java/command-line-injection", "CWE-88",
+        )
+        assert "cmdi_argv" in classes
+        assert "cmdi_argv" in sink_classes_for_rule(
+            "js/command-line-injection",
+        )
+
+    def test_space_dash_quote_charset_yields_no_signal(self, tmp_path):
+        (tmp_path / "R.java").write_text(self.ARGV_JAVA)
+        verdict = prescreen_finding(
+            paths=[_path("R.java", 2, [3], 4)], repo_root=tmp_path,
+            rule_id="java/command-line-injection", cwe="CWE-88",
+        )
+        assert verdict is None
+
+    def test_argv_clean_charset_still_refutes(self, tmp_path):
+        """Two-direction control: a charset clean of BOTH the shell
+        and the argv danger sets keeps refuting."""
+        (tmp_path / "R.java").write_text(self.CLEAN_JAVA)
+        verdict = prescreen_finding(
+            paths=[_path("R.java", 2, [3], 4)], repo_root=tmp_path,
+            rule_id="java/command-line-injection", cwe="CWE-88",
+        )
+        assert verdict is not None and verdict.refuted is True

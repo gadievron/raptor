@@ -162,7 +162,12 @@ _TABLE: tuple[KnownSafeCall, ...] = (
             "shlex.quote returns a shell-escaped string safe to "
             "interpolate into a shell command (single-quoted, with "
             "embedded single quotes escaped).  Sound for shell=True "
-            "subprocess invocations."
+            "subprocess invocations ONLY — quoting does not neutralize "
+            "argument-position injection (CWE-88): a quoted value used "
+            "as one argv element still parses as an option "
+            "(quote('-rf') == '-rf'), so this entry belongs to the "
+            "cmdi (shell-string) sink class and must never be "
+            "catalogued for the argv-context class (cmdi_argv)."
         ),
     ),
     # ------------------------------------------------------------------

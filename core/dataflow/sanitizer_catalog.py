@@ -121,7 +121,18 @@ _CWE_TO_SINK_CLASSES: Mapping[str, frozenset] = {
     # OS command / shell injection
     "CWE-77": frozenset({"cmdi"}),
     "CWE-78": frozenset({"cmdi"}),
-    "CWE-88": frozenset({"cmdi"}),
+    # Argument injection: the attack channel is the argv POSITION
+    # (option injection, tokenizer splits, re-join quoting), which the
+    # shell-quoting sanitizers catalogued under ``cmdi`` do not
+    # neutralize (``shlex.quote("-rf")`` is still ``-rf``).  Mapping
+    # CWE-88 to ``cmdi`` selected exactly those sanitizers — and the
+    # ``cmdi`` danger model (shell metachars only) proved charsets
+    # SOUND against none of the argv attack characters.  ``cmdi_argv``
+    # carries the argv-context danger model (a superset of ``cmdi``,
+    # see ``smt_barrier._DANGER_CHARS``) and no catalogue entries, so
+    # sanitizer lookups for CWE-88 abstain instead of endorsing
+    # shell-context quoting.
+    "CWE-88": frozenset({"cmdi_argv"}),
     # Path traversal family
     "CWE-22": frozenset({"pathtrav"}),
     "CWE-23": frozenset({"pathtrav"}),
