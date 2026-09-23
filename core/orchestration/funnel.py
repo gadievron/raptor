@@ -91,12 +91,20 @@ def bucket_orchestration_results(results: list[dict]) -> dict[str, Any]:
         "inconsistent_findings": [],
     }
     for r in results:
+        # LLM-shape drift defense, whole-row edition: a non-dict row
+        # (bare string error, stray scalar) is skipped, never crashes
+        # the bucketing — this module exists to absorb exactly that
+        # drift, and everything below assumes a mapping (`"error" in
+        # r` raised TypeError on an int row, `.get` AttributeError on
+        # a str row).
+        if not isinstance(r, dict):
+            continue
         # Status-aware short-circuits for the categorical buckets.
         # ``status`` (when set) is authoritative; ``derive_status``
         # is the pre-#19 fallback. Skipped findings don't contribute
         # to ANY verdict bucket — they're tracked separately by
         # callers that care.
-        explicit_status = r.get("status") if isinstance(r, dict) else None
+        explicit_status = r.get("status")
         status = explicit_status or derive_status(r)
 
         if status == ERROR or "error" in r:
