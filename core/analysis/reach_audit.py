@@ -420,23 +420,36 @@ def audit_corpus(
         with tempfile.TemporaryDirectory() as td:
             inventory = build_inventory(target_dir, td)
 
-    # Index items by (rel_path, name) → line, for label lookup.
-    line_of: dict[tuple[str, str], int] = {}
+    # Index items by (rel_path, name) → EVERY line, for label lookup.
+    # Same-name items in one file (overloads, #if/#else branches,
+    # nested defs) each keep their line — measuring only the
+    # last-seen variant's line scored a duplicated name at an
+    # arbitrary variant.
+    lines_of: dict[tuple[str, str], list[int]] = {}
     for f in inventory.get("files", []):
         if not isinstance(f, dict):
             continue
         rel = f.get("path") or ""
         for it in f.get("items", []):
             if isinstance(it, dict) and it.get("kind", "function") == "function":
-                line_of[(rel, it.get("name") or "")] = int(
-                    it.get("line_start") or 0)
+                lines_of.setdefault(
+                    (rel, it.get("name") or ""), [],
+                ).append(int(it.get("line_start") or 0))
 
     report = AuditReport()
     for (rel, name), label in labels.items():
         module = path_to_module(rel)
         if not module:
+            # No module derivable from the path (extension-less
+            # scripts, exotic layouts) — an extraction/derivation
+            # gap, NOT a reachability verdict. Silently skipping
+            # shrank the total, the coverage AND the false-suppress
+            # denominators without trace, refuting the "bucketed
+            # separately so it can't masquerade" promise.
+            report.not_found += 1
+            report.not_found_detail.append((rel, name))
             continue
-        if (rel, name) not in line_of:
+        if (rel, name) not in lines_of:
             # The labelled function isn't in the inventory at all — an
             # extraction gap, not a reachability verdict. Bucket it
             # separately so it can't masquerade as a false-suppress (which
@@ -444,8 +457,24 @@ def audit_corpus(
             report.not_found += 1
             report.not_found_detail.append((rel, name))
             continue
-        line = line_of[(rel, name)]
-        verdict = classify_reachability(inventory, rel, name, line, module)
+        # Classify EVERY same-name variant and score the worst
+        # verdict for the label: a live-labelled row false-suppresses
+        # if ANY variant classifies dead; a dead-labelled row is
+        # caught only when EVERY variant classifies dead.
+        verdicts = [
+            classify_reachability(inventory, rel, name, line, module)
+            for line in lines_of[(rel, name)]
+        ]
+        dead_flags = [v in _DEAD_VERDICTS for v in verdicts]
+        if label == "dead":
+            # Worst for a dead label = a live-reading variant.
+            worst_idx = (
+                dead_flags.index(False) if not all(dead_flags) else 0
+            )
+        else:
+            # Worst for a live label = a dead-reading variant.
+            worst_idx = dead_flags.index(True) if any(dead_flags) else 0
+        verdict = verdicts[worst_idx]
         report.total += 1
         report.per_verdict[verdict] = report.per_verdict.get(verdict, 0) + 1
         is_dead = verdict in _DEAD_VERDICTS
