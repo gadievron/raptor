@@ -102,6 +102,54 @@ class TestImportFlowTracesStamps(unittest.TestCase):
                              "understand-bridge")
 
 
+class TestImportGraphAttackPathsStamps(unittest.TestCase):
+    """The graph importer writes TWO artifacts (graph-priority-paths
+    and the attack-paths merge) — both must go through the same
+    sanitise+stamp chokepoint its flow-trace sibling uses."""
+
+    _FAKE_PATHS = [{
+        "id": "GP-1",
+        "entry": {"id": "EP-1", "label": "main"},
+        "sink": {"id": "SINK-1", "label": "exec"},
+        "steps": [],
+        "unchecked": True,
+        "confidence": "candidate",
+        "evidence": {},
+        "missing_boundary": "no boundary recorded",
+    }]
+
+    def _run_import(self, validate_dir):
+        import copy
+        from unittest.mock import patch
+
+        import core.understand_graph as ug
+        with patch.object(
+            ug, "attack_paths",
+            lambda *a, **k: copy.deepcopy(self._FAKE_PATHS),
+        ):
+            return ub._import_graph_attack_paths(
+                validate_dir / "g.sqlite", "/target", validate_dir,
+            )
+
+    def test_graph_priority_paths_stamped_per_element(self):
+        with TemporaryDirectory() as tmp:
+            validate_dir = Path(tmp)
+            stats = self._run_import(validate_dir)
+            self.assertEqual(stats["imported_as_paths"], 1)
+            gpp = load_json(validate_dir / "graph-priority-paths.json")
+            self.assertIsInstance(gpp, list)
+            self.assertTrue(gpp[0]["provenance"]["untrusted"])
+
+    def test_merged_attack_paths_stamped_per_element(self):
+        with TemporaryDirectory() as tmp:
+            validate_dir = Path(tmp)
+            self._run_import(validate_dir)
+            paths = load_json(validate_dir / "attack-paths.json")
+            self.assertIsInstance(paths, list)
+            self.assertEqual(paths[0]["id"], "GP-1")
+            self.assertTrue(paths[0]["provenance"]["untrusted"])
+
+
 class TestLoadUnderstandContextSurfacesProvenance(unittest.TestCase):
 
     def test_summary_carries_context_map_provenance(self):

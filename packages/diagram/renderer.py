@@ -348,7 +348,8 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                 msg = "failed to parse JSON"
                 raise ValueError(msg)
             diagram = edge_obligations.generate(data)
-            body = ("_Source: `edge-obligations.json`_\n\n"
+            body = (f"_Source: `edge-obligations.json`_"
+                    f"{_provenance_note(data)}\n\n"
                     f"```mermaid\n{_fence(diagram)}\n```")
             sections.append(_section(
                 "Edge Obligations (tier-1 solid, tier-2 dashed)", body))
@@ -440,11 +441,19 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
             if data is None:
                 msg = "failed to parse JSON"
                 raise ValueError(msg)
+            # Provenance from the artifact as loaded (bare stamped
+            # list, or a stamped dict envelope) — computed before the
+            # unwrap discards the envelope, and re-checked on the
+            # payload when the envelope itself carries no stamp.
+            prov_note = _provenance_note(data)
             if isinstance(data, dict):
                 data = data.get("paths") or data.get("graph_paths") or data.get("items") or []
+                if not prov_note:
+                    prov_note = _provenance_note(data)
             if isinstance(data, list):
                 diagram = graph_memory.generate_priority_paths(data)
-                body = f"_Source: `graph-priority-paths.json`_\n\n```mermaid\n{_fence(diagram)}\n```"
+                body = (f"_Source: `graph-priority-paths.json`_{prov_note}"
+                        f"\n\n```mermaid\n{_fence(diagram)}\n```")
                 sections.append(_section("Graph Priority Paths", body))
         except Exception as exc:  # noqa: BLE001
             sections.append(_section("Graph Priority Paths", f"> Could not render `graph-priority-paths.json`: {_err(exc)}"))
@@ -478,7 +487,8 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
                 raise ValueError(msg)
             if isinstance(data, dict):
                 diagram = graph_memory.generate_diff(data)
-                body = f"_Source: `{diff_name}`_\n\n```mermaid\n{_fence(diagram)}\n```"
+                body = (f"_Source: `{diff_name}`_{_provenance_note(data)}"
+                        f"\n\n```mermaid\n{_fence(diagram)}\n```")
                 sections.append(_section("Graph Snapshot Diff", body))
         except Exception as exc:  # noqa: BLE001
             sections.append(_section("Graph Snapshot Diff", f"> Could not render `{diff_name}`: {_err(exc)}"))
