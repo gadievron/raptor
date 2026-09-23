@@ -274,25 +274,30 @@ ORDERING_RULES: list[_OrderingRule] = [
 # indicates potential double-encoding bypass: an intermediate security check
 # saw the still-encoded form while the final consumer sees the decoded form.
 
+# Keyword-pair gaps are bounded ({0,200}): an unbounded `.*` gap
+# makes every occurrence of the first keyword re-scan the rest of the
+# scanned text for the second — quadratic on hostile-shaped text.
+# Real decode/encode spellings keep the pair within one identifier or
+# short phrase; beyond the bound the class simply does not attach.
 _DOUBLE_ENCODE_CLASSES: list[tuple[str, re.Pattern[str]]] = [
     ("url_decode", re.compile(
-        r"url.*decode|unquote|percent.*decode|decodeURI|"
-        r"urllib.*unquote|url\.QueryUnescape|url\.PathUnescape",
+        r"url.{0,200}decode|unquote|percent.{0,200}decode|decodeURI|"
+        r"urllib.{0,200}unquote|url\.QueryUnescape|url\.PathUnescape",
         re.IGNORECASE,
     )),
     ("html_decode", re.compile(
-        r"html.*(?:unescape|decode|entity)|unescape.*html|"
-        r"(?:decode|parse).*entit|html_entity_decode|he\.decode",
+        r"html.{0,200}(?:unescape|decode|entity)|unescape.{0,200}html|"
+        r"(?:decode|parse).{0,200}entit|html_entity_decode|he\.decode",
         re.IGNORECASE,
     )),
     ("base64_decode", re.compile(
-        r"base64.*decode|b64decode|atob|Base64\.decode",
+        r"base64.{0,200}decode|b64decode|atob|Base64\.decode",
         re.IGNORECASE,
     )),
     ("url_encode", re.compile(
-        r"url.*encode|urllib.*quote|percent.*encode|encodeURI|"
-        r"url\.QueryEscape|url\.PathEscape|"
-        r"(?:percent|url|uri|path).*quote|quote_plus",
+        r"url.{0,200}encode|urllib.{0,200}quote|percent.{0,200}encode|"
+        r"encodeURI|url\.QueryEscape|url\.PathEscape|"
+        r"(?:percent|url|uri|path).{0,200}quote|quote_plus",
         re.IGNORECASE,
     )),
 ]
