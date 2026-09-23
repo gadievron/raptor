@@ -313,3 +313,52 @@ def test_raptor_config_files_are_not_manifest_candidates() -> None:
     assert _LICENSE_POLICY_FILENAME in RAPTOR_CONFIG_FILENAMES
     for name in RAPTOR_CONFIG_FILENAMES:
         assert _is_k8s_manifest(Path("repo") / name) is False, name
+
+
+def test_trusted_run_honours_in_tree_symlinked_overlay(
+    tmp_path: Path,
+) -> None:
+    """Monorepo layouts symlink shared config inside the tree; on a
+    TRUSTED run an overlay symlink whose target stays inside the scan
+    root is honoured (same scan-root containment discipline the
+    manifest readers use). Out-of-tree targets stay refused."""
+    target = _build_target(tmp_path)
+    (target / "shared").mkdir()
+    (target / "shared" / "suppress.yml").write_text("""
+version: 1
+suppressions:
+  - advisory_id: CVE-2099-FAKE
+    reason: accepted risk — shared monorepo overlay
+""", encoding="utf-8")
+    (target / ".raptor-sca-suppress.yml").symlink_to(
+        target / "shared" / "suppress.yml")
+    out = tmp_path / "out"
+    cache = JsonCache(root=tmp_path / "cache")
+    result = run_sca(target, out,
+                     RunOptions(enable_llm_review=False,
+                                enable_triage=False,
+                                trust_repo=True),
+                     http=StubHttp(), cache=cache)
+    assert result.suppressed_findings == 1
+
+
+def test_trusted_run_still_refuses_out_of_tree_symlinked_overlay(
+    tmp_path: Path,
+) -> None:
+    outside = tmp_path / "outside.yml"
+    outside.write_text("""
+version: 1
+suppressions:
+  - advisory_id: CVE-2099-FAKE
+    reason: operator file reached through the symlink
+""", encoding="utf-8")
+    target = _build_target(tmp_path)
+    (target / ".raptor-sca-suppress.yml").symlink_to(outside)
+    out = tmp_path / "out"
+    cache = JsonCache(root=tmp_path / "cache")
+    result = run_sca(target, out,
+                     RunOptions(enable_llm_review=False,
+                                enable_triage=False,
+                                trust_repo=True),
+                     http=StubHttp(), cache=cache)
+    assert result.suppressed_findings == 0

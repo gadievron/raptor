@@ -719,9 +719,12 @@ def _common_ancestor(paths: Sequence[Path]) -> Path | None:
     root: sizing the batch sandbox cwd to ``/`` would grant the
     resolver session filesystem-wide reads. ``None`` makes the batch
     resolvers take their documented sequential per-dir fallback
-    (each sandboxed to its own manifest dir) instead."""
+    (each sandboxed to its own manifest dir) instead. The
+    single-input shortcut returns that input itself (matching the
+    sequential per-manifest path) and gets the same root refusal."""
     if len(paths) == 1:
-        return paths[0]
+        only = paths[0].resolve()
+        return None if only == Path(only.anchor or "/") else paths[0]
     parts_lists = [p.resolve().parts for p in paths]
     shortest = min(len(pl) for pl in parts_lists)
     common: list[str] = []
