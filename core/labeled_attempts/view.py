@@ -478,6 +478,17 @@ def from_barrier_synthesis(
 # doesn't fit the LabeledAttempt shapes (source 3 in collect_outcomes).
 VERIFIED_OUTCOMES_FILENAME = "verified-outcomes.jsonl"
 
+# Byte budgets for reading one run-local trail. The trail sits in the
+# sandbox-writable run dir and collect_outcomes multiplies the read
+# across EVERY project sibling run dir, reachable from prompt
+# assembly — an unbudgeted read materialised hundreds of MB of
+# outcome objects per planted trail. Real rows are ~1 KiB; 16 MiB
+# per trail / 64 KiB per line are generous ceilings, and over-budget
+# trails degrade to empty per load_jsonl's contract (a warning, no
+# buffering).
+_MAX_OUTCOMES_TRAIL_BYTES = 16 * 1024 * 1024
+_MAX_OUTCOMES_LINE_BYTES = 64 * 1024
+
 
 def collect_outcomes(
     output_dir: Path | None,
@@ -581,7 +592,11 @@ def collect_outcomes(
 
     for run_dir in _verified_outcome_dirs(output_dir, project_root):
         path = run_dir / VERIFIED_OUTCOMES_FILENAME
-        for rec in load_jsonl(path):
+        for rec in load_jsonl(
+            path,
+            max_total_bytes=_MAX_OUTCOMES_TRAIL_BYTES,
+            max_line_bytes=_MAX_OUTCOMES_LINE_BYTES,
+        ):
             if not isinstance(rec, dict):
                 continue
             try:
