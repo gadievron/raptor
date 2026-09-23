@@ -817,8 +817,25 @@ def test_compose_allows_all_devices_with_env(tmp_path: Path, monkeypatch: Any) -
     assert web.get("devices") == ["/dev/foo:/dev/foo"]
 
 
-def test_compose_allows_all_devices_with_param(tmp_path: Path) -> None:
-    """allow_devices=True passes all devices through."""
+def test_compose_param_alone_does_not_grant_devices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """allow_devices=True is a model-settable REQUEST; without the
+    operator env the dangerous mapping is still stripped — untrusted
+    content must not buy a containment relaxation on its own."""
+    monkeypatch.delenv("CVE_ENV_ALLOW_DEVICES", raising=False)
+    web = _rewrite_and_reload(
+        tmp_path,
+        {"image": "x", "devices": ["/dev/foo:/dev/foo"]},
+        allow_devices=True,
+    )
+    assert not web.get("devices")
+
+
+def test_compose_param_plus_operator_env_grants_devices(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CVE_ENV_ALLOW_DEVICES", "1")
     web = _rewrite_and_reload(
         tmp_path,
         {"image": "x", "devices": ["/dev/foo:/dev/foo"]},

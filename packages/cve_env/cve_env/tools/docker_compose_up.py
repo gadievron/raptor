@@ -76,11 +76,18 @@ def _lifecycle_labels(cve_id: str) -> dict[str, str]:
 
 
 def _allow_all_devices(allow_devices: bool) -> bool:
-    """Tool parameter OR the ``CVE_ENV_ALLOW_DEVICES=1`` operator env."""
-    return (
-        allow_devices
-        or os.environ.get("CVE_ENV_ALLOW_DEVICES", "").strip() == "1"
-    )
+    """Device retention requires the ``CVE_ENV_ALLOW_DEVICES=1``
+    OPERATOR env — the tool parameter alone never suffices.
+
+    The parameter is model-settable and a compose file comes from the
+    scanned target: honouring the arg alone let untrusted content buy a
+    containment relaxation (host device nodes mapped into the
+    container) with no operator in the loop. A refused request gets a
+    tool-result hint naming the env so the operator can grant it for
+    genuine hardware/driver CVEs.
+    """
+    del allow_devices  # request only; consent lives in the operator env
+    return os.environ.get("CVE_ENV_ALLOW_DEVICES", "").strip() == "1"
 
 
 def project_name_for(cve_id: str) -> str:
@@ -193,6 +200,13 @@ def docker_compose_up_payload(
             "cve_id": cve_id,
         }
 
+    # Device-retention consent: the arg is a request; only the operator
+    # env grants it. Computed here so the refusal note reaches the
+    # agent in the tool result.
+    devices_requested_not_granted = bool(allow_devices) and not (
+        _allow_all_devices(allow_devices)
+    )
+
     # Idempotency guard: if the agent re-calls with the same cve_id,
     # tear down the previous stack first so ports don't collide.
     if cve_id in _ACTIVE_STACKS:
@@ -277,9 +291,20 @@ def docker_compose_up_payload(
     for c in containers:
         record_session_container(c.container_id)
 
+    result_note = {}
+    if devices_requested_not_granted:
+        result_note["devices_note"] = (
+            "allow_devices=True was requested but device retention "
+            "requires the operator to set CVE_ENV_ALLOW_DEVICES=1 — "
+            "dangerous device mappings were stripped for this launch. "
+            "If the CVE genuinely needs device nodes, report that to "
+            "the operator instead of retrying."
+        )
+
     return {
         "ok": True,
         "cve_id": cve_id,
+        **result_note,
         "project_name": project,
         "compose_file": str(rewritten),
         "primary_container_id": primary.container_id,

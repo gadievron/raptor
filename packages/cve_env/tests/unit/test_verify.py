@@ -1911,3 +1911,49 @@ def test_endpoint_run_ports_counts_any_bind_address() -> None:
             )
     finally:
         reset_failed_attempts()
+
+
+@patch("cve_env.tools.verify._endpoint_run_ports", return_value=None)
+def test_verify_refuses_endpoint_when_port_enumeration_failed(
+    _mock_ports: Any,
+) -> None:
+    """None = docker ps failed. The old empty-set collapse meant a
+    docker-CLI hiccup allowed an agent-authored plan to aim http/tcp
+    probes at ANY loopback port (the operator's local services). The
+    gate must refuse with a retryable reason instead."""
+    out = verify(
+        container_id="a" * 64,
+        host_ip="127.0.0.1",
+        host_port=631,
+        plan=[
+            {"type": "container_status"},
+            {"type": "http_check", "path": "/"},
+        ],
+    )
+    assert out["passed"] is False
+    assert "could not enumerate" in out["reason"]
+    assert out["results"] == []
+
+
+def test_enumerate_run_ports_distinguishes_failure_from_none_published() -> None:
+    """docker-ps failure returns None (endpoint gate refuses); a clean
+    empty answer returns the empty set (loopback-only rule applies);
+    the loopback allowlist view still coerces failure to the empty set
+    — its restrictive direction."""
+    from types import SimpleNamespace
+
+    from cve_env.tools import verify as verify_mod
+    from cve_env.tools.docker_run import reset_failed_attempts
+
+    reset_failed_attempts()
+    ours = "a" * 64
+    failed = SimpleNamespace(returncode=1, timed_out=False, stderr="x", stdout="")
+    empty = SimpleNamespace(returncode=0, timed_out=False, stderr="", stdout="")
+    try:
+        with patch("cve_env.utils.run.run_with_timeout", return_value=failed):
+            assert verify_mod._endpoint_run_ports(ours) is None
+            assert verify_mod._published_run_ports(ours) == frozenset()
+        with patch("cve_env.utils.run.run_with_timeout", return_value=empty):
+            assert verify_mod._endpoint_run_ports(ours) == frozenset()
+    finally:
+        reset_failed_attempts()

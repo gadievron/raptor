@@ -871,7 +871,7 @@ ALL_TOOLS: list[ToolDef] = [
                 },
                 "allow_devices": {
                     "type": "boolean",
-                    "description": "pass True for hardware/driver CVEs that need device node access. Default False: only safe pseudo-devices (/dev/null, /dev/urandom, etc.) are kept; dangerous mappings are stripped"
+                    "description": "REQUEST device node access for hardware/driver CVEs. Granted only when the operator has set CVE_ENV_ALLOW_DEVICES=1; otherwise dangerous mappings are stripped and the result carries a devices_note. Default False: only safe pseudo-devices (/dev/null, /dev/urandom, etc.) are kept"
                 }
             },
             "required": [
