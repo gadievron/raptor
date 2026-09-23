@@ -4108,6 +4108,32 @@ def run_sandboxed(
             # inside the loop; once it has exited, drain what is
             # readable for a BOUNDED window and stop — and never call
             # an exited-0 target a timeout.
+            #
+            # List-accumulate + join, not `bytes +=`: CPython bytes
+            # has no in-place resize, so each append near the capture
+            # cap costs a full-buffer memcpy — quadratic in total,
+            # and the byte PACING is attacker-chosen (fill fast to
+            # near-cap, then dribble 1-byte writes; each wakes
+            # select() and forced tens of milliseconds of
+            # trusted-parent copy work, total bounded only by
+            # cap²/chunk). Same idiom as the audit lane's
+            # _drain_pipes_until_eof. `_materialize` folds the
+            # pending chunks into stdout_buf/stderr_buf at every loop
+            # exit (including the in-loop TimeoutExpired raises and
+            # the finally, so no path observes a stale buffer).
+            stdout_chunks: list[bytes] = []
+            stderr_chunks: list[bytes] = []
+            out_len = err_len = 0
+
+            def _materialize() -> None:
+                nonlocal stdout_buf, stderr_buf
+                if stdout_chunks:
+                    stdout_buf += b"".join(stdout_chunks)
+                    stdout_chunks.clear()
+                if stderr_chunks:
+                    stderr_buf += b"".join(stderr_chunks)
+                    stderr_chunks.clear()
+
             drain_deadline = None
             try:
                 while fds:
@@ -4145,6 +4171,7 @@ def run_sandboxed(
                         # and only the (still-alive) watcher can
                         # reach it by pid.
                         _teardown_target(child_pid, death_w, _parent_fds)
+                        _materialize()
                         out_str = stdout_buf.decode("utf-8", errors="replace") if text else stdout_buf
                         err_str = stderr_buf.decode("utf-8", errors="replace") if text else stderr_buf
                         raise subprocess.TimeoutExpired(
@@ -4170,15 +4197,18 @@ def run_sandboxed(
                             _parent_fds.discard(fd)
                             fds.remove(fd)
                         elif fd == out_r:
-                            if len(stdout_buf) < _capture_cap:
-                                stdout_buf += chunk
+                            if out_len < _capture_cap:
+                                stdout_chunks.append(chunk)
+                                out_len += len(chunk)
                             else:
                                 _truncated[1] = True
                         else:
-                            if len(stderr_buf) < _capture_cap:
-                                stderr_buf += chunk
+                            if err_len < _capture_cap:
+                                stderr_chunks.append(chunk)
+                                err_len += len(chunk)
                             else:
                                 _truncated[2] = True
+                _materialize()
                 if _truncated[1]:
                     stdout_buf += (
                         b"\n[sandbox: stdout capture truncated "
@@ -4190,6 +4220,10 @@ def run_sandboxed(
                         b"at %d bytes]\n" % _capture_cap
                     )
             finally:
+                # Fold pending chunks on EVERY exit path (the normal
+                # exit above already did; this covers exceptions) so
+                # no later reader sees a stale buffer.
+                _materialize()
                 # Close any pipes we didn't drain (timeout, exception).
                 for fd in fds:
                     try:
