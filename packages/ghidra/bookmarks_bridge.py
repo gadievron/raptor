@@ -296,9 +296,13 @@ def _resolve_function(addr, addr_to_func, db) -> str:
     if addr in addr_to_func:
         return addr_to_func[addr]
 
-    for f in db.functions:
-        if f.size > 0 and f.address <= addr < f.address + f.size:
-            return f.name
+    # Indexed containment lookup: the per-bookmark linear scan this
+    # replaces was O(bookmarks x functions) against a hostile-sized
+    # cache — the model grew the bisect index because this exact class
+    # bit twice before (xref resolution, decomp_tree).
+    f = db.function_containing_address(addr)
+    if f is not None:
+        return f.name
 
     return "sub_%x" % addr
 
