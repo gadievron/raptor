@@ -99,6 +99,16 @@ _RULE_SINK_CLASS_PATTERNS: list[tuple] = [
         r"command[-_]?(?:line[-_]?)?injection|os[-_]?command"
         r"|shell[-_]?injection|unsafe[-_]?shell[-_]?command",
         _re.IGNORECASE), "cmdi"),
+    # The command-LINE-injection rule families (CodeQL java/js/py)
+    # flag argv-element sinks (Runtime.exec / ProcessBuilder /
+    # execFile) — the argv-context danger model must be in play for
+    # them ON TOP of the shell model: a charset admitting space/dash/
+    # quotes blocks none of the argv attack characters even when it
+    # excludes every shell metachar. Both classes join the in-play
+    # set; refutation requires the proof to clear the union.
+    (_re.compile(
+        r"command[-_]?line[-_]?injection|argument[-_]?injection",
+        _re.IGNORECASE), "cmdi_argv"),
     (_re.compile(r"sql[-_]?injection|\bsqli\b", _re.IGNORECASE), "sqli"),
     (_re.compile(
         r"\bxss\b|cross[-_]?site[-_]?scripting", _re.IGNORECASE), "xss"),

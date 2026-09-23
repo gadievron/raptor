@@ -1636,6 +1636,14 @@ def test_try_tier0_z3_unavailable_degrades(monkeypatch, tmp_path: Path):
     ("cmdi",     "A-Za-z0-9_.-",  True),   # excludes shell metachars
     ("pathtrav", "A-Za-z0-9_./",  False),  # permits '/'
     ("cmdi",     "A-Za-z0-9; ",   False),  # permits ';'
+    # argv-context: shell-clean charsets that admit argv attack chars
+    # (dash = option injection, space = tokenizer split, quotes =
+    # re-join breakout) must NOT prove sound for cmdi_argv.
+    ("cmdi_argv", "A-Za-z0-9 ._'-", False),  # the fix-common shape
+    ("cmdi_argv", "A-Za-z0-9_-",    False),  # dash alone breaks it
+    ("cmdi_argv", "A-Za-z0-9_ ",    False),  # space alone breaks it
+    ("cmdi_argv", 'A-Za-z0-9_"',    False),  # quote alone breaks it
+    ("cmdi_argv", "A-Za-z0-9_.",    True),   # clean of both contexts
 ])
 def test_prove_table_per_sink_class(sink_class, charset, expect_sound):
     spec = sb.ValidatorSpec("charset", "x", charset, "+...", 0)

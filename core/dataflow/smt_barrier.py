@@ -98,10 +98,32 @@ _DANGER_CHARS = {
     # Shell metachars that introduce command separation, substitution,
     # backgrounding, or redirection.  Newlines included because they
     # terminate a command in most shell contexts; '<' / '>' because
-    # redirects need no separator (``foo>x`` clobbers x).  Residual
-    # known gap: option injection (a leading '-') is argument-position
-    # dependent and out of scope for a charset model.
+    # redirects need no separator (``foo>x`` clobbers x).  This class
+    # covers the SHELL-string context only; findings whose sink is an
+    # argv element (CWE-88, the command-LINE-injection rule families)
+    # are routed to ``cmdi_argv`` below — shell metachars cover none
+    # of that channel.
     "cmdi":     [";", "|", "&", "$", "`", "\n", "<", ">"],
+    # Argument-position command sinks (Runtime.exec / ProcessBuilder /
+    # execFile argv elements — CWE-88 and the ``*-command-line-
+    # injection`` rule families).  Derived per context, superset of
+    # ``cmdi``:
+    #   * '-' — option injection (``-rf``, ``--upload-file x``).  The
+    #     charset model cannot see string position, so ANY dash must
+    #     count, not just a leading one.
+    #   * whitespace (space/tab/CR/LF) — tokenizing sinks split one
+    #     value into several argv elements (``Runtime.exec(String)``
+    #     tokenizes on whitespace; wrapper relaunches re-split).
+    #   * quote chars — platforms that re-JOIN argv into a command
+    #     line and re-parse it (Windows CreateProcess) let a quote
+    #     break out of the element.
+    #   * the full ``cmdi`` shell set rides along because the model
+    #     cannot see whether the argv element later reaches a shell
+    #     (``ProcessBuilder("sh", "-c", x)``, cmd.exe wrappers) —
+    #     excluding them only when provably shell-free would need
+    #     command-target knowledge a charset has no access to.
+    "cmdi_argv": [";", "|", "&", "$", "`", "\n", "<", ">",
+                  " ", "\t", "\r", "-", "'", '"'],
     # SQL quote / comment / statement-terminator chars PLUS the chars
     # that suffice in an UNQUOTED (numeric) context, where no quote is
     # needed to change the query: whitespace and grouping/comparison
@@ -1480,6 +1502,7 @@ _SINK_CLASS_TO_CWE = {
     "xss": "CWE-79",
     "sqli": "CWE-89",
     "cmdi": "CWE-78",
+    "cmdi_argv": "CWE-88",
     "pathtrav": "CWE-22",
 }
 

@@ -65,11 +65,18 @@ def test_no_cwe_maps_to_unknown_sink_class():
     """Conversely: every CWE mapping should resolve to a sink class
     that actually has catalog entries. A CWE that maps to nothing
     causes Phase 7 to falsely report 'no sanitizers possible'
-    instead of warning that the mapping is dead."""
+    instead of warning that the mapping is dead.
+
+    ``cmdi_argv`` is deliberately entry-free: for argument-position
+    injection "no sanitizers possible" is the TRUE state (quoting does
+    not stop option injection), so CWE-88's mapping to it is honest,
+    not dead. Any other entry-free class needs the same rationale
+    before joining the allowance."""
     from core.dataflow.sanitizer_catalog import _CWE_TO_SINK_CLASSES
+    deliberately_entry_free = {"cmdi_argv"}
     real_sink_classes = {e.sink_class for e in all_entries()}
     for cwe, sinks in _CWE_TO_SINK_CLASSES.items():
-        unknown = sinks - real_sink_classes
+        unknown = sinks - real_sink_classes - deliberately_entry_free
         assert not unknown, (
             f"{cwe} maps to sink classes with no catalog entries: {unknown}"
         )
@@ -317,3 +324,35 @@ def test_recognizer_ignores_wrong_language_on_callgraph(tmp_path):
     # Querying with language="java" should not match the python entry.
     matched = match_sanitizers_in_cfg(graph, "CWE-79", "java")
     assert matched == frozenset()
+
+
+class TestArgvContextMapping:
+    """CWE-88 (argument injection) must not select shell-context
+    sanitizers: quoting does not stop option injection in argv
+    position."""
+
+    def test_cwe88_maps_to_argv_class_only(self):
+        from core.dataflow.sanitizer_catalog import sink_classes_for_cwe
+        assert sink_classes_for_cwe("CWE-88") == frozenset({"cmdi_argv"})
+
+    def test_cwe88_selects_no_shell_quoting_sanitizers(self):
+        from core.dataflow.sanitizer_catalog import (
+            sanitizer_callables_for_cwe,
+        )
+        assert "shlex.quote" not in sanitizer_callables_for_cwe(
+            "CWE-88", "python",
+        )
+        # ... while the shell-string CWE keeps its entry.
+        assert "shlex.quote" in sanitizer_callables_for_cwe(
+            "CWE-78", "python",
+        )
+
+    def test_argv_danger_model_is_superset_of_shell_model(self):
+        """The argv context cannot rule out a downstream shell join,
+        so its danger set must contain the whole shell set plus the
+        argv-specific characters."""
+        from core.dataflow.smt_barrier import danger_chars_for
+        cmdi = set(danger_chars_for("cmdi"))
+        argv = set(danger_chars_for("cmdi_argv"))
+        assert cmdi < argv
+        assert {"-", " ", "\t", "'", '"'} <= argv
