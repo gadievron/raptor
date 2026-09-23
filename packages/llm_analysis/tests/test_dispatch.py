@@ -1104,6 +1104,42 @@ class TestJudgeTask:
         assert "SQL injection via user input" in prompt
         assert "is_exploitable=True" in prompt
 
+    def test_prompt_shows_earliest_snapshot_as_primary_verdict(self):
+        # A cross-family conservative override ran before the judge:
+        # the critique premise must be the analyst's OWN conclusion
+        # (the earliest snapshot), never the override — otherwise the
+        # judge critiques "is_exploitable=True" above reasoning that
+        # argues not-exploitable, and its "agreed" stamp mints
+        # corroboration for a verdict no analyst produced.
+        results_by_id = {
+            "f-001": {
+                "is_exploitable": True,  # cross-family override
+                "pre_crossfamily_is_exploitable": False,
+                "cross_family_disputed": True,
+                "ruling": "false_positive",
+                "reasoning": "sink is unreachable behind constant guard",
+            }
+        }
+        task = JudgeTask(results_by_id=results_by_id)
+        prompt = task.build_prompt(_make_finding("f-001"))
+        assert "is_exploitable=False" in prompt
+
+    def test_prompt_prefers_crossfamily_over_consensus_snapshot(self):
+        # Both stages snapshotted: the cross-family one is earlier in
+        # the pipeline and is the analyst's own verdict.
+        results_by_id = {
+            "f-001": {
+                "is_exploitable": True,
+                "pre_crossfamily_is_exploitable": False,
+                "pre_consensus_is_exploitable": True,
+                "ruling": "false_positive",
+                "reasoning": "r",
+            }
+        }
+        task = JudgeTask(results_by_id=results_by_id)
+        prompt = task.build_prompt(_make_finding("f-001"))
+        assert "is_exploitable=False" in prompt
+
 
 class TestAggregationTask:
     def test_gets_aggregate_models(self):

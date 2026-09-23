@@ -502,6 +502,81 @@ class TestCrossFamilyCheckTaskAdjudication:
         assert check["intended_model"] == "claude-haiku-4-5-20251001"
 
 
+class TestCrossFamilyOverrideSnapshot:
+    """The conservative override must never erase the analyst's own
+    verdict: downstream stages (consensus tally + stamp, the judge's
+    critique prompt, the pre_consensus audit snapshot) read
+    ``is_exploitable`` as "the primary's vote" — pre-fix the override
+    wrote over it with the CHECKER's opinion and the original vote
+    survived nowhere on the record (mechanism sibling of the landed
+    pre-consensus snapshot fix, one stage earlier)."""
+
+    def test_dispute_snapshots_primary_verdict(self):
+        prior = {"F-001": _result("F-001", exploitable=False, quality=0.5)}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": True,
+             "ruling": "validated",
+             "analysed_by": "claude-haiku-4-5-20251001"},
+        ]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+
+        assert prior["F-001"]["is_exploitable"] is True  # override stands
+        assert prior["F-001"]["pre_crossfamily_is_exploitable"] is False
+
+    def test_check_record_carries_primary_vote_both_arms(self):
+        # Dispute arm.
+        prior = {"F-001": _result("F-001", exploitable=False, quality=0.5)}
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(
+            [{"finding_id": "F-001", "is_exploitable": True,
+              "ruling": "validated",
+              "analysed_by": "claude-haiku-4-5-20251001"}],
+            prior,
+        )
+        assert prior["F-001"]["cross_family_check"][
+            "primary_exploitable"] is False
+        # Agreed arm.
+        prior2 = {"F-002": _result("F-002", exploitable=True, quality=0.5)}
+        task2 = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior2)
+        task2.finalize(
+            [{"finding_id": "F-002", "is_exploitable": True,
+              "ruling": "validated",
+              "analysed_by": "claude-haiku-4-5-20251001"}],
+            prior2,
+        )
+        assert prior2["F-002"]["cross_family_check"][
+            "primary_exploitable"] is True
+
+    def test_snapshot_never_overwritten(self):
+        # Idempotence: a second adjudication pass (or a re-run over a
+        # record the override already touched) must not re-snapshot
+        # the OVERRIDDEN value as the analyst's own.
+        prior = {"F-001": _result("F-001", exploitable=False, quality=0.5)}
+        checker_results = [
+            {"finding_id": "F-001", "is_exploitable": True,
+             "ruling": "validated",
+             "analysed_by": "claude-haiku-4-5-20251001"},
+        ]
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(checker_results, prior)
+        task.finalize(checker_results, prior)  # second pass sees True
+        assert prior["F-001"]["pre_crossfamily_is_exploitable"] is False
+
+    def test_agreed_arm_writes_no_snapshot(self):
+        # No override happened — the raw field still IS the analyst's
+        # verdict; a snapshot here would freeze a redundant copy.
+        prior = {"F-001": _result("F-001", exploitable=True, quality=0.5)}
+        task = CrossFamilyCheckTask(ANTHROPIC_CHECKER, results_by_id=prior)
+        task.finalize(
+            [{"finding_id": "F-001", "is_exploitable": True,
+              "ruling": "validated",
+              "analysed_by": "claude-haiku-4-5-20251001"}],
+            prior,
+        )
+        assert "pre_crossfamily_is_exploitable" not in prior["F-001"]
+
+
 # ---------------------------------------------------------------------------
 # _resolve_cross_family_checker / auto-detect
 # ---------------------------------------------------------------------------

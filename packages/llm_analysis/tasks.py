@@ -422,6 +422,38 @@ class PatchTask(DispatchTask):
             return None
 
 
+# Override-stage snapshots of the primary analyst's own
+# ``is_exploitable`` conclusion, EARLIEST first. Two pipeline stages
+# mutate the field in place — the cross-family conservative override
+# (CrossFamilyCheckTask.finalize) and the consensus majority
+# (ConsensusTask.finalize) — and each snapshots the pre-override value
+# once, idempotently, before writing. Any consumer that renders or
+# tallies "the primary's vote" must read the earliest snapshot
+# present: reading the raw field one stage downstream re-creates the
+# structurally-impossible-critique defect (a judge shown an override
+# as the analyst's own conclusion, minting "agreed" corroboration for
+# a verdict no analyst produced) one hop later.
+_PRIMARY_SNAPSHOT_KEYS: tuple[str, ...] = (
+    "pre_crossfamily_is_exploitable",
+    "pre_consensus_is_exploitable",
+)
+
+
+def primary_verdict_snapshot(primary: dict) -> bool | None:
+    """The primary analyst's own tri-state ``is_exploitable`` verdict.
+
+    Earliest override-stage snapshot when one exists, else the
+    current field through ``read_verdict`` (tri-state: only a genuine
+    bool is a vote). Snapshot values are RAPTOR-written tri-states;
+    a non-bool snapshot reads as abstention, same as ``read_verdict``.
+    """
+    for key in _PRIMARY_SNAPSHOT_KEYS:
+        if key in primary:
+            value = primary[key]
+            return value if isinstance(value, bool) else None
+    return read_verdict(primary, "is_exploitable")
+
+
 class ConsensusTask(DispatchTask):
     """Independent second opinion from consensus models."""
 
@@ -510,10 +542,15 @@ class ConsensusTask(DispatchTask):
                 if not consensus_analyses:
                     continue
 
-                # Tri-state snapshot (read_verdict): an abstained
-                # primary is recorded as None, not fabricated into an
-                # explicit False the analyst never produced.
-                primary_exploitable = read_verdict(primary, "is_exploitable")
+                # Tri-state read of the analyst's OWN verdict: the
+                # earliest override-stage snapshot when the
+                # cross-family conservative override already mutated
+                # the raw field (reading the raw field tallied the
+                # CHECKER's opinion as "the primary's vote" and froze
+                # it into the pre-consensus audit snapshot), else
+                # read_verdict — an abstained primary is recorded as
+                # None, not fabricated into an explicit False.
+                primary_exploitable = primary_verdict_snapshot(primary)
                 # Shared abstention-aware tally (see correlation.py):
                 # missing/null is_exploitable — an errored / refused /
                 # schema-failed model — is an abstention, never a
@@ -690,16 +727,16 @@ class JudgeTask(DispatchTask):
         fid = finding.get("finding_id")
         primary = self.results_by_id.get(fid, {})
         primary_reasoning = (primary.get("reasoning") or "")[:2000]
-        # Use pre-consensus verdict if ConsensusTask ran first
-        # and stored it. Pre-fix `primary.get("is_exploitable")`
-        # showed the post-consensus value to the judge, making it
-        # structurally impossible for the judge to critique the
-        # primary analyst's ORIGINAL conclusion on any finding
-        # consensus had touched.
-        primary_verdict = (
-            primary["pre_consensus_is_exploitable"]
-            if "pre_consensus_is_exploitable" in primary
-            else read_verdict(primary, "is_exploitable")
+        # The EARLIEST override-stage snapshot (cross-family, then
+        # consensus), else the raw field. Pre-fix
+        # `primary.get("is_exploitable")` showed the post-consensus
+        # value to the judge, making it structurally impossible for
+        # the judge to critique the primary analyst's ORIGINAL
+        # conclusion on any finding consensus had touched — and the
+        # pre-consensus-only read recreated the same defect one stage
+        # earlier for cross-family-overridden findings.
+        primary_verdict: bool | None | str = primary_verdict_snapshot(
+            primary,
         )
         if primary_verdict is None:
             # Abstained primary (schema-nulled verdict or a None
@@ -759,9 +796,14 @@ class JudgeTask(DispatchTask):
                 if not judge_analyses:
                     continue
 
-                # Tri-state snapshot (read_verdict) — same
-                # no-fabrication rule as the consensus stage above.
-                primary_exploitable = read_verdict(primary, "is_exploitable")
+                # Tri-state read of the analyst's OWN verdict — same
+                # earliest-snapshot rule as the consensus stage above
+                # (the raw field here carries the consensus/cross-
+                # family override; feeding it as "the primary's vote"
+                # double-counts the earlier panel's opinion in this
+                # tally and mislabels agreed/disputed) — and the same
+                # no-fabrication rule (junk is not a vote).
+                primary_exploitable = primary_verdict_snapshot(primary)
                 # Shared abstention-aware tally (see correlation.py):
                 # missing/null is_exploitable is an abstention, never
                 # a "not exploitable" vote — pre-fix a schema-failed
@@ -1441,6 +1483,11 @@ class CrossFamilyCheckTask(AnalysisTask):
             check_record = {
                 "checker_model": actual_model,
                 "checker_exploitable": checker_exploitable,
+                # The analyst's own vote, on the record in BOTH arms:
+                # pre-fix the record stored only the checker's side,
+                # so after the conservative override the primary's
+                # original conclusion survived nowhere.
+                "primary_exploitable": primary_exploitable,
                 "checker_ruling": r.get("ruling"),
                 "trigger": trigger,
             }
@@ -1478,6 +1525,17 @@ class CrossFamilyCheckTask(AnalysisTask):
                 check_record["reasoning_distance"] = distance
 
             if primary_exploitable != checker_exploitable:
+                # Snapshot the analyst's own verdict BEFORE the
+                # conservative override, idempotently — same shape as
+                # the pre-consensus snapshot one stage downstream.
+                # Consumers (ConsensusTask tally + stamp, JudgeTask's
+                # critique prompt) prefer the earliest snapshot via
+                # primary_verdict_snapshot; without it they read the
+                # override as the analyst's own conclusion.
+                if "pre_crossfamily_is_exploitable" not in prior_results[fid]:
+                    prior_results[fid]["pre_crossfamily_is_exploitable"] = (
+                        primary_exploitable
+                    )
                 prior_results[fid]["is_exploitable"] = True
                 prior_results[fid]["cross_family_disputed"] = True
                 check_record["verdict"] = "disputed — conservative override"

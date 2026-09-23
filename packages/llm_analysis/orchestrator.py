@@ -216,15 +216,23 @@ def _snapshot_verdicts(
     Error records are excluded entirely (their verdict fields are
     never trusted).
     """
+    from .tasks import primary_verdict_snapshot
+
     out: dict[str, bool | None] = {}
     for fid, r in results_by_id.items():
         if isinstance(r, dict) and "error" not in r:
-            # Tri-state read: a junk shape snapshots as None too —
+            # Tri-state read of the analyst's OWN verdict: the
+            # earliest override-stage snapshot when the cross-family
+            # conservative override already mutated the field (this
+            # helper runs AFTER that stage — reading the raw field
+            # attributed the override to the primary analyst in the
+            # JUDGE_REVIEW / SELF_CONSISTENCY ledgers), else
+            # read_verdict — a junk shape snapshots as None too:
             # bool()-coercing it wrote a fabricated primary vote
             # into the ledgers (a phantom voter that could break a
             # genuine judge tie and mint a "correct" outcome for a
             # vote never cast).
-            out[fid] = read_verdict(r, "is_exploitable")
+            out[fid] = primary_verdict_snapshot(r)
     return out
 
 
