@@ -96,6 +96,22 @@ NEW = "new"
 # surface permanently unverified while review/status say clean.
 UNBASELINED = "unbaselined"
 
+# Cap on the live-capture read. The capture is SERVER-EMITTED text —
+# the hostile party in this module's own threat model — and the
+# review runs on an operator consent surface; an uncapped read
+# buffered a multi-hundred-MB capture whole. Real boot payloads are
+# a few KB; 8 MiB is generous headroom, and an over-budget capture
+# refuses loudly (exit 3) rather than reviewing a truncated payload.
+_MAX_CAPTURE_CHARS = 8 * 1024 * 1024
+
+# Cap on the text fed to difflib per variant. SequenceMatcher is
+# quadratic on diverse-codepoint content that defeats its autojunk
+# (measured minutes for single-MB hostile variants), and the closest-
+# variant selection plus the rendered diff both walk server-emitted
+# text. Prefixes are compared instead; a truncation marker joins the
+# rendered diff so the operator knows the tail was not reviewed here.
+_MAX_DIFF_CHARS = 100_000
+
 
 def _load_guard():
     """Import the enforcement shim as a module.
@@ -354,9 +370,14 @@ def compare(guard, auth: dict | None, live: dict) -> dict:
 def _closest(text: str, candidates: list[str]) -> str:
     if not candidates:
         return ""
+    # Prefix compare (_MAX_DIFF_CHARS): SequenceMatcher over full
+    # server-emitted variants is the quadratic lever — the prefix is
+    # plenty to pick the closest recorded variant for display.
+    probe = text[:_MAX_DIFF_CHARS]
     return max(
         candidates,
-        key=lambda c: difflib.SequenceMatcher(None, c, text).ratio(),
+        key=lambda c: difflib.SequenceMatcher(
+            None, c[:_MAX_DIFF_CHARS], probe).ratio(),
     )
 
 
@@ -403,12 +424,19 @@ def _print_compare(guard, auth: dict | None, report: dict) -> None:
                     guard._variant_objects(auth, json_surface)
                 ]
                 auth_txt = _closest(live_txt, recorded)
+            truncated = (len(live_txt) > _MAX_DIFF_CHARS
+                         or len(auth_txt) > _MAX_DIFF_CHARS)
             diff = difflib.unified_diff(
-                auth_txt.splitlines(), live_txt.splitlines(),
+                auth_txt[:_MAX_DIFF_CHARS].splitlines(),
+                live_txt[:_MAX_DIFF_CHARS].splitlines(),
                 "authorized", "live", lineterm="",
             )
             for line in diff:
                 print(f"    {_line(line)}")
+            if truncated:
+                print(f"    [diff truncated at {_MAX_DIFF_CHARS} "
+                      "characters — oversized variant; the full text "
+                      "was NOT reviewed here]")
 
 
 def _print_summary(report: dict) -> None:
@@ -623,7 +651,17 @@ def main(argv: list[str]) -> int:
         # the capture must not become a line break before the \n-only
         # section scanner runs; see _nl_lines).
         with open(args.live, encoding="utf-8", newline="") as fh:
-            live = parse_sections(fh.read())
+            raw = fh.read(_MAX_CAPTURE_CHARS + 1)
+            if len(raw) > _MAX_CAPTURE_CHARS:
+                # Server-emitted capture past any legitimate payload
+                # size: refuse loudly rather than review a truncated
+                # (or memory-detonating) capture.
+                print(
+                    "boot_payload_review: live capture exceeds "
+                    f"{_MAX_CAPTURE_CHARS} characters — refusing to "
+                    "review it", file=sys.stderr)
+                return 3
+            live = parse_sections(raw)
     except OSError as exc:
         print(f"boot_payload_review: cannot read live capture: {exc}",
               file=sys.stderr)
