@@ -29,6 +29,34 @@ logger = get_logger()
 
 _BASE = Path(__file__).parent
 
+# Report render order for finding levels; anything outside the known
+# universe sorts last (kept visible, never dropped).
+_LEVEL_RANK = {"error": 0, "warning": 1, "note": 2}
+
+
+def _positive_int(value: str) -> int:
+    """argparse type for caps that must be >= 1 (``type=int`` accepted
+    negative values and silently sliced findings off the END)."""
+    n = int(value)
+    if n < 1:
+        raise argparse.ArgumentTypeError(
+            f"must be a positive integer, got {value}")
+    return n
+
+
+def _report_selection(findings: list, max_findings: int) -> list:
+    """The report's severity-first cut: every error-level finding
+    outranks every warning, which outranks every note; original order
+    is kept within a level (stable sort). The pipeline-order slice
+    this replaces dropped whatever OpenAnt emitted LAST — including
+    confirmed error-level findings — while the header claimed the
+    full count."""
+    ranked = sorted(
+        findings,
+        key=lambda f: _LEVEL_RANK.get(f.get("level"), len(_LEVEL_RANK)),
+    )
+    return ranked[:max_findings]
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -101,9 +129,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--max-findings",
-        type=int,
+        type=_positive_int,
         default=50,
-        help="Maximum findings to include in report (default: 50)",
+        help="Maximum findings rendered in the markdown report, "
+             "severity-first (default: 50). The openant_findings.json "
+             "artifact is never capped — downstream merge/validation "
+             "consumes it in full",
     )
     parser.add_argument(
         "--workers",
@@ -278,8 +309,15 @@ def main() -> int:
     translated = translate_pipeline_output(pipeline_output)
     print(f"✓ Translated: {len(translated)} finding(s) after suppression")
 
+    # The durable artifact is NEVER capped: openant_findings.json is
+    # what /validate, project merged views and cross-run correlation
+    # consume, and the /agentic lane saves it uncapped — a capped
+    # artifact silently lost findings (severity-blind, in pipeline
+    # order) from every downstream view while every count surface
+    # claimed the full total. --max-findings caps only the markdown
+    # report below.
     findings_path = out_dir / "openant_findings.json"
-    save_json(findings_path, translated[:args.max_findings])
+    save_json(findings_path, translated)
 
     # ------------------------------------------------------------------
     # FINAL REPORT
@@ -303,6 +341,8 @@ def main() -> int:
                 "completed": True,
                 "raw_findings": len(raw_findings),
                 "translated_findings": len(translated),
+                "report_findings": min(len(translated), args.max_findings),
+                "report_truncated": max(0, len(translated) - args.max_findings),
                 "pipeline_output_path": str(scan_result.get("pipeline_output_path") or ""),
             },
         },
@@ -315,7 +355,10 @@ def main() -> int:
     report_path = out_dir / "raptor_openant_report.json"
     save_json(report_path, final_report)
 
-    _write_markdown_report(out_dir, translated[:args.max_findings], repo_path, duration)
+    _write_markdown_report(
+        out_dir, translated, repo_path, duration,
+        max_findings=args.max_findings,
+    )
 
     print("\n" + "=" * 70)
     print("OPENANT WORKFLOW COMPLETE")
@@ -344,6 +387,7 @@ def _write_markdown_report(
     findings: list,
     repo_path: Path,
     duration: float,
+    max_findings: int | None = None,
 ) -> None:
     # Every finding-derived value below is hostile-influenced: snippet
     # is verbatim target code (a repo being scanned is untrusted),
@@ -353,13 +397,28 @@ def _write_markdown_report(
     # ``` cannot terminate the snippet fence and inject live markdown
     # (autofetch links, forged headings, prompt text for a later LLM
     # pass reading the report) into openant-report.md.
+    total = len(findings)
+    if max_findings is not None and total > max_findings:
+        findings = _report_selection(findings, max_findings)
     lines = [
         "# OpenAnt Vulnerability Report",
         "",
         f"**Repository:** `{md_inline(repo_path)}`  ",
         f"**Duration:** {duration:.1f}s  ",
-        f"**Findings:** {len(findings)}",
+        f"**Findings:** {total}",
         "",
+    ]
+    if len(findings) < total:
+        # Fail-toward-visibility: the truncation is stated, the true
+        # total stays in the header, and the cut is severity-first.
+        lines += [
+            f"**Report truncated:** showing the top {len(findings)} of "
+            f"{total} finding(s) by severity (--max-findings "
+            f"{max_findings}); the full set is in "
+            f"openant_findings.json.",
+            "",
+        ]
+    lines += [
         "---",
         "",
     ]

@@ -74,5 +74,50 @@ class TestMarkdownReportFenceEscape(unittest.TestCase):
         self.assertIn("No findings after suppression.", out)
 
 
+class TestReportSeverityFirstCut(unittest.TestCase):
+    """The report cap selects severity-first (error > warning > note,
+    stable within a level) and states the truncation with the TRUE
+    total in the header."""
+
+    @staticmethod
+    def _finding(i: int, level: str) -> dict:
+        return {"finding_id": f"openant:VULN-{i:03d}", "cwe_id": "CWE-78",
+                "file": "a.py", "level": level, "message": "m",
+                "snippet": "", "metadata": {"function": "f",
+                                            "vuln_name": "n",
+                                            "stage1_verdict": "vulnerable",
+                                            "stage2_verdict": ""}}
+
+    def test_selection_is_severity_first_and_stable(self):
+        findings = ([self._finding(i, "warning") for i in range(4)]
+                    + [self._finding(i, "error") for i in range(4, 6)]
+                    + [self._finding(6, "note")])
+        cut = raptor_openant._report_selection(findings, 3)
+        self.assertEqual(
+            [f["finding_id"] for f in cut],
+            ["openant:VULN-004", "openant:VULN-005", "openant:VULN-000"])
+
+    def test_truncation_note_and_true_total(self):
+        findings = ([self._finding(i, "warning") for i in range(3)]
+                    + [self._finding(3, "error")])
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td)
+            raptor_openant._write_markdown_report(
+                out_dir, findings, Path("/repo"), 1.0, max_findings=2)
+            out = (out_dir / "openant-report.md").read_text()
+        self.assertIn("**Findings:** 4", out)
+        self.assertIn("top 2 of 4", out)
+        self.assertIn("## High (1)", out)
+
+    def test_no_truncation_note_when_under_cap(self):
+        findings = [self._finding(0, "warning")]
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td)
+            raptor_openant._write_markdown_report(
+                out_dir, findings, Path("/repo"), 1.0, max_findings=50)
+            out = (out_dir / "openant-report.md").read_text()
+        self.assertNotIn("Report truncated", out)
+
+
 if __name__ == "__main__":
     unittest.main()
