@@ -222,3 +222,41 @@ def test_console_config_predicate_catches_every_spelling():
         "root.addHandler(fh)\n"
     )
     assert bare_console_config_offences(safe) == []
+
+
+def test_candidate_universe_covers_every_runtime_tree(tmp_path):
+    """The walk's pathspec must include every tree that hosts runtime
+    Python — a hand-picked subset let a bare console sink under a
+    missing tree (engine/, plugins/) merge invisibly, the exact
+    recurrence shape the tree-wide claim of this gate exists to stop.
+    """
+    from core.logging.console_audit import _candidates
+    from core.testing.gitrepo import git_run, init_scratch_repo
+
+    repo = init_scratch_repo(tmp_path)
+    expected = [
+        "core/mod.py",
+        "engine/mod.py",
+        "libexec/raptor-tool",
+        "packages/mod.py",
+        "plugins/coverage/hooks/mod.py",
+        "raptor_cli.py",
+    ]
+    for rel in expected:
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x = 1\n")
+    # Exempt shapes must stay exempt.
+    for rel in ("core/tests/test_mod.py", "core/sub/scripts/tool.py",
+                "core/logging/mod.py", "docs/mod.py"):
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x = 1\n")
+    git_run(repo, "add", "-A")
+    git_run(repo, "commit", "-qm", "fixture")
+
+    rels = _candidates(repo)
+    for rel in expected:
+        assert rel in rels, f"runtime tree not walked: {rel}"
+    assert not any(r.startswith(("docs/", "core/logging/")) for r in rels)
+    assert not any("tests" in r or "scripts" in r for r in rels)
