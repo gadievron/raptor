@@ -564,13 +564,19 @@ class PomInheritanceResolver:
     ) -> None:
         """Absorb BOM imports into ``view``: first the DEFERRED
         declarations the parent walk collected raw on
-        ``view.bom_imports`` (nearest ancestor first — inherited
-        depMgmt outranks the POM's own imports, and setdefault merging
-        awards first-merged), then the ``<scope>import</scope>``
-        entries of ``root`` itself. Each import's version selector is
-        resolved against the same child-wins overlay, so a child
-        property override SELECTS the BOM revision exactly as Maven's
-        effective-POM build does."""
+        ``view.bom_imports`` (nearest ancestor first), then the
+        ``<scope>import</scope>`` entries of ``root`` itself —
+        setdefault merging awards first-merged, so inherited imports
+        outrank the POM's own imports on a conflicting coordinate.
+        That inherited-vs-own ordering PRESERVES this resolver's
+        long-standing behaviour (parents' BOM contents merged before
+        the child's own imports); Maven's own model assembly is
+        argued to award the child's declaration first for the
+        import-vs-import conflict specifically — an open follow-up,
+        deliberately not changed while fixing the selector scope.
+        Each import's version selector is resolved against the
+        child-wins overlay, so a child property override SELECTS the
+        BOM revision exactly as Maven's effective-POM build does."""
         if depth >= self._max_depth:
             return
         if self._offline or self._client is None:
