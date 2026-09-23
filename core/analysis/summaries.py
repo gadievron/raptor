@@ -22,6 +22,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.analysis.taint_approx import function_key
 from core.evidence import EvidenceTier
 
 logger = logging.getLogger(__name__)
@@ -543,9 +544,11 @@ def resolve_scc_summaries(
     for _iteration in range(max_iterations):
         round_new = 0
         for edge in call_edges:
-            caller_key = f"{edge.get('caller_file', '')}:{edge.get('caller', '')}"
+            caller_key = function_key(
+                edge.get("caller_file", ""), edge.get("caller", ""),
+            )
             callee_file = edge.get("callee_file") or edge.get("caller_file", "")
-            callee_key = f"{callee_file}:{edge.get('callee', '')}"
+            callee_key = function_key(callee_file, edge.get("callee", ""))
 
             if caller_key not in scc_set or callee_key not in scc_set:
                 continue

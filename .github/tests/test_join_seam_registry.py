@@ -82,6 +82,9 @@ SEAMS: tuple[Seam, ...] = (
             # summary joins (bare-name fallback keys included:
             # function_key("", func)).
             "core/orchestration/audit_bridge.py": ("function_key",),
+            # The SCC fixed-point propagator joins caller/callee
+            # summaries on the same vocabulary.
+            "core/analysis/summaries.py": ("function_key",),
         },
         forbidden={
             "core/audit/loaders.py": ('f"{rel}:{func_name}"',),
@@ -94,6 +97,10 @@ SEAMS: tuple[Seam, ...] = (
                 'f"{t.file}:{t.function}"',
                 'f"{s.file}:{s.function}"',
                 'f"{sink_file}:{sink_func}"',
+            ),
+            "core/analysis/summaries.py": (
+                "f\"{edge.get('caller_file', '')}:{edge.get('caller', '')}\"",
+                'f"{callee_file}:{edge.get(\'callee\', \'\')}"',
             ),
             "core/orchestration/audit_bridge.py": (
                 'f"{file_path}:{func}"',
