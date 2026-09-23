@@ -97,7 +97,8 @@ class TestSha256Tree:
         assert sha256_tree(t1) == sha256_tree(t2)
 
     def test_hash_file_size_limit(self, tmp_path):
-        """Test that large files are skipped when limit is set."""
+        """Large files' CONTENT is skipped, but their presence still
+        changes the digest (skip record: name + declared size)."""
         # Create a small file
         small_file = tmp_path / "small.txt"
         small_file.write_text("small content")
@@ -108,8 +109,13 @@ class TestSha256Tree:
         large_file.write_text("x" * 200)  # 200 bytes
         hash_with_large = sha256_tree(tmp_path, max_file_size=100)  # 100 byte limit
 
-        # Hash should be same (large file skipped)
-        assert hash_with_small == hash_with_large
+        # Adding the over-cap file must change the digest — silently
+        # omitting it defeated freshness joins built on sha256_tree.
+        assert hash_with_small != hash_with_large
+        # But its CONTENT is not read: same name/size, different
+        # bytes hashes identically.
+        large_file.write_text("y" * 200)
+        assert sha256_tree(tmp_path, max_file_size=100) == hash_with_large
 
     def test_hash_no_size_limit(self, tmp_path):
         """Test that very large max_file_size disables limit."""
@@ -474,3 +480,59 @@ class TestSha256TreeSurrogateescape:
         # The pre-fix implementation raised UnicodeEncodeError here.
         digest = sha256_tree(tmp_path)
         assert len(digest) == 64
+
+
+class TestTreeHashSkippedFiles:
+    """Over-cap files must still be REPRESENTED in the digest.
+
+    The per-file size gate skips a large file's CONTENT, but silently
+    omitting the file entirely made trees differing only in an over-cap
+    file hash identically — defeating every freshness join built on
+    sha256_tree. The skip record mixes name + declared size under a
+    domain-separated marker, and stays content-independent (the whole
+    point of the gate is to never read the bytes).
+    """
+
+    def test_over_cap_file_changes_the_digest(self, tmp_path):
+        from core.hash import sha256_tree
+        tree_a = tmp_path / "a"
+        tree_a.mkdir()
+        (tree_a / "x.txt").write_text("hello")
+        tree_b = tmp_path / "b"
+        tree_b.mkdir()
+        (tree_b / "x.txt").write_text("hello")
+        (tree_b / "huge.bin").write_bytes(b"Z" * 64)
+        assert (sha256_tree(tree_a, max_file_size=16)
+                != sha256_tree(tree_b, max_file_size=16))
+
+    def test_skip_record_is_content_independent(self, tmp_path):
+        from core.hash import sha256_tree
+        tree_a = tmp_path / "a"
+        tree_a.mkdir()
+        (tree_a / "huge.bin").write_bytes(b"Z" * 64)
+        tree_b = tmp_path / "b"
+        tree_b.mkdir()
+        (tree_b / "huge.bin").write_bytes(b"Q" * 64)
+        assert (sha256_tree(tree_a, max_file_size=16)
+                == sha256_tree(tree_b, max_file_size=16))
+
+    def test_skip_record_reflects_declared_size(self, tmp_path):
+        from core.hash import sha256_tree
+        tree_a = tmp_path / "a"
+        tree_a.mkdir()
+        (tree_a / "huge.bin").write_bytes(b"Z" * 64)
+        tree_b = tmp_path / "b"
+        tree_b.mkdir()
+        (tree_b / "huge.bin").write_bytes(b"Z" * 128)
+        assert (sha256_tree(tree_a, max_file_size=16)
+                != sha256_tree(tree_b, max_file_size=16))
+
+    def test_under_cap_trees_keep_their_digest_shape(self, tmp_path):
+        # No skip => no marker: digests of all-under-cap trees are
+        # unaffected by the skip-record scheme.
+        from core.hash import sha256_tree
+        tree = tmp_path / "a"
+        tree.mkdir()
+        (tree / "x.txt").write_text("hello")
+        assert sha256_tree(tree, max_file_size=16) == sha256_tree(
+            tree, max_file_size=1024)

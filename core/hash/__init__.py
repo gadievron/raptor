@@ -46,8 +46,12 @@ def sha256_tree(
 
     Args:
         root: Root directory to hash.
-        max_file_size: Skip files larger than this. None = config default
-            (RaptorConfig.MAX_FILE_SIZE_FOR_HASH). Pass 10**12 to disable.
+        max_file_size: Skip the CONTENT of files larger than this; the
+            skipped file's name and declared size are still mixed into
+            the digest under a domain-separated marker, so trees
+            differing only in an over-cap file never hash identically.
+            None = config default (RaptorConfig.MAX_FILE_SIZE_FOR_HASH).
+            Pass 10**12 to disable.
         chunk_size: Read chunk size. None = config default
             (RaptorConfig.HASH_CHUNK_SIZE). Affects only read efficiency,
             not the digest.
@@ -185,7 +189,23 @@ def sha256_tree(
             if (max_file_size is not None
                     and max_file_size < _MAX_FILE_SIZE_NO_CAP_THRESHOLD
                     and st.st_size > max_file_size):
-                skipped.append(str(p.relative_to(root)))
+                rel = p.relative_to(root).as_posix()
+                skipped.append(rel)
+                # Mix a domain-separated SKIP record — name + declared
+                # size, never content (the gate exists to not read the
+                # bytes). Silently omitting the file made trees
+                # differing only in an over-cap file hash identically,
+                # so a stale artifact kept validating as fresh against
+                # a tree whose large file had been added or swapped.
+                # Same NUL-framed marker scheme as the cumulative-cap
+                # truncation record below: POSIX filenames cannot
+                # contain NUL, so no unskipped tree's name/content
+                # stream can reproduce it.
+                h.update(b"\x00[sha256_tree:skipped:")
+                h.update(rel.encode(_FS_ENCODING, errors=_FS_ERRORS))
+                h.update(b":")
+                h.update(str(st.st_size).encode("ascii"))
+                h.update(b"]\x00")
                 continue
             if cumulative_bytes + st.st_size > cumulative_cap:
                 truncated_at = p.relative_to(root).as_posix()
