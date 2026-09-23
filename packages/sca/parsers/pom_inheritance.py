@@ -127,12 +127,23 @@ def _valid_coord(group: str | None, artifact: str | None,
 # combined parent chain + BOM imports. The child's own
 # depMgmt is NOT in this map (the caller already has it); only
 # inherited values.
+# ``bom_imports`` — BOM import declarations collected RAW from the
+# parent chain, nearest ancestor first: ``(group, artifact,
+# raw_version)`` with the version's ``${...}`` untouched. Absorbing
+# a parent-declared BOM during the walk resolved its ``${bom.version}``
+# at ANCESTOR scope and baked the fetched contents into the parent's
+# cached view — Maven resolves the selector child-wins (the
+# documented pattern for picking a platform-BOM revision), so a
+# child's property override never selected the right BOM. The
+# declarations are absorbed at the child's apply side instead,
+# against the merged child-wins property set.
 class InheritanceView:
-    __slots__ = ("managed", "properties")
+    __slots__ = ("bom_imports", "managed", "properties")
 
     def __init__(self) -> None:
         self.properties: dict[str, str] = {}
         self.managed: dict[tuple[str, str], str] = {}
+        self.bom_imports: list[tuple[str, str, str]] = []
 
 
 # Module-level resolver — injected by the scan pipeline. ``None`` =
@@ -229,7 +240,11 @@ class PomInheritanceResolver:
           * Managed-dependency entries from every ancestor's
             ``dependencyManagement`` (overridden by descendants)
           * BOM-imported managed entries from any ancestor that
-            ``<scope>import</scope>``s a BOM
+            ``<scope>import</scope>``s a BOM — the ancestor's
+            declaration is carried raw and its version selector is
+            resolved HERE, against this POM's merged child-wins
+            property set, so a child override selects the BOM
+            revision the build actually imports
 
         The CHILD's own properties and DIRECTLY DECLARED managed
         entries are NOT included — the caller already has them and
@@ -334,7 +349,17 @@ class PomInheritanceResolver:
             parent_root, parent_view, visited, depth=depth + 1,
         )
         _absorb_self(parent_root, parent_view, resolve_versions=False)
-        self._absorb_boms(parent_root, parent_view, visited, depth + 1)
+        # The parent's BOM imports are NOT absorbed here: collect the
+        # declarations raw (nearest ancestor first — the recursion
+        # above already appended the grandparents') and let the
+        # child-side ``_absorb_boms`` resolve each selector against
+        # the merged child-wins property set. Fetching here resolved
+        # ``${bom.version}`` at ancestor scope and baked that BOM
+        # revision into the cached parent view — every child then
+        # inherited a selection its own override should have changed.
+        parent_view.bom_imports = (
+            _own_bom_imports(parent_root) + parent_view.bom_imports
+        )
 
         # Stash for reuse; merge into the caller's view.
         self._cache[cache_key] = parent_view
@@ -533,16 +558,19 @@ class PomInheritanceResolver:
         visited: set[tuple[str, str, str]],
         depth: int,
     ) -> None:
-        """Walk ``<dependencyManagement>`` for entries with
-        ``<scope>import</scope>`` and fetch each as a BOM. Merge
-        their managed-deps into ``view``."""
+        """Absorb BOM imports into ``view``: first the DEFERRED
+        declarations the parent walk collected raw on
+        ``view.bom_imports`` (nearest ancestor first — inherited
+        depMgmt outranks the POM's own imports, and setdefault merging
+        awards first-merged), then the ``<scope>import</scope>``
+        entries of ``root`` itself. Each import's version selector is
+        resolved against the same child-wins overlay, so a child
+        property override SELECTS the BOM revision exactly as Maven's
+        effective-POM build does."""
         if depth >= self._max_depth:
             return
         if self._offline or self._client is None:
             return
-        bom_entries = root.findall(
-            "./dependencyManagement/dependencies/dependency"
-        )
         # The import's <version> is routinely spelled ``${property}``
         # with the property defined in THIS pom's own <properties>
         # (the centralised-version corporate/Spring layout). ``view``
@@ -550,58 +578,82 @@ class PomInheritanceResolver:
         # child this phase exists to serve — so resolve against an
         # overlay of the root's own properties (own values win, per
         # Maven precedence: child properties override inherited ones).
-        resolve_view = InheritanceView()
-        resolve_view.properties.update(_own_properties(root))
+        resolve_props: dict[str, str] = dict(_own_properties(root))
         for k, v in view.properties.items():
-            resolve_view.properties.setdefault(k, v)
-        for entry in bom_entries:
-            scope = _text(entry, "scope")
-            if scope != "import":
+            resolve_props.setdefault(k, v)
+        deferred = view.bom_imports
+        view.bom_imports = []
+        for group, artifact, raw_version in deferred:
+            version = _resolve_property(raw_version, resolve_props)
+            if not (group and artifact and version):
+                continue
+            self._absorb_one_bom(
+                group, artifact, version, view, visited, depth,
+            )
+        for entry in root.findall(
+                "./dependencyManagement/dependencies/dependency",
+        ):
+            if _text(entry, "scope") != "import":
                 continue
             group = _text(entry, "groupId")
             artifact = _text(entry, "artifactId")
             version = _resolve_property(
-                _text(entry, "version"), resolve_view.properties)
+                _text(entry, "version"), resolve_props)
             if not (group and artifact and version):
                 continue
-            coord_key = (group, artifact, version)
-            cache_key = ("bom", group, artifact, version)
-            if cache_key in self._cache:
-                _merge_into(view, self._cache[cache_key])
-                continue
-            if coord_key in visited:
-                continue
-            visited.add(coord_key)
+            self._absorb_one_bom(
+                group, artifact, version, view, visited, depth,
+            )
 
-            # Fetch the BOM POM the same way we'd fetch a parent.
-            bom_root = self._read_network_parent_by_coord(
-                group, artifact, version,
-            )
-            if bom_root is None:
-                continue
-            bom_view = InheritanceView()
-            # BOMs themselves can have <parent> chains + nested BOM
-            # imports (spring-boot-dependencies inherits from
-            # spring-boot-parent + imports several other BOMs).
-            self._walk_parents(
-                None, bom_root, bom_view, visited, depth=depth + 1,
-            )
-            _absorb_self(bom_root, bom_view, resolve_versions=True)
-            self._absorb_boms(bom_root, bom_view, visited, depth + 1)
-            # An imported BOM is scope-FINAL: any managed value still
-            # carrying ``${...}`` (the BOM's own entry referencing a
-            # property the BOM doesn't define, or its parent chain's
-            # raw-by-design entries) resolves HERE, at the BOM's own
-            # merged property scope, or not at all. Left raw, the
-            # apply pass resolved them against the IMPORTING pom's
-            # properties — a name collision (``revision``,
-            # ``jackson.version``) then reported a version the build
-            # never uses.
-            _finalise_bom_scope(
-                bom_view, origin=f"{group}:{artifact}@{version}",
-            )
-            self._cache[cache_key] = bom_view
-            _merge_into(view, bom_view)
+    def _absorb_one_bom(
+        self,
+        group: str,
+        artifact: str,
+        version: str,
+        view: InheritanceView,
+        visited: set[tuple[str, str, str]],
+        depth: int,
+    ) -> None:
+        """Fetch one BOM by resolved coordinate, build its scope-final
+        view, cache it, and merge into ``view``."""
+        coord_key = (group, artifact, version)
+        cache_key = ("bom", group, artifact, version)
+        if cache_key in self._cache:
+            _merge_into(view, self._cache[cache_key])
+            return
+        if coord_key in visited:
+            return
+        visited.add(coord_key)
+
+        # Fetch the BOM POM the same way we'd fetch a parent.
+        bom_root = self._read_network_parent_by_coord(
+            group, artifact, version,
+        )
+        if bom_root is None:
+            return
+        bom_view = InheritanceView()
+        # BOMs themselves can have <parent> chains + nested BOM
+        # imports (spring-boot-dependencies inherits from
+        # spring-boot-parent + imports several other BOMs).
+        self._walk_parents(
+            None, bom_root, bom_view, visited, depth=depth + 1,
+        )
+        _absorb_self(bom_root, bom_view, resolve_versions=True)
+        self._absorb_boms(bom_root, bom_view, visited, depth + 1)
+        # An imported BOM is scope-FINAL: any managed value still
+        # carrying ``${...}`` (the BOM's own entry referencing a
+        # property the BOM doesn't define, or its parent chain's
+        # raw-by-design entries) resolves HERE, at the BOM's own
+        # merged property scope, or not at all. Left raw, the
+        # apply pass resolved them against the IMPORTING pom's
+        # properties — a name collision (``revision``,
+        # ``jackson.version``) then reported a version the build
+        # never uses.
+        _finalise_bom_scope(
+            bom_view, origin=f"{group}:{artifact}@{version}",
+        )
+        self._cache[cache_key] = bom_view
+        _merge_into(view, bom_view)
 
     def _read_network_parent_by_coord(
         self, group: str, artifact: str, version: str,
@@ -750,11 +802,35 @@ def _finalise_bom_scope(view: InheritanceView, *, origin: str) -> None:
 def _merge_into(dst: InheritanceView, src: InheritanceView) -> None:
     """Merge ``src`` into ``dst``. Existing keys in ``dst`` win —
     we're walking parents bottom-up and the child's view is
-    accumulated before its ancestors'."""
+    accumulated before its ancestors'. Deferred BOM-import
+    declarations append (``dst``'s nearer declarations keep their
+    processing precedence)."""
     for k, v in src.properties.items():
         dst.properties.setdefault(k, v)
     for k, v in src.managed.items():
         dst.managed.setdefault(k, v)
+    dst.bom_imports.extend(src.bom_imports)
+
+
+def _own_bom_imports(root: Any) -> list[tuple[str, str, str]]:
+    """The POM's OWN ``<scope>import</scope>`` depMgmt declarations as
+    raw ``(group, artifact, raw_version)`` triples — version selector
+    untouched (``${...}`` included). Coordinate validation and
+    selector resolution happen at absorb time, in the scope of the POM
+    that ultimately consumes the import."""
+    out: list[tuple[str, str, str]] = []
+    for entry in root.findall(
+            "./dependencyManagement/dependencies/dependency",
+    ):
+        if _text(entry, "scope") != "import":
+            continue
+        group = _text(entry, "groupId")
+        artifact = _text(entry, "artifactId")
+        version = _text(entry, "version")
+        if not (group and artifact and version):
+            continue
+        out.append((group, artifact, version))
+    return out
 
 
 # Total-size budget for a resolved coordinate / version value. Maven

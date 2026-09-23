@@ -1631,3 +1631,100 @@ def test_bom_parent_chain_property_resolves_at_bom_scope(tmp_path: Path):
     })
     deps = _parse_with_resolver(child, client)
     assert _find(deps, ":jackson-databind").version == "2.9.0"
+
+
+_D1_BOM_V1 = '''\
+<project>
+  <groupId>corp</groupId><artifactId>platform-bom</artifactId><version>1.0</version>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>corp</groupId><artifactId>lib</artifactId>
+      <version>9.9.9</version></dependency>
+  </dependencies></dependencyManagement>
+</project>
+'''
+_D1_BOM_V2 = (
+    _D1_BOM_V1
+    .replace("<version>1.0</version>", "<version>2.0</version>")
+    .replace("9.9.9", "5.5.5")
+)
+_D1_PARENT = '''\
+<project>
+  <groupId>corp</groupId><artifactId>par</artifactId><version>1</version>
+  <properties><bom.version>1.0</bom.version></properties>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>corp</groupId><artifactId>platform-bom</artifactId>
+      <version>${bom.version}</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+</project>
+'''
+
+
+def test_parent_declared_bom_selector_resolves_child_wins(tmp_path: Path):
+    """A BOM import declared in the PARENT with
+    ``<version>${bom.version}</version>``: Maven resolves the selector
+    child-wins (the documented pattern for picking a platform-BOM
+    revision). Resolving it at ancestor scope fetched BOM 1.0 and
+    pinned versions the build never imports."""
+    _write(tmp_path, "pom.xml", _D1_PARENT)
+    child = _write(tmp_path, "app/pom.xml", '''\
+<project>
+  <parent><groupId>corp</groupId><artifactId>par</artifactId>
+    <version>1</version></parent>
+  <groupId>corp</groupId><artifactId>app</artifactId><version>1</version>
+  <properties><bom.version>2.0</bom.version></properties>
+  <dependencies>
+    <dependency><groupId>corp</groupId><artifactId>lib</artifactId></dependency>
+  </dependencies>
+</project>
+''')
+    client = _StubMavenClient({
+        "corp:platform-bom:1.0": _D1_BOM_V1,
+        "corp:platform-bom:2.0": _D1_BOM_V2,
+    })
+    deps = _parse_with_resolver(child, client)
+    assert _find(deps, ":lib").version == "5.5.5"
+    assert "corp:platform-bom:2.0" in client.fetch_calls
+
+
+def test_parent_declared_bom_not_baked_into_cached_parent_view(
+    tmp_path: Path,
+):
+    """Two children of ONE parent (cached after the first) with
+    different ``bom.version`` overrides must each get their own BOM
+    revision — the parent's cached view carries the declaration, not
+    a baked selection."""
+    _write(tmp_path, "pom.xml", _D1_PARENT)
+    child_a = _write(tmp_path, "a/pom.xml", '''\
+<project>
+  <parent><groupId>corp</groupId><artifactId>par</artifactId>
+    <version>1</version></parent>
+  <groupId>corp</groupId><artifactId>a</artifactId><version>1</version>
+  <dependencies>
+    <dependency><groupId>corp</groupId><artifactId>lib</artifactId></dependency>
+  </dependencies>
+</project>
+''')
+    child_b = _write(tmp_path, "b/pom.xml", '''\
+<project>
+  <parent><groupId>corp</groupId><artifactId>par</artifactId>
+    <version>1</version></parent>
+  <groupId>corp</groupId><artifactId>b</artifactId><version>1</version>
+  <properties><bom.version>2.0</bom.version></properties>
+  <dependencies>
+    <dependency><groupId>corp</groupId><artifactId>lib</artifactId></dependency>
+  </dependencies>
+</project>
+''')
+    client = _StubMavenClient({
+        "corp:platform-bom:1.0": _D1_BOM_V1,
+        "corp:platform-bom:2.0": _D1_BOM_V2,
+    })
+    resolver = pom_inheritance.PomInheritanceResolver(client)
+    pom_inheritance.set_inheritance_resolver(resolver)
+    try:
+        deps_a = pom_parser.parse(child_a)   # no override → parent's 1.0
+        deps_b = pom_parser.parse(child_b)   # override → 2.0
+    finally:
+        pom_inheritance.set_inheritance_resolver(None)
+    assert _find(deps_a, ":lib").version == "9.9.9"
+    assert _find(deps_b, ":lib").version == "5.5.5"
