@@ -63,7 +63,26 @@ def test_load_cves_rejects_bogus_id(bench) -> None:
 
 def test_parse_args_rejects_unknown_backend(bench) -> None:
     with pytest.raises(SystemExit):
-        bench.parse_args(["--backends", "sdk,quantum", "CVE-2018-7600"])
+        bench.parse_args(["--backends", "quantum", "CVE-2018-7600"])
+
+
+def test_parse_args_refuses_deleted_sdk_arm(bench, capsys) -> None:
+    """An sdk,core matrix would run the identical core engine twice and
+    report run-to-run variance as backend signal — refused with the
+    deletion named. Prefill arm mode keeps free-form labels."""
+    with pytest.raises(SystemExit):
+        bench.parse_args(["--backends", "sdk,core", "CVE-2018-7600"])
+    err = capsys.readouterr().err
+    assert "sdk backend was deleted" in err
+
+
+def test_parse_args_prefill_mode_allows_free_labels(bench, tmp_path) -> None:
+    args = bench.parse_args([
+        "--backends", "prefilled,ambient",
+        "--prefill-artifacts", str(tmp_path),
+        "CVE-2018-7600",
+    ])
+    assert args.backend_list == ["prefilled", "ambient"]
 
 
 # ── run_one record shapes ─────────────────────────────────────────────
@@ -135,12 +154,15 @@ def test_run_one_timeout_is_a_recorded_status(bench, tmp_path,
     assert cleaned == ["CVE-2018-7600"]
 
 
-def test_run_env_sets_backend_and_pythonpath(bench) -> None:
-    env = bench._run_env("core", "some-model")
-    assert env["CVE_ENV_AGENT_BACKEND"] == "core"
+def test_run_env_sets_model_and_pythonpath(bench, monkeypatch) -> None:
+    monkeypatch.delenv("CVE_ENV_AGENT_BACKEND", raising=False)
+    env = bench._run_env("some-model")
     assert env["CVE_ENV_MODEL"] == "some-model"
     assert str(bench.RAPTOR_DIR) in env["PYTHONPATH"]
     assert "cve_env" in env["PYTHONPATH"]
+    # The backend env plumbing is gone with the deleted SDK engine —
+    # nothing at runtime read it, so setting it fabricated an A/B axis.
+    assert "CVE_ENV_AGENT_BACKEND" not in env
 
 
 def test_build_cmd_uses_facade_not_lifecycle_shim(bench, tmp_path) -> None:
@@ -223,7 +245,7 @@ def test_main_resumes_from_results_jsonl(bench, tmp_path,
                                          monkeypatch) -> None:
     bench_dir = tmp_path / "bench"
     bench_dir.mkdir()
-    prior = {"cve_id": "CVE-1000-0001", "backend": "sdk", "repeat": 1,
+    prior = {"cve_id": "CVE-1000-0001", "backend": "core", "repeat": 1,
              "status": "success", "verify_passed": True}
     (bench_dir / "results.jsonl").write_text(json.dumps(prior) + "\n")
 
@@ -236,9 +258,9 @@ def test_main_resumes_from_results_jsonl(bench, tmp_path,
 
     monkeypatch.setattr(bench, "run_one", fake_run_one)
     rc = bench.main(["CVE-1000-0001", "--out", str(bench_dir),
-                     "--backends", "sdk,core"])
+                     "--backends", "core", "--repeats", "2"])
     assert rc == 0
-    assert ran == [("CVE-1000-0001", "core")]  # sdk cell resumed, not re-run
+    assert ran == [("CVE-1000-0001", "core")]  # repeat-1 cell resumed, not re-run
     assert (bench_dir / "report.md").is_file()
 
 
