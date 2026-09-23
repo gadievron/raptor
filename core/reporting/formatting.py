@@ -227,8 +227,20 @@ def truncate_path(path: str, max_len: int = 40) -> str:
     # display width until adding the next char would exceed
     # max_len - 3. `_display_width` belongs to console module — local
     # import to avoid an unconditional dependency.
-    from core.reporting.console import _display_width
+    from core.reporting.console import _cell_code_point_cap, _display_width
+    # Display width alone cannot bound the LENGTH of the result:
+    # combining marks are zero columns wide, so a path component
+    # flooded with them (≤255 bytes per component, thousands across a
+    # multi-component path from a scanned repo) reports a tiny width
+    # while carrying thousands of code points into the column the
+    # caller sized for max_len. Enforce the shared code-point ceiling
+    # in both branches; legitimate paths never approach 4 code points
+    # per display column, and a flood cut mid-cluster is already
+    # unrenderable text.
+    hard_cap = _cell_code_point_cap(max_len)
     if _display_width(path) <= max_len:
+        if len(path) > hard_cap:
+            return "..." + path[-hard_cap:]
         return path
     target = max_len - 3
     suffix_chars: list[str] = []
@@ -241,6 +253,8 @@ def truncate_path(path: str, max_len: int = 40) -> str:
             break
         suffix_chars.append(ch)
         width += w
+        if len(suffix_chars) >= hard_cap:
+            break  # zero-width flood: bound code points, not just width
     return "..." + "".join(reversed(suffix_chars))
 
 
