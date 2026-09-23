@@ -5,8 +5,13 @@ Real-target fixtures referenced by corpus findings. Kept out of tree
 ``out/dataflow-corpus-fixtures/<name>/``.
 
 Re-cloning at any sha other than the pin invalidates the labels
-written against that sha — the setup script verifies this before the
-corpus runner proceeds.
+written against that sha — the corpus runner verifies any PRESENT
+pinned clone's HEAD against this file's pins before proceeding.
+This file is the single home of each pin:
+`core/dataflow/corpus_sources.py` parses the `Pinned sha:` /
+`Local path:` bullet lines of each heading's entry (sha first), and
+a regression test keeps duplicated constants (e.g.
+`core/recall/owasp_manifest.py`) equal to the pins here.
 
 ## OWASP Benchmark Java
 

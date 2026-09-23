@@ -167,3 +167,78 @@ def test_main_with_custom_validator_spec(tmp_path: Path):
         "--validator", "core.dataflow.validator:TrivialValidator",
     ])
     assert rc == 0
+
+
+class TestPinnedSourceVerification:
+    """Labels are sha-bound; the runner must verify present pinned
+    clones against SOURCES.md (the pins' single home) before it
+    proceeds, and duplicated pin constants must equal the documented
+    pin."""
+
+    def test_sources_md_parses_and_pins_are_full_shape(self):
+        from core.dataflow.corpus_sources import load_pinned_sources
+        sources = {s.name: s for s in load_pinned_sources()}
+        assert "OWASP Benchmark Java" in sources
+        owasp = sources["OWASP Benchmark Java"]
+        assert len(owasp.pinned_sha) == 40
+        assert owasp.local_path.startswith("out/dataflow-corpus-fixtures/")
+        # Every entry that documents a pin documents its clone path.
+        for s in sources.values():
+            assert s.pinned_sha and s.local_path, s.name
+
+    def test_owasp_manifest_constant_matches_sources_md(self):
+        """owasp_manifest duplicates the sha with a 'must match
+        SOURCES.md' comment and no gate kept them equal — this is the
+        gate."""
+        from core.dataflow.corpus_sources import load_pinned_sources
+        from core.recall.owasp_manifest import (
+            OWASP_DEFAULT_CLONE,
+            OWASP_PINNED_SHA,
+        )
+        owasp = {s.name: s for s in load_pinned_sources()}[
+            "OWASP Benchmark Java"]
+        assert OWASP_PINNED_SHA == owasp.pinned_sha
+        assert OWASP_DEFAULT_CLONE.rstrip("/") == owasp.local_path
+
+    def test_absent_clones_are_skipped(self, tmp_path):
+        from core.dataflow.corpus_sources import (
+            verify_present_pinned_clones,
+        )
+        assert verify_present_pinned_clones(repo_root=tmp_path) == []
+
+    def test_present_clone_at_wrong_sha_refuses(self, tmp_path, monkeypatch):
+        import os
+        import subprocess
+        from core.dataflow import corpus_sources as cs
+        if subprocess.run(["git", "--version"], capture_output=True,
+                          check=False).returncode != 0:
+            pytest.skip("git unavailable")
+        clone = tmp_path / "out" / "dataflow-corpus-fixtures" / "owasp-benchmark-java"
+        clone.mkdir(parents=True)
+        env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+               "HOME": str(tmp_path), "PATH": os.environ.get("PATH", "")}
+        for cmd in (["git", "init", "-q", "."],
+                    ["git", "commit", "-q", "--allow-empty", "-m", "x"]):
+            subprocess.run(cmd, cwd=clone, env=env, check=True,
+                           capture_output=True)
+        with pytest.raises(cs.CorpusPinError, match="pinned"):
+            cs.verify_present_pinned_clones(repo_root=tmp_path)
+
+    def test_runner_main_refuses_on_pin_mismatch(self, tmp_path, monkeypatch):
+        import core.dataflow.run_corpus as rc
+        from core.dataflow import corpus_sources as cs
+
+        def boom():
+            raise cs.CorpusPinError("clone drifted")
+
+        monkeypatch.setattr(
+            "core.dataflow.corpus_sources.verify_present_pinned_clones",
+            boom,
+        )
+        corpus = tmp_path / "findings"
+        corpus.mkdir()
+        rv = rc.main(["--corpus-dir", str(corpus),
+                      "--output", str(tmp_path / "out.csv")])
+        assert rv == 2
+        assert not (tmp_path / "out.csv").exists()
