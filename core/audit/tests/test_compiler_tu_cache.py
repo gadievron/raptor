@@ -75,6 +75,17 @@ def sandbox_stub(monkeypatch):
     return state
 
 
+def _analysis_calls(state: dict) -> list[list[str]]:
+    """Analyzer compiles only: the reliable-refutation path adds a
+    preprocessor (``-E``) closure-vet invocation with its own cache
+    row — the compile-cache contract is asserted over the compiles."""
+    return [c for c in state["calls"] if "-E" not in c]
+
+
+def _pp_calls(state: dict) -> list[list[str]]:
+    return [c for c in state["calls"] if "-E" in c]
+
+
 def _target(tmp_path: Path, source: str) -> Path:
     target = tmp_path / "repo"
     target.mkdir(exist_ok=True)
@@ -124,7 +135,7 @@ class TestCacheHit:
             target, function="g", hypothesis="write through `q`",
             line_start=7, line_end=9,
         )
-        assert len(sandbox_stub["calls"]) == 1
+        assert len(_analysis_calls(sandbox_stub)) == 1
         assert first.outcome == "confirmed"
         # Same cached diagnostics, different window: no in-range
         # family diagnostic for g → not a confirmation.
@@ -146,7 +157,7 @@ class TestCacheHit:
             target, cwe="CWE-476",
             hypothesis="null dereference of `p`",
         )
-        assert len(sandbox_stub["calls"]) == 1
+        assert len(_analysis_calls(sandbox_stub)) == 1
         assert uaf.outcome == "confirmed"
         assert null.outcome != "confirmed"  # no CWE-476-family diagnostic
 
@@ -173,7 +184,7 @@ class TestCacheMiss:
             _UAF_SOURCE + "\nvoid h(void) {}\n", encoding="utf-8",
         )
         _sweep(target)
-        assert len(sandbox_stub["calls"]) == 2
+        assert len(_analysis_calls(sandbox_stub)) == 2
 
     def test_flag_family_change_recompiles(self, tmp_path: Path, sandbox_stub):
         # CWE-134 adds -Wformat flags → different invocation.
@@ -183,8 +194,9 @@ class TestCacheMiss:
             target, cwe="CWE-134",
             hypothesis="format string via `p`",
         )
-        assert len(sandbox_stub["calls"]) == 2
-        assert sandbox_stub["calls"][0] != sandbox_stub["calls"][1]
+        calls = _analysis_calls(sandbox_stub)
+        assert len(calls) == 2
+        assert calls[0] != calls[1]
 
 
 class TestErrorSemantics:
@@ -214,7 +226,7 @@ class TestErrorSemantics:
         sandbox_stub["raises"] = None
         sandbox_stub["diags"] = []
         assert _sweep(target).outcome in ("refuted", "inconclusive")
-        assert len(sandbox_stub["calls"]) == 2
+        assert len(_analysis_calls(sandbox_stub)) == 2
 
     def test_signal_killed_compile_is_not_cached(
         self, tmp_path: Path, sandbox_stub,
@@ -271,8 +283,12 @@ class TestCacheLifetime:
 
         sweep()
         sweep()
-        assert len(sandbox_stub["calls"]) == 1
-        assert len(tu) == 1
+        # No diagnostics stubbed → the reliable family refutes, so a
+        # closure-vet preprocessor run joins the compile; each caches
+        # once in the CALLER's memo (one compile row + one -E row).
+        assert len(_analysis_calls(sandbox_stub)) == 1
+        assert len(_pp_calls(sandbox_stub)) == 1
+        assert len(tu) == 2
         assert len(inc) == 1
         assert len(compiler_sweep._tu_cache) == 0
         assert len(compiler_sweep._include_dirs_memo) == 0
