@@ -235,3 +235,44 @@ class TestPhaseWallClock:
             rel_tol=calls * 2**-52, abs_tol=1e-9,
         )
         assert ct._active_phase is None
+
+
+class TestEndOfRunBookingLocks:
+    """book_prior_segments / book_unbooked_classes / to_dict mutate or
+    iterate the same ``phases`` map the lock-protected hot path
+    (record_call) mutates from workers — they must take the ledger
+    lock, not rely on an unstated end-of-run-serial convention (the
+    mid-run cadence tick serialises to_dict while the loop is still
+    reviewing)."""
+
+    class _SpyLock:
+        def __init__(self):
+            self.acquisitions = 0
+
+        def __enter__(self):
+            self.acquisitions += 1
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def _spied(self):
+        ledger = PhaseCostLedger()
+        spy = self._SpyLock()
+        object.__setattr__(ledger, "_lock", spy)
+        return ledger, spy
+
+    def test_book_prior_segments_takes_the_lock(self):
+        ledger, spy = self._spied()
+        ledger.book_prior_segments(1.25, segment=2)
+        assert spy.acquisitions == 1
+
+    def test_book_unbooked_classes_takes_the_lock(self):
+        ledger, spy = self._spied()
+        ledger.book_unbooked_classes({"iris": (3, 0.5)})
+        assert spy.acquisitions == 1
+
+    def test_to_dict_takes_the_lock(self):
+        ledger, spy = self._spied()
+        ledger.to_dict()
+        assert spy.acquisitions == 1

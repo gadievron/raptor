@@ -408,11 +408,23 @@ def spatch_marker() -> str:
 
 def digest_strings(parts: Iterable[str]) -> str:
     """Order-sensitive digest of string parts (callers pre-sort
-    order-free inputs)."""
+    order-free inputs).
+
+    Length-prefixed framing: a bare NUL joint collides for parts
+    that themselves contain NUL (``("a\\0", "b")`` and
+    ``("a", "\\0b")`` hash the same byte stream). Current callers
+    feed rule text and gap fields that cannot carry raw NUL, so the
+    collision is latent — but these are cache keys over
+    target-derived content, and framing by length closes the class
+    outright (one-time cache invalidation on upgrade is the cost of
+    a cache, not a behaviour change).
+    """
     h = hashlib.sha256()
     for part in parts:
-        h.update(part.encode("utf-8", "replace"))
-        h.update(b"\0")
+        data = part.encode("utf-8", "replace")
+        h.update(str(len(data)).encode("ascii"))
+        h.update(b":")
+        h.update(data)
     return h.hexdigest()
 
 

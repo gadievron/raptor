@@ -299,3 +299,29 @@ class TestCleanupVocabulary:
         # A plain tmp dir is not a kernel tree — pack stays off.
         assert _pack_cleanup_names(tmp_path) == frozenset()
         assert _pack_cleanup_names(None) == frozenset()
+
+
+class TestCleanupLineAttribution:
+    def test_reported_line_is_the_flagged_return_site(self):
+        # The hint used to anchor at the SEGMENT start (the line
+        # after the previous return) — a whole segment away from the
+        # return it describes.
+        src = (
+            "int f(void) {\n"            # 1
+            "    buf = kmalloc(128);\n"  # 2
+            "    if (error1) {\n"        # 3
+            "        kfree(buf);\n"      # 4
+            "        return -EINVAL;\n"  # 5
+            "    }\n"                    # 6
+            "    if (error2) {\n"        # 7
+            "        return -ENOMEM;\n"  # 8  <- missing kfree
+            "    }\n"                    # 9
+            "    kfree(buf);\n"          # 10
+            "    return 0;\n"            # 11
+            "}\n"
+        )
+        results = check_cleanup_consistency(src)
+        flagged = [r for r in results if r.kind == "cleanup"]
+        assert len(flagged) == 1
+        assert flagged[0].line == 8
+        assert "returning at line 8" in flagged[0].description

@@ -470,3 +470,42 @@ class TestCoverageProbeAnchoring:
         assert joern_function_in_cpg(srv, "f", file_path="a.c") is True
         assert joern_function_in_cpg(srv, "f", file_path="b.c") is True
         assert len(srv.queries) == 2  # distinct anchors, distinct memo
+
+class TestCoverageProbeTimeout:
+    """The probe's timeout rides the same CPG-scaled, deadline-clamped
+    tunables as the live query it gates. The def-time 10s default
+    timed out on a loaded shared REPL while the live queries it gates
+    ran with minutes of budget — each per-function probe timeout
+    booked a channel error, and 8 distinct keys trip the shared
+    health gate (the whole joern lane goes dark for the run,
+    fail-closed availability loss)."""
+
+    class _TimeoutRecorder(_Server):
+        def __init__(self, covers: bool):
+            super().__init__(covers)
+            self.timeouts: list[int] = []
+
+        def query(self, query: str, timeout: int = 0,
+                  check_length: bool = False) -> _QueryResult:
+            self.timeouts.append(timeout)
+            return super().query(query, timeout=timeout,
+                                 check_length=check_length)
+
+    def test_probe_timeout_matches_live_query_budget(self, tmp_path):
+        from core.audit.orchestrator import _joern_live_timeout_s
+        srv = self._TimeoutRecorder(covers=False)
+        cfg = _Cfg(tmp_path)
+        expected = _joern_live_timeout_s(cfg, srv)
+        assert expected > 0
+        _write_tree(tmp_path)
+        _run_tool_chain(
+            [{"type": "joern", "config": {"sinks": ["memcpy"]}}],
+            config=cfg, file_path="src/a.c", function_name="f",
+            source="int f(void){}", hypothesis="taint reaches memcpy",
+            line_start=1, tier_counters={"joern": TierCounters()},
+            joern_server=srv, skipped_types=set(),
+        )
+        # Last query is the coverage probe (the taint batch rides
+        # run_taint_queries_batch, not query()).
+        assert srv.timeouts
+        assert srv.timeouts[-1] == expected
