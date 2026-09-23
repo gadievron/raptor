@@ -95,11 +95,15 @@ _EXTERNAL_ENV_RE = re.compile(
 )
 
 # Common C casts stripped when reducing an argument to its base
-# identifier.
+# identifier. The optional pointer star gates its own trailing
+# whitespace (``(?:\*\s*)?``): the naive ``\s*\*?\s*\)`` put two
+# unbounded whitespace spans around the optional star, quadratic on
+# a cast-shaped token followed by a whitespace run with no ``)``.
+# Match set unchanged.
 _CAST_RE = re.compile(
     r"\(\s*(?:const\s+)?(?:unsigned\s+|signed\s+)?"
     r"(?:size_t|ssize_t|u?int(?:8|16|32|64)?_t|int|long(?:\s+long)?"
-    r"|short|char|void|off_t|ptrdiff_t)\s*\*?\s*\)",
+    r"|short|char|void|off_t|ptrdiff_t)\s*(?:\*\s*)?\)",
 )
 
 _UNSIGNED_VALUED_RE = re.compile(
@@ -131,10 +135,14 @@ _SINGLE_CALL_RE = re.compile(
 
 # The explicitly named target of an invoked-twice claim ("if a caller
 # invokes bitmap_free twice").  Pronouns and generic nouns are not
-# names.
+# names. The optional ``()`` carries its own leading whitespace
+# ((?:\s*\(\s*\))?\s+): the naive ``\s*(?:\(\s*\))?\s+`` put two
+# unbounded whitespace spans around the optional atom, quadratic on
+# a call-verb + name followed by a whitespace run with no keyword.
+# Match set unchanged.
 _INVOKE_TARGET_RE = re.compile(
     r"(?:call(?:s|ed|ing)?|invoke[sd]?|invoking|re-?invoke[sd]?)\s+"
-    r"([A-Za-z_]\w*)\s*(?:\(\s*\))?\s+"
+    r"([A-Za-z_]\w*)(?:\s*\(\s*\))?\s+"
     r"(?:twice|again|more\s+than\s+once|a\s+second\s+time|"
     r"multiple\s+times|repeatedly)",
     re.IGNORECASE,

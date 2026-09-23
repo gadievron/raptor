@@ -2185,3 +2185,41 @@ class TestExtractFieldsWhitespaceRun:
         assert prep._extract_fields(block) == [
             "flags", "name", "bits", "arr",
         ]
+
+
+class TestCFuncExtractionHostileRuns:
+    def test_unclosed_attribute_run_is_fast(self) -> None:
+        """Hostile '__attribute__((' followed by a long run with no
+        closing paren: the previous interior (?:[^()]*|\\([^()]*\\))*
+        nested an unbounded branch inside an unbounded loop and tried
+        every split of the run across iterations — exponential. The
+        first-rest normal form is deterministic."""
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "__attribute__((" + "a" * 4000 + "\nint f(void);\n"
+        with cpu_budget(1.0, what="unclosed-attribute scan"):
+            results = prep._extract_functions(hostile, "x.c")
+        # The real declaration after the hostile line still extracts.
+        assert [f["name"] for f in results] == ["f"]
+
+    def test_attribute_declaration_lines_are_fast(self) -> None:
+        """A planted file of attribute-shaped lines: the unbounded
+        attribute loop let every MULTILINE anchor consume arbitrarily
+        many following lines before failing — quadratic. Bounded
+        loops cap per-anchor reach."""
+        from core.testing.wallclock import cpu_budget
+
+        hostile = '__attribute__((visibility("default"))) \n' * 4000
+        with cpu_budget(2.0, what="attribute-line run scan"):
+            prep._extract_functions(hostile, "x.c")
+
+    def test_declaration_forms_still_extracted(self) -> None:
+        src = (
+            '__attribute__((visibility("default")))\n'
+            "__attribute__((format(printf, 1, 2)))\n"
+            "static inline const struct foo *lookup_foo(int id);\n"
+            "extern unsigned long sum_all(void);\n"
+            "int plain(void);\n"
+        )
+        names = {f["name"] for f in prep._extract_functions(src, "x.h")}
+        assert {"lookup_foo", "sum_all", "plain"} <= names
