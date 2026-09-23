@@ -15,12 +15,14 @@ never a parallel engine:
   bytes escaped, length-capped. An embedded ``` cannot terminate the
   wrapping fence and spill live markdown.
 * :func:`md_inline` — single-line slots: headings, labels, table
-  cells. Newlines flattened, autofetch markup stripped, in-slot
-  structure (``|``, backtick) entity-escaped, length-capped.
+  cells. Newlines flattened, autofetch markup stripped, raw-HTML
+  construct openers entity-escaped, in-slot structure (``|``,
+  backtick) entity-escaped, length-capped.
 * :func:`md_prose` — multi-line free text (finding messages,
-  descriptions). Line-leading markdown structure defanged, autofetch
-  markup stripped, control bytes escaped, newlines preserved,
-  length-capped.
+  descriptions). Line-leading markdown structure defanged, raw-HTML
+  construct openers entity-escaped (``<h1>`` / ``<details>`` /
+  ``<!--`` forgery and report-hiding), autofetch markup stripped,
+  control bytes escaped, newlines preserved, length-capped.
 
 All three are recognised sanitisers in
 :mod:`core.security.report_writer_audit` (``_SANITISERS``), so a
