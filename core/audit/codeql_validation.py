@@ -36,6 +36,7 @@ from core.source import open_regular
 from typing import Any
 
 from core.sarif.parser import load_sarif
+from core.source.lines import split_lines
 
 from ._util import is_valid_identifier
 
@@ -651,7 +652,13 @@ def _load_source_lines(
                         candidate, _MAX_SOURCE_FILE_BYTES,
                     )
                 else:
-                    lines = raw.decode(errors="replace").splitlines()
+                    # \n-model split (core.source.lines contract):
+                    # the indexing line numbers are CodeQL SARIF's,
+                    # which count \n only — a splitlines() view let
+                    # one form feed inside a comment shift the
+                    # guard-harvest window onto attacker-chosen
+                    # lines.
+                    lines = split_lines(raw.decode(errors="replace"))
     except (OSError, ValueError):
         lines = None
     cache[uri] = lines
