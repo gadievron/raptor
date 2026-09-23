@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 
-from packaging.version import InvalidVersion, Version
+from packaging.version import Version
 
 from core.json import MISSING, JsonCache
 
@@ -339,7 +339,10 @@ def _extract_versions(data: dict) -> list[str]:
             continue
         try:
             parsed = Version(ver)
-        except InvalidVersion:
+        except ValueError:
+            # ValueError, not just its InvalidVersion subclass:
+            # CPython's int digit limit raises bare ValueError on a
+            # hostile registry's huge-digit version string.
             continue
         # Skip pre-releases by default — operators don't want
         # ``pip install requests==2.31.0a1`` from a hardening pass.

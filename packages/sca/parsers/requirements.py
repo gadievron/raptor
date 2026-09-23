@@ -423,7 +423,10 @@ def _parse_requirement_line(
 
     try:
         req = Requirement(line)
-    except InvalidRequirement as e:
+    except (InvalidRequirement, ValueError) as e:
+        # Bare ValueError: CPython's int digit limit fires inside
+        # packaging's version normalisation on a crafted 100k-digit
+        # version — not wrapped in InvalidRequirement.
         logger.debug(
             "sca.parsers.requirements: invalid requirement %r in %s: %s",
             line, declared_in, e,

@@ -65,6 +65,7 @@ except ModuleNotFoundError:                     # pragma: no cover
 from core.security.log_sanitisation import escape_nonprintable
 
 from . import _safe_read
+from ._base import PARSE_ESCAPE_ERRORS
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +174,7 @@ def parse_libs_versions_toml(path: Path) -> VersionCatalog | None:
         return _PARSE_CACHE[resolved]
     try:
         data = tomllib.loads(text)
-    except tomllib.TOMLDecodeError as e:
+    except (tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.parsers.gradle_version_catalog: TOML parse failed "
             "for %s: %s",
