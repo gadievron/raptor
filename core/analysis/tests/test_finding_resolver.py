@@ -753,3 +753,53 @@ class TestInterProcBindingsBestEffort:
         out = _inter_proc_bindings_python(src, fn, cfg, "CWE-79")
         assert calls, "patched summary builder was never reached"
         assert out == frozenset()
+
+
+class TestSameLineSinkAmbiguity:
+    """First-node binding on a multi-statement sink line hands the
+    gate a sanitizer-bearing statement instead of the real sink — an
+    evasion-shaped wrong-sink adjudication. Two or more call-bearing
+    nodes on the flagged line refuse; single-statement lines keep
+    resolving (that control is the whole happy-path battery above)."""
+
+    def test_python_one_liner_sink_line_refuses(self, tmp_path):
+        src = (
+            "import html, os\n"
+            "def handle(x):\n"
+            "    y = log(html.escape(x)); os.system(x)\n"
+        )
+        src_file = _write(tmp_path, "app.py", src)
+        finding = _raptor_native(
+            str(src_file), source_line=2, sink_line=3)
+        result = resolve_finding(finding)
+        assert isinstance(result, ResolutionFailure), result
+
+    def test_java_one_liner_sink_line_refuses(self, tmp_path):
+        src = (
+            "import org.owasp.encoder.Encode;\n"
+            "public class T {\n"
+            "    public void handle(String x, "
+            "java.io.PrintWriter out) {\n"
+            "        String y = Encode.forHtml(x); out.println(x);\n"
+            "    }\n"
+            "}\n"
+        )
+        src_file = _write(tmp_path, "T.java", src)
+        finding = _raptor_native(
+            str(src_file), source_line=3, sink_line=4,
+            language="java")
+        result = resolve_finding(finding)
+        assert isinstance(result, ResolutionFailure), result
+
+    def test_c_one_liner_sink_line_refuses(self, tmp_path):
+        src = (
+            "void handle(char *x) {\n"
+            "    log(sanitize(x)); system(x);\n"
+            "}\n"
+        )
+        src_file = _write(tmp_path, "app.c", src)
+        finding = _raptor_native(
+            str(src_file), source_line=1, sink_line=2,
+            language="c", cwe="CWE-78")
+        result = resolve_finding(finding)
+        assert isinstance(result, ResolutionFailure), result

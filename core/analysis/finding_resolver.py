@@ -832,12 +832,26 @@ def _resolve_sink(
 
 
 def _node_at_lineno(cfg: PythonCFG, lineno: int) -> PyCFGNode | None:
+    """First node at ``lineno`` — refusing the line outright when TWO
+    OR MORE call-bearing nodes share it. First-match binding on a
+    multi-statement line hands the gate whichever statement parses
+    first ('y = log(html.escape(x)); os.system(x)' binds the
+    sanitizer-bearing assignment, not the sink) — an evasion-shaped
+    wrong-sink adjudication. The sibling Java machinery already
+    treats one-line co-location as a refusal class."""
+    first: PyCFGNode | None = None
+    call_bearing = 0
     for n in cfg.nodes():
         if not isinstance(n, PyCFGNode):
             continue
         if n.lineno == lineno:
-            return n
-    return None
+            if first is None:
+                first = n
+            if n.call_sites:
+                call_bearing += 1
+    if call_bearing >= 2:
+        return None
+    return first
 
 
 # ---------------------------------------------------------------------------
@@ -972,10 +986,22 @@ def _resolve_from_parsed_java(
         )
 
     def node_at(lineno: int) -> JavaCFGNode | None:
+        # Two or more call-bearing nodes on one line refuse — a
+        # first-match bind could hand the gate a same-line
+        # sanitizer-bearing statement instead of the flagged one
+        # (one-line co-location is the sibling machinery's standing
+        # refusal class).
+        first: JavaCFGNode | None = None
+        call_bearing = 0
         for n in cfg.nodes():
             if isinstance(n, JavaCFGNode) and n.lineno == lineno:
-                return n
-        return None
+                if first is None:
+                    first = n
+                if n.call_sites:
+                    call_bearing += 1
+        if call_bearing >= 2:
+            return None
+        return first
 
     def node_at_or_statement_start(lineno: int) -> JavaCFGNode | None:
         """Exact-line node, retargeted to the enclosing statement's
@@ -1235,12 +1261,22 @@ def _resolve_sink_cpp(
 
 
 def _cpp_node_at_lineno(cfg: CPPCFG, lineno: int) -> CPPCFGNode | None:
+    """First node at ``lineno``, refusing lines shared by two or more
+    call-bearing nodes (see :func:`_node_at_lineno` — the same
+    same-line sanitizer-steals-the-sink-slot hazard)."""
+    first: CPPCFGNode | None = None
+    call_bearing = 0
     for n in cfg.nodes():
         if not isinstance(n, CPPCFGNode):
             continue
         if n.lineno == lineno:
-            return n
-    return None
+            if first is None:
+                first = n
+            if n.call_sites:
+                call_bearing += 1
+    if call_bearing >= 2:
+        return None
+    return first
 
 
 __all__ = [
