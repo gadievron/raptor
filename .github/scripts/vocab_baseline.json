@@ -1005,6 +1005,21 @@
     "kind": "literal",
     "note": "serialization field names, not a name vocabulary"
   },
+  "core/build/build_detector.py::_VALIDATION_COMMANDS": {
+    "count": 18,
+    "kind": "literal",
+    "note": "closed build-system taxonomy: version-probe command per supported build system; a missing entry silently downgrades a good detection to no-build mode (rationale at the definition site) — infrastructure enumeration, not a learned name vocabulary"
+  },
+  "core/build/build_flags.py::_HARDENING_CONFIGS": {
+    "count": 19,
+    "kind": "literal",
+    "note": "closed kernel-hardening kconfig option set consulted when reporting a traced build's hardening posture — platform constant names, not a learned name vocabulary"
+  },
+  "core/build/recipe.py::_RECIPES": {
+    "count": 12,
+    "kind": "literal",
+    "note": "closed build-system-to-recipe dispatch table (one synthesised debug-build recipe per supported build system) — infrastructure enumeration, not a learned name vocabulary"
+  },
   "core/concepts/audit_bridge.py::_STOPWORDS": {
     "count": 24,
     "kind": "literal"
@@ -2096,6 +2111,16 @@
     "kind": "literal",
     "note": "ecosystem build-config basename -> build-type map (maven/gradle/npm/...) - ecosystem file-name taxonomy, not target API function names"
   },
+  "packages/cve_env/scripts/raptor-cve-env-bench::_RECORD_FIELDS": {
+    "count": 10,
+    "kind": "literal",
+    "note": "bench-record schema field manifest copied verbatim from the outcome sidecar — persistence schema keys, not a vocabulary (dev-time bench harness)"
+  },
+  "packages/cve_env/scripts/raptor-cvefix-envs::sidecar": {
+    "count": 11,
+    "kind": "literal",
+    "note": "outcome-sidecar schema keys written per CVE row — persistence schema, not a vocabulary (dev-time corpus builder)"
+  },
   "packages/describe/package_manager.py::_INSTALL_ADVICE": {
     "count": 11,
     "kind": "literal",
@@ -2399,10 +2424,6 @@
     "count": 12,
     "kind": "literal"
   },
-  "packages/sca/conftest.py::_CURATED_POPULAR": {
-    "count": 15,
-    "kind": "literal"
-  },
   "packages/sca/discovery.py::MANIFEST_FILENAMES": {
     "count": 33,
     "kind": "literal"
@@ -2523,6 +2544,16 @@
   "packages/sca/sbom_import.py::_PURL_ECO_MAP": {
     "count": 15,
     "kind": "literal"
+  },
+  "packages/sca/scripts/raptor-sca-compromise-check::_FIXTURE_ALLOWED_FILENAMES": {
+    "count": 30,
+    "kind": "literal",
+    "note": "closed ecosystem manifest/lockfile filename set that may appear in committed fixtures (content-bearing samples are pulled at runtime instead) — platform filename enumeration, not a learned name vocabulary"
+  },
+  "packages/sca/scripts/raptor-sca-compromise-check::_KIND_TO_PREFIXES": {
+    "count": 10,
+    "kind": "literal",
+    "note": "signal-kind to finding-id-prefix dispatch table (legacy + current prefix spellings) — schema mapping, not a vocabulary"
   },
   "packages/sca/supply_chain/__init__.py::_commit_provenance_to_finding": {
     "count": 10,

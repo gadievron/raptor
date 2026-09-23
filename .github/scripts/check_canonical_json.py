@@ -68,13 +68,15 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-PY_ROOTS = ["core", "packages", "plugins", "libexec", "engine"]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-SKIP_DIR_NAMES = {
-    ".git", "__pycache__", "node_modules", "out", ".out", ".tox", ".venv",
-    "venv", "build", "dist", ".claude", "worktrees",
-    "tests", "fixtures", "seeds", "corpus", "data",
-}
+from runtime_universe import runtime_file_universe  # noqa: E402
+
+# Universe: the shared runtime-source derivation (see
+# runtime_universe.py — its root-anchored walk is what keeps runtime
+# packages like core/build from being dropped by a bare artifact-dir
+# name). Only this gate's data-pack homes stay declared here.
+DATA_PACK_HOMES = ("seeds", "corpus", "data")
 
 # Modules owning canonical byte forms (MAC-verified canonicalisation,
 # persisted sha256 identities, digest-keyed caches, prompt-embedded
@@ -122,33 +124,15 @@ HASH_MODULE_NAMES = {"hashlib", "hmac"}
 
 
 def iter_python_files(root: Path) -> Iterator[Path]:
-    for sub in PY_ROOTS:
-        base = root / sub
-        if not base.is_dir():
-            continue
-        for p in sorted(base.rglob("*")):
-            if not p.is_file():
-                continue
-            rel_parts = p.relative_to(root).parts
-            if any(part in SKIP_DIR_NAMES for part in rel_parts):
-                continue
-            if p.suffix == ".py":
-                yield p
-            elif p.suffix == "" and p.parent.name == "libexec":
-                try:
-                    head = p.open("rb").read(64)
-                except OSError:
-                    continue
-                if b"python" in head.split(b"\n", 1)[0]:
-                    yield p
-    # Repo-root entry modules, derived from the tree — never a name
-    # list (codeql_scope.py's doctrine: a hand-maintained entry-module
-    # list silently dropped new entry points before). A dumps-into-
-    # hash flow in raptor_agentic.py is the same regression as one
-    # under core/.
-    for p in sorted(root.glob("*.py")):
-        if p.is_file():
-            yield p
+    # Shared runtime-source derivation (roots, entry modules, libexec
+    # shebang detection, test exclusions). Dev scripts/ dirs stay in
+    # this gate's universe — a dumps-into-hash flow in a verification
+    # harness forks canonical bytes the same way one under core/ does.
+    yield from runtime_file_universe(
+        root,
+        include_dev_scripts=True,
+        extra_excluded_parts=DATA_PACK_HOMES,
+    )
 
 
 def _callee_parts(node: ast.expr) -> tuple[str, ...]:
