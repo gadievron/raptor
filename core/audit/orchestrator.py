@@ -18413,6 +18413,35 @@ def _joern_live_timeout_s(
     return scaled
 
 
+def _joern_coverage_probe(
+    joern_server: Any,
+    function_name: str,
+    file_path: str,
+    timeout: int,
+    errors_out: list,
+) -> bool | None:
+    """The ONE home for the verdict legs' CPG coverage probes.
+
+    File-bound, always: a same-named definition (or a declared
+    prototype) ANYWHERE else in the CPG — common-name C static
+    helpers across TUs — is not coverage of THIS item.  An unbound
+    probe answers True off the cross-file namesake, which licenses
+    refutation-grade silence (the live query never modelled the
+    item's file) and keeps the channel in the dispatch record as
+    phantom class coverage feeding the suspicious→clean gate.  Both
+    consumers (the tool-chain leg and the CWE-dispatch leg) route
+    through this builder so the binding cannot drift per-site: a new
+    call site must supply the item's file.  The probe memo already
+    keys on ``(function_name, file_path)``.
+    """
+    return _joern_function_in_cpg(
+        joern_server, function_name,
+        file_path=file_path,
+        timeout=timeout,
+        errors_out=errors_out,
+    )
+
+
 _MAX_XREF_BYTES = 16384
 _MAX_XREF_NEIGHBORS = 16
 
@@ -19926,12 +19955,8 @@ def _run_tool_chain(
                             errored_types.add(tool_type)
                         if tier_counters:
                             _increment_tier_dict(tier_counters, "joern", "errors")
-                    elif (_cov := _joern_function_in_cpg(
-                        joern_server, function_name,
-                        # File-bound: a same-named definition (or a
-                        # declared prototype) elsewhere is not
-                        # coverage of THIS checklist item.
-                        file_path=file_path,
+                    elif (_cov := _joern_coverage_probe(
+                        joern_server, function_name, file_path,
                         # Same CPG-scaled, deadline-clamped budget as
                         # the live query this probe gates: the 10s
                         # def-time default times out on a loaded
@@ -21234,8 +21259,8 @@ def _proactive_validate(
                     errored.add("joern")
                     if tier_counters:
                         _increment_tier_dict(tier_counters, "joern", "errors")
-                elif (_cov := _joern_function_in_cpg(
-                    joern_server, outcome.function,
+                elif (_cov := _joern_coverage_probe(
+                    joern_server, outcome.function, outcome.file,
                     # Same CPG-scaled, deadline-clamped budget as the
                     # live query this probe gates — mirror of the
                     # tool-chain leg (the def-time 10s default times
