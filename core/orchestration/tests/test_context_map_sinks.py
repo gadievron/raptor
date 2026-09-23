@@ -859,3 +859,34 @@ class TestRawLinesForContainment:
         outside.write_text("x\n")
         cache: dict = {}
         assert _raw_lines_for(str(outside), target, cache) is None
+
+
+class TestSiblingDiscoveryRecency:
+    """Sibling scan order is NEWEST FIRST by mtime — a name sort only
+    matches recency for timestamp-named dirs, and project-mode run
+    dirs carry arbitrary names."""
+
+    def test_newer_sibling_wins_regardless_of_name(self, tmp_path: Path):
+        import os
+
+        from core.orchestration.context_map_sinks import (
+            _find_discovered_sinks,
+        )
+
+        run_dir = tmp_path / "current"
+        run_dir.mkdir()
+        # "zzz-old" sorts LAST lexicographically-descending-first but
+        # is the OLDER run; "aaa-new" is the newest.
+        old = tmp_path / "zzz-old"
+        new = tmp_path / "aaa-new"
+        for d, tag, age in ((old, "old", 2_000), (new, "new", 0)):
+            d.mkdir()
+            (d / "discovered-sinks.json").write_text(json.dumps(
+                {"discovered_sinks": [{"file": f"{tag}.c", "line": 1}],
+                 "tag": tag}))
+            stamp = 1_700_000_000 - age
+            os.utime(d, (stamp, stamp))
+
+        found = _find_discovered_sinks(run_dir)
+        assert found is not None
+        assert found["tag"] == "new"
