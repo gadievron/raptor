@@ -344,7 +344,10 @@ def build_summary_from_query_outputs(
 
 # Identifier immediately followed by an open paren — the way review
 # prose names a concrete call ("passes fmt to sprintf(dst, fmt)").
-_CALL_SHAPED_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_.]*)\s*\(")
+# Name run bounded — separator fills keep the \b live at every
+# planted head, so an unbounded run is re-scanned per head.
+_CALL_SHAPED_NAME_RE = re.compile(
+    r"\b([A-Za-z_][A-Za-z0-9_.]{0,128})\s*\(")
 
 # Fallback label when a reaches-sink assumption doesn't name the sink
 # concretely. Kept stable so dedup in propagate_taint_upward (keyed on

@@ -77,7 +77,10 @@ _DANGEROUS_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
     # flag tokens are \S+ (not [^ ]+): the space-only negation let a
     # tab-run split between the token and the separator — quadratic.
     # A flag containing embedded tabs is not a real nc invocation.
-    (re.compile(r"\bnc\s+(?:-\S+\s+)*[\w.\-]+\s+\d+"),
+    (re.compile(# Option token and loop bounded (tokens far above real nc
+     # invocations; the unbounded forms let crafted option storms
+     # re-scan per token).
+     r"\bnc\s+(?:-\S{1,256}\s+){0,32}[\w.\-]+\s+\d+"),
      "netcat to remote host"),
     (re.compile(r"\bbash\s+-c\s+[\"']?\$\("),
      "bash -c with command substitution"),

@@ -1210,7 +1210,11 @@ def _declared_locally(before_body: str, base: str) -> bool:
     # already covered by the type branch (`char *p`, `int a, *p` —
     # the `[\s*]` tail matches the star).
     return bool(re.search(
-        rf"\b(?:{_DECL_TYPE_TOKENS})\b[^;(){{}}=]*[\s*]"
+        # Type-to-name window bounded: a separator fill keeps the \b
+        # live at every planted type keyword, so an unbounded window
+        # is re-scanned per keyword — quadratic on hostile source
+        # (400 is far above real declaration spans).
+        rf"\b(?:{_DECL_TYPE_TOKENS})\b[^;(){{}}=]{{0,400}}[\s*]"
         rf"{b}\s*[=;,)\[]",
         before_body,
     ))

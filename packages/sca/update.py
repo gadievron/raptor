@@ -1932,10 +1932,14 @@ def _inline_sub_pypi(
     #    to leave PEP 508 markers untouched.
     spec_re = re.compile(
         rf"(?<![A-Za-z0-9._-])({name_re})"
-        rf"((?:\[[^\]\s]*\])?)"
+        # Extras, version and clause-count bounds: separator fills
+        # keep the lookbehind pin live at every planted name, so the
+        # unbounded spans re-scanned per plant — quadratic on hostile
+        # requirements text (bounds far above real specifier rows).
+        rf"((?:\[[^\]\s]{{0,256}}\])?)"
         # Horizontal whitespace only between clauses — ``\s`` would let
         # the trailing ``\s*`` swallow the line's newline into the spec.
-        rf"((?:[ \t]*(?:===|==|>=|<=|~=|!=|>|<)[ \t]*[^\s\\;\"',]+[ \t]*,?)+)",
+        rf"((?:[ \t]*(?:===|==|>=|<=|~=|!=|>|<)[ \t]*[^\s\\;\"',]{{1,256}}[ \t]*,?){{1,32}})",
         re.IGNORECASE,
     )
     declined = False
@@ -1965,7 +1969,8 @@ def _inline_sub_pypi(
     #    the segment (e.g. inside a trailing comment) is left alone.
     bare = re.compile(
         rf"(?<![A-Za-z0-9._-])({name_re})"
-        rf"((?:\[[^\]\s]*\])?)"
+        # Extras span bounded — same rationale as the specifier form.
+        rf"((?:\[[^\]\s]{{0,256}}\])?)"
         rf"(?![A-Za-z0-9._@/=\[-])",
         re.IGNORECASE,
     )

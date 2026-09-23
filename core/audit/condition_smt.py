@@ -3503,7 +3503,11 @@ _PARSED_INT_COMPARE_TEMPLATE = (
     r"\b{var}\b\s*[<>]=?|[<>]=?\s*\b{var}\b"
 )
 
-_PARSED_INT_CALL_ARG_RE = re.compile(r"\b([A-Za-z_][\w.]*)\s*\(([^()]*)\)")
+# Name run bounded — same boundary-fill rationale as the call
+# scans (separator fills keep \b live; unbounded runs re-scan per
+# planted head).
+_PARSED_INT_CALL_ARG_RE = re.compile(
+    r"\b([A-Za-z_][\w.]{0,128})\s*\(([^()]*)\)")
 
 # A direct text-to-integer parse call anywhere in a function body marks
 # that function as a parse WRAPPER: callers receive text-derived

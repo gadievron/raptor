@@ -1996,7 +1996,9 @@ def check_lock_ordering(
 # (auth_predicates / security_fields), never hardcoded per framework.
 _AUTH_TERM_SEED = frozenset({"auth", "login", "authentication"})
 
-_AMR_CALL_RE = re.compile(r"\b([A-Za-z_][\w.]*)\s*\(")
+# Name run bounded — separator fills keep the \b live at every
+# planted head, so an unbounded run is re-scanned per head.
+_AMR_CALL_RE = re.compile(r"\b([A-Za-z_][\w.]{0,128})\s*\(")
 _AMR_KEYWORDS = frozenset({
     "if", "elif", "while", "for", "return", "switch", "sizeof",
     "assert", "print", "len", "isinstance", "super", "str", "int",
