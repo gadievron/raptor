@@ -34,21 +34,28 @@ Evidence stamps are namespaced ``joern:guard-dominance`` /
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from ._util import is_valid_identifier
 from .sweep import SweepResult, _check_path_containment
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 
 GUARD_DOMINANCE_STAMP = "joern:guard-dominance"
 FLOW_STAMP = "joern:flow"
+# Sanitizer-aware flow lane (CWE-116): the confirm additionally claims
+# "no required-class sanitizer name on the flow path" — a textual
+# name-membership test that cannot prove the encoding was correct for
+# the context, so the stamp is detection-grade (below).
+FLOW_ENCODING_STAMP = "joern:flow-encoding"
 
 # Detection-grade joern stamps: bare taint reachability (``joern:live``
 # from the orchestrator's live-query corroboration, ``joern:pre_sweep``
@@ -58,8 +65,12 @@ FLOW_STAMP = "joern:flow"
 # receipts corroborate through multi-channel aggregation and never
 # convict or sustain alone. The hypothesis-endpoint-bound stamps
 # (``joern:flow``, ``joern:guard-dominance``, ``joern:taint:*``) keep
-# verification role.
-DETECTION_STAMPS = frozenset({"joern:live", "joern:pre_sweep"})
+# verification role. ``joern:flow-encoding`` is endpoint-bound too but
+# its extra premise — no sanitizer NAME on the path — is textual, so
+# it corroborates without convicting alone.
+DETECTION_STAMPS = frozenset({
+    "joern:live", "joern:pre_sweep", FLOW_ENCODING_STAMP,
+})
 
 
 def is_detection_rule_id(rule_id: str) -> bool:
@@ -98,7 +109,26 @@ FLOW_CWES = frozenset({
     # for all of these (sinks come from cwe_dispatch).
     "CWE-22", "CWE-23", "CWE-502", "CWE-918", "CWE-611", "CWE-601",
     "CWE-77", "CWE-94", "CWE-95", "CWE-1321",
+    # CWE-116: taint reaching an encoding-relevant emitter — the
+    # sanitizer-aware lane (confirms are detection-grade, see
+    # FLOW_ENCODING_STAMP / _FLOW_SANITIZER_CLASSES).
+    "CWE-116",
 })
+
+# CWE → required sanitizer classes (the sanitizer_catalog sink-class
+# vocabulary) for the sanitizer-aware flow lane. Scoped to CWE-116
+# only: filtering flows for the established families would be strictly
+# more conservative but is a behaviour change needing its own fixture
+# evidence — extend per class, never wholesale. Both directions
+# weighed at this site: adding a class here downgrades its flow
+# confirms to detection grade (FLOW_ENCODING_STAMP) in exchange for
+# the sanitizer-path premise; removing CWE-116 would let a bare
+# reachableByFlows confirm an "unencoded" claim it never tested.
+# Every class listed here MUST have seeds in _SANITIZER_NAME_SEEDS
+# (the lane-arming invariant — see that table's comment).
+_FLOW_SANITIZER_CLASSES: dict[str, tuple[str, ...]] = {
+    "CWE-116": ("xss",),
+}
 
 # Fallback sink lists for CWEs without a sink-carrying cwe_dispatch
 # entry (CWE-476 is joern=False there; CWE-20/74 have no entry at
@@ -210,15 +240,36 @@ def guard_chain_entry(cwe: str) -> dict[str, Any] | None:
                                               "cwe": norm}}
 
 
-def flow_chain_entry(cwe: str) -> dict[str, Any] | None:
-    """Tool-chain entry for the flow-reachability channel, or None."""
+def flow_chain_entry(
+    cwe: str, file_path: str | None = None,
+) -> dict[str, Any] | None:
+    """Tool-chain entry for the flow-reachability channel, or None.
+
+    Classes in :data:`_FLOW_SANITIZER_CLASSES` carry their required
+    sanitizer classes in the config — the dispatch site resolves them
+    to concrete names (catalog + IRIS specs + seeds) at check time.
+    ``file_path`` feeds the dispatch entry's ``joern_langs`` gate
+    (CWE-116 legs are c/cpp-only); entries without the key keep their
+    pre-existing ungated behaviour for every caller.
+    """
     norm = normalize_cwe(cwe)
     if norm not in FLOW_CWES:
         return None
+    try:
+        from .cwe_dispatch import joern_language_permitted
+    except ImportError:
+        pass
+    else:
+        if not joern_language_permitted(norm, file_path):
+            return None
     sinks = _sinks_for(norm)
     if not sinks:
         return None
-    return {"type": "joern_flow", "config": {"sinks": sinks}}
+    config: dict[str, Any] = {"sinks": sinks}
+    sanitizer_classes = _FLOW_SANITIZER_CLASSES.get(norm)
+    if sanitizer_classes:
+        config["sanitizer_classes"] = list(sanitizer_classes)
+    return {"type": "joern_flow", "config": config}
 
 
 def _sinks_for(norm_cwe: str) -> list[str]:
@@ -231,6 +282,161 @@ def _sinks_for(norm_cwe: str) -> list[str]:
     if not sinks:
         sinks = _DEFAULT_GUARD_SINKS.get(norm_cwe, [])
     return sinks
+
+
+# ── sanitizer-name resolution for the sanitizer-aware flow lane ──────
+
+# File suffix → known_safe_calls catalog language. Only the languages
+# the curated catalog actually carries entries for — other targets get
+# their sanitizer vocabulary from the IRIS specs and the seeds.
+_CATALOG_LANG_BY_EXT: dict[str, str] = {
+    ".py": "python",
+    ".java": "java",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+}
+
+# SEED-tier encoder names per sanitizer class: small, curated,
+# universal library encoders only (the seed-set policy). The real
+# per-target vocabulary is learned — IRIS sanitiser-role specs read
+# from the run's out dir at check time. INVARIANT (pinned by test):
+# every class in _FLOW_SANITIZER_CLASSES has a non-empty seed tuple
+# here, so flow_sanitizer_names never resolves empty for an armed
+# lane — an empty resolution would silently stamp the confirm with
+# the verification-grade FLOW_STAMP instead of FLOW_ENCODING_STAMP.
+_SANITIZER_NAME_SEEDS: dict[str, tuple[str, ...]] = {
+    "xss": ("htmlspecialchars", "htmlentities", "urlencode",
+            "rawurlencode"),
+}
+
+# Per-path memo of IRIS sanitiser names, keyed on mtime_ns so a
+# refreshed spec file re-reads (the specs are written once per run
+# but the checks run for hours).
+_IRIS_SANITIZER_MEMO: dict[str, tuple[int, tuple[str, ...]]] = {}
+
+
+def _iris_sanitizer_names(out_dir: Path | None) -> tuple[str, ...]:
+    """Sanitiser-role function names from the run's IRIS specs.
+
+    Reads ``iris-taint-specs.json`` from *out_dir* (the file the
+    orchestrator's spec-prep phase writes). Missing/unreadable/
+    unparseable file → empty; a malformed ENTRY is skipped
+    individually (one junk spec must not drop the valid ones) — the
+    lane degrades to catalog + seeds, never errors.
+    """
+    if out_dir is None:
+        return ()
+    path = Path(out_dir) / "iris-taint-specs.json"
+    try:
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return ()
+    key = str(path)
+    memo = _IRIS_SANITIZER_MEMO.get(key)
+    if memo is not None and memo[0] == mtime:
+        return memo[1]
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — degrade per the docstring contract
+        # A defective spec FILE (unreadable bytes, invalid JSON)
+        # degrades this tier to empty — a malformed run artifact must
+        # never abort the flow check itself.
+        return ()
+    if not isinstance(raw, list):
+        return ()
+    found: set[str] = set()
+    for item in raw:
+        # Per-entry tolerance: skip junk entries individually. Both
+        # role spellings accepted — parse_spec_response normalises
+        # "sanitizer" → "sanitiser" at LLM-parse time, but a spec
+        # file written by another producer may carry either form.
+        if not isinstance(item, dict):
+            continue
+        if item.get("role") not in ("sanitiser", "sanitizer"):
+            continue
+        fn = item.get("function")
+        if isinstance(fn, str) and is_valid_identifier(fn):
+            found.add(fn)
+    names = tuple(sorted(found))
+    _IRIS_SANITIZER_MEMO[key] = (mtime, names)
+    return names
+
+
+def flow_sanitizer_names(
+    sanitizer_classes: Sequence[str],
+    file_path: str,
+    out_dir: Path | None,
+) -> tuple[str, ...]:
+    """Concrete sanitizer names for the sanitizer-aware flow lane.
+
+    Union of three tiers: the curated known-safe catalog (sink-class
+    match, language from the file suffix), the run's IRIS-synthesised
+    sanitiser specs (the learned per-target vocabulary), and the
+    per-class seeds. Empty when *sanitizer_classes* is empty — the
+    plain flow lane is untouched.
+    """
+    classes = {c for c in sanitizer_classes if c}
+    if not classes:
+        return ()
+    names: set[str] = set()
+    lang = _CATALOG_LANG_BY_EXT.get(Path(file_path or "").suffix.lower())
+    if lang:
+        try:
+            from core.dataflow.known_safe_calls import all_entries
+        except ImportError:
+            pass
+        else:
+            names.update(
+                entry.library_call
+                for entry in all_entries()
+                if entry.sink_class in classes and lang in entry.languages
+            )
+    names.update(_iris_sanitizer_names(out_dir))
+    for cls in classes:
+        names.update(_SANITIZER_NAME_SEEDS.get(cls, ()))
+    return tuple(sorted(names))
+
+
+def _partition_sanitized_flows(
+    flows: list[Any],
+    sanitizer_names: Sequence[str],
+) -> tuple[list[Any], list[Any]]:
+    """Split flows into (unsanitized, sanitized) by path-step calls.
+
+    A flow is *sanitized* when any step's code calls a sanitizer name
+    (word boundary + open paren; dotted catalog names match on their
+    trailing segment, mirroring the sink-name handling). Textual by
+    design — the honest claim is "no sanitizer NAME on the returned
+    path", nothing stronger. Known suppression trigger: step code is
+    raw source text, so a sanitizer name followed by ``(`` inside a
+    STRING LITERAL or comment on a path step also counts as sanitized
+    — a target can suppress this lane's confirms by mentioning
+    encoder names in strings. Suppression-direction only (the lane
+    goes inconclusive, the class stays dark for review); the stamp is
+    detection-grade regardless, so nothing convicting is lost.
+    """
+    patterns = [
+        re.compile(
+            rf"\b{re.escape(name.rsplit('.', maxsplit=1)[-1])}\s*\(",
+        )
+        for name in sanitizer_names
+    ]
+    unsanitized: list[Any] = []
+    sanitized: list[Any] = []
+    for flow in flows:
+        texts = " ".join(
+            str(getattr(s, "code", ""))
+            for s in (getattr(flow, "steps", []) or [])
+        )
+        if any(p.search(texts) for p in patterns):
+            sanitized.append(flow)
+        else:
+            unsanitized.append(flow)
+    return unsanitized, sanitized
 
 
 # ── hypothesis extraction ────────────────────────────────────────────
@@ -1100,6 +1306,7 @@ def run_flow_reachability_check(
     server: Any = None,
     timeout: int | None = None,
     max_call_depth: int = 2,
+    sanitizer_names: Sequence[str] = (),
 ) -> SweepResult:
     """Flow-reachability verdict for a taint-style hypothesis.
 
@@ -1112,8 +1319,17 @@ def run_flow_reachability_check(
         absent (vacuity guard: an empty-source query "finding no flow"
         proves nothing).
       * ``error`` — Joern unavailable, invalid input, or query error.
+
+    ``sanitizer_names`` arms the sanitizer-aware lane (the CWE-116
+    encoding families): flows whose path steps call one of the names
+    do not confirm — when EVERY returned flow is sanitized the outcome
+    is ``inconclusive`` (a name match proves neither correct encoding
+    nor its absence, so it is not a refutation either), and confirms
+    from the remaining flows carry the detection-grade
+    :data:`FLOW_ENCODING_STAMP` instead of :data:`FLOW_STAMP`. The
+    zero-flow refutation lane is unchanged.
     """
-    tool_stamp = FLOW_STAMP
+    tool_stamp = FLOW_ENCODING_STAMP if sanitizer_names else FLOW_STAMP
     sink_bare = sink_call.rsplit(".", maxsplit=1)[-1]
     pre = _validate_common(
         tool_stamp, target_path, file_path, function_name, server,
@@ -1203,6 +1419,31 @@ def run_flow_reachability_check(
                 f"flows returned but none mentions {source_id!r} — "
                 "refusing to confirm (identifier-consistency control)",
             )
+        sanitized_count = 0
+        if sanitizer_names:
+            consistent, sanitized = _partition_sanitized_flows(
+                consistent, sanitizer_names,
+            )
+            sanitized_count = len(sanitized)
+            if not consistent:
+                # Every returned flow passes a required-class
+                # sanitizer name: the "reaches the sink unencoded"
+                # premise failed, so no confirm — and a name match
+                # proves nothing about encoding correctness for the
+                # context, so no refutation either.
+                return _inconclusive(
+                    tool_stamp, file_path, function_name,
+                    f"every flow from {source_id!r} to {sink_bare!r} "
+                    "passes a required-class sanitizer name — "
+                    "refusing to confirm (encoding residual not "
+                    "shown); not a refutation (a sanitizer name does "
+                    "not prove correct encoding for the context)",
+                    details={"sanitized_flow_count": sanitized_count},
+                )
+        details: dict[str, Any] = {"source": source_id, "sink": sink_bare}
+        if sanitizer_names:
+            details["sanitized_flow_count"] = sanitized_count
+            details["sanitizer_names_checked"] = list(sanitizer_names)
         return SweepResult(
             tool="joern",
             file_path=file_path,
@@ -1211,7 +1452,7 @@ def run_flow_reachability_check(
             matches=[f.to_dict() for f in consistent],
             rule_id=tool_stamp,
             raw_output=(result.raw_output or "")[:2000],
-            details={"source": source_id, "sink": sink_bare},
+            details=details,
         )
 
     if not facts["source_count"] or not facts["sink_count"]:
