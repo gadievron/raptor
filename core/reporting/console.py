@@ -32,6 +32,13 @@ def _display_width(s: str) -> int:
 #: render_console_table for the trade-off note).
 _DEFAULT_MAX_WIDTH = 256
 
+#: Code-point ceiling for the title and footer lines. They carry
+#: the same finding-derived text class as cells, and escaping alone
+#: does not bound LENGTH — without a ceiling one hostile slot could
+#: dictate the whole render's size. Generous: real titles are one
+#: line, real footers a few lines of counts.
+_TITLE_FOOTER_MAX_CHARS = 4096
+
 
 def _cell_code_point_cap(w: int) -> int:
     """Code-point ceiling for a cell truncated to display width *w*.
@@ -89,8 +96,12 @@ def render_console_table(
     # multi-line prose): pre-fix only cells and headers were escaped,
     # and a finding-derived title/footer carried raw ANSI/BEL through.
     title = escape_nonprintable(str(title), preserve_newlines=True)
+    if len(title) > _TITLE_FOOTER_MAX_CHARS:
+        title = title[:_TITLE_FOOTER_MAX_CHARS] + " [elided]"
     if footer is not None:
         footer = escape_nonprintable(str(footer), preserve_newlines=True)
+        if len(footer) > _TITLE_FOOTER_MAX_CHARS:
+            footer = footer[:_TITLE_FOOTER_MAX_CHARS] + " [elided]"
     safe_columns = [escape_nonprintable(str(h)) for h in columns]
     safe_rows = [
         tuple(escape_nonprintable(str(cell)) for cell in row)

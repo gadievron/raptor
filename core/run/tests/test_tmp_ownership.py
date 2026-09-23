@@ -145,3 +145,51 @@ class TestSweep:
             tempfile, "tempdir", str(tmp_path / "gone"),
         )
         assert sweep_dead_owner_dirs(PREFIX) == []
+
+
+class TestOwnerPidGatedRead:
+    """Markers live in world-writable /tmp — the type/size gate must
+    hold on the inode actually read (a FIFO swapped in after a
+    by-name lstat blocked the reaper forever), and symlinked markers
+    stay refused (O_NOFOLLOW keeps the lstat semantics)."""
+
+    def test_fifo_marker_none_not_hung(self, tmp_path: Path):
+        import signal as _signal
+
+        from core.run.tmp_ownership import _owner_pid
+
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("platform lacks mkfifo")
+        marker = tmp_path / OWNER_MARKER_NAME
+        os.mkfifo(marker)
+
+        def _on_alarm(signum, frame):
+            msg = "_owner_pid blocked on a planted FIFO"
+            raise AssertionError(msg)
+
+        old = _signal.signal(_signal.SIGALRM, _on_alarm)
+        _signal.alarm(30)
+        try:
+            assert _owner_pid(marker) is None
+        finally:
+            _signal.alarm(0)
+            _signal.signal(_signal.SIGALRM, old)
+
+    def test_symlinked_marker_refused(self, tmp_path: Path):
+        from core.run.tmp_ownership import _owner_pid
+
+        real = tmp_path / "real.json"
+        real.write_text(json.dumps({"pid": os.getpid()}))
+        marker = tmp_path / OWNER_MARKER_NAME
+        try:
+            marker.symlink_to(real)
+        except OSError:
+            pytest.skip("platform lacks symlinks")
+        assert _owner_pid(marker) is None
+
+    def test_valid_marker_roundtrip(self, tmp_path: Path):
+        from core.run.tmp_ownership import _owner_pid
+
+        marker = tmp_path / OWNER_MARKER_NAME
+        marker.write_text(json.dumps({"pid": os.getpid()}))
+        assert _owner_pid(marker) == os.getpid()

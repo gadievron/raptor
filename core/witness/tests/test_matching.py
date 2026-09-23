@@ -426,3 +426,18 @@ def test_fifo_binary_path_does_not_hang_scoring(tmp_path):
         _signal.alarm(0)
         _signal.signal(_signal.SIGALRM, old)
     assert score == 0
+
+
+def test_bare_basename_never_suffix_joins():
+    # A single-component finding path would suffix-join ANY same-named
+    # file anywhere in a sibling run's tree — and the matched bytes
+    # influence downstream feasibility verdicts in both directions.
+    # Bare basenames join on exact equality only.
+    w = _make_witness(
+        {"file_path": "/sibling-run/other_project/src/util/index.js"})
+    score, _ = score_witness_for_finding(w, {"file": "index.js"})
+    assert score == 0
+    # Exact single-component equality still joins.
+    w2 = _make_witness({"file_path": "index.js"})
+    score2, _ = score_witness_for_finding(w2, {"file": "index.js"})
+    assert score2 == 4

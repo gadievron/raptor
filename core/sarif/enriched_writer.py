@@ -226,9 +226,13 @@ def build_enriched_sarif(
     skipped_by_tool: dict[str, list[dict[str, Any]]] = {}
 
     for idx, f in enumerate(findings):
-        tool = (
-            f.get("tool") if isinstance(f, dict) else None
-        ) or tool_name
+        # The tool key must be a usable string BEFORE any dict use —
+        # a junk-shaped (unhashable) tool value would otherwise kill
+        # the export at the very bookkeeping that exists to contain
+        # junk rows.
+        tool = f.get("tool") if isinstance(f, dict) else None
+        if not isinstance(tool, str) or not tool:
+            tool = tool_name
         runs_by_tool.setdefault(tool, [])
         rules_by_tool.setdefault(tool, {})
 
@@ -253,21 +257,30 @@ def build_enriched_sarif(
                 type(exc).__name__,
                 escape_nonprintable(str(exc))[:200],
             )
+            # The notification text carries finding-derived bytes and
+            # downstream consumers render notifications to terminals —
+            # escape here, same as the log line.
             skipped_by_tool.setdefault(tool, []).append({
                 "level": "error",
                 "message": {"text": (
-                    f"finding {idx} ({rid[:100]}) skipped: "
-                    f"{type(exc).__name__}: {str(exc)[:200]}"
+                    f"finding {idx} ({escape_nonprintable(rid)[:100]}) "
+                    f"skipped: {type(exc).__name__}: "
+                    f"{escape_nonprintable(str(exc))[:200]}"
                 )},
             })
             continue
         runs_by_tool[tool].append(result)
 
-        rid = f.get("rule_id") or "unknown"
+        # Same containment for the rule registry: a non-string
+        # rule_id is junk (and unhashable shapes crashed the dict
+        # membership test); the row itself already exported above.
+        rid = f.get("rule_id")
+        if not isinstance(rid, str) or not rid:
+            rid = "unknown"
         if rid not in rules_by_tool[tool]:
             rule_entry: dict[str, Any] = {"id": rid}
             cwe = f.get("cwe_id")
-            if cwe:
+            if isinstance(cwe, str) and cwe:
                 rule_entry["properties"] = {"cwe": [cwe]}
             desc = f.get("message")
             if desc:
