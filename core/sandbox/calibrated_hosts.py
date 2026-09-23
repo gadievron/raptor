@@ -35,6 +35,8 @@ import subprocess
 import threading
 from collections.abc import Iterable, Sequence
 
+from core.sandbox.errors import SandboxSetupError
+
 logger = logging.getLogger(__name__)
 
 
@@ -70,26 +72,32 @@ def calibrated_profile(
 
     # Check the memo under the lock. On a miss, plant an Event so
     # concurrent threads wait for the single in-flight calibration
-    # instead of stampeding N probes.
-    with _CACHE_LOCK:
-        cached = _CACHE.get(key, _MISSING)
-        if isinstance(cached, threading.Event):
-            waiter = cached
-        elif cached is not _MISSING:
-            return cached
-        else:
-            waiter = None
-            sentinel = threading.Event()
-            _CACHE[key] = sentinel
-
-    if waiter is not None:
-        waiter.wait()
-        with _CACHE_LOCK:
-            return _CACHE.get(key)
-
-    # We own the calibration slot.
+    # instead of stampeding N probes. The plant happens INSIDE the
+    # try whose finally sets the Event: an owner dying between the
+    # plant and the probe (an async BaseException in that window)
+    # previously left the sentinel forever unset and parked every
+    # later caller for this key in waiter.wait() for the process
+    # lifetime.
     result = None
+    sentinel: threading.Event | None = None
     try:
+        with _CACHE_LOCK:
+            cached = _CACHE.get(key, _MISSING)
+            if isinstance(cached, threading.Event):
+                waiter = cached
+            elif cached is not _MISSING:
+                return cached
+            else:
+                waiter = None
+                sentinel = threading.Event()
+                _CACHE[key] = sentinel
+
+        if waiter is not None:
+            waiter.wait()
+            with _CACHE_LOCK:
+                return _CACHE.get(key)
+
+        # We own the calibration slot.
         try:
             from core.sandbox.calibrate import load_or_calibrate
         except ImportError:
@@ -113,10 +121,28 @@ def calibrated_profile(
                 "to static policy", tag, bin_path, exc,
             )
             result = None
+        except SandboxSetupError as exc:
+            # DELIBERATE BaseException absorption: SandboxSetupError
+            # subclasses BaseException precisely so ENFORCEMENT
+            # callers cannot swallow it — but this layer is
+            # documented fail-soft ADVISORY measurement (every
+            # consumer treats None as "use the static fallback").
+            # On a degraded host the calibration probe's sandboxed
+            # run refuses with SandboxSetupError; letting it escape
+            # converted an advisory measurement into an exception no
+            # consumer `except Exception` could absorb — failing
+            # exactly the runs the static-hosts fallback exists to
+            # carry.
+            logger.debug(
+                "%s: calibration of %s refused by the sandbox (%s); "
+                "falling back to static policy", tag, bin_path, exc,
+            )
+            result = None
     finally:
-        with _CACHE_LOCK:
-            _CACHE[key] = result
-        sentinel.set()
+        if sentinel is not None:
+            with _CACHE_LOCK:
+                _CACHE[key] = result
+            sentinel.set()
     return result
 
 
