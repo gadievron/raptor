@@ -139,9 +139,19 @@ rules:
       the dependency entirely.
     languages: [javascript, typescript]
     severity: CRITICAL
-    pattern-either:
-      - pattern: serialize.unserialize(...)
+    patterns:
+      # Receiver-anchored: unserialize() is only node-serialize's RCE
+      # vector when the receiver is bound to the node-serialize
+      # module — a project's own codec exposing an unserialize()
+      # method must not mint a CRITICAL verdict by method name alone.
       - pattern: $NS.unserialize(...)
+      - pattern-either:
+          - pattern-inside: |
+              $NS = require('node-serialize')
+              ...
+          - pattern-inside: |
+              import $NS from 'node-serialize'
+              ...
     metadata:
       cwe: ["CWE-502"]
       owasp_top_10: ["A8:2021-Software and Data Integrity Failures"]
