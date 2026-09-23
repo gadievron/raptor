@@ -195,12 +195,12 @@ def iter_refs(
     if not store_dir.is_dir():
         return
     for entry in sorted(store_dir.iterdir()):
+        # The .json suffix filter is load-bearing for crash recovery
+        # too: an in-flight atomic write's temp (save_json names them
+        # .~savejson-<name>.json.<pid>.<tid>.<rand>.tmp; the atomic_fs
+        # default prefix is .atomic-) always ends .tmp, so a process
+        # killed mid-write leaves nothing this walk can pick up.
         if not entry.is_file() or not entry.name.endswith(".json"):
-            continue
-        if entry.name.startswith(".tmp-"):
-            # An in-flight atomic write left a tmp file behind
-            # (process killed mid-write). Skip silently — the
-            # final-named entry is what's load-bearing.
             continue
         payload = load_json(entry, max_bytes=8 * 1024 * 1024)
         if not isinstance(payload, dict):
