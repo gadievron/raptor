@@ -116,14 +116,14 @@ def _instructor_truncation_stop(exc: Exception) -> str | None:
 # Package roots whose exception classes come from an HTTP / SDK
 # transport layer. Used to decide whether an exception MESSAGE is
 # trustworthy evidence about the API's behaviour (status codes,
-# rate-limit vocabulary) — see ``_is_api_transport_exception``.
+# rate-limit vocabulary) — see ``is_api_transport_exception``.
 _TRANSPORT_EXC_MODULE_ROOTS: frozenset[str] = frozenset({
     "openai", "anthropic", "google", "httpx", "httpcore",
     "requests", "urllib3", "aiohttp", "ssl", "socket",
 })
 
 
-def _is_api_transport_exception(exc: Exception) -> bool:
+def is_api_transport_exception(exc: BaseException) -> bool:
     """Whether *exc* originates from an HTTP/SDK transport layer.
 
     Message sniffing for quota / rate-limit / auth vocabulary is only
@@ -132,13 +132,39 @@ def _is_api_transport_exception(exc: Exception) -> bool:
     message — a ``429`` or ``rate limit`` inside it describes the
     CONTENT of a completed, recoverable generation, not the API's
     status, and must not be routed as a quota boundary.
+
+    Public: every classifier whose verdict can disable, demote, or
+    latch-out a transport (retry kill, session-wide model skip,
+    ``budget``/``quota`` dispositions) gates its message arms on this
+    predicate so model-echoed content cannot steer model selection.
     """
     if getattr(exc, "status_code", None) is not None:
         return True
     if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
         return True
+    # Explicit opt-in for RAPTOR's own transport-boundary exception
+    # types (e.g. ``cc_adapter.CCTransportError``, which relays the
+    # claude CLI's error envelope): a class-level marker, set by code,
+    # never derivable from message content.
+    if getattr(exc, "is_api_transport", False) is True:
+        return True
     module_root = (type(exc).__module__ or "").split(".")[0]
     return module_root in _TRANSPORT_EXC_MODULE_ROOTS
+
+
+class TransportRelayError(RuntimeError):
+    """RuntimeError shape whose message RELAYS a transport exception.
+
+    Wrap sites that re-shape a raw SDK/socket exception into the
+    ``RuntimeError`` convention (e.g. ``_convert_stream_failure``)
+    would otherwise strip the transport provenance the message-based
+    classifiers now require — a genuine mid-stream billing error would
+    become inert. Raise this ONLY when the wrapped source passed
+    ``is_api_transport_exception``; never for messages that embed
+    model-generated content.
+    """
+
+    is_api_transport = True
 
 
 _TEMPERATURE_DEPRECATED_FROM = (4, 7)
@@ -601,14 +627,21 @@ class LLMProvider(ABC):
         can echo auth headers, the prompt, and the request URL, plus
         control bytes that forge log/terminal output) and keeps the
         original text so message-based classifiers (credit exhaustion,
-        rate-limit vocabulary) still see it.
+        rate-limit vocabulary) still see it. When the source exception
+        is transport-corroborated, the wrapper is a
+        ``TransportRelayError`` so that corroboration survives the
+        re-shaping — the classifiers' message arms are transport-gated.
         """
         from core.security.log_sanitisation import escape_nonprintable
         from core.security.redaction import redact_secrets
         detail = escape_nonprintable(redact_secrets(_redact_endpoint(
             str(exc), getattr(self.config, "api_base", None),
         )))[:512]
-        return RuntimeError(
+        exc_cls = (
+            TransportRelayError if is_api_transport_exception(exc)
+            else RuntimeError
+        )
+        return exc_cls(
             f"stream failed mid-turn ({type(exc).__name__}): {detail}"
         )
 
@@ -804,7 +837,7 @@ class LLMProvider(ABC):
         # routing it as a boundary skipped the fallback entirely.
         # Type-name and status-code checks stay unconditional — those
         # attributes only exist on real SDK exceptions.
-        transport = _is_api_transport_exception(exc)
+        transport = is_api_transport_exception(exc)
         # Quota before auth: AUTH_KEYWORDS_RE deliberately covers
         # billing vocabulary ("quota", "rate limit"), so the
         # rate-limit check must win for the label to be honest.
@@ -3722,6 +3755,14 @@ def is_credit_exhausted(exc: BaseException) -> bool:
     Provider-agnostic: checks the exception message for credit/billing
     keywords across Anthropic (400 ``credit balance is too low``),
     OpenAI (429 ``exceeded your current quota``), and generic shims.
+
+    The message/body arms require transport corroboration
+    (``is_api_transport_exception``): billing exhaustion is a statement
+    the PROVIDER makes via its error envelope, never something model
+    output can assert. A validation/shape exception quoting model
+    content that happens to contain billing vocabulary is inert —
+    logged at DEBUG, never classified — because this verdict kills the
+    retry policy and labels the telemetry disposition ``budget``.
     """
     status = getattr(exc, "status_code", None)
     # Only 400/401/402/403/429 carry billing errors — 5xx never does.
@@ -3735,7 +3776,7 @@ def is_credit_exhausted(exc: BaseException) -> bool:
             text += " " + str(err.get("message", "")).lower()
         elif isinstance(err, str):
             text += " " + err.lower()
-    return any(phrase in text for phrase in (
+    matched = any(phrase in text for phrase in (
         "credit balance is too low",
         "exceeded your current quota",
         "insufficient_quota",
@@ -3744,6 +3785,16 @@ def is_credit_exhausted(exc: BaseException) -> bool:
         "billing not active",
         "reached your specified api usage limits",
     ))
+    if not matched:
+        return False
+    if not is_api_transport_exception(exc):
+        logger.debug(
+            "Billing vocabulary in non-transport %s ignored "
+            "(content-level match without transport corroboration)",
+            type(exc).__name__,
+        )
+        return False
+    return True
 
 
 def _message_to_anthropic_wire(m: Message) -> dict[str, Any]:
@@ -4386,6 +4437,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
         from .cc_adapter import (
             CCDispatchConfig,
+            CCTransportError,
             build_cc_command,
             run_cc_streaming,
             system_prompt_file_for,
@@ -4439,7 +4491,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 )
         except subprocess.TimeoutExpired as e:
             msg = f"claude -p timed out after {call_timeout}s"
-            raise RuntimeError(msg) from e
+            raise CCTransportError(msg) from e
         duration = _time.monotonic() - start
 
         # Book usage BEFORE the error check: a failed call (budget
@@ -4461,7 +4513,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         )
 
         if sr.error:
-            raise RuntimeError(sr.error)
+            raise CCTransportError(sr.error)
 
         # The claude-code harness reports the model it used in the
         # stream-json output; treat that as the resolved snapshot. But
@@ -4507,6 +4559,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
 
         from .cc_adapter import (
             CCDispatchConfig,
+            CCTransportError,
             build_cc_command,
             run_cc_streaming,
             system_prompt_file_for,
@@ -4572,7 +4625,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
                 )
         except subprocess.TimeoutExpired as e:
             msg = f"claude -p timed out after {call_timeout}s"
-            raise RuntimeError(msg) from e
+            raise CCTransportError(msg) from e
         duration = _time.monotonic() - start
 
         # Book usage BEFORE the error/parse checks: a failed call
@@ -4594,7 +4647,7 @@ class ClaudeCodeLLMProvider(LLMProvider):
         )
 
         if sr.error:
-            raise RuntimeError(sr.error)
+            raise CCTransportError(sr.error)
 
         if sr.structured_output is not None:
             result = sr.structured_output

@@ -15,6 +15,7 @@ import json
 
 import pytest
 
+from core.llm.cc_adapter import CCTransportError
 from core.llm.client import (
     LLMClient,
     _failure_disposition,
@@ -44,8 +45,12 @@ def test_auth_error_gets_own_disposition() -> None:
 def test_budget_abort_gets_own_disposition() -> None:
     assert _failure_disposition(
         RuntimeError("claude -p exited 1: error_max_budget_usd")) == "budget"
+    # Billing text needs transport corroboration — on the claudecode
+    # transport that is CCTransportError (the CLI's error envelope).
     assert _failure_disposition(
-        RuntimeError("your credit balance is too low")) == "budget"
+        CCTransportError(
+            "claude -p exited 1: your credit balance is too low",
+        )) == "budget"
 
 
 def test_shape_failure_disposition_stays_fatal() -> None:
@@ -65,10 +70,10 @@ def test_shape_failure_disposition_stays_fatal() -> None:
     RuntimeError("401 unauthorized"),
     RuntimeError("403 permission denied"),
     RuntimeError("claude -p exited 1: error_max_budget_usd"),
-    RuntimeError("your credit balance is too low"),
+    CCTransportError("claude -p exited 1: your credit balance is too low"),
     RuntimeError("Anthropic returned empty content (stop_reason=end_turn)"),
     RuntimeError("Gemini returned empty response (finish_reason=OTHER)"),
-    RuntimeError("429 rate limit exceeded"),
+    CCTransportError("claude -p exited 1: 429 rate limit exceeded"),
     TimeoutError("read timed out"),
     ConnectionError("connection reset by peer"),
 ])
