@@ -12,9 +12,9 @@ rules:
     languages: [java, javascript, python]
     severity: HIGH
     pattern-either:
-      - pattern: $Q = "=~/(?i)^(select|insert|update|delete|create|drop|alter)[^a-z0-9_]/" + ...
+      - pattern: $Q = "=~/(?i)^\s*(select|insert|update|delete|create|drop|alter)[^a-z0-9_]/" + ...
       - patterns:
-          - pattern: $OBJ.$METHOD("=~/(?i)^(select|insert|update|delete)[^a-z0-9_]/" + ...)
+          - pattern: $OBJ.$METHOD("=~/(?i)^\s*(select|insert|update|delete)[^a-z0-9_]/" + ...)
           - metavariable-regex:
               metavariable: $METHOD
               regex: ^(executeQuery|executeUpdate|execute|executemany|query|rawQuery)$
@@ -26,7 +26,7 @@ rules:
     message: SQL query formed by %-formatting; use parameterised queries or placeholders.
     languages: [python]
     severity: HIGH
-    pattern: $Q = "=~/(?i)^(select|insert|update|delete)[^a-z0-9_]/" % ...
+    pattern: $Q = "=~/(?i)^\s*(select|insert|update|delete)[^a-z0-9_]/" % ...
     metadata:
       cwe: ["CWE-89"]
       asvs: ["V5.1"]
@@ -38,7 +38,7 @@ rules:
     # Deep match on the innermost `"SQL..." . $X` node so left-assoc
     # chains fire; a constant SQL string with no concatenation has no
     # `.` node and stays silent.
-    pattern: $Q = <... "=~/(?i)^(select|insert|update|delete)[^a-z0-9_]/" . $X ...>;
+    pattern: $Q = <... "=~/(?i)^\s*(select|insert|update|delete)[^a-z0-9_]/" . $X ...>;
     metadata:
       cwe: ["CWE-89"]
       asvs: ["V5.1"]
