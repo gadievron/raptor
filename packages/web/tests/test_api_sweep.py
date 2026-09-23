@@ -353,3 +353,40 @@ class TestReplayShapePartition(unittest.TestCase):
         for hit in hits[2:]:
             self.assertEqual(hit["verification"]["status"], "skipped")
             self.assertIn("shape", hit["verification"]["reason"])
+
+
+class TestSweepFlagsDeriveMechanically(unittest.TestCase):
+    def test_inline_flags_come_from_the_marker_patterns_themselves(self):
+        """The sweep's inline flags are derived from each marker
+        pattern's compile-time flags (markers.go_inline_flags) — a
+        hand-typed per-class table silently desynced whenever a marker
+        pattern's flags changed."""
+        from packages.web.markers import (
+            MARKER_RES,
+            STATIC_SIGNATURE_CLASSES,
+            go_inline_flags,
+        )
+
+        alternation = sweep_match_regex()
+        for name in STATIC_SIGNATURE_CLASSES:
+            expected = (
+                f"(?{go_inline_flags(MARKER_RES[name])}:"
+                f"{MARKER_RES[name].pattern})"
+            )
+            self.assertIn(expected, alternation, name)
+
+    def test_flag_derivation_reads_the_compiled_flags(self):
+        import re as re_module
+
+        from packages.web.markers import go_inline_flags
+
+        self.assertEqual(
+            go_inline_flags(re_module.compile("x", re_module.I)), "i",
+        )
+        self.assertEqual(
+            go_inline_flags(
+                re_module.compile("x", re_module.I | re_module.M | re_module.S),
+            ),
+            "ims",
+        )
+        self.assertEqual(go_inline_flags(re_module.compile("x")), "")

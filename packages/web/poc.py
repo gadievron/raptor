@@ -30,7 +30,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from core.logging import get_logger
 from core.security.redaction import redact_secrets
-from packages.web.markers import MARKER_RES
+from packages.web.markers import MARKER_RES, go_inline_flags
 from packages.web.verified_outcomes import has_exploit_oracle_evidence
 
 if TYPE_CHECKING:
@@ -50,13 +50,7 @@ def _go_regex_for(vuln_type: str) -> str | None:
     pattern = MARKER_RES.get(vuln_type)
     if pattern is None:
         return None
-    inline = ""
-    if pattern.flags & re.IGNORECASE:
-        inline += "i"
-    if pattern.flags & re.MULTILINE:
-        inline += "m"
-    if pattern.flags & re.DOTALL:
-        inline += "s"
+    inline = go_inline_flags(pattern)
     return (f"(?{inline})" if inline else "") + pattern.pattern
 
 
@@ -132,9 +126,14 @@ def _oob_reproducer(data: dict) -> str:
             f"-H {shlex.quote(position + ': ')}{_CALLBACK_EXPANSION}"
         )
     else:
+        # Strip any fragment first: it sorts AFTER the query in the
+        # rebuilt URL, so the appended callback expansion would land
+        # inside the fragment — a reproducer that silently probes
+        # nothing (reachable via OpenAPI/hand-fed URLs).
+        defragged = urlunparse(urlparse(target)._replace(fragment=""))
         curl = (
             f"curl -sk -X GET "
-            f"{shlex.quote(_url_with_param(target, position, ''))}"
+            f"{shlex.quote(_url_with_param(defragged, position, ''))}"
             f"{_CALLBACK_EXPANSION}"
         )
     return (

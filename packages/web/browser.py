@@ -236,6 +236,11 @@ class BrowserEngine:
                     target,
                 ):
                     self._blocked_requests += 1
+                    # Record the blocked hop destination too: without
+                    # it the blocked_hosts diff was blind to poisoned
+                    # markup delivered via a same-origin request whose
+                    # redirect CHAIN pivoted off-origin.
+                    self._note_blocked(target)
                     route.abort()
                     return
                 hop_headers = {

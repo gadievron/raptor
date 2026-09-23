@@ -232,3 +232,23 @@ def test_normal_template_round_trips_through_yaml():
     parsed = yaml.safe_load(build_nuclei_template(_proven()))
     assert parsed["http"][0]["method"] == "GET"
     assert parsed["info"]["severity"] == "high"
+
+
+def test_oob_reproducer_with_fragment_url_still_probes_the_query():
+    reproducer = build_reproducer(_proven(
+        attack_vector="oob_callback",
+        vuln_type="ssrf",
+        cwe_id="CWE-918",
+        target_url="https://example.test/x?u=orig#frag",
+        oracle_signal="oob_callback_replayed",
+        affected_parameters=["u"],
+    ))
+    assert reproducer is not None
+    curl_line = [
+        line for line in reproducer.splitlines() if line.startswith("curl")
+    ][0]
+    # The callback expansion must extend the QUERY: with the fragment
+    # kept, '?u=' sorts before '#frag' and the appended expansion
+    # landed inside the fragment — a reproducer that probes nothing.
+    assert "#" not in curl_line
+    assert "u=" in curl_line

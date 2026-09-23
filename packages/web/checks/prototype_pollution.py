@@ -38,7 +38,14 @@ def _clean_request_shows(client, needle: str) -> bool:
 
 @registry.register(CheckCategory.INJECTION, "V5.3.1", "Server-side prototype pollution")
 class ServerSidePrototypePollutionCheck(Check):
-    risk = "active"
+    # Intrusive, not active: a SUCCESSFUL probe persistently mutates
+    # the target process's Object.prototype until restart — the
+    # declared intrusive definition ("may change target state").
+    # Keeping it active would run a state-persisting probe under a
+    # consent level that promises none; operators who want it opt in
+    # with --approval-level intrusive (or --approve-tool), the same
+    # trade every lockout/reset-class check makes.
+    risk = "intrusive"
     def run(self, client, target_url, session=None, discovery=None):
         # Baseline guard: if the sentinel is already on the page before
         # any probe (a previous run's stored content), the oracle below

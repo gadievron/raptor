@@ -11,15 +11,16 @@ protected by MFA, SSO, or any other interactive auth flow, use one of:
 from __future__ import annotations
 
 import abc
-import logging
 from dataclasses import dataclass, field
+from core.logging import get_logger
+
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlparse
 
 if TYPE_CHECKING:
     from packages.web.client import WebClient
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 
 class AuthenticationError(Exception):
@@ -95,6 +96,17 @@ class FormAuthManager(AuthManager):
 
         pre_login_cookies = client.get_cookies()
         parsed = urlparse(self.login_url)
+        # Stripping an absolute login URL to path+query silently
+        # re-anchored a CROSS-ORIGIN --login-url onto the target origin
+        # (credentials POSTed to the wrong host's path). Refuse loudly
+        # instead; SSO-style flows belong to cookie/bearer mode.
+        if parsed.hostname and not client._is_in_scope(self.login_url):
+            raise AuthenticationError(
+                f"--login-url {self.login_url} is not on the target "
+                f"origin {client.base_url} — form auth cannot log in "
+                "across origins (use cookie or bearer mode for "
+                "SSO/external identity providers)"
+            )
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
 
         try:
@@ -208,11 +220,20 @@ class FormAuthManager(AuthManager):
             if final_path != login_path:
                 return True
 
-        # Positive signal 2: authenticated page furniture.
-        body = post_resp.text if isinstance(post_resp.text, str) else ""
-        lowered = body.lower()
-        if any(marker in lowered for marker in ("logout", "log out", "sign out")):
-            return True
+        # Positive signal 2: a logout AFFORDANCE — an anchor href or a
+        # form action pointing at a logout endpoint. Matching the raw
+        # words anywhere in the body ("logout" in nav furniture, help
+        # text, or marketing copy) stamped scans authenticated that
+        # never were.
+        for anchor in soup.find_all("a", href=True):
+            href = str(anchor.get("href", "")).lower()
+            if any(m in href for m in ("logout", "log-out", "signout",
+                                       "sign-out", "log_out", "sign_out")):
+                return True
+        for form in soup.find_all("form"):
+            action = str(form.get("action", "")).lower()
+            if any(m in action for m in ("logout", "signout")):
+                return True
 
         return False
 

@@ -12,14 +12,15 @@ client and kept only for direct callers.
 
 from __future__ import annotations
 
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from core.logging import get_logger
+
 from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     from packages.web.client import WebClient
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 _INTERESTING_STATUS = {200, 201, 204, 301, 302, 307, 308, 403, 405}
 

@@ -140,9 +140,15 @@ class ExternalValidatorRunner:
         # excluded from the batch — never silently dropped.
         results: list[dict[str, Any]] = []
         targets: dict[str, set[str]] = {}
+        # Remember denials: without this, every further finding on an
+        # already-denied target re-authorized and appended a duplicate
+        # "denied" row per finding.
+        denied: set[str] = set()
         for finding in findings:
             target_url = finding.target_url or finding.url
             tags = TAGS_BY_VULN_TYPE.get(finding.vuln_type or "", "")
+            if target_url in denied:
+                continue
             if target_url in targets:
                 if tags:
                     targets[target_url].update(tags.split(","))
@@ -155,6 +161,7 @@ class ExternalValidatorRunner:
                     action="external_validator",
                 )
             except WebPolicyError as exc:
+                denied.add(target_url)
                 results.append({
                     "tool": "nuclei",
                     "target_url": self._redact(target_url),
@@ -364,7 +371,14 @@ class ExternalValidatorRunner:
         for target_url in targets:
             if matched_at.startswith(target_url):
                 return target_url
-        matched_host = (urlparse(matched_at).hostname or "").lower()
+        # nuclei's matched-at is often a bare "host:port" — urlparse
+        # reads that as scheme "host" with no hostname, so host-based
+        # attribution silently failed and the match survived only in
+        # the raw jsonl while the target row read "no_match"
+        # (evidence-loss direction). Prefix // so urlparse treats it
+        # as a netloc.
+        candidate = matched_at if "//" in matched_at else f"//{matched_at}"
+        matched_host = (urlparse(candidate).hostname or "").lower()
         for target_url in targets:
             if (urlparse(target_url).hostname or "").lower() == matched_host:
                 return target_url

@@ -341,6 +341,11 @@ class WebFuzzer:
                     self._get_basic_payloads(vuln_type, param_name=param_name),
                 ), vuln_type)
             payloads = self._non_destructive(payloads, vuln_type)
+            # Enforce the requested budget on the reply: each payload
+            # costs ~2 live requests per cell/class, and nothing else
+            # stops an over-generous generation from multiplying the
+            # scan's request volume.
+            payloads = payloads[:count]
             logger.info("Generated %d payloads for %s", len(payloads), vuln_type)
             self._payload_cache[cache_key] = list(payloads)
             return payloads

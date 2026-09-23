@@ -165,3 +165,28 @@ def test_json_field_fuzzing_three_gate(tmp_path):
     assert any(
         body and body.get("note") == "raptor-baseline" for body in bodies
     )
+
+
+def test_unresolved_ref_properties_are_not_fuzzed_as_scalars():
+    from packages.web.api_testing import _body_from_operation
+
+    operation = {
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "address": {"$ref": "#/components/schemas/Address"},
+                        },
+                    },
+                },
+            },
+        },
+    }
+    template, string_fields = _body_from_operation(operation)
+    # An unresolved $ref has no known shape: fuzzing it as a scalar
+    # string is pure request noise.
+    assert template == {"name": "raptor-baseline"}
+    assert string_fields == [("name",)]
