@@ -29,6 +29,8 @@ from core.llm.scorecard._render import scrub_cell
 from .paths import default_scorecard_path
 from .scorecard import (
     ALL_EVENT_TYPES,
+    DEFAULT_MISS_RATE_CEILING,
+    DEFAULT_SAMPLE_SIZE_FLOOR,
     EventType,
     ModelScorecard,
     Policy,
@@ -54,13 +56,20 @@ from .scorecard import (
 def _policy_for_stats(
     stats: DecisionClassStats,
     *,
-    sample_size_floor: int = 10,
-    miss_rate_ceiling: float = 0.05,
+    sample_size_floor: int = DEFAULT_SAMPLE_SIZE_FLOOR,
+    miss_rate_ceiling: float = DEFAULT_MISS_RATE_CEILING,
 ) -> str:
     """Re-derive the policy decision from a ``DecisionClassStats``
     snapshot. We don't read the live ``ModelScorecard.should_short_circuit``
     here because that's per-call and we want a self-contained
-    interpretation of the on-disk data."""
+    interpretation of the on-disk data.
+
+    The gate parameters default to the SUBSTRATE constants (never
+    re-hardcoded literals) so this column diverges from the live gate
+    only where the operator tuned a per-run knob the CLI cannot see —
+    a run configured with ``scorecard_freshness_half_life_days`` or a
+    custom ceiling. The default-view note in ``cmd_list`` names that
+    residual; ``--freshness`` mirrors the freshness half."""
     if stats.policy_override == "force_short_circuit":
         return Policy.SHORT_CIRCUIT
     if stats.policy_override == "force_fall_through":
@@ -206,7 +215,7 @@ def _filter_stats(
     since: _dt.timedelta | None = None,
     only_untrusted: bool = False,
     only_learning: bool = False,
-    sample_size_floor: int = 10,
+    sample_size_floor: int = DEFAULT_SAMPLE_SIZE_FLOOR,
 ) -> list[DecisionClassStats]:
     """Apply CLI filter flags. Filters compose (AND)."""
     out = list(stats)
@@ -558,6 +567,17 @@ def cmd_list(args: argparse.Namespace) -> int:
         print(_dumps_json_lane(out))
         return 0
     print(_render_table(stats, event_type=event_type, drift_map=drift_map))
+    if not hl:
+        # Divergence breadcrumb: the live gate applies the run
+        # config's scorecard_freshness_half_life_days, which this
+        # process cannot see — an operator auditing the routing
+        # decision must know the default view is the unweighted lens.
+        print(
+            "\nnote: policy column is unweighted with default gate "
+            "parameters; a run configured with freshness weighting "
+            "applies a different lens — mirror it with --freshness "
+            "DAYS."
+        )
     if hl:
         # When the freshness view is on, summarise its impact inline: how many
         # currently-trusted cells would change verdict under this half-life —
@@ -576,7 +596,8 @@ def cmd_summary(args: argparse.Namespace) -> int:
     """One-shot dashboard: totals, policy breakdown, spend, most-used model,
     cheapest-reliable, recent activity. The "open this every morning" view."""
     sc = ModelScorecard(args.path)
-    stats = sc.get_stats()
+    hl = getattr(args, "freshness_half_life_days", None)
+    stats = sc.get_stats(freshness_half_life_days=hl)
     if not stats:
         print("scorecard is empty — no LLM calls recorded yet.")
         return 0
@@ -1332,6 +1353,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "one-shot dashboard: cell totals, policy breakdown, total spend, "
             "most-used model, cheapest trusted, recent activity"
+        ),
+    )
+    p_sum.add_argument(
+        "--freshness", dest="freshness_half_life_days",
+        type=float, default=None, metavar="DAYS",
+        help=(
+            "weight recent behaviour (half-life in days) so the policy "
+            "breakdown mirrors a freshness-configured live gate; same "
+            "as `list --freshness`. Default: unweighted (all-time)."
         ),
     )
     p_sum.set_defaults(handler=cmd_summary)
