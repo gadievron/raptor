@@ -1085,8 +1085,24 @@ def main() -> int:
     ap.add_argument("--redb-map", default=None, metavar="PATH",
                     help="Passed through to raptor-study-prep "
                          "(decomp-map.json sidecar).")
+    ap.add_argument("--max-cost", type=float, default=None,
+                    metavar="USD",
+                    help="Maximum LLM cost in USD before stopping — "
+                         "passed through to raptor-study-run (the "
+                         "dominant-spend leg; the overview and "
+                         "compile legs run on the config default).")
     ap.add_argument("-v", "--verbose", action="store_true")
     parsed = ap.parse_args()
+
+    # isfinite: argparse's float() accepts "nan"/"inf", and NaN
+    # passes a naive `<= 0` gate — the forwarded cap then never
+    # trips downstream, silently unlimited.
+    import math
+    if parsed.max_cost is not None and (
+            not math.isfinite(parsed.max_cost) or parsed.max_cost <= 0):
+        print("study-loop: --max-cost must be a positive finite "
+              "dollar amount", file=sys.stderr)
+        return 1
 
     target = Path(parsed.target).resolve()
     output_dir = Path(parsed.output_dir).resolve()
@@ -1202,6 +1218,8 @@ def main() -> int:
                 run_cmd.extend(["--model", parsed.model])
             if parsed.batch_target != 80:
                 run_cmd.extend(["--batch-target", str(parsed.batch_target)])
+            if parsed.max_cost is not None:
+                run_cmd.extend(["--max-cost", str(parsed.max_cost)])
             if parsed.verbose:
                 run_cmd.append("-v")
 

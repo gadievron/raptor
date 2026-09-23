@@ -75,3 +75,58 @@ class TestGenerateStructuredBudgetTerminal:
         with check, acquire, get_provider as gp, pytest.raises(LLMBudgetExceededError):
             client.generate_structured("prompt", _SCHEMA)
         assert gp.call_count == 1
+
+
+class TestIsBudgetExceededClassifier:
+    """Typed check primary; string fallback structurally vetoed.
+
+    Callers treat a budget verdict as TERMINAL for their whole
+    dispatch loop, so model-authored text echoing 'budget exceeded'
+    inside a response-shape failure must never classify — mirroring
+    ``is_auth_refusal``'s shape veto.
+    """
+
+    def _classify(self, exc):
+        from core.llm.client import is_budget_exceeded_error
+        return is_budget_exceeded_error(exc)
+
+    def test_typed_error_matches(self):
+        assert self._classify(LLMBudgetExceededError("cap"))
+
+    def test_typed_error_matches_through_wrapper_chain(self):
+        inner = LLMBudgetExceededError("cap")
+        try:
+            raise RuntimeError("wrapped") from inner
+        except RuntimeError as outer:
+            assert self._classify(outer)
+
+    def test_legacy_message_fallback_matches(self):
+        assert self._classify(RuntimeError(
+            "LLM budget exceeded: $10.00 spent > $10.00 limit"))
+
+    def test_hostile_echo_in_json_decode_error_vetoed(self):
+        import json as _json
+        shape = _json.JSONDecodeError(
+            "Expecting value", '{"note": "budget exceeded"}', 1)
+        wrapped = RuntimeError(
+            "structured parse failed: budget exceeded echo")
+        wrapped.__cause__ = shape
+        assert not self._classify(wrapped)
+
+    def test_hostile_echo_in_schema_error_vetoed(self):
+        from core.llm.response_validation import SchemaUnknownFieldError
+        shape = SchemaUnknownFieldError(
+            "unknown field 'budget exceeded'")
+        wrapped = RuntimeError("schema failed: budget exceeded")
+        wrapped.__cause__ = shape
+        assert not self._classify(wrapped)
+
+    def test_hostile_echo_in_validation_error_vetoed(self):
+        class ValidationError(Exception):
+            pass
+        wrapped = RuntimeError("validation: budget exceeded")
+        wrapped.__cause__ = ValidationError("budget exceeded field")
+        assert not self._classify(wrapped)
+
+    def test_unrelated_error_does_not_match(self):
+        assert not self._classify(RuntimeError("connection reset"))
