@@ -1125,10 +1125,6 @@ class TestCollidedIdNotStampedOut(unittest.TestCase):
         self.assertNotIn("fingerprints", result)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestSeverityInheritance(unittest.TestCase):
     """Results without an explicit level inherit the rule's
     defaultConfiguration.level (SARIF severity inheritance). Semgrep's
@@ -1325,3 +1321,7 @@ class TestExtensionRules(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["level"], "error")
         self.assertEqual(findings[0]["cwe_id"], "CWE-89")
+
+
+if __name__ == "__main__":
+    unittest.main()

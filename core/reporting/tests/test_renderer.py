@@ -96,10 +96,6 @@ class TestRenderReport(unittest.TestCase):
         self.assertIn("### D1", result)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestRendererDefangsSingleLineSlots(unittest.TestCase):
     """The renderer is a shared chokepoint: a NEW render_report caller
     that skips producer-side sanitisation must not be able to leak
@@ -153,3 +149,7 @@ class TestRendererDefangsSingleLineSlots(unittest.TestCase):
         out = render_report(spec)
         self.assertNotIn("\ninjected", out)
         self.assertNotIn("\x1b", out)
+
+
+if __name__ == "__main__":
+    unittest.main()
