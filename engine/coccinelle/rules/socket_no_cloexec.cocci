@@ -9,7 +9,11 @@
 // F_SETFD with an OR-ed flag word) sets close-on-exec just as well as
 // the creation-time flag, so descriptors that reach an F_SETFD fcntl
 // are collected into a safe set (position-exclusion technique, cf.
-// format_string.cocci) and never reported. `exists` on the safe rules
+// format_string.cocci) and never reported. The assignment arm binds
+// the descriptor as an EXPRESSION so struct-field descriptors
+// (srv->listen_fd = socket(...)) reach the safe set too — an
+// identifier binding covered locals only and reported the correct
+// field-fd + fcntl sequence at verification grade. `exists` on the safe rules
 // biases toward suppression: one fcntl on any path is enough to
 // disqualify the report — a partial-path fcntl is a different (and
 // far rarer) bug than never setting cloexec at all.
@@ -20,6 +24,7 @@
 // Safe set: socket() result reaches an F_SETFD fcntl.
 @socket_cloexec_safe exists@
 identifier FD;
+expression E;
 type T;
 position p;
 @@
@@ -29,9 +34,9 @@ position p;
   ... when any
   fcntl(FD, F_SETFD, ...)
 |
-  FD = socket@p(...);
+  E = socket@p(...);
   ... when any
-  fcntl(FD, F_SETFD, ...)
+  fcntl(E, F_SETFD, ...)
 )
 
 @socket_no_cloexec@
@@ -63,6 +68,7 @@ if "SOCK_CLOEXEC" not in type_str:
 // name), so it needs no safe-set entry.
 @accept_cloexec_safe exists@
 identifier FD;
+expression E;
 type T;
 position p;
 @@
@@ -72,9 +78,9 @@ position p;
   ... when any
   fcntl(FD, F_SETFD, ...)
 |
-  FD = accept@p(...);
+  E = accept@p(...);
   ... when any
-  fcntl(FD, F_SETFD, ...)
+  fcntl(E, F_SETFD, ...)
 )
 
 @accept_no_cloexec@
