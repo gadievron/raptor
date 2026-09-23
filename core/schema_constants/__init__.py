@@ -59,7 +59,8 @@ VULN_TYPES = [
     "out_of_bounds_read", "out_of_bounds_write",
     "null_deref", "type_confusion", "memory_leak", "privilege_confusion",
     "race_condition", "uninitialized_memory",
-    "hardcoded_secret", "weak_crypto", "other",
+    "hardcoded_secret", "weak_crypto",
+    "information_disclosure", "open_redirect", "other",
 ]
 
 # Memory corruption vuln_types — Stage E feasibility analysis applies to these.
@@ -203,9 +204,14 @@ VULN_TYPE_ALIASES = {
     # Deserialization
     "insecure_deserialization": "deserialization",
     "unsafe_deserialization": "deserialization",
-    # Memory leak
-    "information_leak": "memory_leak",
-    "info_leak": "memory_leak",
+    # Information disclosure — NOT memory_leak: CWE-401 (missing
+    # release of memory) is a resource-lifetime bug; leaking data to
+    # an observer is CWE-200-family, and conflating them steered
+    # downstream CWE inference to the wrong family.
+    "information_leak": "information_disclosure",
+    "info_leak": "information_disclosure",
+    "information_exposure": "information_disclosure",
+    "sensitive_data_exposure": "information_disclosure",
     # Crypto
     "weak_cryptography": "weak_crypto",
     "insecure_crypto": "weak_crypto",
@@ -306,8 +312,8 @@ CWE_TO_VULN_TYPE = {
     "CWE-190": "integer_overflow",
     "CWE-191": "integer_underflow", # Distinct from overflow — see batch 324
     "CWE-193": "buffer_overflow",   # Off-by-one error
-    "CWE-200": "other",             # Information disclosure
-    "CWE-209": "other",             # Sensitive info in error message
+    "CWE-200": "information_disclosure",
+    "CWE-209": "information_disclosure",  # Sensitive info in error message
     "CWE-269": "privilege_confusion", # Improper privilege management
     "CWE-285": "other",             # Improper authorization
     "CWE-287": "other",             # Improper authentication
@@ -336,7 +342,11 @@ CWE_TO_VULN_TYPE = {
     "CWE-494": "other",             # Download of code without integrity check
     "CWE-502": "deserialization",
     "CWE-552": "path_traversal",   # Files accessible to external parties
-    "CWE-601": "ssrf",              # URL redirect to untrusted site
+    # Open redirect, not SSRF: CWE-601 is the SERVER sending the
+    # CLIENT elsewhere; SSRF (CWE-918) is the server being made to
+    # fetch. The old label promoted every open-redirect finding into
+    # the SSRF lane (wrong severity model, wrong CWE-918 round-trip).
+    "CWE-601": "open_redirect",
     "CWE-611": "other",             # XXE
     "CWE-639": "other",             # Authorization bypass via user-controlled key
     "CWE-732": "other",             # Incorrect permission assignment
@@ -383,10 +393,15 @@ VULN_TYPE_TO_CWE = {
     "type_confusion": "CWE-843",
     "ssrf": "CWE-918",
     # Round-trip closure: every vuln_type that appears as a value
-    # in CWE_TO_VULN_TYPE above should also appear as a key here so
-    # callers can convert in BOTH directions. Pre-fix five
-    # categories were forward-only:
+    # in CWE_TO_VULN_TYPE above also appears as a key here so
+    # callers can convert in BOTH directions — with exactly ONE
+    # deliberate exception: "other" is the forward map's catch-all
+    # and has no representative CWE (any reverse pick would be
+    # wrong for most of its members). The closure test pins this.
+    # Pre-fix five categories were forward-only:
     "memory_leak": "CWE-401",
+    "information_disclosure": "CWE-200",
+    "open_redirect": "CWE-601",
     "hardcoded_secret": "CWE-798",
     "uninitialized_memory": "CWE-908",  # Use of uninitialized resource (more general than 457 init-only)
     "privilege_confusion": "CWE-269",
