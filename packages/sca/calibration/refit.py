@@ -247,6 +247,7 @@ def grid_search_refit(
                 improvement_threshold=improvement_threshold,
                 max_delta=max_delta,
                 notes=[
+                    *notes,
                     "no project samples found under "
                     f"{corpus_dir}/project_samples/",
                 ],
@@ -266,6 +267,7 @@ def grid_search_refit(
                 improvement_threshold=improvement_threshold,
                 max_delta=max_delta,
                 notes=[
+                    *notes,
                     f"only {len(samples)} labelled findings in corpus; "
                     f"need ≥ {min_samples} for refit",
                 ],
@@ -294,13 +296,14 @@ def grid_search_refit(
     # crossing KEV_MULT, NOT_EVALUATED becoming a bonus instead of
     # penalty). Inadmissible candidates produce a precision of -inf
     # so they're never picked even when they'd numerically maximise.
-    # `_search_metric` returns (top_20, top_50). max() over tuples
-    # compares lexicographically — top-20 dominates, top-50 breaks
-    # ties. The legacy scalar `_top_20_precision` is preserved for
-    # the verdict + report fields; the search itself runs on the
-    # tuple so once the corpus saturates top-20 at 1.000 the search
-    # keeps moving on top-50 instead of silently sticking to the
-    # first-seen candidate.
+    # `_search_metric` returns (top_20_precision, ndcg_20,
+    # spearman_rho). max() over tuples compares lexicographically —
+    # top-20 dominates, NDCG@20 breaks P20 ties, corpus-wide ρ
+    # breaks NDCG ties. The legacy scalar `_top_20_precision` is
+    # preserved for the verdict + report fields; the search itself
+    # runs on the tuple so once the corpus saturates top-20 at
+    # 1.000 the search keeps moving on the finer-grained metrics
+    # instead of silently sticking to the first-seen candidate.
     SENTINEL_INADMISSIBLE = (float("-inf"), float("-inf"), float("-inf"))
 
     per_constant: list[ConstantRefit] = []
@@ -361,6 +364,7 @@ def grid_search_refit(
     joint_overrides = {
         c.name: c.proposed for c in per_constant if c.changed
     }
+    composition_rejected = False
     if joint_overrides:
         joint_full = {**current, **joint_overrides}
         ok_joint, joint_reason = is_admissible(joint_full)
@@ -370,6 +374,7 @@ def grid_search_refit(
                 f"falling back to baseline"
             )
             joint_overrides = {}
+            composition_rejected = True
     joint_precision = (
         _top_20_precision(samples, overrides=joint_overrides)
         if joint_overrides else baseline
@@ -396,7 +401,14 @@ def grid_search_refit(
 
     if not joint_overrides:
         status = "rejected"
-        notes.append("no per-constant variant beat the baseline")
+        # Only claim "nothing beat the baseline" when that is what
+        # happened — when per-constant variants DID beat it but
+        # their composition was inadmissible, the composition-
+        # rejected note above is the (whole) truth, and this note
+        # would falsely steer the next tuner away from the real
+        # cause.
+        if not composition_rejected:
+            notes.append("no per-constant variant beat the baseline")
     elif _fails_accept_gate(improvement, rho_improvement,
                             improvement_threshold):
         status = "rejected"
@@ -632,7 +644,7 @@ def joint_grid_search_refit(
                 improvement=0.0,
                 improvement_threshold=improvement_threshold,
                 max_delta=max_delta,
-                notes=[why],
+                notes=[*notes, why],
             ),
             corpus_dir, out_path, update_snapshot=update_snapshot,
         )
@@ -956,8 +968,10 @@ def _load_findings_with_labels(
     corpus_dir: Path,
 ) -> list[tuple[dict[str, Any], int]]:
     """Walk project samples; pair each finding with its exploited
-    label (1 if any of the finding's CVE aliases appears in the
-    KEV / EDB / MSF / GitHub-PoC ground-truth signals).
+    label (1 if any of the finding's CVE ids appears in the
+    ground-truth signal union — the six sources listed by
+    ``validate._ground_truth_files()``: KEV, Exploit-DB,
+    Metasploit, GitHub-PoC, OSV exploit-evidence, Vulnrichment).
 
     Returns a list of ``(finding_dict, label)`` pairs. Findings
     without a usable score (no risk_components or non-float
@@ -1012,11 +1026,11 @@ def _top_20_precision(
 
     Backwards-compatible scalar metric — kept for the existing
     refit verdict + report fields. The grid search itself uses
-    `_search_metric` (a tuple of (top_20, top_50) precisions) so
-    when top-20 saturates at 1.0 across multiple candidates,
-    top-50 is the tiebreaker — without this, the search picks
-    the first-seen candidate even when a strictly-better-packed
-    top-50 exists.
+    `_search_metric` (the (top_20_precision, ndcg_20, spearman_rho)
+    tuple) so when top-20 saturates at 1.0 across multiple
+    candidates, NDCG@20 and then corpus-wide ρ break the tie —
+    without this, the search picks the first-seen candidate even
+    when a strictly-better ordering exists.
     """
     return _search_metric(samples, overrides=overrides)[0]
 
