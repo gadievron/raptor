@@ -216,5 +216,154 @@ class TestRequireTargetTypeGate(unittest.TestCase):
             self.assertNotIn("Created project", out)
 
 
+class TestBinaryDominantTargets(unittest.TestCase):
+    """Compiled-artifact trees route to the ``binary`` catalog
+    entry — create/adopt recommend the binary lane instead of the
+    source-tree pattern scanners."""
+
+    _ELF = b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 8
+
+    def _artifact_tree(self, d: str, count: int = 6) -> Path:
+        target = Path(d)
+        for i in range(count):
+            (target / f"tool{i}").write_bytes(self._ELF)
+        return target
+
+    def test_elf_tree_detected_as_binary(self):
+        with TemporaryDirectory() as d:
+            entry = _detect_target_type(str(self._artifact_tree(d)))
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.name, "binary")
+
+    def test_binary_entry_recommends_binary_lane(self):
+        with TemporaryDirectory() as d:
+            entry = _detect_target_type(str(self._artifact_tree(d)))
+            joined = "\n".join(_format_project_tuning(entry))
+            self.assertIn("Target type: binary", joined)
+            self.assertIn(
+                "Recommended pipeline: binary → understand-study", joined)
+            self.assertNotIn("scan → agentic", joined)
+
+    def test_source_tree_with_stray_artifact_keeps_source_type(self):
+        # A real source tree with one built a.out beside it must
+        # keep its source-tree classification.
+        with TemporaryDirectory() as d:
+            target = Path(d)
+            for i in range(6):
+                (target / f"mod{i}.c").write_text("int x;\n")
+            (target / "a.out").write_bytes(self._ELF)
+            entry = _detect_target_type(str(target))
+            self.assertIsNotNone(entry)
+            self.assertNotEqual(entry.name, "binary")
+
+    def test_unreadable_files_tolerated(self):
+        # chmod-000 sibling must not break classification (skipped
+        # for non-root; a root runner reads 4 non-magic bytes,
+        # which is equally non-evidence).
+        with TemporaryDirectory() as d:
+            target = self._artifact_tree(d, count=5)
+            locked = target / "locked"
+            locked.write_bytes(b"data")
+            locked.chmod(0)
+            try:
+                entry = _detect_target_type(str(target))
+            finally:
+                locked.chmod(0o600)
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.name, "binary")
+
+    def _run_create(self, target_path: str, *extra_args: str) -> str:
+        with patch("core.project.cli.ProjectManager") as MockMgr:
+            instance = MockMgr.return_value
+            instance.create.return_value = type("P", (), {
+                "name": "bin-test",
+                "output_dir": "/tmp/bin-test-out",
+                "binaries": [],
+            })()
+            argv = [
+                "raptor-project", "create", "bin-test",
+                "--target", target_path,
+            ] + list(extra_args)
+            buf = io.StringIO()
+            with patch("sys.argv", argv):
+                with contextlib.redirect_stdout(buf):
+                    main()
+            return buf.getvalue()
+
+    def test_create_prints_binary_lane_recommendation(self):
+        with TemporaryDirectory() as d:
+            out = self._run_create(str(self._artifact_tree(d)))
+            self.assertIn("Created project", out)
+            self.assertIn("Target type: binary", out)
+            self.assertIn("binary → understand-study", out)
+            self.assertNotIn("scan → agentic", out)
+
+    def test_single_file_elf_target_detected_as_binary(self):
+        # ``--target ./firmware.elf`` — a single compiled-artifact
+        # file classifies by its own magic.
+        with TemporaryDirectory() as d:
+            fw = Path(d) / "firmware.elf"
+            fw.write_bytes(self._ELF)
+            entry = _detect_target_type(str(fw))
+            self.assertIsNotNone(entry)
+            self.assertEqual(entry.name, "binary")
+
+    def test_require_target_type_binary_assertable(self):
+        # The new name is assertable through the strict-CI gate.
+        with TemporaryDirectory() as d:
+            out = self._run_create(
+                str(self._artifact_tree(d)),
+                "--require-target-type", "binary",
+            )
+            self.assertIn("Created project", out)
+            self.assertIn("Target type: binary", out)
+
+    def test_adopt_prints_binary_lane_recommendation(self):
+        with patch("core.project.cli.ProjectManager") as MockMgr, \
+                patch("core.project.cli._acquire_mutation_lock",
+                      return_value=None):
+            instance = MockMgr.return_value
+            instance.add_directory.return_value = 1
+            with TemporaryDirectory() as d, TemporaryDirectory() as run_dir:
+                target = self._artifact_tree(d)
+                argv = [
+                    "raptor-project", "adopt", "bin-adopt", run_dir,
+                    "--target", str(target),
+                ]
+                buf = io.StringIO()
+                with patch("sys.argv", argv):
+                    with contextlib.redirect_stdout(buf):
+                        main()
+                out = buf.getvalue()
+                self.assertIn("Adopted 1 run(s)", out)
+                self.assertIn("Target type: binary", out)
+                self.assertIn("binary → understand-study", out)
+
+    def test_adopt_source_target_output_unchanged(self):
+        with patch("core.project.cli.ProjectManager") as MockMgr, \
+                patch("core.project.cli._acquire_mutation_lock",
+                      return_value=None):
+            instance = MockMgr.return_value
+            instance.add_directory.return_value = 1
+            with TemporaryDirectory() as d, TemporaryDirectory() as run_dir:
+                target = Path(d)
+                for i in range(4):
+                    (target / f"mod{i}.py").write_text("x = 1\n")
+                argv = [
+                    "raptor-project", "adopt", "src-adopt", run_dir,
+                    "--target", str(target),
+                ]
+                buf = io.StringIO()
+                with patch("sys.argv", argv):
+                    with contextlib.redirect_stdout(buf):
+                        main()
+                out = buf.getvalue()
+                self.assertIn("Adopted 1 run(s)", out)
+                # No tuning block for non-binary targets — adopt's
+                # existing output is preserved.
+                self.assertNotIn("Target type:", out)
+                self.assertNotIn("Recommended pipeline:", out)
+
+
 if __name__ == "__main__":
     unittest.main()

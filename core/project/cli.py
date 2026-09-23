@@ -201,10 +201,26 @@ def _detect_target_type(target_path: str):
     ``core.run.target_types.load`` — this is just the project-
     create surface so operators see the catalog match at
     create-time.
+
+    Binary-dominant targets (compiled ELF / Mach-O / PE artifacts,
+    no substantial source tree) route to the ``binary`` catalog
+    entry: the extension/glob catalog would classify such a tree
+    as ``generic`` and recommend the source-tree pattern scanners
+    (scan → agentic), which have nothing to scan there — the
+    binary lane is the right recommendation. Scoped here on
+    purpose: the runtime ``load`` consumers keep their existing
+    classification.
     """
     try:
-        from core.run.target_types import load
-        return load(Path(target_path))
+        from core.run.target_types import binary_dominant, load, load_by_name
+        target = Path(target_path)
+        if binary_dominant(target):
+            entry = load_by_name("binary")
+            if entry is not None:
+                return entry
+            # Missing catalog entry — degrade to the catalog match
+            # (substrate stays best-effort, create never refuses).
+        return load(target)
     except Exception:  # noqa: BLE001
         return None
 
@@ -273,10 +289,11 @@ def main() -> None:
         "--require-target-type", default=None, metavar="<name>",
         help=("Hard-fail if target-type catalog detection didn't "
               "pick this exact name (e.g. ``c.userspace-daemon``, "
-              "``python.web-app``). For strict-CI runs that assert "
-              "the project's target shape — catches malformed "
-              "targets or stale catalog drift BEFORE any LLM cost. "
-              "On mismatch the project is NOT created."),
+              "``python.web-app``, or ``binary`` for a "
+              "compiled-artifact tree). For strict-CI runs that "
+              "assert the project's target shape — catches "
+              "malformed targets or stale catalog drift BEFORE any "
+              "LLM cost. On mismatch the project is NOT created."),
     )
     p_create.add_argument("--wait", action="store_true", help=_WAIT_HELP)
 
@@ -1502,6 +1519,16 @@ def main() -> None:
                                         seeded_by="adopt") is not None:
                             print(f"  Active for this session "
                                   f"(last-activated default unchanged).")
+                # Binary-lane steer — adopt-time twin of smart
+                # create. Only fires when the resolved target is
+                # binary-dominant (compiled artifacts, no
+                # substantial source tree); every other target
+                # keeps adopt's existing output byte-for-byte.
+                if target:
+                    _entry = _detect_target_type(str(target))
+                    if _entry is not None and _entry.name == "binary":
+                        for line in _format_project_tuning(_entry):
+                            print(line)
             else:
                 print("No runs adopted (already present, target mismatch, "
                       "or no run directories found)")
