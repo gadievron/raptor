@@ -17,7 +17,12 @@ from __future__ import annotations
 from typing import Any, TYPE_CHECKING
 
 from core.json import load_json
+from .caps import DEFAULT_CAP, cap_elements, truncation_marker_lines
 from .sanitize import sanitize as _sanitize, sanitize_id as _sid
+
+# Shared flow_trace rationale (see packages.diagram.caps): tree nodes
+# come from an LLM-written artifact with no upstream bound.
+_MAX_NODES = DEFAULT_CAP
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -222,6 +227,7 @@ def generate(
     # Shallow-copy each node before assigning the sanitized id, so
     # the caller's dict is untouched. The new list still references
     # the same shape information, just with id rewritten on a copy.
+    raw_nodes, dropped_nodes = cap_elements(raw_nodes, _MAX_NODES)
     nodes = [dict(n) for n in raw_nodes]
     for n in nodes:
         n["id"] = _sid(n.get("id", "?"))
@@ -379,6 +385,9 @@ def generate(
             "    %% note: companion finding ids matched no tree node id"
             " — proximity/ruled-out annotations not shown"
         )
+
+    lines.extend(truncation_marker_lines(
+        "TRUNC", dropped_nodes, "nodes", _MAX_NODES))
 
     return "\n".join(lines)
 

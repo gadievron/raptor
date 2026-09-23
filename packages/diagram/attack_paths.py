@@ -12,11 +12,32 @@ from typing import Any, TYPE_CHECKING
 from core.json import load_json
 from core.security.markdown_render import md_inline
 
+from .caps import cap_elements, truncation_marker_lines
 from .envelope import unwrap_list
 from .sanitize import sanitize as _sanitize
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# Per-path element caps (shared flow_trace rationale: unbounded
+# LLM/run artifacts hang browsers, trip Mermaid's complexity limit
+# and blow markdown size budgets). Steps use the shared 200; blockers
+# are annotation nodes hanging off the last step, useless past a
+# screenful — 50 keeps the worst case readable while no legitimate
+# path observed carries more than a handful.
+_MAX_STEPS = 200
+_MAX_BLOCKERS = 50
+
+# Markdown-level caps: each path is a WHOLE diagram section, so the
+# per-element cap is much lower than the in-diagram one. The byte
+# budget mirrors the renderer's _fence budget (200k) — this generator
+# emits its own ```mermaid fences and is appended to diagrams.md RAW
+# (self-fenced blocks skip the renderer's last-hop _fence), so the
+# budget must live here or nowhere. Lower values would cut legitimate
+# multi-path reports sooner; higher values re-open the oversize
+# report failure the fence budget exists to stop.
+_MAX_PATHS = 50
+_MAX_SECTION_BYTES = 200_000
 
 _PROXIMITY_LABEL = {
     (0, 1): "Theoretical only",
@@ -40,8 +61,14 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
     path_id = path_data.get("id", f"PATH-{path_index+1}")
     name = _sanitize(path_data.get("name", path_id))
     steps = path_data.get("steps", [])
+    if not isinstance(steps, list):
+        steps = []
+    steps, truncated_steps = cap_elements(steps, _MAX_STEPS)
     proximity = path_data.get("proximity") or 0
     blockers = path_data.get("blockers", [])
+    if not isinstance(blockers, list):
+        blockers = []
+    blockers, truncated_blockers = cap_elements(blockers, _MAX_BLOCKERS)
     status = _sanitize(str(path_data.get("status", "uncertain")))
 
     try:
@@ -145,6 +172,12 @@ def generate_single(path_data: dict[str, Any], path_index: int) -> str:
             if node_ids:
                 lines.append(f"    {node_ids[-1]} -. \"blocked\" .-> {bid}")
 
+    lines.extend(truncation_marker_lines(
+        f"TRUNC_{path_index}", truncated_steps, "steps", _MAX_STEPS))
+    lines.extend(truncation_marker_lines(
+        f"TRUNCBLK_{path_index}", truncated_blockers, "blockers",
+        _MAX_BLOCKERS))
+
     return "\n".join(lines)
 
 
@@ -153,8 +186,11 @@ def generate(data: list[dict[str, Any]]) -> str:
     if not data:
         return '```mermaid\nflowchart TD\n    EMPTY["No attack paths"]\n```'
 
-    sections = []
-    for i, path_data in enumerate(data):
+    paths, dropped = cap_elements(data, _MAX_PATHS)
+
+    sections: list[str] = []
+    total_bytes = 0
+    for i, path_data in enumerate(paths):
         # id/name/status come raw from attack-paths.json; sanitize so a
         # crafted value can't break the heading out of its line.
         raw_id = path_data.get("id", f"PATH-{i+1}")
@@ -172,10 +208,26 @@ def generate(data: list[dict[str, Any]]) -> str:
         heading = md_inline(
             f"{path_id}: {name} (Proximity {proximity}/10, {status})",
         )
-        sections.append(f"#### {heading}\n")
-        sections.append("```mermaid")
-        sections.append(generate_single(path_data, i))
-        sections.append("```\n")
+        block = "\n".join((
+            f"#### {heading}\n",
+            "```mermaid",
+            generate_single(path_data, i),
+            "```\n",
+        ))
+        # Byte budget on the assembled markdown: whole blocks only, so
+        # truncation can never land mid-fence and spill live markdown.
+        if sections and total_bytes + len(block) > _MAX_SECTION_BYTES:
+            dropped += len(paths) - i
+            break
+        sections.append(block)
+        total_bytes += len(block)
+
+    if dropped:
+        sections.append(
+            f"> ⚠ Attack-paths section truncated: {dropped} of "
+            f"{len(data)} path(s) not shown (path cap {_MAX_PATHS}, "
+            f"section budget {_MAX_SECTION_BYTES} bytes).\n",
+        )
 
     return "\n".join(sections)
 

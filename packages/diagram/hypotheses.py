@@ -13,8 +13,16 @@ from typing import Any, TYPE_CHECKING
 
 from core.json import load_json
 
+from .caps import DEFAULT_CAP, cap_elements, truncation_marker_lines
 from .envelope import unwrap_list
 from .sanitize import sanitize as _sanitize, sanitize_id as _sid
+
+# Shared flow_trace rationale (see packages.diagram.caps): hypotheses
+# and their predictions come from LLM/run artifacts with no upstream
+# bound. Predictions are per-hypothesis leaf nodes — 50 keeps a
+# pathological fan-out readable while real hypotheses carry a handful.
+_MAX_HYPOTHESES = DEFAULT_CAP
+_MAX_PREDICTIONS_PER_HYP = 50
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -62,6 +70,9 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
     if not hypotheses:
         return 'flowchart TD\n    EMPTY["No hypotheses"]'
 
+    hypotheses, dropped_hyps = cap_elements(hypotheses, _MAX_HYPOTHESES)
+    dropped_preds = 0
+
     # Group by finding
     by_finding: dict[str, list[dict]] = {}
     ungrouped: list[dict] = []
@@ -98,7 +109,11 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
             lines.append(f'{indent}{nid}{{"{label}"}}')
 
         # Predictions
-        for pred in hyp.get("predictions", []):
+        nonlocal dropped_preds
+        preds = hyp.get("predictions", [])
+        preds, over = cap_elements(preds, _MAX_PREDICTIONS_PER_HYP)
+        dropped_preds += over
+        for pred in preds:
             pnid = next_id("PN")
             plabel = _prediction_label(pred)
             pstatus = _sanitize(pred.get("status", "testing"))
@@ -171,6 +186,12 @@ def generate(hypotheses: list[dict[str, Any]]) -> str:
         pred_by_status.setdefault(key, []).append(pred_nid)
     for cls, ids in pred_by_status.items():
         lines.append(f"    class {','.join(ids)} {cls}")
+
+    lines.extend(truncation_marker_lines(
+        "TRUNC", dropped_hyps, "hypotheses", _MAX_HYPOTHESES))
+    lines.extend(truncation_marker_lines(
+        "TRUNCPR", dropped_preds, "predictions",
+        _MAX_PREDICTIONS_PER_HYP))
 
     return "\n".join(lines)
 
