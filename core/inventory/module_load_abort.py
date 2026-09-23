@@ -23,6 +23,30 @@ config-gated. False negatives are cheap (we miss a deferral
 opportunity); false positives are expensive (we silence a real
 finding on a file that's actually loadable).
 
+Recovery / early-exit constructs make an abort non-terminating even
+when the abort statement itself is unconditional, so each detector
+also abstains when the language offers a way for the file to survive
+(or never reach) the abort:
+
+  * Go: a ``defer`` registered before the panic may ``recover()`` it,
+    and a ``return`` before the panic ends init first — any ``defer``
+    or ``return`` token in the init body before the panic → no
+    witness.
+  * JavaScript / PHP: a module-/file-scope ``return`` (CommonJS
+    module wrapper, PHP include) ends top-level execution before the
+    abort line is reached. Any ``return`` token not provably inside a
+    ``function`` body (or arrow-function body for JS) before the
+    abort → no witness. Braces whose opener can't be proven to be a
+    function (class/method/object bodies, bare blocks) count as
+    module-level — the cheap under-detect direction.
+  * Ruby: a top-level ``return`` ends the file's execution; an
+    INDENTED block opener at nesting depth zero breaks the column-0
+    nesting model (the following column-0 lines may be inside it) —
+    either → no witness.
+
+Suppression is only ever earned when the abort provably terminates
+loading; every ambiguity above degrades to "no signal".
+
 Per-language detection currently handled:
 
   * Python: ``raise <AbortException>(...)`` at module scope, NOT
@@ -196,6 +220,20 @@ _JS_THROW_NEW = re.compile(
 
 _JS_STMT_BOUNDARY = frozenset({";", "{", "}"})
 
+_JS_RETURN = re.compile(r"return\b")
+# A brace provably opening a FUNCTION body: an arrow (``=>``) or a
+# ``function`` keyword header (optionally generator / named) whose
+# parameter list carries no braces. ONLY these scopes may contain a
+# ``return`` without ending module-level execution. Anything the
+# pattern can't prove (class/object method shorthand, bare blocks,
+# parameter defaults containing braces) counts as module-level, so a
+# ``return`` inside it abstains — the cheap under-detect direction; a
+# wrongly "function"-classified brace would instead let a module-level
+# return keep a false whole-file abort witness.
+_JS_FN_BRACE = re.compile(
+    r"(?:=>|\bfunction\b(?:\s*\*)?(?:\s+[A-Za-z_$][\w$]*)?\s*\([^{}]*\))\s*$"
+)
+
 
 def _detect_javascript(
     language: str, content: str,
@@ -223,22 +261,44 @@ def _detect_javascript(
         return None
     # Walk character-by-character tracking brace and paren depth.
     # An unconditional module-level throw is one at depth zero
-    # before any function body opens it.
+    # before any function body opens it. Braces are additionally
+    # classified function / non-function so a module-level ``return``
+    # (a CommonJS wrapper can return; conditional blocks that return
+    # end the module before a later throw runs) abstains, while a
+    # ``return`` inside a proven function body doesn't.
     depth = 0
     paren = 0
+    fn_depth = 0
+    brace_is_fn: list[bool] = []
     last_significant = None
     i = 0
     n = len(stripped)
     while i < n:
         c = stripped[i]
         if c == "{":
+            is_fn = bool(_JS_FN_BRACE.search(stripped, max(0, i - 400), i))
+            brace_is_fn.append(is_fn)
+            if is_fn:
+                fn_depth += 1
             depth += 1
         elif c == "}":
             depth = max(0, depth - 1)
+            if brace_is_fn and brace_is_fn.pop():
+                fn_depth -= 1
         elif c == "(":
             paren += 1
         elif c == ")":
             paren = max(0, paren - 1)
+        elif c == "r" and fn_depth == 0 and (
+                i == 0 or not (stripped[i - 1].isalnum()
+                               or stripped[i - 1] in "_$")):
+            if _JS_RETURN.match(stripped, i):
+                # A return not provably inside a function body may end
+                # module-level execution before any later abort line is
+                # reached (CJS top-level return, return inside an
+                # executed conditional block). Abstain — toward no
+                # suppression.
+                return None
         elif c == "t" and depth == 0 and paren == 0 and (
                 last_significant is None
                 or last_significant in _JS_STMT_BOUNDARY):
@@ -286,6 +346,12 @@ def _js_skip_string(source: str, start: int) -> int | None:
 
 _GO_INIT_HEADER = re.compile(r"\bfunc\s+init\s*\(\s*\)\s*\{")
 _GO_PANIC_CALL = re.compile(r"\bpanic\s*\(")
+# Recovery / early-exit tokens BEFORE the panic disqualify the abort:
+# a ``defer`` registered first may ``recover()`` the panic (the file
+# then loads normally), and a ``return`` ends init before the panic
+# runs. Textual check on the comment/string-stripped body — a token
+# inside a nested func literal also abstains (under-detect, cheap).
+_GO_RECOVERY_TOKEN = re.compile(r"\b(?:defer|return)\b")
 
 
 def _go_strip_comments_and_strings(content: str) -> str:
@@ -357,6 +423,11 @@ def _detect_go(content: str) -> ModuleLoadAbort | None:
     init_body = content[body_start:body_end]
     panic_match = _GO_PANIC_CALL.search(init_body)
     if not panic_match:
+        return None
+    # A defer registered before the panic may recover() it; a return
+    # before the panic ends init first. Either way the abort is not
+    # proven to terminate loading — no witness.
+    if _GO_RECOVERY_TOKEN.search(init_body, 0, panic_match.start()):
         return None
     # Panic must be at init body's top scope (not inside any
     # nested block — if / for / switch / select). If brace depth
@@ -566,6 +637,16 @@ _PHP_ABORT = re.compile(r"throw\s+new\s+([A-Za-z_\\][\w\\]*)|die\b|exit\b")
 # after ``<?php`` sees ``last_significant is None`` and counts as initial.)
 _PHP_STMT_BOUNDARY = frozenset({";", "{", "}"})
 
+_PHP_RETURN = re.compile(r"return\b")
+# A brace provably opening a PHP function/method/closure body: a
+# ``function`` keyword with no brace/semicolon between it and the
+# ``{`` (covers names, parameter lists, ``use (...)`` closures and
+# return-type declarations). Same abstain doctrine as the JS matcher:
+# an unproven brace counts as file-scope, so a ``return`` inside it
+# withholds the witness (a file-scope return ends the include before
+# any later abort line runs).
+_PHP_FN_BRACE = re.compile(r"\bfunction\b[^{};]*$")
+
 
 def _detect_php(content: str) -> ModuleLoadAbort | None:
     from core.inventory.lexical_view import LexicalRefusal, blank_noncode
@@ -588,6 +669,8 @@ def _detect_php(content: str) -> ModuleLoadAbort | None:
     # (the close tags and surrounding HTML are already blanked).
     stripped = _PHP_TAG.sub(_spaces, stripped)
     depth = 0
+    fn_depth = 0
+    brace_is_fn: list[bool] = []
     last_significant = None  # last non-whitespace char seen
     i = 0
     n = len(stripped)
@@ -601,9 +684,23 @@ def _detect_php(content: str) -> ModuleLoadAbort | None:
             i = j
             continue
         if c == "{":
+            is_fn = bool(_PHP_FN_BRACE.search(stripped, max(0, i - 400), i))
+            brace_is_fn.append(is_fn)
+            if is_fn:
+                fn_depth += 1
             depth += 1
         elif c == "}":
             depth = max(0, depth - 1)
+            if brace_is_fn and brace_is_fn.pop():
+                fn_depth -= 1
+        elif c == "r" and fn_depth == 0 and (
+                i == 0 or not (stripped[i - 1].isalnum()
+                               or stripped[i - 1] in "_$")):
+            if _PHP_RETURN.match(stripped, i):
+                # A file-scope return (directly, or inside an executed
+                # conditional block) ends the include before any later
+                # abort runs. Abstain — toward no suppression.
+                return None
         elif depth == 0 and (c in "tde") and (
                 last_significant is None or last_significant in _PHP_STMT_BOUNDARY):
             # Only attempt a match at a statement boundary at file scope.
@@ -649,6 +746,21 @@ _RB_ABORT = re.compile(r"^(raise\s+\S|abort\b|exit!|exit\b|fail\s+\S|Kernel\.(ab
 # continues, the file loads, and flagging it fabricates the whole-file
 # dead gate on a live file.
 _RB_MODIFIER = re.compile(r"\b(if|unless|while|until|rescue)\b")
+# An endless method definition (``def foo = 42``, ``def foo(a) = a``)
+# opens NO body and has NO ``end`` — counting it as an opener leaves
+# the depth stuck at 1 and silently disables detection for the rest
+# of the file. Setter defs (``def foo=(v)``) keep their ``end`` and
+# must NOT match: the ``=`` alternative with parens requires the
+# parameter list first, and the paren-less alternative requires
+# whitespace on both sides of the ``=``.
+_RB_ENDLESS_DEF = re.compile(
+    r"^def\s+(?:self\s*\.\s*)?[A-Za-z_]\w*[!?]?"
+    r"(?:\s*\([^()]*\)\s*=(?![=~>])|\s+=\s)"
+)
+# A top-level ``return`` (valid at Ruby file scope) ends the file's
+# execution — any later abort line never runs. Modifier-conditional
+# forms (``return if cond``) are ambiguous the same way; both abstain.
+_RB_RETURN = re.compile(r"^return\b")
 
 
 def _detect_ruby(content: str) -> ModuleLoadAbort | None:
@@ -673,6 +785,20 @@ def _detect_ruby(content: str) -> ModuleLoadAbort | None:
         if not stripped:
             continue
         is_col0 = line[:1] not in (" ", "\t")
+        if depth == 0:
+            if _RB_RETURN.match(stripped):
+                # Top-level return — execution ends here; a later abort
+                # never runs. Abstain, toward no suppression.
+                return None
+            if (not is_col0 and _RB_OPENER.match(stripped)
+                    and not _RB_ONELINER.search(stripped)
+                    and not _RB_ENDLESS_DEF.match(stripped)):
+                # An INDENTED opener at depth zero breaks the column-0
+                # nesting model: following column-0 lines (including an
+                # abort) may sit inside its body, unconditionally-looking
+                # but conditional. Bail on the whole file — toward no
+                # suppression.
+                return None
         if is_col0 and depth == 0:
             abort = _RB_ABORT.match(stripped)
             if abort and not _RB_MODIFIER.search(stripped[len(abort.group(0)):]):
@@ -685,8 +811,11 @@ def _detect_ruby(content: str) -> ModuleLoadAbort | None:
         if is_col0:
             if _RB_END.match(stripped):
                 depth = max(0, depth - 1)
-            elif _RB_OPENER.match(stripped) and not _RB_ONELINER.search(stripped):
-                # one-liner (``def f; end``) is net-zero — don't increment.
+            elif (_RB_OPENER.match(stripped)
+                    and not _RB_ONELINER.search(stripped)
+                    and not _RB_ENDLESS_DEF.match(stripped)):
+                # one-liner (``def f; end``) and endless defs
+                # (``def f = 42``) are net-zero — don't increment.
                 depth += 1
     return None
 

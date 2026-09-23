@@ -1175,3 +1175,256 @@ def test_js_real_abort_below_hashbang_still_detected():
     assert result is not None
     assert result.line == 2
     assert result.summary == "throw new Boom"
+
+
+# ---------------------------------------------------------------------------
+# Recovery / early-exit constructs — an unconditional-looking abort is
+# not proven to terminate loading when the language offers a way to
+# survive it (defer-recover) or to end top-level execution before it
+# (module-/file-scope return, indented Ruby nesting). Every ambiguity
+# must abstain: these witnesses hard-suppress findings downstream.
+# ---------------------------------------------------------------------------
+
+
+def test_go_defer_before_panic_abstains():
+    # A defer registered before the panic may recover() it — the file
+    # then loads and every function below is live (go-run verified).
+    src = textwrap.dedent(
+        """\
+        package main
+
+        import "fmt"
+
+        func init() {
+        \tdefer func() { recover() }()
+        \tpanic("integrity check")
+        }
+
+        func Vuln() {
+        \tfmt.Println("VULN:live")
+        }
+
+        func main() { Vuln() }
+        """
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_defer_in_comment_before_panic_still_fires():
+    src = (
+        "package main\n"
+        "func init() {\n"
+        "\t// defer is only mentioned here\n"
+        "\tpanic(\"disabled\")\n"
+        "}\n"
+    )
+    result = detect_module_load_abort("go", src)
+    assert result is not None
+    assert result.line == 4
+
+
+def test_go_return_before_panic_abstains():
+    # A return before the panic ends init first — conditional shapes
+    # (return inside a nested block) skip the panic on that branch.
+    src = (
+        "package main\n"
+        "func init() {\n"
+        "\tif ok() {\n"
+        "\t\treturn\n"
+        "\t}\n"
+        "\tpanic(\"disabled\")\n"
+        "}\n"
+    )
+    assert detect_module_load_abort("go", src) is None
+
+
+def test_go_defer_after_panic_still_fires():
+    # A defer AFTER the panic never registers — cannot recover it.
+    src = (
+        "package main\n"
+        "func init() {\n"
+        "\tpanic(\"disabled\")\n"
+        "\tdefer cleanup()\n"
+        "}\n"
+    )
+    result = detect_module_load_abort("go", src)
+    assert result is not None
+    assert result.line == 3
+
+
+def test_js_module_level_return_in_executed_block_abstains():
+    # CommonJS top-level return inside an executed conditional ends the
+    # module before the throw; `below` is hoisted, exported, callable
+    # (node-run verified).
+    _requires_lexical_grammar("javascript")
+    src = (
+        "exports.below = below;\n"
+        "if (true) { return; }\n"
+        "throw new Error(\"unreachable\");\n"
+        "function below(x){ console.log(x); }\n"
+    )
+    assert detect_module_load_abort("javascript", src) is None
+
+
+def test_js_bare_module_level_return_abstains():
+    _requires_lexical_grammar("javascript")
+    src = "return;\nthrow new Error(\"unreachable\");\n"
+    assert detect_module_load_abort("javascript", src) is None
+
+
+def test_js_return_inside_function_before_throw_still_fires():
+    _requires_lexical_grammar("javascript")
+    src = (
+        "function helper(x) { return x + 1; }\n"
+        "const f = (a) => { return a; };\n"
+        "throw new Error(\"disabled\");\n"
+    )
+    result = detect_module_load_abort("javascript", src)
+    assert result is not None
+    assert result.line == 3
+
+
+def test_js_return_in_class_method_abstains():
+    # A class-method brace is not PROVEN to be a function body by the
+    # matcher — the return abstains (cheap under-detect direction; the
+    # dangerous direction would be classifying a bare block as a
+    # function and keeping a false witness).
+    _requires_lexical_grammar("javascript")
+    src = (
+        "class A { m() { return 1; } }\n"
+        "throw new Error(\"disabled\");\n"
+    )
+    assert detect_module_load_abort("javascript", src) is None
+
+
+def test_js_return_after_throw_still_fires():
+    _requires_lexical_grammar("javascript")
+    src = (
+        "throw new Error(\"disabled\");\n"
+        "if (x) { return; }\n"
+    )
+    result = detect_module_load_abort("javascript", src)
+    assert result is not None
+    assert result.line == 1
+
+
+def test_php_file_scope_return_in_executed_block_abstains():
+    # PHP binds unconditional top-level functions at compile time; a
+    # file-scope return ends the include before the die() runs.
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\n"
+        "if (true) { return; }\n"
+        "die('never runs');\n"
+        "function vuln($x){ echo $x; }\n"
+    )
+    assert detect_module_load_abort("php", src) is None
+
+
+def test_php_return_inside_function_before_die_still_fires():
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\n"
+        "function f($x) { return $x; }\n"
+        "die('disabled');\n"
+    )
+    result = detect_module_load_abort("php", src)
+    assert result is not None
+    assert result.line == 3
+
+
+def test_php_return_variable_name_does_not_abstain():
+    _requires_lexical_grammar("php")
+    src = (
+        "<?php\n"
+        "$returnCode = 1;\n"
+        "die('disabled');\n"
+    )
+    result = detect_module_load_abort("php", src)
+    assert result is not None
+    assert result.line == 3
+
+
+def test_ruby_indented_opener_at_top_level_abstains():
+    # A one-space-indented `if` never increments the column-0 depth
+    # counter, so the conditional raise below it read unconditional
+    # (tree-sitter ground truth: the raise sits inside the if node).
+    _requires_lexical_grammar("ruby")
+    src = " if ENV['X']\nraise 'conditional'\n end\ndef vuln; end\n"
+    assert detect_module_load_abort("ruby", src) is None
+
+
+def test_ruby_top_level_return_abstains():
+    # `return` is valid at Ruby file scope and ends execution — a
+    # later abort line never runs.
+    _requires_lexical_grammar("ruby")
+    src = "return if ENV['SKIP']\nraise 'disabled'\n"
+    assert detect_module_load_abort("ruby", src) is None
+
+
+def test_ruby_endless_def_does_not_wedge_depth():
+    # `def foo = 42` opens no body and has no `end`; counting it as an
+    # opener left depth stuck at 1, silently disabling detection for
+    # the rest of the file.
+    _requires_lexical_grammar("ruby")
+    result = detect_module_load_abort("ruby", "def foo = 42\nraise 'disabled'\n")
+    assert result is not None
+    assert result.line == 2
+
+
+def test_ruby_setter_def_still_counts_as_opener():
+    # `def foo=(v)` is a setter (regular def with an `end`), not an
+    # endless def — the raise inside its body must not fire.
+    _requires_lexical_grammar("ruby")
+    src = "def foo=(v)\nraise 'inside setter'\nend\n"
+    assert detect_module_load_abort("ruby", src) is None
+
+
+def test_ruby_indented_body_inside_col0_opener_still_fires_below():
+    # Ordinary layout — indented openers at depth > 0 are the norm and
+    # must not trigger the depth-0 indented-opener bail.
+    _requires_lexical_grammar("ruby")
+    src = (
+        "class C\n"
+        "  if x\n"
+        "    y = 1\n"
+        "  end\n"
+        "end\n"
+        "raise 'disabled'\n"
+    )
+    result = detect_module_load_abort("ruby", src)
+    assert result is not None
+    assert result.line == 6
+
+
+def test_check_suppress_not_earned_on_recoverable_go_panic(tmp_path):
+    # End-to-end over the real chain: build_inventory ->
+    # classify_reachability -> check_suppress must NOT return a
+    # hard-suppress verdict for a function in a file whose init panic
+    # is recovered by a defer (`go run` executes the function).
+    import json
+    import tempfile
+
+    from core.analysis.reach_chokepoint import check_suppress
+    from core.inventory.builder import build_inventory
+
+    (tmp_path / "main.go").write_text(
+        "package main\n\n"
+        "import \"fmt\"\n\n"
+        "func init() {\n"
+        "\tdefer func() { recover() }()\n"
+        "\tpanic(\"integrity check\")\n"
+        "}\n\n"
+        "func Vuln() {\n"
+        "\tfmt.Println(\"VULN:live\")\n"
+        "}\n\n"
+        "func main() { Vuln() }\n"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        build_inventory(str(tmp_path), td, parallel=False)
+        checklist = json.loads(
+            (__import__("pathlib").Path(td) / "checklist.json").read_text())
+    decision = check_suppress(
+        checklist=checklist, file_path="main.go", function_name="Vuln",
+        line=11, repo_root=tmp_path)
+    assert decision is None
