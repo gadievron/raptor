@@ -71,7 +71,7 @@ def _json(payload: dict[str, Any]) -> str:
 # -- nvd_lookup -----------------------------------------------------------
 
 
-# Module-level per-CVE state. Thread-unsafe by design: single-process-per-CVE model (see _activity.py).
+# Module-level per-CVE state. Thread-unsafe by design: one process per CVE.
 # Must call reset_all_tool_state() between CVEs.
 #
 # Guard against re-calling nvd_lookup mid-CVE. The agent can re-research

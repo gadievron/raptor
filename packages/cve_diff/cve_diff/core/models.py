@@ -130,21 +130,19 @@ class DiffBundle:
     inner loop where it'd inflate cost). Surfaced in the per-CVE
     markdown report and the OSV `database_specific.consensus` field.
 
-    `extraction_agreement` is the cross-check between the clone-based
-    diff (this bundle) and a parallel ``extract_via_api`` pull on the
-    same ``(slug, sha)`` for GitHub-hosted commits. Captures whether
-    two independent extraction methods agree on the file set / byte
-    count of the diff. Keys when present:
-      - ``method``: ``"clone+api"`` (always — single key today)
-      - ``files_clone`` / ``files_api``: int file counts
-      - ``paths_overlap``: float in [0, 1] — Jaccard of touched paths
-      - ``bytes_clone`` / ``bytes_api``: int diff bytes
-      - ``bytes_pct_diff``: float — relative size delta (clone-side
-        baseline). Loose ±5% tolerance is the agreement threshold.
-      - ``api_truncated``: bool — True when API response capped at
-        ~300 files; comparison is then advisory only.
+    `extraction_agreement` is the N-source extraction-content
+    cross-check between the clone-based diff (this bundle) and the
+    parallel extractor pulls on the same ``(slug, sha)``. Keys when
+    present (the 2026 schema the producer emits and
+    ``report/markdown._render_extraction_agreement`` consumes):
       - ``verdict``: ``"agree"`` / ``"partial"`` / ``"disagree"`` /
         ``"single_source"``.
+      - ``sources``: list of per-extractor rows
+        (``{name, files, bytes, truncated, ...}``).
+      - ``pairwise``: per-pair comparison records (path overlap,
+        byte deltas).
+      - ``outliers``: extractor names whose content disagrees with
+        the majority.
     None when no second source was attempted (non-GitHub URL, API
     fallback path itself, or feature disabled).
     """

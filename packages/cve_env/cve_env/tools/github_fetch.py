@@ -194,7 +194,7 @@ class GhFetchResult:
     )  # [{name,type,path,size}]
     status: int = 0
     reason: str = ""
-    reason_class: str = "ok"  # ok / rate_limited / transport / auth / not_found
+    reason_class: str = "ok"  # ok / rate_limited / transport / auth / not_found / poc_repo_blocked
 
 
 # Per-process cache so ``resolve_github_token`` doesn't fork ``gh`` repeatedly.
