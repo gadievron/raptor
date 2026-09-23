@@ -784,6 +784,73 @@ class TestBuildTemplateQuery:
         assert "go" in langs
 
 
+class TestBuildPredicateProbeQuery:
+    """Vacuity-control probe assembly: one standalone selector per
+    LLM-written predicate, sharing the taint template's exact
+    per-language header."""
+
+    def _probe(self, role, **overrides):
+        kwargs = dict(
+            language="python",
+            source_predicate_body="none()",
+            sink_predicate_body="exists(Call c)",
+            probe_role=role,
+        )
+        kwargs.update(overrides)
+        from packages.llm_analysis.dataflow_query_builder import (
+            build_predicate_probe_query,
+        )
+        return build_predicate_probe_query(**kwargs)
+
+    def test_source_probe_selects_issource(self):
+        q = self._probe("source")
+        assert q is not None
+        assert "IrisConfig::isSource(n)" in q
+        assert "none()" in q
+        # Both predicate bodies stay in the module so a body that
+        # compiled inside the flow query compiles identically here.
+        assert "exists(Call c)" in q
+        assert "import python" in q
+
+    def test_sink_probe_selects_issink(self):
+        q = self._probe("sink")
+        assert q is not None
+        assert "IrisConfig::isSink(n)" in q
+
+    def test_probe_is_a_problem_query_without_flow_select(self):
+        q = self._probe("source")
+        assert "@kind problem" in q
+        assert "@kind path-problem" not in q
+        assert "IrisFlow::flowPath" not in q
+        assert "import IrisFlow::PathGraph" not in q
+
+    def test_cpp_probe_keeps_alias_header(self):
+        q = self._probe("source", language="cpp")
+        assert q is not None
+        assert "FlowSources as FS" in q
+
+    def test_unknown_role_returns_none(self):
+        assert self._probe("both") is None
+
+    def test_unknown_language_returns_none(self):
+        assert self._probe("source", language="cobol") is None
+
+    def test_blank_predicate_returns_none(self):
+        assert self._probe("source", source_predicate_body="  ") is None
+        assert self._probe("source", sink_predicate_body="") is None
+
+    def test_every_template_carries_the_shared_flow_tail(self):
+        # Drift guard: the probe builder splits each taint template on
+        # this tail to reuse its header — a template that loses the
+        # tail makes the builder refuse and the vacuity control abstain
+        # (never mis-assemble). Both directions pinned here.
+        for lang, template in _dqb._TAINT_TEMPLATES.items():
+            assert template.count(_dqb._FLOW_QUERY_TAIL) == 1, lang
+            assert template.count("@kind path-problem") == 1, lang
+            q = self._probe("source", language=lang)
+            assert q is not None, lang
+
+
 class TestSchemas:
     def test_template_predicate_schema_has_required_fields(self):
         assert "source_predicate_body" in TEMPLATE_PREDICATE_SCHEMA

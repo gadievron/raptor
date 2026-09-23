@@ -266,6 +266,18 @@ class TestE2EIris:
             matches=[], summary="no matches",
         )
 
+        probe_hit = ToolEvidence(
+            tool="codeql", rule="<probe>", success=True,
+            matches=[{"file": "x.py", "line": 1, "message": "n"}],
+            summary="1 match",
+        )
+
+        def _adapter_run(rule, *a, **k):
+            # Vacuity probes see non-empty endpoint models so the
+            # zero-flow refutation stands (the vacuity control has
+            # its own tests in test_dataflow_validation).
+            return probe_hit if "IRIS is" in str(rule) else empty_evidence
+
         # LLM returns predicate bodies for Tier 2
         llm = MagicMock()
         llm.generate_structured.return_value = {
@@ -279,7 +291,7 @@ class TestE2EIris:
             return_value=True,
         ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.run",
-            return_value=empty_evidence,
+            side_effect=_adapter_run,
         ), patch(
             "packages.llm_analysis.dataflow_validation.DispatchClient",
             return_value=llm,
@@ -339,7 +351,13 @@ class TestE2EIris:
             tool="codeql", rule="<gen>", success=True,
             matches=[], summary="no matches",
         )
-        # F-real: 1 call (Tier 1 confirms). F-fp: 2 calls (Tier 1 → Tier 2)
+        # F-real: 1 call (Tier 1 confirms). F-fp: 2 calls (Tier 1 →
+        # Tier 2) + 2 vacuity probes on the zero-flow refutation.
+        probe_hit = ToolEvidence(
+            tool="codeql", rule="<probe>", success=True,
+            matches=[{"file": "x.py", "line": 1, "message": "n"}],
+            summary="1 match",
+        )
         adapter_runs = [match_for_real, no_match, no_match]
 
         # LLM gives predicate bodies for F-fp's Tier 2 generation.
@@ -356,7 +374,8 @@ class TestE2EIris:
             return_value=True,
         ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.run",
-            side_effect=lambda rule, target, **kwargs: adapter_runs.pop(0),
+            side_effect=lambda rule, *a, **kwargs: (
+                probe_hit if "IRIS is" in str(rule) else adapter_runs.pop(0)),
         ), patch(
             "packages.llm_analysis.dataflow_validation.DispatchClient",
             return_value=llm,
@@ -403,6 +422,18 @@ class TestE2EIris:
             matches=[], summary="no matches",
         )
 
+        probe_hit = ToolEvidence(
+            tool="codeql", rule="<probe>", success=True,
+            matches=[{"file": "x.py", "line": 1, "message": "n"}],
+            summary="1 match",
+        )
+
+        def _adapter_run(rule, *a, **k):
+            # Vacuity probes see non-empty endpoint models so the
+            # zero-flow refutation stands (the vacuity control has
+            # its own tests in test_dataflow_validation).
+            return probe_hit if "IRIS is" in str(rule) else empty_evidence
+
         llm = MagicMock()
         llm.generate_structured.return_value = {
             "source_predicate_body": "n instanceof X",
@@ -415,7 +446,7 @@ class TestE2EIris:
             return_value=True,
         ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.run",
-            return_value=empty_evidence,
+            side_effect=_adapter_run,
         ), patch(
             "packages.llm_analysis.dataflow_validation.DispatchClient",
             return_value=llm,

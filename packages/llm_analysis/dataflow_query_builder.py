@@ -524,6 +524,84 @@ def supported_languages_for_template() -> set:
     return set(_TAINT_TEMPLATES.keys())
 
 
+# Shared tail of every taint template. build_predicate_probe_query
+# splits on it to reuse each language's exact import/alias header, so
+# a predicate body that compiled inside the flow query compiles
+# identically inside the probe. Template drift is guarded by a unit
+# test asserting every template carries this tail exactly once; a
+# template without it makes the probe builder refuse (None) rather
+# than mis-assemble a query.
+_FLOW_QUERY_TAIL = """\
+module IrisFlow = TaintTracking::Global<IrisConfig>;
+import IrisFlow::PathGraph
+
+from IrisFlow::PathNode source, IrisFlow::PathNode sink
+where IrisFlow::flowPath(source, sink)
+select sink.getNode(), source, sink, "IRIS dataflow path"
+"""
+
+_PROBE_TAILS: dict[str, str] = {
+    "source": """\
+from DataFlow::Node n
+where IrisConfig::isSource(n)
+select n, "IRIS isSource probe"
+""",
+    "sink": """\
+from DataFlow::Node n
+where IrisConfig::isSink(n)
+select n, "IRIS isSink probe"
+""",
+}
+
+
+def build_predicate_probe_query(
+    *,
+    language: str,
+    source_predicate_body: str,
+    sink_predicate_body: str,
+    probe_role: str,
+    query_id: str = "raptor/iris/predicate-probe",
+) -> str | None:
+    """Assemble a standalone selector for ONE LLM-written predicate.
+
+    The Tier 2 vacuity control: before a zero-flow taint result is
+    trusted as refutation, each endpoint predicate is run on its own —
+    a predicate that selects zero nodes anywhere in the DB makes "no
+    flow" vacuously true, which is a property of the LLM's model, not
+    of the code. The probe keeps the taint template's full per-language
+    header (imports, aliases, the IrisConfig module with BOTH predicate
+    bodies) and swaps the flow query for a plain node selection over
+    ``probe_role`` (``"source"`` → ``isSource``, ``"sink"`` →
+    ``isSink``), downgrading ``@kind path-problem`` to ``@kind
+    problem`` for the two-column select.
+
+    Returns the full .ql text, or None when the language has no
+    template, either predicate body is empty / blank, ``probe_role``
+    is unknown, or the template lacks the shared flow tail (drift).
+    """
+    probe_tail = _PROBE_TAILS.get(probe_role)
+    if probe_tail is None:
+        return None
+    template = _TAINT_TEMPLATES.get(language.lower())
+    if template is None:
+        return None
+    if not source_predicate_body or not source_predicate_body.strip():
+        return None
+    if not sink_predicate_body or not sink_predicate_body.strip():
+        return None
+    header, sep, _ = template.partition(_FLOW_QUERY_TAIL)
+    if not sep:
+        return None
+    probe = (header + probe_tail).replace(
+        "@kind path-problem", "@kind problem", 1,
+    )
+    return probe.format(
+        source_predicate_body=source_predicate_body.strip(),
+        sink_predicate_body=sink_predicate_body.strip(),
+        query_id=query_id,
+    )
+
+
 def build_template_query(
     *,
     language: str,
