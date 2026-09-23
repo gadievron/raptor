@@ -52,7 +52,7 @@ Be extremely thorough in checking your causal chain of events. Make sure that:
  root-cause-analysis into the working directory under the filename "root-cause-hypothesis-YYY.md" (where YYY is a running counter starting from 1 for each hypothesis that is generated). The analysis MUST include:
   1) A clear explanation of what is going wrong and why.
   2) MANDATORY: The actual verbatim output from running rr commands. For EVERY step in the pointer chain, you must include:
-     a) The rr commands you will run (e.g., "rr replay ...; break file.c:123; commands; printf ...; end")
+     a) The rr commands you will run (e.g., "rr replay <trace> -- -nx -iex 'set auto-load off' -iex 'set auto-load safe-path /dev/null'; break file.c:123; commands; printf ...; end") — ALWAYS pass the gdb auto-load hardening flags after `--`: the recorded binary is untrusted, and a permissive gdb config would otherwise execute scripts it plants
      b) The ACTUAL OUTPUT from running those commands showing real pointer values (e.g., "pointer=0x60e000000100")
      c) You must NOT write "expected output" - you must actually RUN the commands and paste the real output
   3) The report must contain at least 3 instances of actual rr output: allocation, intermediate modifications, and crash
@@ -74,7 +74,7 @@ relevant_code_here();
 
 **RR Verification:**
 ```bash
-rr replay rr-trace
+rr replay rr-trace -- -nx -iex 'set auto-load off' -iex 'set auto-load safe-path /dev/null'
 break file.c:123
 commands
   printf "variable=%p\n", variable
