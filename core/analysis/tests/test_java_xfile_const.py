@@ -479,3 +479,83 @@ class TestCoveredIdentifiers:
         r = self._resolver(tmp_path, src)
         cov = r.covered_identifiers(src, 7)  # the n(...) line
         assert "TYPE_FORWARD_ONLY" not in cov
+
+
+class TestJdkNamespaceIdentity:
+    """Namespace prefix is not identity: only ``java.*`` is
+    JVM-classloader-reserved (prohibited package name); ``javax.*`` is
+    user-definable, so a repo can declare its own javax class and a
+    prefix-only tier would fold that class's MUTABLE static fields as
+    attacker-free. The tier fires only when the class provably is not
+    declared in the analysed tree."""
+
+    HOLDER = (
+        "package javax.legacy;\n"
+        "public class Holder {\n"
+        "    public static String CURRENT;\n"
+        "    public static void set(javax.servlet.http."
+        "HttpServletRequest r) {\n"
+        '        CURRENT = r.getParameter("q");\n'
+        "    }\n"
+        "}\n"
+    )
+
+    def _resolver(self, tmp_path, caller_src):
+        from core.analysis.java_xfile_const import make_xfile_resolver
+        d = tmp_path / "src" / "javax" / "legacy"
+        d.mkdir(parents=True)
+        (d / "Holder.java").write_text(self.HOLDER, encoding="utf-8")
+        f = tmp_path / "src" / "T.java"
+        f.write_text(caller_src, encoding="utf-8")
+        return make_xfile_resolver(str(f), str(tmp_path))
+
+    def test_repo_declared_javax_class_never_blind_taint_free(
+            self, tmp_path):
+        from core.analysis.const_fold_java import REFUSE
+        r = self._resolver(
+            tmp_path,
+            "import javax.legacy.Holder;\npublic class T {}\n")
+        # In-tree declaration takes the normal static-final path:
+        # CURRENT is a mutable static written from a request — REFUSE.
+        assert r.resolve_field("Holder", "CURRENT", True) is REFUSE
+        assert r.resolve_field(
+            "javax.legacy.Holder", "CURRENT", True) is REFUSE
+
+    def test_repo_declared_javax_static_final_folds_normally(
+            self, tmp_path):
+        from core.analysis.java_xfile_const import make_xfile_resolver
+        d = tmp_path / "javax" / "legacy"
+        d.mkdir(parents=True)
+        (d / "K.java").write_text(
+            "package javax.legacy;\n"
+            "public class K { public static final String "
+            'D = "v"; }\n', encoding="utf-8")
+        f = tmp_path / "T.java"
+        f.write_text("import javax.legacy.K;\npublic class T {}\n",
+                     encoding="utf-8")
+        r = make_xfile_resolver(str(f), str(tmp_path))
+        assert r.resolve_field("K", "D", True) == "v"
+
+    def test_genuine_javax_miss_keeps_the_tier(self, tmp_path):
+        from core.analysis.const_fold_java import TAINT_FREE
+        r = self._resolver(
+            tmp_path,
+            "import javax.sql.DataSource;\npublic class T {}\n")
+        # No DataSource.java under the root — proven miss, tier fires.
+        assert r.resolve_field("DataSource", "X", True) is TAINT_FREE
+
+    def test_rootless_javax_refuses_java_star_stays(self, tmp_path):
+        from core.analysis.const_fold_java import REFUSE, TAINT_FREE
+        from core.analysis.java_xfile_const import make_xfile_resolver
+        f = tmp_path / "T.java"
+        f.write_text(
+            "import javax.sql.DataSource;\n"
+            "import java.sql.ResultSet;\npublic class T {}\n",
+            encoding="utf-8")
+        r = make_xfile_resolver(str(f), None)
+        assert r is not None
+        # Without a tree there is no miss proof for a user-definable
+        # namespace; java.* is unloadable from application code and
+        # stays blind-resolvable.
+        assert r.resolve_field("DataSource", "X", True) is REFUSE
+        assert r.resolve_field("ResultSet", "X", True) is TAINT_FREE

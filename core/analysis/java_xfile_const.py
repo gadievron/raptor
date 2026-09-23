@@ -110,6 +110,9 @@ class XFileConst:
             and self._root.is_dir()
         self._imports: dict[str, str] = {}
         self._class_cache: dict[str, tuple[Any, Path] | None] = {}
+        # simple class name -> does ANY <Simple>.java exist under the
+        # root (the JDK tier's miss proof; see resolve_field).
+        self._simple_name_cache: dict[str, bool] = {}
         self._field_cache: dict[tuple[str, str], Any] = {}
         self._method_cache: dict[tuple[str, str, int], Any] = {}
         # None = not scanned; ("poisoned",) = a variable-key
@@ -266,22 +269,63 @@ class XFileConst:
         return key not in scan
 
     def is_jdk_chain(self, chain: str) -> bool:
-        """True when ``chain`` names a JDK class — a fully-qualified
-        ``java.*``/``javax.*`` chain or a simple name the analysed
-        file imports from those packages. JDK class fields cannot
-        carry the current request's taint under the gate's
+        """True when ``chain`` carries a JDK-namespace PREFIX — a
+        fully-qualified ``java.*``/``javax.*`` chain or a simple name
+        the analysed file imports from those packages. Prefix only:
+        :meth:`resolve_field` owns the identity question (``javax.*``
+        is user-definable, so the taint-free tier additionally
+        requires a proven same-tree miss there). JDK class fields
+        cannot carry the current request's taint under the gate's
         intra-procedural model (b36 tier, merged here: XFileConst
         cannot resolve JDK classes from source, so without this the
         ResultSet.TYPE_FORWARD_ONLY sibling class refuses forever)."""
         fqn = self._imports.get(chain, chain) if "." not in chain             else chain
         return fqn.startswith(("java.", "javax."))
 
+    def _tree_declares_simple_name(self, chain: str) -> bool:
+        """True when any ``<Simple>.java`` exists under the root for
+        ``chain``'s simple name; False is the JDK tier's PROVEN miss.
+        A hit is not yet a declaration — the normal locate path
+        decides (package match, ambiguity) — but a hit means the
+        blind tier must not fire. Errors read as a hit (refusal
+        direction)."""
+        fqn = self._imports.get(chain, chain)
+        simple = fqn.rsplit(".", 1)[-1]
+        cached = self._simple_name_cache.get(simple)
+        if cached is None:
+            try:
+                cached = next(
+                    self._root.rglob(f"{simple}.java"), None) is not None
+            except OSError:
+                cached = True
+            self._simple_name_cache[simple] = cached
+        return cached
+
     def resolve_field(self, chain: str, field: str,
                       allow_taint_free: bool) -> Any:
         """``chain.field`` → constant | TAINT_FREE | REFUSE."""
         from core.analysis.const_fold_java import REFUSE, TAINT_FREE
         if self.is_jdk_chain(chain):
-            return TAINT_FREE if allow_taint_free else REFUSE
+            # Namespace prefix is not identity: ``javax.*`` is
+            # user-definable — only ``java.*`` is JVM-classloader-
+            # reserved (prohibited package name) — so a repo can
+            # declare ``package javax.legacy; class Holder`` and a
+            # prefix-only tier would fold its MUTABLE static fields
+            # attacker-free. The blind tier fires only on a PROVEN
+            # same-tree miss; an in-tree candidate falls through to
+            # the normal static-final path. Without a tree to check,
+            # only ``java.*`` stays blind-resolvable.
+            if self.ok:
+                if not self._tree_declares_simple_name(chain):
+                    return TAINT_FREE if allow_taint_free else REFUSE
+                # fall through: the locate path decides (an unrelated
+                # same-named file refuses there — still no blind mint)
+            else:
+                fqn = self._imports.get(chain, chain) \
+                    if "." not in chain else chain
+                if fqn.startswith("java."):
+                    return TAINT_FREE if allow_taint_free else REFUSE
+                return REFUSE
         key = (chain, field)
         if key in self._field_cache:
             val = self._field_cache[key]
