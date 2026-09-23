@@ -388,3 +388,54 @@ class TestReturnValueWhitespaceRun:
             "return;",       # bare: skipped
             "return  ;",     # whitespace-only value: skipped
         ]) == ["0", "a + b", "foo(x, y)"]
+
+
+class TestDynAllocAssignWhitespaceRun:
+    def test_assign_whitespace_run_is_fast(self):
+        """Hostile assignment line ending in a long whitespace run
+        with no allocator call: the previous ``\\(?\\s*[^=;]*?``
+        spelling overlapped the lazy filler and the whitespace spans
+        — cubic in the line length. The gated-paren, \\S-headed
+        filler is linear."""
+        import re
+
+        from core.testing.wallclock import cpu_budget
+        from packages.source_intel.adapter import (
+            _DYNAMIC_ALLOCATORS_PATTERN,
+        )
+
+        pat = re.compile(
+            r"\bbuf\s*=\s*(?:\(\s*)?(?:[^=;\s][^=;]*?)?"
+            + _DYNAMIC_ALLOCATORS_PATTERN.pattern[:-2] + r"\(",
+        )
+        hostile = "buf =" + " " * (1 << 16) + "x"
+        with cpu_budget(1.0, what="alloc-assign whitespace run"):
+            assert pat.search(hostile) is None
+        assert pat.search("buf = (char *) malloc(64);")
+        assert pat.search("buf = kmalloc(sz, GFP_KERNEL);")
+
+
+class TestFnDefOpenWhitespaceRun:
+    def test_decl_token_run_is_fast(self):
+        """Hostile declaration-shaped line with a long token run and
+        no paren: the previous unbounded lazy return-type window
+        chained overlapping whitespace-capable spans — cubic even at
+        the anchored match call. The bounded window is linear."""
+        from core.testing.wallclock import cpu_budget
+        from packages.source_intel.adapter import _FN_DEF_OPEN_RE
+
+        hostile = "a" + " b" * 40000
+        with cpu_budget(1.0, what="fn-def token-run scan"):
+            assert _FN_DEF_OPEN_RE.match(hostile) is None
+
+    def test_definition_forms_still_match(self):
+        from packages.source_intel.adapter import _FN_DEF_OPEN_RE
+
+        for line, name in (
+            ("static int parse_hdr(struct pkt *p)", "parse_hdr"),
+            ("  void *grab(size_t n) {", "grab"),
+            ("handler(int sig)", "handler"),
+        ):
+            m = _FN_DEF_OPEN_RE.match(line)
+            assert m is not None, line
+            assert m.group("name") == name, line
