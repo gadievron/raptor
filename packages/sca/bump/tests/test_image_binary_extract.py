@@ -209,6 +209,35 @@ class TestResolveEntrypointPath:
             client=client, ref=ref, config_digest="sha256:bad",
         ) is None
 
+    def test_oversize_config_blob_refused_without_buffering(self):
+        """A hostile / compromised registry serving a huge "config"
+        blob (real ones are a few KB) must degrade to None at the
+        cap — pre-fix the only bound was the client's 2 GiB LAYER
+        budget and the blob was fully buffered twice (join + decoded
+        copy) per image ref."""
+        from packages.sca.bump.image_binary_extract import (
+            _MAX_CONFIG_BLOB_BYTES,
+        )
+
+        consumed = {"chunks": 0}
+        chunk = b"A" * (1024 * 1024)
+
+        class _FloodClient:
+            def stream_blob(self, ref, digest):
+                for _ in range(64):
+                    consumed["chunks"] += 1
+                    yield chunk
+
+        from core.oci.image_ref import parse_image_ref
+        ref = parse_image_ref("docker.io/library/test:1")
+        assert _resolve_entrypoint_path(
+            client=_FloodClient(), ref=ref,
+            config_digest="sha256:flood",
+        ) is None
+        # The stream stops at the cap — the flood is never drained.
+        cap_chunks = _MAX_CONFIG_BLOB_BYTES // len(chunk)
+        assert consumed["chunks"] <= cap_chunks + 1
+
     def test_no_config_block_returns_none(self):
         client = _StubClient()
         client.blobs["sha256:cfg"] = json.dumps({"other": "data"}).encode()

@@ -341,6 +341,13 @@ def cleanup_extracted_binary(path: Path | None) -> None:
 _SAFE_FILENAME_CHARS = re.compile(r"[^A-Za-z0-9._-]")
 _MAX_FILENAME_COMPONENT = 64
 
+# Image CONFIG blobs are small JSON documents (a few KB in the
+# wild); 4 MiB is generous headroom. Deliberately far below the
+# shared 2 GiB stream_blob budget, which is sized for image LAYERS
+# — every other remote read on this lane carries its own tight cap
+# (action.yml 256 KB, layer extraction double-bounded).
+_MAX_CONFIG_BLOB_BYTES = 4 * 1024 * 1024
+
 
 def _sanitise_filename_component(name: str) -> str:
     """Reduce a remote-influenced basename to ``[A-Za-z0-9._-]``.
@@ -380,8 +387,27 @@ def _resolve_entrypoint_path(
     """
     try:
         chunks = client.stream_blob(ref, config_digest)
-        # Config blobs are JSON, not gzipped tar — read raw bytes.
-        blob = b"".join(chunks)
+        # Config blobs are JSON, not gzipped tar — read raw bytes,
+        # bounded: real image configs are a few KB, and the only
+        # limit below this one is the client's 2 GiB LAYER budget.
+        # A hostile or compromised registry (exactly the artefact
+        # class this detector inspects) serving a huge "config"
+        # must degrade to None, not get buffered twice (join +
+        # decoded copy) per image ref.
+        pieces: list[bytes] = []
+        received = 0
+        for chunk in chunks:
+            received += len(chunk)
+            if received > _MAX_CONFIG_BLOB_BYTES:
+                logger.warning(
+                    "sca.bump.image_binary_extract: config blob %s "
+                    "exceeds %d bytes — refusing (real image configs "
+                    "are a few KB)",
+                    config_digest, _MAX_CONFIG_BLOB_BYTES,
+                )
+                return None
+            pieces.append(chunk)
+        blob = b"".join(pieces)
         config = json.loads(blob.decode("utf-8", errors="replace"))
     except Exception as e:                            # noqa: BLE001
         logger.debug(
