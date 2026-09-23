@@ -153,3 +153,52 @@ class TestHelperReaderRoundTrip:
         )
         p.write_text('{"findings": [1]}', encoding="utf-8")
         assert not helper._is_validated(str(tmp_path), p.name)
+
+
+class TestValidatedIndexLocking:
+    """_write_validated serialises its read-modify-write under an
+    advisory flock: two concurrent stage validations otherwise both
+    read the same pre-state and the later rename drops the earlier
+    entry."""
+
+    def test_rmw_happens_under_the_lock(
+            self, validator, tmp_path: Path, monkeypatch):
+        import fcntl
+
+        events: list[str] = []
+        real_flock = fcntl.flock
+        real_read = validator._read_validated
+
+        def spy_flock(fd, op):
+            if op == fcntl.LOCK_EX:
+                events.append("lock")
+            return real_flock(fd, op)
+
+        def spy_read(directory):
+            events.append("read")
+            return real_read(directory)
+
+        monkeypatch.setattr(fcntl, "flock", spy_flock)
+        monkeypatch.setattr(validator, "_read_validated", spy_read)
+        validator._write_validated(
+            tmp_path, "stage-1.json", "h" * 8, "stage")
+        assert events[0] == "lock"
+        assert "read" in events
+        data = (tmp_path / ".validated").read_text()
+        assert "stage-1.json:stage:" + "h" * 8 in data
+
+    def test_flock_failure_still_writes_cache(
+            self, validator, tmp_path: Path, monkeypatch):
+        # Cache semantics: the loss direction is benign
+        # (re-validation), so a lockless filesystem must not lose
+        # the write itself.
+        import errno
+        import fcntl
+
+        def deny(fd, op):
+            raise OSError(errno.ENOLCK, "No locks available")
+
+        monkeypatch.setattr(fcntl, "flock", deny)
+        validator._write_validated(tmp_path, "stage-1.json", "h" * 8)
+        assert ("stage-1.json:" + "h" * 8
+                in (tmp_path / ".validated").read_text())
