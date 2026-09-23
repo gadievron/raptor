@@ -312,3 +312,66 @@ class TestDedupKeyUriNormalization(unittest.TestCase):
         from packages.openant.translator import _normalize_path
         self.assertEqual(
             _normalize_path("/other/x.py", Path("/repo")), "/other/x.py")
+
+
+class TestDedupKeyCweIntegrity(unittest.TestCase):
+    """The CWE half of the dedup key: missing CWEs must never join
+    (a ``""`` key is a wildcard bucket, loss direction), and the
+    OpenAnt side must canonicalise CWE spellings through the same
+    module the SARIF side uses."""
+
+    def test_cwe_less_findings_never_join(self):
+        oa = [{"tool": "openant", "file": "src/app.py", "cwe_id": None,
+               "message": "auth bypass"}]
+        sarif = [{"tool": "semgrep", "file": "src/app.py", "cwe_id": None,
+                  "message": "style nit"}]
+        merged, dropped = deduplicate_with_sarif(oa, sarif)
+        self.assertEqual(dropped, 0)
+        self.assertEqual(sorted(f["tool"] for f in merged),
+                         ["openant", "semgrep"])
+
+    def test_same_cwe_still_joins(self):
+        oa = [{"tool": "openant", "file": "src/app.py", "cwe_id": "CWE-78"}]
+        sarif = [{"tool": "semgrep", "file": "src/app.py",
+                  "cwe_id": "CWE-78"}]
+        merged, dropped = deduplicate_with_sarif(oa, sarif)
+        self.assertEqual(dropped, 1)
+
+    def test_string_shaped_cwe_id_canonicalised(self):
+        """LLM-shaped drift: cwe_id "CWE-78" minted CWE-CWE-78 /
+        openant/CWE-CWE-78 and voided the dedup join."""
+        out = translate_pipeline_output({"findings": [{
+            "id": "VULN-001",
+            "stage1_verdict": "vulnerable",
+            "location": {"file": "src/app.py", "function": "f"},
+            "cwe_id": "CWE-78",
+            "description": "d",
+        }]})
+        self.assertEqual(out[0]["cwe_id"], "CWE-78")
+        self.assertEqual(out[0]["rule_id"], "openant/CWE-78")
+        sarif = [{"tool": "semgrep", "file": "src/app.py",
+                  "cwe_id": "CWE-78"}]
+        merged, dropped = deduplicate_with_sarif(out, sarif)
+        self.assertEqual(dropped, 1)
+
+    def test_int_cwe_id_unchanged(self):
+        out = translate_pipeline_output({"findings": [{
+            "id": "VULN-001",
+            "stage1_verdict": "vulnerable",
+            "location": {"file": "src/app.py", "function": "f"},
+            "cwe_id": 78,
+            "description": "d",
+        }]})
+        self.assertEqual(out[0]["cwe_id"], "CWE-78")
+        self.assertEqual(out[0]["rule_id"], "openant/CWE-78")
+
+    def test_garbage_cwe_id_yields_unknown_rule(self):
+        out = translate_pipeline_output({"findings": [{
+            "id": "VULN-001",
+            "stage1_verdict": "vulnerable",
+            "location": {"file": "src/app.py", "function": "f"},
+            "cwe_id": "not-a-cwe",
+            "description": "d",
+        }]})
+        self.assertIsNone(out[0]["cwe_id"])
+        self.assertEqual(out[0]["rule_id"], "openant/unknown")
