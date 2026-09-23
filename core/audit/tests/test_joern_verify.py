@@ -29,6 +29,7 @@ from core.audit.joern_verify import (
     guard_chain_entry,
     normalize_cwe,
     run_flow_reachability_check,
+    guard_check_kind,
     run_guard_dominance_check,
 )
 from packages.joern.models import JoernResult
@@ -692,3 +693,163 @@ class TestEvidenceStamps:
 
         assert not _is_detection_only(GUARD_DOMINANCE_STAMP)
         assert not _is_detection_only(FLOW_STAMP)
+
+
+class TestGuardDominanceKindBinding:
+    """The refutation binds to the check KIND the hypothesis asserts.
+
+    The dominance query collects EVERY condition mentioning the
+    identifier, so without kind-binding a mere USE dominating the
+    sink refuted "missing <kind> check" hypotheses. Live-verified
+    against joern: `while (ptr->next)` — a dereference, not a null
+    check — is collected by the condition query and dominates a
+    later `free(ptr)`.
+    """
+
+    def _run(self, tmp_path, server, **kw):
+        args = {
+            "target_path": tmp_path,
+            "file_path": "src/a.c",
+            "function_name": "free_list",
+            "identifier": "ptr",
+            "sink_call": "free",
+            "server": server,
+        }
+        args.update(kw)
+        return run_guard_dominance_check(**args)
+
+    def test_kind_mismatched_dominator_abstains(self, tmp_path):
+        # The live-verified shape: a dereference dominates the sink.
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+                "RAPTOR_GD_GUARDED:9|8|ptr->next|free(ptr)\n"
+                "RAPTOR_GD_UNG_TOTAL:0\n"
+            ),
+            check_kind="null",
+        )
+        assert r.outcome == "inconclusive"
+        assert r.details["kind_mismatched"][0]["guard_code"] == "ptr->next"
+        assert "missing-null-check" in r.details["reason"]
+
+    def test_kind_matched_dominator_still_refutes(self, tmp_path):
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+                "RAPTOR_GD_GUARDED:9|8|!ptr|free(ptr)\n"
+                "RAPTOR_GD_UNG_TOTAL:0\n"
+            ),
+            check_kind="null",
+        )
+        assert r.outcome == "refuted"
+
+    def test_truth_test_conjunct_is_a_null_check(self, tmp_path):
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+                "RAPTOR_GD_GUARDED:9|8|ptr && ready|free(ptr)\n"
+                "RAPTOR_GD_UNG_TOTAL:0\n"
+            ),
+            check_kind="null",
+        )
+        assert r.outcome == "refuted"
+
+    def test_zero_equality_is_not_a_bounds_check(self, tmp_path):
+        # `if (len != 0)` must not refute "missing bounds check on
+        # len".
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+                "RAPTOR_GD_GUARDED:9|8|len != 0|memcpy(dst, s, len)\n"
+                "RAPTOR_GD_UNG_TOTAL:0\n"
+            ),
+            identifier="len", sink_call="memcpy", check_kind="bounds",
+        )
+        assert r.outcome == "inconclusive"
+        assert "kind_mismatched" in r.details
+
+    def test_member_access_arrow_is_not_a_bounds_check(self, tmp_path):
+        # `if (s->len)` mentions len after a `>`, but the > of the
+        # arrow is member access, not a comparison.
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+                "RAPTOR_GD_GUARDED:9|8|s->len|memcpy(dst, s, len)\n"
+                "RAPTOR_GD_UNG_TOTAL:0\n"
+            ),
+            identifier="len", sink_call="memcpy", check_kind="bounds",
+        )
+        assert r.outcome == "inconclusive"
+        assert r.details["kind_mismatched"][0]["guard_code"] == "s->len"
+
+    def test_relational_dominator_refutes_bounds(self, tmp_path):
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+                "RAPTOR_GD_GUARDED:9|8|len < sizeof(dst)|"
+                "memcpy(dst, s, len)\n"
+                "RAPTOR_GD_UNG_TOTAL:0\n"
+            ),
+            identifier="len", sink_call="memcpy", check_kind="bounds",
+        )
+        assert r.outcome == "refuted"
+
+    def test_no_kind_keeps_mention_semantics(self, tmp_path):
+        # The release-order / propagation callers ask exactly the
+        # mention-dominance question — no kind, no demotion.
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+                "RAPTOR_GD_GUARDED:9|8|ptr->next|free(ptr)\n"
+                "RAPTOR_GD_UNG_TOTAL:0\n"
+            ),
+        )
+        assert r.outcome == "refuted"
+
+    def test_mixed_dominators_one_mismatch_abstains(self, tmp_path):
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:2\n"
+                "RAPTOR_GD_GUARDED:9|8|!ptr|free(ptr)\n"
+                "RAPTOR_GD_GUARDED:19|18|ptr->next|free(ptr->data)\n"
+                "RAPTOR_GD_UNG_TOTAL:0\n"
+            ),
+            check_kind="null",
+        )
+        assert r.outcome == "inconclusive"
+        assert len(r.details["kind_mismatched"]) == 1
+
+    def test_confirmed_direction_untouched_by_kind(self, tmp_path):
+        r = self._run(
+            tmp_path,
+            FakeServer(
+                "RAPTOR_GD_FUNC:found\nRAPTOR_GD_SINKS:1\n"
+                "RAPTOR_GD_UNGUARDED:42|free(ptr)\n"
+                "RAPTOR_GD_UNG_TOTAL:1\n"
+            ),
+            check_kind="null",
+        )
+        assert r.outcome == "confirmed"
+
+    def test_kind_mapping_from_cwe(self):
+        assert guard_check_kind("CWE-476") == "null"
+        assert guard_check_kind("476") == "null"
+        for cwe in ("CWE-120", "CWE-121", "CWE-122", "CWE-125",
+                    "CWE-787"):
+            assert guard_check_kind(cwe) == "bounds"
+        # Web validation families keep mention semantics.
+        for cwe in ("CWE-22", "CWE-502", "CWE-918", "CWE-77"):
+            assert guard_check_kind(cwe) is None
+
+    def test_guard_chain_entry_carries_cwe(self):
+        entry = guard_chain_entry("CWE-476")
+        assert entry is not None
+        assert entry["config"]["cwe"] == "CWE-476"

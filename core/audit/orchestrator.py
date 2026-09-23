@@ -19824,6 +19824,7 @@ def _run_tool_chain(
                 from .joern_verify import (
                     extract_flow_endpoints,
                     extract_guard_target,
+                    guard_check_kind,
                     run_flow_reachability_check,
                     run_guard_dominance_check,
                 )
@@ -19879,6 +19880,12 @@ def _run_tool_chain(
                             sink_call=sink,
                             server=joern_server,
                             timeout=jv_timeout,
+                            # Bind the refutation to the check kind
+                            # the hypothesis CWE asserts is missing —
+                            # a dominating mere USE of the identifier
+                            # must abstain, not refute.
+                            check_kind=guard_check_kind(
+                                tool_cfg.get("cwe", "")),
                         )
                     else:
                         jv_result = run_flow_reachability_check(
