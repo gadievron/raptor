@@ -67,11 +67,14 @@ _KEYWORDS: frozenset[str] = frozenset({
     "sizeof", "strlen", "wcslen",
 })
 
-# Struct/field access patterns
-_FIELD_RE = re.compile(r"([a-zA-Z_]\w*)(?:->|\.)([a-zA-Z_]\w*)")
+# Struct/field access patterns. \b pins each attempt to an
+# identifier start: unanchored, a hostile word run retries every
+# suffix — quadratic. A mid-word start ('x1f' inside '0x1f') was a
+# false token, not an identifier.
+_FIELD_RE = re.compile(r"\b([a-zA-Z_]\w*)(?:->|\.)([a-zA-Z_]\w*)")
 
 # Array subscript: arr[idx]
-_SUBSCRIPT_RE = re.compile(r"([a-zA-Z_]\w*)\s*\[")
+_SUBSCRIPT_RE = re.compile(r"\b([a-zA-Z_]\w*)\s*\[")
 
 
 def extract_identifiers(text: str) -> frozenset[str]:

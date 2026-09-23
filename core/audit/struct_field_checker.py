@@ -91,8 +91,13 @@ _TYPE_SIZES: Dict[str, int] = {
     "pointer": 8, "void *": 8, "addr": 8,
 }
 
+# The struct body span is bounded: unbounded, a body that repeats
+# `struct x{` inside it re-scans the remainder from every occurrence
+# — quadratic in hostile source length. 6000 chars covers even
+# generated/decompiled struct bodies (hundreds of fields); beyond
+# that the definition is skipped rather than scanned without bound.
 _STRUCT_DEF_RE = re.compile(
-    r'struct\s+(\w+)\s*\{([^}]+)\}',
+    r'struct\s+(\w+)\s*\{([^}]{1,6000})\}',
     re.DOTALL,
 )
 
@@ -128,8 +133,10 @@ _COPY_INTO_OFFSET_RE = re.compile(
     r'(?:\((?:long|ulong|char\s*\*)\)\s*)?'
     r'(\w+)\s*\+\s*(0x[0-9a-fA-F]+|\d+)'
     r'\s*,'
-    r'([^,]+),'
-    r'([^)]+)\)',
+    # Argument spans bounded — same rationale as _STRUCT_DEF_RE
+    # (4000 chars is far above a real argument).
+    r'([^,]{1,4000}),'
+    r'([^)]{1,4000})\)',
 )
 
 

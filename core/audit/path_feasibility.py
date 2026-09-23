@@ -123,8 +123,11 @@ def extract_conditions_from_hypothesis(
 
     # Gated optional paren — the naive ``\(?\s*`` pair was
     # quadratic on a keyword followed by a whitespace run.
+    # \b pins each attempt to a word start: unanchored, a hostile
+    # word run retries every suffix — quadratic. A mid-word keyword
+    # ('elif' read as 'if') was a false token, not a condition.
     if_patterns = re.findall(
-        r'(?:if|when|where|provided that|assuming)\s*(?:\(\s*)?'
+        r'\b(?:if|when|where|provided that|assuming)\s*(?:\(\s*)?'
         r'([a-zA-Z_]\w*\s*(?:[<>=!]+|!=|==)\s*(?:\w+|0x[0-9a-fA-F]+|\d+))',
         hypothesis,
         re.IGNORECASE,
@@ -135,7 +138,7 @@ def extract_conditions_from_hypothesis(
         ) for match in if_patterns]
 
     null_patterns = re.findall(
-        r'(\w+)\s+is\s+(?:non-null|not null|not NULL)',
+        r'\b(\w+)\s+is\s+(?:non-null|not null|not NULL)',
         hypothesis,
         re.IGNORECASE,
     )
@@ -145,7 +148,7 @@ def extract_conditions_from_hypothesis(
         ) for var in null_patterns)
 
     nonneg_patterns = re.findall(
-        r'(\w+)\s+(?:is|must be)\s+(?:non-negative|positive|greater than zero)',
+        r'\b(\w+)\s+(?:is|must be)\s+(?:non-negative|positive|greater than zero)',
         hypothesis,
         re.IGNORECASE,
     )

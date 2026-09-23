@@ -321,8 +321,13 @@ def _scan_tree_for_visibility(
 
     name_re = re.compile(rf"(?<![\w.>]){re.escape(function_name)}\b")
     basename = Path(rel_file).name
+    # Directive body and quoted-path spans are bounded: unbounded,
+    # a file that repeats the directive head inside the span
+    # re-scans the remainder from every occurrence — quadratic in
+    # hostile source length. Real include/define lines sit far
+    # inside 1000 chars; beyond that the line stops matching.
     include_re = re.compile(
-        rf"#\s*(?:include|define)\b[^\n]*[\"<][^\">]*?"
+        rf"#\s*(?:include|define)\b[^\n]{{0,1000}}[\"<][^\">]{{0,1000}}?"
         rf"{re.escape(basename)}\s*[\">]",
         re.IGNORECASE,
     )
@@ -403,7 +408,10 @@ def _line_depths_before(lines: list[str]) -> list[int]:
 def _caller_name_from_head(head_line: str) -> str | None:
     """Function name from a definition's first line (the last
     identifier directly followed by ``(``), or None."""
-    matches = list(re.finditer(r"([A-Za-z_]\w*)\s*\(", head_line))
+    # \b pins each attempt to an identifier start: unanchored, every
+    # suffix of a long identifier is retried — quadratic on a hostile
+    # head line. Mid-word starts were never real function names.
+    matches = list(re.finditer(r"\b([A-Za-z_]\w*)\s*\(", head_line))
     if not matches:
         return None
     return matches[-1].group(1)
@@ -668,7 +676,11 @@ def _locks_held_at_call(
         if _has_goto_label(between):
             continue  # a goto could enter after the acquire
         b = re.escape(base)
-        decl_re = re.compile(rf"\bstruct\b[^;]*\b{b}\s*[;=]")
+        # The declarator span is bounded: unbounded, a line that
+        # repeats `struct` inside it re-scans the remainder from
+        # every occurrence — quadratic on a hostile line. A real
+        # declaration head fits far inside 1000 chars.
+        decl_re = re.compile(rf"\bstruct\b[^;]{{0,1000}}\b{b}\s*[;=]")
         rebound = any(decl_re.search(ln) for ln in between)
         if not rebound:
             for pat in prefix_pats:

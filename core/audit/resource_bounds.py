@@ -139,9 +139,14 @@ _LIMITISH_RE = re.compile(
 
 _BACKTICK_IDENT_RE = re.compile(r"`([A-Za-z_][\w.]*)\s*(?:\(\s*\))?`")
 _IDENT_RE = re.compile(r"\b([A-Za-z_]\w{2,})\b")
+# \b pins each attempt to an identifier start and the member chains
+# are depth-bounded: unanchored and unbounded, a hostile `a.a.a...`
+# run retries every suffix and re-walks the chain from each —
+# quadratic. 32 members is far beyond real chains; a mid-word start
+# was never a real identifier.
 _CMP_RE = re.compile(
-    r"([A-Za-z_]\w*(?:(?:->|\.)\w+)*)\s*(<=|>=|==|<|>)\s*"
-    r"([A-Za-z_]\w*(?:(?:->|\.)\w+)*|\d+)",
+    r"\b([A-Za-z_]\w*(?:(?:->|\.)\w+){0,32})\s*(<=|>=|==|<|>)\s*"
+    r"([A-Za-z_]\w*(?:(?:->|\.)\w+){0,32}|\d+)",
 )
 _LOOP_RE = re.compile(r"\b(?:for|while)\s*\(")
 
@@ -414,12 +419,16 @@ def _call_re(names: tuple[str, ...] | frozenset[str]) -> re.Pattern:
 # "set" — exactly the arithmetic/bookkeeping class the weak-verb tier
 # exists to exclude. Segment atoms are ``[A-Za-z0-9]+`` (no ``_``), so
 # the quantifiers cannot backtrack across segment boundaries.
+# Stem heads and segment chains are bounded: unbounded, one long
+# stem-repeating identifier costs every head/verb split — quadratic
+# on a hostile line. Real identifiers sit far inside 256 chars and
+# 32 snake_case segments.
 _STEM_INSERT_RE = re.compile(
     r"\b("
-    r"\w+_(?:insert|enqueue)(?:_\w+)?"
-    r"|(?:[A-Za-z0-9]+_)*"
+    r"\w{1,256}?_(?:insert|enqueue)(?:_\w+)?"
+    r"|(?:[A-Za-z0-9]+_){0,32}"
     r"(?:list|queue|stack|ring|table|hash|set|vec|array|buf|heap|sk)"
-    r"(?:_[A-Za-z0-9]+)*?_(?:add|push|append)(?:_\w+)?"
+    r"(?:_[A-Za-z0-9]+){0,32}?_(?:add|push|append)(?:_\w+)?"
     r")\s*\(",
 )
 

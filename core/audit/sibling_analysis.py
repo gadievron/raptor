@@ -524,22 +524,27 @@ _STRICT_BOUND_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The if-to-operand gaps are bounded: unbounded, a body that
+# repeats `if` inside the gap re-scans the remainder from every
+# occurrence — quadratic in hostile source length. A real guard's
+# operand sits well inside 300 chars of its `if` (the gap never
+# crosses a newline).
 _NULL_GUARD_RE = re.compile(
     r"(?:"
-    r"\bif\b.*\bis\s+None\b"
-    r"|\bif\s*\(.*==\s*(?:NULL|null|nil|nullptr)\b"
+    r"\bif\b.{0,300}\bis\s+None\b"
+    r"|\bif\s*\(.{0,300}==\s*(?:NULL|null|nil|nullptr)\b"
     r"|\bif\s*\(\s*!\s*\w+\s*[)\s{]"
     r"|\bif\s+not\s+\w+\b"
-    r"|\bif\s*\(.*!=\s*(?:NULL|null|nil|nullptr)\b"
+    r"|\bif\s*\(.{0,300}!=\s*(?:NULL|null|nil|nullptr)\b"
     r")",
     re.IGNORECASE,
 )
 
 _BOUNDS_GUARD_RE = re.compile(
     r"(?:"
-    r"\bif\b.*\blen\s*\("
-    r"|\bif\b.*\.(?:size|length|count)\s*\("
-    r"|\bif\b.*\b(?:index|idx|offset|pos)\s*[<>=!]"
+    r"\bif\b.{0,200}\blen\s*\("
+    r"|\bif\b.{0,200}\.(?:size|length|count)\s*\("
+    r"|\bif\b.{0,200}\b(?:index|idx|offset|pos)\s*[<>=!]"
     r")",
     re.IGNORECASE,
 )

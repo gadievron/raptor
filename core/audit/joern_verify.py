@@ -452,8 +452,11 @@ _GUARD_IDENT_PATTERNS = (
         re.IGNORECASE,
     ),
     # "`len` is not checked / never validated"
+    # \b pins each attempt to an identifier start: unanchored, a
+    # hostile word run retries every suffix — quadratic. A mid-word
+    # start was never a real identifier.
     re.compile(
-        r"[`'\"]?([A-Za-z_][A-Za-z0-9_]*)[`'\"]?\s+is\s+"
+        r"[`'\"]?\b([A-Za-z_][A-Za-z0-9_]*)[`'\"]?\s+is\s+"
         r"(?:not|never)\s+(?:checked|validated|verified|bounded)",
         re.IGNORECASE,
     ),
@@ -475,8 +478,9 @@ _FLOW_PATTERNS = (
         re.IGNORECASE,
     ),
     # "`buf` reaches `system`" / "`buf` flows into `system`"
+    # \b pin: same rationale as the `is not checked` pattern above.
     re.compile(
-        r"[`'\"]?([A-Za-z_][A-Za-z0-9_]*)[`'\"]?\s+"
+        r"[`'\"]?\b([A-Za-z_][A-Za-z0-9_]*)[`'\"]?\s+"
         r"(?:reach(?:es)?|flows?\s+(?:to|into)|is\s+passed\s+to)\s+"
         r"[`'\"]?([A-Za-z_][A-Za-z0-9_.]*)(?:\(\))?[`'\"]?",
         re.IGNORECASE,

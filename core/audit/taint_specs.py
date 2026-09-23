@@ -83,12 +83,15 @@ _TABLE_NAME_RE = re.compile(
     r"(?:INTO|FROM|UPDATE|JOIN|TABLE)\s+[`\"']?(\w+)[`\"']?",
     re.IGNORECASE,
 )
+# \b pins each attempt to a word start: unanchored, a hostile word
+# run retries every suffix — quadratic. Mid-word starts were never
+# real model or cache receiver names.
 _MODEL_NAME_RE = re.compile(
-    r"(\w+)\.(?:objects|query|filter|get|find|save|create|update|delete|all)\s*\(",
+    r"\b(\w+)\.(?:objects|query|filter|get|find|save|create|update|delete|all)\s*\(",
     re.IGNORECASE,
 )
 _CACHE_KEY_RE = re.compile(
-    r"(?:cache|redis|memcache)\w*\.(?:get|set|delete|hget|hset)\s*\(\s*[\"']([^\"']+)",
+    r"\b(?:cache|redis|memcache)\w*\.(?:get|set|delete|hget|hset)\s*\(\s*[\"']([^\"']+)",
     re.IGNORECASE,
 )
 
