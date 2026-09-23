@@ -34,6 +34,12 @@ from ..models import Confidence, Reachability
 
 logger = logging.getLogger(__name__)
 
+# Extraction version for the per-file import cache: bump whenever
+# ``_modules_from_node`` / the walk semantics change, or every
+# previously-scanned unchanged file keeps replaying the old
+# generation's results forever (TTL_FOREVER entries).
+_EXTRACTION_VERSION = 1
+
 # Directory exclusions are handled by ``_walker.py`` now — sourced
 # from ``discovery.EXCLUDED_DIR_NAMES``. The python-specific
 # ``site-packages`` exclusion is passed to ``iter_source_files`` at
@@ -150,6 +156,7 @@ def scan_imports(
 
         pairs = cached_per_file(
             cache, "reachability:py-imports", text, _compute,
+            version=_EXTRACTION_VERSION,
         )
         for top_module, line in pairs:
             out.setdefault(top_module, []).append((py_file, line, is_test))

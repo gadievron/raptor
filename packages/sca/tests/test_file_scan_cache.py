@@ -60,7 +60,7 @@ def test_cache_miss_invokes_compute_and_caches(tmp_path: Path):
         calls["count"] += 1
         return ["module-a", "module-b"]
 
-    out = cached_per_file(cache, "tester", "abc", compute)
+    out = cached_per_file(cache, "tester", "abc", compute, version=1)
     assert out == ["module-a", "module-b"]
     assert calls["count"] == 1
     assert cache.misses == 1
@@ -78,9 +78,9 @@ def test_cache_hit_skips_compute(tmp_path: Path):
         calls["count"] += 1
         return ["x"]
 
-    cached_per_file(cache, "tester", "abc", compute)        # populate
-    cached_per_file(cache, "tester", "abc", compute)        # hit
-    cached_per_file(cache, "tester", "abc", compute)        # hit
+    cached_per_file(cache, "tester", "abc", compute, version=1)        # populate
+    cached_per_file(cache, "tester", "abc", compute, version=1)        # hit
+    cached_per_file(cache, "tester", "abc", compute, version=1)        # hit
     assert calls["count"] == 1, (
         "cache hit must NOT re-invoke compute"
     )
@@ -97,7 +97,7 @@ def test_no_cache_falls_through_to_compute(tmp_path: Path):
         return "value"
 
     for _ in range(3):
-        cached_per_file(None, "tester", "abc", compute)
+        cached_per_file(None, "tester", "abc", compute, version=1)
     assert calls["count"] == 3
 
 
@@ -113,7 +113,7 @@ def test_duck_type_guard_for_sentinel_cache(tmp_path: Path):
         return 42
 
     sentinel = object()
-    out = cached_per_file(sentinel, "tester", "abc", compute)
+    out = cached_per_file(sentinel, "tester", "abc", compute, version=1)
     assert out == 42
     assert calls["count"] == 1
 
@@ -139,8 +139,8 @@ def test_different_content_creates_new_entry(tmp_path: Path):
         calls.append("b")
         return ["from-b"]
 
-    out_a = cached_per_file(cache, "tester", "version 1", compute_a)
-    out_b = cached_per_file(cache, "tester", "version 2", compute_b)
+    out_a = cached_per_file(cache, "tester", "version 1", compute_a, version=1)
+    out_b = cached_per_file(cache, "tester", "version 2", compute_b, version=1)
 
     assert out_a == ["from-a"]
     assert out_b == ["from-b"]
@@ -158,8 +158,8 @@ def test_different_consumer_namespaces_isolated(tmp_path: Path):
     keys without collisions. Without this, one consumer's result
     would shadow the other's."""
     cache = _make_cache(tmp_path)
-    out_a = cached_per_file(cache, "consumer-a", "abc", lambda: ["a-result"])
-    out_b = cached_per_file(cache, "consumer-b", "abc", lambda: ["b-result"])
+    out_a = cached_per_file(cache, "consumer-a", "abc", lambda: ["a-result"], version=1)
+    out_b = cached_per_file(cache, "consumer-b", "abc", lambda: ["b-result"], version=1)
     assert out_a == ["a-result"]
     assert out_b == ["b-result"]
 
@@ -176,7 +176,7 @@ def test_cache_survives_reconstruction(tmp_path: Path):
     the actual perf win lives, not within a single process."""
     root = tmp_path / "cache"
     cache_a = JsonCache(root=root)
-    cached_per_file(cache_a, "tester", "abc", lambda: ["fresh"])
+    cached_per_file(cache_a, "tester", "abc", lambda: ["fresh"], version=1)
 
     cache_b = JsonCache(root=root)
     calls = {"count": 0}
@@ -185,7 +185,7 @@ def test_cache_survives_reconstruction(tmp_path: Path):
         calls["count"] += 1
         return ["should-not-fire"]
 
-    out = cached_per_file(cache_b, "tester", "abc", compute)
+    out = cached_per_file(cache_b, "tester", "abc", compute, version=1)
     assert out == ["fresh"], "second-run cache must serve first-run's value"
     assert calls["count"] == 0
 
@@ -203,11 +203,35 @@ def test_value_is_round_tripped_through_json(tmp_path: Path):
     cache = _make_cache(tmp_path)
     cached_per_file(
         cache, "tester", "abc",
-        lambda: [{"k": 1, "lst": [1, 2, 3]}],
+        lambda: [{"k": 1, "lst": [1, 2, 3]}], version=1,
     )
     # Reconstruct via fresh cache → must round-trip.
     out = cached_per_file(
         JsonCache(root=tmp_path / "cache"),
-        "tester", "abc", lambda: ["should-not-fire"],
+        "tester", "abc", lambda: ["should-not-fire"], version=1,
     )
     assert out == [{"k": 1, "lst": [1, 2, 3]}]
+
+
+def test_version_axis_separates_extractor_generations(tmp_path: Path):
+    """TTL_FOREVER + content-hash-only keys pinned PRE-FIX extraction
+    results per file forever: an extractor fix silently did not apply
+    to any previously-scanned unchanged file, machine-wide, with no
+    operator signal. The key carries the consumer's extraction version
+    so bumping the constant invalidates the old generation (the
+    dockerfile_from _SBOM_EXTRACTION_VERSION antidote, adopted at the
+    shared helper so no consumer can forget it)."""
+    cache = _make_cache(tmp_path)
+    calls = {"count": 0}
+
+    def compute():
+        calls["count"] += 1
+        return [calls["count"]]
+
+    a = cached_per_file(cache, "tester", "abc", compute, version=1)
+    b = cached_per_file(cache, "tester", "abc", compute, version=2)
+    assert (a, b) == ([1], [2])
+    # Same version still replays from cache.
+    assert cached_per_file(cache, "tester", "abc", compute,
+                           version=2) == [2]
+    assert calls["count"] == 2
