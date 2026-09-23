@@ -451,3 +451,30 @@ def test_line_zero_evidence_keeps_its_anchor():
     ))
     assert "a.c:0" in row
     assert "[h=beef1234]" in row
+
+
+def test_invariant_row_round_trips():
+    from core.concepts.study import _SAGE_INVARIANT_RE
+
+    row = ("Invariant [inv-1]: len is validated before copy "
+           "(negation: copy with unvalidated len)")
+    m = _SAGE_INVARIANT_RE.match(row)
+    assert m is not None
+    assert m.group(1) == "inv-1"
+    assert (m.group(2) or "").strip() == "len is validated before copy"
+    assert m.group(3).strip() == "copy with unvalidated len"
+
+
+def test_invariant_row_whitespace_run_is_fast():
+    """Hostile recall line opening 'Invariant [x]:' and ending in a
+    long whitespace run with no '(negation:': the previous trim
+    spelling \\s+(.*?)\\s*\\( overlapped three unbounded repeats on
+    whitespace and tried every split of the run between them — cubic
+    in the line length. The \\S-delimited statement spelling is
+    linear."""
+    from core.concepts.study import _SAGE_INVARIANT_RE
+    from core.testing.wallclock import cpu_budget
+
+    hostile = "Invariant [x]: y" + " " * (1 << 16) + "("
+    with cpu_budget(1.0, what="invariant-row whitespace-run scan"):
+        assert _SAGE_INVARIANT_RE.match(hostile) is None
