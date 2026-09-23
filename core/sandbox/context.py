@@ -4511,6 +4511,11 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
         # setup fails — adaptive so we still get Landlock-only when
         # mount-ns is unusable.
         used_spawn = False
+        # Whether the per-call demotion recheck engaged the Landlock
+        # deny-all fallback for THIS call (assigned in the demoted
+        # dispatch arm; hoisted here so the epilogue's
+        # degraded_net_deny stamp can read it on every path).
+        _demoted_net_deny = False
         # Reason string when the mount-ns spawn path was ATTEMPTED but
         # fell back (exec failure retry, setup exception). Distinct
         # from "never eligible": a caller that relied on mount-ns
@@ -7076,9 +7081,25 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # posture per run.
             if _get_landlock_abi() < 3:
                 result.sandbox_info["landlock_truncate_unrestricted"] = True
-        if _degraded_tcp_deny:
+        if _degraded_tcp_deny or _demoted_net_deny:
+            # Both arms of the deny-all fallback stamp: the
+            # construction-time degrade AND the per-call demotion
+            # recheck — pre-fix a demoted call's engaged deny read as
+            # None here while the prose mount_ns_degraded reason was
+            # the only honest signal.
             result.sandbox_info["degraded_net_deny"] = True
-        if _use_proxy_netns and not effectively_disabled:
+        if (_use_proxy_netns and not effectively_disabled
+                and used_spawn):
+            # Stamp the DELIVERED lane, not the construction-time
+            # tier decision: a per-call spawn demotion (runtime
+            # unshare refusal, setup-status fallback) runs the child
+            # on the plain host-netns lane with _use_proxy_netns
+            # still True — stamping "netns" there told forensic
+            # readers the child had topological containment it never
+            # had (an empty proxy-events list reads as "nothing
+            # tried to egress" instead of "the enforcing tier never
+            # ran"). Demoted calls fall through to the enforcement-
+            # honest labels below.
             result.sandbox_info["proxy_enforcement"] = "netns"
         elif use_egress_proxy:
             # Stamp what actually ENFORCES the chokepoint for THIS
