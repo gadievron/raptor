@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import ast
 import re as _re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -85,6 +86,14 @@ SOLVER_TIMEOUT_MS = 2000
 # prescreen declines (no signal) rather than checking a subset — a
 # partial check can never justify a whole-finding refutation.
 MAX_PRESCREEN_PATHS = 16
+
+# Same shape per path: steps were uncapped, so a hostile SARIF with
+# thousands of steps per path bought O(steps × file) work (each step
+# read + re-blanked its file). Beyond the cap the prescreen declines —
+# a partial step walk can still refute (any ONE dominating validator
+# on the path suffices), but the cap keeps the bound honest and a
+# decline is always sound.
+MAX_PRESCREEN_STEPS = 64
 
 # rule_id -> sink_class, covering both CodeQL query-id and Semgrep
 # rule-name spellings for the four injection classes smt_barrier
@@ -222,11 +231,16 @@ class PrescreenStats:
 
 
 _STATS = PrescreenStats()
+# Counter increments are read-modify-write; the CodeQL validator can
+# fan findings out across threads, and torn telemetry misleads the
+# operator reading it.
+_STATS_LOCK = threading.Lock()
 
 
 def snapshot_stats() -> dict:
     """Copy of the per-process prescreen counters (for diagnostics)."""
-    return _STATS.as_dict()
+    with _STATS_LOCK:
+        return _STATS.as_dict()
 
 
 def sink_classes_for_rule(rule_id: str, cwe: str | None = None) -> frozenset:
@@ -387,8 +401,12 @@ def prescreen_finding(
     # never change verdict shape between kinds.
     if not _z3_available():
         return None
-    language = _language_for_path(paths[0].sink.file_path)
-    if language is None:
+    # Language is resolved PER PATH below (a multi-path finding could
+    # in principle carry paths through differently-typed files; one
+    # binding from paths[0] would judge the others under the wrong
+    # grammar). An unsupported language on ANY path is no signal for
+    # the whole finding — every path must be provably neutralised.
+    if any(_language_for_path(p.sink.file_path) is None for p in paths):
         return None
     if len(paths) > MAX_PRESCREEN_PATHS:
         logger.debug(
@@ -396,25 +414,52 @@ def prescreen_finding(
             len(paths), MAX_PRESCREEN_PATHS,
         )
         return None
+    if any(len(p.intermediate_steps) > MAX_PRESCREEN_STEPS for p in paths):
+        logger.debug(
+            "injection prescreen: a path exceeds the %d-step cap — "
+            "no signal", MAX_PRESCREEN_STEPS,
+        )
+        return None
 
-    _STATS.attempted += 1
+    with _STATS_LOCK:
+        _STATS.attempted += 1
     evidence: list[dict] = []
     any_lifted = False
     total_ms = 0.0
+    # Per-finding cache: (file, language) -> (source text, blanked
+    # view). Steps overwhelmingly share their path's files, and the
+    # whole-file comment/string view is O(file) to recompute — per
+    # STEP that made hostile many-step paths quadratic. Bounded by the
+    # path/step caps above.
+    file_cache: dict[tuple[str, str], tuple[str, list[str]] | None] = {}
+
+    def _load(file_path: str, lang: str) -> tuple[str, list[str]] | None:
+        key = (file_path, lang)
+        if key not in file_cache:
+            text = _read_source(repo_root, file_path)
+            file_cache[key] = (
+                None if text is None
+                else (text, code_view_lines(text, lang))
+            )
+        return file_cache[key]
+
     for path_index, path in enumerate(paths):
         sink = path.sink
+        language = _language_for_path(sink.file_path)
+        if language is None:                     # pragma: no cover — pre-vetted above
+            return None
         path_refuted = False
         for step in path.intermediate_steps:
-            source_text = _read_source(repo_root, step.file_path)
-            if source_text is None:
+            loaded = _load(step.file_path, language)
+            if loaded is None:
                 continue
+            source_text, view_lines = loaded
             line_text = _line_text(source_text, step.line)
             # Anchor the lift against the whole-file comment/string-
             # blanked view: a validator that exists only inside a
             # comment or a multi-line string is prose planted by the
             # scanned repo, not a barrier (the single-line default
             # view cannot see enclosing multi-line constructs).
-            view_lines = code_view_lines(source_text, language)
             view_line = (
                 view_lines[step.line - 1]
                 if 1 <= step.line <= len(view_lines) else ""
@@ -454,13 +499,15 @@ def prescreen_finding(
                 path_refuted = True
                 break
         if not path_refuted:
-            if any_lifted:
-                _STATS.lifted += 1
-            _STATS.no_signal += 1
+            with _STATS_LOCK:
+                if any_lifted:
+                    _STATS.lifted += 1
+                _STATS.no_signal += 1
             return None
 
-    _STATS.lifted += 1
-    _STATS.refuted += 1
+    with _STATS_LOCK:
+        _STATS.lifted += 1
+        _STATS.refuted += 1
     return PrescreenVerdict(
         refuted=True,
         paths_checked=len(paths),

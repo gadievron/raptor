@@ -919,3 +919,77 @@ class TestExoticLineTerminators:
         assert lines[0] == "a\u2028bc"
         assert lines[1] == "2nd\r"
         assert lines[2] == "3rd"
+
+
+class TestResourceBounds:
+    def test_step_cap_declines(self, guard_repo):
+        path = _path(
+            "app.py", GUARD_SOURCE_LINE,
+            [GUARD_VALIDATOR_LINE] * (ip.MAX_PRESCREEN_STEPS + 1),
+            GUARD_SINK_LINE,
+        )
+        assert prescreen_finding(
+            paths=[path], repo_root=guard_repo,
+            rule_id="py/path-injection",
+        ) is None
+
+    def test_step_at_cap_still_refutes(self, guard_repo):
+        path = _path(
+            "app.py", GUARD_SOURCE_LINE,
+            [GUARD_VALIDATOR_LINE] * ip.MAX_PRESCREEN_STEPS,
+            GUARD_SINK_LINE,
+        )
+        verdict = prescreen_finding(
+            paths=[path], repo_root=guard_repo,
+            rule_id="py/path-injection",
+        )
+        assert verdict is not None and verdict.refuted is True
+
+    def test_file_read_and_view_computed_once_per_file(
+            self, guard_repo, monkeypatch):
+        """The whole-file blanked view used to be recomputed per STEP
+        (O(steps x file) on hostile many-step paths); it must be
+        cached per (file, language) within one finding."""
+        reads: list = []
+        views: list = []
+        real_read = ip._read_source
+        real_view = ip.code_view_lines
+
+        def counting_read(root, rel):
+            reads.append(rel)
+            return real_read(root, rel)
+
+        def counting_view(text, lang):
+            views.append(lang)
+            return real_view(text, lang)
+
+        monkeypatch.setattr(ip, "_read_source", counting_read)
+        monkeypatch.setattr(ip, "code_view_lines", counting_view)
+        path = _path(
+            "app.py", GUARD_SOURCE_LINE,
+            [GUARD_VALIDATOR_LINE, GUARD_VALIDATOR_LINE,
+             GUARD_VALIDATOR_LINE],
+            GUARD_SINK_LINE,
+        )
+        verdict = prescreen_finding(
+            paths=[path], repo_root=guard_repo,
+            rule_id="py/path-injection",
+        )
+        assert verdict is not None and verdict.refuted is True
+        assert len(reads) == 1
+        assert len(views) == 1
+
+    def test_mixed_language_paths_yield_no_signal(self, guard_repo):
+        """A finding whose paths cross differently-typed files must
+        not be judged under one path's grammar."""
+        (guard_repo / "other.c").write_text("int main() {}\n")
+        good = _guard_path()
+        alien = _path("other.c", 1, [1], 1)
+        assert prescreen_finding(
+            paths=[good, alien], repo_root=guard_repo,
+            rule_id="py/path-injection",
+        ) is None
+
+    def test_stats_snapshot_is_lock_guarded(self):
+        # Mechanical pin: the counters and snapshot share one lock.
+        assert isinstance(ip._STATS_LOCK, type(ip.threading.Lock()))
