@@ -483,6 +483,23 @@ class TestChildMain:
         assert code == bq.EXIT_VALIDATION
         assert json.loads(err)["error"] == "validation"
 
+    def test_non_numeric_max_bytes_billed_is_structured(self, monkeypatch):
+        # Contract: malformed request fields produce exit 4 + ONE JSON
+        # error line — never a raw traceback. The numeric coercions
+        # ran outside the typed-error try and crashed unstructured.
+        code, _, err = self._run_child(
+            monkeypatch,
+            json.dumps({"sql": "SELECT 1", "max_bytes_billed": "lots"}))
+        assert code == bq.EXIT_INPUT
+        assert json.loads(err)["error"] == "input"
+
+    def test_non_numeric_timeout_is_structured(self, monkeypatch):
+        code, _, err = self._run_child(
+            monkeypatch,
+            json.dumps({"sql": "SELECT 1", "timeout_s": {"x": 1}}))
+        assert code == bq.EXIT_INPUT
+        assert json.loads(err)["error"] == "input"
+
     def test_success_roundtrip(self, monkeypatch):
         holder: list = []
         _install_google_stub(monkeypatch, holder)

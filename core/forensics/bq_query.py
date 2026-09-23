@@ -506,6 +506,14 @@ def _child_main() -> int:
             msg = "request must be a JSON object"
             raise TypeError(msg)
         sql = request["sql"]
+        # Coerce request fields INSIDE the malformed-request handler:
+        # a non-numeric value here is wrapper-authored input error and
+        # owes the structured exit-4 envelope, not a raw traceback.
+        max_bytes_billed = int(
+            request.get("max_bytes_billed", DEFAULT_MAX_BYTES_BILLED)
+        )
+        timeout_s = float(request.get("timeout_s", DEFAULT_TIMEOUT_S))
+        dry_run = bool(request.get("dry_run", False))
     except (TypeError, ValueError, KeyError) as exc:
         return write_error_json(
             sys.stderr, RequestInputError(f"malformed child request: {exc}")
@@ -515,11 +523,9 @@ def _child_main() -> int:
         result = execute(
             sql,
             project=request.get("project"),
-            max_bytes_billed=int(
-                request.get("max_bytes_billed", DEFAULT_MAX_BYTES_BILLED)
-            ),
-            timeout_s=float(request.get("timeout_s", DEFAULT_TIMEOUT_S)),
-            dry_run=bool(request.get("dry_run", False)),
+            max_bytes_billed=max_bytes_billed,
+            timeout_s=timeout_s,
+            dry_run=dry_run,
         )
     except BQQueryError as exc:
         return write_error_json(sys.stderr, exc)
