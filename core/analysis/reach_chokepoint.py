@@ -130,8 +130,17 @@ def check_suppress(
         verdict_from_classification,
     )
 
+    # Shape-tolerant line coercion: every other input on this path
+    # survives odd SARIF shapes, but a non-numeric line ("N/A") made
+    # this one raw int() raise out of the chokepoint into the
+    # /agentic + /codeql consumer loops. Line 0 already means
+    # "no line".
+    try:
+        line_no = int(line or 0)
+    except (TypeError, ValueError):
+        line_no = 0
     verdict = classify_reachability(
-        checklist, rel, function_name, int(line or 0), module)
+        checklist, rel, function_name, line_no, module)
     spec = verdict_from_classification(verdict)
     if not spec.may_suppress(STRUCTURALLY_SUPPRESSIBLE_KINDS):
         return None
