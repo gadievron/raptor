@@ -639,3 +639,72 @@ class TestGenerativeGrammarBattery:
             skip, reason = _is_trivial_wrapper(src, "c", None)
             assert skip, (src, reason)
             assert "helper" in reason
+
+
+class TestSplitlinesTerminatorUniverse:
+    """The kept/blanked view pair must agree on what a line IS.
+
+    ``str.splitlines`` splits on more than the universal-newlines set
+    (\\x0b \\x0c \\x1c-\\x1e \\x85 U+2028/9).  A terminator the
+    normalisation list missed survives as string DATA in the kept
+    view but blanks to a space in the ref view, so the kept view
+    gains a line, every later pair is off by one, and the
+    drop-eligibility check judges a live sink line against the wrong
+    blanked twin — one plantable byte re-opens the one-planted-line
+    skip.  The views now split on ``\\n`` only, after one shared
+    normalisation whose members are DERIVED from splitlines itself.
+    """
+
+    #: every splitlines-splitting byte a string literal can carry
+    _EXOTIC = ("\x0b", "\x0c", "\x1c", "\x1d", "\x1e",
+               "\x85", "\u2028", "\u2029")
+
+    def test_vt_in_string_does_not_mint_wrapper_skip(self):
+        # The filed shape: a \x0b inside a string literal swallowed
+        # the system(c) line from both judged views.
+        src = ('int wrap(char *c) {\n  const char *s = "A\x0bB";\n'
+               '  system(c);\n#define X 1\n  return helper(c);\n}')
+        assert _refused(src, "c")
+
+    def test_every_exotic_terminator_refuses_the_sink_wrapper(self):
+        for term in self._EXOTIC:
+            src = (f'int wrap(char *c) {{\n  const char *s = "A{term}B";\n'
+                   f'  system(c);\n#define X 1\n  return helper(c);\n}}')
+            assert _refused(src, "c"), f"desync via {term!r}"
+
+    def test_exotic_terminator_perl_branch_refuses_too(self):
+        for term in self._EXOTIC:
+            src = (f'sub wrap {{\n my $t = "a{term}#";\n'
+                   f' system($c);\n return helper($c);\n}}')
+            assert _refused(src, "perl"), f"desync via {term!r}"
+
+    def test_normalisation_set_matches_splitlines_universe(self):
+        # Two-direction closure, derived from the splitting authority
+        # itself: (1) every char splitlines splits on is either \n or
+        # a member of the normalisation tuple; (2) every single-char
+        # member really splits (no stale members).  Chunked scan over
+        # the full codepoint space keeps this fast.
+        from core.audit.prefilter import _LINE_TERMINATORS
+
+        derived: set[str] = set()
+        cps = [chr(cp) for cp in range(0x110000)
+               if not 0xD800 <= cp <= 0xDFFF]
+        for i in range(0, len(cps), 4096):
+            chunk = cps[i:i + 4096]
+            probe = "a".join(chunk)
+            if len(probe.splitlines()) == 1:
+                continue
+            derived.update(c for c in chunk
+                           if len(f"a{c}b".splitlines()) > 1)
+        singles = {t for t in _LINE_TERMINATORS if len(t) == 1}
+        assert derived - {"\n"} == singles
+        assert "\r\n" in _LINE_TERMINATORS
+
+    def test_benign_wrapper_with_exotic_string_data_direction(self):
+        # Direction pin: the normalisation splits the literal's data
+        # across lines, leaving an unterminated-string reading — the
+        # documented over-inclusion direction (costs one review).  A
+        # terminator-free twin keeps its skip.
+        skip, reason = _is_trivial_wrapper(
+            'int w(char *c) {\n  return helper(c);\n}\n', "c", None)
+        assert skip and "helper" in reason

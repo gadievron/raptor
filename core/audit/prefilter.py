@@ -647,6 +647,32 @@ _WRAPPER_INDIRECTION_TAILS = frozenset({
 #: globals()["system"]) anywhere in the delegate body.
 _WRAPPER_LITERAL_NAME_RE = re.compile(r'[\'"]([A-Za-z_][\w.]*)[\'"]')
 
+#: Line terminators normalised to "\n" before any judged-view split,
+#: derived from ``str.splitlines`` semantics (every character it
+#: splits on, minus "\n" itself, plus the "\r\n" compound first so it
+#: never yields a double newline). A member missing here let one
+#: plantable byte inside a string literal desync the kept/blanked
+#: view pair — the byte survives as string data in the strings-kept
+#: view (splitlines gains a line) but blanks to a space in the ref
+#: view, so every later line judges drop-eligibility against the
+#: wrong blanked twin and a live sink line is swallowed from both
+#: views. A closure test derives this tuple from splitlines itself
+#: (test_wrapper_lexer.TestSplitlinesTerminatorUniverse). The judged
+#: views additionally split on "\n" ONLY, so even a terminator this
+#: tuple were to miss stays inside one line in BOTH views and cannot
+#: desync them.
+_LINE_TERMINATORS: tuple[str, ...] = (
+    "\r\n", "\r", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e",
+    "\x85", "\u2028", "\u2029",
+)
+
+
+def _normalize_line_terminators(src: str) -> str:
+    """Rewrite every exotic ``str.splitlines`` terminator to ``\\n``."""
+    for _term in _LINE_TERMINATORS:
+        src = src.replace(_term, "\n")
+    return src
+
 #: functools.partial's wrapped callable: the first argument as a plain
 #: (possibly dotted) identifier REFERENCE — `partial(sp.run)` never
 #: emits a call to sp.run, so the reference is the resolvable name.
@@ -1418,36 +1444,43 @@ def _is_trivial_wrapper(
         #
         # Exotic line terminators normalised before the two views
         # split (same rationale as the C-family branch below): a lone
-        # \r or U+2028/9 in string data splits raw_lines but survives
-        # blanked-to-space in the ref view, pairing ref lines with
-        # the wrong source line and weakening the escape/argument
-        # refusal layers.
-        src = source.strip()
-        for _term in ("\r\n", "\r", "\u2028", "\u2029"):
-            src = src.replace(_term, "\n")
-        raw_lines = [ln.strip() for ln in src.splitlines()]
+        # \r \u2014 or ANY other str.splitlines terminator in string data \u2014
+        # splits raw_lines but survives blanked-to-space in the ref
+        # view, pairing ref lines with the wrong source line and
+        # weakening the escape/argument refusal layers. The
+        # normalisation set is the full splitlines universe
+        # (_LINE_TERMINATORS), and both views then split on "\n" ONLY
+        # so no residual byte can desync them.
+        src = _normalize_line_terminators(source.strip())
+        raw_lines = [ln.strip() for ln in src.split("\n")]
         kept = [
             idx for idx, ln in enumerate(raw_lines)
             if ln and ln not in ("{", "}")
         ]
         code_lines = [raw_lines[i] for i in kept]
-        sview = sanitized_view(src, language=lang).splitlines()
+        sview = sanitized_view(src, language=lang).split("\n")
         ref_lines = [
             sview[i].strip() if i < len(sview) else ""
             for i in kept
         ]
     else:
         # Exotic line terminators normalised first so the two views
-        # split onto the SAME indices: a lone \r or U+2028/9 survives
-        # as string data in the comments-only view but blanks to a
-        # space in the ref view, desynchronising splitlines() and
-        # pairing ref lines with the wrong source line.
-        src = source.strip()
-        for _term in ("\r\n", "\r", "\u2028", "\u2029"):
-            src = src.replace(_term, "\n")
+        # split onto the SAME indices: a lone \r \u2014 or any other
+        # str.splitlines terminator (\x0b, \x0c, \x1c-\x1e, \x85,
+        # U+2028/9) \u2014 survives as string data in the comments-only
+        # view but blanks to a space in the ref view, desynchronising
+        # splitlines() and pairing ref lines with the wrong source
+        # line (one plantable byte swallowed a live sink line from
+        # both judged views). The normalisation set is derived from
+        # splitlines itself (_LINE_TERMINATORS), and both views then
+        # split on "\n" ONLY \u2014 sanitized_view preserves "\n" 1:1 and
+        # blanks everything else to spaces, so the two views agree on
+        # line indices BY CONSTRUCTION even for a terminator the
+        # tuple were to miss.
+        src = _normalize_line_terminators(source.strip())
         cview = sanitized_view(src, language=lang, keep_strings=True)
-        rlines = sanitized_view(src, language=lang).splitlines()
-        for idx, raw in enumerate(cview.splitlines()):
+        rlines = sanitized_view(src, language=lang).split("\n")
+        for idx, raw in enumerate(cview.split("\n")):
             ln = raw.strip()
             rl = rlines[idx].strip() if idx < len(rlines) else ""
             if not ln or ln in ("{", "}"):
