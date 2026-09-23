@@ -195,6 +195,26 @@ def _cmd_gaps(view):
         _tprint(f"  {g['file']}:{g['function']}")
 
 
+def _mark_model() -> str:
+    """Provenance value for --mark/--unmark journal rows.
+
+    "operator" only when the invocation context shows an interactive
+    TTY (the /annotate rule) — an agent-minted assertion in the
+    durable project index must stay distinguishable from an
+    operator's, or any future reader granting operator rows extra
+    weight inherits a laundering channel. The coverage registry keeps
+    grading producer="mark" rows at LLM category either way.
+    """
+    from core.annotations.provenance import (
+        INTERACTIVE_TTY,
+        PROVENANCE_KEY,
+        detect_invocation_context,
+    )
+    ctx = detect_invocation_context()
+    return "operator" if ctx.get(PROVENANCE_KEY) == INTERACTIVE_TTY \
+        else "agent-mark"
+
+
 def _journal_marks(run_dir, marked, verdict_by_key):
     """Journal marks as review assertions so they are durable and
     hash-aware.
@@ -249,7 +269,7 @@ def _journal_marks(run_dir, marked, verdict_by_key):
                     (file_path, func_name), "clean"),
                 source_hash=source_hash,
                 line_start=lo, line_end=hi,
-                model="operator", producer="mark",
+                model=_mark_model(), producer="mark",
             ))
         return merge_into_index(project_dir, run_dir)
     except Exception as exc:  # noqa: BLE001 — journaling is additive
@@ -504,7 +524,7 @@ def _neutralise_journaled_marks(run_dir, keys):
                     verdict="error", source_hash="",
                     line_start=line_start,
                     lesson="operator unmark — review assertion withdrawn",
-                    model="operator", producer="mark",
+                    model=_mark_model(), producer="mark",
                 ))
                 touched = True
         if touched:
