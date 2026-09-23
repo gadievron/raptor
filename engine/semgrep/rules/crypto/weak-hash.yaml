@@ -3,16 +3,18 @@ rules:
     message: Weak hash function detected. Use SHA-256 or better. Verify migration and test vectors.
     languages: [java, kotlin]
     severity: HIGH
-    pattern-either:
+    patterns:
       # MD2 (RFC 6149) and MD4 (RFC 6150) are strictly weaker than the
       # MD5 already listed; MD2 is a standard JCA algorithm name and
       # MD4 is provider-registered (e.g. BouncyCastle). Set kept
       # consistent with the config-resolved channel's weak-hash set.
-      - pattern: MessageDigest.getInstance("MD2")
-      - pattern: MessageDigest.getInstance("MD4")
-      - pattern: MessageDigest.getInstance("MD5")
-      - pattern: MessageDigest.getInstance("SHA1")
-      - pattern: MessageDigest.getInstance("SHA-1")
+      # (?i): the JCA getInstance lookup is case-insensitive per spec,
+      # so getInstance("md5") is a fully working weak-hash use —
+      # mirroring the python arm's hashlib.new discipline.
+      - pattern: MessageDigest.getInstance($ALG, ...)
+      - metavariable-regex:
+          metavariable: $ALG
+          regex: '(?i)^"(md2|md4|md5|sha-?1)"$'
     metadata:
       cwe: ["CWE-328"]
       asvs: ["V3.9"]

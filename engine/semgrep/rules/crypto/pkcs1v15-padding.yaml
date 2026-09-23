@@ -8,9 +8,14 @@ rules:
       Use RSA/ECB/OAEPWithSHA-256AndMGF1Padding instead.
     languages: [java, kotlin]
     severity: HIGH
-    pattern-either:
-      - pattern: Cipher.getInstance("RSA/ECB/PKCS1Padding", ...)
-      - pattern: Cipher.getInstance("RSA", ...)
+    patterns:
+      # (?i): JCA transformation lookup is case-insensitive per spec.
+      # Bare "RSA" defaults to PKCS1 padding on every mainstream
+      # provider, hence the optional suffix.
+      - pattern: Cipher.getInstance($ALGO, ...)
+      - metavariable-regex:
+          metavariable: $ALGO
+          regex: (?i)^"rsa(/ecb/pkcs1padding)?"$
     metadata:
       cwe: ["CWE-780", "CWE-327"]
       asvs: ["V11.3.1"]
