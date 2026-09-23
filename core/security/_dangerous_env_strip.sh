@@ -37,6 +37,42 @@
 # are handled by `core.config.get_safe_env()` when we spawn children;
 # stripping them in the launcher would needlessly break the operator's
 # legitimate environment.
+#
+# Exported-function hardening. bash imports `BASH_FUNC_<name>%%` env
+# entries as shell functions at startup, and (outside POSIX mode)
+# function lookup precedes EVERY builtin — a hostile parent env
+# exporting a function named `unset` therefore both executed attacker
+# code from this very loop and silently neutralised the strip. No
+# builtin name is safe to call until precedence is restored, so the
+# fragment leans only on primitives an exported function cannot
+# shadow: reserved words, variable assignment/expansion (SYNTAX, not
+# command lookup), and — once `POSIXLY_CORRECT=1` is assigned —
+# special builtins, which POSIX command search finds BEFORE functions
+# (`unset` is one). From there: clear any shadow on the two regular
+# builtins used below (`declare`, `read` — regular builtins rank
+# below functions even in POSIX mode), then drop every EXPORTED
+# function outright. In a launcher chain an exported function can
+# only have arrived via env import (the launchers export none); each
+# one is a PATH-grade command shadow, and `unset -f` removes both the
+# function and its export so children do not re-import it.
+#
+# Boundary (documented, not defended): a fully hostile parent env
+# also owns PATH itself — redirecting `python3` to an attacker binary
+# is a different primitive this fragment never claimed to close. The
+# claim here is narrower and now holds: the strip loop executes no
+# attacker code, the listed variables are truly gone, and no imported
+# function survives into the launcher or its children.
+_raptor_had_posix=${POSIXLY_CORRECT+set}
+POSIXLY_CORRECT=1
+unset -f unset declare read 2>/dev/null || :
+while read -r _raptor_decl _raptor_flags _raptor_fname; do
+    case $_raptor_decl:$_raptor_flags in
+        declare:*x*) unset -f "$_raptor_fname" 2>/dev/null || : ;;
+    esac
+done <<RAPTOR_FUNC_SWEEP
+$(declare -F)
+RAPTOR_FUNC_SWEEP
+unset _raptor_decl _raptor_flags _raptor_fname
 
 for _raptor_strip_var in \
     LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT \
@@ -53,3 +89,9 @@ for _raptor_strip_var in \
     unset "$_raptor_strip_var"
 done
 unset _raptor_strip_var
+
+# Leave POSIX mode only if this fragment enabled it.
+if [ "$_raptor_had_posix" != set ]; then
+    unset POSIXLY_CORRECT
+fi
+unset _raptor_had_posix
