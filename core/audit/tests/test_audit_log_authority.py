@@ -216,6 +216,72 @@ class TestRecordGatesVerified:
         assert "G2 TOOL-GROUNDED" in capsys.readouterr().err
 
 
+class TestG3ResumeFeedVerified:
+    """The G3 re-recording gate DEMOTES findings on prior
+    finding/suspicious rows — a planted prior row must never earn
+    that. Behavioral twin of the census's substring assertion: a
+    revert of the feed to the tolerant loader passes the substring
+    check (the name can survive in a comment) but fails these."""
+
+    ROW = {
+        "action": "record", "key": "src/a.c:foo",
+        "status": "finding",
+    }
+
+    def _outcome(self):
+        from core.audit.orchestrator import ReviewOutcome
+
+        # Re-record with NO new tool evidence — the exact shape G3
+        # demotes when a prior row exists.
+        return ReviewOutcome(
+            file="src/a.c", function="foo", status="finding",
+            body="b", hypothesis="if x unchecked, CWE-787", line=1,
+        )
+
+    def _violations(self, out_dir: Path):
+        from core.audit.orchestrator import (
+            _check_finding_gates,
+            _g3_prior_review_rows,
+        )
+
+        config = SimpleNamespace(resume=True, out_dir=out_dir)
+        rows = _g3_prior_review_rows(config)
+        return _check_finding_gates(self._outcome(), audit_log=rows)
+
+    def test_forged_prior_row_demotes_nothing(self, tmp_path: Path):
+        _plant_raw_row(tmp_path, self.ROW)
+        violations = self._violations(tmp_path)
+        assert not any(v.startswith("G3") for v in violations)
+
+    def test_stamped_prior_row_fires_g3(self, tmp_path: Path):
+        from core.audit.record import append_audit_log
+
+        append_audit_log(tmp_path, self.ROW)
+        violations = self._violations(tmp_path)
+        assert any(v.startswith("G3") for v in violations)
+
+    def test_cross_run_replayed_row_demotes_nothing(self, tmp_path: Path):
+        from core.audit.record import append_audit_log
+
+        other = tmp_path / "other"
+        other.mkdir()
+        append_audit_log(other, self.ROW)
+        here = tmp_path / "here"
+        here.mkdir()
+        (here / ".audit-log.jsonl").write_bytes(
+            (other / ".audit-log.jsonl").read_bytes())
+        violations = self._violations(here)
+        assert not any(v.startswith("G3") for v in violations)
+
+    def test_non_resume_feeds_nothing(self, tmp_path: Path):
+        from core.audit.orchestrator import _g3_prior_review_rows
+        from core.audit.record import append_audit_log
+
+        append_audit_log(tmp_path, self.ROW)
+        config = SimpleNamespace(resume=False, out_dir=tmp_path)
+        assert _g3_prior_review_rows(config) == []
+
+
 # ── consumer census ──────────────────────────────────────────────────
 #
 # Mechanically derived reader set: every call site of load_audit_log /
@@ -237,7 +303,7 @@ _AUTHORITY_READERS = {
         "defers (suppresses) CWE-252 census sites",
     ("core/audit/orchestrator.py", "_relog_final_statuses"):
         "decides which corrective final-status rows reach the log",
-    ("core/audit/orchestrator.py", "_run_audit_body"):
+    ("core/audit/orchestrator.py", "_g3_prior_review_rows"):
         "feeds _check_finding_gates G3 (prior rows demote findings)",
     ("libexec/raptor-audit", "cmd_record"):
         "G5 READ-FIRST / G2 sweep-receipt gates relax on matching rows"
