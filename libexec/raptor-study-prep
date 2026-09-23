@@ -295,7 +295,14 @@ _DISPATCH_TABLE_PATTERN = re.compile(
 # ``\)\s*\{?\s*\n`` chained spans around it — quadratic on an
 # if-line followed by a whitespace run.
 _NULL_GUARD_PATTERN = re.compile(
-    r"if\s*\(\s*!(\w+(?:->\w+)*)\s*\)\s*(?:\{\s*)?\n\s*"
+    # Member chains bounded: a body-unit ("->a") storm makes every
+# chain start re-walk the run — quadratic on hostile source.
+# Real access chains sit far inside 32 links.
+# The guard gap anchors on the FIRST newline (same language:
+# any whitespace mix with one required newline after the
+# optional brace) — the `\s*\n\s*` spelling split a hostile
+# newline run three ways per scan position, quadratic.
+r"if\s*\(\s*!(\w+(?:->\w+){0,32})\s*\)(?:\s*\{)?[^\S\n]*\n\s*"
     r"(?:return\s+(-\w+)|goto\s+(\w+))",
 )
 
@@ -320,8 +327,10 @@ _VALIDATION_BOUND_PATTERN = re.compile(
 # The allocator argument span is bounded (same close-paren-free run
 # rationale as _FLAG_CHECK_PATTERN; alloc arguments are tiny).
 _ALLOC_THEN_CHECK_PATTERN = re.compile(
-    r"\b(\w+(?:->\w+)*)\s*=\s*(\w+alloc\w*|alloc_\w+)\s*\([^)]{0,256}\)\s*;"
-    r"\s*\n\s*if\s*\(\s*!(?:\1)\s*\)",
+    # Member chain bounded — same rationale as _NULL_GUARD_PATTERN.
+    r"\b(\w+(?:->\w+){0,32})\s*=\s*(\w+alloc\w*|alloc_\w+)\s*\([^)]{0,256}\)\s*;"
+    # First-newline anchoring — same rationale as _NULL_GUARD_PATTERN.
+    r"[^\S\n]*\n\s*if\s*\(\s*!(?:\1)\s*\)",
 )
 
 _INFRA_TYPES = frozenset({

@@ -70,8 +70,13 @@ _ARG_RE = re.compile(
 # Operator override inside the comment:
 #   # raptor-sca: PyPI:semgrep
 #   # raptor-sca: skip
+# The spec head is non-space ([\w.-]): the class overlapped the
+# leading whitespace run on spaces, so a space-storm row cost
+# every split of the run — quadratic. The dropped corner is a
+# whitespace-only override name (garbage, not a spec); interior
+# spaces still match.
 _OVERRIDE_RE = re.compile(
-    r"raptor-sca:\s*(?P<spec>skip|[\w. -]+:[\w/@.\-+_]+)"
+    r"raptor-sca:\s*(?P<spec>skip|[\w.-][\w. -]*:[\w/@.\-+_]+)"
 )
 
 

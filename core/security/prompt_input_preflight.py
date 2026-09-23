@@ -69,7 +69,11 @@ _REDOS_SHAPES = (
     re.compile(r'\)\?\)\?\)'),        # deeply nested optional groups
     # (a|aa)+ AND (a|aa)* alternation overlap — the starred twin
     # backtracks just as exponentially as the plus form.
-    re.compile(r'\([^()]*\|[^()]*\)[+*]'),
+    # The first span excludes '|' (anchors on the FIRST separator —
+    # same alternation shapes flagged, identical spans): with '|'
+    # inside it, a pipe-storm pattern made every split explorable,
+    # quadratic in the scanned pattern text.
+    re.compile(r'\([^()|]*\|[^()]*\)[+*]'),
 )
 
 

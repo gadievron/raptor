@@ -601,8 +601,12 @@ _CONTROL_FLOW_NAMES = frozenset(
 
 # \b keeps the unanchored scan from restarting inside an identifier
 # run (quadratic); earliest-start matches and captures unchanged.
+# The dotted chain is bounded: a ".a"-unit storm makes every
+# component start re-walk the run when no call paren follows —
+# quadratic in the line (beyond 32 links the match binds the
+# last 32 components; real call chains sit far inside that).
 _CALL_RE = re.compile(
-    r"\b(\w+(?:\.\w+)*)\s*\(",
+    r"\b(\w+(?:\.\w+){0,32})\s*\(",
 )
 
 

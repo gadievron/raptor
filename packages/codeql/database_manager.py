@@ -391,7 +391,10 @@ class DatabaseManager:
                 # `re.ASCII` so Unicode digits don't sneak in (see
                 # packages/exploit_feasibility/profiles.py for the same
                 # rationale applied to glibc parsing).
-                m = re.search(r'\d+(?:\.\d+){1,3}', result.stdout, re.ASCII)
+                # (?<!\d) pins the scan to digit-run starts (identical first
+                # match; unpinned, a hostile digit run is re-read from
+                # every offset — quadratic).
+                m = re.search(r'(?<!\d)\d+(?:\.\d+){1,3}', result.stdout, re.ASCII)
                 if m:
                     return m.group(0)
                 # Fallback for unexpected output: return first line so

@@ -3657,7 +3657,14 @@ def _check_perl_patterns(
                 ))
 
         if re.search(
-            r'=~\s*s/(?:\\.|[^/\\\n])*\$(?:\\.|[^/\\\n])*'
+            # The pattern body BEFORE the interpolation excludes bare '$':
+            # it stops at the first unescaped '$' deterministically —
+            # with '$' inside the class, a '$'-storm line made every
+            # split of the run explorable, quadratic per line.  Escaped
+            # dollars still ride the escape branch; a match exists for
+            # exactly the same lines (first-$ vs any-$ anchoring), and
+            # the consumer is a boolean hit.
+            r'=~\s*s/(?:\\.|[^/\\\n$])*\$(?:\\.|[^/\\\n])*'
             r'/(?:\\.|[^/\\\n])*/e',
             stripped,
         ):
