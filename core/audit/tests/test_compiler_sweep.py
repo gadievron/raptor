@@ -790,6 +790,35 @@ class TestIncludeClosureSuppressionForgery:
         )
         assert result.outcome == "refuted", vars(result)
 
+    def test_digraph_pragma_cannot_refute(self, tmp_path, sandbox_spy):
+        # Pinned-by-review shape: the digraph spelling `%:pragma`
+        # suppresses gcc and carries no literal `#pragma` for a raw
+        # scan — the preprocessor normalises it to a `#pragma` line
+        # in -E output, where the closure vet reads it.
+        result = self._sweep_uaf(
+            tmp_path, "uaf_digraph.c", "evil_digraph.h",
+        )
+        assert result.outcome != "refuted", vars(result)
+        assert result.outcome == "inconclusive"
+        assert "pragma" in (
+            result.details.get("suppression_witness") or ""
+        ).lower(), vars(result)
+
+    def test_backslash_spliced_pragma_cannot_refute(
+        self, tmp_path, sandbox_spy,
+    ):
+        # Pinned-by-review shape: `#prag\` + newline + `ma …` splices
+        # into a live pragma the raw text never spells — caught
+        # post-splice in -E output.
+        result = self._sweep_uaf(
+            tmp_path, "uaf_splice.c", "evil_splice.h",
+        )
+        assert result.outcome != "refuted", vars(result)
+        assert result.outcome == "inconclusive"
+        assert "pragma" in (
+            result.details.get("suppression_witness") or ""
+        ).lower(), vars(result)
+
     def test_clean_include_closure_still_refutes(
         self, tmp_path, sandbox_spy,
     ):
