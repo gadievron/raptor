@@ -1833,6 +1833,17 @@ def format_context_for_prompt(
         sections.append(PromptSection(
             "block_analysis", ctx["block_analysis"], 0))
 
+    if ctx.get("fused_evidence"):
+        # Rendered + defended at the producer
+        # (orchestrator._store_fused_evidence — defend_repo_text
+        # chokepoint); previously the key was written and never
+        # consumed, so the fused pre-review evidence never reached
+        # the reviewer. Shed priority comes from the fusion module's
+        # own injection-priority contract (strongest item wins).
+        sections.append(PromptSection(
+            "fused_evidence", "\n" + ctx["fused_evidence"],
+            ctx.get("fused_evidence_priority", 1)))
+
     if ctx.get("project_context"):
         # Cross-run learnings are LLM-authored text persisted in the
         # project dir and restored VERBATIM by /project import — an

@@ -1575,10 +1575,15 @@ def _naked_keys(
 ) -> list[tuple[int, str]]:
     """Return (line, key) pairs for LLM-derived reads in ``node`` that
     are NOT inside a recognised sanitiser call. ``tainted`` names count
-    as LLM-derived reads too (one-level local taint), and simple-name
-    calls to ``tainted_calls`` (module-local helpers whose RETURN value
-    is tainted — the ``sys.stdout.write(render_json(report))`` shape)
-    count as foreign reads.
+    as LLM-derived reads too (one-level local taint), and calls to
+    ``tainted_calls`` (module-local helpers whose RETURN value is
+    tainted — the ``sys.stdout.write(render_json(report))`` shape)
+    count as foreign reads in BOTH spellings: simple-name
+    (``render(x)``) and attribute-form (``self.render(x)`` /
+    ``obj.render(x)`` — helper names are registered by short name, so
+    the method spelling of the same module-local helper matches on
+    ``func.attr``; over-taint is bounded because the names are
+    function-local to the audited module).
 
     ``wide=True`` (sink arguments and return expressions) matches the
     FULL vocabulary including the widened and label tiers;
@@ -1678,6 +1683,30 @@ def _naked_keys(
                 and n.func.id in tainted_calls):
             out.append((getattr(n, "lineno", 0), n.func.id))
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute):
+            # Attribute-form call to a tainted-return helper
+            # (`self.render()` / `obj.as_row()`): same module-local
+            # helper as the bare-Name arm above, spelled as a method.
+            # Pre-fix this arm skipped the func Attribute entirely,
+            # so method-spelled tainted returns were invisible
+            # end-to-end (the service-health `as_row` relay class).
+            # Scope mirrors the widened-name trade-off documented in
+            # the docstring: SINK positions (wide=True) match any
+            # receiver; taint-engine positions match only self/cls
+            # receivers (unambiguously module-local method calls).
+            # Helper names registered by short name collide with
+            # common method spellings (`gate.to_dict()`,
+            # `drain.collect()`) — letting those drive assignments
+            # cascaded taint through whole-function Path/report
+            # plumbing (measured: 5 phantom sink flags in one main()).
+            # The un-matched assignment-position round-trip is a
+            # documented residual, same shape as the widened-name one.
+            recv = n.func.value
+            if n.func.attr in tainted_calls and (
+                wide
+                or (isinstance(recv, ast.Name)
+                    and recv.id in ("self", "cls"))
+            ):
+                out.append((getattr(n, "lineno", 0), n.func.attr))
             # A method reference (`severity.title()`, `text.strip()`) is
             # not a field read — skip the func Attribute itself but keep
             # walking the receiver and the arguments.
