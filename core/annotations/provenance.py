@@ -161,12 +161,18 @@ def classify_provenance(metadata: Mapping[str, str] | None) -> str:
     tag = metadata.get(PROVENANCE_KEY)
     if tag in (INTERACTIVE_TTY, NON_TTY, IMPORTED):
         return tag
+    if tag is not None:
+        # A ``provenance`` key exists but carries an unrecognised
+        # value — someone tampered or a producer is broken. Never
+        # grant the elevated tier, and never fall through to the
+        # ``tty`` key: a partially-tampered stamp (garbage tag
+        # beside a well-formed tty value) must demote, not elevate.
+        return NON_TTY
     tty = metadata.get(TTY_KEY)
     if tty is not None and valid_tty_value(tty):
         return NON_TTY if tty == _TTY_NONE else INTERACTIVE_TTY
-    if tag is not None or tty is not None:
-        # A stamp key exists but carries garbage — someone tampered
-        # or a producer is broken. Never grant the elevated tier.
+    if tty is not None:
+        # Garbage ``tty`` value with no tag: same never-grant rule.
         return NON_TTY
     return LEGACY
 
