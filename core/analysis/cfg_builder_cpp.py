@@ -728,8 +728,10 @@ def _payload_from_subtree(n) -> tuple[frozenset[str], frozenset[str],
 
 
 def _find_function_definition(root, function_name: str):
-    """First ``function_definition`` whose declarator's innermost
-    identifier matches ``function_name``. ``None`` if not found.
+    """A ``function_definition`` whose declarator's innermost
+    identifier matches ``function_name`` (DFS order — with multiple
+    same-named definitions the one found is NOT necessarily the
+    textually first). ``None`` if not found.
 
     The walker descends into ``namespace_definition`` and
     ``class_specifier`` for C++ but does NOT join the namespace /
@@ -1266,24 +1268,37 @@ class _CPPCFGBuilder:
         cond = stmt.child_by_field_name("condition")
         # body entry has the same predecessors as the do statement.
         # tail node = the condition test; body falls through to it.
+        # The label prefix is "do-while", NOT "while": label-driven
+        # condition extraction treats a condition label as an entry
+        # guard, which a do-while tail is not (the body precedes the
+        # first evaluation) — the Java leg's "do-while" label never
+        # matched, and this keeps both legs symmetric in the refusal
+        # direction.
         if cond is not None:
             calls, defs, uses, css = _payload_from_subtree(cond)
             tail = self._make_node(
                 kind="stmt", lineno=cond.start_point[0] + 1,
-                label="while " + self._short_label(cond),
+                label="do-while " + self._short_label(cond),
                 calls=calls, defs=defs, uses=uses, call_sites=css,
                 may_escape=self._escapes(cond),
             )
         else:
             tail = self._make_node(
                 kind="stmt", lineno=stmt.end_point[0] + 1,
-                label="while (...)",
+                label="do-while (...)",
             )
-        # Pre-allocate the body entry as a sentinel so break/continue
-        # have something to point at. We use the first body node as
-        # the loop "header" for continue.
+        # ``break`` exits the whole do statement WITHOUT evaluating
+        # the tail condition (C11 6.8.6.3): it targets a payload-free
+        # after-loop join, never the condition — routing it through
+        # the tail invented condition dominance over post-loop code
+        # (SMT guard consumers read dominance as "this condition held
+        # here"). ``continue`` targets the condition (real path).
+        after = self._make_node(
+            kind="stmt", lineno=stmt.end_point[0] + 1,
+            label="do-while-join",
+        )
         self._loop_stack.append((tail, tail))
-        self._break_stack.append(tail)
+        self._break_stack.append(after)
         # Tail loops back to body entry.  _build_stmts links incoming →
         # first body node(s), so we snapshot incoming's successors before
         # and diff after to recover the body entry set.
@@ -1296,9 +1311,10 @@ class _CPPCFGBuilder:
             body_entry |= set(self._adjacency.get(n, ())) - pre_succs.get(n, set())
         for entry in body_entry:
             self._link(tail, entry)
+        self._link(tail, after)
         self._break_stack.pop()
         self._loop_stack.pop()
-        return [tail]
+        return [after]
 
     def _build_switch(self, stmt: Node, incoming):
         subj = stmt.child_by_field_name("condition")
@@ -1425,9 +1441,16 @@ class _CPPCFGBuilder:
         self._link_many(incoming, ln)
         self._labels.setdefault(label_name, ln)
         # Inner stmt — tree-sitter exposes it as the next named child.
+        # NB: the Python bindings mint a FRESH Node wrapper per access,
+        # so ``c is not label_node`` was always True and the loop
+        # picked the label identifier itself as the "inner" statement —
+        # the real inner statement (and its calls/defs/uses payload)
+        # silently vanished from the graph. A missing statement is
+        # unsound in BOTH directions (an invisible re-taint write lets
+        # an exclusivity proof hold falsely). Skip by node TYPE.
         inner: Any | None = None
         for c in stmt.children:
-            if c.is_named and c is not label_node:
+            if c.is_named and c.type != "statement_identifier":
                 inner = c
                 break
         if inner is None:
@@ -1451,8 +1474,11 @@ class _CPPCFGBuilder:
             if target is not None:
                 self._link(goto_node, target)
             else:
-                # Unknown label — goto becomes a no-op flowing to exit
-                # so the function isn't a sink-trap for analysis.
+                # Unknown label (macro-generated or outside the
+                # parsed span) — route the goto to EXIT: the jump
+                # target is unknowable, so treating the path as
+                # function-terminating refuses rather than invents a
+                # fall-through successor.
                 self._link(goto_node, self.exit)
         adjacency: dict[CPPCFGNode, tuple[CPPCFGNode, ...]] = {
             k: tuple(v) for k, v in self._adjacency.items()

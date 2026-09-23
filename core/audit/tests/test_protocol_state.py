@@ -348,6 +348,32 @@ class TestBranchGuards:
         assert guards and any("highest_sent" in g for g in guards)
 
 
+class TestDoWhileBreakGuards:
+    def test_no_guard_minted_at_post_loop_site_reached_via_break(self):
+        # break exits the do statement WITHOUT evaluating the tail
+        # condition (C11 6.8.6.3) — a post-loop site is reachable with
+        # the condition never tested, so no guard derived from it may
+        # be asserted there.
+        from core.audit.protocol_state import _branch_guards
+        src = (
+            "int m(int n)\n"
+            "{\n"
+            "    do {\n"
+            "        step();\n"
+            "        if (cond()) break;\n"
+            "    } while (n < 100);\n"
+            "    sink(n);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        guards = _branch_guards(src, "m", 7)
+        assert guards is not None
+        assert not any("100" in g for g in guards), (
+            "guard minted from a condition the break path never "
+            "evaluates"
+        )
+
+
 class TestTruncatedCensus:
     def test_all_sites_skipped_on_budget_is_not_preserved(self):
         # With every site skipped on budget, per_site is empty and the

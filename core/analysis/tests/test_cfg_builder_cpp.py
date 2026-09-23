@@ -293,6 +293,129 @@ class TestLoops:
         # Smoke test: cfg builds and reaches exit.
         assert cfg.exit_node in _reachable(cfg, cfg.entry_node)
 
+    def test_do_while_break_exits_without_evaluating_condition(self):
+        # C semantics match the Java leg: break leaves the do statement
+        # without evaluating the tail condition, so the condition node
+        # must not dominate post-loop code (SMT guard consumers read
+        # dominance as "this condition held here").
+        src = (
+            "int f(int n) {\n"
+            "    do {\n"
+            "        step();\n"
+            "        if (cond()) break;\n"
+            "    } while (n < 100);\n"
+            "    sink(n);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        cfg = _build(src)
+        from core.analysis.dominators import build_dom_tree
+        dom = build_dom_tree(cfg)
+        cond = next(n for n in cfg.nodes()
+                    if n.label.startswith("do-while "))
+        sink = next(n for n in cfg.nodes() if "sink" in n.label)
+        assert not dom.dominates(cond, sink), (
+            "do-while condition must not dominate post-loop code: the "
+            "break path never evaluates it"
+        )
+        brk = next(n for n in cfg.nodes() if n.label == "break")
+        assert cond not in cfg.successors(brk)
+
+    def test_do_while_without_break_condition_dominates_after(self):
+        # Control: no break — the condition is on every exit path and
+        # must keep dominating post-loop code.
+        src = (
+            "int f(int n) {\n"
+            "    do {\n"
+            "        step();\n"
+            "    } while (n < 100);\n"
+            "    sink(n);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        cfg = _build(src)
+        from core.analysis.dominators import build_dom_tree
+        dom = build_dom_tree(cfg)
+        cond = next(n for n in cfg.nodes()
+                    if n.label.startswith("do-while "))
+        sink = next(n for n in cfg.nodes() if "sink" in n.label)
+        assert dom.dominates(cond, sink)
+
+    def test_do_while_goto_out_bypasses_condition(self):
+        # Sibling escape form: goto out of the body links straight to
+        # the label — like break, it must not create condition
+        # dominance over the jump target.
+        src = (
+            "int f(int n) {\n"
+            "    do {\n"
+            "        step();\n"
+            "        if (cond()) goto out;\n"
+            "    } while (n < 100);\n"
+            "out:\n"
+            "    sink(n);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        cfg = _build(src)
+        from core.analysis.dominators import build_dom_tree
+        dom = build_dom_tree(cfg)
+        cond = next(n for n in cfg.nodes()
+                    if n.label.startswith("do-while "))
+        sink = next(n for n in cfg.nodes() if "sink" in n.label)
+        assert not dom.dominates(cond, sink)
+
+    def test_labeled_statement_inner_payload_survives(self):
+        # The label wrapper must not swallow its inner statement: a
+        # call (or re-taint write) at a labeled statement that vanishes
+        # from the graph is unsound in both directions.
+        src = (
+            "int f(int n) {\n"
+            "    if (n) goto out;\n"
+            "    work();\n"
+            "out:\n"
+            "    sink(n);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        cfg = _build(src)
+        assert any("sink" in n.calls for n in cfg.nodes()), (
+            "labeled statement's inner statement dropped from the CFG"
+        )
+
+    def test_do_while_condition_label_invisible_to_guard_extraction(self):
+        # The do-while tail is labeled distinctly from a genuine while
+        # header, so label-driven condition extraction (which treats a
+        # condition as an entry guard) never reads it — symmetric with
+        # the Java leg, whose "do-while" label never matched. A plain
+        # while keeps extracting.
+        from core.analysis.cfg_conditions import extract_conditions_from_cfg
+        src_do = (
+            "int f(int n) {\n"
+            "    do {\n"
+            "        step();\n"
+            "    } while (n < 100);\n"
+            "    sink(n);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        cfg = _build(src_do)
+        conds = [e for e in extract_conditions_from_cfg(cfg)
+                 if e.condition is not None]
+        assert not any("100" in e.condition.text for e in conds)
+        src_while = (
+            "int f(int n) {\n"
+            "    while (n < 100) {\n"
+            "        step();\n"
+            "    }\n"
+            "    sink(n);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        cfg2 = _build(src_while)
+        conds2 = [e for e in extract_conditions_from_cfg(cfg2)
+                  if e.condition is not None]
+        assert any("100" in e.condition.text for e in conds2)
+
     def test_break_targets_after_loop(self):
         src = (
             "void f(int n) {\n"
