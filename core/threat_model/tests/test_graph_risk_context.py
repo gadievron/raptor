@@ -71,3 +71,102 @@ def test_project_target_still_serves_graph_context(
     target.mkdir()
     out = graph_risk_context_for_target(target)
     assert out == f"GRAPH RISKS from {graph_path}"
+
+
+def test_process_pin_governs_graph_context(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OWNER RULE parity with load_for_target: with a run pinned to
+    project A, the graph context must come from A — never from a twin
+    project that happens to share the target."""
+    import core.understand_graph as ug
+
+    pinned_dir = tmp_path / "proj-a-out"
+    pinned_graph = pinned_dir / "graph" / "raptor.graph.sqlite"
+    pinned_graph.parent.mkdir(parents=True)
+    pinned_graph.touch()
+
+    twin_dir = tmp_path / "proj-b-out"
+    twin_graph = twin_dir / "graph" / "raptor.graph.sqlite"
+    twin_graph.parent.mkdir(parents=True)
+    twin_graph.touch()
+
+    target = tmp_path / "shared-target"
+    target.mkdir()
+
+    class _Pinned:
+        output_dir = str(pinned_dir)
+        target_path = str(target)
+
+        def __init__(self) -> None:
+            self.target = str(target)
+
+    class _Twin:
+        output_dir = str(twin_dir)
+
+        def __init__(self) -> None:
+            self.target = str(target)
+
+    monkeypatch.setattr(
+        "core.run.pin.get_process_project", lambda: "proj-a")
+    monkeypatch.setattr(
+        "core.project.trust._context_project_name",
+        lambda run_dir=None: "proj-a")
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.load",
+        lambda self, name: _Pinned() if name == "proj-a" else None)
+    # The twin is what the raw first-match scan would return.
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.find_project_for_target",
+        lambda self, target, content_id=None: _Twin())
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.get_active",
+        lambda self: None)
+    monkeypatch.setattr(
+        ug, "threat_model_graph_context",
+        lambda gp, target, limit=8: f"GRAPH RISKS from {gp}",
+    )
+
+    out = graph_risk_context_for_target(target)
+    assert out == f"GRAPH RISKS from {pinned_graph}"
+
+
+def test_process_pin_target_mismatch_yields_no_graph_context(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A governed context whose pinned project targets something else
+    must yield nothing — never fall back to the twin scan."""
+    import core.understand_graph as ug
+
+    other_dir = tmp_path / "other-out"
+    other_graph = other_dir / "graph" / "raptor.graph.sqlite"
+    other_graph.parent.mkdir(parents=True)
+    other_graph.touch()
+
+    target = tmp_path / "the-target"
+    target.mkdir()
+
+    class _Elsewhere:
+        output_dir = str(other_dir)
+
+        def __init__(self) -> None:
+            self.target = str(tmp_path / "different-target")
+
+    monkeypatch.setattr(
+        "core.run.pin.get_process_project", lambda: "proj-x")
+    monkeypatch.setattr(
+        "core.project.trust._context_project_name",
+        lambda run_dir=None: "proj-x")
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.load",
+        lambda self, name: _Elsewhere())
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.find_project_for_target",
+        lambda self, target, content_id=None: _Elsewhere())
+    monkeypatch.setattr(
+        "core.project.project.ProjectManager.get_active",
+        lambda self: None)
+    monkeypatch.setattr(
+        ug, "threat_model_graph_context",
+        lambda gp, target, limit=8: f"GRAPH RISKS from {gp}",
+    )
+
+    assert graph_risk_context_for_target(target) == ""

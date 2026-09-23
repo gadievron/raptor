@@ -1152,18 +1152,19 @@ def threat_model_untrusted_blocks(target: Path) -> list[UntrustedBlock]:
 
 
 def graph_risk_context_for_target(target: Path, *, limit: int = 8) -> str:
-    """Return compact graph-backed risks for a target, if project graph exists."""
+    """Return compact graph-backed risks for a target, if project graph exists.
+
+    Project resolution goes through ``_project_for_target`` — the same
+    OWNER RULE as the model lane. Graph risks steer prompt attention the
+    same way the model does, so serving them from an unpinned twin
+    project sharing the target was the identical per-prompt
+    cross-project contamination the model lane's governed-pin fix
+    closed.
+    """
     try:
-        from core.project.project import ProjectManager
         from core.understand_graph import threat_model_graph_context
 
-        mgr = ProjectManager()
-        project = mgr.find_project_for_target(str(target))
-        if project is None:
-            active = mgr.get_active()
-            candidate = mgr.load(active) if active else None
-            if candidate and _same_path(candidate.target, target):
-                project = candidate
+        project = _project_for_target(target)
         if project is None:
             # The process CWD is the framework dir, never the analysis
             # target, so a CWD-relative graph probe can only ever read
@@ -1383,43 +1384,56 @@ def link_verified_outcomes(model: ThreatModel, outcomes: Iterable[Any]) -> Threa
     return model
 
 
+def _project_for_target(target: Path) -> Any | None:
+    """Resolve the governing project for ``target``, or None.
+
+    OWNER RULE — one home, consumed by BOTH context lanes
+    (``load_for_target`` for the model, ``graph_risk_context_for_target``
+    for graph risks) so they cannot drift: when a governing project
+    exists for this context — the process pin override (run
+    children/parents bootstrap it from the run's pin) or the ambient
+    layers — that project is the ONLY candidate, and only when its
+    target actually matches. Both the model and the graph context steer
+    prompt attention (out-of-scope entries suppress analysis), so the
+    WRONG project's context is an analysis-steering contamination. The
+    pre-fix first-match ``find_project_for_target`` scan could return
+    an arbitrary twin project sharing the target, and re-ran PER PROMPT
+    mid-run. The target-keyed scan survives only for no-context callers
+    (bare CLI).
+    """
+    from core.project.project import ProjectManager
+    mgr = ProjectManager()
+    project = None
+    governed = False
+    try:
+        from core.project.trust import _context_project_name
+        from core.run.pin import get_process_project
+        if get_process_project() is not None:
+            governed = True
+            name = _context_project_name()
+            candidate = mgr.load(name) if name else None
+            if candidate and _same_path(candidate.target, target):
+                project = candidate
+    except Exception:  # noqa: BLE001 — fall to the legacy scan
+        governed = False
+    if not governed:
+        project = mgr.find_project_for_target(str(target))
+        if project is None:
+            active = mgr.get_active()
+            candidate = mgr.load(active) if active else None
+            if candidate and _same_path(candidate.target, target):
+                project = candidate
+    return project
+
+
 def load_for_target(target: Path) -> ThreatModel | None:
     """Find the project-owned threat model for ``target`` if one exists.
 
-    OWNER RULE: when a governing project exists for this context — the
-    process pin override (run children/parents bootstrap it from the
-    run's pin) or the ambient layers — that project is the ONLY
-    candidate, and only when its target actually matches: a threat
-    model steers prompt attention (out-of-scope entries suppress
-    analysis), so the WRONG project's model is an analysis-steering
-    contamination. The pre-fix first-match ``find_project_for_target``
-    scan could return an arbitrary twin project sharing the target,
-    and re-ran PER PROMPT mid-run. The target-keyed scan survives only
-    for no-context callers (bare CLI).
+    Project resolution is the OWNER RULE in ``_project_for_target``
+    (see its docstring).
     """
     try:
-        from core.project.project import ProjectManager
-        mgr = ProjectManager()
-        project = None
-        governed = False
-        try:
-            from core.project.trust import _context_project_name
-            from core.run.pin import get_process_project
-            if get_process_project() is not None:
-                governed = True
-                name = _context_project_name()
-                candidate = mgr.load(name) if name else None
-                if candidate and _same_path(candidate.target, target):
-                    project = candidate
-        except Exception:  # noqa: BLE001 — fall to the legacy scan
-            governed = False
-        if not governed:
-            project = mgr.find_project_for_target(str(target))
-            if project is None:
-                active = mgr.get_active()
-                candidate = mgr.load(active) if active else None
-                if candidate and _same_path(candidate.target, target):
-                    project = candidate
+        project = _project_for_target(target)
         if project is None:
             return None
         json_path = _project_threat_model_json_path(project)
