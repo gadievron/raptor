@@ -1720,3 +1720,79 @@ class TestMetadataReadBudget(unittest.TestCase):
             "bare load_json in metadata.py — metadata readers route "
             "through _load_meta/load_run_metadata; other artifacts "
             f"pass max_bytes: {offenders}")
+
+
+class MetadataLockTamperTest(unittest.TestCase):
+    """The `.lock` sibling lives inside the sandbox child's write
+    grant (the metadata FILE is namespace-masked; the sibling is not)
+    — the lock open must not follow a planted symlink, must not block
+    on a planted FIFO, and must degrade LOUDLY, never silently."""
+
+    def setUp(self):
+        self._tmp = TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.run_dir = Path(self._tmp.name)
+        self.meta_path = self.run_dir / ".raptor-run.json"
+        self.lock_path = self.run_dir / ".raptor-run.json.lock"
+
+    def test_planted_symlink_not_followed(self):
+        import os
+
+        from core.run.metadata import _metadata_lock
+        victim = self.run_dir / "attacker-chosen-path"
+        os.symlink(victim, self.lock_path)
+        with self.assertLogs("core.run.metadata", level="WARNING") as logs:
+            with _metadata_lock(self.meta_path):
+                pass
+        self.assertFalse(victim.exists(),
+                         "symlink was followed — file created at the "
+                         "attacker-chosen path")
+        self.assertTrue(any("UNSERIALISED" in m for m in logs.output))
+
+    def test_planted_fifo_does_not_wedge(self):
+        import os
+        import time
+
+        from core.run.metadata import _metadata_lock
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("no mkfifo on this platform")
+        os.mkfifo(self.lock_path)
+        start = time.monotonic()
+        with self.assertLogs("core.run.metadata", level="WARNING"):
+            with _metadata_lock(self.meta_path):
+                pass
+        self.assertLess(time.monotonic() - start, 2.0,
+                        "FIFO open blocked the lifecycle finaliser")
+
+    def test_planted_fifo_with_reader_refused(self):
+        import os
+        import time
+
+        from core.run.metadata import _metadata_lock
+        if not hasattr(os, "mkfifo"):
+            self.skipTest("no mkfifo on this platform")
+        os.mkfifo(self.lock_path)
+        rfd = os.open(self.lock_path, os.O_RDONLY | os.O_NONBLOCK)
+        self.addCleanup(os.close, rfd)
+        start = time.monotonic()
+        with self.assertLogs("core.run.metadata", level="WARNING") as logs:
+            with _metadata_lock(self.meta_path):
+                pass
+        self.assertLess(time.monotonic() - start, 2.0)
+        self.assertTrue(any("not a regular file" in m for m in logs.output))
+
+    def test_regular_lock_flow_stays_silent_and_locks(self):
+        import fcntl
+        import os
+
+        from core.run.metadata import _metadata_lock
+        with _metadata_lock(self.meta_path):
+            self.assertTrue(self.lock_path.is_file())
+            # A second would-be locker cannot take the flock while the
+            # window is held.
+            fd = os.open(self.lock_path, os.O_WRONLY)
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(fd)
