@@ -26,10 +26,15 @@ def _normalize_condition(cond: str) -> str:
     s = re.sub(r"\s+", " ", s)
     # Flip Yoda-style comparisons (e.g. "null != x" → "x != null")
     s = re.sub(r"\b(null|0)\s*(!=|==)\s*(\S+)", r"\3 \2 \1", s)
-    s = re.sub(r"\s*!=\s*null\b", "", s)
-    s = re.sub(r"\s*!=\s*0\b", "", s)
-    s = re.sub(r"\s*==\s*null\b", " == null", s)
-    return re.sub(r"\s*==\s*0\b", " == 0", s)
+    # The (?<!\s) pins each match to the start of its whitespace run:
+    # an unanchored scan of a bare `\s*` prefix re-consumes the run
+    # from every position — quadratic on hostile condition text. The
+    # earliest match always starts at the run start, so the pinned
+    # spelling matches identically.
+    s = re.sub(r"(?<!\s)\s*!=\s*null\b", "", s)
+    s = re.sub(r"(?<!\s)\s*!=\s*0\b", "", s)
+    s = re.sub(r"(?<!\s)\s*==\s*null\b", " == null", s)
+    return re.sub(r"(?<!\s)\s*==\s*0\b", " == 0", s)
 
 
 def _guard_covers(read_guard: Guard, write_guard: Guard) -> bool:
