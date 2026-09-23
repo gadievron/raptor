@@ -513,7 +513,7 @@ class TestCallerWalkDeadline:
     def test_expired_deadline_stops_the_walk(self):
         from core.audit.resource_bounds import _caller_bound_search
 
-        witness, receipts = _caller_bound_search(
+        witness, receipts, truncated = _caller_bound_search(
             "insert_fn",
             {"a.c": "void caller(void)\n{\n    insert_fn(x);\n}\n"},
             "a.c", None, frozenset(), "c",
@@ -521,6 +521,61 @@ class TestCallerWalkDeadline:
         )
         assert witness is None
         assert receipts == []
+        assert truncated is True
+
+    def test_completed_walk_is_not_truncated(self):
+        from core.audit.resource_bounds import _caller_bound_search
+
+        _witness, _receipts, truncated = _caller_bound_search(
+            "insert_fn",
+            {"a.c": "void caller(void)\n{\n    insert_fn(x);\n}\n"},
+            "a.c", None, frozenset(), "c",
+            deadline=None,
+        )
+        assert truncated is False
+
+    def test_truncated_walk_never_confirms(self, tmp_path, monkeypatch):
+        # The fixture refutes (bound-in-caller) on a COMPLETE walk.
+        # With the deadline expiring inside the walk — after the
+        # between-sites boundary check — the no-witness result covers
+        # only the searched prefix: confirming there would let a
+        # hostile repo convert bounded sites into findings just by
+        # slowing the walk. Must cap at inconclusive.
+        import core.audit.resource_bounds as rb
+
+        for rel, text in CALLER_BOUND_DEPTH2.items():
+            _write(tmp_path, rel, text)
+        control = rb.run_resource_bounds_check(
+            tmp_path, "src/inner.c", "cache_insert",
+            "items list grows without limit",
+        )
+        assert control.outcome == "refuted"
+
+        # State-based clock: the deadline reads as expired only for
+        # monotonic() calls made INSIDE the site walk — robust to
+        # boundary/pre-load deadline checks added around the walk
+        # (a call-count stub broke every time one was added).
+        in_walk = {"flag": False}
+        real_adjudicate = rb._adjudicate_site
+
+        def spy_adjudicate(*args, **kwargs):
+            in_walk["flag"] = True
+            try:
+                return real_adjudicate(*args, **kwargs)
+            finally:
+                in_walk["flag"] = False
+
+        def fake_monotonic():
+            return 100.0 if in_walk["flag"] else 0.0
+
+        monkeypatch.setattr(rb, "_adjudicate_site", spy_adjudicate)
+        monkeypatch.setattr(rb.time, "monotonic", fake_monotonic)
+        res = rb.run_resource_bounds_check(
+            tmp_path, "src/inner.c", "cache_insert",
+            "items list grows without limit", budget_s=10.0,
+        )
+        assert res.outcome == "inconclusive"
+        assert "truncated search cannot confirm" in res.reason
 
 
 class TestCheckBudget:
@@ -542,6 +597,31 @@ class TestCheckBudget:
             tmp_path, "src/ssl_sess.c", "ssl_session_cache_add", HYP,
         )
         assert res.outcome == "confirmed"
+
+    def test_deadline_threads_into_site_adjudication(
+        self, tmp_path, monkeypatch,
+    ):
+        # The between-sites check bounds only site BOUNDARIES; the
+        # walk inside one site honours the same deadline only when it
+        # is threaded through — the prepass path passes it, the
+        # hypothesis path dropped it.
+        import core.audit.resource_bounds as rb
+
+        _write(tmp_path, "src/ssl_sess.c", CVE_2024_2511)
+        seen: list = []
+        real = rb._adjudicate_site
+
+        def recording(*args, **kwargs):
+            seen.append(kwargs.get("deadline"))
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(rb, "_adjudicate_site", recording)
+        rb.run_resource_bounds_check(
+            tmp_path, "src/ssl_sess.c", "ssl_session_cache_add", HYP,
+            budget_s=30.0,
+        )
+        assert seen, "no site was adjudicated"
+        assert all(d is not None for d in seen)
 
 
 class TestPackCollectionVerbsCache:
