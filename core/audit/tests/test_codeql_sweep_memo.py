@@ -79,10 +79,18 @@ def _counting_analyze(results: list[dict], calls: list[dict]):
     return fake
 
 
-def _make_db(tmp_path: Path, manifest: str = "sourceLocationPrefix: /src\n") -> Path:
+def _make_db(tmp_path: Path, manifest: str = "sourceLocationPrefix: /src\n",
+             extracted: tuple[str, ...] = ("src/a.c",)) -> Path:
     db = tmp_path / "codeql-db"
     db.mkdir(exist_ok=True)
     (db / "codeql-database.yml").write_text(manifest, encoding="utf-8")
+    # Source archive: refutation-grade outcomes need the target file
+    # extraction-witnessed (an unextracted file caps at inconclusive).
+    import zipfile
+
+    with zipfile.ZipFile(db / "src.zip", "w") as zf:
+        for name in extracted:
+            zf.writestr(name, "int x;\n")
     return db
 
 

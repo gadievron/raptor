@@ -126,11 +126,50 @@ class TestSweepMembershipGate:
         assert res.outcome == "confirmed"
         assert len(res.matches) == 1
 
-    def test_unknown_membership_fails_open(self, tmp_path, monkeypatch):
-        # No src.zip at all: membership is unknowable and the gate
-        # must fail OPEN to the historic classification (documented
-        # trade-off — an unreadable archive must not kill the
-        # channel), so zero rows still classify as refuted here.
+    def test_unknown_membership_fails_open_to_dispatch_not_refutation(
+        self, tmp_path, monkeypatch,
+    ):
+        # No src.zip at all: membership is unknowable. Fail-OPEN
+        # governs the SKIP decision — the dispatch must proceed (an
+        # unreadable archive must not kill the channel: a match here
+        # still confirms, pinned below) — but zero rows from an
+        # unwitnessed run may not claim refutation-grade silence:
+        # the extraction-witness arm caps them at inconclusive, the
+        # semgrep leg's absent-sidecar rule. The gate's documented
+        # fail-open price (vacuous refutations surviving in the
+        # degraded case) is thereby closed without reopening the
+        # channel-killing trade-off the pre-gate refused.
+        _reset_codeql_memo()
+        db = tmp_path / "cpp-db"
+        db.mkdir()
+        (db / "codeql-database.yml").write_text(
+            "primaryLanguage: cpp\n", encoding="utf-8",
+        )
+        calls: list = []
+
+        def _recording_analyze(*a, **k):
+            calls.append(a)
+            return _fake_analyze([])(*a, **k)
+
+        monkeypatch.setattr(
+            "core.dataflow.codeql_augmented_run.analyze",
+            _recording_analyze)
+        res = run_codeql_sweep(
+            target_path=tmp_path,
+            file_path="src/table.inc",
+            function_name="f",
+            query_path=str(_query(tmp_path)),
+            database_path=str(db),
+        )
+        assert calls, "fail-open must still dispatch the analyze"
+        assert res.outcome == "inconclusive"
+        assert any("extraction witness" in e for e in res.errors)
+
+    def test_unknown_membership_match_still_confirms(
+        self, tmp_path, monkeypatch,
+    ):
+        # The other half of fail-open: with no archive, a real match
+        # must still confirm — the witness arm only gates zero rows.
         _reset_codeql_memo()
         db = tmp_path / "cpp-db"
         db.mkdir()
@@ -139,15 +178,17 @@ class TestSweepMembershipGate:
         )
         monkeypatch.setattr(
             "core.dataflow.codeql_augmented_run.analyze",
-            _fake_analyze([]))
+            _fake_analyze([_match_at("src/table.inc", 5)]))
         res = run_codeql_sweep(
             target_path=tmp_path,
             file_path="src/table.inc",
             function_name="f",
             query_path=str(_query(tmp_path)),
             database_path=str(db),
+            line_start=1,
+            line_end=10,
         )
-        assert res.outcome == "refuted"
+        assert res.outcome == "confirmed"
 
 
 class TestOrchestratorLegMembershipSkip:
