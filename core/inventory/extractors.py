@@ -3152,7 +3152,16 @@ def extract_items(filepath: str, language: str, content: str,
             and i.line_end <= i.line_start
         }
         regex_ext = _REGEX_EXTRACTORS.get(language, GenericExtractor())
-        regex_funcs = regex_ext.extract(filepath, content)
+        # Run the gap-filling regex over a comment/string-blanked view
+        # (newline-preserving, so line numbers agree): the line
+        # extractor skips only `#`/`//`-leading lines, so a function
+        # commented out with /* */ — ubiquitous in C — minted a
+        # phantom item the correctly-parsing tree-sitter never saw
+        # (a reviewable checklist unit over dead text, its span
+        # overlapping the real function below the comment).
+        from core.inventory.dead_scope import _c_strip_comments_and_strings
+        regex_funcs = regex_ext.extract(
+            filepath, _c_strip_comments_and_strings(content))
         regex_by_name = {f.name: f for f in regex_funcs if f.kind == KIND_FUNCTION}
         for i, item in enumerate(items):
             if item.kind == KIND_FUNCTION and item.name in broken:
