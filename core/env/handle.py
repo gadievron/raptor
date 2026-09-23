@@ -293,9 +293,11 @@ class SandboxHandle(RuntimeHandle):
                 # from an untrusted image are exactly the primitive
                 # being removed. Residual: DANGEROUS_ENV_VARS is an
                 # exact-name blocklist — loader-adjacent names outside
-                # it (e.g. GCONV_PATH-class knobs) ride through; the
-                # gate-#5 mount-ns pin remains the containment for
-                # anything the list misses.
+                # it ride through (GCONV_PATH itself IS a member; the
+                # class exemplar is a not-yet-enumerated sibling like
+                # a future glibc tunable spelling); the gate-#5
+                # mount-ns pin remains the containment for anything
+                # the list misses.
                 strict_env=True,
             )
         except Exception as exc:  # noqa: BLE001 — outcome shape, not raise

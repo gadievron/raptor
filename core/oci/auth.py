@@ -1,17 +1,20 @@
 """Auth chain for OCI / Docker registries.
 
-Three sources, tried in order:
+Three sources. ``lookup_credentials`` tries env vars FIRST, then
+``config.json``; anonymous is what remains when neither yields
+credentials — matching the README's env → config → anonymous order
+(an earlier revision of this docstring listed anonymous first,
+which was never what the code did):
 
-  1. **Anonymous bearer token** — for public images when NO
-     credentials are configured. The registry's ``WWW-Authenticate``
-     header on a 401 response carries a ``realm`` / ``service`` /
-     ``scope`` triple; we request a token from that realm without
-     credentials. Works for everything on ``docker.io/library/*``,
-     public ``ghcr.io``, ``public.ecr.aws``, ``quay.io`` (mostly).
-     When credentials ARE configured for the registry, the token
-     exchange sends them from the first attempt (they are needed for
-     private scopes and harmless for public ones); the realm has
-     already passed the HTTPS + allowlist gate at that point.
+  1. **Per-registry env vars** — ``RAPTOR_OCI_<HOST_UPPER>_USER`` and
+     ``RAPTOR_OCI_<HOST_UPPER>_PASSWORD``, with ``.`` and ``-``
+     replaced by ``_`` in the host. So ``ghcr.io`` →
+     ``RAPTOR_OCI_GHCR_IO_USER`` / ``RAPTOR_OCI_GHCR_IO_PASSWORD``.
+     Catches CI / ad-hoc cases where ``docker login`` hasn't been
+     run. Because that encoding collapses ``.`` and ``-`` to the
+     same character, hostnames containing a dash (or underscore)
+     additionally require ``RAPTOR_OCI_<HOST_UPPER>_HOST`` set to
+     the exact hostname — see :func:`_from_env`.
 
   2. **``~/.docker/config.json`` inline ``auths``** — the standard
      artefact ``docker login`` produces. We read ONLY the inline
@@ -21,15 +24,16 @@ Three sources, tried in order:
      is a much larger trust surface than reading a file. Operators
      using credential helpers fall back to the env-var path.
 
-  3. **Per-registry env vars** — ``RAPTOR_OCI_<HOST_UPPER>_USER`` and
-     ``RAPTOR_OCI_<HOST_UPPER>_PASSWORD``, with ``.`` and ``-``
-     replaced by ``_`` in the host. So ``ghcr.io`` →
-     ``RAPTOR_OCI_GHCR_IO_USER`` / ``RAPTOR_OCI_GHCR_IO_PASSWORD``.
-     Catches CI / ad-hoc cases where ``docker login`` hasn't been
-     run. Because that encoding collapses ``.`` and ``-`` to the
-     same character, hostnames containing a dash (or underscore)
-     additionally require ``RAPTOR_OCI_<HOST_UPPER>_HOST`` set to
-     the exact hostname — see :func:`_from_env`.
+  3. **Anonymous bearer token** — for public images when NO
+     credentials are configured. The registry's ``WWW-Authenticate``
+     header on a 401 response carries a ``realm`` / ``service`` /
+     ``scope`` triple; we request a token from that realm without
+     credentials. Works for everything on ``docker.io/library/*``,
+     public ``ghcr.io``, ``public.ecr.aws``, ``quay.io`` (mostly).
+     When credentials ARE configured for the registry, the token
+     exchange sends them from the first attempt (they are needed for
+     private scopes and harmless for public ones); the realm has
+     already passed the HTTPS + allowlist gate at that point.
 
 The chain is consulted lazily: the first REQUEST goes out without
 auth (the challenge triple is only discoverable from the 401);

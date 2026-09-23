@@ -248,7 +248,9 @@ class FileScan:
 # load-bearing — revisit the docstring and walk boundaries instead.
 PACK_PROBE_VERIFIED_CLI = "2.26.3"
 
-# packages/codeql/.. — three levels up from this file.
+# Repo root: core/security/codeql_trust.py → core/security → core →
+# repo. (A stale copy of this comment still described the module's
+# old packages/codeql home.)
 _RAPTOR_DIR = Path(__file__).resolve().parents[2]
 
 # 1 MiB cap on pack files. Real codeql-pack.yml files are <10 KiB; the
@@ -520,6 +522,15 @@ def _scan_codeql_config(path: Path) -> FileScan:
     # queries: list of {uses: ...} OR string entries. External repo
     # references (``owner/repo`` or URL) bring in arbitrary queries
     # that can abuse extension functions during analysis.
+    #
+    # Accepted asymmetry, recorded: ``./local`` and single-segment
+    # in-repo suite refs pass while external refs block, though an
+    # in-repo suite wields the same arbitrary-QL power. Latent by
+    # construction — RAPTOR only ever runs ``database create``, which
+    # does not execute the config's query suites; the packs/extractor
+    # arms above cover what CREATE does consult. If a consumer ever
+    # runs ``database analyze`` with a repo config, in-repo query
+    # refs must start blocking too.
     queries = doc.get("queries")
     if queries:
         entries = queries if isinstance(queries, list) else [queries]
