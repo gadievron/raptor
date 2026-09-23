@@ -401,7 +401,10 @@ def _finding_in_dead_code(finding: Finding, repo_root: Path) -> bool:
         return False
 
     facts = _gather_prereqs_cached(target)
-    if facts is None or facts.is_skipped:
+    if facts is None or facts.is_skipped or not facts.complete:
+        # Incomplete sweeps (an errored rule) may be missing exactly
+        # the call site that would disprove "zero callers" — a
+        # dead-code verdict needs the complete caller map.
         return False
     # Function must be defined AND have zero callers in the target.
     if not facts.function_exists(finding_fn):
@@ -1716,7 +1719,10 @@ def _privilege_back_walk_suppresses(
         return False
 
     facts = _gather_prereqs_cached(target)
-    if facts is None or facts.is_skipped:
+    if facts is None or facts.is_skipped or not facts.complete:
+        # "Every path is gated" quantifies over the caller map; an
+        # incomplete sweep may be missing an ungated caller, so the
+        # suppression claim needs the complete map.
         return False
 
     callers = facts.callers_of(finding_fn)
