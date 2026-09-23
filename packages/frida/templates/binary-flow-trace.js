@@ -8,6 +8,26 @@
 
 'use strict';
 
+// Per-function emission cap (the exec-and-load idiom): read/fread/
+// recv are hot, and every event pays a 12-frame ACCURATE backtrace —
+// a hostile or busy target would otherwise flood events.jsonl for
+// the whole session. Loud cap: one _meta marker per hook; a capped
+// hook stops paying the backtrace cost too.
+var MAX_EVENTS_PER_FN = 500;
+const emitted = Object.create(null);   // null-proto: cap must be unpoisonable
+
+function capReached(fn) {
+  emitted[fn] = (emitted[fn] || 0) + 1;
+  if (emitted[fn] > MAX_EVENTS_PER_FN) {
+    if (emitted[fn] === MAX_EVENTS_PER_FN + 1) {
+      // Never truncate silently: one loud marker per hook.
+      send({ _meta: 'binary-flow-trace cap reached', fn: fn, cap: MAX_EVENTS_PER_FN });
+    }
+    return true;
+  }
+  return false;
+}
+
 function findGlobalExport(name) {
   if (typeof Module.findGlobalExportByName === 'function') {
     return Module.findGlobalExportByName(name);
@@ -88,10 +108,16 @@ function hook(name, category, readArgs) {
   if (addr === null) return false;
   Interceptor.attach(addr, {
     onEnter: function (args) {
+      if (capReached(name)) {
+        this.capped = true;
+        return;   // skip the backtrace work too
+      }
+      this.capped = false;
       this.site = callsite(this.context, this.returnAddress);
       try { this.args = readArgs(args); } catch (e) { this.args = { _err: String(e) }; }
     },
     onLeave: function (retval) {
+      if (this.capped) return;
       send(Object.assign({
         category: category,
         fn: name,
