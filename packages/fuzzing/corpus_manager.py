@@ -133,7 +133,14 @@ class CorpusManager:
     def get_stats(self) -> dict:
         """Get corpus statistics."""
         seeds = self.list_seeds()
-        total_size = sum(f.stat().st_size for f in seeds if f.is_file())
+        total_size = 0
+        for f in seeds:
+            try:
+                total_size += f.stat().st_size
+            except OSError:
+                # Deleted between listing and stat — the corpus dir
+                # is live (fuzzer-writable) during a campaign.
+                continue
 
         return {
             "num_seeds": len(seeds),
