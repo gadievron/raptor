@@ -252,6 +252,7 @@ def _find_best_validator_line(
 
 def _line_invokes_library_call(
     line: str, library_call: str, variable: str,
+    *, require_variable_in_args: bool = False,
 ) -> bool:
     """Verify the LLM-claimed ``library_call`` actually appears on the
     claimed line as a call, applied to (or assigned from) the claimed
@@ -261,6 +262,16 @@ def _line_invokes_library_call(
     at any real added line (a log statement, a comment-adjacent
     assignment) and claim it is ``shlex.quote``.  Without this check
     the curated-table lookup adjudicates a call that never happens.
+
+    ``require_variable_in_args=True`` (validate-kind entries) drops
+    the assigned-from fallback: a validate-kind chain starts DIRECTLY
+    from the claimed variable, so accepting ``safe = raw; ok =
+    ipcheck(z)`` for variable ``safe`` — bound on the line but never
+    an argument of (nor bound from) the call — would certify SOUND
+    for a value the validator never constrained.  Transform-kind
+    callers keep the fallback: their chain start is re-derived from
+    the actual binding targets, so a mis-attributed variable here is
+    harmless.
     """
     tail = library_call.rsplit(".", maxsplit=1)[-1]
     lib_parts = library_call.split(".")
@@ -293,7 +304,8 @@ def _line_invokes_library_call(
             return True
         if _re.search(rf"\b{_re.escape(variable)}\b", args):
             return True
-        if _re.match(rf"\s*{_re.escape(variable)}\s*=", line):
+        if (not require_variable_in_args
+                and _re.match(rf"\s*{_re.escape(variable)}\s*=", line)):
             return True
     return False
 
@@ -481,7 +493,8 @@ def _try_known_safe_call(
         )
     if not _line_invokes_library_call(
             spec.validator_source_line, spec.library_call,
-            spec.variable_name):
+            spec.variable_name,
+            require_variable_in_args=(entry.input_arg_kind == "validate")):
         return Tier0Result(
             Tier0Status.NOT_APPLICABLE,
             f"Tier 1B: claimed library call {spec.library_call!r} does "

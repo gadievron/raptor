@@ -1622,3 +1622,79 @@ def test_find_best_validator_line_all_decoys_returns_none(tmp_path: Path):
         source, "name = validator.escape(name);", 5, "javascript",
     )
     assert line is None
+
+
+# ---------------------------------------------------------------------------
+# Validate-kind argument binding (pinned BEFORE any validate entry lands)
+# ---------------------------------------------------------------------------
+
+def test_line_invokes_call_validate_kind_requires_argument():
+    """Validate-kind chains start DIRECTLY from the claimed variable,
+    so the assigned-from fallback must not bind a variable that is
+    never an argument of the call: ``safe = raw; ok = ipcheck(z)``
+    binds ``safe`` on the line, but ipcheck never constrained it."""
+    fn = t1._line_invokes_library_call
+    line = "safe = raw; ok = ipcheck(z)"
+    # Transform-kind (default) keeps the fallback — harmless there,
+    # the chain re-derives its start from real binding targets.
+    assert fn(line, "ipcheck", "safe") is True
+    assert fn(line, "ipcheck", "safe",
+              require_variable_in_args=True) is False
+    # The variable as a real argument still passes.
+    assert fn("ok = ipcheck(safe)", "ipcheck", "safe",
+              require_variable_in_args=True) is True
+
+
+def test_first_validate_entry_cannot_bind_non_argument(
+        tmp_path: Path, monkeypatch):
+    """End-to-end pin: with a validate-kind curated entry (none exist
+    yet — whoever lands the first one gets this guard for free), an
+    LLM claim binding a variable the call never took as an argument
+    must DECLINE, not certify SOUND.
+
+    The live lane is non-Python: the lexical chain check only asks
+    whether the variable appears at the sink line, so nothing behind
+    gate 1 re-checks that the validator ever saw the value (the
+    Python AST chain walker refuses these shapes on the rebind)."""
+    from core.dataflow import known_safe_calls as ksc
+
+    fake_entry = ksc.KnownSafeCall(
+        library_call="net.isIP",
+        sink_class="cmdi",
+        languages=("javascript",),
+        input_arg_kind="validate",
+        soundness_note="test-only fake validate entry",
+    )
+    monkeypatch.setattr(
+        t1.known_safe_calls, "find",
+        lambda call, sink_class, language: fake_entry,
+    )
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "views.js").write_text(
+        "function run(req, other) {\n"
+        "  const raw = req.query.host;\n"
+        "  safe = raw; ok = net.isIP(other);\n"
+        "  exec(safe);\n"
+        "}\n"
+    )
+    diff = (
+        "--- a/app/views.js\n"
+        "+++ b/app/views.js\n"
+        "@@\n"
+        "+  safe = raw; ok = net.isIP(other);\n"
+        "   exec(safe);\n"
+    )
+    reply = json.dumps({
+        "kind": "known_safe_call",
+        "validator_source_line": "  safe = raw; ok = net.isIP(other);",
+        "variable_name": "safe",
+        "charset": "", "forbidden": "",
+        "library_call": "net.isIP",
+    })
+    r = t1.try_tier1b(
+        fix_diff=diff, repo_root=tmp_path,
+        sink_uri="app/views.js", sink_line=4, sink_class="cmdi",
+        language="javascript", complete=_fake_complete(reply),
+    )
+    assert r.status is t1.Tier0Status.NOT_APPLICABLE
+    assert "does not appear on the claimed source line" in r.reasoning
