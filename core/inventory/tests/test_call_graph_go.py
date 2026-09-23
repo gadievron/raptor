@@ -574,3 +574,30 @@ def test_go_prefixed_versioned_module_binds_stripped_form():
         'func f() { barutils.Do() }\n'
     )
     assert g.imports.get("barutils") == "github.com/foo/go-bar-utils/v2"
+
+
+def test_dot_versioned_module_binds_pre_dot_segment():
+    """gopkg.in-style dot-versioned paths (``gopkg.in/yaml.v2``)
+    declare the pre-version package name — call sites read
+    ``yaml.Unmarshal``, so the bare import must bind ``yaml``
+    alongside the literal segment."""
+    g = extract_call_graph_go(
+        'package x\nimport "gopkg.in/yaml.v2"\n'
+        'func f(b []byte) { var v any; yaml.Unmarshal(b, &v) }\n'
+    )
+    assert g.imports.get("yaml") == "gopkg.in/yaml.v2"
+    assert g.imports.get("yaml.v2") == "gopkg.in/yaml.v2"
+
+
+def test_dot_versioned_binding_names_include_hyphen_aliases():
+    """The dot-version alias composes with the hyphen conventions
+    (``gopkg.in/src-d/go-git.v4`` → ``go-git`` → ``git`` /
+    ``gogit``), pure-function level so the rule is pinned without
+    the grammar wheel."""
+    from core.inventory.call_graph import _go_bare_binding_names
+    names = _go_bare_binding_names("gopkg.in/yaml.v2")
+    assert "yaml" in names
+    names = _go_bare_binding_names("gopkg.in/src-d/go-git.v4")
+    assert {"go-git", "git", "gogit"} <= set(names)
+    # The literal segment stays first — first-import-wins contract.
+    assert _go_bare_binding_names("gopkg.in/yaml.v2")[0] == "yaml.v2"

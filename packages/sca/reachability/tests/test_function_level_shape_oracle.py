@@ -718,3 +718,199 @@ def test_go_flat_nested_subpackage_tail_binds():
         _run_tier("go_function_level", uncalled_imported)
         == "not_function_reachable"
     )
+
+
+def _run_go(dep_name: str, scenario: _Scenario) -> str:
+    """Drive the Go tier with an explicit dep name (the module-path
+    conventions under test — ``/vN`` versioning, ``go-`` prefixes —
+    live in the dep name itself, which the spec-table runner pins to
+    one spelling)."""
+    build, refine, map_kwarg = _tier_entry_points("go_function_level")
+    dep = _dep(dep_name, "Go")
+    adv = _Adv(
+        ecosystem_specific=scenario.ecosystem_specific,
+        database_specific=scenario.database_specific,
+    )
+    symbol_map = build([_OsvResult(dep_key=dep.key(), advisories=[adv])])
+    assert dep.key() in symbol_map
+    out: Dict[str, Reachability] = {dep.key(): _imported()}
+    refine(
+        [dep], out,
+        target=Path("/nonexistent-target"),
+        inventory=_inventory(scenario.imports, list(scenario.chains)),
+        **{map_kwarg: symbol_map},
+    )
+    return out[dep.key()].verdict
+
+
+def test_go_flat_versioned_module_tail_binds():
+    """Go path-versioned modules (``github.com/foo/bar/v2``) declare
+    package ``bar``, not ``v2`` — every major ≥2 since Go modules is
+    spelled this way. A flat advisory entry using the source-level
+    spelling ``bar.Parse`` used to rebind onto the LAST path segment
+    only, composing garbage (``.../v2.bar.Parse`` and
+    ``.../v2/bar.Parse``) that paired NOT_CALLED and minted the
+    high-confidence suppression on a genuinely-called function. Tail
+    candidates now come from the Go extractor's own binding-name
+    conventions, so the pre-version segment rebinds honestly."""
+    dep = "github.com/foo/bar/v2"
+    called = {"bar": "github.com/foo/bar/v2"}
+    chain = (("bar", "Parse"),)
+
+    pkg_tail = _Scenario(
+        {"affected_functions": ["bar.Parse"]}, None,
+        called, chain, expected="likely_called",
+    )
+    assert _run_go(dep, pkg_tail) == "likely_called"
+
+    # The advisory-literal blind spelling (module path + package
+    # name + symbol) has no statically-composable honest reading —
+    # the refine pass derives it from the module-ROOT import (the
+    # head is one of the module's own binding names, so the honest
+    # query is ``<module>.<rest>``).
+    blind_literal = _Scenario(
+        {"affected_functions": ["github.com/foo/bar/v2.bar.Parse"]},
+        None,
+        called, chain, expected="likely_called",
+    )
+    assert _run_go(dep, blind_literal) == "likely_called"
+
+    # The UNVERSIONED-root spelling names the SAME module — the /vN
+    # suffix is version selection, not a different dependency — and
+    # must rebind onto the dep's versioned module path rather than
+    # being treated as a foreign borrow.
+    unversioned = _Scenario(
+        {"affected_functions": ["github.com/foo/bar.Parse"]}, None,
+        called, chain, expected="likely_called",
+    )
+    assert _run_go(dep, unversioned) == "likely_called"
+
+    # Unversioned SUB-PACKAGE spelling, project importing the
+    # versioned sub-package path.
+    unversioned_sub = _Scenario(
+        {"affected_functions": ["github.com/foo/bar/sub.Parse"]},
+        None,
+        {"sub": "github.com/foo/bar/v2/sub"}, (("sub", "Parse"),),
+        expected="likely_called",
+    )
+    assert _run_go(dep, unversioned_sub) == "likely_called"
+
+    # A DIFFERENT module whose name extends the unversioned root is
+    # NOT this dep — the respell is separator-guarded and derives
+    # nothing; the entry's own readings pair NOT_CALLED and the
+    # downgrade fires.
+    foreign = _Scenario(
+        {"affected_functions": ["github.com/foo/barbaz.Parse"]},
+        None,
+        {"barbaz": "github.com/foo/barbaz"}, (("barbaz", "Parse"),),
+        expected="not_function_reachable",
+    )
+    assert _run_go(dep, foreign) == "not_function_reachable"
+
+    # Counter-direction: an uncalled tail-spelled entry under the
+    # versioned module still downgrades — the rebind must not
+    # vacuously disable the suppression arm.
+    tail_uncalled = _Scenario(
+        {"affected_functions": ["bar.Absent"]}, None,
+        called, chain, expected="not_function_reachable",
+    )
+    assert _run_go(dep, tail_uncalled) == "not_function_reachable"
+
+
+def test_go_flat_go_prefixed_module_tail_binds():
+    """``go-<name>`` repos declare their package WITHOUT the prefix
+    (go-multierror → package multierror) — the dominant go-* naming
+    convention. A flat advisory entry using the source-level package
+    spelling used to rebind onto the literal last segment only,
+    composing garbage that minted the suppression on a
+    genuinely-called function."""
+    dep = "github.com/foo/go-bar"
+
+    for alias in ("bar", "gobar"):
+        spelled = _Scenario(
+            {"affected_functions": [f"{alias}.Parse"]}, None,
+            {alias: dep}, ((alias, "Parse"),),
+            expected="likely_called",
+        )
+        assert _run_go(dep, spelled) == "likely_called", alias
+
+    # Counter-direction: uncalled convention-spelled entry still
+    # downgrades.
+    uncalled = _Scenario(
+        {"affected_functions": ["bar.Absent"]}, None,
+        {"bar": dep}, (("bar", "Parse"),),
+        expected="not_function_reachable",
+    )
+    assert _run_go(dep, uncalled) == "not_function_reachable"
+
+
+def test_go_subpackage_twin_uses_binding_conventions():
+    """The refine pass's import-derived sub-package twins matched the
+    entry head against the import path's LAST SEGMENT only — a
+    ``go-`` or ``/vN`` sub-package name never matched, re-minting the
+    suppression one level down. The twin derivation now consults the
+    extractor's binding-name conventions per imported path."""
+    sub_convention = _Scenario(
+        {"affected_functions": ["example.com/lib.sub.Parse"]}, None,
+        {"sub": "example.com/lib/go-sub"}, (("sub", "Parse"),),
+        expected="likely_called",
+    )
+    assert (
+        _run_tier("go_function_level", sub_convention) == "likely_called"
+    )
+
+    # Counter-direction: same convention shapes, function uncalled —
+    # the derived twin itself pairs NOT_CALLED, downgrade fires.
+    sub_uncalled = _Scenario(
+        {"affected_functions": ["example.com/lib.sub.Absent"]}, None,
+        {"sub": "example.com/lib/go-sub"}, (("sub", "Parse"),),
+        expected="not_function_reachable",
+    )
+    assert (
+        _run_tier("go_function_level", sub_uncalled)
+        == "not_function_reachable"
+    )
+
+
+def test_go_bare_flat_entry_binds_via_imported_subpackage():
+    """A BARE flat advisory entry (``Parse``) names a function that
+    may live in ANY package of the module — composing only the
+    module-root reading (``example.com/lib.Parse``) paired
+    NOT_CALLED and enabled the downgrade while the project genuinely
+    called the function from an imported sub-package. The refine
+    pass now derives a twin per imported sub-package of the module,
+    so whichever package the advisory meant, the honest query is
+    present."""
+    bare_called = _Scenario(
+        {"affected_functions": ["Parse"]}, None,
+        {"sub": "example.com/lib/sub"}, (("sub", "Parse"),),
+        expected="likely_called",
+    )
+    assert _run_tier("go_function_level", bare_called) == "likely_called"
+
+    # Counter-directions: uncalled bare entry, sub-package imported
+    # and not — the downgrade still fires in both.
+    for imports, chains in (
+        ({"sub": "example.com/lib/sub"}, (("sub", "Parse"),)),
+        ({"lib": "example.com/lib"}, (("lib", "Parse"),)),
+    ):
+        bare_uncalled = _Scenario(
+            {"affected_functions": ["Absent"]}, None,
+            imports, chains, expected="not_function_reachable",
+        )
+        assert (
+            _run_tier("go_function_level", bare_uncalled)
+            == "not_function_reachable"
+        )
+
+    # Hostile-borrow gate: a bare entry derives twins only from
+    # imports under THIS dep's module path — another module's
+    # packages can't be borrowed to bind it.
+    borrow = _Scenario(
+        {"affected_functions": ["Parse"]}, None,
+        {"other": "example.com/other"}, (("other", "Parse"),),
+        expected="not_function_reachable",
+    )
+    assert (
+        _run_tier("go_function_level", borrow) == "not_function_reachable"
+    )

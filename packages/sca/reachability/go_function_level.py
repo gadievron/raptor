@@ -50,6 +50,7 @@ because the resolver concatenates middle parts.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 from collections.abc import Iterable
@@ -57,7 +58,28 @@ from collections.abc import Iterable
 from ..models import Confidence, Dependency, Reachability
 from ._shared import UNRESOLVED_ENTRY
 
+# The Go extractor's convention authority for what binding names a
+# bare ``import "<path>"`` makes available: last path segment PLUS
+# the /vN pre-version segment (path-versioned modules declare the
+# pre-version package name) and go-/hyphen aliases (go-multierror →
+# package multierror). Shared so the advisory-entry rebinds below
+# can never drift from what the call-graph pass actually binds.
+from core.inventory.call_graph import _go_bare_binding_names
+
 logger = logging.getLogger(__name__)
+
+
+_VERSION_SUFFIX_RE = re.compile(r"/v\d+$")
+
+
+def _unversioned_root(module_path: str) -> str:
+    """The module path without its ``/vN`` major-version suffix
+    (``github.com/foo/bar/v2`` → ``github.com/foo/bar``), or ``""``
+    when the path carries no version suffix. A ``/vN`` module is the
+    SAME dependency spelled for a different major — advisory entries
+    routinely use the unversioned spelling."""
+    stripped = _VERSION_SUFFIX_RE.sub("", module_path)
+    return stripped if stripped != module_path else ""
 
 
 def build_go_symbol_map(
@@ -181,7 +203,19 @@ def _extract_qualified(advisory: Any, dep_name: str) -> list[str]:
     # twins from the project's own imports of this module (a project
     # can only call the function after importing its package, so the
     # import-derived twin always exists for a called function).
-    tail: str = dep_name.rsplit("/", 1)[-1]
+    #
+    # Tail candidates come from the Go extractor's binding-name
+    # conventions, NOT the literal last path segment alone: a
+    # path-versioned module (``github.com/foo/bar/v2``) declares
+    # package ``bar``, and a ``go-<name>`` repo declares its package
+    # without the prefix — the literal-tail-only rebind composed
+    # garbage for both classes and re-minted the suppression on
+    # their source-level spellings.
+    tails: list[str] = (
+        [t for t in _go_bare_binding_names(dep_name) if t]
+        if dep_name else []
+    )
+    root: str = _unversioned_root(dep_name) if dep_name else ""
     for key in ("affected_symbols", "affected_functions"):
         for source in (es, ds):
             if not isinstance(source, dict):
@@ -195,8 +229,22 @@ def _extract_qualified(advisory: Any, dep_name: str) -> list[str]:
                 if s.startswith(dep_name + ".") or s.startswith(dep_name + "/"):
                     out.append(s)
                     continue
-                if tail and len(s) > len(tail) + 1 and s.startswith(tail + "."):
-                    out.append(f"{dep_name}.{s[len(tail) + 1:]}")
+                if root and (s.startswith(root + ".")
+                             or s.startswith(root + "/")):
+                    spelled_rest = s[len(root):]
+                    # The unversioned-root spelling names the SAME
+                    # module (advisories routinely omit the /vN
+                    # suffix) — respell it onto the dep's module
+                    # path so the honest query exists. A remainder
+                    # opening with ANOTHER version segment is a
+                    # different major, not a respell target.
+                    if not re.match(r"/v\d+[./]", spelled_rest):
+                        out.append(s)
+                        out.append(f"{dep_name}{spelled_rest}")
+                        continue
+                for t in tails:
+                    if len(s) > len(t) + 1 and s.startswith(t + "."):
+                        out.append(f"{dep_name}.{s[len(t) + 1:]}")
                 seg0, _, rest = s.partition(".")
                 if seg0 and rest:
                     out.append(f"{dep_name}/{seg0}.{rest}")
@@ -279,8 +327,21 @@ def refine_go_verdicts(
     # not-called.
     strength = {Verdict.NOT_CALLED: 0, Verdict.UNCERTAIN: 1, Verdict.CALLED: 2}
 
+    # Binding-name conventions per imported path (versioned modules
+    # bind the pre-version segment, go-/hyphen repos bind the
+    # collapsed forms) — memoised, the universe is shared across deps.
+    _bare_names_cache: dict[str, list[str]] = {}
+
+    def _bare_names(pth: str) -> list[str]:
+        names = _bare_names_cache.get(pth)
+        if names is None:
+            names = _go_bare_binding_names(pth)
+            _bare_names_cache[pth] = names
+        return names
+
     for d in candidates:
         dep_module = d.name
+        dep_root = _unversioned_root(dep_module)
         qualified_names = go_symbol_map[d.key()]
         paired = []
         for qualified in qualified_names:
@@ -291,26 +352,46 @@ def refine_go_verdicts(
             # under THIS dep's module path — a crafted entry can never
             # borrow another module's packages): for a reading
             # ``<module>.<head>.<rest>``, every imported
-            # ``<module>/...`` path whose tail segment == head, or
-            # whose slash-relative path dot-spells a prefix of the
-            # remainder, yields a ``<import_path>.<suffix>`` twin.
+            # ``<module>/...`` path whose binding names contain the
+            # head, or whose slash-relative path dot-spells a prefix
+            # of the remainder, yields a ``<import_path>.<suffix>``
+            # twin; the module-ROOT import contributes the honest
+            # reading of ``<module>.<binding>.<rest>`` (the middle
+            # segment being one of the module's own binding names —
+            # the advisory-literal blind spelling of a /vN or go-
+            # module); a BARE remainder (``<module>.<sym>``) twins
+            # onto every imported sub-package, since a flat advisory
+            # entry names a function that may live in any package of
+            # the module. A ``<unversioned-root>.``-spelled reading
+            # is the SAME dep (/vN is version selection) and is
+            # respelled onto the module path first.
+            rem = ""
             if dep_module and qualified.startswith(dep_module + "."):
                 rem = qualified[len(dep_module) + 1:]
+            elif dep_root and qualified.startswith(dep_root + "."):
+                rem = qualified[len(dep_root) + 1:]
+                respelled = f"{dep_module}.{rem}"
+                if respelled not in queries:
+                    queries.append(respelled)
+            if rem:
                 head, _, rest = rem.partition(".")
-                if head and rest:
-                    for pth in universe:
-                        if not pth.startswith(dep_module + "/"):
-                            continue
+                for pth in universe:
+                    twin: str | None = None
+                    if pth == dep_module:
+                        if rest and head and head in _bare_names(pth):
+                            twin = f"{pth}.{rest}"
+                    elif pth.startswith(dep_module + "/"):
                         rel_dot = pth[len(dep_module) + 1:].replace("/", ".")
-                        twin: str | None = None
                         if rem.startswith(rel_dot + "."):
                             suffix = rem[len(rel_dot) + 1:]
                             if suffix:
                                 twin = f"{pth}.{suffix}"
-                        elif pth.rsplit("/", 1)[-1] == head:
+                        elif rest and head and head in _bare_names(pth):
                             twin = f"{pth}.{rest}"
-                        if twin and twin not in queries:
-                            queries.append(twin)
+                        elif not rest and head:
+                            twin = f"{pth}.{head}"
+                    if twin and twin not in queries:
+                        queries.append(twin)
             best: ReachabilityResult | None = None
             for q in queries:
                 try:
