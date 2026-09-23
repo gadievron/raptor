@@ -749,6 +749,55 @@ class TestBodySplicePrimitives:
             ))
 
 
+class TestFunctionNameNormalisation:
+    """NFC/NFD twin names are byte-distinct but visually identical:
+    two sections no operator can tell apart, and byte-exact joins
+    (respect-manual included) miss the twin."""
+
+    def _twins(self):
+        import unicodedata
+        return (
+            unicodedata.normalize("NFC", "caf\u00e9"),
+            unicodedata.normalize("NFD", "caf\u00e9"),
+        )
+
+    def test_non_nfc_function_name_rejected(self, tmp_path):
+        nfc, nfd = self._twins()
+        assert nfc != nfd
+        with pytest.raises(ValueError, match="NFC"):
+            write_annotation(tmp_path, Annotation(
+                file="a.py", function=nfd, body="x",
+            ))
+        assert not (tmp_path / "a.py.md").exists()
+
+    def test_nfc_name_accepted_and_round_trips(self, tmp_path):
+        nfc, _ = self._twins()
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function=nfc, body="x",
+        ))
+        assert read_annotation(tmp_path, "a.py", nfc) is not None
+
+    def test_respect_manual_covers_legacy_nfd_twin(self, tmp_path):
+        # A hand-written (pre-validation) NFD section with a human
+        # note: a scripted NFC add with respect-manual must treat the
+        # visually identical twin as the prior record and skip.
+        nfc, nfd = self._twins()
+        path = annotation_path(tmp_path, "b.py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"<!-- annotations-version: 1 -->\n# b.py\n\n"
+            f"## {nfd}\n<!-- meta: source=human -->\n\noperator note\n",
+        )
+        res = write_annotation(tmp_path, Annotation(
+            file="b.py", function=nfc, body="agent",
+            metadata={"source": "agent"},
+        ), overwrite="respect-manual")
+        assert res is None
+        text = path.read_text()
+        assert "operator note" in text
+        assert text.count("## ") == 1
+
+
 class TestFunctionNameEdgeWhitespace:
     """``"victim "`` passes a containment-only validator, but the
     heading parser strips the captured name — the stored section
