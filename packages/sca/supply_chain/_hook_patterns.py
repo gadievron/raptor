@@ -355,13 +355,92 @@ def is_attested_publish_helper(dep: Dependency) -> bool:
 # ---------------------------------------------------------------------------
 
 
-# Cap on hook-body length before pattern application. Legitimate
-# lifecycle-hook commands are short (a line or two of shell); even
-# elaborate build scripts stay well under a few KB. Bounding here
-# keeps every substrate regex linear-time on adversarial inputs
-# (e.g. megabytes of whitespace crafted against a backtracking
-# pattern) for every adapter in one place.
+# Per-CHUNK regex input bound. The substrate is shared by two body
+# classes with very different sizes: manifest SCRIPT STRINGS (a line
+# or two of shell) and ENTIRE attacker-authored source files
+# (setup.py / build.rs / extconf.rb via the whole-file adapters).
+# The old behaviour capped the WHOLE body at this bound and silently
+# scanned only the prefix — 16 KB of plausible boilerplate followed
+# by the payload was a total, zero-cost evasion of every
+# dangerous-pattern / credential / worm signal for the file
+# adapters. Bodies are now scanned IN FULL (up to
+# ``_MAX_HOOK_SCAN_BYTES``) in line-aligned chunks of this size:
+# every regex input stays bounded, so an accidentally-superlinear
+# pattern costs at most per-chunk work, while the patterns
+# themselves are line-local and linear (test_hook_patterns_redos
+# pins both), making total work linear in body size.
 _MAX_HOOK_BODY_BYTES = 16 * 1024
+
+# Total pattern-scan budget per body. Legitimate build scripts sit
+# far below this; content beyond it is NOT silently ignored — the
+# analysis fails toward review by appending
+# :data:`SCAN_TRUNCATED_REASON` (adapters classify reasons as high),
+# so padding a payload past the budget flags the file instead of
+# hiding it.
+_MAX_HOOK_SCAN_BYTES = 256 * 1024
+
+# Reason row appended whenever any part of the body went unscanned
+# (total budget hit, or a single line longer than the chunk bound
+# was cut). Severity follows the standard reasons rule — the
+# unscanned remainder cannot be attested, so the hook is surfaced
+# for manual review rather than silently passed.
+SCAN_TRUNCATED_REASON = (
+    "hook body exceeds the pattern-scan bound "
+    "(unscanned remainder cannot be attested — review manually)"
+)
+
+
+def _scan_chunks(body: str) -> tuple[list[str], bool]:
+    """Split ``body`` into line-aligned chunks of at most
+    ``_MAX_HOOK_BODY_BYTES``, covering at most
+    ``_MAX_HOOK_SCAN_BYTES``. Returns ``(chunks, truncated)`` —
+    ``truncated`` is True when any content was left unscanned.
+
+    Chunks split on ``"\n"`` ONLY — deliberately NOT
+    ``str.splitlines()``. The split points must match the pattern
+    grammar's line model: the substrate regexes treat only ``\n``
+    as a line terminator (their ``[^|\n]``-style classes match
+    straight through NEL / VT / FF / LS / PS), so a splitlines
+    boundary would turn those characters into silent seam points —
+    an attacker-placed ``\x85`` inside a match span at a chunk
+    flush split the match across chunks with ``truncated=False``.
+    With ``\n``-only splitting every pattern-visible line lands
+    whole in some chunk; only a single ``\n``-line longer than the
+    chunk bound is cut (and reported truncated)."""
+    if len(body) <= _MAX_HOOK_BODY_BYTES:
+        return [body], False
+    truncated = False
+    scan_body = body
+    if len(scan_body) > _MAX_HOOK_SCAN_BYTES:
+        scan_body = scan_body[:_MAX_HOOK_SCAN_BYTES]
+        truncated = True
+    chunks: list[str] = []
+    buf: list[str] = []
+    buf_len = 0
+    segments = scan_body.split("\n")
+    lines = [
+        seg + "\n" if i < len(segments) - 1 else seg
+        for i, seg in enumerate(segments)
+    ]
+    if lines and not lines[-1]:
+        lines.pop()
+    for line in lines:
+        n = len(line)
+        if n > _MAX_HOOK_BODY_BYTES:
+            if buf:
+                chunks.append("".join(buf))
+                buf, buf_len = [], 0
+            chunks.append(line[:_MAX_HOOK_BODY_BYTES])
+            truncated = True
+            continue
+        if buf_len + n > _MAX_HOOK_BODY_BYTES:
+            chunks.append("".join(buf))
+            buf, buf_len = [], 0
+        buf.append(line)
+        buf_len += n
+    if buf:
+        chunks.append("".join(buf))
+    return chunks, truncated
 
 
 @dataclass(frozen=True)
@@ -383,20 +462,31 @@ def analyse_body(body: str) -> HookAnalysis:
       * reads_credentials AND has_publish_action AND NOT
         publish-helper host → high (self-replication shape)
       * otherwise → low (hook present, behaviour not flagged)
+
+    The body is scanned in full through line-aligned chunks (see
+    ``_scan_chunks``); when anything was left unscanned, the
+    truncation itself becomes a reason row — the analysis fails
+    toward review, never toward silence.
     """
-    if len(body) > _MAX_HOOK_BODY_BYTES:
+    chunks, truncated = _scan_chunks(body)
+    reasons = [
+        why for rgx, why in _DANGEROUS_PATTERNS
+        if any(rgx.search(c) for c in chunks)
+    ]
+    if truncated:
         logger.debug(
             "sca.supply_chain._hook_patterns: hook body of %d bytes "
-            "exceeds %d-byte cap; truncating (DoS bound)",
-            len(body), _MAX_HOOK_BODY_BYTES,
+            "exceeds the scan bound; flagging the unscanned remainder",
+            len(body),
         )
-        body = body[:_MAX_HOOK_BODY_BYTES]
-    reasons = [why for rgx, why in _DANGEROUS_PATTERNS if rgx.search(body)]
+        reasons.append(SCAN_TRUNCATED_REASON)
     reads_credentials = any(
-        rgx.search(body) for rgx in _CREDENTIAL_READ_PATTERNS
+        any(rgx.search(c) for c in chunks)
+        for rgx in _CREDENTIAL_READ_PATTERNS
     )
     has_publish_action = any(
-        rgx.search(body) for rgx in _PUBLISH_ACTION_PATTERNS
+        any(rgx.search(c) for c in chunks)
+        for rgx in _PUBLISH_ACTION_PATTERNS
     )
     return HookAnalysis(
         reasons=reasons,
@@ -407,6 +497,7 @@ def analyse_body(body: str) -> HookAnalysis:
 
 __all__ = [
     "HookAnalysis",
+    "SCAN_TRUNCATED_REASON",
     "analyse_body",
     "is_publish_helper",
     "load_publish_helpers",

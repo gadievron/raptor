@@ -105,6 +105,18 @@ _COMPOUND_RE = re.compile(r"(?:&&|\|\||\||;|&(?!\&))")
 # they're shell idioms for "this path, here, now".
 _PATH_PREFIXES_TO_STRIP: tuple = ("./", "$PWD/", "${PWD}/", "$(pwd)/")
 
+# Input bound for :func:`resolve_intree_targets`. Its callers pass
+# hook BODIES that can be as large as the manifest read bound
+# (megabytes) — compound splitting + shlex over an unbounded body is
+# linear but with a constant large enough that a planted
+# multi-megabyte scripts string dominates the scan stage. Real hook
+# bodies referencing in-tree files are tiny; content beyond the
+# bound is ignored for INTREE-EVIDENCE purposes only (the evidence
+# can only PROMOTE a finding — the hook analysis itself scans the
+# full body elsewhere), cut at a whitespace boundary so a token is
+# never half-read.
+_MAX_RESOLVE_BODY_BYTES = 256 * 1024
+
 
 @dataclass(frozen=True)
 class IntreeTarget:
@@ -219,6 +231,11 @@ def resolve_intree_targets(
     Defensive against shell quoting, compound commands, path
     traversal, symlinks; see module docstring.
     """
+    if len(body) > _MAX_RESOLVE_BODY_BYTES:
+        cut = body.rfind("\n", 0, _MAX_RESOLVE_BODY_BYTES)
+        if cut <= 0:
+            cut = _MAX_RESOLVE_BODY_BYTES
+        body = body[:cut]
     seen: set = set()
     out: list[IntreeTarget] = []
     for sub in _split_compound(body):
