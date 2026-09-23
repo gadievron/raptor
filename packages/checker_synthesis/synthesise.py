@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from core.atomic_fs import write_text_atomically
-from packages.coccinelle.runner import contains_script_block
+from packages.coccinelle.runner import RESULT_PREFIX, contains_script_block
 
 from .languages import detect_engine, fallback_engine
 from .models import (
@@ -139,6 +139,19 @@ def _reject_cocci_scripting(body: str) -> str | None:
             "@initialize:/@finalize:) — LLM-synthesised rules must be "
             "declarative SmPL only; RAPTOR injects the reporting "
             "harness itself"
+        )
+    # Belt: a rule-supplied COCCIRESULT emit marker is an evidence-
+    # forgery vector — the runner nonce-rewrites every marker in the
+    # text it executes, so a rule carrying its own would have its emit
+    # site minted into accepted match evidence. The runner refuses such
+    # rules at run time too; rejecting here keeps them out of the
+    # checkers library entirely. Case-folded: wider than the runner's
+    # exact rewrite trigger, and the extra width only refuses more.
+    if RESULT_PREFIX.lower() in body.lower():
+        return (
+            "rule body contains the COCCIRESULT result-marker text — "
+            "LLM-synthesised rules must not carry their own emit "
+            "sites; RAPTOR injects the reporting harness itself"
         )
     return None
 
