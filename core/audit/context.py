@@ -547,6 +547,21 @@ def _defend_assembled_context(ctx: dict[str, Any], file_path: str,
                 )
                 for name, body in ctx["macro_definitions"]
             ]
+        # Caller-contract site excerpts are raw repo lines around
+        # calls of contract-risk functions, rendered into a
+        # priority-0 (never-shed) section — plantable steering text
+        # beside any call site would otherwise inject into every
+        # review of that function with injection_warnings unset.
+        cc = ctx.get("caller_contract")
+        if isinstance(cc, dict):
+            for site in cc.get("sites") or []:
+                if isinstance(site, dict) and site.get("excerpt"):
+                    site["excerpt"] = defend_repo_text(
+                        ctx, site["excerpt"],
+                        location=f"{site.get('file', '?')} "
+                                 f"(caller-contract site of "
+                                 f"{function_name})",
+                    )
     except Exception:
         logger.warning("prompt defence failed", exc_info=True)
 
