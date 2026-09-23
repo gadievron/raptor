@@ -17,6 +17,17 @@ from core.run.tmp_reaper import reap_stale_logs, reap_stale_runs, reap_stale_tmp
 _OLD = time.time() - 25 * 3600  # past the 24h default age floor
 
 
+@pytest.fixture(autouse=True)
+def _pin_sweep_roots(monkeypatch):
+    """Hermeticity: the sweep also walks the real system tmp root and
+    the lane fallback base by default — every test here must operate
+    on private roots only. The multi-root tests re-point these
+    deliberately."""
+    import core.run.tmp_reaper as reaper_mod
+    monkeypatch.setattr(reaper_mod, "_SYSTEM_TMP_ROOTS", ())
+    monkeypatch.setattr(reaper_mod, "_lane_fallback_bases", lambda: ())
+
+
 @pytest.fixture
 def tmp_root(tmp_path, monkeypatch):
     monkeypatch.setattr("tempfile.gettempdir", lambda: str(tmp_path))
@@ -649,8 +660,14 @@ class TestSigkilledProcessStrays:
         env["PYTHONPATH"] = str(repo_root)
         sweeper = subprocess.run(
             [sys.executable, "-c",
-             "from core.run.tmp_reaper import reap_stale_tmp;"
-             "print(len(reap_stale_tmp()))"],
+             # Pin the sweep to the private TMPDIR root: the fresh
+             # interpreter would otherwise also walk the REAL system
+             # tmp root (production behaviour, hermetically wrong and
+             # count-perturbing here).
+             "import core.run.tmp_reaper as t;"
+             "t._SYSTEM_TMP_ROOTS = ();"
+             "t._lane_fallback_bases = lambda: ();"
+             "print(len(t.reap_stale_tmp()))"],
             env=env, capture_output=True, text=True, timeout=60,
         )
         assert sweeper.returncode == 0, sweeper.stderr
@@ -767,3 +784,91 @@ class TestDeadPidDirReaping:
         monkeypatch.setattr(tmp_reaper.os, "listdir", _boom)
         assert tmp_reaper.reap_dead_pid_dirs(
             tmp_path, "raptor-pytest-emu-") == []
+
+
+class TestMultiRootSweep:
+    """The sweep covers the system tmp root and the lane fallback base
+    in addition to gettempdir() — under the launcher, gettempdir() is
+    the per-session TMPDIR and root-level strays were invisible."""
+
+    @pytest.fixture
+    def roots(self, tmp_path, monkeypatch):
+        from core.run import tmp_reaper as reaper_mod
+        session = tmp_path / "session-tmp"
+        system = tmp_path / "system-tmp"
+        runuser = tmp_path / "run-user"
+        for d in (session, system, runuser):
+            d.mkdir()
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(session))
+        monkeypatch.setattr(
+            reaper_mod, "_SYSTEM_TMP_ROOTS", (str(system),))
+        monkeypatch.setattr(
+            reaper_mod, "_lane_fallback_bases", lambda: (str(runuser),))
+        monkeypatch.delenv("RAPTOR_TMP_REAP_MAX_AGE_H", raising=False)
+        return session, system, runuser
+
+    def test_stale_strays_reaped_across_all_roots(self, roots):
+        session, system, runuser = roots
+        in_session = _make_old_dir(session, "raptor-pytest-abc123")
+        at_root = _make_old_dir(system, "raptor-pytest-def456")
+        stale_file = system / "audit_sweep_ab12cd34.yaml"
+        stale_file.write_text("rules: []\n")
+        os.utime(stale_file, (_OLD, _OLD))
+        lane = _make_old_dir(runuser, ".raptor-lane-a1b2c3d4")
+        reaped = reap_stale_tmp()
+        assert sorted(reaped) == sorted(
+            [in_session, at_root, stale_file, lane])
+        for p in (in_session, at_root, stale_file, lane):
+            assert not p.exists()
+
+    def test_lane_fallback_base_sweeps_lane_dirs_only(self, roots):
+        _session, _system, runuser = roots
+        # A reaper-known prefix that is NOT a lane: in /run/user/<uid>
+        # only make_lane_dir ever mints RAPTOR artifacts, so anything
+        # else there is out of scope no matter how stale.
+        other = _make_old_dir(runuser, "raptor-llm-raptor-cafe0009-x1")
+        assert reap_stale_tmp() == []
+        assert other.is_dir()
+
+    def test_fresh_and_live_root_strays_kept(self, roots):
+        _session, system, _runuser = roots
+        fresh = system / "raptor-pytest-fresh1"
+        fresh.mkdir()  # young: age floor keeps it
+        live = _make_old_dir(system, "raptor-pytest-livecwd")
+        proc = subprocess.Popen(
+            ["sleep", "30"], cwd=str(live),
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        try:
+            os.utime(live, (_OLD, _OLD))
+            assert reap_stale_tmp() == []
+            assert fresh.is_dir() and live.is_dir()
+        finally:
+            proc.terminate()
+            proc.wait()
+
+    def test_foreign_owned_root_stray_kept(self, roots, monkeypatch):
+        from core.run import tmp_reaper as reaper_mod
+        _session, system, _runuser = roots
+        stray = _make_old_dir(system, "raptor-pytest-foreign1")
+        monkeypatch.setattr(
+            reaper_mod.os, "geteuid", lambda: os.getuid() + 1)
+        assert reap_stale_tmp() == []
+        assert stray.is_dir()
+
+    def test_gettempdir_at_system_root_dedupes(self, roots, monkeypatch):
+        # Bare-shell shape: gettempdir() IS the system root — one
+        # sweep, no double-reporting.
+        _session, system, _runuser = roots
+        monkeypatch.setattr("tempfile.gettempdir", lambda: str(system))
+        stray = _make_old_dir(system, "raptor-pytest-dedupe1")
+        assert reap_stale_tmp() == [stray]
+
+    def test_missing_extra_roots_skipped(self, roots, monkeypatch):
+        from core.run import tmp_reaper as reaper_mod
+        session, _system, _runuser = roots
+        monkeypatch.setattr(
+            reaper_mod, "_SYSTEM_TMP_ROOTS",
+            (str(session.parent / "absent"),))
+        stray = _make_old_dir(session, "raptor-pytest-onlyhere")
+        assert reap_stale_tmp() == [stray]
