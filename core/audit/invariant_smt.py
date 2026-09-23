@@ -71,10 +71,19 @@ _ATOM = (
     rf"|(?:min|max)\s*\((?:[^()]|\([^()]{{0,48}}\)){{0,80}}\)"
     rf"|{_IDENT}|\d+)"
 )
-_SIDE_TAIL = rf"{_ATOM}(?:\s*[+\-]\s*{_ATOM})*"
+# The +/- chain is bounded: with an unbounded chain, a run of
+# single-char terms ("a+a+a+...") makes every atom start re-walk the
+# chain tail when the end anchor fails — quadratic in the side text.
+# Real invariant sides carry a handful of terms; 12 is generous
+# (trade-off: a longer chain stops parsing as one side, versus an
+# unbounded re-walk on hostile text).
+_SIDE_TAIL = rf"{_ATOM}(?:\s*[+\-]\s*{_ATOM}){{0,12}}"
 # Anchored forms: the LAST expression before the operator and the
-# FIRST expression after it (prose around them is ignored).
-_LHS_RE = re.compile(rf"({_SIDE_TAIL})\s*$")
+# FIRST expression after it (prose around them is ignored).  The
+# leading \b pins the search to atom starts — a mid-word start only
+# ever fabricated a token (the "xff" tail of a hex literal), and an
+# unpinned scan re-reads the same word from every offset.
+_LHS_RE = re.compile(rf"\b({_SIDE_TAIL})\s*$")
 _RHS_RE = re.compile(rf"^\s*({_SIDE_TAIL})")
 
 # How far around the operator an invariant side may reach.
