@@ -689,6 +689,46 @@ class TestRefuteByKnownReturnType:
             assert _refute_by_known_return_type(outcome, _Config()) \
                 is None, hyp
 
+    def test_narrowing_store_spellings_not_refuted(self):
+        """A narrowing STORE spelled without truncate/cast vocabulary
+        ("stored into a uint8_t field") is the same wrap class — the
+        destination-type net must stand the gate down."""
+        for hyp in (
+            "CWE-190: the length from ntohs() is stored into a "
+            "uint8_t field, causing wraparound of the value",
+            "CWE-190: ntohs() result assigned to an unsigned char "
+            "member wraps around",
+            "CWE-190: the ntohs() value is written into a u8 length "
+            "field and wraps",
+            "CWE-190: the ntohs() length lands in a short and the "
+            "sign flips",
+            "CWE-190: the ntohs() count is kept in an 8-bit counter "
+            "which wraps",
+        ):
+            outcome = _Outcome(
+                hypothesis=hyp, review_result={"cwe": "CWE-190"},
+            )
+            assert _refute_by_known_return_type(outcome, _Config()) \
+                is None, hyp
+
+    def test_wide_enough_destination_still_refuted(self):
+        """A destination that HOLDS the entry's range keeps the
+        refutation — the cited range argument is intact there."""
+        for hyp in (
+            "CWE-190: the ntohs() length is stored into a uint32_t "
+            "counter and wraps it",
+            "CWE-190: the ntohs() value is kept in a uint16_t field "
+            "and overflows",
+            "CWE-190: the 16-bit ntohs() length overflows the "
+            "computation",
+        ):
+            outcome = _Outcome(
+                hypothesis=hyp, review_result={"cwe": "CWE-190"},
+            )
+            verdict = _refute_by_known_return_type(outcome, _Config())
+            assert verdict is not None, hyp
+            assert verdict.refuter_grade == "proof", hyp
+
     def test_identifier_adjacent_unspaced_ops_not_refuted(self):
         """Verifier hypotheses quote C verbatim: unspaced
         identifier-adjacent arithmetic (``len-2``, ``seq+1``, ``n-1``)

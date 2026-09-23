@@ -718,6 +718,74 @@ _WRAP_CAPABLE_OP_KW = re.compile(
 )
 
 
+# Narrowing-DESTINATION net: a hypothesis that names a destination
+# type too small for the table entry's return range describes a
+# narrowing store ("stored into a uint8_t field", "assigned to an
+# unsigned char member", "written into a u8 length field") — the
+# same wrap class as an explicit truncate/cast spelling, but carrying
+# none of the _WRAP_CAPABLE_OP_KW vocabulary.  The range table
+# precludes nothing about a store into a narrower type, so the gate
+# must stand down on these spellings rather than proof-refute.
+# Matched: fixed-width C/Rust/kernel spellings (uint8_t, int16_t, u8,
+# i16, __le16, u_int8_t), char/short families, ``byte``, and plain
+# "8-bit"/"16-bit" width prose (treated as unsigned — the generous
+# direction for keeping sound refutations is taken only where the
+# spelling itself pins signedness).  Over-matching is safe: the gate
+# only stands down.
+_NARROW_DEST_RE = re.compile(
+    r"\b(?:"
+    r"(?:__)?(?P<fixsign>u|s|i|le|be)(?P<fixbits>8|16|32|64)\b"
+    r"|u?_?int(?P<stdbits>8|16|32|64)_t\b"
+    r"|(?P<uchar>unsigned\s+char)\b"
+    r"|(?P<char>(?:signed\s+)?char)\b"
+    r"|(?P<ushort>unsigned\s+short)\b"
+    r"|(?P<short>short)\b"
+    # ``byte`` as a TYPE name only — "2-byte"/"2 byte" width prose
+    # describes the source value, not a destination.
+    r"|(?P<byte>(?<![\d-])(?<!\d )byte)\b"
+    r"|(?P<prosebits>8|16|32|64)[- ]bit"
+    r")",
+    re.IGNORECASE,
+)
+
+
+def _dest_type_max(m: re.Match) -> int:
+    """Largest value the matched destination-type spelling can hold."""
+    text = m.group(0).lower()
+    if m.group("uchar"):
+        return 0xFF
+    if m.group("char"):
+        return 0x7F  # plain char signedness is implementation-defined
+        # — judge it signed, the stand-down direction.
+    if m.group("ushort"):
+        return 0xFFFF
+    if m.group("short"):
+        return 0x7FFF
+    if m.group("byte"):
+        return 0xFF
+    bits = int(
+        m.group("fixbits") or m.group("stdbits") or m.group("prosebits"),
+    )
+    if m.group("fixsign"):
+        signed = m.group("fixsign").lower() in ("s", "i")
+    elif m.group("stdbits"):
+        signed = not text.lstrip("_").startswith("u")
+    else:
+        signed = False  # "N-bit" prose: judged unsigned (see net note)
+    return (1 << (bits - 1)) - 1 if signed else (1 << bits) - 1
+
+
+def _narrowest_named_dest_max(text: str) -> int | None:
+    """The smallest max-value among destination-type spellings named
+    in *text*, or None when no such type is named."""
+    best: int | None = None
+    for m in _NARROW_DEST_RE.finditer(text):
+        cap = _dest_type_max(m)
+        if best is None or cap < best:
+            best = cap
+    return best
+
+
 def _find_bounded_name_token(text: str, func_name: str) -> int:
     """Position of *func_name* as a standalone token in *text*, or -1.
 
@@ -824,12 +892,25 @@ def _refute_by_known_return_type(
 
     if best is not None:
         func_name, ret_type, max_val, _ = best
+        # Narrowing-store stand-down: the hypothesis names a
+        # destination type that cannot hold the entry's maximum
+        # ("stored into a uint8_t field" against ntohs's 0xffff).
+        # That is truncation spelled with a store verb — no
+        # truncate/cast/operator vocabulary required — and the
+        # return range precludes nothing about it, so the gate
+        # abstains.  A destination wide enough for the range
+        # ("stored into a uint32_t counter") keeps the refutation:
+        # the cited range argument still holds there.
+        dest_max = _narrowest_named_dest_max(hyp_lower)
+        if dest_max is not None and dest_max < max_val:
+            return None
         # Grade: PROOF. The refuting fact is the named function's
         # return range — an ISO C / POSIX guarantee that is
         # mechanically true regardless of how the hypothesis text is
         # interpreted; the table admits only ranges that fit signed
         # int, and the underflow / buffer-overflow / wrap-capable-op
-        # bail-outs above keep the range argument applicable to what
+        # / narrowing-destination bail-outs above keep the range
+        # argument applicable to what
         # remains (the raw value in int-width use). Known residual: a target
         # that shadows the libc name (macro or local redefinition)
         # breaks the premise — the gate matches the NAME in the
