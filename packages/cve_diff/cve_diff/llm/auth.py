@@ -79,13 +79,19 @@ def resolve_auth(model_id: str) -> AuthDecision:
     via_dispatcher = bool(os.environ.get("RAPTOR_LLM_SOCKET"))
 
     # Claude Code OAuth fallback for Anthropic-family models when
-    # neither dispatcher nor ANTHROPIC_API_KEY is available.
-    # Historical cve-diff behaviour preserved (operator without an
-    # Anthropic key but with Claude Code installed gets free
-    # Anthropic-routed analysis).
+    # neither dispatcher nor direct SDK auth is available. Historical
+    # cve-diff behaviour preserved (operator without an Anthropic key
+    # but with Claude Code installed gets free Anthropic-routed
+    # analysis). Direct SDK auth means EITHER first-party spelling
+    # (member sites of core.security.credential_env.
+    # ANTHROPIC_FIRST_PARTY_AUTH_VARS): the SDK reads
+    # ANTHROPIC_AUTH_TOKEN too, so a bearer-token-only operator must
+    # not be demoted to the claudecode subprocess route.
+    # CLAUDE_CODE_OAUTH_TOKEN is excluded — the SDK does not read it.
     if (provider == "anthropic"
             and not via_dispatcher
-            and not os.environ.get("ANTHROPIC_API_KEY")):
+            and not os.environ.get("ANTHROPIC_API_KEY")
+            and not os.environ.get("ANTHROPIC_AUTH_TOKEN")):
         return AuthDecision(provider="claudecode")
 
     # Everything else: hand off to ``core.llm.providers``. Pass

@@ -117,8 +117,13 @@ def probe_anthropic() -> HealthResult:
         )
 
     api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    # Both first-party spellings authenticate the SDK route (member
+    # sites of core.security.credential_env.ANTHROPIC_FIRST_PARTY_AUTH_VARS;
+    # CLAUDE_CODE_OAUTH_TOKEN is excluded — the SDK does not read it).
+    # A bearer-token-only operator must not see a false "not set".
+    auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
     via_dispatcher = bool(os.environ.get("RAPTOR_LLM_SOCKET"))
-    if not api_key and not via_dispatcher:
+    if not api_key and not auth_token and not via_dispatcher:
         # Phrasing keeps the historical "ANTHROPIC_API_KEY not set"
         # substring so existing test fixtures + scripts grepping for
         # it still match; the credential-isolation hint is appended
@@ -129,6 +134,14 @@ def probe_anthropic() -> HealthResult:
                 "ANTHROPIC_API_KEY not set (or run with "
                 "RAPTOR_LLM_SOCKET for credential-isolation dispatcher)"
             ),
+        )
+    if not api_key and auth_token:
+        # Bearer-token auth uses a different header scheme than the
+        # x-api-key ping below; report configured-but-unprobed rather
+        # than a false "not set".
+        return HealthResult(
+            "Anthropic API", True, 0,
+            detail="auth via ANTHROPIC_AUTH_TOKEN (bearer; not pinged)",
         )
     if not api_key:
         # Dispatcher route — the API call would succeed via

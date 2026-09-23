@@ -253,3 +253,21 @@ def test_default_model_id_survives_registry_errors(monkeypatch):
 
     monkeypatch.setattr("core.llm.config._get_default_primary_model", _boom)
     assert default_model_id() == FALLBACK_MODEL_ID
+
+
+def test_auth_token_spelling_keeps_direct_sdk_route(monkeypatch):
+    """ANTHROPIC_AUTH_TOKEN is first-party SDK auth (see
+    core.security.credential_env.ANTHROPIC_FIRST_PARTY_AUTH_VARS) —
+    a bearer-token-only operator must not be demoted to the
+    claudecode subprocess route."""
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "sk-ant-test-bearer")
+    decision = resolve_auth("claude-opus-4-7")
+    assert decision.provider == "anthropic"
+
+
+def test_claude_code_oauth_token_alone_still_falls_back(monkeypatch):
+    """CLAUDE_CODE_OAUTH_TOKEN is NOT SDK auth — the claudecode
+    fallback is exactly right for it."""
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-oauth")
+    decision = resolve_auth("claude-opus-4-7")
+    assert decision.provider == "claudecode"
