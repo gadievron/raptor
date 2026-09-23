@@ -329,6 +329,28 @@ class TestExecute:
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         return holder
 
+    def test_row_cap_truncates_and_flags(self, clients, monkeypatch):
+        # The one unbounded read on an otherwise fully-budgeted
+        # surface: result materialisation must stop at max_rows and
+        # say so in the envelope (maximum_bytes_billed bounds scan
+        # cost, not result cardinality).
+        rows = [{"a": i} for i in range(5)]
+        orig_init = _FakeClient.__init__
+
+        def _init(self, credentials=None, project=None):
+            orig_init(self, credentials=credentials, project=project)
+            self.next_job = _FakeJob(rows=list(rows))
+
+        monkeypatch.setattr(_FakeClient, "__init__", _init)
+        result = bq.execute("SELECT 1", max_rows=3)
+        assert result["row_count"] == 3
+        assert len(result["rows"]) == 3
+        assert result["truncated"] is True
+
+    def test_default_row_cap_not_truncated(self, clients):
+        result = bq.execute("SELECT 1")
+        assert result["truncated"] is False
+
     def test_envelope_shape(self, clients):
         result = bq.execute("SELECT 1")
         assert result["dry_run"] is False
@@ -511,6 +533,20 @@ class TestChildMain:
         payload = json.loads(out)
         assert payload["rows"] == [{"a": 1}]
         assert holder[0].last_job_config.maximum_bytes_billed == 999
+
+    def test_non_numeric_max_rows_is_structured(self, monkeypatch):
+        code, _, err = self._run_child(
+            monkeypatch,
+            json.dumps({"sql": "SELECT 1", "max_rows": "many"}))
+        assert code == bq.EXIT_INPUT
+        assert json.loads(err)["error"] == "input"
+
+    def test_non_positive_max_rows_is_structured(self, monkeypatch):
+        code, _, err = self._run_child(
+            monkeypatch,
+            json.dumps({"sql": "SELECT 1", "max_rows": 0}))
+        assert code == bq.EXIT_INPUT
+        assert json.loads(err)["error"] == "input"
 
 
 class TestJsonDefault:

@@ -198,6 +198,12 @@ def main() -> int:
              f"more (default: {bq.DEFAULT_MAX_BYTES_BILLED})",
     )
     parser.add_argument(
+        "--max-rows", type=int, default=bq.DEFAULT_MAX_ROWS,
+        help="Cap on result rows materialised into the envelope; "
+             "truncation is flagged via \"truncated\": true "
+             f"(default: {bq.DEFAULT_MAX_ROWS})",
+    )
+    parser.add_argument(
         "--timeout", type=float, default=bq.DEFAULT_TIMEOUT_S,
         help=f"Query timeout in seconds (default: {bq.DEFAULT_TIMEOUT_S:g})",
     )
@@ -223,6 +229,8 @@ def main() -> int:
 
     if args.max_bytes_billed <= 0:
         parser.error("--max-bytes-billed must be a positive integer")
+    if args.max_rows <= 0:
+        parser.error("--max-rows must be a positive integer")
     if args.timeout <= 0:
         parser.error("--timeout must be positive")
 
@@ -238,6 +246,7 @@ def main() -> int:
         "max_bytes_billed": args.max_bytes_billed,
         "timeout_s": args.timeout,
         "dry_run": args.dry_run,
+        "max_rows": args.max_rows,
     }
 
     if not args.no_sandbox:
@@ -262,6 +271,7 @@ def main() -> int:
             max_bytes_billed=args.max_bytes_billed,
             timeout_s=args.timeout,
             dry_run=args.dry_run,
+            max_rows=args.max_rows,
         )
     except bq.BQQueryError as exc:
         return bq.write_error_json(sys.stderr, exc)
