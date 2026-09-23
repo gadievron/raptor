@@ -178,6 +178,134 @@ class TestShadowedImportIdentity:
         bindings = match_sanitizers_in_cfg(cfg, "cwe-079", "java")
         assert not bindings, bindings
 
+    def test_same_file_method_shadowing_static_import_never_binds(self):
+        # JLS 15.12.1: methods of the enclosing class shadow
+        # single-static-imports for bare calls — the runtime callee is
+        # the repo's method, not the catalog identity the import
+        # spelling suggests.
+        from core.dataflow.sanitizer_catalog import (
+            match_sanitizers_in_cfg,
+        )
+        src = (
+            "import static org.owasp.encoder.Encode.forHtml;\n"
+            "public class T {\n"
+            "    String forHtml(String s) { return s; }\n"
+            "    public void handle(String x, "
+            "java.io.PrintWriter out) {\n"
+            "        String y = forHtml(x);\n"
+            "        out.println(y);\n"
+            "    }\n"
+            "}\n"
+        )
+        cfg = build_java_intraproc_cfg(src, "handle")
+        assert cfg is not None
+        calls = {cs.name for n in cfg.nodes() for cs in n.call_sites}
+        assert "org.owasp.encoder.Encode.forHtml" not in calls
+        assert not match_sanitizers_in_cfg(cfg, "cwe-079", "java")
+
+    def test_unshadowed_static_import_still_resolves(self):
+        # Control: no same-file method of that name — the static
+        # import keeps its identity.
+        src = (
+            "import static org.owasp.encoder.Encode.forHtml;\n"
+            "public class T {\n"
+            "    public void handle(String x, "
+            "java.io.PrintWriter out) {\n"
+            "        String y = forHtml(x);\n"
+            "        out.println(y);\n"
+            "    }\n"
+            "}\n"
+        )
+        cfg = build_java_intraproc_cfg(src, "handle")
+        assert cfg is not None
+        calls = {cs.name for n in cfg.nodes() for cs in n.call_sites}
+        assert "org.owasp.encoder.Encode.forHtml" in calls
+
+    def test_member_inner_class_shadowing_import_never_binds(self):
+        # JLS 6.4.1: a member type declared in the file shadows a
+        # single-type import for simple-name references — the runtime
+        # callee is the REPO's inner class, not the catalog class.
+        from core.dataflow.sanitizer_catalog import (
+            match_sanitizers_in_cfg,
+        )
+        src = (
+            "import org.owasp.encoder.Encode;\n"
+            "public class T {\n"
+            "    static class Encode { static String forHtml"
+            "(String s) { return s; } }\n"
+            "    public void handle(String x, "
+            "java.io.PrintWriter out) {\n"
+            "        String y = Encode.forHtml(x);\n"
+            "        out.println(y);\n"
+            "    }\n"
+            "}\n"
+        )
+        cfg = build_java_intraproc_cfg(src, "handle")
+        assert cfg is not None
+        calls = {cs.name for n in cfg.nodes() for cs in n.call_sites}
+        assert "org.owasp.encoder.Encode.forHtml" not in calls
+        assert not match_sanitizers_in_cfg(cfg, "cwe-079", "java")
+
+    def test_nested_inner_class_shadow_also_blocks(self):
+        # File-wide type-shadow set: a doubly-nested member type
+        # blocks the join too (over-broad only in the refusal
+        # direction — a blocked name never GRANTS identity).
+        src = (
+            "import org.owasp.encoder.Encode;\n"
+            "public class T {\n"
+            "    static class Outer { static class Encode { "
+            "static String forHtml(String s) { return s; } } }\n"
+            "    public void handle(String x, "
+            "java.io.PrintWriter out) {\n"
+            "        String y = Encode.forHtml(x);\n"
+            "        out.println(y);\n"
+            "    }\n"
+            "}\n"
+        )
+        cfg = build_java_intraproc_cfg(src, "handle")
+        assert cfg is not None
+        calls = {cs.name for n in cfg.nodes() for cs in n.call_sites}
+        assert "org.owasp.encoder.Encode.forHtml" not in calls
+
+    def test_type_parameter_shadow_also_blocks(self):
+        # A type variable shadows the import as well (JLS 6.4.1).
+        # Static access through a type variable does not COMPILE, but
+        # semgrep-lane findings ride non-compiling hostile source, so
+        # the analysis-level join is blocked anyway (belt and braces).
+        src = (
+            "import org.owasp.encoder.Encode;\n"
+            "public class T<Encode> {\n"
+            "    public void handle(String x, "
+            "java.io.PrintWriter out) {\n"
+            "        String y = Encode.forHtml(x);\n"
+            "        out.println(y);\n"
+            "    }\n"
+            "}\n"
+        )
+        cfg = build_java_intraproc_cfg(src, "handle")
+        assert cfg is not None
+        calls = {cs.name for n in cfg.nodes() for cs in n.call_sites}
+        assert "org.owasp.encoder.Encode.forHtml" not in calls
+
+    def test_shadowing_creation_type_never_resolves(self):
+        # 'new Encode(...)' with the member inner class in scope must
+        # not surface as the catalog class's constructor either.
+        src = (
+            "import org.owasp.encoder.Encode;\n"
+            "public class T {\n"
+            "    static class Encode { }\n"
+            "    public void handle(String x, "
+            "java.io.PrintWriter out) {\n"
+            "        Object o = new Encode();\n"
+            "        out.println(x);\n"
+            "    }\n"
+            "}\n"
+        )
+        cfg = build_java_intraproc_cfg(src, "handle")
+        assert cfg is not None
+        calls = {cs.name for n in cfg.nodes() for cs in n.call_sites}
+        assert "new org.owasp.encoder.Encode" not in calls
+
     def test_true_static_call_still_binds(self):
         # Control: the genuine import-resolved static call keeps its
         # catalog identity and full-strength binding.

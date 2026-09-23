@@ -658,11 +658,13 @@ def collection_guard_reason(
 
     from core.analysis.cfg_builder_java import (
         _declared_local_scopes,
+        _file_type_shadow_names,
         _NameResolver,
         build_import_map,
     )
     types, statics = build_import_map(root)
-    resolver = _NameResolver(types, statics)
+    type_shadows = _file_type_shadow_names(root)
+    resolver = _NameResolver(types, statics, type_shadows=type_shadows)
     # Scope oracle for the TESTED identifier. The guard's soundness
     # premise — "no syntactic writer between guard and sink means the
     # tested value is unchanged" — only holds for unaliasable names
@@ -815,6 +817,16 @@ def collection_guard_reason(
                     msg = (
                         "collection chain head is a local variable "
                         "(obscures the type name)"
+                    )
+                    raise _Refused(msg)
+                if head_ident in type_shadows:
+                    # JLS 6.4.1: a same-file member type / type
+                    # parameter shadows the import — resolving the
+                    # simple name cross-file would bind a DIFFERENT
+                    # class than the runtime receiver.
+                    msg = (
+                        "collection chain head is shadowed by a "
+                        "same-file type declaration"
                     )
                     raise _Refused(msg)
                 resolved_head = resolver._resolve_chain(head)

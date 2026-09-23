@@ -417,6 +417,30 @@ class TestCrossFile:
         assert collection_guard_reason(
             src, 6, "x", "CWE-79", source_root=str(tmp_path)) is None
 
+    def test_chain_head_shadowed_by_member_type_refuses(self, tmp_path):
+        # JLS 6.4.1 type-shadows-type: a member inner class named like
+        # the imported helper makes 'Utils.COMMON' read the INNER
+        # class's field at runtime; the cross-file class must not bind.
+        helpers = tmp_path / "org" / "example" / "helpers"
+        helpers.mkdir(parents=True)
+        (helpers / "Utils.java").write_text(
+            "package org.example.helpers;\n"
+            "import java.util.*;\n"
+            "public class Utils {\n"
+            "    public static final Set<String> COMMON =\n"
+            '            new HashSet<>(Arrays.asList("accept"));\n'
+            "}\n", encoding="utf-8")
+        src = ("import org.example.helpers.Utils;\n"
+               "public class T {\n"
+               "    static class Utils { public static "
+               "java.util.Set<String> COMMON = null; }\n"
+               "    public void handle(String x, "
+               "java.io.PrintWriter out) {\n"
+               "        if (!Utils.COMMON.contains(x)) { return; }\n"
+               "        out.println(x);\n    }\n}\n")
+        assert collection_guard_reason(
+            src, 6, "x", "CWE-79", source_root=str(tmp_path)) is None
+
     def test_cross_file_mutator_anywhere_refuses(self, tmp_path):
         src, root = self._tree(tmp_path, mutator='add("evil")')
         assert collection_guard_reason(

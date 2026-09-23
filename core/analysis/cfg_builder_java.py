@@ -335,10 +335,25 @@ class _NameResolver:
 
     def __init__(self, type_imports: Mapping[str, str],
                  static_imports: Mapping[str, str],
-                 local_scopes=None) -> None:
+                 local_scopes=None,
+                 file_method_names: frozenset[str] = frozenset(),
+                 type_shadows: frozenset[str] = frozenset()) -> None:
         self.types = dict(type_imports)
         self.statics = dict(static_imports)
         self.local_scopes = local_scopes
+        # Bare-call twin of the obscuring rule: methods of the
+        # enclosing class shadow single-static-imports (JLS 15.12.1),
+        # so a bare call whose simple name is declared as a method
+        # ANYWHERE in this file must not resolve through the static
+        # import map (conservative over the whole file — the refusal
+        # direction; kin of the KNOWN bare-call binding class).
+        self.file_method_names = file_method_names
+        # Type-shadows-type leg (JLS 6.4.1): a member type declared in
+        # the file — or a type parameter — shadows a single-type
+        # import for simple-name references, so a chain head (or a
+        # creation type) in this set must never vouch the imported
+        # FQN. File-wide is conservative (refusal direction).
+        self.type_shadows = type_shadows
 
     def vouches_local(self, name: str, byte: int) -> bool:
         return self.local_scopes is not None \
@@ -349,6 +364,10 @@ class _NameResolver:
         if head_byte is not None and self.vouches_local(head, head_byte):
             # Obscured by a local — stays an unresolved instance
             # chain (simple names never match catalog FQN keys).
+            return chain
+        if head in self.type_shadows:
+            # Shadowed by a same-file type / type parameter — the
+            # simple name binds the REPO's type, not the import.
             return chain
         fqn = self.types.get(head)
         if fqn is not None:
@@ -363,6 +382,8 @@ class _NameResolver:
             ty_text = _node_text(ty) if ty is not None else None
             if not ty_text:
                 return None
+            if ty_text.split("<", 1)[0].strip() in self.type_shadows:
+                return "new " + ty_text
             return "new " + self.types.get(ty_text, ty_text)
         name_node = invocation.child_by_field_name("name")
         if name_node is None:
@@ -370,9 +391,12 @@ class _NameResolver:
         simple = _node_text(name_node)
         obj = invocation.child_by_field_name("object")
         if obj is None:
-            # Bare call — resolves only via a static import.
+            # Bare call — resolves only via a static import, and only
+            # when no same-file method shadows the imported name.
             fqn = self.statics.get(simple)
-            return fqn if fqn is not None else simple
+            if fqn is not None and simple not in self.file_method_names:
+                return fqn
+            return simple
         obj = _unwrap_value_expr(obj)
         if obj.type == _METHOD_INVOCATION:
             # Chained call: mark the receiver as a CALL explicitly so
@@ -879,6 +903,48 @@ def _declared_local_scopes(decl: Node) -> _LocalNameScopes:
         stack.extend(
             (c, bound) for c in cur.children if c.is_named)
     return _LocalNameScopes({k: tuple(v) for k, v in windows.items()})
+
+
+def _file_type_shadow_names(root: Node) -> frozenset[str]:
+    """Simple names of every class-like type declared anywhere in the
+    file, plus every type-parameter name — the JLS 6.4.1 type-shadow
+    set for _NameResolver. A member type wins over a single-type
+    import for simple-name references; a type variable shadows both.
+    File-wide (including nested inner classes whose simple names are
+    not actually in scope everywhere) is conservative — blocking a
+    name only refuses catalog identity, never grants it."""
+    out: set[str] = set()
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type in ("class_declaration", "interface_declaration",
+                      "enum_declaration", "record_declaration",
+                      "annotation_type_declaration"):
+            nm = n.child_by_field_name("name")
+            if nm is not None:
+                out.add(_node_text(nm))
+        elif n.type == "type_parameter":
+            for c in n.children:
+                if c.type in (_IDENT, "type_identifier"):
+                    out.add(_node_text(c))
+                    break
+        stack.extend(c for c in n.children if c.is_named)
+    return frozenset(out)
+
+
+def _file_method_names(root: Node) -> frozenset[str]:
+    """Simple names of every method declared anywhere in the file —
+    the bare-call static-import shadow set (see _NameResolver)."""
+    out: set[str] = set()
+    stack = [root]
+    while stack:
+        n = stack.pop()
+        if n.type == _METHOD_DECL:
+            nm = n.child_by_field_name("name")
+            if nm is not None:
+                out.add(_node_text(nm))
+        stack.extend(c for c in n.children if c.is_named)
+    return frozenset(out)
 
 
 def find_enclosing_method(
@@ -1585,7 +1651,9 @@ def build_java_intraproc_cfg(
     type_imports, static_imports = build_import_map(root)
     method_scopes = _declared_local_scopes(decl)
     resolver = _NameResolver(type_imports, static_imports,
-                             local_scopes=method_scopes)
+                             local_scopes=method_scopes,
+                             file_method_names=_file_method_names(root),
+                             type_shadows=_file_type_shadow_names(root))
     builder = _JavaCFGBuilder(function_name, "<memory>", resolver,
                               local_scopes=method_scopes)
     try:
