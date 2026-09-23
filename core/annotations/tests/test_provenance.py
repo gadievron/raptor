@@ -19,6 +19,7 @@ from core.annotations import (
     IMPORTED,
     INTERACTIVE_TTY,
     LEGACY,
+    LEGACY_PRE_ERA,
     NON_TTY,
     STAMP_ERA_START,
     Annotation,
@@ -425,6 +426,159 @@ class TestWriteTimeEnumRejection:
                 "tty": "stdin", **CORROBORATED,
                 CORROBORATION_KEY: CORROBORATION_PRE_ERA}
         assert self._ann(tmp_path, meta) is not None
+
+
+class TestEraMaterialisation:
+    """Both grandfather fences key on the whole-FILE mtime, which any
+    sibling add/rm/edit (or fresh checkout) resets — a rewrite must
+    materialise a passing fence durably before destroying its input.
+    """
+
+    def _seed_legacy_file(self, base, mtime):
+        import os
+        path = base / "a.py.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# a.py\n\n## old_fn\n<!-- meta: source=human -->\n\n"
+            "old operator note\n",
+        )
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_sibling_write_preserves_legacy_grade(self, tmp_path):
+        self._seed_legacy_file(tmp_path, STAMP_ERA_START - 86400.0)
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="new_fn", body="x",
+            metadata={"source": "agent"},
+        ))
+        anns = {a.function: a for a in _read_all(tmp_path, "a.py")}
+        old = anns["old_fn"]
+        assert old.body == "old operator note"
+        assert old.metadata["provenance"] == LEGACY_PRE_ERA
+        # Grade survives with the post-rewrite mtime AND without one
+        # (fresh-checkout arm: mtime is gone entirely).
+        assert is_human_grade(
+            old.metadata,
+            note_mtime=annotation_file_mtime(tmp_path, "a.py"),
+        )
+        assert is_human_grade(old.metadata)
+
+    def test_remove_preserves_legacy_grade_on_survivors(self, tmp_path):
+        from core.annotations import remove_annotation
+        self._seed_legacy_file(tmp_path, STAMP_ERA_START - 86400.0)
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="doomed", body="x",
+            metadata={"source": "agent"},
+        ))
+        # the first write already materialised; strip the marker to
+        # exercise the remove path independently
+        path = tmp_path / "a.py.md"
+        path.write_text(
+            "# a.py\n\n## doomed\n<!-- meta: source=agent -->\n\nx\n"
+            "\n## old_fn\n<!-- meta: source=human -->\n\n"
+            "old operator note\n",
+        )
+        import os
+        os.utime(path, (STAMP_ERA_START - 86400.0,) * 2)
+        assert remove_annotation(tmp_path, "a.py", "doomed")
+        old = {a.function: a for a in _read_all(tmp_path, "a.py")}["old_fn"]
+        assert old.metadata["provenance"] == LEGACY_PRE_ERA
+        assert is_human_grade(old.metadata)
+
+    def test_post_era_stampless_note_is_not_materialised(self, tmp_path):
+        # A failing fence materialises nothing: the stamp-less note
+        # keeps demoting exactly as under the mtime rule.
+        self._seed_legacy_file(tmp_path, STAMP_ERA_START + 86400.0)
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="new_fn", body="x",
+            metadata={"source": "agent"},
+        ))
+        old = {a.function: a for a in _read_all(tmp_path, "a.py")}["old_fn"]
+        assert "provenance" not in old.metadata
+        assert not is_human_grade(old.metadata)
+
+    def test_non_human_stampless_note_is_not_materialised(self, tmp_path):
+        import os
+        path = tmp_path / "a.py.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# a.py\n\n## old_fn\n<!-- meta: source=agent -->\n\nx\n",
+        )
+        os.utime(path, (STAMP_ERA_START - 86400.0,) * 2)
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="new_fn", body="y",
+            metadata={"source": "agent"},
+        ))
+        old = {a.function: a for a in _read_all(tmp_path, "a.py")}["old_fn"]
+        assert "provenance" not in old.metadata
+
+    def _seed_interactive_file(self, base, mtime):
+        import os
+        path = base / "b.py.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "# b.py\n\n## fn\n<!-- meta: source=human "
+            "provenance=interactive-tty tty=stdin -->\n\nnote\n",
+        )
+        os.utime(path, (mtime, mtime))
+        return path
+
+    def test_sibling_write_preserves_pre_corroboration_grade(
+        self, tmp_path,
+    ):
+        self._seed_interactive_file(
+            tmp_path, CORROBORATION_ERA_START - 86400.0,
+        )
+        write_annotation(tmp_path, Annotation(
+            file="b.py", function="other", body="x",
+            metadata={"source": "agent"},
+        ))
+        fn = {a.function: a for a in _read_all(tmp_path, "b.py")}["fn"]
+        assert fn.metadata[CORROBORATION_KEY] == CORROBORATION_PRE_ERA
+        assert is_human_grade(fn.metadata)
+
+    def test_post_era_uncorroborated_stamp_is_not_materialised(
+        self, tmp_path,
+    ):
+        self._seed_interactive_file(
+            tmp_path, CORROBORATION_ERA_START + 86400.0,
+        )
+        write_annotation(tmp_path, Annotation(
+            file="b.py", function="other", body="x",
+            metadata={"source": "agent"},
+        ))
+        fn = {a.function: a for a in _read_all(tmp_path, "b.py")}["fn"]
+        assert CORROBORATION_KEY not in fn.metadata
+        assert not is_human_grade(fn.metadata)
+
+    def test_corroborated_stamp_is_left_alone(self, tmp_path):
+        # Sections already carrying facts never get the pre-era
+        # marker — the facts are the (stronger) evidence.
+        write_annotation(tmp_path, Annotation(
+            file="c.py", function="fn", body="note",
+            metadata={"source": "human", "provenance": INTERACTIVE_TTY,
+                      "tty": "stdin", **CORROBORATED},
+        ))
+        write_annotation(tmp_path, Annotation(
+            file="c.py", function="other", body="x",
+            metadata={"source": "agent"},
+        ))
+        fn = {a.function: a for a in _read_all(tmp_path, "c.py")}["fn"]
+        assert CORROBORATION_KEY not in fn.metadata
+        assert is_human_grade(fn.metadata)
+
+    def test_durable_tag_classifies_and_grades(self):
+        md = {"source": "human", "provenance": LEGACY_PRE_ERA}
+        assert classify_provenance(md) == LEGACY_PRE_ERA
+        assert is_human_grade(md)
+        assert not is_human_grade(
+            {"source": "agent", "provenance": LEGACY_PRE_ERA},
+        )
+
+
+def _read_all(base, source_file):
+    from core.annotations import read_file_annotations
+    return read_file_annotations(base, source_file)
 
 
 class TestLegacyFilesStayReadable:

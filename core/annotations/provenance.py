@@ -119,6 +119,16 @@ IMPORTED = "imported"
 # Classification (never written to disk) for annotations that predate
 # the stamp.
 LEGACY = "legacy"
+# Durable on-disk form of a PASSING legacy fence: the whole-file
+# mtime the fence keys on is destroyed by any sibling rewrite (every
+# write path re-renders the whole file) and by a fresh checkout, so a
+# rewrite that carries over a stamp-less source=human section whose
+# file still predates STAMP_ERA_START materialises the fence outcome
+# as an explicit tag readers honour without an mtime. Written only by
+# the storage layer's era materialisation (CLI-reserved like the rest
+# of the stamp); a hand-written tag is the same acknowledged
+# direct-file-write channel as a hand-written interactive stamp.
+LEGACY_PRE_ERA = "legacy-pre-era"
 
 # When the invocation-context stamp began being recorded (the commit
 # that introduced this module landed 2026-08-17T23:55:36Z). The
@@ -375,8 +385,9 @@ def _corroboration_ok(
 def classify_provenance(metadata: Mapping[str, str] | None) -> str:
     """Classify a stored annotation's invocation context.
 
-    Returns ``interactive-tty``, ``non-tty``, ``imported``, or
-    ``legacy``:
+    Returns ``interactive-tty``, ``non-tty``, ``imported``,
+    ``legacy-pre-era`` (the durable form of a passing legacy fence),
+    or ``legacy``:
 
       * a recognised ``provenance`` tag wins;
       * otherwise a well-formed ``tty`` key is interpreted directly
@@ -388,7 +399,7 @@ def classify_provenance(metadata: Mapping[str, str] | None) -> str:
     if not metadata:
         return LEGACY
     tag = metadata.get(PROVENANCE_KEY)
-    if tag in (INTERACTIVE_TTY, NON_TTY, IMPORTED):
+    if tag in (INTERACTIVE_TTY, NON_TTY, IMPORTED, LEGACY_PRE_ERA):
         return tag
     if tag is not None:
         # A ``provenance`` key exists but carries an unrecognised
@@ -424,7 +435,11 @@ def is_human_grade(
     :data:`STAMP_ERA_START`; see the module docstring). Use
     :func:`core.annotations.storage.annotation_file_mtime` to obtain
     it. Without ``note_mtime`` a stamp-less note demotes — the fence
-    cannot be established, so fail toward the lower tier.
+    cannot be established, so fail toward the lower tier. A rewrite
+    that carries over a fence-passing stamp-less section
+    materialises ``provenance=legacy-pre-era`` so the grade survives
+    the mtime churn every whole-file rewrite (or fresh checkout)
+    causes; that durable tag grades without an mtime.
 
     ``source=agent`` / ``source=llm``, ``source=human`` with a
     ``non-tty`` stamp (the all-fds-piped laundering shape),
@@ -438,6 +453,10 @@ def is_human_grade(
     tag = classify_provenance(metadata)
     if tag == INTERACTIVE_TTY:
         return _corroboration_ok(metadata, note_mtime)
+    if tag == LEGACY_PRE_ERA:
+        # Durable form of a passing legacy fence: materialised by a
+        # rewrite that verified the file mtime while it still held.
+        return True
     return (
         tag == LEGACY
         and note_mtime is not None

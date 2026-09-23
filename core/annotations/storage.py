@@ -52,17 +52,22 @@ import logging
 
 from .models import Annotation
 from .provenance import (
+    CORROBORATION_ERA_START,
     CORROBORATION_KEY,
     CORROBORATION_PRE_ERA,
     ENV_MARKERS_KEY,
     IMPORTED,
     INTERACTIVE_TTY,
+    LEGACY,
+    LEGACY_PRE_ERA,
     NON_TTY,
     PARENTS_KEY,
     PROVENANCE_KEY,
     SID_KEY,
     SID_VALUES,
+    STAMP_ERA_START,
     TTY_KEY,
+    classify_provenance,
     valid_env_markers_value,
     valid_parents_value,
     valid_tty_value,
@@ -268,11 +273,12 @@ def _validate_metadata(metadata) -> None:
             )
             raise ValueError(msg)
         if k == PROVENANCE_KEY and v_str not in (
-            INTERACTIVE_TTY, NON_TTY, IMPORTED,
+            INTERACTIVE_TTY, NON_TTY, IMPORTED, LEGACY_PRE_ERA,
         ):
             msg = (
                 f"invalid provenance tag {v_str!r}; expected "
-                f"{INTERACTIVE_TTY!r}, {NON_TTY!r} or {IMPORTED!r}"
+                f"{INTERACTIVE_TTY!r}, {NON_TTY!r}, {IMPORTED!r} or "
+                f"{LEGACY_PRE_ERA!r}"
             )
             raise ValueError(msg)
         if k == TTY_KEY and not valid_tty_value(v_str):
@@ -670,6 +676,52 @@ def read_annotation(
     return None
 
 
+def _materialise_era_markers(
+    ann: Annotation, file_mtime: float | None,
+) -> Annotation:
+    """Durably materialise a passing mtime-era fence on a carried-over
+    section.
+
+    Both grandfather fences in :mod:`core.annotations.provenance` key
+    on the annotation FILE's mtime, and every write path re-renders
+    the whole file — so one sibling add/rm/edit (or a fresh checkout)
+    silently stripped human-grade authority from untouched pre-era
+    notes. A rewrite is the last moment the fence input still exists;
+    record its outcome as an explicit marker readers honour without
+    an mtime:
+
+      * a stamp-less ``source=human`` section in a file predating
+        ``STAMP_ERA_START`` gets ``provenance=legacy-pre-era``;
+      * an interactive-tty ``source=human`` section without
+        corroboration facts in a file predating
+        ``CORROBORATION_ERA_START`` gets ``corroboration=pre-era``.
+
+    A failing fence materialises nothing — the note demotes exactly
+    as it would have under the mtime rule (fail toward the lower
+    tier, never grant)."""
+    if file_mtime is None or ann.metadata.get("source") != "human":
+        return ann
+    tag = classify_provenance(ann.metadata)
+    updates: dict[str, str] = {}
+    if tag == LEGACY and file_mtime < STAMP_ERA_START:
+        updates[PROVENANCE_KEY] = LEGACY_PRE_ERA
+    elif (
+        tag == INTERACTIVE_TTY
+        and file_mtime < CORROBORATION_ERA_START
+        and not any(
+            k in ann.metadata
+            for k in (SID_KEY, ENV_MARKERS_KEY, PARENTS_KEY,
+                      CORROBORATION_KEY)
+        )
+    ):
+        updates[CORROBORATION_KEY] = CORROBORATION_PRE_ERA
+    if not updates:
+        return ann
+    return dataclasses.replace(
+        ann, metadata={**dict(ann.metadata), **updates},
+    )
+
+
 def write_annotation(
     base_dir: Path, ann: Annotation,
     *, overwrite: str = "all",
@@ -730,6 +782,10 @@ def write_annotation(
         # note (respect-manual included: a prior human note it cannot
         # read is one it must not clobber).
         existing = read_file_annotations(base_dir, ann.file, strict=True)
+        pre_mtime = annotation_file_mtime(base_dir, ann.file)
+        existing = [
+            _materialise_era_markers(a, pre_mtime) for a in existing
+        ]
         if overwrite == "respect-manual":
             prior = next(
                 (a for a in existing if a.function == ann.function), None,
@@ -768,7 +824,11 @@ def remove_annotation(
         existing = read_file_annotations(base_dir, source_file, strict=True)
         if not any(a.function == function for a in existing):
             return False
-        remaining = [a for a in existing if a.function != function]
+        pre_mtime = annotation_file_mtime(base_dir, source_file)
+        remaining = [
+            _materialise_era_markers(a, pre_mtime)
+            for a in existing if a.function != function
+        ]
         if not remaining:
             try:
                 path.unlink()
