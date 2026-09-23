@@ -45,3 +45,20 @@ def test_preflight_hit_caps_confidence(mock_rs):
     mock_rs.return_value = MagicMock(error=None, model=v, preflight_hit=True)
     out = _call()
     assert out.confidence == "medium"     # high haircut on injection indicators
+
+
+def test_every_system_prompt_carries_a_version() -> None:
+    """Module convention (prompts.py header): each prompt carries a
+    ``<stage>_VERSION`` so prompt changes can be correlated with
+    verdict diffs over time. Closure over every ``*_SYSTEM`` name so
+    a new stage can't ship version-blind."""
+    import packages.sca.llm.prompts as prompts
+
+    systems = [n for n in vars(prompts) if n.endswith("_SYSTEM")]
+    assert systems
+    for name in systems:
+        version_name = name[: -len("_SYSTEM")] + "_VERSION"
+        assert hasattr(prompts, version_name), (
+            f"{name} has no {version_name}"
+        )
+        assert isinstance(getattr(prompts, version_name), str)
