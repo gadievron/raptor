@@ -1338,3 +1338,31 @@ class TestWrongSlotSanitiser:
             audit_note="test entry",
         )
         assert rwa.filter_allowlisted(v, (entry,)) == []
+
+
+class TestShadowScanSelfReference:
+    """The Attribute branch's self-reference exclusion was dead
+    (`n is node` compared an Attribute to a FunctionDef — always
+    False), so a shadowing method whose ONLY 'canonical' reference is
+    its own recursive self-call passed the name-shadow arm."""
+
+    def test_self_recursive_shadow_flagged(self):
+        src = (
+            "class W:\n"
+            "    def sanitise_string(self, s, depth=0):\n"
+            "        if depth:\n"
+            "            return self.sanitise_string(s, 0)\n"
+            "        return s\n"
+        )
+        v = rwa.audit_source(src)
+        assert any(x.kind == "sanitiser_shadow" for x in v) or any(
+            "shadow" in x.kind for x in v), [x.kind for x in v]
+
+    def test_module_qualified_reference_passes(self):
+        src = (
+            "import core.security.prompt_output_sanitise as pos\n"
+            "def sanitise_string(s):\n"
+            "    return pos.sanitise_string(s)\n"
+        )
+        v = rwa.audit_source(src)
+        assert not any("shadow" in x.kind for x in v), [x.kind for x in v]

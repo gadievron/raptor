@@ -690,6 +690,9 @@
     },
     "packages/codeql/autonomous_analyzer.py::AutonomousCodeQLAnalyzer.analyze_finding_autonomous::unsanitised_llm_value::exploit_code": {
       "note": "artifact, not display: the exploit PoC file's contract is the raw LLM-generated code (same adjudicated split as the replay --json artifact lane); the write path is safe_id-derived and the operator-facing log line prints only the path; surfaced by the attribute-form helper-return arm widening"
+    },
+    "core/audit/invariant_smt.py::_term::sanitiser_shadow::_term": {
+      "note": "name collision, not a sanitiser definition: this _term is the SMT invariant expression parser's TERM production (recursive-descent), sharing a name with the recognised _term terminal helper; it renders nothing and the file is not a writer. Surfaced when the shadow arm's dead self-reference wrapper was fixed. Rename on next touch."
     }
   },
   "bash_manual_audit": {
