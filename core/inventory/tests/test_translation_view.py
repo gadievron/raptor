@@ -567,3 +567,32 @@ def test_unterminated_comment_in_directive_rest_keeps_old_evaluation():
     # previously-honoured directive changes evaluation.
     src = "#if 0 /* note\nstill comment */\n#endif\nlive();\n"
     assert detect_preprocessor_dead_ranges(src) == []
+
+
+def test_comment_between_hash_and_keyword_is_honoured():
+    # `# /* c */ if 0` is `#if 0` to the compiler (phase 3 turns the
+    # comment into whitespace inside the directive line) — gcc-verified:
+    # rc=0, zero diagnostics, dead1 absent from the object.
+    src = (
+        "# /* c */ if 0\n"
+        "void dead1(void){}\n"
+        "#endif\n"
+        "int main(void){ return 0; }\n"
+    )
+    assert detect_preprocessor_dead_ranges(src) == [(2, 2)]
+
+
+def test_backslash_formfeed_and_vtab_splices_mask_directive():
+    # gcc splices a backslash separated from the newline by ANY
+    # whitespace — form feed and vertical tab included (verified:
+    # rc=0, warning only, the live function present in the binary).
+    for ws in ("\x0c", "\x0b"):
+        src = (
+            "#if 1\n"
+            "#define X \\" + ws + "\n"
+            "#if 0\n"
+            "void live_fn(void){}\n"
+            "#endif\n"
+            "int main(void){ live_fn(); return 0; }\n"
+        )
+        assert detect_preprocessor_dead_ranges(src) == [], repr(ws)

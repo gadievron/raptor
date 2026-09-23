@@ -183,15 +183,16 @@ def _is_digit_separator(line: str, i: int) -> bool:
 
 # Translation phase 2: a backslash at end of line splices the next
 # physical line onto it. GCC and Clang additionally splice when
-# horizontal whitespace (or a CR left behind by CRLF content split on
-# "\n") separates the backslash from the newline — diagnostics only,
+# whitespace (space, tab, vertical tab, form feed — gcc-verified for
+# every member — or a CR left behind by CRLF content split on "\n")
+# separates the backslash from the newline — diagnostics only,
 # semantics unchanged. Matching only a bare trailing "\\" made every
 # backslash-space and backslash-CRLF splice a divergence the compiler
 # resolves the other way (blanking compiled functions out of the
 # parse view). A strict-standard compiler that refuses the
 # whitespace-separated splice diverges only toward under-blanking
 # (dead code stays visible — the cheap failure).
-_PP_SPLICE_RE = re.compile(r"\\[ \t\r]*$")
+_PP_SPLICE_RE = re.compile(r"\\[ \t\v\f\r]*$")
 
 
 def _ends_with_splice(line: str) -> bool:
@@ -464,7 +465,7 @@ def detect_macro_call_targets(content: str) -> set:
     # macros, and folding only "\\\n" made detection silently lose the
     # UNCERTAIN rescue for macro-only-reachable functions there (the
     # false NOT_CALLED direction).
-    joined = re.sub(r"\\[ \t\r]*\n", " ", content)
+    joined = re.sub(r"\\[ \t\v\f\r]*\n", " ", content)
     targets: set = set()
     for m in _FUNC_MACRO_DEF.finditer(joined):
         macro_name = m.group(1)
