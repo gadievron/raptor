@@ -147,6 +147,49 @@ class TestPositives:
         """)
         assert sorted(r["line"] for r in results) == [3, 4, 5]
 
+    def test_parenthesized_ternary_with_non_literal_arm_fires(
+        self, tmp_path,
+    ):
+        # Recall guard for the parenthesized safe arm: parens around a
+        # ternary with a non-literal arm must not mark it safe.
+        results = _run_rule(tmp_path, """\
+            void tern(int x, char *user, int n)
+            {
+                printf((x ? user : "b %d"), n);
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["line"] == 3
+
+    def test_local_ternary_with_non_literal_arm_fires(self, tmp_path):
+        # Recall guard for the ternary-into-local safe arm: one
+        # non-literal arm keeps the local in the bug set.
+        results = _run_rule(tmp_path, """\
+            void tern(int x, char *user, int n)
+            {
+                const char *fmt;
+                fmt = x ? user : "b %d";
+                printf(fmt, n);
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["line"] == 5
+
+    def test_local_ternary_reassigned_from_parameter_fires(self, tmp_path):
+        # The ternary-of-literals initializer shares the dominating-
+        # reassignment discipline of the other constant-valued inits.
+        results = _run_rule(tmp_path, """\
+            void tern(int x, char *user, int n)
+            {
+                const char *fmt;
+                fmt = x ? "a %d" : "b %d";
+                fmt = user;
+                printf(fmt, n);
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["line"] == 6
+
     def test_gettext_of_user_local_fires(self, tmp_path):
         # Only a gettext of a string CONSTANT marks the local safe —
         # translating attacker data returns attacker data.
@@ -249,6 +292,50 @@ class TestNegatives:
                 printf(x ? "a %d" : "b %d", n);
                 fprintf(fp, x ? "a %d" : "b %d", n);
                 snprintf(buf, 9, x ? "a %d" : "b %d", n);
+            }
+        """)
+        assert results == []
+
+    def test_parenthesized_ternary_of_literals_does_not_fire(self, tmp_path):
+        # Same literals-only ternary, parenthesized — the paren
+        # isomorphism does not reach into the escaped-alternation
+        # slot, so the spelling needs its own safe arm.
+        results = _run_rule(tmp_path, """\
+            void pick(int x, int n, void *fp, char *buf)
+            {
+                printf((x ? "a %d" : "b %d"), n);
+                fprintf(fp, (x ? "a %d" : "b %d"), n);
+                snprintf(buf, 9, (x ? "a %d" : "b %d"), n);
+            }
+        """)
+        assert results == []
+
+    def test_ternary_of_literals_into_local_does_not_fire(self, tmp_path):
+        # The COMPOSITION of two safe shapes: a literals-only ternary
+        # assigned to a local that reaches the call unreassigned. Both
+        # arms are literals, so the local is literal-valued whichever
+        # way the condition went.
+        results = _run_rule(tmp_path, """\
+            void pick(int x, int n, void *fp, char *buf)
+            {
+                const char *fmt;
+                fmt = x ? "a %d\\n" : "b %d\\n";
+                printf(fmt, n);
+                fprintf(fp, fmt, n);
+                snprintf(buf, 9, fmt, n);
+            }
+        """)
+        assert results == []
+
+    def test_parenthesized_ternary_into_local_does_not_fire(self, tmp_path):
+        # Third spelling: the parenthesized literals-only ternary
+        # assigned to a local — the composition of the two arms above.
+        results = _run_rule(tmp_path, """\
+            void pick(int x, int n)
+            {
+                const char *fmt;
+                fmt = (x ? "a %d\\n" : "b %d\\n");
+                printf(fmt, n);
             }
         """)
         assert results == []
