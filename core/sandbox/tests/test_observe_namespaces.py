@@ -158,6 +158,59 @@ class TestObserveUnderLandlockOnly(unittest.TestCase):
                 "should land",
             )
 
+    def test_landlock_only_audit_lane_bounds_nproc(self):
+        """The audited payload on the Landlock-only lane runs with NO
+        pid-ns, so RLIMIT_NPROC is the ONLY fork-bomb bound there —
+        exactly as on the plain no-namespace lane, whose preexec has
+        carried host_nproc_cap all along. The audit lane's
+        rlimit-only preexec omitted it, running audited targets at
+        the host's per-UID ceiling (millions on defaults) while the
+        module threat-model claimed the no-namespace fallback bounds
+        growth. This is the named oracle for that claim on the audit
+        lane."""
+        import resource
+        from unittest.mock import patch
+
+        from core.sandbox import run as sandbox_run
+
+        parent_soft = resource.getrlimit(resource.RLIMIT_NPROC)[0]
+        if (parent_soft != resource.RLIM_INFINITY
+                and parent_soft < 20000):
+            self.skipTest(
+                "host RLIMIT_NPROC already tight — the lane's bound "
+                "is indistinguishable from the inherited one here")
+
+        with TemporaryDirectory() as d:
+            run_dir = Path(d) / "audit-nproc"
+            run_dir.mkdir()
+            with patch("core.sandbox._spawn.mount_ns_available",
+                       return_value=False), \
+                 patch("core.sandbox.context.check_mount_available",
+                       return_value=False):
+                result = sandbox_run(
+                    [sys.executable, "-c",
+                     "import resource; print(resource.getrlimit("
+                     "resource.RLIMIT_NPROC)[0])"],
+                    target=str(run_dir), output=str(run_dir),
+                    observe=True,
+                    capture_output=True, text=True, timeout=30,
+                )
+            self.assertEqual(
+                result.returncode, 0,
+                f"stderr={result.stderr!r}",
+            )
+            child_soft = int(result.stdout.strip().splitlines()[-1])
+            # Cap = current same-UID usage + the configured budget
+            # (1024 by default) — far below any default host ceiling.
+            self.assertLess(
+                child_soft, 20000,
+                "audited payload runs at (or near) the host per-UID "
+                "process ceiling — host_nproc_cap did not reach the "
+                "audit lane's preexec",
+            )
+            if parent_soft != resource.RLIM_INFINITY:
+                self.assertLess(child_soft, parent_soft)
+
 
 # ---------------------------------------------------------------------------
 # block_network — connect() recorded even when net-ns blocks it
