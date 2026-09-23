@@ -40,7 +40,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import Any
 
 from core.hash import sha256_file
 from core.function_taxonomy import (
@@ -61,9 +61,6 @@ from core.function_taxonomy import (
     TOCTOU_FUNCS,
 )
 from pathlib import Path
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
