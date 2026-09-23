@@ -502,7 +502,9 @@ def cmd_record(args: argparse.Namespace) -> int:
     # G3: NO-SELF-CRITIQUE — re-recording same function requires a sweep
     # since the last record. First record is always allowed.
     last_record_idx = None
+    last_record_status = None
     last_sweep_idx = None
+    last_executed_sweep_idx = None
     for i, e in enumerate(audit_log):
         entry_key = e.get("key") or (
             f"{e.get('file')}:{e.get('function')}"
@@ -512,21 +514,58 @@ def cmd_record(args: argparse.Namespace) -> int:
             continue
         if e.get("action") == "sweep":
             last_sweep_idx = i
+            # An EXECUTED sweep carries the tool's own outcome. Manual
+            # rows either attest an outcome (tagged manual-attestation
+            # by the producer) or log no outcome at all — neither is
+            # execution evidence. An "error" outcome means the tool
+            # never completed: also not execution evidence.
+            if (e.get("outcome")
+                    and e.get("outcome") != "error"
+                    and e.get("rule_source") != "manual-attestation"):
+                last_executed_sweep_idx = i
         elif e.get("status") and e.get("action") != "context":
             last_record_idx = i
+            last_record_status = e.get("status")
 
-    if last_record_idx is not None:  # noqa: SIM102
+    if last_record_idx is not None:
         if last_sweep_idx is None or last_sweep_idx < last_record_idx:
             print(
                 f"error [G3 NO-SELF-CRITIQUE]: {_k} was already recorded "
                 f"(entry #{last_record_idx}). Re-recording requires a sweep "
                 f"(tool-grounded check) since the last record.\n"
-                f"  Run a tool first, then: libexec/raptor-audit sweep "
+                f"  Run a tool first: libexec/raptor-audit sweep "
                 f"--out {out_dir} --file {_f} --function {_fn} "
-                f"--tool <tool> --outcome <confirmed|refuted>",
+                f"--tool <tool> --rule-file <rule> (auto-run tools: "
+                f"symbolic, smt, heap-copy, ...)",
                 file=sys.stderr,
             )
             return 1
+        # Retraction lane: downgrading a concern-tier verdict is the
+        # suppression-critical direction ("tool output is the
+        # verdict") — it must be grounded by a sweep that actually
+        # RAN, not by an attested outcome one flag away from the
+        # refusal text. Escalations keep the plain freshness rule:
+        # minting a finding is already receipt-gated by G2.
+        _rank = {"finding": 3, "suspicious": 2, "error": 1,
+                 "dormant": 0, "clean": 0}
+        if (last_record_status in ("finding", "suspicious")
+                and _rank.get(args.status, 0)
+                < _rank[last_record_status]):  # noqa: SIM102
+            if (last_executed_sweep_idx is None
+                    or last_executed_sweep_idx < last_record_idx):
+                print(
+                    f"error [G3 NO-SELF-CRITIQUE]: retracting {_k} "
+                    f"from '{last_record_status}' to '{args.status}' "
+                    "requires an EXECUTED sweep since the last record "
+                    "— manual --outcome attestations do not ground a "
+                    "retraction.\n"
+                    f"  Run the tool: libexec/raptor-audit sweep "
+                    f"--out {out_dir} --file {_f} --function {_fn} "
+                    f"--tool <tool> --rule-file <rule> (auto-run "
+                    f"tools: symbolic, smt, heap-copy, ...)",
+                    file=sys.stderr,
+                )
+                return 1
 
     # Auto-resolve line numbers from the checklist when not provided.
     # Must run before G7 so the reachability check gets the correct
