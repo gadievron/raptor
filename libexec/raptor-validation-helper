@@ -3225,6 +3225,31 @@ def prepare_1(workdir, target=None, model=None):
 
     print(generate_summary(workdir))
 
+    # Machine-readable per-finding outcomes + graph enrichment: the
+    # writer projects findings.json's verdicts into
+    # validation-outcomes.json, then the graph lane promotes them into
+    # verified_outcome nodes (VALIDATES edges).
+    with contextlib.suppress(Exception):
+        from packages.exploitability_validation.report import (
+            write_validation_outcomes,
+        )
+        outcomes_path = write_validation_outcomes(workdir)
+        if outcomes_path is not None:
+            try:
+                from core.understand_graph import ingest_validation_outcomes
+                ingest_validation_outcomes(Path(workdir), target or "")
+            # Broad except: enrichment is best-effort by design (the
+            # sibling graph-enrichment sites use the same spelling).
+            # The ingest mkdirs the graph dir and binds
+            # artifact-derived values, so the failure surface spans
+            # OSError, sqlite errors, shape errors, and bind
+            # overflows — any of them must degrade here, not revoke
+            # an otherwise-complete validation run at its final
+            # optional step.
+            except Exception as e:  # noqa: BLE001
+                print(f"⚠️  Graph enrichment skipped: "
+                      f"{_sft(str(e), max_len=300)}", file=sys.stderr)
+
     with contextlib.suppress(Exception):
         _write_stage1_coverage_records(Path(workdir))
 
