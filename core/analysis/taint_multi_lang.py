@@ -364,6 +364,7 @@ def _extract_java_functions(
     """Extract Java function definitions with bodies."""
     results = []
     matches = list(_JAVA_FUNC.finditer(content))
+    scan_state = _new_scan_state(content)
     for i, match in enumerate(matches):
         name = match.group(1)
         params_str = match.group(2)
@@ -372,9 +373,8 @@ def _extract_java_functions(
         next_start = (
             matches[i + 1].start() if i + 1 < len(matches) else None
         )
-        body_end = _find_brace_end(
-            content, body_start - 1,
-            limit=_body_scan_limit(content, body_start - 1, next_start),
+        body_end = _bounded_body_end(
+            content, body_start - 1, next_start, scan_state,
         )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
@@ -465,6 +465,7 @@ def _extract_js_functions(
         r"(?:async\s+)?function\s+(\w+)\s*\(([^)]{0,400})\)\s*(?::\s*\S+\s*)?\{",
     )
     named_matches = list(named_re.finditer(content))
+    scan_state = _new_scan_state(content)
     for i, match in enumerate(named_matches):
         name = match.group(1)
         params = _parse_js_params(match.group(2))
@@ -473,9 +474,8 @@ def _extract_js_functions(
             named_matches[i + 1].start()
             if i + 1 < len(named_matches) else None
         )
-        body_end = _find_brace_end(
-            content, match.end() - 1,
-            limit=_body_scan_limit(content, match.end() - 1, next_start),
+        body_end = _bounded_body_end(
+            content, match.end() - 1, next_start, scan_state,
         )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
@@ -516,9 +516,8 @@ def _extract_js_functions(
             method_matches[i + 1].start()
             if i + 1 < len(method_matches) else None
         )
-        body_end = _find_brace_end(
-            content, match.end() - 1,
-            limit=_body_scan_limit(content, match.end() - 1, next_start),
+        body_end = _bounded_body_end(
+            content, match.end() - 1, next_start, scan_state,
         )
         if body_end > body_start and name not in seen:
             seen.add(name)
@@ -587,6 +586,7 @@ def _extract_go_functions(
     """Extract Go function definitions."""
     results = []
     matches = list(_GO_FUNC.finditer(content))
+    scan_state = _new_scan_state(content)
     for i, match in enumerate(matches):
         name = match.group(1)
         params = _parse_go_params(match.group(2))
@@ -600,9 +600,8 @@ def _extract_go_functions(
         next_start = (
             matches[i + 1].start() if i + 1 < len(matches) else None
         )
-        body_end = _find_brace_end(
-            content, open_pos,
-            limit=_body_scan_limit(content, open_pos, next_start),
+        body_end = _bounded_body_end(
+            content, open_pos, next_start, scan_state,
         )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
@@ -673,6 +672,7 @@ def _extract_rust_functions(
     """Extract Rust function definitions."""
     results = []
     matches = list(_RUST_FUNC.finditer(content))
+    scan_state = _new_scan_state(content)
     for i, match in enumerate(matches):
         name = match.group(1)
         params = _parse_rust_params(match.group(2))
@@ -685,9 +685,9 @@ def _extract_rust_functions(
         next_start = (
             matches[i + 1].start() if i + 1 < len(matches) else None
         )
-        body_end = _find_brace_end(
-            content, open_pos, rust_lifetimes=True,
-            limit=_body_scan_limit(content, open_pos, next_start),
+        body_end = _bounded_body_end(
+            content, open_pos, next_start, scan_state,
+            rust_lifetimes=True,
         )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
@@ -911,17 +911,56 @@ def _extract_php_extra_flows(
 # brace makes a "body" out of the rest of the file.
 _MAX_BODY_CHARS = 20000
 
+# Per-file amortised brace-scan budget: legitimate nesting scans each
+# byte once per nesting level (total ≈ depth × file size, well under
+# 8×), while N hostile unclosed headers would each scan up to the
+# per-body cap — the budget lets the first few pay full price and
+# clamps the rest at the next header for free.
+_SCAN_BUDGET_FLOOR = 1_000_000
+_SCAN_BUDGET_FACTOR = 8
 
-def _body_scan_limit(
-    content: str, open_pos: int, next_start: int | None,
+
+def _bounded_body_end(
+    content: str,
+    open_pos: int,
+    next_start: int | None,
+    scan_state: dict[str, int],
+    *,
+    rust_lifetimes: bool = False,
 ) -> int:
-    """Scan bound for one body: the next function header's start
-    (overlapping extents are what made N unclosed bodies O(N·L)) or
-    the per-body character cap, whichever is tighter."""
-    limit = min(len(content), open_pos + 1 + _MAX_BODY_CHARS)
+    """Body end for the brace at ``open_pos``, bounded two ways.
+
+    A PROPERLY CLOSED body within the per-body cap keeps its true
+    extent even when later function headers sit inside it (nested
+    named functions are pervasive legitimate code — clamping them at
+    the next header truncated real outer bodies). An UNCLOSED body
+    (hostile flood, minified/truncated source) — or any body once the
+    per-file scan budget is spent — clamps at the next header's start
+    so N overlapping extents can never re-scan the file N times.
+    """
+    cap_limit = min(len(content), open_pos + 1 + _MAX_BODY_CHARS)
+    clamp = cap_limit
     if next_start is not None:
-        limit = min(limit, max(next_start, open_pos + 1))
-    return limit
+        clamp = min(clamp, max(next_start, open_pos + 1))
+    if scan_state["used"] >= scan_state["budget"]:
+        return clamp
+    end = _find_brace_end(
+        content, open_pos, rust_lifetimes=rust_lifetimes,
+        limit=cap_limit,
+    )
+    scan_state["used"] += max(0, end - open_pos)
+    if end >= cap_limit:
+        # Ran to the bound without closing — treat as unclosed.
+        return clamp
+    return end
+
+
+def _new_scan_state(content: str) -> dict[str, int]:
+    return {
+        "used": 0,
+        "budget": max(_SCAN_BUDGET_FLOOR,
+                      _SCAN_BUDGET_FACTOR * len(content)),
+    }
 
 
 # A Rust character literal at a given position: 'x', '\n', '\'',
