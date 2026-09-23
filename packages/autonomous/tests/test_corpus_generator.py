@@ -83,7 +83,7 @@ class TestCommandsDetectedOrdering(unittest.TestCase):
             root = Path(tmpdir)
             gen = self._make_generator(root)
             with patch(
-                "packages.autonomous.corpus_generator._run_trusted",
+                "packages.autonomous.corpus_generator._inspect_binary",
                 return_value=_FakeStrings(_BINARY_STDOUT),
             ):
                 analysis = gen.analyze_binary()
@@ -103,7 +103,7 @@ class TestCommandsDetectedOrdering(unittest.TestCase):
             (source_dir / "README.md").write_text("no grammar here\n", encoding="utf-8")
 
             with patch(
-                "packages.autonomous.corpus_generator._run_trusted",
+                "packages.autonomous.corpus_generator._inspect_binary",
                 return_value=_FakeStrings(_BINARY_STDOUT),
             ):
                 without_source = self._make_generator(root).analyze_binary()
@@ -138,7 +138,7 @@ class TestFormatDetectionBoundaries(unittest.TestCase):
             binary.write_bytes(b"dummy")
             generator = CorpusGenerator(binary)
             with patch(
-                "packages.autonomous.corpus_generator._run_trusted",
+                "packages.autonomous.corpus_generator._inspect_binary",
                 return_value=result,
             ):
                 generator.analyze_binary()

@@ -10,11 +10,12 @@ Instead of hardcoded seeds, this module:
 """
 
 import re
-from core.sandbox import run_trusted as _run_trusted, SandboxSetupError  # read-only tools only (strings)
 from pathlib import Path
 from typing import Any
 
+from core.binary.inspect import inspect_binary as _inspect_binary
 from core.logging import get_logger
+from core.sandbox.errors import SandboxSetupError
 
 logger = get_logger()
 
@@ -66,13 +67,11 @@ class CorpusGenerator:
         }
 
         try:
-            # Extract strings from binary
-            result = _run_trusted(
-                ["strings", str(self.binary_path)],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
+            # Extract strings from the binary — full sandbox via
+            # core.binary.inspect (the bytes strings parses are the
+            # target's).
+            result = _inspect_binary(
+                "strings", (), self.binary_path, timeout=10)
 
             if result.returncode == 0:
                 strings = result.stdout.lower().split('\n')

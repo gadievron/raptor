@@ -15,9 +15,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.binary.inspect import inspect_binary as _inspect_binary
 from core.json import save_json
 from core.logging import get_logger
-from core.sandbox import run_trusted as _run_trusted
 from packages.fuzzing.capability import CapabilityReport
 from packages.fuzzing.capability import probe as probe_capabilities
 from packages.fuzzing.target_detector import TargetInfo
@@ -291,12 +291,11 @@ class FuzzingOrchestrator:
             return
         if not shutil.which("strings"):
             return
-        try:
-            result = _run_trusted(
-                ["strings", str(binary)],
-                capture_output=True, text=True, timeout=30,
-            )
-        except Exception:  # noqa: BLE001 — probe is best-effort
+        # Full sandbox via core.binary.inspect — strings parses the
+        # target's bytes. Never raises; failure is returncode None
+        # (probe is best-effort either way).
+        result = _inspect_binary("strings", (), binary, timeout=30)
+        if result.returncode is None:
             return
         out = result.stdout or ""
         if "__AFL" in out or "afl" in out.lower():
@@ -324,21 +323,20 @@ class FuzzingOrchestrator:
         if not shutil.which("nm") and not shutil.which("strings"):
             return False
 
-        for cmd in (
-            ["nm", str(target_path)],
-            ["strings", "-a", str(target_path)],
-            ["strings", str(target_path)],
+        # Full sandbox via core.binary.inspect — nm/strings parse the
+        # target's bytes. inspect_binary never raises; a failed
+        # invocation is returncode None with empty streams (probe is
+        # best-effort either way).
+        for tool, args in (
+            ("nm", ()),
+            ("strings", ("-a",)),
+            ("strings", ()),
         ):
-            if not shutil.which(cmd[0]):
+            if not shutil.which(tool):
                 continue
-            try:
-                result = _run_trusted(
-                    cmd, capture_output=True, text=True, timeout=15,
-                )
-                if (result.stdout or "") and "LLVMFuzzerTestOneInput" in result.stdout:
-                    return True
-            except Exception:  # noqa: BLE001, S112 — probe is best-effort
-                continue
+            result = _inspect_binary(tool, args, target_path, timeout=15)
+            if result.stdout and "LLVMFuzzerTestOneInput" in result.stdout:
+                return True
         return False
 
     def execute(

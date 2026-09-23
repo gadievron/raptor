@@ -312,8 +312,9 @@ class TestPlanTimeTracerHint:
         binary = tmp_path / "plain"
         binary.write_bytes(b"\x7fELF-no-markers-here")
         caps = SimpleNamespace(afl_qemu_trace=None, afl_frida_trace=None)
-        fake = SimpleNamespace(stdout="printable strings only", stderr="")
-        monkeypatch.setattr(orch_mod, "_run_trusted",
+        fake = SimpleNamespace(returncode=0,
+                               stdout="printable strings only", stderr="")
+        monkeypatch.setattr(orch_mod, "_inspect_binary",
                             lambda *a, **k: fake)
         # The availability gate consults the host PATH before the
         # (mocked) probe runs — pin it so the test is independent of
@@ -341,7 +342,9 @@ class TestPlanTimeTracerHint:
         assert plan.hints == []
 
         caps_none = SimpleNamespace(afl_qemu_trace=None, afl_frida_trace=None)
-        fake = SimpleNamespace(stdout="__AFL_SHM_ID present", stderr="")
-        monkeypatch.setattr(orch_mod, "_run_trusted", lambda *a, **k: fake)
+        fake = SimpleNamespace(returncode=0,
+                               stdout="__AFL_SHM_ID present", stderr="")
+        monkeypatch.setattr(orch_mod, "_inspect_binary",
+                            lambda *a, **k: fake)
         FuzzingOrchestrator._hint_binary_only_gap(plan, caps_none, binary)
         assert plan.hints == []
