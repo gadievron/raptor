@@ -89,13 +89,17 @@ _AUTH_PATTERNS: tuple[re.Pattern[str], ...] = (
 _NOT_FOUND_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bmanifest unknown\b", re.IGNORECASE),
     re.compile(r"\bnot found\b", re.IGNORECASE),
-    re.compile(r"repository .+ not found", re.IGNORECASE),
+    # Gaps bounded: unbounded, every planted head phrase re-scans
+    # the rest of the (registry-controlled) message — quadratic.
+    # Image refs sit far below 500 chars; beyond the bound the
+    # message falls back to the transport default.
+    re.compile(r"repository .{1,500} not found", re.IGNORECASE),
     # Keep in step with failures.py's _MANIFEST_UNKNOWN_PATTERNS:
     # this shape fell through to the transport default here while the
     # sibling classifier called it permanent — one wasted retry per
     # absent ref.
     re.compile(
-        r"pull access denied for .+, repository does not exist",
+        r"pull access denied for .{1,500}, repository does not exist",
         re.IGNORECASE,
     ),
 )

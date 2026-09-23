@@ -137,7 +137,11 @@ _META_KV_RE = re.compile(
     # ``key="quoted value"`` or ``key=bareword`` (no spaces, no quotes).
     # Quoted values handle ``\"`` escapes so round-tripping values
     # containing double-quote characters works correctly.
-    r'(\w[-\w]*)=(?:"((?:[^"\\]|\\.)*)"|(\S+))'
+    # The key is pinned to the start of its word run ((?<![-\w])):
+    # an unanchored scan otherwise restarts inside every key suffix
+    # — quadratic on a long token run — and a mid-word start is
+    # never a real key.
+    r'(?<![-\w])(\w[-\w]*)=(?:"((?:[^"\\]|\\.)*)"|(\S+))'
 )
 
 

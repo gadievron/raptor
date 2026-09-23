@@ -171,8 +171,13 @@ _SPDX_COMPOUND_HEADER_RE = re.compile(
 # principal X) — split_compound_expression flattens the operators
 # away, so these splitters recover the structure. Case-insensitive to
 # match the IGNORECASE header regex above.
-_ANDOR_SPLIT_RE_CI = re.compile(r"\s+(?:AND|OR)\s+", re.IGNORECASE)
-_WITH_SPLIT_RE_CI = re.compile(r"\s+WITH\s+", re.IGNORECASE)
+# (?<!\s) pins each operator match to the start of its whitespace
+# run: a bare leading \s+ re-consumes a hostile whitespace run from
+# every scan position — quadratic in the expression length. The
+# earliest match always starts at the run start, so the split is
+# unchanged.
+_ANDOR_SPLIT_RE_CI = re.compile(r"(?<!\s)\s+(?:AND|OR)\s+", re.IGNORECASE)
+_WITH_SPLIT_RE_CI = re.compile(r"(?<!\s)\s+WITH\s+", re.IGNORECASE)
 
 
 @dataclass(frozen=True)

@@ -33,7 +33,10 @@ logger = logging.getLogger(__name__)
 MAX_PAIRS = 500
 
 _CALL_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
-_SOURCE_LOC_RE = re.compile(r"@\s*(\S+?):(\d+)\s*$")
+# Path span bounded: unbounded, every planted "@" re-scans the rest
+# of a hostile line — quadratic. Real source paths sit far below
+# 300 chars (beyond it the location is unparsed).
+_SOURCE_LOC_RE = re.compile(r"@\s*(\S{1,300}?):(\d+)\s*$")
 
 _EP_KEYS = ("has_taint_flow", "taint_reaches_sinks")
 _SINK_KEYS = ("taint_reached_from",)

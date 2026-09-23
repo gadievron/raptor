@@ -75,7 +75,11 @@ _warned_paths: set = set()
 
 # Trailing token appended by stamp(); strip() removes it (and any
 # whitespace immediately before it) from the end of the content.
-_TOKEN_RE = re.compile(r"\s*\[mac:([0-9a-f]{64})\]\s*$")
+# (?<!\s) pins the match to the start of its whitespace run (a bare
+# leading \s* re-consumes a whitespace run from every scan position
+# — quadratic); the earliest match always starts at the run start,
+# so the stripped span is unchanged.
+_TOKEN_RE = re.compile(r"(?<!\s)\s*\[mac:([0-9a-f]{64})\]\s*$")
 
 
 def _key_path() -> Path:

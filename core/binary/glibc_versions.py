@@ -40,7 +40,12 @@ def parse_major_minor(raw: str | None) -> tuple[int, int] | None:
     return (major, minor)
 
 
-_SEARCH_RE = re.compile(r"(\d+)\.(\d+)", re.ASCII)
+# (?<!\d) pins the match to the start of its digit run: a bare
+# leading \d+ re-consumes a digit run from every scan position —
+# quadratic on tool output stuffed with digits. The earliest match
+# always starts at the run start, so the extracted pair is
+# unchanged.
+_SEARCH_RE = re.compile(r"(?<!\d)(\d+)\.(\d+)", re.ASCII)
 
 
 def search_major_minor(text: str | None) -> tuple[int, int] | None:

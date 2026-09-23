@@ -110,7 +110,6 @@ def _find_user_controlled_fmt(src: str) -> str | None:
             return f"{fn}({', '.join(args[:pos])}...)"[:60]
     return None
 _C_LINE_COMMENT_RE = re.compile(r"//[^\n]*")
-_C_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", flags=re.DOTALL)
 
 # Symbol names the corpus uses for "attacker's goal" functions.
 # Kept broad so the detector doesn't miss variants; the router's
@@ -254,8 +253,30 @@ def detect_shape(
     )
 
 
+def _strip_block_comments(text: str) -> str:
+    """Replace each ``/* ... */`` span (non-nesting, first close
+    wins) with one space — the language of a lazy ``/\\*.*?\\*/``
+    DOTALL sub, done with str.find: a hostile file stuffed with
+    unclosed ``/*`` openers costs one linear pass instead of a
+    rescan of the tail per opener."""
+    out: list[str] = []
+    i = 0
+    while True:
+        j = text.find("/*", i)
+        if j < 0:
+            out.append(text[i:])
+            return "".join(out)
+        k = text.find("*/", j + 2)
+        if k < 0:
+            out.append(text[i:])
+            return "".join(out)
+        out.append(text[i:j])
+        out.append(" ")
+        i = k + 2
+
+
 def _strip_c_comments(src: str) -> str:
-    src = _C_BLOCK_COMMENT_RE.sub(" ", src)
+    src = _strip_block_comments(src)
     src = _C_LINE_COMMENT_RE.sub(" ", src)
     return src
 

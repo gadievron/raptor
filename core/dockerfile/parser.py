@@ -57,8 +57,12 @@ _KNOWN_DIRECTIVES = frozenset({
 # ``FROM <image> [AS <stage>]`` — extract the stage name when
 # present. We tolerate both ``AS`` and ``as`` since either shows
 # up in practice.
+# (?<!\s) pins the match to the start of its whitespace run: a bare
+# leading \s+ re-consumes a hostile run from every scan position —
+# quadratic in the line length; the earliest match always starts at
+# the run start, so the match is unchanged.
 _FROM_AS_RE = re.compile(
-    r"\s+AS\s+(?P<name>[A-Za-z0-9_-]+)\s*$",
+    r"(?<!\s)\s+AS\s+(?P<name>[A-Za-z0-9_-]+)\s*$",
     re.IGNORECASE,
 )
 

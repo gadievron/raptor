@@ -4691,8 +4691,12 @@ def _verify_evidence_hashes(
 # 'Evidence (x):' row ending in a long whitespace run with no dash
 # cost every split of the run — cubic in the recall-row length.
 # Match set and all five captures unchanged on writer-shaped rows.
+# The statement gap is bounded: unbounded, every 'Evidence (x):'
+# head planted in a hostile row re-scans the rest of the row —
+# quadratic. Writer-shaped statements sit far below 500 chars
+# (beyond it the row is not parsed, versus an unbounded scan).
 _SAGE_EVIDENCE_RE = re.compile(
-    r"Evidence\s+\((\w+)\):\s+(\S(?:.*?\S)??)(?::(\d+))?"
+    r"Evidence\s+\((\w+)\):\s+(\S(?:.{0,500}?\S)??)(?::(\d+))?"
     r"\s+(?:\[h=([a-f0-9]+)\]\s+)?[-–—]\s+(.*)"
 )
 # The statement group is \S-delimited and carries its trailing

@@ -68,7 +68,12 @@ _DAEMON_CORRUPTION_PATTERNS: tuple[re.Pattern[str], ...] = (
 _DISK_FULL_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"no space left on device", re.IGNORECASE),
     re.compile(r"\bdisk full\b", re.IGNORECASE),
-    re.compile(r"write.+: no space", re.IGNORECASE),
+    # Gaps in these daemon-output patterns are bounded: unbounded,
+    # every planted head phrase re-scans the rest of the (container-
+    # controlled) output — quadratic. Paths and image refs in real
+    # messages sit far below 500 chars; beyond the bound the line
+    # falls back to the generic classification.
+    re.compile(r"write.{1,500}: no space", re.IGNORECASE),
     re.compile(r"input/output error", re.IGNORECASE),  # often disk-related on Colima
 )
 
@@ -78,7 +83,8 @@ _DISK_FULL_PATTERNS: tuple[re.Pattern[str], ...] = (
 # dockerfile_gen, OR a base-image pivot to bookworm/alpine.
 _GPG_SIGNATURE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"At least one invalid signature was encountered", re.IGNORECASE),
-    re.compile(r"GPG error.+invalid signature", re.IGNORECASE),
+    # (gap bounded — see _DISK_FULL_PATTERNS)
+    re.compile(r"GPG error.{1,500}invalid signature", re.IGNORECASE),
     re.compile(r"is not signed", re.IGNORECASE),
     re.compile(r"NO_PUBKEY", re.IGNORECASE),
 )
@@ -95,9 +101,13 @@ _FATAL_COMPOSE_CONFIG_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _MANIFEST_UNKNOWN_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bmanifest unknown\b", re.IGNORECASE),
-    re.compile(r"manifest for .+ not found", re.IGNORECASE),
-    re.compile(r"repository .+ not found", re.IGNORECASE),
-    re.compile(r"pull access denied for .+, repository does not exist", re.IGNORECASE),
+    # (gaps bounded — see _DISK_FULL_PATTERNS)
+    re.compile(r"manifest for .{1,500} not found", re.IGNORECASE),
+    re.compile(r"repository .{1,500} not found", re.IGNORECASE),
+    re.compile(
+        r"pull access denied for .{1,500}, repository does not exist",
+        re.IGNORECASE,
+    ),
     re.compile(r"image not found", re.IGNORECASE),
 )
 

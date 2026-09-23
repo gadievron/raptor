@@ -45,7 +45,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["ToolInfo", "probe", "reset_probe_cache"]
 
-_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+# (?<!\d) pins the match to the start of its digit run (a bare
+# leading \d+ re-scans a digit run from every position — quadratic);
+# the earliest match always starts at the run start, so the
+# extracted version is unchanged.
+_VERSION_RE = re.compile(r"(?<!\d)(\d+)\.(\d+)(?:\.(\d+))?")
 
 #: Per-stream retention cap on probe output (see the run call for the
 #: rationale). 64k chars keeps every real tool's banner intact.

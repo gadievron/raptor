@@ -50,7 +50,12 @@ def extract_from_image(dockerfile_text: str | None, ctx: Path) -> str | None:
         # Strip optional --platform=... flag
         rest = re.sub(r"^FROM\s+(?:--\S+\s+)*", "", line, flags=re.IGNORECASE)
         # Strip ' AS <stage>'
-        rest = re.split(r"\s+AS\s+", rest, maxsplit=1, flags=re.IGNORECASE)[0]
+        # (?<!\s) pins the split to the start of its whitespace run: an
+        # unanchored bare \s+ prefix re-consumes a hostile run from
+        # every scan position — quadratic in the line length. The
+        # earliest match always starts at the run start, so the split
+        # is unchanged.
+        rest = re.split(r"(?<!\s)\s+AS\s+", rest, maxsplit=1, flags=re.IGNORECASE)[0]
         return rest.strip() or None
     return None
 

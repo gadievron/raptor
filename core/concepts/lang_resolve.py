@@ -624,7 +624,12 @@ def _dynamic_assignment_found(
         if tail not in content:
             continue
         if lang == "python" and re.search(
-            rf"\bsetattr\s*\([^,]+,\s*['\"]{re.escape(tail)}['\"]", content,
+            # Bounded first-argument span: unbounded, every "setattr("
+            # planted in hostile source re-scans the rest of it —
+            # quadratic. Real receiver expressions sit far below the
+            # bound.
+            rf"\bsetattr\s*\([^,]{{1,500}},\s*['\"]{re.escape(tail)}['\"]",
+            content,
         ):
             return True
         # Scoped to PHP contents so C's ``ps->field = v`` never trips

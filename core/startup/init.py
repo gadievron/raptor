@@ -320,7 +320,10 @@ def _cached_cli_version(binary: str) -> str | None:
         return None
     out = (proc.stdout or proc.stderr or "").strip()
     first = out.splitlines()[0] if out else ""
-    m = re.search(r"\d+\.\d+(?:\.\d+)*", first)
+    # (?<!\d) pins the match to its digit-run start (a bare leading
+    # \d+ re-scans a digit run from every position — quadratic); the
+    # earliest match is unchanged.
+    m = re.search(r"(?<!\d)\d+\.\d+(?:\.\d+)*", first)
     if proc.returncode != 0 or not m:
         return None
     ver = m.group(0)

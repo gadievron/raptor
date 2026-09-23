@@ -150,13 +150,17 @@ _SANDBOX_EXEC_FALLBACK = "/usr/bin/sandbox-exec"
 # language — the lazy group absorbed any remainder): the naive
 # ``\s+(.+?)`` overlapped the run and the group — quadratic on a
 # 'Sandbox:'-opening log line ending in a whitespace run.
+# The name span is bounded: unbounded, every planted "Sandbox:"
+# head re-scans the rest of the line — quadratic. Process names sit
+# far below 300 chars (beyond it the line is unparsed, same as any
+# other format drift).
 _LOG_LINE_RE = re.compile(
-    r"Sandbox:\s+(?=\S)(.+?)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
+    r"Sandbox:\s+(?=\S)(.{1,300}?)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
 )
 # Greedy-name twin of _LOG_LINE_RE — identical structure, but (.+)
 # anchors the name to the LAST "(digits) <verdict>" occurrence.
 _LOG_LINE_RE_GREEDY = re.compile(
-    r"Sandbox:\s+(?=\S)(.+)\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
+    r"Sandbox:\s+(?=\S)(.{1,300})\((\d+)\)\s+(allow|deny)(?:\(\d+\))?\s+(\S+)\s+(.+)$"
 )
 
 # Parse-ratio diagnostic thresholds (see LogStreamer.stop). When at

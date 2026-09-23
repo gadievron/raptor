@@ -273,8 +273,12 @@ def _entry_to_credentials(entry: dict) -> BasicCredentials | None:
 #
 # token = 1*<any CHAR except CTL or "()<>@,;:\\\"/[]?={} \t">
 # quoted-string = literal "" with optional backslash escapes.
+# The key is pinned to the start of its token run ((?<![...])): an
+# unanchored scan otherwise restarts inside every key suffix —
+# quadratic on a hostile header — and a mid-token start is never a
+# real parameter name.
 _WWW_AUTH_PARAM_RE = re.compile(
-    r'(?P<key>[a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*'
+    r'(?<![a-zA-Z0-9_-])(?P<key>[a-zA-Z][a-zA-Z0-9_-]*)\s*=\s*'
     r'(?:"(?P<qval>[^"]*)"|(?P<tval>[^\s",]+))'
 )
 
@@ -286,8 +290,13 @@ _WWW_AUTH_PARAM_RE = re.compile(
 # permits multiple challenges per header). The scheme names are the
 # ones registries actually emit; a scheme token inside a QUOTED param
 # value would falsely split, which no real realm URL contains.
+# The whitespace after a boundary is bounded: unbounded, every
+# newline/comma in a hostile header re-scans the remaining
+# whitespace run — quadratic. Real header folding uses a few chars
+# of whitespace; 64 is generous (beyond it the challenge is not
+# split there, versus an unbounded scan).
 _CHALLENGE_BOUNDARY_RE = re.compile(
-    r"(?:^|[\n,]\s*)(?P<scheme>Bearer|Basic|Digest|Negotiate)(?=\s|$)",
+    r"(?:^|[\n,]\s{0,64})(?P<scheme>Bearer|Basic|Digest|Negotiate)(?=\s|$)",
     re.IGNORECASE,
 )
 

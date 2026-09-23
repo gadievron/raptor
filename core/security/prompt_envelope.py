@@ -262,7 +262,12 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     # body. The open arm's attribute run is bounded at 8 KB with the
     # over-long fallback joining the family arm further down.
     r'|<style\b[^>]{0,8192}>'
-    r'|@import\s+url\([^)]*\)'
+    # The @import url body is bounded like the other fetch arms:
+    # unbounded, every planted '@import url(' re-scans the rest of
+    # a hostile document — quadratic. Real imports sit far below
+    # 2048 chars; an over-long target simply keeps the arm from
+    # matching that one decoy span.
+    r'|@import\s+url\([^)]{0,2048}\)'
     # Reference-style link/image DEFINITION — `[label]: destination`.
     # The explicit-scheme arm above this comment block predates these
     # and stays (unanchored defence-in-depth); it missed scheme-
