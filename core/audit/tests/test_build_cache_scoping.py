@@ -103,6 +103,60 @@ class TestMergeScoping:
         _merge_from_build_cache(result, cache, {"cafe1234": str(binary)})
         assert [e.caller for e in result.sink_edges] == ["genuine"]
 
+    def test_hash_less_envelope_never_merges(self, tmp_path):
+        # A hash-less envelope under a chosen build-id is mintable by
+        # ANY writer of the shared (possibly network-mounted) cache
+        # dir; the merge must require a RECORDED matching
+        # binary_sha256, exactly as the strict import helper does.
+        from core.audit.binary_bridge import (
+            BinaryBridgeResult,
+            _merge_from_build_cache,
+        )
+
+        cache = _mk_cache(tmp_path)
+        binary = tmp_path / "prog"
+        binary.write_bytes(b"content the hostile peer never saw")
+        cache.put("cafe1234", "layer0-findings", _layer0("planted"))
+        result = BinaryBridgeResult()
+        _merge_from_build_cache(result, cache, {"cafe1234": str(binary)})
+        assert result.sink_edges == [], (
+            "a hash-less envelope must never enter the audit as "
+            "layer0 sink evidence"
+        )
+
+    def test_legacy_cache_object_enforces_recorded_hash(self, tmp_path):
+        # Duck-typed cache without the binding kwarg (TypeError
+        # fallback): the recorded-hash requirement applies there too.
+        from core.audit.binary_bridge import (
+            BinaryBridgeResult,
+            _merge_from_build_cache,
+        )
+
+        binary = tmp_path / "prog"
+        binary.write_bytes(b"real binary contents")
+        sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+
+        class LegacyCache:
+            def __init__(self, envelope):
+                self.envelope = envelope
+
+            def get(self, build_id, artifact):  # no binding kwarg
+                return self.envelope
+
+        hashless = {"data": _layer0("planted")}
+        result = BinaryBridgeResult()
+        _merge_from_build_cache(
+            result, LegacyCache(hashless), {"cafe1234": str(binary)},
+        )
+        assert result.sink_edges == []
+
+        bound = {"data": _layer0("genuine"), "binary_sha256": sha}
+        result = BinaryBridgeResult()
+        _merge_from_build_cache(
+            result, LegacyCache(bound), {"cafe1234": str(binary)},
+        )
+        assert [e.caller for e in result.sink_edges] == ["genuine"]
+
     def test_load_binary_bridge_passes_scoping(self, tmp_path, monkeypatch):
         from core.audit.binary_bridge import load_binary_bridge
 
