@@ -642,6 +642,61 @@ class ChildTailTests(unittest.TestCase):
             self.assertIn("stage helper crashed mid-run", content)
 
 
+    def test_timeout_persists_partial_capture(self):
+        # The kill's partial capture is the only account of what the
+        # multi-minute child was doing when the clock ran out — the
+        # arm previously returned without writing the artifact.
+        import subprocess as sp
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            dispatcher = _lifecycle_dispatcher(run_dir)
+
+            def _sandbox(cmd, *args, **kwargs):
+                dispatcher(cmd, *args, **kwargs)
+                raise sp.TimeoutExpired(
+                    cmd="claude", timeout=60,
+                    output=b"Stage A written\nstill grinding \x1b[2J...\n",
+                    stderr="partial stderr line")
+
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                result = _run(tmp, run_dir, sandbox=_sandbox)
+            self.assertFalse(result.ran)
+            self.assertIn("timeout", result.skipped_reason)
+            tail = run_dir / "dispatch-child-tail.log"
+            self.assertTrue(
+                tail.is_file(),
+                "timeout kill's partial capture must persist")
+            content = tail.read_text()
+            self.assertIn("exit=timeout after 60s", content)
+            self.assertIn("still grinding", content)
+            self.assertIn("partial stderr line", content)
+            # Hostile bytes escaped at write (newlines kept).
+            self.assertNotIn("\x1b", content)
+
+    def test_timeout_with_no_capture_still_fails_cleanly(self):
+        import subprocess as sp
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            dispatcher = _lifecycle_dispatcher(run_dir)
+
+            def _sandbox(cmd, *args, **kwargs):
+                dispatcher(cmd, *args, **kwargs)
+                raise sp.TimeoutExpired(cmd="claude", timeout=60)
+
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                result = _run(tmp, run_dir, sandbox=_sandbox)
+            self.assertFalse(result.ran)
+            self.assertIn("timeout", result.skipped_reason)
+            # Nothing captured: the artifact still records the exit
+            # label with empty tails — forensics never raises.
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+            self.assertIn("exit=timeout after 60s", content)
+
+
 class ChildTailPlantTests(unittest.TestCase):
     """run_dir is child-writable by design: a planted symlink at the
     artifact name must never steer the parent's write."""

@@ -221,8 +221,10 @@ def _read_child_tail_untrusted(path: Path) -> str | None:
     """Bounded, symlink-refusing read of the dispatch tail artifact.
 
     The artifact lives in a directory the CC child writes by design,
-    and on the timeout / launch-failure paths the PARENT never wrote
-    it — whatever sits at this name is child-controlled. Refuse
+    and on the launch-failure path the PARENT never wrote it (the
+    timeout arm persists the kill's partial capture, but the child
+    may still have replaced the name) — whatever sits here can be
+    child-controlled. Refuse
     symlinks and specials (O_NOFOLLOW + fstat, the inventory probe's
     discipline), read only the file's last 4 KiB (a planted sparse
     giant must not buffer), and escape control bytes AT READ TIME —
