@@ -37,6 +37,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import re
+import unicodedata
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -203,6 +204,20 @@ def _validate_function_name(function: str) -> None:
             f"function name may not have leading/trailing whitespace "
             f"(the parser strips it, so the name would not "
             f"round-trip): {function!r}"
+        )
+        raise ValueError(msg)
+    if unicodedata.normalize("NFC", function) != function:
+        # A non-NFC name is byte-distinct from its visually identical
+        # NFC twin: writing one beside the other creates duplicate
+        # sections no operator can tell apart, and byte-exact joins
+        # (respect-manual, replacement, lookups) silently miss the
+        # twin. Source languages normalise identifiers (Python:
+        # NFKC), so a legitimate non-NFC name does not occur; refuse
+        # rather than silently rewrite the caller's key.
+        msg = (
+            f"function name must be Unicode NFC-normalised (a non-NFC "
+            f"name would create a visually identical duplicate of its "
+            f"NFC twin): {function!r}"
         )
         raise ValueError(msg)
 
@@ -900,8 +915,19 @@ def write_annotation(
             for a in state.annotations
         ]
         if overwrite == "respect-manual":
+            # NFC-equivalent comparison: legacy on-disk sections may
+            # predate the NFC validation, and a visually identical
+            # twin of a human note is still the operator's record —
+            # the protective gate must cover it. (Joins/replacement
+            # stay byte-exact: silently merging pre-existing twins
+            # would itself destroy one of them.)
+            target = unicodedata.normalize("NFC", ann.function)
             prior = next(
-                (a for a in existing if a.function == ann.function), None,
+                (
+                    a for a in existing
+                    if unicodedata.normalize("NFC", a.function) == target
+                ),
+                None,
             )
             if prior is not None and prior.metadata.get("source") == "human":
                 return None
