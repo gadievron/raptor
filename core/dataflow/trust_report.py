@@ -11,8 +11,6 @@ precision/recall but:
     suppress? Must be 0 for a sound suppressor (the FN-gate).
   * **defer_rate** — share left ``uncertain``.
   * **suppression_precision** — of everything suppressed, how much was a real FP.
-
-.
 """
 
 from __future__ import annotations

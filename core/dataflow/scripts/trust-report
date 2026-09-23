@@ -2,8 +2,10 @@
 """Tier 0-aware analysis of the trust-witness bridge's ``synth_results`` DB.
 
 Usage:
-  core/dataflow/scripts/trust-report \\
-      [--synth-db /data/corpus/synth-results-tier0.db]
+  core/dataflow/scripts/trust-report --synth-db <path-to-synth-results.db>
+
+``--synth-db`` is required — there is deliberately no default path
+(the old one baked a machine layout into the repo).
 
 Headline numbers: processed / sound / not_sound / no_barrier, suppression rate,
 Tier 0 vs Tier 2 backend split among SOUND verdicts, per-CWE / per-language

@@ -9,8 +9,6 @@ CodeQL's :class:`DataflowPath`, IRIS LocalFlowSource hits, Semgrep
 results, and future dynamic-web producers all convert into a
 :class:`Finding` via per-producer adapters under
 ``core.dataflow.adapters`` so downstream consumers see one shape.
-
-See the design memo for the design.
 """
 
 from .finding import SCHEMA_VERSION, Finding, Step

@@ -7,24 +7,18 @@ Extracts parser/decoder API names from CVE-fix history (local clones of
 parsing libraries, or recorded fix-diff directories) into the
 parser_apis data pack consumed by core.function_taxonomy.
 
-Run via ``bin/raptor`` (which sets ``CLAUDECODE``) or with
-``_RAPTOR_TRUSTED=1`` for direct invocation in tests.
-"""
-import sys
+Dev-tooling only — not invoked by the LLM-driven RAPTOR workflows.
+Co-located with ``core/dataflow/`` (the module it operates on) rather
+than ``libexec/`` (which is reserved for framework-internal shims).
 
-# ─── trust-marker check (do not import; inline by design) ───
-# fmt: off
-import os  # noqa: E402
-if not (os.environ.get("CLAUDECODE")
-        or os.environ.get("_RAPTOR_TRUSTED")):
-    sys.stderr.write(
-        f"{sys.argv[0]}: internal dispatch script.\n"
-        "  Run via 'bin/raptor' instead.\n"
-        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
-    )
-    sys.exit(2)
-# fmt: on
-# ─── end trust-marker check ─────────────────────────────────
+The libexec ``_RAPTOR_TRUSTED`` guard previously gated invocation —
+removed for consistency with the sibling corpus-run / corpus-metrics
+scripts: this class is openly invocable by developers, and the guard
+was defensible only under the "internal dispatch script" framing
+libexec implies.
+"""
+import os
+import sys
 
 # Repo root comes from the launcher-set RAPTOR_DIR — the ONLY
 # path ever added to sys.path (hard lookup; KeyError if the
