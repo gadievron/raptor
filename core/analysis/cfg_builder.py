@@ -1106,7 +1106,14 @@ def build_python_cfg(
     """
     if isinstance(source, Path):
         file_path = str(source)
-        source_text = source.read_text(encoding="utf-8")
+        try:
+            source_text = source.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # Hostile / binary bytes on the direct-Path API: refuse
+            # (None) like the not-found path — decoding with
+            # replacement could mangle literals downstream consumers
+            # read as values.
+            return None
     else:
         file_path = "<string>"
         source_text = source

@@ -903,3 +903,14 @@ class TestExceptHandlerBinding:
         cfg = build_python_cfg(src, "handle")
         entries = [n for n in cfg.nodes() if n.label.startswith("except")]
         assert entries and all(not n.defs for n in entries)
+
+
+class TestHostileBytesPathRead:
+    def test_non_utf8_path_read_refuses(self, tmp_path):
+        # Direct-Path API over hostile bytes: refuse (None), never
+        # raise UnicodeDecodeError out of the builder.
+        from pathlib import Path as _P
+        from core.analysis.cfg_builder import build_python_cfg
+        f = tmp_path / "bad.py"
+        f.write_bytes(b"def f():\n    s = '\xff\xfe\x9d'\n")
+        assert build_python_cfg(_P(f), "f") is None

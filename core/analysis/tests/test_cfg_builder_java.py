@@ -125,6 +125,22 @@ class TestRefusals:
         assert cfg is not None
 
 
+class TestScale:
+    @pytest.mark.slow
+    def test_straight_line_build_is_not_quadratic(self):
+        # Twin of the C/C++ builder's bound — the per-node list scan
+        # was duplicated across both legs.
+        import time
+        n = 16000
+        body = "".join(f"        int v{i} = {i};\n" for i in range(n))
+        cfg, _ = _cfg(body)
+        t0 = time.monotonic()
+        cfg, _ = _cfg(body)
+        elapsed = time.monotonic() - t0
+        assert cfg is not None
+        assert elapsed < 5.0, f"CFG build took {elapsed:.1f}s at n={n}"
+
+
 class TestControlFlowSoundness:
     def test_do_while_second_iteration_path_exists(self):
         # ``y = clean(x); do { out.println(y); y = x; } while (c);``

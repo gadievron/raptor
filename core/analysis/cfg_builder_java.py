@@ -872,6 +872,11 @@ class _JavaCFGBuilder:
         )
         self._adjacency: dict[JavaCFGNode, list[JavaCFGNode]] = {}
         self._all_nodes: list[JavaCFGNode] = [self.entry, self.exit]
+        # Hash-set twin of _all_nodes for the _make_node collision
+        # probe — a list scan per node made CFG construction quadratic
+        # in statement count (machine-generated/hostile sources reach
+        # 100k+ statements per function). _all_nodes keeps ordering.
+        self._node_seen: set[JavaCFGNode] = {self.entry, self.exit}
         self._loop_stack: list[tuple[JavaCFGNode, JavaCFGNode]] = []
         # Unlabeled ``break`` targets: loops push their header,
         # switches push their join node — Java's break exits the
@@ -907,7 +912,7 @@ class _JavaCFGBuilder:
             defs=defs, uses=uses, call_sites=call_sites,
             may_escape=may_escape,
         )
-        if node in self._adjacency or node in self._all_nodes:
+        if node in self._adjacency or node in self._node_seen:
             self._dedupe_counter += 1
             node = JavaCFGNode(
                 kind="stmt", lineno=lineno,
@@ -916,6 +921,7 @@ class _JavaCFGBuilder:
                 may_escape=may_escape,
             )
         self._all_nodes.append(node)
+        self._node_seen.add(node)
         return node
 
     def _short_label(self, n) -> str:
