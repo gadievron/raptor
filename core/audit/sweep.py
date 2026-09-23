@@ -2820,11 +2820,19 @@ def _extract_path_conditions(
     quoted conditions or simple relational expressions.
     """
     import re
-    backtick_conds = re.findall(r"`([^`]*[<>=!]+[^`]*)`", hypothesis)
+    # The condition body is spelled prefix-without-operators, ONE
+    # operator char, then the greedy rest ([^`<>=!]*[<>=!][^`]*): the
+    # naive [^`]*[<>=!]+[^`]* overlaps all three repeats on the
+    # operator chars, and an unterminated quote followed by an
+    # operator run makes the engine try every split of the run
+    # between them — cubic in the hypothesis length. Match set
+    # unchanged: any between-quote span with at least one operator
+    # char, captured whole, in both spellings.
+    backtick_conds = re.findall(r"`([^`<>=!]*[<>=!][^`]*)`", hypothesis)
     if backtick_conds:
         return backtick_conds
 
-    quoted_conds = re.findall(r'"([^"]*[<>=!]+[^"]*)"', hypothesis)
+    quoted_conds = re.findall(r'"([^"<>=!]*[<>=!][^"]*)"', hypothesis)
     if quoted_conds:
         return quoted_conds
 

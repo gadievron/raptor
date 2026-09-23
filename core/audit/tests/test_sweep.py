@@ -2690,3 +2690,38 @@ class TestPremiseGateProfileLockstep:
                 f"premises would reach the query and masquerade as "
                 f"refuted"
             )
+
+
+class TestExtractPathConditionsOperatorRun:
+    def test_unterminated_quote_with_operator_run_is_fast(self):
+        """Hostile hypothesis text with an unterminated quote followed
+        by a long operator run: with the body spelled
+        [^`]*[<>=!]+[^`]* all three repeats overlap on the operator
+        chars and the engine tries every split of the run between
+        them — cubic in the hypothesis length. Spelling the body as
+        prefix-without-operators + one operator + greedy rest is
+        linear. Both-direction bound: fast AND real conditions still
+        extracted."""
+        from core.audit.sweep import _extract_path_conditions
+        from core.testing.wallclock import cpu_budget
+
+        for quote in ("`", '"'):
+            hostile = f"the check {quote}x " + "=" * (1 << 16) + " y"
+            with cpu_budget(1.0, what="operator-run condition extract"):
+                assert _extract_path_conditions(hostile, "") == []
+
+    def test_condition_forms_still_extracted(self):
+        from core.audit.sweep import _extract_path_conditions
+
+        assert _extract_path_conditions(
+            "fails when `len > cap` holds", "",
+        ) == ["len > cap"]
+        assert _extract_path_conditions(
+            'overflow if "n != 0" and "m <= k"', "",
+        ) == ["n != 0", "m <= k"]
+        assert _extract_path_conditions(
+            "wraps when size >= limit", "",
+        ) == ["size >= limit"]
+        # No operator inside the quotes: falls through, same as before.
+        assert _extract_path_conditions("call `foo` then x < y", "") \
+            == ["x < y"]
