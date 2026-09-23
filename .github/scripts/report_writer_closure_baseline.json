@@ -241,12 +241,6 @@
     "core/coverage/store_summary.py::format_file_level_view::unsanitised_llm_value::status": {
       "note": "coverage summary terminal lanes \u2014 filed upstream as the store_summary member; sanitise + register with that fix"
     },
-    "core/coverage/store_summary.py::format_store_view::unsanitised_llm_value::file": {
-      "note": "coverage summary terminal lanes \u2014 filed upstream as the store_summary member; sanitise + register with that fix"
-    },
-    "core/coverage/store_summary.py::format_store_view::unsanitised_llm_value::function": {
-      "note": "coverage summary terminal lanes \u2014 filed upstream as the store_summary member; sanitise + register with that fix"
-    },
     "core/coverage/store_summary.py::render_coverage::unsanitised_llm_value::table": {
       "note": "coverage summary terminal lanes \u2014 filed upstream as the store_summary member; sanitise + register with that fix"
     },

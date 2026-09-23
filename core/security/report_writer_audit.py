@@ -279,6 +279,13 @@ _SANITISERS = frozenset({
     # (investigation._md_escape: thin wrapper over md_inline —
     # table-cell grade for binary-derived names).
     "_md_escape",
+    # coverage store_summary's terminal chokepoint for journal/
+    # inventory-derived names (_defang: sanitise_for_terminal +
+    # length bound). Recognising the name puts the gate back on
+    # guard for those lanes — their baseline rows were retired once
+    # the sanitisation landed, and without the vocabulary entry a
+    # REVERT of the sanitisation read clean to the gate.
+    "_defang",
     # packages/diagram's Mermaid chokepoints: sanitize.sanitize
     # (imported as _sanitize; Mermaid-structure neutralisation +
     # fence-break ZWSP + escape_nonprintable), the context_map _text
