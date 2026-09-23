@@ -113,9 +113,9 @@ def _resolve_active_project() -> tuple[str, str, str] | None:
 def volatile_target_reason(target: str | None) -> str | None:
     """Reason string when *target* is a scratch/volatile path, else None.
 
-    Flags exactly three shapes (a stale machine-generated project once
-    left ``/tmp`` as the active default target, and only an interactive
-    ask caught it):
+    Flagged shapes (a stale machine-generated project once left
+    ``/tmp`` as the active default target, and only an interactive ask
+    caught it):
 
     * an empty/whitespace target string — ``Path("").resolve()`` is
       the CWD (always the RAPTOR repo dir for these callers), the
@@ -126,7 +126,10 @@ def volatile_target_reason(target: str | None) -> str | None:
       lexical normalisation, so a symlink alias of the temp root
       cannot slip past the equality check;
     * a nonexistent path;
-    * an empty directory.
+    * an empty directory;
+    * a URL (fine for /web, not a filesystem default for
+      code-scanning commands);
+    * a path that cannot be resolved or read.
     """
     if target is None:
         return None
@@ -324,9 +327,29 @@ def _check_target_mismatch(target_path: str, project_name: str,
     if _URL_SCHEME_RE.match(target_path):
         if _URL_SCHEME_RE.match(project_target):
             # Both sides are URLs: compare them (trailing-slash
-            # tolerant) instead of skipping — /web --url https://B
-            # must not silently land its run in project A.
-            if target_path.rstrip("/") != project_target.rstrip("/"):
+            # tolerant, scheme/host case-insensitive — DNS names and
+            # schemes are case-insensitive, so https://Example.com
+            # must not spuriously refuse project https://example.com;
+            # the path stays case-sensitive) instead of skipping —
+            # /web --url https://B must not silently land its run in
+            # project A.
+            def _url_norm(u: str) -> str:
+                from urllib.parse import urlsplit, urlunsplit
+                try:
+                    parts = urlsplit(u.rstrip("/"))
+                    port = parts.port
+                except ValueError:
+                    return u.rstrip("/")
+                host = (parts.hostname or "").casefold()
+                if port is not None:
+                    host = f"{host}:{port}"
+                if "@" in parts.netloc:  # userinfo stays case-sensitive
+                    host = parts.netloc.rsplit("@", 1)[0] + "@" + host
+                return urlunsplit((parts.scheme.casefold(), host,
+                                   parts.path, parts.query,
+                                   parts.fragment))
+
+            if _url_norm(target_path) != _url_norm(project_target):
                 raise TargetMismatchError(
                     f"Run target {target_path!r} does not match the active "
                     f"project's target {project_target!r}. Use --out to "

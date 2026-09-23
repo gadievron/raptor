@@ -81,8 +81,7 @@ def _extract_date_from_dir(run_dir: Path) -> str:
     so collision-renamed files stay stable across re-merges) and
     short enough to not bloat downstream filenames.
     """
-    # `re.ASCII` so `\d` matches only ASCII digits. Same rationale as
-    # core/run/metadata.py:_extract_date_from_dir — Unicode-default
+    # `re.ASCII` so `\d` matches only ASCII digits: Unicode-default
     # `\d` admits Devanagari / Arabic-Indic / fullwidth digits, which
     # would break the deterministic timestamp-from-name extraction
     # if a tool re-encoded glyphs in the path. Anchoring to ASCII

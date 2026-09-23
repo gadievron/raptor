@@ -289,3 +289,28 @@ class TestResolveDefaultTarget(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUrlTargetCaseInsensitiveHost(unittest.TestCase):
+    """URL scheme/host comparison is case-insensitive (DNS is) — a
+    https://Example.com run against project https://example.com
+    spuriously refused; a genuinely different host must still raise."""
+
+    def test_case_only_host_difference_accepted(self):
+        from core.run.output import _check_target_mismatch
+        _check_target_mismatch(
+            "https://Example.com/repo", "p", "https://example.com/repo")
+
+    def test_different_host_still_refused(self):
+        from core.run.output import TargetMismatchError, _check_target_mismatch
+        with self.assertRaises(TargetMismatchError):
+            _check_target_mismatch(
+                "https://evil.example/repo", "p",
+                "https://example.com/repo")
+
+    def test_path_stays_case_sensitive(self):
+        from core.run.output import TargetMismatchError, _check_target_mismatch
+        with self.assertRaises(TargetMismatchError):
+            _check_target_mismatch(
+                "https://example.com/Repo", "p",
+                "https://example.com/repo")

@@ -233,3 +233,25 @@ class TestExportSurface:
             and isinstance(v, str) and v in fs.ALL_STATUSES
         }
         assert constants == set(fs.ALL_STATUSES)
+
+
+class TestDeriveStatusNegativeContradiction:
+    def test_contradictory_negative_verdict_is_inconsistent(self):
+        # Verdict-POLARITY-agnostic: a self-contradictory NEGATIVE
+        # verdict is as untrustworthy as a positive one — pre-fix it
+        # derived a clean `analysed`.
+        finding = {
+            "is_true_positive": True,
+            "is_exploitable": False,
+            "self_contradictory": True,
+        }
+        assert derive_status(finding) == ANALYSIS_INCONSISTENT
+
+    def test_resolved_negative_contradiction_is_analysed(self):
+        finding = {
+            "is_true_positive": True,
+            "is_exploitable": False,
+            "self_contradictory": True,
+            "contradiction_resolved_by_judge": True,
+        }
+        assert derive_status(finding) == ANALYSED

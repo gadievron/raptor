@@ -133,8 +133,15 @@ def derive_status(finding: dict) -> str:
       1. ``error`` field present → ``error``
       2. ``is_true_positive`` key absent → ``skipped`` (generic;
          caller didn't record a specific skip reason)
-      3. ``is_exploitable=True`` AND ``self_contradictory=True``
-         (and not resolved by judge) → ``analysis_inconsistent``
+      3. a GENUINE ``is_exploitable`` verdict (either polarity) AND
+         ``self_contradictory=True`` (and not resolved by judge) →
+         ``analysis_inconsistent``. Verdict-POLARITY-agnostic by
+         definition: a self-contradictory NEGATIVE verdict is exactly
+         as untrustworthy as a positive one — gating on
+         ``is_exploitable=True`` let it derive a clean ``analysed``.
+         A junk/absent verdict stays out of the bucket (tri-state
+         accessor rule): the inconsistency bucket keys on a genuine
+         claim contradicting itself, not on junk.
       4. Otherwise → ``analysed``
 
     Known tension (deliberately unchanged): a PRESENT-but-null
@@ -149,7 +156,7 @@ def derive_status(finding: dict) -> str:
         return ERROR
     if "is_true_positive" not in finding:
         return SKIPPED
-    if (read_verdict(finding, "is_exploitable") is True
+    if (read_verdict(finding, "is_exploitable") is not None
             and finding.get("self_contradictory")
             and not finding.get("contradiction_resolved_by_judge")):
         return ANALYSIS_INCONSISTENT

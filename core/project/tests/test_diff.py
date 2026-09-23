@@ -140,3 +140,11 @@ class TestDiffRuns(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_changed_label_reads_orchestrated_file_path():
+    """Orchestrated /agentic findings carry file_path, not file — the
+    label read the wrong key and rendered '?'."""
+    from core.project.diff import _finding_label
+    assert _finding_label({"file_path": "src/a.c", "function": "p",
+                           "line": 3}) == "src/a.c:p:3"
