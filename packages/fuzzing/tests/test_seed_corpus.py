@@ -312,3 +312,74 @@ def test_prepare_builtin_seed_corpus_refuses_dangerous_outputs(tmp_path, monkeyp
 
     with pytest.raises(ValueError, match="too broad or dangerous"):
         prepare_builtin_seed_corpus(Path(fake_home.anchor))
+
+
+class TestBuiltinResetProvenance:
+    """Deletion in the builtin-reset path must be provenance-gated —
+    the generated sibling documents that contract for both helpers.
+    Name-colliding operator data on FIRST contact (no generator-owned
+    manifest) must be refused, never deleted; a directory is never
+    rmtree'd regardless of manifest state."""
+
+    def test_first_run_refuses_to_delete_colliding_operator_file(
+        self, tmp_path,
+    ):
+        out = tmp_path / "builtin"
+        out.mkdir()
+        collide = out / "seed-0001-text-small"
+        collide.write_text("OPERATOR-CONTENT\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="refusing"):
+            prepare_builtin_seed_corpus(out)
+        assert collide.read_text(encoding="utf-8") == "OPERATOR-CONTENT\n"
+
+    def test_colliding_directory_never_rmtreed(self, tmp_path):
+        out = tmp_path / "builtin"
+        out.mkdir()
+        nested = out / "seed-0001-text-small"
+        nested.mkdir()
+        (nested / "precious.txt").write_text("keep\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="refusing"):
+            prepare_builtin_seed_corpus(out)
+        assert (nested / "precious.txt").read_text(
+            encoding="utf-8") == "keep\n"
+
+    def test_colliding_directory_refused_even_with_our_manifest(
+        self, tmp_path,
+    ):
+        out = tmp_path / "builtin"
+        prepare_builtin_seed_corpus(out)
+        victim = out / "seed-0001-text-small"
+        victim.unlink()
+        victim.mkdir()
+        (victim / "precious.txt").write_text("keep\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="refusing"):
+            prepare_builtin_seed_corpus(out)
+        assert (victim / "precious.txt").read_text(
+            encoding="utf-8") == "keep\n"
+
+    def test_foreign_manifest_refused(self, tmp_path):
+        import json
+
+        out = tmp_path / "builtin"
+        out.mkdir()
+        (out / "manifest.json").write_text(
+            json.dumps({"source": "someone-elses-tool"}),
+            encoding="utf-8",
+        )
+        with pytest.raises(ValueError, match="refusing"):
+            prepare_builtin_seed_corpus(out)
+        assert (out / "manifest.json").is_file(), (
+            "a foreign manifest must not be unlinked"
+        )
+
+    def test_list_shaped_manifest_degrades_without_attributeerror(
+        self, tmp_path,
+    ):
+        out = tmp_path / "builtin"
+        out.mkdir()
+        (out / "manifest.json").write_text('["junk"]', encoding="utf-8")
+        # No collisions on disk: a corrupt manifest is treated as
+        # foreign, and with nothing to delete the run may proceed —
+        # but never raise AttributeError.
+        with pytest.raises(ValueError, match="refusing"):
+            prepare_builtin_seed_corpus(out)
