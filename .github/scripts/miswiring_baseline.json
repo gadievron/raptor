@@ -55,9 +55,6 @@
     "artifacts:orphan_reader::codeql.log": {
       "note": "externally produced input: written by the CodeQL CLI in the run dir, read by the audit log-inspection path"
     },
-    "artifacts:orphan_reader::coverage-*.json": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
     "artifacts:orphan_reader::coverage-codeql.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -386,7 +383,7 @@
       "note": "variable-path read false positive: raptor_agentic.py writes openant_findings.json then passes the Path to run_validation_phase(openant_findings_path=...) which reads it via load_json, and core/project/findings_utils.load_findings_from_dir reads it as the standalone-/openant fallback via its size-gated loader; the detector cannot trace either path indirection"
     },
     "artifacts:write_only_artifact::raptor_openant_report.json": {
-      "note": "operator-facing output: /openant standalone run writes the machine-readable run summary; consumed by the operator only — project merge lists it in KNOWN_FILES (deliberately not artefact-copied, like raptor_agentic_report.json) but no production code reads it back; findings visibility rides openant_findings.json"
+      "note": "operator-facing output: /openant standalone run writes the machine-readable run summary; consumed by the operator only \u2014 project merge lists it in KNOWN_FILES (deliberately not artefact-copied, like raptor_agentic_report.json) but no production code reads it back; findings visibility rides openant_findings.json"
     },
     "artifacts:write_only_artifact::patch-verify.json": {
       "note": "operator/LLM-facing output: the frida runtime regression oracle writes both runs' evidence as patch-verify.json and prints its path; the machine-consumed verdict rides the CLI exit code and the in-process return value, so no in-repo literal-name production reader exists by design (tests read the file back)"
@@ -556,9 +553,6 @@
     "artifacts:write_only_artifact::wrappers.json": {
       "note": "provenance sidecar of the source-wrapper stage: records the mechanically-derived wrapper vocabulary for the run; the in-run consumer receives the same names in-process via the stage's return value (extra_source_patterns), same class as suppressions.jsonl"
     },
-    "dead:dead_class:packages/exploit_feasibility/constants.py:AddressSpace": {
-      "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
-    },
     "dead:dead_class:packages/exploit_feasibility/constants.py:FormatWriteLimits": {
       "note": "kept: public API surface (operator decision 2026-08-16); zero in-repo consumers \u2014 revisit"
     },
@@ -597,18 +591,6 @@
     },
     "dead:dead_function:core/audit/frida_observe.py:collect_observed_functions": {
       "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
-    },
-    "dead:dead_function:core/audit/heap_copy_checker.py:format_findings": {
-      "note": "binary-audit checker entry point landed ahead of its consumer wiring (roadmap phases land checker surface first); remove this entry when the orchestrator/sweep wiring lands or the symbol is excised"
-    },
-    "dead:dead_function:core/audit/integer_truncation_checker.py:format_findings": {
-      "note": "public checker API: renders findings for operator/CLI consumption; not called by orchestrator dispatch path"
-    },
-    "dead:dead_function:core/audit/proto_length_checker.py:format_findings": {
-      "note": "public checker API: renders findings for operator/CLI consumption; not called by orchestrator dispatch path"
-    },
-    "dead:dead_function:core/audit/struct_field_checker.py:format_findings": {
-      "note": "public checker API: renders findings for operator/CLI consumption; not called by orchestrator dispatch path"
     },
     "dead:dead_function:core/iris/api.py:load_project_assumptions": {
       "note": "zero-reference symbol at baseline cut \u2014 triaged as public-API surface, planned wiring, or deletable-pending-owner-decision"
