@@ -59,6 +59,29 @@ SKIP_DIR_NAMES = {
     "venv", "build", "dist", "fixtures", "seeds", ".claude/worktrees",
     "data",  # packaged datasets (packages/sca/data is 35MB of JSON)
 }
+
+# Artifact-name dirs that are also legitimate RUNTIME PACKAGE names.
+# A bare-name skip on "build" silently dropped core/build (~2k lines
+# of build detection) from the whole liveness index — symbols only
+# core/build consumes looked dead, and its own fields could never be
+# flagged. Same disambiguation the env-docs gate uses: a dir carrying
+# __init__.py is a tracked source package, not an artifact tree.
+# Failure direction is safe both ways: a stray artifact tree that
+# happens to carry a top-level __init__.py fails toward over-scanning
+# (more corpus), never toward suppressing a finding — and CI scans a
+# clean checkout.
+PACKAGE_AMBIGUOUS_SKIP_NAMES = {"build", "dist", "out"}
+
+
+def _is_skipped_dir_part(root: Path, rel_parts: tuple, i: int) -> bool:
+    part = rel_parts[i]
+    if part not in SKIP_DIR_NAMES:
+        return False
+    if part in PACKAGE_AMBIGUOUS_SKIP_NAMES:
+        d = root.joinpath(*rel_parts[: i + 1])
+        if (d / "__init__.py").is_file():
+            return False
+    return True
 MAX_TEXT_FILE = 262_144   # text-corpus per-file cap (reference scanning only)
 # text corpus extensions for reference scanning (non-Python)
 TEXT_EXTS = {".sh", ".md", ".yml", ".yaml", ".toml", ".json", ".cfg", ".ini",
@@ -109,7 +132,10 @@ def iter_files(root: Path):
             if not p.is_file():
                 continue
             rel_parts = p.relative_to(root).parts
-            if any(part in SKIP_DIR_NAMES for part in rel_parts):
+            if any(
+                _is_skipped_dir_part(root, rel_parts, i)
+                for i in range(len(rel_parts) - 1)
+            ):
                 continue
             yield p
 
