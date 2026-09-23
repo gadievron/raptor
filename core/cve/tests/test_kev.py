@@ -219,6 +219,80 @@ class TestKevErrors:
 
 
 # ---------------------------------------------------------------------------
+# Catalog-shape gate on the eternal cache envelope
+# ---------------------------------------------------------------------------
+
+
+class TestKevJunkCatalog:
+    """A 200 dict that is not catalog-shaped (JSON error page from a
+    CDN/proxy, hostile feed) must never be stored — the storage TTL is
+    TTL_FOREVER precisely so the stale-if-offline arm can re-read it,
+    which would make one junk fetch the eternal \"catalog\"."""
+
+    _JUNK = {"error": "backend timeout"}
+
+    def test_junk_200_is_not_cached(self, tmp_path: Path) -> None:
+        cache = JsonCache(root=tmp_path)
+        kev = KevClient(FakeHttp(payload=self._JUNK), cache)
+        assert kev.contains("CVE-2021-44228") is False
+
+        # A second client within the caller TTL must NOT be served
+        # the junk from the cache — the real catalog wins.
+        kev2 = KevClient(FakeHttp(payload=_PAYLOAD), cache)
+        assert kev2.contains("CVE-2021-44228") is True
+
+    def test_junk_200_falls_back_to_stale_catalog(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """A junk 200 at refresh time is the same epistemic state as a
+        failed fetch: the stale real catalog beats the junk."""
+        cache = JsonCache(root=tmp_path)
+        KevClient(FakeHttp(payload=_PAYLOAD), cache).contains(
+            "CVE-2021-44228",
+        )  # seed a real catalog
+        TestKevCaching._warp_cache_clock(monkeypatch, days=3)
+        kev = KevClient(FakeHttp(payload=self._JUNK), JsonCache(root=tmp_path))
+        assert kev.contains("CVE-2021-44228") is True
+        assert kev.is_loaded() is True
+
+    def test_stale_arm_rejects_preexisting_junk_entry(
+        self, tmp_path: Path, monkeypatch, caplog,
+    ) -> None:
+        """An already-poisoned eternal envelope (written before the
+        shape gate) is refused by the stale arm — degraded-unavailable
+        is honest; \"serving the stale cached catalog\" over junk is
+        not."""
+        from core.json import TTL_FOREVER
+
+        cache = JsonCache(root=tmp_path)
+        cache.put("kev", self._JUNK, ttl_seconds=TTL_FOREVER)
+        TestKevCaching._warp_cache_clock(monkeypatch, days=3)
+        kev = KevClient(FakeHttp(error=HttpError("boom")),
+                        JsonCache(root=tmp_path))
+        with caplog.at_level("WARNING", logger="core.cve.kev"):
+            assert kev.contains("CVE-2021-44228") is False
+        assert not any(
+            "serving the stale cached catalog" in r.getMessage()
+            for r in caplog.records
+        ), "stale arm must not present junk as a catalog"
+
+    def test_legacy_finite_ttl_envelope_not_served_stale(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        """Eligibility pin for the stale arm: only envelopes written
+        by this client (TTL_FOREVER) re-serve past the freshness
+        window. A legacy finite-TTL envelope stays expired until one
+        successful online refresh rewrites it."""
+        cache = JsonCache(root=tmp_path)
+        cache.put("kev", _PAYLOAD, ttl_seconds=24 * 3600)  # legacy shape
+        TestKevCaching._warp_cache_clock(monkeypatch, days=3)
+        kev = KevClient(FakeHttp(error=HttpError("boom")),
+                        JsonCache(root=tmp_path))
+        assert kev.contains("CVE-2021-44228") is False
+        assert kev.is_loaded() is True
+
+
+# ---------------------------------------------------------------------------
 # Hostile / adversarial inputs
 # ---------------------------------------------------------------------------
 

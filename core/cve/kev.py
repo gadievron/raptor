@@ -84,6 +84,13 @@ class KevClient:
 
     def _load(self) -> None:
         record = self._cache.get(_CACHE_KEY, ttl_seconds=self._ttl)
+        if record is not None and not _extract_cves(record):
+            # A cached envelope that is not catalog-shaped predates
+            # the shape gate below (or was hand-corrupted) — evict it
+            # and treat this as a cache miss so a real catalog can be
+            # fetched instead of serving an empty signal.
+            self._cache.invalidate(_CACHE_KEY)
+            record = None
         if record is None and not self._offline:
             try:
                 record = self._http.get_json(KEV_URL)
@@ -101,7 +108,7 @@ class KevClient:
                     "day-to-day", e,
                 )
             else:
-                if isinstance(record, dict):
+                if _extract_cves(record):
                     # Stored with TTL_FOREVER so the stale-if-offline
                     # arm can re-read past the freshness window
                     # (JsonCache honours min(stored, caller) TTL); the
@@ -110,6 +117,29 @@ class KevClient:
                     self._cache.put(
                         _CACHE_KEY, record, ttl_seconds=TTL_FOREVER,
                     )
+                else:
+                    # A 200 whose body carries no CVE entries is not a
+                    # KEV catalog (CDN/proxy error page shaped as JSON,
+                    # hostile feed — the real catalog has 1000+
+                    # entries). Storing it with TTL_FOREVER would make
+                    # one junk fetch the eternal "catalog" the stale
+                    # arm re-serves on every later failure, with
+                    # is_loaded() True hiding the loss. Same epistemic
+                    # state as a failed fetch: never cached, stale real
+                    # catalog preferred.
+                    stale = self._stale_cached_catalog()
+                    if stale is None:
+                        logger.warning(
+                            "core.cve.kev: fetch returned a non-catalog "
+                            "payload; KEV unavailable",
+                        )
+                        self._loaded = True
+                        return
+                    logger.warning(
+                        "core.cve.kev: fetch returned a non-catalog "
+                        "payload; serving the stale cached catalog",
+                    )
+                    record = stale
         elif record is None:
             # Offline + fresh-cache miss: a stale catalog beats
             # silently answering False for everything (an offline
@@ -136,10 +166,13 @@ class KevClient:
         Only envelopes written by this client (TTL_FOREVER) are
         eligible: ``JsonCache`` honours the minimum of the caller and
         stored TTLs, so a legacy finite-TTL envelope stays expired and
-        re-serves only after one successful online refresh.
+        re-serves only after one successful online refresh. Catalog-
+        shape-invalid payloads (a junk entry written before the shape
+        gate at the cache write) are refused — degraded-unavailable is
+        honest; "serving the stale cached catalog" over junk is not.
         """
         value = self._cache.try_get(_CACHE_KEY, ttl_seconds=TTL_FOREVER)
-        if value is MISSING or not isinstance(value, dict):
+        if value is MISSING or not _extract_cves(value):
             return None
         return value
 
