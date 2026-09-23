@@ -19,6 +19,7 @@ import re
 
 from ..models import Confidence, Reachability
 from ._shared import format_evidence as _format_evidence
+from ._shared import iter_matches_with_lines as _iter_matches_with_lines
 from ..parsers import _safe_read
 from typing import TYPE_CHECKING
 
@@ -196,9 +197,11 @@ def _code_before_close(line: str) -> tuple[str, bool]:
 
 
 def _imports_in(text: str) -> Iterable[tuple[str, int]]:
-    # Single-line.
-    for m in _IMPORT_SINGLE_RE.finditer(text):
-        yield m.group(1), text.count("\n", 0, m.start()) + 1
+    # Single-line. Rolling-cursor line numbers — the naive
+    # full-prefix count is quadratic on dense-import files.
+    for m, line in _iter_matches_with_lines(
+            text, _IMPORT_SINGLE_RE.finditer(text)):
+        yield m.group(1), line
     # Block form — parsed line-wise from ``import (`` to the line
     # carrying the unquoted closing ``)``.
     in_block = False

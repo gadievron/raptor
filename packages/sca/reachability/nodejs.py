@@ -81,6 +81,7 @@ _REQUIRE_RE = re.compile(
 # TS variants this module previously matched with a private regex).
 from .._test_paths import is_test_path as _is_test_file  # noqa: E402
 from ..parsers import _safe_read
+from ._shared import iter_matches_with_lines as _iter_matches_with_lines  # noqa: E402
 
 _JS_SUFFIXES = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
 
@@ -159,11 +160,13 @@ def resolve_dep(
 # ---------------------------------------------------------------------------
 
 def _imports_in(text: str) -> Iterable[tuple[str, int]]:
-    for m in _REQUIRE_RE.finditer(text):
+    # Rolling-cursor line numbers — the naive full-prefix count is
+    # quadratic on dense require/import files.
+    for m, line in _iter_matches_with_lines(
+            text, _REQUIRE_RE.finditer(text)):
         spec = next((g for g in m.groups() if g is not None), None)
         if not spec:
             continue
-        line = text.count("\n", 0, m.start()) + 1
         yield spec, line
 
 
