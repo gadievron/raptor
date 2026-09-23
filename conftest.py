@@ -194,8 +194,23 @@ def _apply_platform_emulation(config):
         )
     sys.platform = _EMULATED_PLATFORM
     if not config.option.basetemp:
+        # xdist workers arrive here with basetemp already set (the
+        # controller hands each one <controller-basetemp>/gwN), so
+        # only the controller mints an emu root — and only the
+        # controller runs the sibling sweep below.
+        tmp_root = Path(_tempfile.gettempdir())
+        # Reclaim prior sessions' emu roots before minting ours: the
+        # per-pid root defeats pytest's keep-last-3 retention (it
+        # prunes numbered runs under one SHARED basetemp, never
+        # sibling per-pid roots) and, under the launcher, sits outside
+        # the session-TMPDIR the stale-tmp sweep covers — dead emu
+        # roots accreted ~25k inodes each. A dead owning pid is proof
+        # the session is gone; keep=3 preserves pytest's post-mortem
+        # retention semantics at the root level.
+        from core.run.tmp_reaper import reap_dead_pid_dirs
+        reap_dead_pid_dirs(tmp_root, "raptor-pytest-emu-", keep=3)
         basetemp = (
-            Path(_tempfile.gettempdir())
+            tmp_root
             / f"raptor-pytest-emu-{os.getpid()}"
             / "private" / "var" / "folders" / "zz" / "raptor-emu" / "T"
             / "pytest"
