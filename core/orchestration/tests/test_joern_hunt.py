@@ -405,3 +405,41 @@ class TestRestartRetrySeam:
 
         find_sink_callsites("system", _Thin())
         assert calls["query"] == 1
+
+
+class TestTaintQueryCap:
+    """Unique-pair Joern round-trips are capped: matches come from
+    LLM/target-shaped hunt output, so dedup alone leaves the query
+    count unbounded on a dense hunt."""
+
+    def test_pairs_past_cap_stay_unclassified(self, monkeypatch):
+        from core.orchestration import joern_hunt as jh
+        monkeypatch.setattr(jh, "MAX_TAINT_QUERIES", 3)
+        matches = [
+            {"file": "a.c", "line": i, "caller": f"fn{i}",
+             "sink": "memcpy"}
+            for i in range(6)
+        ]
+        srv = FakeServer(verdicts={(f"fn{i}", "memcpy"): True
+                                   for i in range(6)})
+        classify_taint_batch(matches, srv)
+        assert len(srv.taint_queries) == 3
+        classified = [m for m in matches if "joern_tainted" in m]
+        assert len(classified) == 3
+        # Past-cap matches carry NO verdict — unclassified, never a
+        # false negative.
+        for m in matches[3:]:
+            assert "joern_tainted" not in m
+
+    def test_repeat_pairs_do_not_consume_cap(self, monkeypatch):
+        from core.orchestration import joern_hunt as jh
+        monkeypatch.setattr(jh, "MAX_TAINT_QUERIES", 2)
+        matches = [
+            {"file": "a.c", "line": i, "caller": "same",
+             "sink": "memcpy"}
+            for i in range(10)
+        ]
+        srv = FakeServer(verdicts={("same", "memcpy"): True})
+        classify_taint_batch(matches, srv)
+        assert len(srv.taint_queries) == 1
+        assert all(m["joern_tainted"] is True for m in matches)

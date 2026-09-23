@@ -39,6 +39,15 @@ from packages.joern.runner import SCALA_JSON_ESC_DEF, _escape_scala_string
 _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _CALL_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 
+# Per-batch cap on unique (caller, sink) Joern round-trips. Matches
+# come from LLM/target-shaped hunt output, so dedup alone leaves the
+# query count unbounded on a dense hunt; every sibling query channel
+# carries a cap (taint pairs 500, guard-dominance 20, fail-open 200).
+# Sized to the taint-pair cap: raising it buys server load, lowering
+# it leaves more matches unclassified (hint-tier — the LLM still
+# rules).
+MAX_TAINT_QUERIES = 500
+
 _CALLER_MARKER = "JOERN_CALLER:"
 
 # Same shape as packages/joern/queries/callers.sc, inlined so the sink
@@ -236,9 +245,14 @@ def classify_taint_batch(
     false`` — a verdict downstream consumers act on. Slightly heavier
     per unique pair; verdict-equivalent at the same bounded depth.
 
+    Unique (caller, sink) pairs are capped at ``MAX_TAINT_QUERIES``
+    (loud drop): matches past the cap stay unclassified — the same
+    downstream effect as a degraded query, never a false verdict.
+
     Mutates and returns *matches*.
     """
     verdicts: dict[tuple[str, str], bool | None] = {}
+    dropped_pairs: set[tuple[str, str]] = set()
     for match in matches:
         caller = match.get("caller") or match.get("function")
         sink = match.get("sink") or sink_call or _first_call_name(
@@ -247,6 +261,9 @@ def classify_taint_batch(
             continue
         key = (caller, sink)
         if key not in verdicts:
+            if len(verdicts) >= MAX_TAINT_QUERIES:
+                dropped_pairs.add(key)
+                continue
             query_errors: list = []
             try:
                 flows = server.run_taint_query(
@@ -269,4 +286,10 @@ def classify_taint_batch(
                 verdicts[key] = None
         if verdicts[key] is not None:
             match["joern_tainted"] = verdicts[key]
+    if dropped_pairs:
+        logger.warning(
+            "taint classification: unique-pair cap (%d) reached — "
+            "%d pair(s) left unclassified", MAX_TAINT_QUERIES,
+            len(dropped_pairs),
+        )
     return matches
