@@ -135,7 +135,10 @@ def _drift_for_ref(
     Outcomes:
       * (None, fp)      — first-ever scan; baseline saved
       * (None, fp)      — no drift; baseline refreshed
-      * (Finding, fp)   — drift detected; baseline replaced
+      * (Finding, fp)   — drift detected; baseline RETAINED (the
+                           finding re-fires every scan until the
+                           operator re-baselines via
+                           ``fingerprint --save``)
       * (None, None)    — extract / fingerprint failed
     """
     binary = fetch_image_binary(ref, client=oci_client)
@@ -157,9 +160,13 @@ def _drift_for_ref(
         )
         return None, None
 
-    # Always save the new fingerprint AFTER computing the drift
-    # — the previous baseline is what we compare against, then
-    # the current fingerprint becomes the next-scan baseline.
+    # Baselines advance only on CLEAN comparisons (and first scan).
+    # A drifted — possibly malicious — fingerprint must not absorb
+    # into the baseline: that made drift a one-shot signal, with the
+    # next scan comparing malicious-to-malicious and going quiet. The
+    # operator's explicit re-baseline is ``fingerprint --save`` (the
+    # compare-without-save posture ``fingerprint_cli --check``
+    # documents).
     baseline = load_fingerprint(fingerprint_store_dir, ref)
     if baseline is None:
         # First scan of this ref — no baseline, no signal yet.
@@ -178,7 +185,6 @@ def _drift_for_ref(
     finding = _drift_finding(
         ref=ref, drift=drift, declared_in=declared_in,
     )
-    save_fingerprint(fingerprint_store_dir, ref, current)
     return finding, current
 
 
