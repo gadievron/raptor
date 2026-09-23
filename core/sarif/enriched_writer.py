@@ -9,6 +9,7 @@ Consumers: ``/agentic --sarif-out``, ``/project export --sarif``,
 ``/validate`` (future).
 """
 
+import math
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,8 @@ from typing import Any
 from core.json import save_json
 from core.logging import get_logger
 from core.run.finding_status import read_verdict
+from core.sarif.parser import _coerce_line
+from core.security.log_sanitisation import escape_nonprintable
 
 logger = get_logger()
 
@@ -77,7 +80,10 @@ def _build_raptor_properties(
     if analysis.get("reasoning"):
         props["reasoning"] = str(analysis["reasoning"])[:500]
 
-    score = finding.get("exploitability_score")
+    # findings.json rows are read back from run directories, where
+    # numeric fields arrive as JSON strings ("9.8") or junk — a raw
+    # `score > 0` comparison raised TypeError and killed the export.
+    score = _coerce_score(finding.get("exploitability_score"))
     if score is not None and score > 0:
         props["exploitability_score"] = score
 
@@ -89,20 +95,50 @@ def _build_raptor_properties(
     return verdict, props
 
 
+def _coerce_score(value: Any) -> float | None:
+    """Finite float from an untrusted score field, or None."""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    return score if math.isfinite(score) else None
+
+
+def _line_value(finding: dict[str, Any], *keys: str) -> int | None:
+    """First usable line number among *keys*, coerced.
+
+    Row values read back from run-directory JSON arrive as ints,
+    floats, strings, Infinity/NaN, or junk; ``_coerce_line`` (the
+    import chokepoint's coercer) handles the numeric shapes and this
+    wrapper additionally accepts integer STRINGS ("12") so a
+    stringified-but-real line keeps its value instead of degrading
+    to the fallback."""
+    for key in keys:
+        value = finding.get(key)
+        coerced = _coerce_line(value)
+        if coerced is None and isinstance(value, str):
+            try:
+                coerced = int(value.strip(), 10)
+            except ValueError:
+                coerced = None
+        if coerced is not None:
+            return coerced
+    return None
+
+
 def _build_result(finding: dict[str, Any]) -> dict[str, Any]:
     file_path = finding.get("file_path") or finding.get("file") or ""
 
-    start_line = finding.get("start_line")
-    if start_line is None:
-        start_line = finding.get("startLine")
-    if start_line is None:
-        start_line = finding.get("line")
+    # Coerced first (pre-fix the raw values hit `< 1` comparisons:
+    # one string-typed line in one row raised TypeError and killed
+    # the whole export).
+    start_line = _line_value(finding, "start_line", "startLine", "line")
     if start_line is None or start_line < 1:
         start_line = 1
 
-    end_line = finding.get("end_line")
-    if end_line is None:
-        end_line = finding.get("endLine")
+    end_line = _line_value(finding, "end_line", "endLine")
     if end_line is None or end_line < start_line:
         end_line = start_line
 
@@ -187,13 +223,44 @@ def build_enriched_sarif(
 
     runs_by_tool: dict[str, list[dict[str, Any]]] = {}
     rules_by_tool: dict[str, dict[str, dict[str, Any]]] = {}
+    skipped_by_tool: dict[str, list[dict[str, Any]]] = {}
 
-    for f in findings:
-        tool = f.get("tool") or tool_name
+    for idx, f in enumerate(findings):
+        tool = (
+            f.get("tool") if isinstance(f, dict) else None
+        ) or tool_name
         runs_by_tool.setdefault(tool, [])
         rules_by_tool.setdefault(tool, {})
 
-        result = _build_result(f)
+        # Per-finding degrade: rows come back from run-directory JSON
+        # (the sandbox-adjacent surface — producers vary, files are
+        # hand-editable, junk shapes happen), and one malformed row
+        # must not abort the ENTIRE export. A failed row becomes a
+        # structured skip record (surfaced in the run's invocation
+        # notifications below, the SARIF-standard slot for per-row
+        # processing errors) instead of an export-fatal exception.
+        try:
+            if not isinstance(f, dict):
+                msg = f"finding is {type(f).__name__}, expected dict"
+                raise TypeError(msg)
+            result = _build_result(f)
+        except Exception as exc:  # noqa: BLE001 — any one row's junk shape degrades to a recorded skip
+            rid = str(f.get("rule_id", "unknown")) if isinstance(f, dict) else "unknown"
+            logger.warning(
+                "enriched SARIF: skipping malformed finding %d (%s): "
+                "%s: %s",
+                idx, escape_nonprintable(rid)[:100],
+                type(exc).__name__,
+                escape_nonprintable(str(exc))[:200],
+            )
+            skipped_by_tool.setdefault(tool, []).append({
+                "level": "error",
+                "message": {"text": (
+                    f"finding {idx} ({rid[:100]}) skipped: "
+                    f"{type(exc).__name__}: {str(exc)[:200]}"
+                )},
+            })
+            continue
         runs_by_tool[tool].append(result)
 
         rid = f.get("rule_id") or "unknown"
@@ -204,12 +271,19 @@ def build_enriched_sarif(
                 rule_entry["properties"] = {"cwe": [cwe]}
             desc = f.get("message")
             if desc:
-                rule_entry["shortDescription"] = {"text": desc[:200]}
+                rule_entry["shortDescription"] = {"text": str(desc)[:200]}
             rules_by_tool[tool][rid] = rule_entry
 
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     runs = []
     for tool_key, results in runs_by_tool.items():
+        invocation: dict[str, Any] = {
+            "executionSuccessful": True,
+            "endTimeUtc": now,
+        }
+        skipped = skipped_by_tool.get(tool_key)
+        if skipped:
+            invocation["toolExecutionNotifications"] = skipped
         runs.append({
             "tool": {
                 "driver": {
@@ -219,10 +293,7 @@ def build_enriched_sarif(
                 },
             },
             "results": results,
-            "invocations": [{
-                "executionSuccessful": True,
-                "endTimeUtc": now,
-            }],
+            "invocations": [invocation],
         })
 
     return {

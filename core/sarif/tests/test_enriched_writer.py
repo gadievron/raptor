@@ -446,3 +446,79 @@ class TestAtomicWrite:
         assert n == 2
         doc = json.loads(out.read_text())
         assert len(doc["runs"][0]["results"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Untrusted row shapes — one junk row never kills the export
+# ---------------------------------------------------------------------------
+
+class TestUntrustedRowShapes:
+    """findings.json rows read back from run directories carry
+    string-typed numerics and junk shapes; the writer must coerce
+    what it can and degrade the rest to a recorded per-row skip —
+    never an export-fatal exception."""
+
+    def _good(self, **overrides):
+        base = {
+            "rule_id": "r-good", "file_path": "src/a.c",
+            "start_line": 3, "message": "ok", "tool": "semgrep",
+        }
+        base.update(overrides)
+        return base
+
+    def test_string_line_keeps_its_value(self):
+        doc = build_enriched_sarif([self._good(start_line="12")])
+        region = (doc["runs"][0]["results"][0]["locations"][0]
+                  ["physicalLocation"]["region"])
+        assert region["startLine"] == 12
+
+    def test_junk_line_falls_back(self):
+        doc = build_enriched_sarif([self._good(start_line="not-a-line")])
+        region = (doc["runs"][0]["results"][0]["locations"][0]
+                  ["physicalLocation"]["region"])
+        assert region["startLine"] == 1
+
+    def test_string_score_exported_as_float(self):
+        doc = build_enriched_sarif(
+            [self._good(exploitability_score="9.8")])
+        props = (doc["runs"][0]["results"][0]["properties"]["raptor"])
+        assert props["exploitability_score"] == 9.8
+
+    def test_junk_score_omitted_not_fatal(self):
+        doc = build_enriched_sarif(
+            [self._good(exploitability_score="high")])
+        props = (doc["runs"][0]["results"][0]["properties"]["raptor"])
+        assert "exploitability_score" not in props
+
+    def test_poison_row_skipped_with_record_others_survive(self):
+        poison = self._good(rule_id="r-bad", analysis="not-a-dict")
+        doc = build_enriched_sarif(
+            [self._good(), poison, self._good(rule_id="r-2")])
+        run = doc["runs"][0]
+        exported_rules = {r["ruleId"] for r in run["results"]}
+        assert "r-good" in exported_rules
+        assert "r-2" in exported_rules
+        assert "r-bad" not in exported_rules
+        notes = run["invocations"][0]["toolExecutionNotifications"]
+        assert len(notes) == 1
+        assert "r-bad" in notes[0]["message"]["text"]
+
+    def test_non_dict_row_skipped_with_record(self):
+        # A non-dict row cannot name its tool, so its skip record
+        # lands on the default-tool run.
+        doc = build_enriched_sarif([self._good(), "junk-row"])
+        results = [r for run in doc["runs"] for r in run["results"]]
+        assert len(results) == 1
+        notes = [
+            n
+            for run in doc["runs"]
+            for inv in run["invocations"]
+            for n in inv.get("toolExecutionNotifications", [])
+        ]
+        assert len(notes) == 1
+
+    def test_clean_export_has_no_notifications(self):
+        doc = build_enriched_sarif([self._good()])
+        invocation = doc["runs"][0]["invocations"][0]
+        assert "toolExecutionNotifications" not in invocation
+        assert invocation["executionSuccessful"] is True
