@@ -450,3 +450,29 @@ class TestFieldCensusPrepCache:
         )
         census = fc.build_field_census_cached(dict(self._SRC), out_dir=out)
         assert census.fields
+
+
+class TestFunctionSpansHostileRuns:
+    def test_prototype_word_lines_are_fast(self):
+        """Hostile file of prototype-shaped word lines with no parens:
+        the unbounded head span made every MULTILINE ^ restart
+        re-scan the remaining text — quadratic in the file size. The
+        bounded head window is linear."""
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "aa bb cc dd ee ff gg hh\n" * 6000
+        with cpu_budget(1.0, what="prototype-word-line span scan"):
+            assert fc.function_spans_regex(hostile) == []
+
+    def test_multiline_declaration_still_spans(self):
+        spans = fc.function_spans_regex(
+            "static void\n"
+            "spread(struct s *x,\n"
+            "       int v)\n"
+            "{\n"
+            "    use(x, v);\n"
+            "}\n",
+        )
+        by_name = {s.name: s for s in spans}
+        assert "spread" in by_name
+        assert by_name["spread"].is_static

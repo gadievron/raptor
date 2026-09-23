@@ -224,13 +224,27 @@ def _detect_optional_not_checked(
 # Sub-detector: truncation_not_signaled
 # ---------------------------------------------------------------------------
 
+# Bounded iteration/window counts on every newline-crossing span.
+# The qualifier/type loops and the params class cross newlines BY
+# DESIGN (multi-line declarations and parameter lists must keep
+# matching), but the unbounded spelling was quadratic two ways: the
+# keyword loop and the type loop overlap on every word (keywords ARE
+# \w+), so a run of qualifier words with no paren made the engine
+# try every split of the run between the loops; and every MULTILINE
+# ``^`` restart re-scanned the remaining text through the loops
+# (4x per input doubling measured at 14-56KB). Bound trade-off, both
+# directions: larger keeps pathological declarations matching but
+# raises the per-anchor re-scan ceiling; smaller is faster but a
+# real declaration beyond the bound stops matching. 16 words per
+# loop / 400-char receiver / 4096-char params sit far above real
+# code while capping per-anchor work at a constant.
 _C_FUNC_RE = re.compile(
     r"^[ \t]*(?:(?:static|inline|void|int|char|unsigned|const|auto|"
     r"public|private|protected|func|function|export|async|fn|"
-    r"override|virtual|abstract|final|synchronized)\s+)*"
-    r"(?:\([^)]*\)\s+)?"      # Go method receiver
-    r"(?:\w+[*&]*\s+)*"       # return type(s) with pointer/ref
-    r"(\w+)\s*\([^)]*\)\s*\{",
+    r"override|virtual|abstract|final|synchronized)\s+){0,16}"
+    r"(?:\([^)]{0,400}\)\s+)?"     # Go method receiver
+    r"(?:\w+[*&]*\s+){0,16}"       # return type(s) with pointer/ref
+    r"(\w+)\s*\([^)]{0,4096}\)\s*\{",
     re.MULTILINE,
 )
 
