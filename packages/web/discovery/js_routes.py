@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 import re
+from core.logging import get_logger
+
 from typing import TYPE_CHECKING, List, Set
 from urllib.parse import urljoin, urlparse
 
@@ -12,7 +13,7 @@ from packages.web.origin import origin_of
 if TYPE_CHECKING:
     from packages.web.client import WebClient
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 _MAX_SCRIPT_SIZE = 512 * 1024  # 512 KB per script
 

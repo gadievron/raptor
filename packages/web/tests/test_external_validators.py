@@ -313,3 +313,41 @@ def test_non_external_adapter_is_skipped(tmp_path, templates_dir):
     )
 
     assert results[0]["status"] == "skipped"
+
+
+def test_denied_target_yields_one_row_across_many_findings(
+    tmp_path, templates_dir, monkeypatch,
+):
+    monkeypatch.setattr(
+        "packages.web.external_validators.shutil.which",
+        lambda _b: "/usr/bin/nuclei",
+    )
+    monkeypatch.setattr(
+        "packages.web.external_validators.run_untrusted_networked",
+        lambda cmd, **kwargs: SimpleNamespace(
+            returncode=0, stdout="", stderr="",
+        ),
+    )
+
+    results = _runner(tmp_path, templates_dir).run(
+        [
+            _finding("https://evil.test/a", vuln_type="sqli"),
+            _finding("https://evil.test/a", vuln_type="xss"),
+            _finding("https://evil.test/a", vuln_type="ssrf"),
+        ],
+        ["nuclei"],
+    )
+
+    denied = [r for r in results if r["status"] == "denied"]
+    assert len(denied) == 1
+
+
+def test_bare_host_port_matched_at_attributes_to_its_target():
+    targets = {"http://127.0.0.1:8080/app": []}
+    owner = ExternalValidatorRunner._attribute_target(
+        None, "127.0.0.1:8080", targets,
+    )
+    # urlparse reads bare host:port as scheme "127.0.0.1" with no
+    # hostname; the attribution must still find the batch target so
+    # the match lands on its row instead of only in the raw jsonl.
+    assert owner == "http://127.0.0.1:8080/app"

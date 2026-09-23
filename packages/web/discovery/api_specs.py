@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-import logging
+from core.logging import get_logger
+
 from typing import TYPE_CHECKING, Dict
 
 if TYPE_CHECKING:
     from packages.web.client import WebClient
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 _OPENAPI_PATHS = [
     "/swagger.json", "/swagger.yaml",

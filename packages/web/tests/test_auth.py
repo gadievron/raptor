@@ -113,3 +113,57 @@ def test_bearer_verify_never_raises_on_transport_failure():
 
     assert session.authenticated is True
     assert manager.verify(client, session) is False
+
+
+def test_cross_origin_login_url_is_refused_loudly():
+    pytest.importorskip("bs4")
+    from packages.web.auth import AuthenticationError, FormAuthManager
+
+    class _ScopedClient(_StubClient):
+        base_url = "https://target.example"
+
+        def _is_in_scope(self, url: str) -> bool:
+            return url.startswith("https://target.example")
+
+        def get_cookies(self):
+            return {}
+
+    manager = FormAuthManager(
+        login_url="https://sso.other.example/login",
+        username="u", password="p",
+    )
+    # Stripping the URL to path+query silently re-anchored the login
+    # POST onto the target origin — credentials to the wrong host's
+    # path with no error.
+    with pytest.raises(AuthenticationError, match="not on the target"):
+        manager.authenticate(_ScopedClient())
+
+
+def test_verify_success_requires_a_logout_affordance_not_body_text():
+    pytest.importorskip("bs4")
+    from packages.web.auth import FormAuthManager
+
+    manager = FormAuthManager(
+        login_url="https://t.example/login", username="u", password="p",
+    )
+
+    class _Resp:
+        status_code = 200
+        history: list = []
+        url = "https://t.example/login"
+
+        def __init__(self, html: str):
+            self.text = html
+            self.content = html.encode()
+
+    # Nav furniture / marketing copy mentioning "logout" is not a
+    # session: no affordance, no success.
+    furniture = _Resp(
+        "<p>You can logout any time from the menu. Sign out policies "
+        "apply.</p>"
+    )
+    assert manager._verify_success(_Resp("<form></form>"), furniture) is False
+
+    # A real logout link IS the affordance.
+    affordance = _Resp('<a href="/account/logout">Log out</a>')
+    assert manager._verify_success(_Resp("<form></form>"), affordance) is True

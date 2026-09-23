@@ -275,3 +275,35 @@ class TestLandscapeCountsOnlyRunnableChecks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTierContractHolds(unittest.TestCase):
+    def test_state_persisting_prototype_pollution_is_intrusive(self):
+        # A successful probe mutates Object.prototype until the target
+        # restarts — the declared intrusive definition.
+        from packages.web.checks.prototype_pollution import (
+            ServerSidePrototypePollutionCheck,
+        )
+
+        self.assertEqual(ServerSidePrototypePollutionCheck.risk, "intrusive")
+
+    def test_passive_stack_trace_check_sends_only_benign_paths(self):
+        from packages.web.checks.information import StackTraceCheck
+
+        self.assertEqual(getattr(StackTraceCheck, "risk", "passive"), "passive")
+
+        paths: list[str] = []
+
+        class _Recorder:
+            def get(self, path, **kwargs):
+                paths.append(path)
+                from types import SimpleNamespace
+                return SimpleNamespace(status_code=404, text="")
+
+        StackTraceCheck().run(_Recorder(), "https://t.example")
+        self.assertTrue(paths)
+        for path in paths:
+            self.assertFalse(
+                any(ch in path for ch in "<>\"'"),
+                f"attack-shaped probe path under the passive tier: {path}",
+            )

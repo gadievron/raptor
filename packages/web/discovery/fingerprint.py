@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-import logging
 import re
+from core.logging import get_logger
+
 from typing import TYPE_CHECKING, Dict
 
 if TYPE_CHECKING:
     from packages.web.client import WebClient
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 _SERVER_NORMALISE = re.compile(r"[/\s].*$")
 

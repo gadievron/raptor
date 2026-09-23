@@ -152,6 +152,11 @@ def _fill_body(
     for name, prop in properties.items():
         if not isinstance(prop, dict):
             continue
+        if "$ref" in prop:
+            # An unresolved reference has no known shape — defaulting
+            # it to "string" fuzzed structured objects as scalars
+            # (request noise, never a valid probe).
+            continue
         prop_type = prop.get("type", "string")
         if prop_type == "object":
             _fill_body(prop, (*prefix, str(name)), out, string_fields, depth + 1)
@@ -161,28 +166,24 @@ def _fill_body(
             string_fields.append((*prefix, str(name)))
 
 
-# Go/RE2 inline-flag translation per static-signature class (the
-# class list itself is markers.STATIC_SIGNATURE_CLASSES — single
-# source with the fuzzer's candidate re-verification).
-_SWEEP_MARKER_FLAGS: dict[str, str] = {
-    "sqli": "i",
-    "command_injection": "im",
-    "path_traversal": "ims",
-}
-
-
 def sweep_match_regex() -> str:
     """One Go-regexp alternation of the static error-signature markers.
 
-    Built from ``markers.MARKER_RES`` so the ffuf pre-filter and the
-    verification oracle can never drift apart on what counts as a
-    signal; the marker patterns use only RE2-compatible syntax (no
-    lookarounds, no backreferences).
+    Built from ``markers.MARKER_RES`` — patterns AND flags (via
+    ``markers.go_inline_flags``, replacing a hand-typed per-class flag
+    table that silently desynced whenever a marker pattern's flags
+    changed) — so the ffuf pre-filter and the verification oracle can
+    never drift apart on what counts as a signal; the marker patterns
+    use only RE2-compatible syntax (no lookarounds, no backreferences).
     """
-    from packages.web.markers import MARKER_RES, STATIC_SIGNATURE_CLASSES
+    from packages.web.markers import (
+        MARKER_RES,
+        STATIC_SIGNATURE_CLASSES,
+        go_inline_flags,
+    )
 
     return "|".join(
-        f"(?{_SWEEP_MARKER_FLAGS[name]}:{MARKER_RES[name].pattern})"
+        f"(?{go_inline_flags(MARKER_RES[name])}:{MARKER_RES[name].pattern})"
         for name in STATIC_SIGNATURE_CLASSES
     )
 

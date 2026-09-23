@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import logging
+from core.logging import get_logger
+
 from typing import TYPE_CHECKING, List
 
 if TYPE_CHECKING:
     from packages.web.client import WebClient
 
-logger = logging.getLogger(__name__)
+logger = get_logger()
 
 # Bounds on hostile robots.txt input. fetch_robots runs unconditionally
 # in Phase 2, unauthenticated and before any budget, and the WebClient

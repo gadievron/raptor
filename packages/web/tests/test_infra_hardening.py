@@ -334,3 +334,39 @@ def test_ffuf_summary_carries_raw_values_when_display_form_mutates(tmp_path):
     })
     assert "input_raw" not in clean
     assert "url_raw" not in clean
+
+
+def test_redirect_hop_abort_records_the_blocked_host():
+    """The origin gate's hop-abort path incremented _blocked_requests
+    but never recorded the host — the blocked_hosts diff (the poisoned-
+    markup evidence channel) was blind to payloads delivered via a
+    same-origin request whose redirect chain pivoted off-origin."""
+    from packages.web.browser import BrowserEngine
+
+    engine = BrowserEngine("https://target.example")
+
+    class _HopResponse:
+        status = 302
+        headers = {"location": "https://attacker-sink.example/pivot"}
+
+    class _Route:
+        aborted = False
+
+        class request:  # noqa: N801 - playwright shape
+            url = "https://target.example/start"
+            method = "GET"
+            post_data = None
+            headers: dict = {}
+
+        def fetch(self, max_redirects=0):
+            return _HopResponse()
+
+        def abort(self):
+            type(self).aborted = True
+
+    route = _Route()
+    engine._route_gate(route)
+
+    assert _Route.aborted is True
+    assert engine.blocked_requests == 1
+    assert "attacker-sink.example" in engine.blocked_hosts

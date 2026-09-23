@@ -674,10 +674,12 @@ def test_options_probe_failure_counts_as_degradation(monkeypatch):
 
     from packages.web.checks.information import VerboseHttpMethodsCheck
 
-    def _refuse(*args, **kwargs):
+    def _refuse(self, *args, **kwargs):
         raise requests.ConnectionError("refused")
 
-    monkeypatch.setattr(requests, "options", _refuse)
+    # The probe rides its own Session (trust_env control for loopback
+    # targets), so patch the Session method.
+    monkeypatch.setattr(requests.Session, "options", _refuse)
     client = _CountingClient(lambda *a, **k: FakeResponse(200, "ok"))
     assert VerboseHttpMethodsCheck().run(client, "https://t.example") == []
     assert client.transport_errors == 1

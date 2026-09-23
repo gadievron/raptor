@@ -28,11 +28,13 @@ _STACK_TRACE_PATTERNS = [
 @registry.register(CheckCategory.INFORMATION, "V7.4.1", "Stack trace in error response")
 class StackTraceCheck(Check):
     def run(self, client, target_url, session=None, discovery=None):
-        # Trigger a likely-404 path to see error response
+        # Trigger a likely-404 path to see error response. Paths must
+        # stay benign: this check is passive-tier, and an attack-shaped
+        # value (an earlier "/?id=<script>" probe) is a crafted probe —
+        # active-tier by the vocabulary the receipt gates on.
         trigger_paths = [
             "/this-path-does-not-exist-raptor-probe",
             "/api/does-not-exist-raptor",
-            "/?id=<script>",
         ]
         for path in trigger_paths:
             try:
@@ -177,12 +179,29 @@ class VerboseHttpMethodsCheck(Check):
             # (which speaks only GET/POST), so its transport failures
             # must be counted here for degraded-coverage accounting;
             # WebClient's own failures above already self-count.
+            import ipaddress
+
             import requests as req_lib
             from urllib.parse import urlparse
 
             from packages.web.checks.base import note_transport_error
             parsed = urlparse(target_url)
             base = f"{parsed.scheme}://{parsed.netloc}"
+            # Mirror WebClient's rule (the tls.py sibling implements the
+            # same): loopback/private targets must not route through a
+            # corporate proxy env whose NO_PROXY rarely covers loopback —
+            # the off-client OPTIONS probe otherwise silently lost
+            # coverage on proxied hosts scanning local fixtures.
+            _host = (parsed.hostname or "").lower()
+            _local = _host == "localhost"
+            if not _local:
+                try:
+                    _ip = ipaddress.ip_address(_host)
+                    _local = _ip.is_loopback or _ip.is_private
+                except ValueError:
+                    pass
+            _session = req_lib.Session()
+            _session.trust_env = not _local
             try:
                 # allow_redirects=False: the check needs only the FIRST
                 # response's Allow header. Following a target-controlled
@@ -191,13 +210,16 @@ class VerboseHttpMethodsCheck(Check):
                 # DNS-rebinding gate, and the execution-policy audit —
                 # and let a different host supply the graded evidence.
                 # Sibling off-client probe tls.py passes the same flag.
-                opts = req_lib.options(
-                    base + "/", timeout=10, verify=client.verify_ssl,
-                    allow_redirects=False,
-                )
-            except req_lib.RequestException:
-                note_transport_error(client)
-                return []
+                try:
+                    opts = _session.options(
+                        base + "/", timeout=10, verify=client.verify_ssl,
+                        allow_redirects=False,
+                    )
+                except req_lib.RequestException:
+                    note_transport_error(client)
+                    return []
+            finally:
+                _session.close()
             allow = opts.headers.get("Allow", "")
             if allow:
                 dangerous = {"TRACE", "TRACK", "DELETE", "PUT"} & {

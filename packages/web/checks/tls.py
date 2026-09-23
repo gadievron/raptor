@@ -47,15 +47,20 @@ class HttpsRedirectCheck(Check):
                 _session = requests.Session()
                 _session.trust_env = not _local
                 try:
-                    resp = _session.get(
-                        http_url,
-                        allow_redirects=False,
-                        timeout=10,
-                        verify=False,
-                    )
-                except requests.RequestException:
-                    note_transport_error(client)
-                    return []
+                    try:
+                        resp = _session.get(
+                            http_url,
+                            allow_redirects=False,
+                            timeout=10,
+                            verify=False,
+                        )
+                    except requests.RequestException:
+                        note_transport_error(client)
+                        return []
+                finally:
+                    # One leaked connection pool per check run adds up
+                    # over a long scan.
+                    _session.close()
                 if resp.status_code not in (301, 302, 307, 308):
                     return [self._result(
                         passed=False, url=http_url,

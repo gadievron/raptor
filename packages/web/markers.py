@@ -57,6 +57,22 @@ STATIC_SIGNATURE_CLASSES: tuple[str, ...] = (
 )
 
 
+def go_inline_flags(pattern: re.Pattern) -> str:
+    """Inline-flag letters translating *pattern*'s compile-time flags
+    for Go regexp (``(?ims)`` prefixes). One home: the nuclei template
+    builder and the ffuf sweep matcher both derive from it, so a flags
+    change on a marker pattern can never silently desync them.
+    """
+    letters = ""
+    if pattern.flags & re.IGNORECASE:
+        letters += "i"
+    if pattern.flags & re.MULTILINE:
+        letters += "m"
+    if pattern.flags & re.DOTALL:
+        letters += "s"
+    return letters
+
+
 def marker_present(vuln_type: str, text: str) -> bool:
     """True when *text* carries the class marker for *vuln_type*.
 

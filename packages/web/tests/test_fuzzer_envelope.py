@@ -147,3 +147,20 @@ class TestActiveTierPayloadContract:
         client.reveal_secrets = False
         fuzzer = WebFuzzer(client=client, llm=None)
         assert fuzzer._generate_payloads("cmd", "text", "command_injection")
+
+
+class TestPayloadBudget:
+    def test_llm_reply_is_clamped_to_the_requested_count(self):
+        from packages.web.fuzzer import WebFuzzer
+
+        mock_llm = MagicMock()
+        mock_llm.generate_structured.return_value = (
+            {"payloads": [f"<x{i}>" for i in range(40)]},
+            "raw",
+        )
+        client = MagicMock()
+        client.reveal_secrets = False
+        fuzzer = WebFuzzer(client=client, llm=mock_llm)
+        # Each payload costs ~2 live requests per cell/class; the
+        # request budget is the caller's count, not the model's mood.
+        assert len(fuzzer._generate_payloads("q", "text", "xss")) == 10
