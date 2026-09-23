@@ -746,7 +746,18 @@ def _find_discovered_sinks(run_dir: Path) -> dict[str, Any] | None:
             from core.orchestration.run_discovery import (
                 recorded_target_matches,
             )
-            for sibling in sorted(parent.iterdir(), reverse=True):
+
+            def _mtime_ns(p: Path) -> int:
+                try:
+                    return p.stat().st_mtime_ns
+                except OSError:
+                    return -1
+
+            # Newest first by mtime — a lexicographic-descending NAME
+            # sort only matches recency for timestamp-named dirs, and
+            # project-mode run dirs carry arbitrary names.
+            for sibling in sorted(parent.iterdir(), key=_mtime_ns,
+                                  reverse=True):
                 if sibling == run_dir or not sibling.is_dir():
                     continue
                 if own_target and not recorded_target_matches(
