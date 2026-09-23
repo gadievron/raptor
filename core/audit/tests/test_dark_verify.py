@@ -6532,3 +6532,54 @@ class TestLaneValueEncoderClosure:
         for lang, (src, _markers) in self._rows().items():
             assert '+ result + ' not in src, lang
             assert '\\"value\\":\\"%s\\"' not in src, lang
+
+
+class TestConfirmReceiptProvenance:
+    """A confirm must EXTEND the receipt chain, not replace it — the
+    refuted branch already preserves the prior deterministic receipt
+    (\"+dark_verify:refuted\"), while the confirm branch overwrote
+    it, erasing engine provenance from the exported record."""
+
+    def _outcome(self, tmp_path):
+        import textwrap as _tw
+
+        from core.audit.orchestrator import ReviewOutcome
+        src = tmp_path / "math_util.py"
+        src.write_text(_tw.dedent("""\
+            def divide(a, b):
+                return a / b
+        """), encoding="utf-8")
+        oc = ReviewOutcome(
+            file="math_util.py", function="divide", status="dark",
+            body="suspected bug", hypothesis="division by zero",
+        )
+        oc.evidence_tool = "smt"
+        return oc
+
+    def test_confirm_preserves_prior_tool_receipt(self, tmp_path):
+        import json as _json
+
+        from core.audit.orchestrator import (
+            OrchestratorConfig,
+            OrchestratorResult,
+            _run_dark_verification,
+        )
+        config = OrchestratorConfig(target_path=tmp_path, out_dir=tmp_path)
+        oc = self._outcome(tmp_path)
+        result = OrchestratorResult()
+        result.outcomes = [oc]
+        result.dormant = 1
+        llm_response = _json.dumps({
+            "module_path": "math_util",
+            "function": "divide",
+            "args": [1, 0],
+            "expected_exception": "ZeroDivisionError",
+            "rationale": "dividing by zero",
+        })
+        _run_dark_verification(
+            result, config, llm_client=lambda s, u: llm_response,
+        )
+        assert result.outcomes[0].status == "finding"
+        parts = (result.outcomes[0].evidence_tool or "").split("+")
+        assert "dark_verify:confirmed" in parts
+        assert "smt" in parts

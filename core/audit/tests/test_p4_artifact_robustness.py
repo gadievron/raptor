@@ -103,3 +103,46 @@ class TestPreScanScopeLabels:
         (tmp_path / "src").mkdir()
         labels = [lab for lab, _ in _scan_targets(tmp_path, ["src"])]
         assert labels == ["src"]
+
+
+class TestSharedPrepSourceTexts:
+    def test_prep_reads_each_gap_file_through_one_map(self):
+        # Five prep channels each built their own whole-tree
+        # {file: text} dict (one retained run-long) — several
+        # redundant in-memory copies of every gap file. The shared
+        # read-through map is the only _contained_source_text caller
+        # inside _compute_audit_prep.
+        import ast as _ast
+        from pathlib import Path as _Path
+        orch = _Path(__file__).resolve().parents[1] / "orchestrator.py"
+        tree = _ast.parse(orch.read_text())
+        prep = next(
+            n for n in tree.body
+            if isinstance(n, _ast.FunctionDef)
+            and n.name == "_compute_audit_prep"
+        )
+        def _calls_stopping_at_defs(fn):
+            found = 0
+            stack = list(fn.body)
+            while stack:
+                node = stack.pop()
+                if isinstance(node, (_ast.FunctionDef,
+                                     _ast.AsyncFunctionDef)):
+                    continue  # nested defs counted separately
+                if (
+                    isinstance(node, _ast.Call)
+                    and isinstance(node.func, _ast.Name)
+                    and node.func.id == "_contained_source_text"
+                ):
+                    found += 1
+                stack.extend(_ast.iter_child_nodes(node))
+            return found
+
+        assert _calls_stopping_at_defs(prep) == 0, \
+            "a prep channel re-grew its own source-text loop"
+        shared = next(
+            n for n in _ast.walk(prep)
+            if isinstance(n, _ast.FunctionDef)
+            and n.name == "_gap_source_texts"
+        )
+        assert _calls_stopping_at_defs(shared) == 1
