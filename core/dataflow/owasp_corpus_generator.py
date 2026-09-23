@@ -31,7 +31,9 @@ from pathlib import Path
 from core.dataflow.adapters.codeql import from_sarif_result
 from core.dataflow.finding import Finding, Step
 from core.json import load_json
+from core.paths import confine
 from core.sarif.parser import SARIF_MAX_BYTES
+from core.source import read_text_capped
 from core.dataflow.label import (
     FP_MISSING_SANITIZER_MODEL,
     GroundTruth,
@@ -117,16 +119,14 @@ def _rewrite_finding_paths_and_snippets(
     line_cache: dict[Path, list[str]] = {}
 
     def _read_line(rel_path: str, line: int) -> str | None:
-        full = (repo_root / rel_path).resolve()
-        if not full.is_relative_to(repo_root.resolve()):
+        full = confine(repo_root, rel_path)
+        if full is None:
             return None
         if full not in line_cache:
-            try:
-                line_cache[full] = full.read_text(
-                    encoding="utf-8", errors="replace",
-                ).splitlines()
-            except OSError:
-                line_cache[full] = []
+            # Capped read: SARIF-named paths into the benchmark clone;
+            # a snippet past the cap just stays empty (no-signal).
+            got = read_text_capped(full)
+            line_cache[full] = got[0].splitlines() if got is not None else []
         lines = line_cache[full]
         if 1 <= line <= len(lines):
             return lines[line - 1].strip()

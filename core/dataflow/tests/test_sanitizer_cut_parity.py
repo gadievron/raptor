@@ -282,3 +282,31 @@ class TestReport:
         s = aggregate_parity([])
         report = render_parity_report(s)
         assert "Records in window: **0**" in report
+
+
+class TestParityReaderBudget:
+    def test_oversized_line_skipped_valid_lines_kept(self, tmp_path):
+        """The parity log is unbounded across runs; the reader streams
+        and a line over the per-record budget is dropped like any
+        other malformed line, without derailing later records."""
+        from core.dataflow.sanitizer_cut_parity import (
+            _MAX_RECORD_LINE_CHARS,
+            ParityRecord,
+            append_parity_record,
+            read_parity_records,
+        )
+        log = tmp_path / "parity.jsonl"
+        rec = ParityRecord(
+            finding_id="a", file="f.py", cwe="CWE-79", language="python",
+            source_line=1, sink_line=2, kind="charset",
+            lexical_suppressed=True, value_bound_verdict="suppress",
+            value_bound_suppressed=True,
+        )
+        append_parity_record(log, rec)
+        with log.open("a", encoding="utf-8") as f:
+            f.write("{\"pad\": \"" + "x" * (_MAX_RECORD_LINE_CHARS + 64)
+                    + "\"}\n")
+        append_parity_record(log, rec)
+        records = read_parity_records(log)
+        assert len(records) == 2
+        assert all(r.finding_id == "a" for r in records)

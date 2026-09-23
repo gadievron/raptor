@@ -765,3 +765,31 @@ class TestSanitizerWindow:
         result = validate_structurally(self._path(), tmp_path,
                                        language="python")
         assert result.sanitizers == ["escape_html"]
+
+
+class TestCappedReads:
+    def test_read_file_content_routes_through_capped_reader(
+            self, tmp_path, monkeypatch):
+        """Step files are target-controlled; the read must pay the
+        shared size budget rather than materialise a planted
+        multi-hundred-MB file per finding."""
+        import core.dataflow.structural_validator as sv
+        seen: dict = {}
+
+        def fake_capped(path, *a, **k):
+            seen["path"] = Path(path)
+            return ("capped-content", False)
+
+        monkeypatch.setattr(sv, "read_text_capped", fake_capped)
+        p = tmp_path / "f.py"
+        p.write_text("x = 1\n")
+        assert sv._read_file_content(p) == "capped-content"
+        assert seen["path"] == p
+
+    def test_read_file_content_none_on_unreadable(self, tmp_path):
+        assert _read_file_content_missing(tmp_path) is None
+
+
+def _read_file_content_missing(tmp_path):
+    from core.dataflow.structural_validator import _read_file_content
+    return _read_file_content(tmp_path / "does-not-exist.py")

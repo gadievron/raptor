@@ -3597,3 +3597,43 @@ class TestBalancedPhantomPairs:
         # depends on it
         line = "if (a) /{/.test(x); b = c / 2;"
         assert len(f(line)) == len(line)
+def test_value_bound_java_precheck_read_is_capped(monkeypatch, tmp_path):
+    """The java constant-definers pre-check reads scanned-repo source;
+    it must go through the shared capped reader, not an unbounded
+    read_text."""
+    from core.analysis import finding_resolver as fr
+    from core.analysis import sanitizer_cut as sc
+
+    src = tmp_path / "App.java"
+    src.write_text("class App {}\n", encoding="utf-8")
+
+    resolved = fr.ResolvedFinding(
+        file=str(src), enclosing_function="f", source_lineno=1,
+        source_symbols=frozenset({"x"}), sink_lineno=2, sink_arg="x",
+        cwe="CWE-79", language="java", cfg=object(), source_node=object(),
+        sink_node=object(),
+    )
+    monkeypatch.setattr(fr, "resolve_finding", lambda finding: resolved)
+
+    def fake_evaluate(graph, sources, sink, **kwargs):
+        return sc.SanitizerCutResult(
+            suppress=True, reason="test", cut_set=frozenset(),
+            candidate_callables=frozenset(),
+        )
+
+    monkeypatch.setattr(sc, "evaluate_finding", fake_evaluate)
+    monkeypatch.setattr(sb._sc_config, "value_bound_enabled", lambda: True)
+
+    seen: dict = {}
+
+    def fake_capped(path, *a, **k):
+        seen["path"] = str(path)
+        return ("class App {}\n", False)
+
+    monkeypatch.setattr(sb, "read_text_capped", fake_capped)
+    out = sb._value_bound_dominates(
+        file_path=str(src), validator_line=1, sink_line=2,
+        cwe="CWE-79", language="java",
+    )
+    assert out is True
+    assert seen["path"] == str(src)
