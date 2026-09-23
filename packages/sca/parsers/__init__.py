@@ -154,12 +154,18 @@ def capture_parse_failures() -> Iterator[list[ParseFailure]]:
     handler = _ParseFailureCollector()
     parsers_logger = logging.getLogger(__name__)
     parsers_logger.addHandler(handler)
+    # Restore the PREVIOUS collector on exit (not None): a nested
+    # capture — a helper that captures around one parse inside an
+    # outer discovery-stage capture — otherwise clobbered the outer
+    # collector, silently dropping every failure after the inner
+    # block.
+    prev = getattr(_TLS, "collector", None)
     _TLS.collector = handler
     try:
         yield handler.failures
     finally:
         parsers_logger.removeHandler(handler)
-        _TLS.collector = None
+        _TLS.collector = prev
 
 
 class ManifestParser(Protocol):
