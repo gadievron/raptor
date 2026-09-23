@@ -51,6 +51,7 @@ from .record import (
     cleanup_manifest,
     load_record,
     load_records,
+    read_manifest_lines,
     write_record,
 )
 from .registry import category_of, classify, depth_of
@@ -122,6 +123,7 @@ __all__ = [
     "iter_inventory_functions",
     "load_record",
     "load_records",
+    "read_manifest_lines",
     "mark_runtime",
     "parse_drcov",
     "parse_sancov",

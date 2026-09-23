@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from core.coverage.journal import is_mechanical_echo as _is_mechanical_echo
+from core.coverage.record import READS_MANIFEST, read_manifest_lines
 from core.json import load_json, save_json
 from core.security.prompt_output_sanitise import sanitise_string
 
@@ -1359,15 +1360,18 @@ def _find_unrecorded_reads(
     dicts for files with unrecorded functions, sorted by number of
     unrecorded functions descending.
     """
-    manifest_path = out_dir / ".reads-manifest"
+    manifest_path = out_dir / READS_MANIFEST
     checklist_path = out_dir / "checklist.json"
     if not manifest_path.exists() or not checklist_path.exists():
         return []
 
-    try:
-        with Path(manifest_path).open(encoding="utf-8", errors="replace") as f:
-            read_paths = {line.strip() for line in f if line.strip()}
-    except OSError:
+    # Chokepoint reader, never a bespoke parser: the manifest sits in
+    # the sandbox write grant, and a raw ``.open()`` here followed a
+    # planted symlink, blocked forever on a planted FIFO (wedging
+    # report finalize), and buffered an unbounded plant — exactly the
+    # attacks the shared reader refuses (lstat S_ISREG + 64 MiB cap).
+    read_paths = read_manifest_lines(manifest_path)
+    if not read_paths:
         return []
 
     checklist = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)

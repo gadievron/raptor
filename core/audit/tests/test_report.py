@@ -318,6 +318,47 @@ class TestUnrecordedReads:
         result = _find_unrecorded_reads(tmp_path, {"files": {}}, None)
         assert result == []
 
+    def _checklist_and_target(self, tmp_path: Path) -> Path:
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "a.c").write_text("int f1() {}")
+        (tmp_path / "checklist.json").write_text(json.dumps({
+            "files": [
+                {
+                    "path": "a.c",
+                    "items": [
+                        {"name": "f1", "kind": "function",
+                         "line_start": 1},
+                    ],
+                },
+            ],
+        }))
+        return target
+
+    def test_fifo_manifest_does_not_block(self, tmp_path: Path):
+        # The manifest sits in the sandbox write grant: a planted
+        # FIFO wedged report finalize forever on a raw open(). The
+        # chokepoint reader refuses non-regular files.
+        import os as _os
+        import time as _time
+
+        target = self._checklist_and_target(tmp_path)
+        _os.mkfifo(tmp_path / ".reads-manifest")
+        t0 = _time.monotonic()
+        result = _find_unrecorded_reads(tmp_path, {"files": {}}, target)
+        assert _time.monotonic() - t0 < 2.0, "FIFO plant blocked finalize"
+        assert result == []
+
+    def test_symlink_manifest_not_followed(self, tmp_path: Path):
+        # A symlink plant pulled a foreign file into the comparison —
+        # the chokepoint reader refuses the link inode.
+        target = self._checklist_and_target(tmp_path)
+        foreign = tmp_path / "foreign-listing"
+        foreign.write_text(str(target / "a.c") + "\n")
+        (tmp_path / ".reads-manifest").symlink_to(foreign)
+        result = _find_unrecorded_reads(tmp_path, {"files": {}}, target)
+        assert result == []
+
     def test_all_recorded(self, tmp_path: Path):
         target = tmp_path / "target"
         target.mkdir()

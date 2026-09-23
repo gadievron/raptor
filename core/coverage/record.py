@@ -46,12 +46,16 @@ READS_MANIFEST = ".reads-manifest"
 _MANIFEST_CAP = 64 * 1024 * 1024
 
 
-def _read_manifest_lines(manifest_path: Path) -> set[str]:
+def read_manifest_lines(manifest_path: Path) -> set[str]:
     r"""Read reads-manifest paths under a shared flock with a size cap.
 
     Single reader for the hook-written ``.reads-manifest`` so every
-    consumer (``build_from_manifest``, ``build_from_findings``) gets
-    the same reader-writer coordination and memory ceiling.
+    consumer — ``build_from_manifest``, ``build_from_findings``, and
+    the audit report's unrecorded-reads cross-reference — gets the
+    same reader-writer coordination, special-file refusal, and memory
+    ceiling. Public deliberately: a second bespoke parser shipped
+    beside this one with a bare ``.open()`` and reintroduced exactly
+    the FIFO/symlink/unbounded-read attacks documented below.
 
     Line integrity against in-flight writers (the PostToolUse hook in
     plugins/coverage/) comes from the writers themselves: both hook
@@ -150,7 +154,7 @@ def build_from_manifest(run_dir: Path, tool: str,
     # Locked, capped, streaming read — the manifest is appended to by
     # the PostToolUse hook (LOCK_EX side), so this reader needs the
     # same LOCK_SH coordination as ``build_from_findings``.
-    files = _read_manifest_lines(manifest)
+    files = read_manifest_lines(manifest)
 
     # Add extra files from tool-specific sources
     if extra_files:
@@ -433,7 +437,7 @@ def build_from_findings(findings_path: Path, reads_manifest_path: Path | None = 
     # streaming read shared with ``build_from_manifest``.
     read_files = set()
     if reads_manifest_path:
-        read_files = _read_manifest_lines(reads_manifest_path)
+        read_files = read_manifest_lines(reads_manifest_path)
 
     all_files = sorted(read_files | finding_files)
 
