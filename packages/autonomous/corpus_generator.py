@@ -174,12 +174,19 @@ class CorpusGenerator:
         if not self.source_dir:
             return analysis
 
+        from itertools import islice
+
         candidate_suffixes = {".c", ".cc", ".cpp", ".h", ".hpp", ".md", ".txt", ".rst"}
         try:
-            files = [
-                p for p in self.source_dir.rglob("*")
-                if p.is_file() and p.suffix.lower() in candidate_suffixes
-            ][:200]
+            # islice, not list-then-slice: the old form materialised
+            # every matching path in the tree before keeping 200 —
+            # pure walk/allocation cost on big source dirs. The walk
+            # now stops at the 200th match.
+            files = list(islice(
+                (p for p in self.source_dir.rglob("*")
+                 if p.is_file() and p.suffix.lower() in candidate_suffixes),
+                200,
+            ))
         except OSError:
             files = []
 
