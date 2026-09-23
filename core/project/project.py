@@ -640,7 +640,13 @@ class Project:
         extraction) share a ``content_id`` even though their ``target`` paths
         differ — this is what lets them resolve to the same project."""
         try:
-            data = load_json(self.output_path / "coverage.json")
+            # Budgeted (run-artifact class): find_project_by_content_id
+            # loads this store for EVERY registered project — one
+            # oversize plant must degrade to "no id", not buffer
+            # unbounded per project scanned.
+            from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
+            data = load_json(self.output_path / "coverage.json",
+                             max_bytes=RUN_ARTIFACT_MAX_BYTES)
         except Exception:  # noqa: BLE001 — any read failure means "no id yet"
             return None
         return data.get("content_id") if isinstance(data, dict) else None
@@ -705,20 +711,28 @@ class Project:
                          if its session is dead (legacy fallback for runs
                          without session_pid).
         """
-        from core.json import load_json
         from core.run.metadata import (
             RUN_METADATA_FILE,
             _session_alive_for_meta,
             fail_run,
+            load_run_metadata,
         )
 
-        # Find all running dirs with their timestamps and PIDs
+        # Find all running dirs with their timestamps and PIDs.
+        # Budgeted read (load_run_metadata): the marker is
+        # sandbox-writable, and the sweep's pre-fix bare load both
+        # buffered an oversize plant unbounded AND crashed the whole
+        # get_run_dirs(sweep=True) consumer set — the sweep parsed the
+        # plant, decided to fail the run, and the BUDGETED fail_run
+        # then refused the same file, escaping as FileNotFoundError.
+        # Budgeted, an oversize marker reads None and the dir is
+        # skipped (not sweepable, not a crash).
         running = []
         for d in dirs:
             meta_file = d / RUN_METADATA_FILE
             if not meta_file.exists():
                 continue
-            meta = load_json(meta_file)
+            meta = load_run_metadata(d)
             if isinstance(meta, dict) and meta.get("status") == "running":
                 running.append((meta.get("timestamp", ""), d,
                                 meta.get("session_pid"), meta))

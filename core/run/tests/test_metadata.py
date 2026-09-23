@@ -1796,3 +1796,120 @@ class MetadataLockTamperTest(unittest.TestCase):
                     fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             finally:
                 os.close(fd)
+
+
+class MetadataReaderTreeClosureTest(unittest.TestCase):
+    """Tree-wide widening of the module-scoped budget oracle above.
+
+    The module-scoped oracle (`inspect.getsource(core.run.metadata)`)
+    structurally cannot see readers of the SAME sandbox-writable file
+    in sibling packages — and they re-grew: sweep, CLI, sessions, and
+    rename readers all loaded `.raptor-run.json` bare. Derive the
+    reader set mechanically instead: every function in core/project +
+    core/run + core/coverage whose source names the metadata file
+    (RUN_METADATA_FILE or the literal) must pass ``max_bytes=`` on
+    each load_json call inside it, or route through
+    _load_meta/load_run_metadata. Heuristic residual (documented): a
+    reader that builds the path in one function and loads it in
+    another, or reads via read_text, is outside this derivation —
+    the per-member behaviour tests carry those.
+    """
+
+    def test_metadata_file_readers_carry_a_budget(self):
+        import ast
+
+        repo = Path(__file__).resolve().parents[3]
+        markers = ("RUN_METADATA_FILE", ".raptor-run.json")
+        offenders: list[str] = []
+        for pkg in ("core/project", "core/run", "core/coverage"):
+            for py in sorted((repo / pkg).rglob("*.py")):
+                if "tests" in py.parts or py.name.startswith("test_"):
+                    continue
+                src = py.read_text(encoding="utf-8")
+                if not any(m in src for m in markers):
+                    continue
+                tree = ast.parse(src)
+                for fn in ast.walk(tree):
+                    if not isinstance(fn, (ast.FunctionDef,
+                                           ast.AsyncFunctionDef)):
+                        continue
+                    if fn.name in ("_load_meta", "load_run_metadata"):
+                        continue  # the budgeted loaders themselves
+                    fsrc = ast.get_source_segment(src, fn) or ""
+                    if not any(m in fsrc for m in markers):
+                        continue
+                    for node in ast.walk(fn):
+                        if not isinstance(node, ast.Call):
+                            continue
+                        name = ""
+                        if isinstance(node.func, ast.Name):
+                            name = node.func.id
+                        elif isinstance(node.func, ast.Attribute):
+                            name = node.func.attr
+                        if name not in ("load_json", "_lj"):
+                            continue
+                        if any(k.arg == "max_bytes"
+                               for k in node.keywords):
+                            continue
+                        arg = (ast.get_source_segment(src, node.args[0])
+                               if node.args else "") or ""
+                        offenders.append(
+                            f"{py.relative_to(repo)}:{node.lineno} "
+                            f"{fn.name}() load_json({arg[:60]})")
+        self.assertEqual(
+            offenders, [],
+            "bare load_json inside a metadata-file-reading function — "
+            "route through _load_meta/load_run_metadata or pass "
+            f"max_bytes: {offenders}")
+
+    def test_oracle_is_not_vacuous(self):
+        # Two-direction guard: the derivation must actually see the
+        # known reader set (sweep + gate homes at minimum).
+        import ast
+
+        repo = Path(__file__).resolve().parents[3]
+        seen = set()
+        markers = ("RUN_METADATA_FILE", ".raptor-run.json")
+        for pkg in ("core/project", "core/run", "core/coverage"):
+            for py in sorted((repo / pkg).rglob("*.py")):
+                if "tests" in py.parts or py.name.startswith("test_"):
+                    continue
+                src = py.read_text(encoding="utf-8")
+                if not any(m in src for m in markers):
+                    continue
+                tree = ast.parse(src)
+                for fn in ast.walk(tree):
+                    if isinstance(fn, (ast.FunctionDef,
+                                       ast.AsyncFunctionDef)):
+                        fsrc = ast.get_source_segment(src, fn) or ""
+                        if any(m in fsrc for m in markers):
+                            seen.add((py.name, fn.name))
+        self.assertIn(("project.py", "_sweep_stale"), seen)
+        self.assertIn(("metadata.py", "_live_conflicting_run"), seen)
+        self.assertGreater(len(seen), 10)
+
+
+class UpdateStatusUnreadableMarkerTest(unittest.TestCase):
+    """A marker that EXISTS but fails the budgeted read must refuse
+    with the malformed-on-disk contract (ValueError), not claim the
+    file is missing — the FileNotFoundError misled callers that had
+    just enumerated it."""
+
+    def test_oversize_marker_raises_value_error(self):
+        import json as _json
+
+        from core.run.metadata import _update_status
+        with TemporaryDirectory() as d:
+            run = Path(d)
+            (run / RUN_METADATA_FILE).write_text(_json.dumps({
+                "status": "running",
+                "pad": "A" * (2 * 1024 * 1024),
+            }), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                _update_status(run, "failed")
+
+    def test_missing_marker_still_file_not_found(self):
+        from core.run.metadata import _update_status
+        with TemporaryDirectory() as d:
+            with self.assertRaises(FileNotFoundError):
+                _update_status(Path(d), "failed")

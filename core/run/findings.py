@@ -51,7 +51,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from core.json import loads, save_json
+from core.json import load_json, save_json
 from core.logging import get_logger
 
 from .metadata import RUN_METADATA_FILE, load_run_metadata
@@ -132,16 +132,24 @@ def stamp_findings_in_run(run_dir: Path) -> dict[str, int]:
 
 def _stamp_file(path: Path, ref: dict[str, Any]) -> int:
     """Stamp findings in one file. Returns count of findings newly stamped,
-    or -1 on parse failure (file skipped, not modified)."""
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except OSError as e:
-        logger.warning("stamp_findings: read failed %s: %s", path, e)
-        return -1
-    try:
-        data = loads(raw)
-    except ValueError as e:
-        logger.warning("stamp_findings: parse failed %s: %s", path, e)
+    or -1 on parse/budget failure (file skipped, not modified)."""
+    # Byte-budgeted load: this runs inside complete_run (the host-side
+    # lifecycle), and findings.json is written into the sandbox-
+    # writable run dir — the uncapped read_text + full rewrite of an
+    # oversize plant put the OOM inside the finaliser itself (and
+    # stamp_findings' caller swallows exceptions, so OOM-kill was the
+    # failure mode). load_json's gated read checks the budget on the
+    # open fd (no stat-then-read grow window); skip-with-warning is
+    # the same contract as the report/merge readers and export's
+    # import-side rewriter.
+    from core.project.findings_utils import MAX_FINDINGS_JSON_BYTES
+    data = load_json(path, max_bytes=MAX_FINDINGS_JSON_BYTES)
+    if data is None:
+        logger.warning(
+            "stamp_findings: skipping %s (unreadable, malformed, or "
+            "over the %d-byte findings gate)",
+            path, MAX_FINDINGS_JSON_BYTES,
+        )
         return -1
 
     findings_list, _container_kind = _resolve_findings_list(data)

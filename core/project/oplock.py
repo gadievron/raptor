@@ -83,12 +83,21 @@ def _session_pid() -> int | None:
         return None
 
 
+#: Byte cap for the holder stamp read. A legitimate stamp is <300
+#: bytes; the lock file is writable by any principal with project-dir
+#: access, so the diagnostic read must not slurp a planted payload.
+_HOLDER_STAMP_MAX_BYTES = 64 * 1024
+
+
 def read_holder(lock_path: Path) -> dict:
     """Parse the holder stamp. Diagnostic only — callers must consult
     it exclusively AFTER flock refused (a free lock's stale content
-    must never produce a message)."""
+    must never produce a message). Bounded read: an over-cap stamp
+    truncates and fails the parse — the diagnostic degrades to the
+    holder-unknown message, never to an unbounded buffer."""
     try:
-        data = json.loads(Path(lock_path).read_text(encoding="utf-8"))
+        with open(Path(lock_path), encoding="utf-8") as fh:
+            data = json.loads(fh.read(_HOLDER_STAMP_MAX_BYTES))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}

@@ -285,3 +285,29 @@ class HostileStampTest(unittest.TestCase):
                             "unbounded stamp flooded the message")
             # Non-int pid is coerced, not echoed.
             self.assertIn("pid unknown", msg)
+
+
+class ReadHolderBoundedTest(unittest.TestCase):
+    """The holder stamp is writable by any principal with project-dir
+    access — the diagnostic read is byte-bounded, degrading an
+    over-cap plant to the holder-unknown shape."""
+
+    def test_oversize_stamp_reads_as_unknown(self):
+        from tempfile import TemporaryDirectory
+
+        from core.project.oplock import read_holder
+        with TemporaryDirectory() as td:
+            lock = Path(td) / ".op.lock"
+            lock.write_text('{"pad": "' + "A" * (2 * 1024 * 1024) + '"}',
+                            encoding="utf-8")
+            self.assertEqual(read_holder(lock), {})
+
+    def test_normal_stamp_still_parses(self):
+        from tempfile import TemporaryDirectory
+
+        from core.project.oplock import read_holder
+        with TemporaryDirectory() as td:
+            lock = Path(td) / ".op.lock"
+            lock.write_text('{"pid": 123, "op": "merge"}',
+                            encoding="utf-8")
+            self.assertEqual(read_holder(lock)["op"], "merge")

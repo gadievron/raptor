@@ -150,9 +150,22 @@ def _empty_result() -> dict[str, Any]:
 
 # --- Helpers ---
 
+def _load_orchestrated_report(run_dir: Path) -> Any:
+    """Budgeted read of a run's ``orchestrated_report.json``.
+
+    The report lives in the sandbox-writable run dir and correlate
+    loads one per run — an oversize plant degrades to None (findings
+    fall back to the size-gated findings.json path) instead of
+    buffering unbounded.
+    """
+    from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
+    return load_json(run_dir / "orchestrated_report.json",
+                     max_bytes=RUN_ARTIFACT_MAX_BYTES)
+
+
 def _get_run_model(run_dir: Path) -> str:
     """Extract the analysis model name for a run."""
-    orch = load_json(run_dir / "orchestrated_report.json")
+    orch = _load_orchestrated_report(run_dir)
     if orch and isinstance(orch, dict):
         o = orch.get("orchestration") or {}
         models = o.get("analysis_models") or []
@@ -192,7 +205,7 @@ def _load_all_findings(
     """
     result = {}
     for d in run_dirs:
-        orch = load_json(d / "orchestrated_report.json")
+        orch = _load_orchestrated_report(d)
         if orch and isinstance(orch, dict):
             findings = orch.get("results", [])
             if findings:
