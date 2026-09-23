@@ -1274,3 +1274,73 @@ class TestContractQualifiedIdentity:
             if "CONTRACT FOR" in p
         )
         assert "function name only" not in exact
+
+class TestDriftedModelDegradesPerEntry:
+    """One schema-drifted record must cost one logged gap, never the
+    whole domain-knowledge block (consumers catch-all at DEBUG, so an
+    escaped KeyError is silent total loss)."""
+
+    @staticmethod
+    def _drifted_model():
+        return {
+            "version": "1", "target": "t", "source_root": "s",
+            "concepts": [
+                # id missing: the drifted record (description still
+                # names the function so it scores as relevant).
+                {"description": "checksum_verify validates the frame"},
+                {"id": "frame_layout",
+                 "description": "checksum_verify frames carry a "
+                                "trailing CRC"},
+                "just a string",
+            ],
+            "invariants": [
+                {"concept": "frame_layout",
+                 "statement": "checksum_verify must run before use"},
+                {"id": "crc_before_use", "concept": "frame_layout",
+                 "statement": "checksum_verify precedes any field "
+                              "read"},
+            ],
+            "contracts": [
+                {"file": "net/frame.c",
+                 "input_semantics": "drifted: no function key"},
+                {"function": "checksum_verify", "file": "net/frame.c",
+                 "input_semantics": "buf holds >= 4 bytes"},
+            ],
+        }
+
+    def test_block_survives_drifted_records(self, tmp_path, caplog):
+        import logging
+
+        (tmp_path / "domain-model.json").write_text(
+            json.dumps(self._drifted_model()), encoding="utf-8")
+        with caplog.at_level(
+            logging.WARNING, logger="core.concepts.audit_bridge",
+        ):
+            block = domain_model_context(
+                tmp_path, "net/frame.c", "checksum_verify")
+        assert block is not None, "drifted record killed the block"
+        # The intact records still render.
+        assert "frame_layout" in block
+        assert "crc_before_use" in block
+        assert "buf holds >= 4 bytes" in block
+        # The gap is recorded, both in the log and in the block.
+        assert any("schema drift" in r.message for r in caplog.records)
+        assert "schema-drifted" in block
+
+    def test_primers_survive_drifted_records(self, tmp_path):
+        from core.concepts.audit_bridge import primers_from_domain_model
+        (tmp_path / "domain-model.json").write_text(
+            json.dumps(self._drifted_model()), encoding="utf-8")
+        primers = primers_from_domain_model(
+            tmp_path, "net/frame.c", "checksum_verify")
+        assert any("CONTRACT FOR checksum_verify" in p for p in primers)
+
+    def test_non_list_key_degrades_to_empty(self, tmp_path):
+        model = self._drifted_model()
+        model["invariants"] = "corrupted"
+        (tmp_path / "domain-model.json").write_text(
+            json.dumps(model), encoding="utf-8")
+        block = domain_model_context(
+            tmp_path, "net/frame.c", "checksum_verify")
+        assert block is not None
+        assert "frame_layout" in block
