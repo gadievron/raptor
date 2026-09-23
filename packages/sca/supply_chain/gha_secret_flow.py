@@ -961,7 +961,10 @@ _STDIN_PIPE_RE = re.compile(
     # ``login`` literal on word chars, so an unbounded loop cost
     # every split of a subcommand-word run — quadratic. Sixteen
     # subcommand tokens sits far above real CLI chains.
-    + r"""\s+(?:[\w.-]+\s+){0,16}login\s+(?:\$(?!\()|[^|;&<>$`])*"""
+    # (?=\S) pins the post-login whitespace run — the argument
+    # class admits whitespace, so an unpinned run split against it
+    # (quadratic on a login line ending in a whitespace run).
+    + r"""\s+(?:[\w.-]+\s+){0,16}login\s+(?=\S)(?:\$(?!\()|[^|;&<>$`])*"""
     + r"""--password-stdin(?:\$(?!\()|[^|;&<>$`])*$""",
 )
 

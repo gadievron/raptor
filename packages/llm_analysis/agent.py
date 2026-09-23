@@ -2424,8 +2424,13 @@ class AutonomousSecurityAgentV2:
     # them). Anchored on a per-line basis (re.MULTILINE) so prose
     # text containing "```cpp" inline (`"like ```cpp would match"`)
     # doesn't false-positive as a code block.
+    # The fence line's trailing gap is horizontal ([^\S\n]*\n):
+    # with ``\s*\n`` every fence anchor could swallow following
+    # blank lines and re-scan the tail — quadratic over planted
+    # fence lines. Blank lines after the fence now stay in the body
+    # (leading whitespace in extracted code is inert).
     _CODE_FENCE_RE = re.compile(
-        r"^```(?P<lang>[a-zA-Z0-9_+-]*)\s*\n"
+        r"^```(?P<lang>[a-zA-Z0-9_+-]*)[^\S\n]*\n"
         r"(?P<body>.*?)"
         r"^```\s*$",
         re.MULTILINE | re.DOTALL,
