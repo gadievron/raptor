@@ -595,3 +595,63 @@ class TestMatchCaptureRebindNotSuppressed:
             language="python", source_symbols={"x"}, sink_arg="y",
         )
         assert r.verdict == VERDICT_SUPPRESS
+
+
+class TestCatalogModuleShadowDegraded:
+    """The catalog join matches the WRITTEN dotted name; a local
+    binding of the chain's root swaps the runtime callee for an
+    attacker-chosen object (``html = FakeNs; html.escape(x)``). The
+    binding must degrade — a forged catalog identity drove an
+    enforced suppression."""
+
+    def test_local_root_rebind_degrades_binding(self):
+        src = (
+            "def handle(x):\n"
+            "    html = fake_ns()\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        cfg = _cfg(src)
+        sink = _node_with_call(cfg, "render")
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"},
+            sink_arg="y",
+        )
+        assert result.verdict == VERDICT_NO_SUPPRESS
+
+    def test_param_named_like_catalog_root_degrades(self):
+        src = (
+            "def handle(x, html):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        cfg = _cfg(src)
+        sink = _node_with_call(cfg, "render")
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"},
+            sink_arg="y",
+        )
+        assert result.verdict == VERDICT_NO_SUPPRESS
+
+    def test_unshadowed_catalog_call_still_suppresses(self):
+        # Direction pin: the ordinary module-level-import shape keeps
+        # its suppression — the guard keys on the FUNCTION's own
+        # bindings only.
+        src = (
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        cfg = _cfg(src)
+        sink = _node_with_call(cfg, "render")
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"},
+            sink_arg="y",
+        )
+        assert result.verdict == VERDICT_SUPPRESS
