@@ -130,3 +130,35 @@ class TestNumericLeavesDiscoverable:
         assert "True" not in vals and "true" not in vals
         assert "12" not in vals
         assert "456" in vals
+
+
+class TestCapIsStrictAtTheBoundary:
+    """The extraction lanes must honour the cap STRICTLY: the
+    per-token accounting checked the budget only at the top of each
+    token, so a token whose slash-parts landed at the boundary could
+    overshoot by a few entries (the union merge clamps the run set,
+    but the lane-level bound advertised by the constant must hold
+    too)."""
+
+    def test_token_lane_never_exceeds_cap(self, monkeypatch):
+        # Cap smaller than one token's contribution (token + 4
+        # slash-parts = 5 entries): the boundary token must be
+        # clipped mid-parts, never finish over the cap.
+        monkeypatch.setattr(loop_mod, "_MAX_KNOWN_VALUES", 3)
+        text = " ".join(
+            f"alpha{i}/beta{i}/gamma{i}/delta{i}" for i in range(10)
+        )
+        values = _extract_tokens_from_text(text)
+        assert len(values) <= 3
+
+    def test_json_walk_never_exceeds_cap(self, monkeypatch):
+        import json
+        monkeypatch.setattr(loop_mod, "_MAX_KNOWN_VALUES", 3)
+        payload = json.dumps({
+            "items": [
+                f"alpha{i}/beta{i}/gamma{i}/delta{i}" for i in range(10)
+            ],
+            "nums": [1000 + i for i in range(10)],
+        })
+        values = _extract_values_from_json(payload)
+        assert len(values) <= 3
