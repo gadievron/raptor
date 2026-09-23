@@ -71,6 +71,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import save_json
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -387,7 +388,7 @@ def build_state_field_index(
                     return name, ()
             return "", ()
 
-        for line_no, raw in enumerate(source.splitlines(), start=1):
+        for line_no, raw in enumerate(split_lines(source), start=1):
             code = raw.split("//", 1)[0]
             for m in (*_FIELD_CHAIN_RE.finditer(code),
                       *_FIELD_CHAIN_AFTER_CLOSER_RE.finditer(code)):

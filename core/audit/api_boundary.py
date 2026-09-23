@@ -53,6 +53,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
+from core.source.lines import split_lines
 from pathlib import Path
 
 from core.paths import confine
@@ -1517,7 +1518,7 @@ def address_taken_occurrences(
         except ValueError:
             continue
         view = sanitized_view(text, str(path))
-        for line_no, line in enumerate(view.splitlines(), start=1):
+        for line_no, line in enumerate(split_lines(view), start=1):
             if (
                 def_span
                 and rel == def_file

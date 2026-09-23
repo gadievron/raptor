@@ -38,6 +38,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from core.source.lines import split_lines
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -588,7 +589,7 @@ def _detect_consumer_fail_open(
 
 def _function_start_line(source: str, func_name: str) -> int:
     """Return the 1-based line number of a function definition in source."""
-    for i, line in enumerate(source.splitlines(), 1):
+    for i, line in enumerate(split_lines(source), 1):
         if re.search(rf"\b{re.escape(func_name)}\s*\(", line):
             return i
     return 1

@@ -46,6 +46,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from core.source.lines import split_lines
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -352,7 +353,7 @@ def find_mutation_sites(
     from .source_view import sanitized_view
     sites: list[tuple[int, str, str, str, str]] = []
     view = sanitized_view(source, language="c")
-    for line_no, code in enumerate(view.splitlines(), start=1):
+    for line_no, code in enumerate(split_lines(view), start=1):
         for var in sorted(variables, key=len, reverse=True):
             v = re.escape(var)
             m = re.search(
@@ -389,7 +390,7 @@ def find_alias_escapes(
     escapes: list[tuple[int, str, str]] = []
     view = sanitized_view(source, language="c")
     member = r"(?:[A-Za-z_]\w*\s*(?:->|\.)\s*)"
-    for line_no, code in enumerate(view.splitlines(), start=1):
+    for line_no, code in enumerate(split_lines(view), start=1):
         for var in sorted(variables, key=len, reverse=True):
             v = re.escape(var)
             # &var and &s->var / &s.var (member paths ending in the

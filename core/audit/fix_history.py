@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import save_json
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -400,7 +401,7 @@ def _sweep_callee_sites(
             text = _read_target_text(full)
         except (ValueError, OSError):
             continue
-        for i, line_text in enumerate(text.splitlines(), start=1):
+        for i, line_text in enumerate(split_lines(text), start=1):
             if pattern.search(line_text):
                 sites.append((rel, i))
     return sites
