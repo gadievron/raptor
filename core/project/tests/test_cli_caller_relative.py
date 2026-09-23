@@ -81,3 +81,35 @@ class TestCreateUsesCallerDir(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGhidraAddUsesCallerDir(unittest.TestCase):
+    """The newer ghidra add/remove surface skipped _caller_relative —
+    a relative <path.gpr> resolved against the RAPTOR repo dir the
+    launcher moved cwd to, not the operator's shell."""
+
+    def test_ghidra_add_resolves_relative_gpr_against_caller(self):
+        from unittest.mock import patch as _patch
+
+        from core.project.cli import main
+        with TemporaryDirectory() as d:
+            caller = Path(d) / "shell"
+            caller.mkdir()
+            gpr = caller / "proj.gpr"
+            gpr.write_text("x")
+            fake_p = type("P", (), {"ghidra_projects": [],
+                                    "output_dir": str(Path(d) / "out"),
+                                    "to_dict": lambda self: {}})()
+            with _patch.dict(os.environ,
+                             {"RAPTOR_CALLER_DIR": str(caller)}), \
+                    _patch("core.project.cli.ProjectManager") as MockMgr:
+                inst = MockMgr.return_value
+                inst.load.return_value = fake_p
+                inst.projects_dir = Path(d) / "projects"
+                inst.projects_dir.mkdir()
+                with _patch("sys.argv",
+                            ["raptor-project", "ghidra", "add",
+                             "proj.gpr", "myproj"]):
+                    main()
+            self.assertEqual(fake_p.ghidra_projects,
+                             [str(gpr.resolve())])

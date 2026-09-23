@@ -326,3 +326,31 @@ def test_stamp_still_stamps_in_budget_file(tmp_path):
     assert counts["findings_stamped"] == 1
     data = json.loads((tmp_path / "findings.json").read_text())
     assert data["findings"][0]["provenance_refs"]
+
+
+def test_openant_findings_are_stamped(tmp_path):
+    """Standalone /openant runs write openant_findings.json and no
+    top-level findings.json — unstamped, there was no canonical
+    provenance ref for the run and a forged local-looking ref in an
+    imported archive was the record's only back-link."""
+    from core.run.findings import stamp_findings_in_run
+    (tmp_path / ".raptor-run.json").write_text(json.dumps({
+        "version": 2, "command": "openant",
+        "timestamp": "2026-01-01T00:00:00+00:00", "status": "running",
+    }), encoding="utf-8")
+    (tmp_path / "openant_findings.json").write_text(
+        json.dumps({"findings": [{"id": "f1"}]}), encoding="utf-8")
+    counts = stamp_findings_in_run(tmp_path)
+    assert counts["findings_stamped"] == 1
+    data = json.loads((tmp_path / "openant_findings.json").read_text())
+    assert data["findings"][0]["provenance_refs"]
+
+
+def test_import_ref_rewrite_paths_are_the_stamp_paths():
+    """One constant, consumed from its owner: the import-side
+    namespacing rewrite must cover exactly the stamped files, or an
+    imported file's refs read as locally-verified work."""
+    from core.project.export import _IMPORTED_REF_REWRITE_PATHS
+    from core.run.findings import _STAMP_PATHS
+    assert _IMPORTED_REF_REWRITE_PATHS is _STAMP_PATHS
+    assert "openant_findings.json" in _STAMP_PATHS

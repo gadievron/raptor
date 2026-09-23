@@ -1311,8 +1311,16 @@ def _promote_checklist(project_dir: Path) -> None:
     # Run-dir artifacts: sibling checklists are sandbox-writable; the
     # shared run-artifact budget bounds the promotion scan.
     from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
-    checklists = []
-    for d in sorted(children, key=lambda d: (_safe_mtime(d), d.name), reverse=True):
+
+    # STREAMING merge: the newest parsed checklist is the promotion
+    # base and each older sibling is loaded, folded into it, and
+    # released before the next load. Accumulating every sibling first
+    # held N × the per-file budget live at once — a project with many
+    # runs turned promotion into the run start's high-water mark.
+    from core.inventory.builder import _carry_forward_coverage
+    promoted = None
+    for d in sorted(children, key=lambda d: (_safe_mtime(d), d.name),
+                    reverse=True):
         try:
             if not d.is_dir() or d.name.startswith((".", "_")):
                 continue
@@ -1322,18 +1330,15 @@ def _promote_checklist(project_dir: Path) -> None:
         except OSError:
             continue
         data = load_json(cl, max_bytes=RUN_ARTIFACT_MAX_BYTES)
-        if data:
-            checklists.append(data)
+        if not data:
+            continue
+        if promoted is None:
+            promoted = data  # newest wins the base
+        else:
+            _carry_forward_coverage(data, promoted)
 
-    if not checklists:
+    if promoted is None:
         return
-
-    # Start with newest, merge checked_by from older ones
-    promoted = checklists[0]
-    if len(checklists) > 1:
-        from core.inventory.builder import _carry_forward_coverage
-        for older in checklists[1:]:
-            _carry_forward_coverage(older, promoted)
 
     save_json(project_dir / "checklist.json", promoted)
 

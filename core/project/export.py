@@ -399,9 +399,12 @@ def _demote_imported_annotations(output_dir: Path) -> None:
 
 
 # Findings files (relative to a run dir) whose provenance refs get
-# namespaced on import. Mirrors core/run/findings.py's _STAMP_PATHS —
-# the same files the lifecycle stamper writes canonical refs into.
-_IMPORTED_REF_REWRITE_PATHS = ("findings.json", "sca/findings.json")
+# namespaced on import: exactly the files the lifecycle stamper
+# writes canonical refs into — ONE constant, consumed from its owner,
+# so a stamp-path addition cannot leave imported refs of that file
+# un-namespaced (the pre-shared-constant mirror drifted exactly that
+# way when the openant lane landed without the ride-along).
+from core.run.findings import _STAMP_PATHS as _IMPORTED_REF_REWRITE_PATHS
 
 # Prefix stamped onto every imported provenance ref's run_id. An
 # imported archive cannot own ANY run id on this install: a

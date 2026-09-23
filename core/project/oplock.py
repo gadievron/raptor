@@ -208,6 +208,42 @@ def project_op_lock(project_dir: Path, operation: str,
                 msg,
                 holder,
             )
+        # Verify-after-lock (the _ledger_lock idiom): `delete --purge`
+        # rmtrees the project dir INCLUDING a possibly-held .op.lock,
+        # and a re-created same-path project then mints a fresh inode
+        # — without this check the old holder and every new locker
+        # sit on DIFFERENT inodes, silently splitting the mutual
+        # exclusion. If the path no longer resolves to our locked
+        # inode, re-open once and re-acquire on the current file.
+        for _ in range(3):
+            try:
+                held = os.fstat(fd)
+                current = os.stat(str(lock_path))
+                if (held.st_ino == current.st_ino
+                        and held.st_dev == current.st_dev):
+                    break
+            except OSError:
+                pass  # path gone (purge in flight) — re-mint below
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+            fd = -1
+            try:
+                project_dir.mkdir(parents=True, exist_ok=True)
+                fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                # Another locker beat us onto the re-minted inode —
+                # genuine contention, name the holder.
+                holder = read_holder(lock_path)
+                raise OpLockContention(
+                    f"project is locked by another operation "
+                    f"({describe_holder(holder)}) — retry shortly or "
+                    f"pass --wait", holder) from None
+            except OSError:
+                # Same degrade posture as the uncreatable-lock branch.
+                yield
+                return
         _stamp_holder(fd, operation)
         try:
             yield
@@ -215,4 +251,5 @@ def project_op_lock(project_dir: Path, operation: str,
             with contextlib.suppress(OSError):
                 fcntl.flock(fd, fcntl.LOCK_UN)
     finally:
-        os.close(fd)
+        if fd >= 0:
+            os.close(fd)

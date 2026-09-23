@@ -47,6 +47,10 @@ __all__ = ["ToolInfo", "probe", "reset_probe_cache"]
 
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
 
+#: Per-stream retention cap on probe output (see the run call for the
+#: rationale). 64k chars keeps every real tool's banner intact.
+_CAPTURE_RETAIN_CHARS = 64 * 1024
+
 _CACHE_LOCK = threading.Lock()
 _CACHE: dict[tuple[str, tuple[str, ...]], ToolInfo | None] = {}
 
@@ -125,11 +129,18 @@ def probe(
                 timeout=timeout,
                 env=safe_subprocess_env(),
             )
+            # Retention cap: probes exec whatever PATH resolves, and a
+            # hostile tool can answer --version with an arbitrarily
+            # large stream — every ToolInfo consumer wants a first
+            # line, not the payload. The capture itself stays
+            # subprocess.run (the module's patched-run test contract);
+            # its transient buffer is bounded in practice by the probe
+            # timeout.
             info = ToolInfo(
                 name=name, path=path, args=args,
                 returncode=proc.returncode,
-                stdout=proc.stdout or "",
-                stderr=proc.stderr or "",
+                stdout=(proc.stdout or "")[:_CAPTURE_RETAIN_CHARS],
+                stderr=(proc.stderr or "")[:_CAPTURE_RETAIN_CHARS],
             )
         except (subprocess.TimeoutExpired, OSError) as exc:
             logger.debug("toolprobe: %s %s failed: %s", name, args, exc)

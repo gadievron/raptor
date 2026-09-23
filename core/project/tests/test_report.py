@@ -438,3 +438,17 @@ class TestProvenanceMdScrub(unittest.TestCase):
         # Line-leading '#' is defanged — no forged heading renders.
         self.assertNotIn("\n# forged heading", prov)
         self.assertIn("scan", prov)
+
+
+def test_clear_generated_findings_dir_unlinks_symlink(tmp_path):
+    """rmtree refuses symlinks with OSError — uncaught it crashed the
+    whole report pass; the link (not the pointed-to tree) is removed."""
+    from core.project.report import _clear_generated_findings_dir
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "keep.txt").write_text("x")
+    link = tmp_path / "findings"
+    link.symlink_to(real)
+    _clear_generated_findings_dir(link)
+    assert not link.exists()
+    assert (real / "keep.txt").exists()

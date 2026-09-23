@@ -63,9 +63,17 @@ PROVENANCE_REFS_FIELD = "provenance_refs"
 
 # Files we stamp, relative to the run dir. Tested via load_findings_from_dir's
 # shape detection (top-level list OR {"findings": [...]} wrapper).
+# ``openant_findings.json``: standalone /openant runs write their
+# translated findings there with no top-level findings.json — without
+# the stamp there is no canonical provenance ref for the run, so a
+# forged local-looking ref in an imported archive would be the
+# record's only back-link. Import's ref-namespacing rewrite CONSUMES
+# THIS CONSTANT (core/project/export.py) — the two ends move together
+# by construction.
 _STAMP_PATHS: tuple = (
     "findings.json",
     "sca/findings.json",
+    "openant_findings.json",
 )
 
 
