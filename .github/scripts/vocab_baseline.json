@@ -1645,6 +1645,11 @@
     "kind": "literal",
     "note": "taint-engine tier of the detector vocabulary (the pre-widening core names; must stay a subset of _FOREIGN_KEYS \u2014 see _naked_keys(wide) for the tier contract)"
   },
+  "core/security/report_writer_audit.py::_LABEL_KEYS": {
+    "count": 11,
+    "kind": "literal",
+    "note": "detector vocabulary, not a learned name set: the label-tier field names (dict-read matching at sinks, no taint propagation) \u2014 severity/label joined after two live render lanes carried them raw; tier trade-off measured both directions at the widening commit"
+  },
   "core/security/report_writer_audit.py::_LLM_DERIVED_KEYS": {
     "count": 32,
     "kind": "literal",
