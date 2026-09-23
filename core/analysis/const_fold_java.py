@@ -454,6 +454,25 @@ def _receiver_chain(node: Node) -> str | None:
     return None
 
 
+def _tf_string_members_clear(ext, members) -> bool:
+    """b40 discipline for TAINT_FREE mints that have SEEN concrete
+    string members (concat algebra, pure-call concat, the
+    unknown-selector ternary): each member must clear the caller's
+    danger predicate, exactly like :func:`_tf_union` — a value-based
+    finding class is violated by the constant itself, however
+    attacker-free the selection around it. No predicate at this entry
+    means no danger authority: refuse, never assume. Non-string
+    members (TAINT_FREE sentinels, ints, bools) carry no charset and
+    pass through."""
+    strs = [m for m in members if isinstance(m, str)]
+    if not strs:
+        return True
+    if ext is None:
+        return False
+    chk = ext.union_member_check
+    return chk is not None and bool(chk(strs))
+
+
 def _fold_field_access(node: Node, ext) -> Any:
     """``File.separator``-class taint-free fields and cross-file
     static-final resolution. Only fires under an extension context —
@@ -675,9 +694,13 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
             # constant/taint-free operands is taint-free (an attacker
             # controls neither side); every other operator refuses —
             # comparisons on an unknown value have no truth value.
+            # A concrete string operand is a MEMBER of the result and
+            # must clear the danger predicate (b40 composition).
             if op == "+" and all(
                     v is TAINT_FREE or isinstance(v, str)
                     for v in (left, right)):
+                if not _tf_string_members_clear(ext, (left, right)):
+                    return _REFUSE
                 return TAINT_FREE
             return _REFUSE
         if op in ("==", "!=") and not _eq_semantics_are_value(
@@ -690,9 +713,13 @@ def _fold(node: Node, resolve_name, depth: int, array_resolver=None,
             if ext is not None and ext.allow_taint_free:
                 # Unknown selection over two attacker-free branches is
                 # attacker-free — taint-freedom, never a usable value.
+                # Each concrete string branch is a member of the
+                # result and must clear the danger predicate (b40).
                 cons = _fold(node.child_by_field_name("consequence"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
                 alt = _fold(node.child_by_field_name("alternative"), resolve_name, depth + 1, array_resolver, config_resolver, conduit_resolver, ext)
                 if cons is not _REFUSE and alt is not _REFUSE:
+                    if not _tf_string_members_clear(ext, (cons, alt)):
+                        return _REFUSE
                     return TAINT_FREE
             return _REFUSE
         branch = "consequence" if cond else "alternative"
@@ -786,13 +813,23 @@ def _fold_pure_call(node: Node, resolve_name, depth: int,
     if receiver is TAINT_FREE:
         # Value-erasing ops on an attacker-free receiver: the result
         # carries no caller taint whatever the runtime value. charAt/
-        # length yield derived scalars — equally attacker-free.
+        # length yield derived scalars — equally attacker-free. A
+        # concrete string ARGUMENT to concat is a member of the
+        # result and must clear the danger predicate (b40).
+        if method == "concat" \
+                and not _tf_string_members_clear(ext, folded_args):
+            return _REFUSE
         if any(a is TAINT_FREE for a in folded_args):
             return TAINT_FREE if method == "concat" else _REFUSE
         return TAINT_FREE
     if not isinstance(receiver, str):
         return _REFUSE
     if any(a is TAINT_FREE for a in folded_args):
+        # Concrete RECEIVER (and any concrete args) are members of
+        # the concat result — same b40 bar.
+        if method == "concat" and not _tf_string_members_clear(
+                ext, [receiver, *folded_args]):
+            return _REFUSE
         return TAINT_FREE if method == "concat" else _REFUSE
     if method == "length":
         if folded_args or not _utf16_faithful(receiver):
@@ -1265,6 +1302,14 @@ def all_definers_constant(
             "every reaching definer of the sink argument is provably "
             "attacker-uncontrolled (taint-free system/config reads)"
         )
+    if isinstance(value, str) \
+            and not _tf_string_members_clear(ext, (value,)):
+        # b40: the agreed-value arm holds itself to the _tf_union bar
+        # — the same constant DISAGREEING across definers would refuse
+        # via the member check, so agreeing on it must not mint the
+        # suppression reason either. A danger-bearing compile-time
+        # constant violates a value-based finding class on its own.
+        return None
     return (
         f"every reaching definer of the sink argument folds to the "
         f"same compile-time {type(value).__name__} constant"

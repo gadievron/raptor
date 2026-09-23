@@ -91,17 +91,42 @@ class TestPrecisionGate:
         assert report.rule_of_three_95_ub == pytest.approx(
             3.0 / report.n_must_not)
 
+    # Fully-constant sink strings whose TEXT carries the CWE's danger
+    # chars (quotes in developer-written SQL). The agreed-value arm of
+    # all_definers_constant now holds the same per-member danger bar
+    # as the non-agreeing taint-free union and the finite-value-set
+    # path — the IDENTICAL value reaching the sink through an if/else
+    # chain always refused, so suppressing these encoded an arm
+    # inconsistency (the same constant got opposite verdicts by
+    # spelling). Losing them is a deliberate consistency trade in the
+    # refusal direction, recorded here so any OTHER miss still fails
+    # the pin. Trade-back direction: teach the danger predicate to
+    # distinguish whole-statement constants from variable-part
+    # members — for EVERY arm at once, never per spelling.
+    _ACCEPTED_CONSTANT_TEXT_MISSES = frozenset({
+        "sqli_assign_sink_constant_selection_java",
+        "sqli_execute_hop_constant_selection_java",
+        "java_b36_prepcall_jdk_const_siblings",
+    })
+
     @requires_ts("java")
     def test_all_safe_shapes_suppress(self, report):
         """Utility pin: every may-suppress fixture currently earns the
-        suppress verdict. Not a gate condition (soundness first), but
-        a regression here means the gate lost coverage it had.
+        suppress verdict (minus the documented constant-text danger
+        trades above). Not a gate condition (soundness first), but a
+        regression here means the gate lost coverage it had.
 
         Needs the Java grammar: the corpus's Java may-suppress
         fixtures degrade to ``unresolved`` without it (a refusal, so
         the soundness gate above still runs everywhere — only this
         utility pin skips)."""
-        assert report.missed_suppressions == []
+        # Two-direction: an OTHER miss fails (lost coverage), and if
+        # the danger predicate later learns the whole-statement
+        # distinction the accepted list must shrink rather than mask
+        # the regained coverage.
+        assert set(report.missed_suppressions) \
+            == self._ACCEPTED_CONSTANT_TEXT_MISSES, \
+            sorted(report.missed_suppressions)
 
     def test_cross_tab_covers_classes(self, report):
         for cls in ("xss", "cmdi", "pathtrav", "sqli"):

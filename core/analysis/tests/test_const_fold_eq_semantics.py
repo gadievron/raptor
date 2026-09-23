@@ -159,7 +159,9 @@ class TestThroughProductionMachinery:
             'String out = "safe";',
         )
         rd, sink, index = self._rd_sink_index(src)
-        assert all_definers_constant(rd, sink, "out", index) is not None
+        assert all_definers_constant(
+            rd, sink, "out", index,
+            union_member_check=lambda strs: True) is not None
 
     def test_if_refinement_keeps_both_branches(self):
         from core.analysis.cfg_builder_java import build_java_intraproc_cfg
