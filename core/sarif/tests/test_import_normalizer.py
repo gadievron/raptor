@@ -4,8 +4,11 @@ import json
 from pathlib import Path
 
 from core.sarif.import_normalizer import (
+    _MAX_DEPTH_CACHE,
+    _MAX_FULL_SCAN_SECONDS,
     _infer_cwe,
     _is_sca_finding,
+    _remember_depth,
     _resolve_uri,
     _strip_file_scheme,
     findings_to_sarif,
@@ -248,6 +251,104 @@ class TestResolveUri:
         idx = {}
         cache = [None]
         assert _resolve_uri("nonexistent.c", root, idx, cache) is None
+
+
+# ---------------------------------------------------------------------------
+# Depth-cache cost containment
+# ---------------------------------------------------------------------------
+
+class TestDepthCacheCap:
+    """The cached-depth loop runs BEFORE every budget gate, so its
+    per-URI cost must not be a document-controlled multiplier: a SARIF
+    that seeds one cache entry per strip depth must not make every
+    later unresolvable URI pay one ``_is_under_root`` resolve per
+    seeded depth after the scan budgets are spent."""
+
+    def _seed_cache(self, root, cache, depths):
+        """Cache one strip depth per member of *depths* via real
+        resolutions (junk prefix of that length ending in a real
+        file), with fresh budgets."""
+        idx: dict = {}
+        for d in depths:
+            uri = "/".join(f"s{j}" for j in range(d)) + "/x.c"
+            budget = [64]
+            clock = [0.0]
+            assert _resolve_uri(
+                uri, root, idx, cache,
+                scan_budget=budget, scan_clock=clock,
+            ) == "x.c"
+
+    def test_remember_depth_caps_cache(self):
+        cache: list = [None]
+        for d in range(1, 21):
+            _remember_depth(cache, d)
+        assert len(cache) == _MAX_DEPTH_CACHE
+        # Most-recent-first, oldest evicted.
+        assert cache[0] == 20
+        assert 1 not in cache
+
+    def test_seeded_cache_cannot_multiply_post_budget_cost(
+        self, tmp_path, monkeypatch,
+    ):
+        """After the scan budgets are spent, one unresolvable URI's
+        cached-depth cost is bounded by the cache cap — not by how
+        many depths the document managed to seed."""
+        (tmp_path / "x.c").write_text("int x;\n")
+        cache: list = [None]
+        self._seed_cache(tmp_path, cache, range(1, 33))
+
+        import core.sarif.import_normalizer as _mod
+        real = _mod._is_under_root
+        calls = [0]
+
+        def _counting(root, candidate):
+            calls[0] += 1
+            return real(root, candidate)
+
+        monkeypatch.setattr(_mod, "_is_under_root", _counting)
+        # Budgets spent: the full-scan lane is closed, only the
+        # cached-depth loop and the basename index run.
+        result = _resolve_uri(
+            "/".join(f"h{j}" for j in range(64)), tmp_path, {}, cache,
+            scan_budget=[0],
+            scan_clock=[_MAX_FULL_SCAN_SECONDS],
+        )
+        assert result is None
+        assert calls[0] <= _MAX_DEPTH_CACHE
+
+    def test_cached_shapes_survive_post_budget(self, tmp_path):
+        """Resolved scanner shapes keep the cached-depth fast path
+        after budget exhaustion (the documented post-budget contract)."""
+        (tmp_path / "x.c").write_text("int x;\n")
+        (tmp_path / "y.c").write_text("int y;\n")
+        cache: list = [None]
+        # Three alternating scanner shapes — all must stay cached.
+        self._seed_cache(tmp_path, cache, (1, 2, 3))
+        for d in (1, 2, 3):
+            uri = "/".join(f"p{j}" for j in range(d)) + "/y.c"
+            assert _resolve_uri(
+                uri, tmp_path, {}, cache,
+                scan_budget=[0],
+                scan_clock=[_MAX_FULL_SCAN_SECONDS],
+            ) == "y.c"
+
+    def test_evicted_depth_rediscovered_e2e(self, tmp_path):
+        """LRU eviction never loses findings: a shape whose depth was
+        evicted re-resolves through the (budgeted) full scan."""
+        (tmp_path / "real.c").write_text("int r;\n")
+        findings = []
+        for d in range(1, _MAX_DEPTH_CACHE + 5):
+            uri = "/".join(f"s{j}" for j in range(d)) + "/real.c"
+            findings.append(_make_finding(
+                finding_id=f"f{d}", file=uri, startLine=1, endLine=1,
+            ))
+        # Re-visit the first (now evicted) shape at the end.
+        findings.append(_make_finding(
+            finding_id="revisit", file="s0/real.c", startLine=1, endLine=1,
+        ))
+        result = normalize_imported_findings(findings, tmp_path)
+        assert result.stats.findings_skipped == 0
+        assert all(f["file"] == "real.c" for f in result.findings)
 
 
 # ---------------------------------------------------------------------------

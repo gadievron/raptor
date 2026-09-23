@@ -224,16 +224,38 @@ _MAX_RESOLVED_URI_MEMO = 4096
 _MAX_FULL_SCAN_SECONDS = 20.0
 
 
+#: Ceiling on remembered strip depths. The cached-depth loop runs
+#: BEFORE every budget gate and pays one ``_is_under_root`` resolve
+#: per entry per unresolved URI, so the cache length is a per-URI
+#: cost multiplier the DOCUMENT controls: a handful of cheap resolving
+#: URIs (each caching one distinct depth) used to grow it to the
+#: component cap (256), making every later unmappable URI pay 256
+#: unbudgeted resolves — the same hours-scale wedge the scan budgets
+#: close, re-opened through the one unbudgeted lane. Capping the
+#: cache (LRU eviction, most-recent-first order) makes the lane's
+#: worst case a small input-independent constant. Trade-off, both
+#: directions: too low thrashes genuinely multi-shape imports (each
+#: shape re-pays a budgeted full scan when its depth is evicted —
+#: real imports carry a handful of scanner shapes, mixed-root CI
+#: aggregates maybe a few more); too high re-opens the seeded wedge
+#: (cost scales linearly with the cap). 8 covers every observed
+#: legitimate shape count with headroom.
+_MAX_DEPTH_CACHE = 8
+
+
 def _remember_depth(depth_cache: list, depth: int) -> None:
-    """Record a successful strip depth, most-recent-first.  The cache
-    holds EVERY successful depth (bounded by the component cap, ≤256
-    ints) — a single-slot cache thrashed when two scanner shapes
-    alternated, re-paying the full scan per finding."""
+    """Record a successful strip depth, most-recent-first, capped at
+    ``_MAX_DEPTH_CACHE`` entries (LRU eviction — see the constant's
+    trade-off note). A single-slot cache thrashed when two scanner
+    shapes alternated, re-paying the full scan per finding; an
+    unbounded cache let the document itself inflate the per-URI cost
+    of the pre-budget cached-depth loop."""
     if depth in depth_cache:
         depth_cache.remove(depth)
     depth_cache.insert(0, depth)
     while None in depth_cache:
         depth_cache.remove(None)
+    del depth_cache[_MAX_DEPTH_CACHE:]
 
 
 def _resolve_uri(
@@ -250,10 +272,12 @@ def _resolve_uri(
     """Resolve a SARIF URI to a relative path under *source_root*.
 
     Tries progressively shorter prefixes until a match is found.
-    Caches EVERY successful strip-depth (``depth_cache``, most-recent-
-    first) so subsequent findings from the same scanner shape(s)
-    resolve in O(1) — a single-slot cache thrashed on two alternating
-    shapes and re-paid the quadratic scan per finding.
+    Caches successful strip-depths (``depth_cache``, most-recent-first,
+    capped at ``_MAX_DEPTH_CACHE``) so subsequent findings from the
+    same scanner shape(s) resolve in O(1) — a single-slot cache
+    thrashed on two alternating shapes and re-paid the quadratic scan
+    per finding; an uncapped cache let the document seed one entry per
+    depth and multiply every unresolved URI's pre-budget cost by 256.
 
     Rejects any resolved path that escapes *source_root* (traversal
     defence for untrusted SARIF).
