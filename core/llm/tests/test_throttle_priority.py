@@ -69,10 +69,9 @@ class TestLowPriorityAcquire:
         # order assert below is only valid once the NORMAL contender
         # has registered itself (low-priority defers only while
         # ``_sync_waiters > 0``); on a loaded box a fixed 0.3s window
-        # let low legitimately win the freed slot. Single read per
-        # check — ``_sync_waiters`` transiently drops to 0 on every
-        # bounded-wait cycle (same pattern as test_throttle.py's
-        # blocked checkpoint).
+        # let low legitimately win the freed slot. Registration is
+        # held for the waiter's whole wait (no per-cycle transient
+        # drop), so one observed ``>= 1`` read is stable.
         deadline = time.monotonic() + 5.0
         observed = throttle._sync_waiters
         while observed == 0 and time.monotonic() < deadline:
@@ -90,6 +89,82 @@ class TestLowPriorityAcquire:
             f"acquisition order was {order}"
         )
         assert order[2] == "low"
+
+    def test_registration_survives_between_wait_cycles(self):
+        """A normal waiter stays registered across its bounded-wait
+        cycles — the between-cycles gap (lock dropped,
+        ``_maybe_restore`` running outside the condition) used to
+        read ``_sync_waiters == 0`` with the waiter still logically
+        waiting, letting a low-priority caller whose 0.5s expiry
+        landed in the gap take the freed slot first. Forces the gap
+        deterministically by parking the normal waiter inside its
+        ``_maybe_restore`` call."""
+        throttle = AdaptiveThrottle(1, auto_register=False)
+        order: list[str] = []
+        release_holder = threading.Event()
+        trap_armed = threading.Event()
+        normal_in_gap = threading.Event()
+        let_normal_continue = threading.Event()
+        real_restore = throttle._maybe_restore
+
+        def instrumented_restore():
+            if (threading.current_thread().name == "normal"
+                    and trap_armed.is_set()):
+                normal_in_gap.set()
+                let_normal_continue.wait(timeout=10)
+            real_restore()
+
+        throttle._maybe_restore = instrumented_restore  # type: ignore[method-assign]
+
+        def holder():
+            with throttle.acquire_sync():
+                order.append("holder")
+                release_holder.wait(timeout=10)
+
+        def normal():
+            with throttle.acquire_sync():
+                order.append("normal")
+
+        def low():
+            with throttle.acquire_sync(low_priority=True):
+                order.append("low")
+
+        t_h = threading.Thread(target=holder, name="holder")
+        t_h.start()
+        deadline = time.monotonic() + 5.0
+        while throttle.in_flight != 1 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        t_n = threading.Thread(target=normal, name="normal")
+        t_n.start()
+        deadline = time.monotonic() + 5.0
+        while throttle._sync_waiters == 0 and time.monotonic() < deadline:
+            time.sleep(0.005)
+        assert throttle._sync_waiters == 1
+        trap_armed.set()
+        assert normal_in_gap.wait(timeout=5), "normal never hit the gap"
+
+        # THE pin: mid-gap, the waiter is still registered.
+        assert throttle._sync_waiters == 1, (
+            "normal waiter deregistered between wait cycles — the "
+            "low-priority guard reads a lie"
+        )
+
+        # Free the slot while normal is parked in the gap and give a
+        # low-priority contender more than one full 0.5s wait expiry
+        # to (wrongly) claim it.
+        t_l = threading.Thread(target=low, name="low")
+        t_l.start()
+        release_holder.set()
+        time.sleep(0.7)
+        assert "low" not in order, (
+            "low-priority acquired while a normal waiter was "
+            f"logically waiting; order so far: {order}"
+        )
+
+        let_normal_continue.set()
+        for t in (t_h, t_n, t_l):
+            t.join(timeout=10)
+        assert order == ["holder", "normal", "low"]
 
     def test_low_priority_not_starved_forever(self):
         """Once normal waiters drain, the low-priority caller gets in."""
