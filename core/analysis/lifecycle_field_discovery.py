@@ -36,9 +36,18 @@ _MAX_SOURCE_BYTES = 1_000_000
 _C_STRUCT_KEYWORD_RE = re.compile(
     r"(?:struct|union)\s+(\w+)\s*\{",
 )
+# Bounded type window, gated optional atoms, and a leading \b so an
+# unanchored scan cannot restart inside an identifier run: the naive
+# ``(\w[\w\s*]*?)\s+\*?\s*(\w+)\s*(?:\[.*?\])?\s*;`` chained
+# overlapping whitespace-capable spans around optional atoms — a
+# field-shaped token run with no ``;`` cost every split of the run
+# between them, cubic in the struct-body length. Bound trade-off,
+# both directions: a larger window admits longer multi-token types
+# but raises the per-position backtracking ceiling. 256 chars sits
+# far above real C field types.
 _C_FIELD_RE = re.compile(
-    r"(?:const\s+)?(?:unsigned\s+|signed\s+)?(?:struct\s+)?"
-    r"(\w[\w\s*]*?)\s+\*?\s*(\w+)\s*(?:\[.*?\])?\s*;",
+    r"\b(?:const\s+)?(?:unsigned\s+|signed\s+)?(?:struct\s+)?"
+    r"(\w[\w\s*]{0,256}?)\s{1,256}(?:\*\s*)?(\w+)\s*(?:\[.*?\]\s*)?;",
 )
 
 _PY_CLASS_RE = re.compile(
