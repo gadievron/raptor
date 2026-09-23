@@ -382,38 +382,53 @@ class TestAzureOpenAIWithoutEndpoint:
         )
 
 
+def _keyless_store() -> CredentialStore:
+    creds = CredentialStore.__new__(CredentialStore)
+    creds._keys = {}
+    return creds
+
+
+def _rule_names() -> list[str]:
+    from core.llm.dispatcher.auth import build_rules
+    return sorted(build_rules(_keyless_store()))
+
+
+class TestRuleTableParity:
+    """The path-prefix routing map (server.py) and the auth rules
+    table (auth.py:build_rules) are hand-maintained in different
+    modules. Both drift directions fail closed (404 unknown path /
+    503 unconfigured), so drift is silent availability loss — and a
+    provider added to both tables used to get zero 503 coverage
+    because the 503 test was a third hand-typed list. One parity pin
+    closes the pair; the 503 test below derives from the rules table."""
+
+    def test_prefix_map_matches_rules_table(self):
+        from core.llm.dispatcher.server import _PROVIDER_FROM_PATH_PREFIX
+        assert set(_PROVIDER_FROM_PATH_PREFIX.values()) == set(_rule_names())
+        for prefix, name in _PROVIDER_FROM_PATH_PREFIX.items():
+            assert prefix == f"/{name}/", (
+                f"prefix {prefix!r} does not follow the /<provider>/ "
+                f"shape for {name!r}"
+            )
+
+
 class TestNewProvidersUnconfiguredKeyReturns503:
-    """Every aggregator must surface a clean 503 when its key is
-    unset — same UX as the original three. Pinned per provider so
-    a future build_rules edit that drops a 503 path gets caught."""
+    """Every provider must surface a clean 503 when its key is unset.
+    Parametrised over the rules table itself so a provider added to
+    production gets this pin automatically. Bedrock is excluded: its
+    unconfigured path (botocore/AWS-credential resolution) has its own
+    dedicated tests."""
 
     @pytest.mark.parametrize(
-        "provider,path",
-        [
-            ("mistral",      "/mistral/v1/chat/completions"),
-            ("groq",         "/groq/openai/v1/chat/completions"),
-            ("together",     "/together/v1/chat/completions"),
-            ("openrouter",   "/openrouter/api/v1/chat/completions"),
-            ("orcarouter",   "/orcarouter/v1/chat/completions"),
-            ("fireworks",    "/fireworks/inference/v1/chat/completions"),
-            ("deepinfra",    "/deepinfra/v1/openai/chat/completions"),
-            ("perplexity",   "/perplexity/chat/completions"),
-            ("cohere",       "/cohere/v1/chat"),
-            ("replicate",    "/replicate/v1/predictions"),
-            ("azure_openai", "/azure_openai/openai/deployments/x/chat/completions"),
-        ],
+        "provider",
+        [n for n in _rule_names() if n != "bedrock"],
     )
-    def test_unconfigured_provider_returns_503(self, tmp_path, provider, path):
-        creds = CredentialStore.__new__(CredentialStore)
-        # All keys absent — every provider should 503.
-        creds._keys = {p: None for p in [
-            "anthropic", "openai", "gemini",
-            "mistral", "groq", "together", "openrouter",
-            "orcarouter",
-            "fireworks", "deepinfra", "perplexity",
-            "cohere", "replicate",
-            "azure_openai", "azure_openai_endpoint",
-        ]}
+    def test_unconfigured_provider_returns_503(self, tmp_path, provider):
+        # Any path under the provider prefix routes to the rule; the
+        # 503 fires on the configured-check before the path suffix is
+        # ever consulted.
+        path = f"/{provider}/v1/chat/completions"
+        creds = _keyless_store()
         d = LLMDispatcher(
             run_id=f"unconf-{provider}", creds=creds,
             audit_path=tmp_path / "audit.jsonl",
