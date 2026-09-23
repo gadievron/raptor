@@ -31,6 +31,18 @@ def test_non_project_target_yields_empty_context(
         monkeypatch: pytest.MonkeyPatch) -> None:
     import core.understand_graph as ug
 
+    # Plant a graph at the CWD-relative location and chdir onto it, so
+    # ANY CWD-relative spelling of the probe — routed through
+    # graph_path_for_run or a direct Path("graph/...") — finds a file
+    # that exists and would serve content. The spy-only oracle killed
+    # just the import-routed spelling; a direct-Path regression stayed
+    # green while serving the CWD graph.
+    cwd = tmp_path / "framework-cwd"
+    planted = cwd / "graph" / "raptor.graph.sqlite"
+    planted.parent.mkdir(parents=True)
+    planted.write_bytes(b"planted")
+    monkeypatch.chdir(cwd)
+
     probes: list[tuple[Path, str | None]] = []
 
     def spy(run_dir: Path, target_path: str | None = None) -> Path:
@@ -39,10 +51,24 @@ def test_non_project_target_yields_empty_context(
 
     monkeypatch.setattr(ug, "graph_path_for_run", spy)
 
+    # Record — don't raise: the production code wraps the lookup in a
+    # broad except that would swallow an AssertionError and return ""
+    # anyway. Returning sentinel text makes any graph read visible in
+    # the return value; the call log catches an exception-eaten path.
+    graph_reads: list[Path] = []
+
+    def read_spy(gp: Path, target: str, limit: int = 8) -> str:
+        graph_reads.append(Path(gp))
+        return f"CWD GRAPH CONTENT from {gp}"
+
+    monkeypatch.setattr(ug, "threat_model_graph_context", read_spy)
+
     target = tmp_path / "some-target"
     target.mkdir()
     assert graph_risk_context_for_target(target) == ""
-    # No probe at all — in particular never a Path(".")-relative one.
+    # No graph was read, and no run-dir probe happened — in particular
+    # never a Path(".")-relative one.
+    assert graph_reads == []
     assert probes == []
 
 
