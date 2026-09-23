@@ -150,11 +150,29 @@ class GhidraSession:
                     )
                 target_program = programs[0]
                 if len(programs) > 1:
+                    from core.security.log_sanitisation import (
+                        sanitise_for_terminal,
+                    )
+                    # Program names come from the hostile project's
+                    # database — scrub before the operator's terminal.
                     logger.info(
                         "multi-program project: %s — opening %s",
-                        ", ".join(programs),
-                        target_program,
+                        sanitise_for_terminal(", ".join(programs)),
+                        sanitise_for_terminal(target_program),
                     )
+            # Same refusal as the headless, server, and bridge lanes
+            # (headless._project_process_args): program names — the
+            # operator-passed one AND the project-database-derived
+            # default above — must not carry empty, dash-leading, or
+            # traversal components; this lane hands the name straight
+            # to consume_program.
+            parts = target_program.split("/")
+            if any(not part or part.startswith("-") or part == ".."
+                   for part in parts):
+                raise GhidraSessionError(
+                    f"refusing suspicious program name: {target_program!r} "
+                    "(empty, dash-leading, or traversal component)"
+                )
 
             try:
                 self._program, self._consumer = consume_program(
@@ -176,10 +194,11 @@ class GhidraSession:
             shutil.rmtree(work_dir, ignore_errors=True)
             raise
 
+        from core.security.log_sanitisation import sanitise_for_terminal
         logger.info(
             "opened %s/%s (%s)",
-            project_name_str,
-            target_program,
+            sanitise_for_terminal(project_name_str),
+            sanitise_for_terminal(target_program),
             self._program.getLanguage().getLanguageDescription().getProcessor(),
         )
 

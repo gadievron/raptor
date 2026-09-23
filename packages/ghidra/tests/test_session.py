@@ -382,3 +382,59 @@ class TestSessionExportProvenance:
 
         db = session.export()
         assert calls == [db]
+
+
+class TestOpenProgramNameRefusal:
+    """GhidraSession.open applies the shared program-name refusal the
+    headless, server, and bridge lanes already enforce — the name (the
+    operator-passed one and the project-derived default) goes straight
+    to consume_program."""
+
+    def _open(self, gpr_project, program_name, monkeypatch,
+              programs=("prog_a",)):
+        fake_api = MagicMock()
+        fake_api.open_project.return_value = MagicMock()
+        fake_api.consume_program.return_value = (MagicMock(), MagicMock())
+        fake_pyghidra = MagicMock()
+        fake_pyghidra.api = fake_api
+        monkeypatch.setitem(sys.modules, "pyghidra", fake_pyghidra)
+        monkeypatch.setitem(sys.modules, "pyghidra.api", fake_api)
+        session = GhidraSession()
+        with patch.object(session, "ensure_jvm"), \
+             patch.object(GhidraSession, "list_programs",
+                          return_value=list(programs)):
+            session.open(gpr_project, program_name=program_name)
+        return session, fake_api
+
+    def test_hostile_names_refused(self, gpr_project, monkeypatch):
+        for hostile in ("-deleteProject", "sub/../etc", "a//b"):
+            with pytest.raises(GhidraSessionError,
+                               match="refusing suspicious program name"):
+                self._open(gpr_project, hostile, monkeypatch)
+
+    def test_hostile_default_from_project_refused(self, gpr_project,
+                                                  monkeypatch):
+        # The project-database-derived default is attacker-shaped too.
+        with pytest.raises(GhidraSessionError,
+                           match="refusing suspicious program name"):
+            self._open(gpr_project, None, monkeypatch,
+                       programs=("-evil",))
+
+    def test_legit_name_reaches_consume_program(self, gpr_project,
+                                                monkeypatch):
+        session, fake_api = self._open(gpr_project, "prog_a", monkeypatch)
+        assert fake_api.consume_program.call_args[0][1] == "/prog_a"
+        session.close()
+
+    def test_multi_program_log_scrubbed(self, gpr_project, monkeypatch,
+                                        caplog):
+        import logging as _logging
+        with caplog.at_level(_logging.INFO,
+                             logger="packages.ghidra.session"):
+            session, _ = self._open(
+                gpr_project, None, monkeypatch,
+                programs=("prog\x1b[2Ja", "prog_b"),
+            )
+        session.close()
+        joined = "\n".join(r.getMessage() for r in caplog.records)
+        assert "\x1b" not in joined

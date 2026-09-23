@@ -297,3 +297,26 @@ class TestGetProgramsIndex:
             "NEXT-ID:2\nMD5:d41d8cd98f00b204e9800998ecf8427e\n"
         )
         assert get_programs(gpr) == ["target", "nofileid"]
+
+
+class TestXmlFallbackIsLoud:
+    def test_stdlib_fallback_warns_at_import(self, monkeypatch, caplog):
+        # detect parses the hostile project's .gpr/.prp XML; without
+        # defusedxml, entity-expansion protection depends on the host
+        # expat — the operator must see that, not discover it.
+        import importlib
+        import logging as _logging
+        import sys as _sys
+
+        import packages.ghidra.detect as detect_mod
+        monkeypatch.setitem(_sys.modules, "defusedxml", None)
+        monkeypatch.setitem(_sys.modules, "defusedxml.ElementTree", None)
+        try:
+            with caplog.at_level(_logging.WARNING,
+                                 logger="packages.ghidra.detect"):
+                importlib.reload(detect_mod)
+            assert any("defusedxml not installed" in r.getMessage()
+                       for r in caplog.records)
+        finally:
+            monkeypatch.undo()
+            importlib.reload(detect_mod)

@@ -11,6 +11,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from core.security.log_sanitisation import sanitise_for_terminal
+
 from .detect import get_project_dir, get_project_name
 from .export_script_java import EXPORT_SCRIPT_JAVA
 from .project_util import prepare_working_copy
@@ -251,7 +253,11 @@ def export_project(
             "-postScript", "ExportRaptor.java", *script_args,
         ]
 
-        logger.info("running: %s", " ".join(cmd))
+        # The argv embeds project/program names sourced from the
+        # hostile project database — scrub control bytes and bound
+        # the length before they reach the operator's terminal.
+        logger.info("running: %s",
+                    sanitise_for_terminal(" ".join(cmd), max_len=2000))
 
         try:
             # Repo convention for binary-touching tools (see the
@@ -418,7 +424,11 @@ def import_enrichments(
             "-postScript", "ImportRaptor.java", str(enrichments_path),
         ]
 
-        logger.info("running: %s", " ".join(cmd))
+        # The argv embeds project/program names sourced from the
+        # hostile project database — scrub control bytes and bound
+        # the length before they reach the operator's terminal.
+        logger.info("running: %s",
+                    sanitise_for_terminal(" ".join(cmd), max_len=2000))
 
         try:
             # Same sandbox posture as export_project: the JVM opens
