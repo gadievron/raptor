@@ -488,11 +488,15 @@ mismatched or undecodable content is stripped/dropped fail-closed with a
 Stamps recorded before the tools baseline existed have no `tools.list`
 section: the guard then forwards `tools/list` unmodified but appends an
 in-band unverified notice (plus a stderr note) until the operator
-baselines the surface — run `libexec/raptor-sage-setup review` and
-approve the displayed tool definitions at your own terminal
-(`review --approve`).  Sidecar upgrades that change tool definitions are
-handled the same way: the changed tools are stubbed with the warning
-until reviewed and approved.
+baselines the surface — run `libexec/raptor-sage-setup review` at your
+own terminal.  A first baseline renders as a single digest (tool count,
+sorted names, per-tool description length, schema size+hash, and a
+red-flag scan over all description text) with a `d <tool>` drill-down
+for any full definition; approving it baselines the current live
+surface (trust-on-first-use).  Sidecar upgrades that change tool
+definitions are handled the same way: the changed tools are stubbed
+with the warning until reviewed, and the review shows only the changed
+definitions, each diffed against the baselined entry of that name.
 
 The setup script replaces `.mcpServers.sage` entirely on each run (stale
 `type`/`url` fields from an old SSE config are removed).  Other MCP
