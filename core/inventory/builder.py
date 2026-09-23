@@ -1697,7 +1697,13 @@ def _process_single_file(
 
         _uncorroborated_generated = False
         if skip_generated and is_generated_file(content):
-            if generated_marker_corroborated(rel_path):
+            # target_root arms the first-party package probe so a
+            # walk-KEPT build/dist/target package never corroborates —
+            # mirroring the walk-time exemption (marker + kept-path
+            # hint must not compose into whole-file suppression).
+            if generated_marker_corroborated(
+                    rel_path,
+                    target_root=target if target.is_dir() else None):
                 return {"path": rel_path, "_excluded": True,
                         "_reason": "generated_file", "_pattern": None}
             # The in-file marker is target-controlled text; honouring

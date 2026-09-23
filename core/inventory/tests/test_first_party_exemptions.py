@@ -150,3 +150,77 @@ def test_root_manifest_outranks_nested(tmp_path):
     kind, reason = detect_target_kind(str(tmp_path))
     assert kind == "application"
     assert "corpus" not in reason
+
+
+class TestGeneratedMarkerCorroborationRespectsWalkPolicy:
+    """The corroborating path is as repo-author-controlled as the
+    in-file marker — a hint name may only corroborate where the walk
+    policy itself treats the location as generated-shaped. Composing
+    the marker with a walk-KEPT namespace (nested out/, pkg-exempted
+    build/) re-opened the whole-file self-exclusion channel."""
+
+    def test_nested_out_dir_does_not_corroborate(self):
+        from core.inventory.exclusions import generated_marker_corroborated
+        assert not generated_marker_corroborated("src/out/evil.c")
+
+    def test_root_out_dir_still_corroborates(self):
+        from core.inventory.exclusions import generated_marker_corroborated
+        assert generated_marker_corroborated("out/gen.c")
+
+    def test_unambiguous_hints_still_corroborate_anywhere(self):
+        from core.inventory.exclusions import generated_marker_corroborated
+        assert generated_marker_corroborated("src/generated/x.c")
+        assert generated_marker_corroborated("a/b/node_modules/x.js")
+
+    def test_generated_name_still_corroborates(self):
+        from core.inventory.exclusions import generated_marker_corroborated
+        assert generated_marker_corroborated("src/api_pb2.py")
+
+    def test_pkg_exempt_build_package_does_not_corroborate(self, tmp_path):
+        from core.inventory.exclusions import generated_marker_corroborated
+        pkg = tmp_path / "build"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "mod.py").write_text("x = 1\n")
+        # First-party package (walk keeps it) — marker must not
+        # compose with the path into an exclusion.
+        assert not generated_marker_corroborated(
+            "build/mod.py", target_root=tmp_path)
+
+    def test_artifact_build_dir_still_corroborates(self, tmp_path):
+        from core.inventory.exclusions import generated_marker_corroborated
+        (tmp_path / "build").mkdir()
+        (tmp_path / "build" / "gen.c").write_text("")
+        # No __init__.py: a real artifact tree — corroborates.
+        assert generated_marker_corroborated(
+            "build/gen.c", target_root=tmp_path)
+
+    def test_no_target_root_keeps_legacy_pkg_behavior(self):
+        from core.inventory.exclusions import generated_marker_corroborated
+        # Legacy callers without a root cannot probe — unchanged.
+        assert generated_marker_corroborated("build/mod.py")
+
+    def test_builder_keeps_marked_file_in_walk_kept_namespace(self, tmp_path):
+        import json
+        import tempfile
+
+        from core.inventory.builder import build_inventory
+
+        (tmp_path / "src" / "out").mkdir(parents=True)
+        (tmp_path / "src" / "main.c").write_text(
+            "int main(void){ return 0; }\n")
+        (tmp_path / "src" / "out" / "evil.c").write_text(
+            "// @generated\nint vuln(char *s){ return 0; }\n")
+        with tempfile.TemporaryDirectory() as td:
+            build_inventory(str(tmp_path), td, parallel=False)
+            cl = json.loads(
+                (__import__("pathlib").Path(td) / "checklist.json")
+                .read_text())
+        files = {f["path"] for f in cl["files"]}
+        # The walk admits nested src/out/ as first-party; the marker
+        # alone must not then delete it from every analysis tier. The
+        # claim survives as a visible flag only.
+        assert "src/out/evil.c" in files
+        by_path = {f["path"]: f for f in cl["files"]}
+        assert by_path["src/out/evil.c"].get(
+            "generated_marker") == "uncorroborated"
