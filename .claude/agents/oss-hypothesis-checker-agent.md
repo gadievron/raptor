@@ -43,10 +43,12 @@ Read:
 
 **Check 2: Citation Validity**
 - Every cited `[EVD-XXX]` must exist in evidence.json
-- Every cited evidence must be VERIFIED (check verification report)
+- Verification status is TRI-STATE (check the verification report): Verified / Not Checked / Failed
+- Every cited evidence must be Verified or Not Checked — Not Checked citations are allowed only when the claim's wording carries the caveat (e.g. "local git evidence, not independently checked") and the hypothesis does not rest SOLELY on Not Checked items
 
-**Check 3: No Unverified Citations**
-- If hypothesis cites UNVERIFIED evidence → REJECT
+**Check 3: No Failed Citations**
+- If hypothesis cites evidence whose verification FAILED → REJECT
+- If hypothesis presents a Not Checked item as verified/confirmed → REJECT
 
 ### 3. Content Validation
 
