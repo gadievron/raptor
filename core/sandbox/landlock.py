@@ -27,6 +27,7 @@ import logging
 import os
 import platform
 import stat
+from collections.abc import Callable
 
 from . import state
 from ._pathpin import is_per_process_procfs, open_pinned
@@ -391,6 +392,50 @@ _grant_redirects_warned: set = set()
 # such entries, which would otherwise log on every spawn).
 _per_process_grants_noted: set = set()
 
+# The canonical usrmerge aliases: exactly these top-level directories,
+# each a distro-installed symlink to the same-named directory under
+# /usr. An exact-match allowlist — never a prefix rule.
+_USRMERGE_CANONICAL_GRANTS: frozenset[str] = frozenset(
+    {"/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32"},
+)
+
+
+def _is_canonical_usrmerge_redirect(
+    requested: str,
+    resolved: str,
+    lstat_fn: Callable[[str], os.stat_result] | None = None,
+) -> bool:
+    """True iff a grant redirect is the distro's own usrmerge aliasing.
+
+    All three must hold, checked against the live filesystem via
+    ``lstat_fn`` (injectable — and late-bound to ``os.lstat`` when
+    None — so the predicate is unit-testable without root or a
+    usrmerged host):
+
+    1. ``requested`` is exactly one of the canonical top-level
+       usrmerge paths (:data:`_USRMERGE_CANONICAL_GRANTS`) — exact
+       string match, never a prefix rule;
+    2. ``resolved`` is exactly ``/usr/<same basename>``;
+    3. the symlink at ``requested`` is itself root-owned
+       (``lstat().st_uid == 0``, belt-and-braces).
+
+    An ``OSError`` from ``lstat_fn``, a non-symlink, or a non-root
+    owner answers False — the caller keeps warning. Only ``OSError``
+    is caught: any other exception from an injected ``lstat_fn``
+    propagates (unreachable at the real ``os.lstat`` call site).
+    """
+    if requested not in _USRMERGE_CANONICAL_GRANTS:
+        return False
+    if resolved != "/usr" + requested:
+        return False
+    if lstat_fn is None:
+        lstat_fn = os.lstat
+    try:
+        st = lstat_fn(requested)
+    except OSError:
+        return False
+    return stat.S_ISLNK(st.st_mode) and st.st_uid == 0
+
 
 def _resolve_grant_paths(paths: list, kind: str) -> list:
     """Resolve rule paths to canonical form at VALIDATION time.
@@ -413,7 +458,10 @@ def _resolve_grant_paths(paths: list, kind: str) -> list:
     from operator intent (usrmerge ``/bin``, symlinked home trees) and
     resolves normally, but the redirect is announced once per
     (requested, resolved) pair so a pre-planted steer is at least
-    visible in the run log.
+    visible in the run log. The canonical root-owned usrmerge aliases
+    are exempt from the announcement (see
+    :func:`_is_canonical_usrmerge_redirect`) — the grant semantics are
+    identical, only the log noise differs.
 
     Per-process procfs magic-link paths (``/proc/self/*``,
     ``/proc/thread-self/*``) yield NO rule — see the inline comment
@@ -450,16 +498,33 @@ def _resolve_grant_paths(paths: list, kind: str) -> list:
             continue
         resolved = os.path.realpath(path)
         if resolved != requested:
-            key = (requested, resolved)
-            if key not in _grant_redirects_warned:
-                _grant_redirects_warned.add(key)
-                logger.warning(
-                    "Landlock %s grant path %s resolves through a "
-                    "symlink to %s — the rule applies to the resolved "
-                    "tree. If that symlink is not operator-intended, "
-                    "inspect the path for a planted redirect.",
-                    kind, requested, resolved,
-                )
+            # Canonical usrmerge aliasing (/bin -> /usr/bin etc.) is
+            # exempt from the announcement — logging policy only, the
+            # grant still applies to the resolved tree either way. The
+            # fixed set is trust-equivalent because planting one of
+            # these symlinks requires replacing a root-owned top-level
+            # directory, and an attacker with that power already owns
+            # every library and binary the sandbox loads — the threat
+            # model is void before the redirect matters; warning on
+            # every run on usrmerged distros only trains operators to
+            # ignore the warning class. Everything else keeps the
+            # warning verbatim: the exemption is exact-match on the
+            # canonical names (never a prefix rule), requires the
+            # resolved target to be /usr/<same basename>, and requires
+            # the symlink itself to be root-owned — so redirects an
+            # unprivileged planter CAN place (home trees, shared output
+            # dirs, non-/usr targets) are still announced.
+            if not _is_canonical_usrmerge_redirect(requested, resolved):
+                key = (requested, resolved)
+                if key not in _grant_redirects_warned:
+                    _grant_redirects_warned.add(key)
+                    logger.warning(
+                        "Landlock %s grant path %s resolves through a "
+                        "symlink to %s — the rule applies to the resolved "
+                        "tree. If that symlink is not operator-intended, "
+                        "inspect the path for a planted redirect.",
+                        kind, requested, resolved,
+                    )
         resolved_paths.append(resolved)
     return resolved_paths
 
