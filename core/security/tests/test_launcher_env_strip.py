@@ -138,3 +138,94 @@ class TestBehaviouralStrip(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestExportedFunctionHardening(unittest.TestCase):
+    """A hostile parent env can export bash FUNCTIONS
+    (BASH_FUNC_<name>%% entries, imported at shell startup) that
+    shadow the very builtins the strip fragment calls — pre-fix,
+    shadowing `unset` both executed attacker code once per strip-loop
+    iteration and silently neutralised the whole strip."""
+
+    _FUNC_POISON = {
+        "BASH_FUNC_unset%%": "() { echo PWNED-unset; }",
+        "BASH_FUNC_command%%": "() { echo PWNED-command; }",
+        "BASH_FUNC_declare%%": "() { echo PWNED-declare; }",
+        "BASH_FUNC_read%%": "() { echo PWNED-read; }",
+    }
+
+    def _run_fragment(self) -> "subprocess.CompletedProcess[str]":
+        # Source the fragment in a bash whose env imports the hostile
+        # functions, then report what survived.
+        script = (
+            f'. "{REPO}/core/security/_dangerous_env_strip.sh"\n'
+            'echo "LD_PRELOAD=${LD_PRELOAD:-<stripped>}"\n'
+            'echo "POSIXLY_CORRECT=${POSIXLY_CORRECT:-<unset>}"\n'
+            # Any surviving imported function would re-export into
+            # children; declare -F must show no exported functions.
+            'declare -F | grep -c "declare -fx" || true\n'
+            'unset -v PROBE_OK 2>/dev/null; echo STRIP-RAN\n'
+        )
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "LD_PRELOAD": "/tmp/evil.so",
+            **self._FUNC_POISON,
+        }
+        return subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True, text=True, timeout=60,
+            env=env, check=False,
+        )
+
+    def test_strip_survives_builtin_shadowing(self):
+        proc = self._run_fragment()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("PWNED", proc.stdout + proc.stderr,
+                         "attacker function executed inside the strip")
+        self.assertIn("LD_PRELOAD=<stripped>", proc.stdout,
+                      "strip was neutralised by the unset shadow")
+        self.assertIn("STRIP-RAN", proc.stdout)
+
+    def test_imported_functions_swept(self):
+        proc = self._run_fragment()
+        # grep -c over `declare -F` output: zero exported functions
+        # survive (the count line prints 0).
+        self.assertIn("\n0\n", "\n" + proc.stdout,
+                      f"exported functions survived: {proc.stdout!r}")
+
+    def test_posix_mode_restored(self):
+        proc = self._run_fragment()
+        self.assertIn("POSIXLY_CORRECT=<unset>", proc.stdout,
+                      "fragment leaked POSIX mode into the launcher")
+
+    def test_preexisting_posix_mode_preserved(self):
+        script = (
+            f'. "{REPO}/core/security/_dangerous_env_strip.sh"\n'
+            'echo "POSIXLY_CORRECT=${POSIXLY_CORRECT:-<unset>}"\n'
+        )
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True, text=True, timeout=60,
+            env={"PATH": "/usr/bin:/bin", "POSIXLY_CORRECT": "1"},
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("POSIXLY_CORRECT=1", proc.stdout)
+
+    def test_fragment_works_under_strict_shell_options(self):
+        # The launchers run with set -euo pipefail; the hardening must
+        # not introduce a nonzero status that kills them.
+        script = (
+            "set -euo pipefail\n"
+            f'. "{REPO}/core/security/_dangerous_env_strip.sh"\n'
+            "echo STRICT-OK\n"
+        )
+        proc = subprocess.run(
+            ["bash", "-c", script],
+            capture_output=True, text=True, timeout=60,
+            env={"PATH": "/usr/bin:/bin", **self._FUNC_POISON,
+                 "LD_PRELOAD": "/tmp/evil.so"},
+            check=False,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("STRICT-OK", proc.stdout)
