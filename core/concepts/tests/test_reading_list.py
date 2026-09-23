@@ -567,3 +567,42 @@ class TestCrossProcessReadingList:
         missing = expected - questions
         assert not missing, f"lost {len(missing)} items: " \
             f"{sorted(missing)[:5]}..."
+
+
+class TestLoadDegradesPerItem:
+    """load's degrade-to-empty contract extends to per-record shape:
+    non-dict entries and entries missing required fields are skipped
+    with a warning, never raised out of queueing."""
+
+    def _write(self, tmp_path, body):
+        import json as _json
+        p = tmp_path / "reading-list.json"
+        p.write_text(_json.dumps(body), encoding="utf-8")
+        return p
+
+    def test_non_dict_items_skipped(self, tmp_path):
+        p = self._write(tmp_path, {"items": ["oops", 42, {
+            "id": "ok", "question": "q?", "source_command": "/audit",
+        }]})
+        rl = ReadingList.load(p)
+        assert [i.id for i in rl.items] == ["ok"]
+
+    def test_missing_required_fields_skipped(self, tmp_path):
+        p = self._write(tmp_path, {"items": [
+            {"question": "no id or command"},
+            {"id": "ok", "question": "q?",
+             "source_command": "/audit"},
+        ]})
+        rl = ReadingList.load(p)
+        assert [i.id for i in rl.items] == ["ok"]
+
+    def test_non_list_items_degrades_empty(self, tmp_path):
+        p = self._write(tmp_path, {"items": {"id": "x"}})
+        assert ReadingList.load(p).items == []
+
+    def test_queue_survives_malformed_disk_state(self, tmp_path):
+        from core.concepts.audit_bridge import queue_reading_list_item
+        self._write(tmp_path, {"items": ["oops"]})
+        assert queue_reading_list_item(
+            tmp_path, question="q?", source_file="a.c",
+            source_function="f")

@@ -15,6 +15,7 @@ or ``<project>/concepts/reading-list.json`` (per-project).
 from __future__ import annotations
 
 import dataclasses
+import logging
 import threading
 import time
 from dataclasses import asdict, dataclass, field
@@ -22,6 +23,8 @@ from enum import Enum
 from pathlib import Path
 
 from core.json import save_json
+
+logger = logging.getLogger(__name__)
 
 
 def question_scoped_id(prefix: str, question: str) -> str:
@@ -250,8 +253,30 @@ class ReadingList:
         if not isinstance(raw, dict):
             return cls(_path=path)
         valid_keys = {f.name for f in dataclasses.fields(ReadingListItem)}
-        items = [
-            ReadingListItem(**{k: v for k, v in i.items() if k in valid_keys})
-            for i in raw.get("items", [])
-        ]
+        raw_items = raw.get("items", [])
+        if not isinstance(raw_items, list):
+            return cls(_path=path)
+        # Degrade per record, never crash: the list is a shared
+        # multi-writer artifact and callers invoke load outside their
+        # OSError shells — a structurally wrong but valid-JSON body
+        # (non-dict entries, entries missing required fields) must
+        # cost the bad records only, not abort queueing.
+        items = []
+        skipped = 0
+        for i in raw_items:
+            if not isinstance(i, dict):
+                skipped += 1
+                continue
+            try:
+                items.append(ReadingListItem(
+                    **{k: v for k, v in i.items() if k in valid_keys},
+                ))
+            except TypeError:
+                # Required field missing (id/question/source_command).
+                skipped += 1
+        if skipped:
+            logger.warning(
+                "reading list %s: skipped %d malformed item(s); "
+                "%d loaded", path, skipped, len(items),
+            )
         return cls(items=items, _path=path)
