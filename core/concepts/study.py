@@ -20,6 +20,12 @@ from collections.abc import Iterator
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:  # non-POSIX (Windows) — locks degrade to no-ops
+    _HAS_FCNTL = False
+
 from core.json import dumps_display, save_json
 from core.llm.coerce import structured_result
 from core.paths import confine
@@ -323,6 +329,59 @@ def _promote_to_project(per_run_path: Path, output_dir: Path) -> None:
         logger.debug("domain-model promotion failed", exc_info=True)
 
 
+@contextlib.contextmanager
+def _promotion_lock(canonical: Path) -> Iterator[None]:
+    """Cross-process exclusive lock over a canonical study artifact's
+    load → merge → write window.
+
+    Same idiom as ``core.iris.store.store_lock`` /
+    ``core.coverage.store.coverage_store_lock``: flock a sibling
+    ``<name>.lock`` file (never the artifact itself, which the merge
+    atomically replaces — locking a replaced inode splits lockers),
+    hold it across the WHOLE load → merge → write cycle, degrade to a
+    no-op without fcntl (non-POSIX). Without it, concurrent promoters
+    on one project (parallel study runs, the study loop beside
+    /agentic — projects explicitly support concurrent sessions) read
+    the same canonical state and the later writer silently drops the
+    earlier run's entire study contribution. O_NOFOLLOW: the lock file
+    lives in a project directory that may carry broader write grants —
+    a planted symlink must not steer the flock to an attacker-chosen
+    path; a refused open degrades to the unlocked path with a loud
+    warning rather than failing the promotion. The lock file is
+    deliberately never unlinked — unlink-after-unlock races split
+    lockers across two inodes.
+    """
+    if not _HAS_FCNTL:
+        yield
+        return
+    lock_path = canonical.with_suffix(canonical.suffix + ".lock")
+    flags = (
+        os.O_WRONLY | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock_path), flags, 0o600)
+    except OSError as exc:
+        logger.warning(
+            "promotion lock %s: refusing to open (%s); proceeding "
+            "WITHOUT cross-process lock — concurrent promotions may "
+            "drop each other's contributions; investigate a planted "
+            "symlink at that path", lock_path, exc,
+        )
+        yield
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def merge_promote_domain_model(per_run_path: Path,
                                canonical: Path) -> None:
     """Fold a per-run domain model into the *canonical* copy.
@@ -333,13 +392,23 @@ def merge_promote_domain_model(per_run_path: Path,
     into the canonical model, never replace it: a reading-list-scoped
     (or zero-item) pass produces a tiny per-run model, and an
     unconditional copy would clobber the project's accumulated
-    knowledge with that subset (and lose a concurrent run's
-    contribution landed since this run seeded). Merge semantics match
-    the in-run prior merge: the new run wins on ID collisions,
-    everything else accumulates. Raises OSError on write failure —
-    callers decide how loudly to report.
+    knowledge with that subset. The whole load → merge → write cycle
+    (including the absent-canonical seeding branch) runs under
+    :func:`_promotion_lock`, so a concurrent run's contribution landed
+    since this run seeded is folded in, not lost, and two first-time
+    promoters cannot both take the seeding branch. Merge semantics
+    match the in-run prior merge: the new run wins on ID collisions
+    (the last promoter to hold the lock is the well-defined winner for
+    a shared ID), everything else accumulates. Raises OSError on write
+    failure — callers decide how loudly to report.
     """
-    import os
+    with _promotion_lock(canonical):
+        _merge_promote_domain_model_locked(per_run_path, canonical)
+
+
+def _merge_promote_domain_model_locked(per_run_path: Path,
+                                       canonical: Path) -> None:
+    """Body of :func:`merge_promote_domain_model`; caller holds the lock."""
     import shutil
     import tempfile
 
@@ -406,7 +475,9 @@ def merge_promote_patterns(src: Path, canonical: Path) -> None:
     THE promotion write for discovered patterns — both study-prep and
     the study loop route through it. Keyed by pattern name, run wins
     per key: a narrowly scoped run must never replace the whole-tree
-    accumulation. Raises OSError/ValueError on unreadable input —
+    accumulation. The canonical load → merge → save window runs under
+    :func:`_promotion_lock` (same lost-update interleave as the domain
+    model above). Raises OSError/ValueError on unreadable input —
     callers decide how loudly to report.
     """
     from core.json import load_json
@@ -417,20 +488,23 @@ def merge_promote_patterns(src: Path, canonical: Path) -> None:
     run_data = load_json(src, strict=True, max_bytes=max_bytes) or {}
     if not isinstance(run_data, dict):
         return
-    merged: dict[str, Any] = {}
-    if canonical.is_file():
-        prior = load_json(canonical, strict=True, max_bytes=max_bytes)
-        if isinstance(prior, dict):
-            merged = prior
-    patterns = merged.get("patterns")
-    if not isinstance(patterns, dict):
-        patterns = {}
-    run_patterns = run_data.get("patterns")
-    if isinstance(run_patterns, dict):
-        patterns.update(run_patterns)
-    merged.update({k: v for k, v in run_data.items() if k != "patterns"})
-    merged["patterns"] = patterns
-    save_json(canonical, merged)
+    with _promotion_lock(canonical):
+        merged: dict[str, Any] = {}
+        if canonical.is_file():
+            prior = load_json(canonical, strict=True, max_bytes=max_bytes)
+            if isinstance(prior, dict):
+                merged = prior
+        patterns = merged.get("patterns")
+        if not isinstance(patterns, dict):
+            patterns = {}
+        run_patterns = run_data.get("patterns")
+        if isinstance(run_patterns, dict):
+            patterns.update(run_patterns)
+        merged.update(
+            {k: v for k, v in run_data.items() if k != "patterns"},
+        )
+        merged["patterns"] = patterns
+        save_json(canonical, merged)
 
 
 def _is_under_projects_base(directory: Path) -> bool:
