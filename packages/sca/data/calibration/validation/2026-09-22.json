@@ -1,105 +1,122 @@
 {
   "by_ecosystem": {
     "Alpine:v3.11": {
-      "spearman_rho": null,
-      "top_20_precision": 0.0,
+      "spearman_rho": -0.02955086281335914,
+      "top_20_precision": 0.14285714285714285,
       "total": 14,
-      "with_signal": 0
+      "with_cve": 14,
+      "with_signal": 2
     },
     "Alpine:v3.12": {
-      "spearman_rho": null,
-      "top_20_precision": 0.0,
+      "spearman_rho": 0.13116516715679058,
+      "top_20_precision": 0.1,
       "total": 24,
-      "with_signal": 0
+      "with_cve": 24,
+      "with_signal": 3
     },
     "Alpine:v3.16": {
       "spearman_rho": null,
       "top_20_precision": 0.0,
       "total": 6,
+      "with_cve": 6,
       "with_signal": 0
     },
     "Alpine:v3.21": {
-      "spearman_rho": null,
-      "top_20_precision": 0.0,
+      "spearman_rho": 0.26077589295968157,
+      "top_20_precision": 0.15,
       "total": 26,
-      "with_signal": 0
+      "with_cve": 26,
+      "with_signal": 3
     },
     "Alpine:v3.23": {
       "spearman_rho": null,
       "top_20_precision": 0.0,
       "total": 20,
+      "with_cve": 20,
       "with_signal": 0
     },
     "Alpine:v3.24": {
       "spearman_rho": null,
       "top_20_precision": 0.0,
       "total": 44,
+      "with_cve": 44,
       "with_signal": 0
     },
     "Alpine:v3.8": {
       "spearman_rho": null,
       "top_20_precision": 0.0,
       "total": 1,
+      "with_cve": 1,
       "with_signal": 0
     },
     "Cargo": {
       "spearman_rho": 0.4685384206150784,
       "top_20_precision": 0.6,
       "total": 334,
+      "with_cve": 119,
       "with_signal": 39
     },
     "Debian": {
-      "spearman_rho": null,
+      "spearman_rho": 0.04769821924981843,
       "top_20_precision": 0.0,
       "total": 10905,
-      "with_signal": 0
+      "with_cve": 10388,
+      "with_signal": 506
     },
     "Go": {
       "spearman_rho": 0.34338323615348293,
       "top_20_precision": 1.0,
       "total": 3537,
+      "with_cve": 3323,
       "with_signal": 217
     },
     "Maven": {
       "spearman_rho": 0.4029485211577053,
       "top_20_precision": 1.0,
       "total": 825,
+      "with_cve": 823,
       "with_signal": 76
     },
     "NuGet": {
       "spearman_rho": 0.6678228351795538,
       "top_20_precision": 0.35,
       "total": 39,
+      "with_cve": 36,
       "with_signal": 7
     },
     "Packagist": {
       "spearman_rho": 0.42332710941056845,
       "top_20_precision": 0.4,
       "total": 415,
+      "with_cve": 373,
       "with_signal": 82
     },
     "PyPI": {
       "spearman_rho": 0.5974745620343568,
       "top_20_precision": 0.95,
       "total": 638,
+      "with_cve": 603,
       "with_signal": 106
     },
     "RubyGems": {
       "spearman_rho": 0.48706252507590103,
       "top_20_precision": 1.0,
       "total": 730,
+      "with_cve": 703,
       "with_signal": 70
     },
     "Ubuntu": {
-      "spearman_rho": null,
-      "top_20_precision": 0.0,
+      "spearman_rho": 0.12031187437861876,
+      "top_20_precision": 0.35,
       "total": 4146,
-      "with_signal": 0
+      "with_cve": 3263,
+      "with_signal": 490
     },
     "npm": {
       "spearman_rho": 0.7367438910352451,
       "top_20_precision": 1.0,
       "total": 3482,
+      "with_cve": 3289,
       "with_signal": 1443
     }
   },
@@ -114,12 +131,12 @@
   },
   "findings_total": 25186,
   "findings_with_score": 25186,
-  "findings_with_signal": 2040,
+  "findings_with_signal": 3044,
   "notes": [
-    "Spearman ρ 0.23 below threshold 0.40"
+    "Spearman ρ 0.26 below threshold 0.40"
   ],
   "snapshot_date": "2026-09-22",
-  "spearman_rho": 0.23029264748193387,
+  "spearman_rho": 0.2553631883318768,
   "threshold_spearman": 0.4,
   "threshold_top_20": 0.5,
   "top_20_precision": 1.0,
