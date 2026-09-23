@@ -50,23 +50,25 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from runtime_universe import runtime_file_universe  # noqa: E402
+
 # Seed-set policy: census/operator guidance allows curated seed sets
 # of up to ~9 names per category. Lists strictly larger are flagged.
 MAX_SEED_NAMES = 9
 
-PY_ROOTS = ["core", "packages", "plugins", "libexec", "engine"]
-
-SKIP_DIR_NAMES = {
-    ".git", "__pycache__", "node_modules", "out", ".out", ".tox", ".venv",
-    "venv", "build", "dist", ".claude", "worktrees",
-    # Legitimate homes for big name lists:
+# Universe: the shared runtime-source derivation (see
+# runtime_universe.py for roots and standing exclusions — its
+# root-anchored walk is what keeps runtime packages like core/build
+# from being dropped by a bare artifact-dir name). Only this gate's
+# LEGITIMATE HOMES for big name lists stay declared here.
+LEGITIMATE_LIST_HOMES = (
     "data",       # data packs / packaged datasets
-    "tests",      # test files and their fixtures
-    "fixtures",
     "seeds",
     "corpus",
     "binary_oracle_corpora",
-}
+)
 
 # Files/dirs where large curated name lists are the DESIGN, not a
 # regression (relative-path prefixes).
@@ -240,38 +242,15 @@ class _Scanner(ast.NodeVisitor):
 
 
 def iter_python_files(root: Path):
-    for sub in PY_ROOTS:
-        base = root / sub
-        if not base.is_dir():
-            continue
-        for p in sorted(base.rglob("*")):
-            if not p.is_file():
-                continue
-            rel_parts = p.relative_to(root).parts
-            if any(part in SKIP_DIR_NAMES for part in rel_parts):
-                continue
-            if _is_python_file(p):
-                yield p
-    # Repo-root entry modules, derived from the tree — never a name
-    # list (codeql_scope.py's doctrine: a hand-maintained entry-module
-    # list silently dropped new entry points before). raptor_agentic
-    # and friends are 1000+-line runtime modules; a curated vocabulary
-    # there is the same regression as one under core/.
-    for p in sorted(root.glob("*.py")):
-        if p.is_file():
-            yield p
-
-
-def _is_python_file(p: Path) -> bool:
-    if p.suffix == ".py":
-        return True
-    if p.suffix == "" and p.parent.name == "libexec":
-        try:
-            head = p.open("rb").read(64)
-        except OSError:
-            return False
-        return b"python" in head.split(b"\n", 1)[0]
-    return False
+    # Shared runtime-source derivation (roots, entry modules, libexec
+    # shebang detection, test exclusions). Dev scripts/ dirs stay in
+    # this gate's universe — a curated vocabulary in a verification
+    # harness steers the same reviewers.
+    yield from runtime_file_universe(
+        root,
+        include_dev_scripts=True,
+        extra_excluded_parts=LEGITIMATE_LIST_HOMES,
+    )
 
 
 def scan_tree(root: Path) -> list[_Finding]:
