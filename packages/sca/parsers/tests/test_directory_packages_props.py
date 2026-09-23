@@ -455,3 +455,57 @@ def test_find_build_props_chain_walks_to_git_boundary(tmp_path: Path):
         sub / "Directory.Build.props",
         tmp_path / "Directory.Build.props",
     ]
+
+
+def test_property_expansion_bomb_is_refused_and_recorded(tmp_path: Path):
+    """A ~550-byte props file chaining 8 properties with 8 refs each
+    grows fanout^depth (167M chars / hundreds of MB RSS) if expansion
+    is only depth-capped. The size budget abandons the expansion
+    before the string is built, the entry is skipped, and the breach
+    surfaces as a structured parse-failure record — an analysis gap
+    the operator can see, not a silent skip."""
+    import time
+
+    from packages.sca.parsers import capture_parse_failures
+
+    lines = ["<Project><PropertyGroup>"]
+    for i in range(8):
+        lines.append(f"<x{i}>{'$(x%d)' % (i + 1) * 8}</x{i}>")
+    lines.append("<x8>AAAAAAAAAA</x8>")
+    lines.append("</PropertyGroup><ItemGroup>")
+    lines.append(
+        '<PackageVersion Include="Newtonsoft.Json" Version="$(x0)" />')
+    lines.append("</ItemGroup></Project>")
+    p = _write(tmp_path, "\n".join(lines))
+
+    start = time.monotonic()
+    with capture_parse_failures() as failures:
+        cpm = parse_directory_packages_props(p)
+    assert time.monotonic() - start < 5.0
+    assert cpm is not None
+    assert cpm.packages == []
+    assert any(
+        "expansion exceeded" in f.reason for f in failures
+    ), [f.reason for f in failures]
+
+
+def test_chained_property_versions_still_resolve(tmp_path: Path):
+    """Two-direction guard for the expansion budget: the legitimate
+    chained-property shape (version property referencing another)
+    keeps resolving to the concrete pin."""
+    p = _write(tmp_path, """\
+<Project>
+  <PropertyGroup>
+    <BaseVersion>8.0.4</BaseVersion>
+    <ExtensionsVersion>$(BaseVersion)</ExtensionsVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Extensions.Logging"
+                    Version="$(ExtensionsVersion)" />
+  </ItemGroup>
+</Project>
+""")
+    cpm = parse_directory_packages_props(p)
+    assert [(pk.name, pk.version) for pk in cpm.packages] == [
+        ("Microsoft.Extensions.Logging", "8.0.4"),
+    ]
