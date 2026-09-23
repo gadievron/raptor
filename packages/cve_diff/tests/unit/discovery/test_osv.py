@@ -288,3 +288,19 @@ class TestNormalizeRepoRejectsAuthorityGames:
         assert OSVDiscoverer._normalize_repo(
             "git@github.com:owner/repo.git",
         ) == "https://github.com/owner/repo"
+
+
+def test_normalize_repo_rejects_query_strings() -> None:
+    """The docstring promises query-bearing URLs are rejected; the check
+    was missing while fragment/userinfo/port were enforced — the exact
+    smuggling shape the docstring's own worked example describes."""
+    assert OSVDiscoverer._normalize_repo(
+        "https://github.com/owner/repo?token=steal&x=1"
+    ) == ""
+    assert OSVDiscoverer._normalize_repo("git@github.com:owner/repo?a=b") == ""
+
+
+def test_normalize_repo_query_free_urls_still_pass() -> None:
+    assert OSVDiscoverer._normalize_repo(
+        "git@github.com:owner/repo"
+    ) == "https://github.com/owner/repo"
