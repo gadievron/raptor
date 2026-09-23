@@ -481,3 +481,50 @@ class TestNoRestartSeam:
              patch.object(srv, "restart") as restart:
             srv.query("cpg.method.name.l", timeout=1)
         assert restart.call_count == 1
+
+
+class TestPostErrorClassificationRace:
+    """_last_post_error is read by query() AFTER _post_sync returns to
+    decide the stuck-REPL restart; sweep threads share the instance,
+    so the classification must be per-thread — a sibling's entry-reset
+    used to clobber a genuine timeout before its own query() read it,
+    skipping the restart and cross-attributing the error text."""
+
+    def test_sibling_entry_reset_cannot_clobber_timeout(self):
+        srv = JoernServer()
+        srv._cpg_loaded = True
+        srv._base_url = "http://joern-local"
+        srv._uds_path = "/nonexistent.sock"  # route _post_sync → uds
+
+        restarts: list[int] = []
+        a_set_error = threading.Event()
+        b_done = threading.Event()
+
+        def stub_uds(method, path, payload, timeout):
+            if "QUERY_A" in payload["query"]:
+                # A's transport timed out: classification written...
+                srv._last_post_error = f"query timed out after {timeout}s"
+                a_set_error.set()
+                # ...then B's whole round-trip (entry-reset included)
+                # lands before A's query() reads it.
+                b_done.wait(5)
+                return None
+            return {"stdout": 'val res0: String = "ok"', "stderr": ""}
+
+        results: dict = {}
+        with patch.object(srv, "_uds_request", side_effect=stub_uds), \
+             patch.object(srv, "restart",
+                          side_effect=lambda: restarts.append(1) or True):
+            ta = threading.Thread(target=lambda: results.update(
+                a=srv.query("QUERY_A", timeout=10, validate=False)))
+            ta.start()
+            assert a_set_error.wait(5)
+            results["b"] = srv.query("QUERY_B", timeout=10, validate=False)
+            b_done.set()
+            ta.join(10)
+
+        # A keeps ITS classification: restart fires for the genuine
+        # timeout and the error text is not cross-attributed.
+        assert results["a"].errors == ["query timed out after 10s"]
+        assert restarts == [1]
+        assert not results["b"].errors

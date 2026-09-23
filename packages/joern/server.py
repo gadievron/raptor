@@ -770,7 +770,13 @@ class JoernServer:
         self._cpg_loaded = False
         self._cpg_path: Path | None = None
         self._last_import_timeout: int | None = None
-        self._last_post_error: str = ""
+        # Per-THREAD post-failure classification (see the
+        # _last_post_error property): sweep threads share this
+        # instance, and instance-level state let a concurrent query's
+        # entry-reset clobber a sibling's genuine timeout
+        # classification — the stuck-REPL restart was then skipped
+        # and the error text cross-attributed.
+        self._post_error_local = threading.local()
         self._restart_lock = threading.Lock()
         # Set while a restart is in progress so concurrent queries
         # fail fast instead of posting into a dead/booting server
@@ -1682,6 +1688,23 @@ class JoernServer:
                 validate=True, check_length=False,
             )
         return self.query(content, timeout=timeout, validate=True, check_length=False)
+
+    @property
+    def _last_post_error(self) -> str:
+        """This THREAD's classification of its last ``_post_sync``.
+
+        ``query()`` reads it after a None response to decide whether
+        the failure was a timeout (→ restart) — that read must see
+        the classification of THIS thread's post, not whichever
+        sibling reset or overwrote a shared slot last. Thread-local
+        storage keeps every assignment site unchanged while making
+        the classification race-free.
+        """
+        return getattr(self._post_error_local, "detail", "")
+
+    @_last_post_error.setter
+    def _last_post_error(self, value: str) -> None:
+        self._post_error_local.detail = value
 
     def _auth_headers(self) -> dict[str, str]:
         """HTTP Basic Authorization header for the per-boot credential.
