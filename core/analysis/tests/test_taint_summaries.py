@@ -1232,3 +1232,32 @@ class TestWorklistFixedPoint:
         _, summaries = _summaries(src)
         assert summaries["dyn"].summary_unknown
         assert not summaries["dyn"].summary_unconverged
+
+
+class TestClassShadowOfDefPoisoned:
+    """A module-scope class sharing a module-scope function def's
+    name (either order) leaves the runtime binding order-dependent —
+    the def's clean chain must not certify."""
+
+    def test_class_after_def_poisons(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "class esc:\n"
+            "    pass\n"
+        )
+        assert summaries["esc"].summary_unknown
+
+    def test_ordinary_class_with_methods_not_poisoned(self):
+        # Precision pin: a class name alone (no colliding function
+        # def) must not poison its own methods.
+        _, summaries = _summaries(
+            "import html\n"
+            "class C:\n"
+            "    def esc(self, s):\n"
+            "        return html.escape(s)\n"
+        )
+        s = summaries["C.esc"]
+        assert not s.summary_unknown
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(1)
