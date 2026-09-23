@@ -2098,7 +2098,18 @@ def _count_statements(body_lines: list) -> int:
     return count
 
 
-_RETURN_VALUE_RE = re.compile(r"\breturn\s+([^;]+?)\s*;")
+# The value group is \S-delimited: the naive trim spelling
+# ([^;]+?)\s*; overlaps the lazy value and the following whitespace
+# span on whitespace, and a 'return'-opening line ending in a long
+# whitespace run with no ';' makes the engine try every split of the
+# run between them — cubic in the line length. Real return values
+# capture identically; the one dropped corner is a whitespace-only
+# value ('return  ;'), which previously appended an empty normalized
+# value and now skips like the bare 'return;' the docstring already
+# excludes.
+_RETURN_VALUE_RE = re.compile(
+    r"\breturn\s+([^;\s](?:[^;]*[^;\s])?)\s*;",
+)
 
 
 def _extract_return_values(body_lines: list) -> list:
