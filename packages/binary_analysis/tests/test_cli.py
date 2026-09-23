@@ -293,6 +293,74 @@ def test_trace_parser_matching_hash_reaches_frida_phase(tmp_path: Path) -> None:
     assert rc == 1
 
 
+def test_corpus_subcommand_accepts_flags() -> None:
+    args = _build_parser().parse_args([
+        "corpus",
+        "/tmp/samples",
+        "--family",
+        "*.sys",
+        "--max-samples",
+        "100",
+        "--max-bytes-per-sample",
+        "4096",
+        "--out",
+        "/tmp/out",
+    ])
+    assert args.samples_dir == "/tmp/samples"
+    assert args.family == "*.sys"
+    assert args.max_samples == 100
+    assert args.max_bytes_per_sample == 4096
+    assert args.out == "/tmp/out"
+
+
+def test_corpus_writes_profile_and_lifecycle(tmp_path: Path, capsys) -> None:
+    corpus = tmp_path / "samples"
+    corpus.mkdir()
+    for i in range(4):
+        (corpus / f"s{i}.dat").write_bytes(b"MAGX" + bytes([i]) * 40)
+    out = tmp_path / "out"
+
+    with (
+        patch("packages.binary_analysis.cli.start_run") as start_run,
+        patch("packages.binary_analysis.cli.complete_run") as complete_run,
+    ):
+        rc = main(["corpus", str(corpus), "--out", str(out)])
+
+    assert rc == 0
+    start_run.assert_called_once_with(out.resolve(), "understand", target=str(corpus.resolve()))
+    complete_run.assert_called_once_with(out.resolve())
+    payload = json.loads((out / "format-profile.json").read_text())
+    assert payload["summary"]["samples_profiled"] == 4
+    assert (out / "format-profile.md").is_file()
+    stdout = capsys.readouterr().out
+    assert "Mode: corpus" in stdout
+    assert "mechanical byte statistics" in stdout
+
+
+def test_corpus_rejects_missing_directory(tmp_path: Path) -> None:
+    rc = main(["corpus", str(tmp_path / "nope")])
+    assert rc == 2
+
+
+def test_corpus_summary_scrubs_hostile_family_keys(tmp_path: Path, capsys) -> None:
+    corpus = tmp_path / "samples"
+    corpus.mkdir()
+    # Attacker-chosen names ride into the family key (extension +
+    # template) — the terminal summary must render them inert.
+    for i in range(3):
+        (corpus / f"evil\x1b]0;pwn{i}\x07.b\x1bd").write_bytes(b"MAGY" + bytes([i]) * 30)
+    out = tmp_path / "out"
+    with (
+        patch("packages.binary_analysis.cli.start_run"),
+        patch("packages.binary_analysis.cli.complete_run"),
+    ):
+        rc = main(["corpus", str(corpus), "--out", str(out)])
+    assert rc == 0
+    stdout = capsys.readouterr().out
+    assert "\x1b" not in stdout
+    assert "\x07" not in stdout
+
+
 def test_wrapper_help_is_available() -> None:
     env = os.environ.copy()
     env["_RAPTOR_TRUSTED"] = "1"
