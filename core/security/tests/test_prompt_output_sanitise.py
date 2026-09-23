@@ -334,3 +334,82 @@ def test_inline_escapes_backticks():
     out = sanitise_inline("a`[x](https://evil.example)`.sh")
     assert "`" not in out
     assert "evil.example" not in out
+
+
+# ---------------------------------------------------------------------------
+# truncation boundaries + default caps — all three entry points
+# ---------------------------------------------------------------------------
+# The cap contract is exact, both directions: a string AT the cap
+# passes through unmodified (no ellipsis appears for content nothing
+# was dropped from), and a string over the cap comes back at EXACTLY
+# max_chars with the final character being the single elision mark.
+# The default cap value per function is itself contract: callers omit
+# max_chars and rely on it when sizing report slots.
+
+
+def test_string_at_default_cap_untruncated():
+    s = "a" * 500
+    assert sanitise_string(s) == s
+
+
+def test_string_over_default_cap_truncates_to_exactly_500():
+    out = sanitise_string("a" * 520)
+    assert out == "a" * 499 + "…"
+
+
+def test_inline_at_default_cap_untruncated():
+    from core.security.prompt_output_sanitise import sanitise_inline
+    s = "a" * 300
+    assert sanitise_inline(s) == s
+
+
+def test_inline_over_default_cap_truncates_to_exactly_300():
+    from core.security.prompt_output_sanitise import sanitise_inline
+    out = sanitise_inline("a" * 350)
+    assert out == "a" * 299 + "…"
+
+
+def test_code_at_default_cap_untruncated():
+    s = "a" * 10_000
+    assert sanitise_code(s) == s
+
+
+def test_code_over_default_cap_truncates_to_exactly_10000():
+    out = sanitise_code("a" * 10_050)
+    assert out == "a" * 9_999 + "…"
+
+
+def test_explicit_cap_boundary_exact():
+    from core.security.prompt_output_sanitise import sanitise_inline
+    assert sanitise_string("x" * 40, max_chars=40) == "x" * 40
+    assert sanitise_string("x" * 41, max_chars=40) == "x" * 39 + "…"
+    assert sanitise_inline("x" * 40, max_chars=40) == "x" * 40
+    assert sanitise_code("x" * 40, max_chars=40) == "x" * 40
+
+
+# ---------------------------------------------------------------------------
+# list-marker ZWSP defang — exact output shape
+# ---------------------------------------------------------------------------
+# The ZWSP goes BETWEEN the marker and its following space (indent
+# preserved, marker text preserved, space preserved) — CommonMark only
+# forms a list item when the char AFTER the marker is a space/tab, so
+# this exact placement is what defangs the construct while keeping
+# the visible "1." / "-" prefixes readable.
+
+
+def test_bullet_marker_zwsp_placement_exact():
+    assert sanitise_string("  - item") == "  -​ item"
+
+
+def test_numbered_marker_zwsp_placement_exact():
+    assert sanitise_string("1. step one") == "1.​ step one"
+    assert sanitise_string("\t2) step two") == "\t2)​ step two"
+
+
+def test_plus_marker_zwsp_placement_exact():
+    assert sanitise_string("+ item") == "+​ item"
+
+
+def test_non_marker_shapes_untouched():
+    # No space after the marker shape — not a list construct.
+    assert sanitise_string("--flag and 1.5 stay") == "--flag and 1.5 stay"
