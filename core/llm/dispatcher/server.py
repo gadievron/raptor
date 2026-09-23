@@ -2594,7 +2594,15 @@ def _make_request_handler(
                 for k, v in self.headers.items():
                     if k.lower() in rule.strip_request_headers:
                         continue
-                    if k.lower() in ("host", "content-length", _TOKEN_HEADER.lower()):
+                    # transfer-encoding: _read_body consumes a
+                    # Content-Length body only, so relaying the
+                    # client's framing header would mislabel the
+                    # re-framed body — the response side already
+                    # strips its twin for the same reason.
+                    if k.lower() in (
+                        "host", "content-length", "transfer-encoding",
+                        _TOKEN_HEADER.lower(),
+                    ):
                         continue
                     forwarded[k] = v
                 # Credential headers always overwrite the worker's

@@ -87,8 +87,12 @@ class TelemetrySink:
     # ── Recording ─────────────────────────────────────────────────
 
     def record(self, rec: dict[str, Any]) -> None:
-        """Append one record; update aggregates. Never raises from the
-        write path (see the one-warning latch below)."""
+        """Append one record; update aggregates.
+
+        The WRITE path never raises (one-warning latch below), but
+        ``_aggregate`` coerces caller-typed fields first and CAN raise
+        on junk values — the never-raises guarantee callers rely on
+        lives on :func:`emit`, the guarded production entry point."""
         rec.setdefault("ts", time.time())
         with self._lock:
             self._aggregate(rec)

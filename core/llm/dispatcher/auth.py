@@ -1322,14 +1322,13 @@ def build_rules(creds: CredentialStore) -> dict[str, ProviderRule]:
             name="azure_openai",
             upstream_base_url=azure_endpoint,
             inject_headers=_azure_openai_headers,
-            # Azure echoes the api-key in some error responses;
-            # strip ``api-key`` from worker requests on top of the
-            # default Bearer/x-api-key set so the dispatcher's
-            # injected value isn't shadowed.
-            strip_request_headers=(
-                "authorization", "x-api-key", "x-goog-api-key",
-                "api-key", "openai-organization",
-            ),
+            # Azure authenticates via ``api-key``, which the
+            # ProviderRule DEFAULT strip set already covers (along
+            # with the Bearer/x-api-key family) — the dispatcher's
+            # injected value cannot be shadowed by a worker header.
+            # No override needed; a previous explicit tuple here was
+            # byte-identical to the default while its comment claimed
+            # an extension.
         ),
         "bedrock": ProviderRule(
             name="bedrock",

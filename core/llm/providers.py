@@ -49,7 +49,11 @@ _DEFAULT_CACHE_CONTROL = CacheControl()
 
 logger = get_logger()
 
+# Lock-guarded like the sibling warn-once latches in this module —
+# an unlocked check-then-add only risks a duplicate warning, but the
+# latch discipline should not vary by site.
 _ZERO_PRICE_WARNED: set[str] = set()
+_ZERO_PRICE_WARNED_LOCK = threading.Lock()
 
 # Instructor resilience: allow this many consecutive failures before
 # permanently disabling tool-use structured output for a provider.
@@ -529,14 +533,16 @@ class LLMProvider(ABC):
         if (
             in_per_m == 0.0 and out_per_m == 0.0
             and (response.input_tokens or response.output_tokens)
-            and self.config.model_name not in _ZERO_PRICE_WARNED
         ):
-            _ZERO_PRICE_WARNED.add(self.config.model_name)
-            logger.warning(
-                "no pricing for model %s — cost tracking disabled, "
-                "max_cost_usd budget cap will not trigger",
-                self.config.model_name,
-            )
+            with _ZERO_PRICE_WARNED_LOCK:
+                first = self.config.model_name not in _ZERO_PRICE_WARNED
+                _ZERO_PRICE_WARNED.add(self.config.model_name)
+            if first:
+                logger.warning(
+                    "no pricing for model %s — cost tracking disabled, "
+                    "max_cost_usd budget cap will not trigger",
+                    self.config.model_name,
+                )
         return (
             response.input_tokens * in_per_m
             + response.output_tokens * out_per_m
@@ -4557,8 +4563,9 @@ class ClaudeCodeLLMProvider(LLMProvider):
         """Dispatch with ``--json-schema`` for structured output via
         stream-json.
 
-        Accepts and ignores ``**kwargs`` — `claude` CLI has no
-        temperature flag (see ClaudeCodeProvider.generate_structured).
+        Honours ``timeout_s`` from ``**kwargs`` (popped below); the
+        rest is accepted and ignored — `claude` CLI has no temperature
+        flag (see ClaudeCodeProvider.generate_structured).
         """
         import subprocess
         import time as _time

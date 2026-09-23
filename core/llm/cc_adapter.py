@@ -1148,7 +1148,16 @@ def parse_cc_structured(
             last_valid = None
             for part in parts[1::2]:
                 lines = part.strip().split("\n", 1)
-                json_str = lines[1] if len(lines) > 1 and not lines[0].startswith("{") else part
+                # Drop a language-tag first line ("json") only when it
+                # is not itself the JSON start — same brace/bracket
+                # pair strip_json_fences uses; the previous "{"-only
+                # check dropped the opening line of a fenced ARRAY.
+                json_str = (
+                    lines[1]
+                    if len(lines) > 1
+                    and not lines[0].lstrip().startswith(("{", "["))
+                    else part
+                )
                 try:
                     candidate = json.loads(json_str.strip())
                     if isinstance(candidate, dict):

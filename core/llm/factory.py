@@ -25,7 +25,7 @@ __all__ = ["get_client"]
 
 
 def get_client(
-    config: LLMConfig = None,
+    config: LLMConfig | None = None,
     *,
     prefer: str | list[str] | None = None,
 ) -> LLMClient | None:
