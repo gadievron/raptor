@@ -125,7 +125,12 @@ _PROTOCOL_STATE_HYPOTHESIS_RE = re.compile(
     r"(?:(?:protocol|state)\s+(?:invariant|machine)"
     r"|never\s+sent|not\s+(?:previously\s+)?sent"
     r"|out.of.window|monoton"
-    r"|acknowledg\w+.{0,40}(?:unsent|never|higher\s+than)"
+    # Canonical-split gap (``\w+.{0,40}`` -> one bounded probe per
+    # split point): the ambiguous spelling re-splits against every
+    # stem repeat inside one long word — quadratic on hostile text.
+    # Same language; only a stem buried more than 64 word-characters
+    # before the gap stops matching.
+    r"|acknowledg(?:\w.{0,40}|\w{1,64}.{40})(?:unsent|never|higher\s+than)"
     r"|peer.{0,40}(?:controls?|sets?|poisons?).{0,30}"
     r"(?:state|counter|sequence|window))",
     re.IGNORECASE | re.DOTALL,

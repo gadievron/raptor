@@ -168,18 +168,28 @@ FAIL_OPEN_CWES = frozenset({
 })
 
 # Hypothesis shapes that assert a fail-open / swallowed-error defect.
+# ``stem\w*.{0,N}`` gaps are respelled in canonical-split form
+# ``stem(?:.{0,N}|\w{1,64}.{N})``: the suffix run and the gap both
+# consume word characters, so the unbounded ambiguous spelling
+# re-splits against every stem repeat inside one long word —
+# quadratic on hostile text. The split form matches the same
+# language (the gap alone, or a word run plus an exactly-N gap)
+# with one bounded probe per split point; only a stem buried more
+# than 64 word-characters before the gap stops matching (16 on the
+# two-link verify-then-outcome chain, whose split probes multiply —
+# real English suffixes are well under either cap).
 _FAIL_OPEN_HYPOTHESIS_RE = re.compile(
     r"(?:fail[s\-]?\s?open"
-    r"|swallow\w*.{0,20}(?:exception|error|failure)"
+    r"|swallow(?:.{0,20}|\w{1,64}.{20})(?:exception|error|failure)"
     r"|(?:empty|silent)\W{0,20}(?:catch|except|handler)"
-    r"|(?:ignor|discard|unchecked)\w*.{0,30}"
+    r"|(?:ignor|discard|unchecked)(?:.{0,30}|\w{1,64}.{30})"
     r"(?:error|return\s+(?:value|code)|result|\berr\b)"
     r"|(?:error|return\s+(?:value|code)|result|\berr\b).{0,40}"
     r"(?:ignor|discard|unchecked|\bnot\s+checked)"
-    r"|recover\w*.{0,20}continue"
+    r"|recover(?:.{0,20}|\w{1,64}.{20})continue"
     r"|unawaited|floating\s+promise"
-    r"|(?:verif|auth|valid|sanitiz|permission)\w*.{0,40}"
-    r"(?:error|exception|failure)\w*.{0,30}"
+    r"|(?:verif|auth|valid|sanitiz|permission)(?:.{0,40}|\w{1,16}.{40})"
+    r"(?:error|exception|failure)(?:.{0,30}|\w{1,16}.{30})"
     r"(?:proceed|continue|allow|bypass|ignored|silently))",
     re.IGNORECASE | re.DOTALL,
 )

@@ -104,12 +104,19 @@ _SEED_LOCK_PAIRS = (
 _STEM_LOCK_RE = re.compile(r"\A(\w+)_lock\Z")
 
 # Hypothesis shapes asserting callback-invocation-under-lock (§5.5).
+# ``stem\w*.{0,N}`` gaps are respelled in canonical-split form
+# ``stem(?:.{0,N}|\w{1,64}.{N})``: the suffix run and the gap both
+# consume word characters, so the unbounded ambiguous spelling
+# re-splits against every stem repeat inside one long word —
+# quadratic on hostile text. Same language (gap alone, or word run
+# plus exactly-N gap); only a stem buried more than 64
+# word-characters before the gap stops matching.
 _LOCK_REGION_HYPOTHESIS_RE = re.compile(
-    r"(?:(?:callback|handler|hook|function\s+pointer|\bcb\b)\w*"
-    r".{0,60}(?:under|while|with|holding|inside)"
+    r"(?:(?:callback|handler|hook|function\s+pointer|\bcb\b)"
+    r"(?:.{0,60}|\w{1,64}.{60})(?:under|while|with|holding|inside)"
     r".{0,20}(?:the\s+|a\s+)?lock"
     r"|lock\s+held.{0,40}(?:callback|reentran)"
-    r"|reentran\w+.{0,40}lock"
+    r"|reentran(?:\w.{0,40}|\w{1,64}.{40})lock"
     r"|deadlock.{0,40}callback"
     r"|callback.{0,40}deadlock)",
     re.IGNORECASE | re.DOTALL,

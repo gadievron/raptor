@@ -93,8 +93,13 @@ _MEMCPY_SPEC = SinkSpec(
     required=frozenset({"bounds"}),
     helpful=frozenset({"null"}),
     irrelevant=frozenset({"auth", "config", "type"}),
+    # The buf..len gap is bounded: unbounded, condition text that
+    # repeats ``buf`` makes every occurrence re-scan the rest of the
+    # line for ``len`` — quadratic on hostile source. Both words of a
+    # real bounds check sit far inside 1000 chars (trade-off: a wider
+    # gap stops matching, versus an unbounded scan).
     text_pattern=re.compile(
-        r"(?:sizeof|size|len|capacity|_sz|_size|buf.*len|alloc)",
+        r"(?:sizeof|size|len|capacity|_sz|_size|buf.{0,1000}len|alloc)",
         re.IGNORECASE,
     ),
     note="bounds check must compare length against destination buffer size",

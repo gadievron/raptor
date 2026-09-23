@@ -164,8 +164,13 @@ _BUILTIN_EXPR_RE = re.compile(
 
 # plain identifier claim: "Is STATE_DONE 3?" / "MAX_BUF == 4096"
 # Same gated-verb respelling as _BUILTIN_EXPR_RE above.
+# The \b pins the identifier to a word start (a consumed opening
+# quote is a boundary too, so quoted spellings are unaffected):
+# unanchored, every position inside a long identifier run starts a
+# fresh scan of the rest of the run — quadratic on hostile question
+# text. A mid-word start is a false token either way.
 _IDENT_EXPR_RE = re.compile(
-    r"[`'\"]?([A-Za-z_]\w*)[`'\"]?\s*"
+    r"[`'\"]?\b([A-Za-z_]\w*)[`'\"]?\s*"
     r"(?:(?:is|==|equals?|equal to|set to|defined as)\s*)?"
     rf"[`'\"]?{_VALUE}[`'\"]?",
 )

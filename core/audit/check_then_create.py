@@ -54,8 +54,12 @@ _DEFER_UNLOCK_RE = re.compile(r"^\s*defer\s+(?P<lk>[\w.]+)\.Unlock\(\)")
 # result short-circuits the function when present.
 #   if v, ok := m[key]; ok { return ... }
 #   x, err := recv.GetFoo(ctx, key) ... else if x != nil { return x... }
+# The lookbehind pins the map expression to the start of its
+# word/dotted run: unanchored, every position inside a long run is a
+# fresh scan attempt over the rest of the run — quadratic on hostile
+# source. The earliest match always starts at the run start.
 _KEYED_MAP_READ_RE = re.compile(
-    r"(?P<map>[\w.]+)\[(?P<key>\w+)\]",
+    r"(?<![\w.])(?P<map>[\w.]+)\[(?P<key>\w+)\]",
 )
 _RETURN_RE = re.compile(r"^\s*return\b")
 

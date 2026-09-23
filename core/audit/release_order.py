@@ -106,12 +106,21 @@ PREPASS_BUDGET_S = 20.0
 MAX_PREPASS_FINDINGS = 50
 
 # Hypothesis shapes asserting release-before-verify ordering.
+# ``stem\w*.{0,N}`` gaps are respelled in canonical-split form
+# ``stem(?:.{0,N}|\w{1,64}.{N})``: the suffix run and the gap both
+# consume word characters, so the unbounded ambiguous spelling
+# re-splits against every stem repeat inside one long word —
+# quadratic on hostile text. Same language (gap alone, or word run
+# plus exactly-N gap); only a stem buried more than 64
+# word-characters before the gap stops matching.
 _RELEASE_ORDER_HYPOTHESIS_RE = re.compile(
-    r"(?:(?:releas|output|write|writ|deliver|emit|flush)\w*.{0,60}"
+    r"(?:(?:releas|output|write|writ|deliver|emit|flush)"
+    r"(?:.{0,60}|\w{1,64}.{60})"
     r"(?:before|prior\s+to|without).{0,40}"
     r"(?:verif|authenticat|\btag\b|\bMAC\b|integrity|signature|"
     r"cipher\s*status)"
-    r"|(?:verif|authenticat|integrity|cipher\s*status)\w*.{0,40}"
+    r"|(?:verif|authenticat|integrity|cipher\s*status)"
+    r"(?:.{0,40}|\w{1,64}.{40})"
     r"(?:only\s+)?(?:after|at\s+EOF|at\s+the\s+end|at\s+end)"
     r"|\bEFAIL\b)",
     re.IGNORECASE | re.DOTALL,

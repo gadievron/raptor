@@ -336,8 +336,12 @@ _DETECTORS: list[_FrameworkDetector] = [
             # ERB escaping (default in Rails 3+).  ``.html_safe`` is the
             # API that disables escaping, so it is a void token (see
             # _ESCAPE_HATCH_VOIDS), never presence evidence.
+            # The tag body is bounded: unbounded, source repeating
+            # ``<%=`` without ``%>`` re-scans the rest of the line
+            # per occurrence — quadratic on hostile source; real ERB
+            # output tags sit far inside 1000 chars.
             (
-                re.compile(r"<%=.*%>|ActionView"),
+                re.compile(r"<%=.{0,1000}%>|ActionView"),
                 ["CWE-79"],
             ),
         ],

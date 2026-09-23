@@ -516,7 +516,11 @@ def _template_matches(template: str, literal: str) -> bool:
     """Check if a literal could have been produced by a template."""
     import re as _re
     pattern = _re.escape(template).replace(r"\{\}", r".+")
-    for fmt_spec in _re.findall(r"\\\{[^}]*\\\}", pattern):
+    # The placeholder body is bounded: unbounded, a template that
+    # repeats ``{`` without ``}`` re-scans the rest of the text per
+    # occurrence — quadratic on hostile config values; real format
+    # specs sit far inside 200 chars.
+    for fmt_spec in _re.findall(r"\\\{[^}]{0,200}\\\}", pattern):
         pattern = pattern.replace(fmt_spec, ".+")
     try:
         return bool(_re.fullmatch(pattern, literal))

@@ -127,8 +127,13 @@ def harvest_wur_declarations(
             # sits on this or a preceding line); a bare attribute line
             # is the attribute-first style (name follows). Never more
             # than one declaration per alias occurrence.
+            # The attribute body is bounded: unbounded, a line that
+            # repeats ``__attribute__((`` without the closer re-scans
+            # the rest of the line per occurrence — quadratic on
+            # hostile source; real attribute lists sit far inside
+            # 1000 chars.
             declarator_tail = re.sub(
-                r"__attribute__\s*\(\(.*?\)\)", "", line,
+                r"__attribute__\s*\(\(.{0,1000}?\)\)", "", line,
             )
             if ")" in declarator_tail:
                 nearby = (

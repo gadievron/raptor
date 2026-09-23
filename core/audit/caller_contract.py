@@ -63,7 +63,13 @@ _TEARDOWN_NAME_RE = re.compile(
 # this from firing on every function that frees a local on an error
 # path: only frees of a *parameter* (or a field of one) mark the
 # function as a teardown wrapper.
-_DEALLOC_NAME = r"(?:\w*free\w*|\w+_(?:destroy|release|put|teardown))"
+# The prefix run before ``free`` is bounded: unbounded, a long
+# identifier stuffed with ``free`` repeats makes every occurrence
+# re-scan the rest of the word for the call parenthesis — quadratic
+# on hostile source. Real dealloc-wrapper names sit far inside 256
+# chars (trade-off: a longer name stops matching, versus an
+# unbounded scan).
+_DEALLOC_NAME = r"(?:\w{0,256}free\w*|\w+_(?:destroy|release|put|teardown))"
 
 
 def _param_names(metadata: dict[str, Any]) -> list[str]:
