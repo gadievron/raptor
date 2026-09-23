@@ -107,6 +107,7 @@ class _CFamilySpec:
     rust_raw_strings: bool = False
     java_text_blocks: bool = False
     php_heredocs: bool = False
+    php_interpolation: bool = False
     regex_literals: bool = False
 
 
@@ -127,7 +128,10 @@ _C_FAMILY_SPECS = {
     "typescript": _JS_SPEC,
     "jsx": _JS_SPEC,
     "tsx": _JS_SPEC,
-    "php": _CFamilySpec(hash_line_comments=True, php_heredocs=True),
+    "php": _CFamilySpec(
+        hash_line_comments=True, php_heredocs=True,
+        php_interpolation=True,
+    ),
 }
 
 _C_FAMILY_EXT_LANG = {
@@ -323,7 +327,11 @@ def _strip_c_family(
             i = end
         elif (spec.php_heredocs and ch == "<"
                 and source.startswith("<<<", i)):
-            nxt_i = _php_heredoc(source, i, blank_str)
+            nxt_i = _php_heredoc(
+                source, chars, i, blank_str,
+                keep_strings=keep_strings,
+                interpolation=spec.php_interpolation,
+            )
             i = nxt_i if nxt_i is not None else i + 3
         elif (spec.java_text_blocks and ch == '"'
                 and source.startswith('"""', i)):
@@ -353,14 +361,23 @@ def _strip_c_family(
             # characters, escapes allowed). A lone tick — a Rust
             # lifetime, an apostrophe in code — is NOT a literal and
             # must not swallow the rest of the line.
-            end = _char_literal_end(source, i)
-            if end is None:
+            lit_end = _char_literal_end(source, i)
+            if lit_end is None:
                 i += 1
             else:
-                blank_str(i + 1, end - 1)
-                i = end
+                blank_str(i + 1, lit_end - 1)
+                i = lit_end
         elif ch == "`" and spec.backtick == "template":
             i = _template_literal(source, chars, i, blank_str)
+        elif spec.php_interpolation and ch == '"':
+            # PHP double-quoted strings execute complex-syntax
+            # interpolation — `{$obj->method($arg)}` CALLS the method
+            # — so those expressions stay visible as code (the
+            # template-arm direction contract). Simple `$ident` /
+            # `${name}` interpolation stays data: a bare variable
+            # mention cannot spell a call, same posture as the perl
+            # variable-interpolation residual.
+            i = _php_dq_end(chars, source, i, keep_strings=keep_strings)
         elif ch == '"' or ch == "'" or (
                 ch == "`" and spec.backtick == "raw"):
             end = _string_end(source, i, ch, raw=(ch == "`"))
@@ -932,24 +949,149 @@ _PHP_HEREDOC_OPEN_RE = re.compile(
     r"<<<[ \t]*(?:\"(\w+)\"|'(\w+)'|(\w+))[ \t]*\r?\n")
 
 
-def _php_heredoc(source: str, i: int, blank_str) -> int | None:
+def _php_heredoc(
+    source: str, chars: list[str], i: int, blank_str, *,
+    keep_strings: bool = False, interpolation: bool = False,
+) -> int | None:
     """Consume a PHP heredoc/nowdoc opened at ``i`` (``<<<``); blank
     its body up to the terminator line (PHP 7.3 flexible closers —
     the identifier may be indented and followed by punctuation).
-    Returns the index just past the terminator identifier, or None
-    when ``<<<`` does not open a heredoc here."""
+    Heredoc bodies (``<<<ID`` / ``<<<"ID"``) execute complex-syntax
+    interpolation exactly like double-quoted strings, so with
+    *interpolation* their ``{$…}`` expressions stay visible
+    (:func:`_php_complex_expr`); nowdoc bodies (``<<<'ID'``) never
+    interpolate and blank whole. Returns the index just past the
+    terminator identifier, or None when ``<<<`` does not open a
+    heredoc here."""
     m = _PHP_HEREDOC_OPEN_RE.match(source, i)
     if m is None:
         return None
     ident = m.group(1) or m.group(2) or m.group(3)
+    nowdoc = m.group(2) is not None
     term = re.compile(
         rf"^[ \t]*{re.escape(ident)}(?![0-9A-Za-z_])", re.M)
     t = term.search(source, m.end())
-    if t is None:
-        blank_str(m.end(), len(source))
-        return len(source)
-    blank_str(m.end(), t.start())
-    return t.end()
+    body_end = len(source) if t is None else t.start()
+    if interpolation and not nowdoc:
+        _php_blank_interp_region(
+            chars, source, m.end(), body_end, keep_strings=keep_strings)
+    else:
+        blank_str(m.end(), body_end)
+    return len(source) if t is None else t.end()
+
+
+def _php_blank_interp_region(
+    chars: list[str], source: str, start: int, end: int, *,
+    keep_strings: bool,
+) -> None:
+    r"""Blank the interpolating PHP string/heredoc body
+    ``chars[start:end]``, keeping ``{$…}`` complex-syntax expressions
+    visible as code. Escapes pair-blank (``\{$`` is data); simple
+    ``$ident``/``${name}`` interpolation stays data (residual — a
+    bare variable mention cannot spell a call)."""
+    j = start
+    while j < end:
+        c = source[j]
+        if c == "\\":
+            if source.startswith("{$", j + 1):
+                # PHP defines no \{ escape in double-quoted strings:
+                # the backslash is literal DATA and the interpolation
+                # still executes — consuming the pair would swallow a
+                # live call (the f-string walker's brace rule).
+                if not keep_strings and chars[j] != "\n":
+                    chars[j] = " "
+                j += 1
+                continue
+            if not keep_strings:
+                for k in (j, j + 1):
+                    if k < end and chars[k] != "\n":
+                        chars[k] = " "
+            j += 2
+            continue
+        if source.startswith("{$", j):
+            j = _php_complex_expr(chars, source, j,
+                                  keep_strings=keep_strings)
+            continue
+        if not keep_strings and chars[j] != "\n":
+            chars[j] = " "
+        j += 1
+
+
+def _php_dq_end(
+    chars: list[str], source: str, i: int, *, keep_strings: bool,
+) -> int:
+    """Consume the PHP double-quoted string opened at ``i``, blanking
+    literal text while ``{$…}`` complex-syntax interpolation stays
+    visible (it is executable code — `{$obj->method($arg)}` calls the
+    method). The walk runs in BOTH view modes: only it finds the true
+    closing quote once a kept expression contains a nested ``"``.
+    Literal text stops at a newline (the pre-existing single-line
+    posture of the C-family scanner); a kept expression may span
+    lines. Returns the index just past the closing quote."""
+    n = len(source)
+    j = i + 1
+
+    def blank1(k: int) -> None:
+        if not keep_strings and chars[k] != "\n":
+            chars[k] = " "
+
+    while j < n:
+        c = source[j]
+        if c == "\\":
+            if source.startswith("{$", j + 1):
+                # No \{ escape in PHP double quotes — the backslash
+                # is data, the interpolation executes (see
+                # _php_blank_interp_region).
+                blank1(j)
+                j += 1
+                continue
+            blank1(j)
+            if j + 1 < n:
+                blank1(j + 1)
+            j += 2
+            continue
+        if source.startswith("{$", j):
+            j = _php_complex_expr(chars, source, j,
+                                  keep_strings=keep_strings)
+            continue
+        if c == '"':
+            return j + 1
+        if c == "\n":
+            return j + 1
+        blank1(j)
+        j += 1
+    return n
+
+
+def _php_complex_expr(
+    chars: list[str], source: str, j: int, *, keep_strings: bool,
+) -> int:
+    """Skip the ``{$…}`` complex-syntax interpolation opened at ``j``
+    (kept visible as code); nested string literals inside it blank
+    their own contents. Returns the index just past the matching
+    ``}``; an unterminated expression keeps the remainder visible
+    (over-inclusion, never a swallow)."""
+    n = len(source)
+    depth = 0
+    while j < n:
+        c = source[j]
+        if c == "{":
+            depth += 1
+            j += 1
+        elif c == "}":
+            depth -= 1
+            j += 1
+            if depth == 0:
+                return j
+        elif c in ("'", '"'):
+            e = _string_end(source, j, c)
+            for k in range(j + 1, min(e, n) - 1):
+                if not keep_strings and chars[k] != "\n":
+                    chars[k] = " "
+            j = e
+        else:
+            j += 1
+    return n
 
 
 # d-char set per the C++ grammar: no space/parens/backslash/control
