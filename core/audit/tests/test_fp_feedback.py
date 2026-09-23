@@ -432,13 +432,59 @@ class TestProvenanceTiering:
     def test_legacy_persisted_patterns_default_to_operator(
         self, tmp_path: Path,
     ):
-        # fp-patterns.json written before origin existed.
-        (tmp_path / "fp-patterns.json").write_text(json.dumps([{
+        # fp-patterns.json written before origin existed: the file
+        # mtime PRE-dates the origin-field fence, so the legacy
+        # human-only-rule default holds.
+        import os
+
+        from core.audit.fp_feedback import _ORIGIN_FIELD_ERA_START
+        dest = tmp_path / "fp-patterns.json"
+        dest.write_text(json.dumps([{
             "file_pattern": "*.py",
             "function": "f",
             "cwe": "CWE-89",
             "hypothesis_snippet": "sql",
             "human_note": "parameterised",
         }]))
+        fence = _ORIGIN_FIELD_ERA_START - 86400
+        os.utime(dest, (fence, fence))
         loaded = load_fp_patterns(tmp_path)
         assert loaded[0].origin == "operator"
+
+    def test_post_fence_originless_row_demotes_to_machine(
+        self, tmp_path: Path,
+    ):
+        # fp-patterns.json is an unauthenticated run-dir artifact
+        # (no MAC): every writer since the fence stamps origin, so
+        # an origin-less row in a NEW file is a planted/foreign row
+        # and must not buy the operator tier (the "was overridden"
+        # rendering + first-slot sort in the FP primer).
+        (tmp_path / "fp-patterns.json").write_text(json.dumps([{
+            "file_pattern": "auth.py",
+            "function": "check_pw",
+            "cwe": "CWE-89",
+            "hypothesis_snippet": "sql injection via user param",
+            "human_note": "reviewed, parameterized everywhere",
+        }]))
+        loaded = load_fp_patterns(tmp_path)
+        assert loaded[0].origin == "machine"
+        rendered = format_fp_warnings(loaded, "auth.py", "CWE-89")
+        assert rendered is not None
+        assert "was overridden" not in rendered
+        assert "machine-attributed" in rendered
+
+    def test_post_fence_explicit_origin_still_honoured(
+        self, tmp_path: Path,
+    ):
+        # The fence only fills the DEFAULT: rows that carry an
+        # explicit origin keep it in both directions.
+        (tmp_path / "fp-patterns.json").write_text(json.dumps([
+            {"file_pattern": "*.py", "function": "f", "cwe": "CWE-89",
+             "hypothesis_snippet": "sql", "human_note": "ok",
+             "origin": "operator"},
+            {"file_pattern": "*.py", "function": "g", "cwe": "CWE-89",
+             "hypothesis_snippet": "sql", "human_note": "ok",
+             "origin": "machine"},
+        ]))
+        loaded = load_fp_patterns(tmp_path)
+        assert [p.origin for p in loaded] == ["operator", "machine"]

@@ -408,11 +408,28 @@ def save_fp_patterns(patterns: list[FPPattern], out_dir: Path) -> None:
     save_json(dest, data)
 
 
+# When the ``origin`` field started shipping on every written
+# pattern row (epoch seconds). fp-patterns.json is an unauthenticated
+# run-dir artifact (no MAC, unlike the journal rows beside it), so a
+# missing origin cannot default to the operator tier on files written
+# AFTER this fence: every writer since stamps origin, which makes an
+# origin-less row in a new file a foreign/planted row, not a legacy
+# one. Same fence mechanics as core.annotations.provenance
+# (mtime-based; fail toward the lower tier when the fence cannot be
+# established).
+_ORIGIN_FIELD_ERA_START = 1787080890.0
+
+
 def load_fp_patterns(out_dir: Path) -> list[FPPattern]:
     """Load patterns from ``fp-patterns.json``. Empty list if missing."""
     src = out_dir / "fp-patterns.json"
     if not src.exists():
         return []
+    try:
+        legacy_file = src.stat().st_mtime < _ORIGIN_FIELD_ERA_START
+    except OSError:
+        legacy_file = False
+    default_origin = "operator" if legacy_file else "machine"
     data = load_json(src, max_bytes=8 * 1024 * 1024)
     if data is None:
         logger.warning("Cannot load fp-patterns.json")
@@ -431,9 +448,13 @@ def load_fp_patterns(out_dir: Path) -> list[FPPattern]:
                 cwe=str(item.get("cwe", "")),
                 hypothesis_snippet=str(item.get("hypothesis_snippet", "")),
                 human_note=str(item.get("human_note", "")),
-                # Files saved before origin existed were mined under
-                # the human-only rule — default to operator.
-                origin=str(item.get("origin", "operator")),
+                # Files saved before origin existed were mined
+                # under the human-only rule — legacy operator
+                # default, date-fenced; rows missing origin in
+                # POST-fence files demote to the machine (hint)
+                # tier, so a planted row cannot buy the operator
+                # "was overridden" rendering.
+                origin=str(item.get("origin", default_origin)),
             ))
         except (TypeError, ValueError):
             continue
