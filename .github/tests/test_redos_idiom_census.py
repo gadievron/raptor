@@ -909,14 +909,99 @@ def _scan_file(path: Path) -> list[tuple[tuple[str, str], int]]:
 _ALL_SITES_CACHE: list[_Site] | None = None
 
 
+def _extract_worker(paths: list[str]) -> list[list[Any]]:
+    """Worker body for ``--extract-worker``: one contiguous chunk of
+    the file universe, extracted and JSON-flattened (same subprocess
+    protocol as ``--oracle-worker``).
+
+    ``flags`` travels as ``(int, is_RegexFlag)``: the pin digests
+    hash ``f"{site.flags}"``, and a ``re.RegexFlag`` formats as its
+    member names ("re.MULTILINE") while the same value as a plain
+    int formats as "8" — collapsing the type over the JSON hop
+    silently re-keyed every pinned digest."""
+    return [
+        [list(site.key), site.lineno, site.pattern,
+         int(site.flags), isinstance(site.flags, re.RegexFlag),
+         site.mode, site.name, site.origin]
+        for path in paths
+        for site in _extract_sites(Path(path))
+    ]
+
+
+def _extract_parallel(files: list[Path]) -> list[_Site] | None:
+    """Fan the whole-tree extraction out over worker subprocesses.
+
+    The extraction is walk-bound (millions of AST nodes across the
+    ~550 files the ``re``-binding gate lets through), and its serial
+    cost sat one loaded-runner spike from the default tier's per-test
+    budget.  Contiguous chunks reassembled by index reproduce the
+    serial order and site set EXACTLY — per-file extraction is
+    deterministic and shares no cross-file state.  Returns ``None``
+    on any worker failure so the caller falls back to the serial
+    path (correctness never depends on the fan-out).
+    """
+    import json
+    import os
+    import subprocess
+    from concurrent.futures import ThreadPoolExecutor
+
+    workers = min(8, os.cpu_count() or 1)
+    if workers < 2 or len(files) < 64:
+        return None
+    n_chunks = workers * 2  # finer chunks even out per-dir imbalance
+    step = (len(files) + n_chunks - 1) // n_chunks
+    chunks = [files[i:i + step] for i in range(0, len(files), step)]
+
+    def run_chunk(chunk: list[Path]) -> list[list[Any]] | None:
+        request = json.dumps({"paths": [str(p) for p in chunk]})
+        try:
+            proc = subprocess.run(
+                [sys.executable, __file__, "--extract-worker"],
+                input=request, capture_output=True, text=True,
+                timeout=300,
+            )
+            if proc.returncode != 0:
+                return None
+            rows = json.loads(proc.stdout)
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            return None
+        return rows if isinstance(rows, list) else None
+
+    sites: list[_Site] = []
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for rows in pool.map(run_chunk, chunks):
+            if rows is None:
+                return None
+            sites.extend(_sites_from_rows(rows))
+    return sites
+
+
+def _sites_from_rows(rows: list[list[Any]]) -> list[_Site]:
+    """Inverse of ``_extract_worker``'s flattening (type-exact: see
+    the flags note there)."""
+    return [
+        _Site(
+            (key[0], key[1]), lineno, pattern,
+            re.RegexFlag(flags) if is_rf else flags, mode, name,
+            origin,
+        )
+        for key, lineno, pattern, flags, is_rf, mode, name, origin
+        in rows
+    ]
+
+
 def _all_runtime_sites() -> list[_Site]:
     """Whole-tree extraction, computed once per process — every arm's
-    tests share it, so the parse cost is paid a single time."""
+    tests share it, so the parse cost is paid a single time (fanned
+    out over worker subprocesses where the host has the cores)."""
     global _ALL_SITES_CACHE
     if _ALL_SITES_CACHE is None:
-        sites: list[_Site] = []
-        for path in _iter_python_files():
-            sites.extend(_extract_sites(path))
+        files = _iter_python_files()
+        sites = _extract_parallel(files)
+        if sites is None:
+            sites = []
+            for path in files:
+                sites.extend(_extract_sites(path))
         _ALL_SITES_CACHE = sites
     return _ALL_SITES_CACHE
 
@@ -2221,6 +2306,52 @@ class RedosIdiomCensus(unittest.TestCase):
             self.assertEqual([key for key, _ in members],
                              [(probe.name, name)], source)
 
+    def test_extract_worker_roundtrip_matches_serial(self) -> None:
+        """Self-check for the extraction fan-out's wire format: one
+        real ``--extract-worker`` subprocess over a planted module
+        whose sites cover the digest-visible flag spellings
+        (attribute, |-combined, numeric literal, none) must
+        reproduce the serial extraction EXACTLY — including the
+        ``f"{flags}"`` rendering the pin digests hash, which the
+        JSON hop once collapsed from ``re.MULTILINE`` to ``8``,
+        silently re-keying every pinned digest."""
+        import json
+        import subprocess
+        import tempfile
+
+        source = (
+            "import re\n"
+            "A = re.compile(r'^\\s*alpha', re.MULTILINE)\n"
+            "B = re.compile(r'beta', 8)\n"
+            "C = re.compile(r'gamma')\n"
+            "D = re.compile(r'delta', re.IGNORECASE | re.DOTALL)\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".py", delete=False,
+        ) as fh:
+            fh.write(source)
+            probe = Path(fh.name)
+        try:
+            serial = _extract_sites(probe)
+            proc = subprocess.run(
+                [sys.executable, __file__, "--extract-worker"],
+                input=json.dumps({"paths": [str(probe)]}),
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            roundtripped = _sites_from_rows(json.loads(proc.stdout))
+        finally:
+            probe.unlink()
+
+        def flat(site: _Site) -> tuple:
+            return (site.key, site.lineno, site.pattern,
+                    f"{site.flags}", type(site.flags).__name__,
+                    site.mode, site.name, site.origin)
+
+        self.assertEqual(len(serial), 4, "planting surface changed?")
+        self.assertEqual([flat(s) for s in roundtripped],
+                         [flat(s) for s in serial])
+
     def test_runtime_source_has_no_members(self) -> None:
         files = _iter_python_files()
         self.assertGreater(len(files), 100, "scan roots missing?")
@@ -3208,6 +3339,12 @@ if __name__ == "__main__":
             request["pattern"], request["flags"], request["mode"],
             request["kind"], request["index"], request["unit"],
         )
+        sys.exit(0)
+    if "--extract-worker" in sys.argv:
+        import json
+
+        request = json.load(sys.stdin)
+        json.dump(_extract_worker(request["paths"]), sys.stdout)
         sys.exit(0)
     if "--regen-trailing-span" in sys.argv:
         sys.exit(_regen_expected())
