@@ -317,6 +317,167 @@ def test_comment_open_in_line_comment_does_not_hide_directive():
 
 
 # ---------------------------------------------------------------------------
+# C++ raw-string literals: R"delim( ... )delim" and its encoding-prefixed
+# spellings. The normaliser must model the raw-string grammar — a raw
+# string whose body embeds quote/comment tokens must neither hide a
+# following live directive (phantom comment) nor be flagged for the
+# inert directive text INSIDE its body.
+# ---------------------------------------------------------------------------
+
+_RAW_PHANTOM_COMMENT_TEMPLATE = (
+    '#include <cstdio>\n'
+    'const char* s = {prefix}"(x") /* )";\n'
+    '#include "/etc/passwd"\n'
+    'const char* t = {prefix}"( (" */ )";\n'
+    'int main(){{ printf("%s", s); return 0; }}\n'
+)
+
+
+def test_rawstring_phantom_comment_does_not_hide_directive():
+    """The confirmed bypass shape: the walker exits the first raw
+    string at the embedded ``"``, the ``/*`` that follows (raw-string
+    BODY text to the compiler) opens a phantom comment, and the live
+    ``#include "/etc/passwd"`` between the two raw strings is deleted
+    from the scanned view while gcc processes it for real."""
+    src = _RAW_PHANTOM_COMMENT_TEMPLATE.format(prefix="R")
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].directive == "#include"
+    assert v[0].path == "/etc/passwd"
+    assert v[0].reason == "absolute path"
+    assert v[0].line_no == 3
+
+
+def test_rawstring_encoding_prefixes_all_modeled():
+    """u8R / uR / UR / LR are the same literal with an encoding
+    prefix — each must be recognised as a raw string."""
+    for prefix in ("u8R", "uR", "UR", "LR"):
+        src = _RAW_PHANTOM_COMMENT_TEMPLATE.format(prefix=prefix)
+        v = scan(src)
+        assert len(v) == 1, f"{prefix}: expected 1 violation, got {v!r}"
+        assert v[0].path == "/etc/passwd"
+
+
+def test_rawstring_with_dchar_delimiter():
+    """Non-empty delimiter: the literal only closes at ``)delim"``."""
+    src = (
+        'const char* s = R"eof(x") /* )eof";\n'
+        '#include "/etc/passwd"\n'
+        'const char* t = R"eof( (" */ )eof";\n'
+    )
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].line_no == 2
+
+
+def test_identifier_ending_in_r_is_not_raw_prefix():
+    """``FOOBAR"..."`` is an identifier token followed by an ordinary
+    string literal, not a raw string — ordinary string rules apply
+    (the quote closes at the next unescaped quote) and the live
+    directive after it is still seen."""
+    src = 'int x = FOOBAR"( /* ")";\n#include "/etc/passwd"\n'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].path == "/etc/passwd"
+
+
+def test_concatenated_raw_and_plain_literals():
+    src = 'const char* s = R"(a)" "b" R"(c)";\n#include "/etc/passwd"\n'
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].line_no == 2
+
+
+def test_directive_inside_rawstring_body_not_flagged():
+    """A directive spelled inside a raw-string body is string data —
+    the compiler never processes it, so the scan must not flag it."""
+    src = 'const char* s = R"(\n#include "/etc/passwd"\n)";\nint main(){}'
+    assert scan(src) == []
+
+
+def test_line_numbers_preserved_across_multiline_rawstring():
+    src = (
+        'const char* s = R"(\nbody2\nbody3\n)";\n'
+        '#include "/etc/passwd"\nint main(){}'
+    )
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].line_no == 5
+
+
+def test_malformed_rawstring_intro_falls_back_to_string_handling():
+    """No ``(`` within the 16-d-char limit → not a well-formed raw
+    literal (ill-formed program). Conservative fallback: ordinary
+    string handling, so the following directive is still scanned
+    (over-inclusion-safe direction)."""
+    src = (
+        'const char* s = R"AAAAAAAAAAAAAAAAAAAAAA x";\n'
+        '#include "/etc/passwd"\n'
+    )
+    v = scan(src)
+    assert len(v) == 1
+
+
+def test_unterminated_rawstring_does_not_swallow_rest_of_file():
+    """An unterminated raw literal is ill-formed; the undecidable tail
+    must be scanned rather than silently treated as string data
+    (fail-toward-detection)."""
+    src = 'const char* s = R"(never closed\n#include "/etc/passwd"\nint main(){}'
+    v = scan(src)
+    assert len(v) == 1
+
+
+def test_splice_inside_rawstring_body_is_not_spliced():
+    """Phases 1-2 are REVERTED inside raw strings: a backslash-newline
+    in the body is literal text, not a splice. Pre-splicing the whole
+    source would close the first raw literal early at the splice-formed
+    ``)"``, walk the ``/*`` that follows into a phantom comment, and
+    hide the live include after the REAL terminator."""
+    src = (
+        'const char* s = R"(x)\\\n" /* )";\n'
+        '#include "/etc/passwd"\n'
+    )
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].path == "/etc/passwd"
+
+
+def test_splice_formed_raw_prefix_recognised():
+    """A phase-2 splice OUTSIDE the quotes stands — ``R\\`` + newline +
+    ``"`` lexes as a raw-string introducer, so the scan must model it
+    as one too."""
+    src = (
+        'const char* s = R\\\n"(x") /* )";\n'
+        '#include "/etc/passwd"\n'
+        'const char* t = R"( (" */ )";\n'
+    )
+    v = scan(src)
+    assert len(v) == 1
+    assert v[0].path == "/etc/passwd"
+
+
+def test_splice_inside_raw_prefix_recognised():
+    src = (
+        'const char* s = u\\\n8R"(x") /* )";\n'
+        '#include "/etc/passwd"\n'
+        'const char* t = u8R"( (" */ )";\n'
+    )
+    v = scan(src)
+    assert len(v) == 1
+
+
+def test_backslash_backslash_newline_in_string_matches_phase2():
+    """``"\\\\`` + newline inside an ordinary string: phase 2 splices
+    the SECOND backslash with the newline, leaving an escape whose
+    operand is the next line's first character — the string continues
+    across the line and the quote on the next line closes it. The
+    directive after the closing quote is live."""
+    src = 'const char* s = "a\\\\\nb";\n#include "/etc/passwd"\n'
+    v = scan(src)
+    assert len(v) == 1
+
+
+# ---------------------------------------------------------------------------
 # Integration with ExploitValidator
 # ---------------------------------------------------------------------------
 
@@ -388,6 +549,13 @@ _EXFIL_PAYLOADS = {
     "incbin_asm":          '__asm__(".incbin \\"/etc/passwd\\"");\nint main(){}',
     "embed_directive":     'const char d[] = {\n#embed "/etc/passwd"\n};\nint main(){}',
     "pragma_dependency":   '#pragma GCC dependency "/etc/passwd"\nint main(){}',
+    # Raw-string phantom-comment shape: the include sits between two
+    # raw strings whose bodies embed quote/comment tokens; a scanner
+    # that mis-models the raw-string grammar deletes it from the
+    # scanned view while gcc includes /etc/passwd and echoes its
+    # content into stderr (verified end-to-end under the validator's
+    # own sandbox configuration).
+    "rawstring_phantom_comment": _RAW_PHANTOM_COMMENT_TEMPLATE.format(prefix="R"),
 }
 
 

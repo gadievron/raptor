@@ -121,6 +121,69 @@ def _classify(path: str) -> str | None:
     return None
 
 
+# Raw-string introducer: the emitted tail must end with ``R`` (plus an
+# optional encoding prefix) that is NOT the tail of a longer identifier
+# — ``FOOBAR"..."`` is an identifier followed by an ordinary string.
+# The ``^`` alternative only fires within the first three characters of
+# the file (the longest prefix, ``u8R``, is three chars), so a 4-char
+# lookback window can never mistake a truncated identifier for a
+# start-of-file prefix.
+_RAW_PREFIX_RE = re.compile(r'(?:^|[^0-9A-Za-z_])(?:u8|u|U|L)?R\Z')
+
+# d-char-seq + opening paren: up to 16 d-chars, where a d-char is any
+# character except parentheses, backslash and whitespace ([lex.string]).
+_RAW_DELIM_RE = re.compile(r'[^()\\ \t\v\f\r\n]{0,16}\(')
+
+
+def _skip_splices(source: str, j: int) -> int:
+    """Return the first index at/after ``j`` that is not the start of a
+    phase-2 line splice (backslash immediately followed by a newline)."""
+    n = len(source)
+    while j < n and source[j] == "\\":
+        if source.startswith("\n", j + 1):
+            j += 2
+        elif source.startswith("\r\n", j + 1):
+            j += 3
+        else:
+            break
+    return j
+
+
+def _match_raw_string(source: str, i: int, out: list[str]) -> int | None:
+    """Try to consume a raw-string literal whose opening quote is at
+    ``source[i]``, given the normalised text emitted so far in ``out``.
+
+    Returns the index just past the closing quote and appends a
+    placeholder (two quotes around the body's preserved newlines) to
+    ``out``; returns None when this is not a well-formed raw-string
+    literal. Both malformed shapes — no ``(`` within the 16-d-char
+    limit, unterminated body — fall back to the caller's ordinary
+    string handling, the over-inclusion-safe direction: text the
+    compiler may treat as inert literal data gets SCANNED rather than
+    trusted as inert.
+
+    Everything between the quotes is consumed verbatim: phases 1-2 are
+    reverted inside raw strings, so no splice handling applies to the
+    delimiter or the body.
+    """
+    tail = "".join(out[-4:])[-4:]
+    if not _RAW_PREFIX_RE.search(tail):
+        return None
+    m = _RAW_DELIM_RE.match(source, i + 1)
+    if m is None:
+        return None
+    delim = m.group(0)[:-1]
+    body_start = m.end()
+    terminator = ")" + delim + '"'
+    end = source.find(terminator, body_start)
+    if end == -1:
+        return None
+    out.append('"')
+    out.append("\n" * source.count("\n", body_start, end))
+    out.append('"')
+    return end + len(terminator)
+
+
 def _normalise(source: str) -> str:
     r"""Approximate translation phases 2-3 so directive regexes see what
     the preprocessor sees.
@@ -136,42 +199,79 @@ def _normalise(source: str) -> str:
     ``/*`` inside a string literal or line comment must NOT open a
     comment, otherwise an attacker could hide a live directive inside
     text the stripper wrongly deletes (the compiler would still
-    process it). Newlines inside block comments are preserved so
-    reported line numbers stay aligned; spliced continuations do
+    process it). C++ raw-string literals get the same treatment with
+    their own grammar (``R"delim( ... )delim"``, optional ``u8``/``u``/
+    ``U``/``L`` encoding prefix): the body is consumed as inert data —
+    an embedded ``"`` must not pop the walker back to code state where
+    a body ``/*`` opens a phantom comment that deletes a following
+    live directive from the scanned view.
+
+    Phase-2 splices are applied INLINE during the walk rather than as
+    a global pre-pass, because the standard reverts phases 1-2 inside
+    raw-string literals: a pre-spliced view can terminate a raw string
+    early (a body ``)\`` + newline + ``"`` splices into the terminator
+    ``)"``) and re-open the phantom-comment channel. Outside raw
+    strings the inline rule is equivalent to the global pre-pass,
+    including ``\\`` + newline inside ordinary strings (the second
+    backslash splices away and the first escapes the next line's
+    first character).
+
+    Newlines inside block comments and raw-string bodies are preserved
+    so reported line numbers stay aligned; spliced continuations do
     shift later line numbers by the number of splices above them,
     which is acceptable at PoC scale.
     """
-    # Phase 2: splice line continuations (CRLF variant first).
-    source = source.replace("\\\r\n", "").replace("\\\n", "")
-
     out: list[str] = []
     i = 0
     n = len(source)
     state = "code"  # code | string | char | line_comment | block_comment
     while i < n:
         c = source[i]
+        # Phase-2 splice, all states (raw-string bodies never reach
+        # this loop — they are consumed wholesale below).
+        if c == "\\":
+            j = _skip_splices(source, i)
+            if j != i:
+                i = j
+                continue
         if state == "code":
             if c == '"':
+                raw_end = _match_raw_string(source, i, out)
+                if raw_end is not None:
+                    i = raw_end
+                    continue
                 state = "string"
                 out.append(c)
             elif c == "'":
                 state = "char"
                 out.append(c)
-            elif c == "/" and i + 1 < n and source[i + 1] == "*":
-                state = "block_comment"
-                out.append(" ")
-                i += 2
-                continue
-            elif c == "/" and i + 1 < n and source[i + 1] == "/":
-                state = "line_comment"
+            elif c == "/":
+                nxt = _skip_splices(source, i + 1)
+                if source.startswith("*", nxt):
+                    state = "block_comment"
+                    out.append(" ")
+                    i = nxt + 1
+                    continue
+                if source.startswith("/", nxt):
+                    state = "line_comment"
+                    out.append("//")
+                    i = nxt + 1
+                    continue
                 out.append(c)
             else:
                 out.append(c)
         elif state in ("string", "char"):
             quote = '"' if state == "string" else "'"
-            if c == "\\" and i + 1 < n:
-                out.append(source[i:i + 2])
-                i += 2
+            if c == "\\":
+                # The escaping backslash's operand sits past any
+                # splices (``\\`` + newline + X escapes X).
+                j = _skip_splices(source, i + 1)
+                if j < n:
+                    out.append("\\" + source[j])
+                    i = j + 1
+                    continue
+                out.append(c)
+                i += 1
                 continue
             if c in (quote, "\n"):
                 # A literal can't span a raw newline; drop back to code
@@ -183,10 +283,12 @@ def _normalise(source: str) -> str:
                 state = "code"
             out.append(c)
         else:  # block_comment
-            if c == "*" and i + 1 < n and source[i + 1] == "/":
-                state = "code"
-                i += 2
-                continue
+            if c == "*":
+                nxt = _skip_splices(source, i + 1)
+                if source.startswith("/", nxt):
+                    state = "code"
+                    i = nxt + 1
+                    continue
             if c == "\n":
                 out.append("\n")  # keep line numbers aligned
         i += 1
