@@ -291,6 +291,60 @@ class TestJsAmbiguousSlashRefusal:
         assert "helper" in reason
 
 
+class TestTemplateInterpolationValueEscape:
+    """A dangerous reference escaping as a `${…}` interpolation VALUE
+    must be judged: the statement split fragments the binding into an
+    empty-ref assignment plus an expression fragment, and pre-fix the
+    fragment's refs were returned unjudged — a one-line hostile plant
+    journalled mechanically clean while fully visible in both judged
+    views. Expression fragments now join the value-escape judgment
+    (over-exclusion costs a review — the file's stated doctrine)."""
+
+    def test_template_value_escape_refused(self):
+        # The filed shape: `execSync` escapes as an interpolation
+        # value, no call parentheses anywhere near it.
+        src = (
+            "const g = (c) => {\n"
+            "  const t = `${x && execSync}`;\n"
+            "  return helper(t, c);\n"
+            "}"
+        )
+        assert _refused(src, "javascript")
+
+    def test_non_template_control_refused(self):
+        # Identical escape without the template — the shape the
+        # analysis always caught; pins that both spellings agree.
+        src = (
+            "const g = (c) => {\n"
+            "  const t = x && execSync;\n"
+            "  return helper(t, c);\n"
+            "}"
+        )
+        assert _refused(src, "javascript")
+
+    def test_benign_interpolation_keeps_skip(self):
+        # Cost control: a data-only interpolation still skips.
+        src = (
+            "const g = (c) => {\n"
+            "  const t = `${prefix}-suffix`;\n"
+            "  return helper(t, c);\n"
+            "}"
+        )
+        assert not _refused(src, "javascript")
+
+    def test_expression_statement_escape_refused(self):
+        # The general member behind the template shape: a bare
+        # expression statement carrying a dangerous ref is a value
+        # escape too.
+        src = (
+            "const g = (c) => {\n"
+            "  x && execSync;\n"
+            "  return helper(c);\n"
+            "}"
+        )
+        assert _refused(src, "javascript")
+
+
 class TestJsRegexCommentMint:
     """A JS regex literal whose interior spells ``//`` or ``/*`` must
     not mint comment state in code position (the kept view is the one
