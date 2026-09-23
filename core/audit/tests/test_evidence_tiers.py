@@ -11,7 +11,8 @@ from core.evidence import (
 class TestEvidenceTierOrdering:
     """The tier ordering is a design constraint, not an implementation detail.
 
-    OBSERVED_RUNTIME > REPLAYED_CRASH > SMT_PROVED > XREF_BACKED >
+    OBSERVED_RUNTIME > REPLAYED_CRASH > SMT_PROVED >
+    CORPUS_CORROBORATED > DECODED_INSTRUCTION > XREF_BACKED >
     HEADER_BACKED > DECOMPILER_INFERRED > HEURISTIC
     """
 
@@ -20,6 +21,8 @@ class TestEvidenceTierOrdering:
             EvidenceTier.OBSERVED_RUNTIME,
             EvidenceTier.REPLAYED_CRASH,
             EvidenceTier.SMT_PROVED,
+            EvidenceTier.CORPUS_CORROBORATED,
+            EvidenceTier.DECODED_INSTRUCTION,
             EvidenceTier.XREF_BACKED,
             EvidenceTier.HEADER_BACKED,
             EvidenceTier.DECOMPILER_INFERRED,
@@ -33,6 +36,29 @@ class TestEvidenceTierOrdering:
     def test_all_tiers_ranked(self):
         for tier in EvidenceTier:
             assert tier in TIER_RANK
+
+
+class TestCorroboratedSpecTiersDerivation:
+    """fail_open_roles' registry-grade set means "rank >=
+    HEADER_BACKED" — pinned as a DERIVATION from the canonical
+    ladder so new tiers can never be silently excluded (an ordering
+    inversion once they are minted)."""
+
+    def test_derived_from_ladder(self):
+        from core.audit.fail_open_roles import _CORROBORATED_SPEC_TIERS
+        floor = TIER_RANK[EvidenceTier.HEADER_BACKED]
+        expected = frozenset(
+            tier.value
+            for tier, rank in TIER_RANK.items() if rank >= floor
+        )
+        assert _CORROBORATED_SPEC_TIERS == expected
+
+    def test_new_tiers_are_registry_grade(self):
+        from core.audit.fail_open_roles import _CORROBORATED_SPEC_TIERS
+        assert "decoded_instruction" in _CORROBORATED_SPEC_TIERS
+        assert "corpus_corroborated" in _CORROBORATED_SPEC_TIERS
+        assert "decompiler_inferred" not in _CORROBORATED_SPEC_TIERS
+        assert "heuristic" not in _CORROBORATED_SPEC_TIERS
 
 
 class TestStronger:

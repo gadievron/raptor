@@ -6,7 +6,8 @@ from core.evidence import EvidenceTier, TIER_RANK, stronger, make_evidence
 class TestEvidenceTierOrdering:
     """The tier ordering is a design constraint, not an implementation detail.
 
-    OBSERVED_RUNTIME > REPLAYED_CRASH > SMT_PROVED > XREF_BACKED >
+    OBSERVED_RUNTIME > REPLAYED_CRASH > SMT_PROVED >
+    CORPUS_CORROBORATED > DECODED_INSTRUCTION > XREF_BACKED >
     HEADER_BACKED > DECOMPILER_INFERRED > HEURISTIC
     """
 
@@ -15,6 +16,8 @@ class TestEvidenceTierOrdering:
             EvidenceTier.OBSERVED_RUNTIME,
             EvidenceTier.REPLAYED_CRASH,
             EvidenceTier.SMT_PROVED,
+            EvidenceTier.CORPUS_CORROBORATED,
+            EvidenceTier.DECODED_INSTRUCTION,
             EvidenceTier.XREF_BACKED,
             EvidenceTier.HEADER_BACKED,
             EvidenceTier.DECOMPILER_INFERRED,
@@ -28,6 +31,23 @@ class TestEvidenceTierOrdering:
     def test_all_tiers_ranked(self):
         for tier in EvidenceTier:
             assert tier in TIER_RANK
+
+    def test_ranks_are_a_total_order(self):
+        # A tie would make stronger() argument-order-dependent for
+        # that pair; the ladder is a total order by contract.
+        ranks = list(TIER_RANK.values())
+        assert len(ranks) == len(set(ranks))
+
+    def test_value_roundtrip(self):
+        # Artifacts persist the VALUE string, never the rank int —
+        # every member must reconstruct from its serialised form.
+        for tier in EvidenceTier:
+            assert EvidenceTier(tier.value) is tier
+
+    def test_new_member_values(self):
+        # Serialised spelling is a cross-run artifact contract.
+        assert EvidenceTier.DECODED_INSTRUCTION.value == "decoded_instruction"
+        assert EvidenceTier.CORPUS_CORROBORATED.value == "corpus_corroborated"
 
 
 class TestStronger:
