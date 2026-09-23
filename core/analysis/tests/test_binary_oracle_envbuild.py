@@ -178,3 +178,55 @@ class TestResolveWiring:
         finally:
             RaptorConfig.BINARY_ORACLE_PATHS = ()
             RaptorConfig.BINARY_ORACLE_NO_SUPPRESS = ()
+
+
+class TestEnvBuildRunPin:
+    """Privilege follows the run: consent AND command resolution must
+    receive the run pin, so a mid-run /project use switch can never
+    steer whether this path builds or what it runs (the fuzzing and
+    validation lanes already thread run_dir; this caller resolved
+    ambiently at neither call site while threading the pin into the
+    adjacent project-binaries lookup)."""
+
+    def test_both_resolvers_receive_the_run_pin(self, tmp_path):
+        run_dir = tmp_path / "out" / "run"
+        run_dir.mkdir(parents=True)
+        seen: dict = {}
+
+        def gate(explicit, *, banner=True, target_path=None, run_dir=None):
+            seen["consent_run_dir"] = run_dir
+            return False   # stop before any build; the pin is the point
+
+        with patch("core.project.trust.resolve_build_execution", gate):
+            resolve_binary_paths(
+                _args(out=str(run_dir)), tmp_path, "auto")
+        assert seen["consent_run_dir"] == run_dir
+
+    def test_command_resolution_receives_the_run_pin(self, tmp_path):
+        run_dir = tmp_path / "out" / "run"
+        run_dir.mkdir(parents=True)
+        seen: dict = {}
+
+        def command(repo, lang=None, *, settings=None, run_dir=None):
+            seen["command_run_dir"] = run_dir
+            return None    # no command resolves; the pin is the point
+
+        with patch("core.project.trust.resolve_build_execution",
+                   return_value=True), \
+             patch("core.build.resolve.resolve_build_command", command):
+            resolve_binary_paths(
+                _args(out=str(run_dir)), tmp_path, "auto")
+        assert seen["command_run_dir"] == run_dir
+
+    def test_no_out_dir_resolves_with_none_pin(self, tmp_path):
+        # Standalone runs (no --out) keep the ambient behavior —
+        # run_dir=None is the documented degrade, not a crash.
+        seen: dict = {}
+
+        def gate(explicit, *, banner=True, target_path=None, run_dir=None):
+            seen["consent_run_dir"] = run_dir
+            return False
+
+        with patch("core.project.trust.resolve_build_execution", gate):
+            resolve_binary_paths(_args(), tmp_path, "auto")
+        assert seen["consent_run_dir"] is None

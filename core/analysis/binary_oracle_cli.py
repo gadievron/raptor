@@ -350,13 +350,20 @@ def _project_binaries(
         return [], None
 
 
-def _env_build_debug_binaries(repo: Path) -> tuple[list[str], bool]:
+def _env_build_debug_binaries(
+    repo: Path, run_dir: Path | None = None,
+) -> tuple[list[str], bool]:
     """Build debug binaries on demand when NOTHING else resolved.
 
     Consent: the project ``build`` trust marker
     (``core.project.trust.resolve_build_execution`` — the same gate as
     /validate's Stage E build-on-demand; no per-run flag on this path).
-    The build command resolves operator-first
+    *run_dir* pins BOTH the consent resolution and the build-command
+    lookup to the run's project — privilege follows the run, so a
+    mid-run ``/project use`` switch can never steer whether this path
+    builds or WHAT it runs (the same thread-through the fuzzing and
+    validation lanes carry; this caller was the one left resolving
+    ambiently). The build command resolves operator-first
     (``core.build.resolve``); the build runs in the network-isolated
     container with debug info and ALL extracted ELF artifacts feed the
     oracle (it is multi-binary native: alive-in-any).
@@ -370,7 +377,8 @@ def _env_build_debug_binaries(repo: Path) -> tuple[list[str], bool]:
     """
     try:
         from core.project.trust import resolve_build_execution
-        if not resolve_build_execution(None, target_path=repo):
+        if not resolve_build_execution(None, target_path=repo,
+                                       run_dir=run_dir):
             print(
                 "binary-oracle: no binaries anywhere and env "
                 "build-on-demand is not authorised — set the project "
@@ -379,7 +387,7 @@ def _env_build_debug_binaries(repo: Path) -> tuple[list[str], bool]:
             )
             return [], False
         from core.build.resolve import resolve_build_command
-        resolved = resolve_build_command(repo)
+        resolved = resolve_build_command(repo, run_dir=run_dir)
         if resolved is None:
             print(
                 "binary-oracle: no binaries anywhere and no build "
@@ -540,7 +548,8 @@ def resolve_binary_paths(args, repo: Path, target_kind: str,
         # demand (marker-gated). Explicit --binary flows never reach
         # here; an operator opt-out (--no-binary-oracle) returned
         # earlier.
-        env_paths, guessed = _env_build_debug_binaries(repo)
+        env_paths, guessed = _env_build_debug_binaries(
+            repo, run_dir=Path(_out) if _out else None)
         for p in env_paths:
             seen.setdefault(p, True)
         if guessed and env_paths and no_suppress_out is not None:
