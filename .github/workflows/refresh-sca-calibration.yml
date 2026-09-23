@@ -120,6 +120,35 @@ jobs:
           set +e
           packages/sca/scripts/raptor-sca-validate-corpus --update-snapshot
           echo "validate exit: $?"
+          # Distil the verdict line the PR body embeds: the verdict
+          # is the oracle this refresh feeds (risk.py stamps
+          # calibration_status from the newest snapshot), so a
+          # regression must be visible in the PR body itself, not
+          # only inside the JSON diff.
+          python <<'PYEOF' > "$RUNNER_TEMP/validate-verdict.txt"
+          import glob, json, os, re
+          dated = re.compile(r"^\d{4}-\d{2}-\d{2}\.json$")
+          paths = sorted(
+              (p for p in
+               glob.glob('packages/sca/data/calibration/validation/*.json')
+               if dated.match(os.path.basename(p))),
+              reverse=True,
+          )
+          def line(path):
+              with open(path) as fh:
+                  d = json.load(fh)
+              rho = d.get("spearman_rho")
+              rho_s = f"{rho:.4f}" if isinstance(rho, (int, float)) else "undefined"
+              return (f"{d.get('verdict', 'unknown')} "
+                      f"(rho={rho_s}, P20={d.get('top_20_precision', 0):.3f}, "
+                      f"with_signal={d.get('findings_with_signal', 0)})")
+          if paths:
+              print(f"verdict: {line(paths[0])}")
+          if len(paths) > 1:
+              prior = os.path.basename(paths[1])[:-5]
+              print(f"prior ({prior}): {line(paths[1])}")
+          PYEOF
+          cat "$RUNNER_TEMP/validate-verdict.txt"
 
       - name: Diff?
         # ``git diff --quiet`` exits non-zero iff there are changes
@@ -222,6 +251,14 @@ jobs:
             echo '```'
             cat <<'EOF'
 
+          ## Validation verdict
+
+          EOF
+            echo '```'
+            cat "$RUNNER_TEMP/validate-verdict.txt" 2>/dev/null || echo '(validation verdict unavailable)'
+            echo '```'
+            cat <<'EOF'
+
           ## License compliance
 
           All Tier 1 sources (KEV, EPSS) are MIT-redistribution compatible and ship verbatim with per-file `_source` attribution blocks. The license-compliance check runs in CI and rejects any forbidden field names that would indicate license-restricted content.
@@ -232,6 +269,7 @@ jobs:
           - [ ] No source shows FAILED above (or it's a known transient)
           - [ ] No license-restricted content in the diff
           - [ ] `ATTRIBUTION.md` still covers every JSON file
+          - [ ] Validation verdict above did not regress vs the prior snapshot (a validated_v1 -> needs_retune flip is exactly what this review exists to catch)
           EOF
           } > "$RUNNER_TEMP/pr-body.md"
           # Idempotent create-or-update: ``gh pr create`` exits non-zero
