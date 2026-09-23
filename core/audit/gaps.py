@@ -1564,9 +1564,13 @@ def _build_covered_set(
         for fa in record.get("functions_analysed") or []:
             if not isinstance(fa, dict):
                 continue
-            if fa.get("status") == "error":
+            if fa.get("status") in ("error", "dark"):
                 # A review that errored is not coverage — same discipline
-                # as import_journal's error-verdict skip.
+                # as import_journal's error/dark-verdict skip. Dark is
+                # the unresolved gate-resolution bucket: record-surface
+                # credit has NO re-adjudication route (nothing walks a
+                # coverage record back into the dark pass), so a dark
+                # functions_analysed row must not suppress the gap.
                 continue
             file_path = fa.get("file") or ""
             func_name = fa.get("function") or ""
@@ -1719,9 +1723,18 @@ def _fold_journal_into_covered(
                 # coverage credit would silently suppress the very
                 # re-review that settles them — same screen as the
                 # verified folds, same fail direction (re-review).
+                # ``dark`` is excluded for the same direction: it is
+                # the unresolved gate-resolution bucket ("tool-blind,
+                # needs concrete verification"), settled only by the
+                # post-loop dark pass or a reuse import that the dark
+                # pass re-walks. Neither exists on this fold — plain
+                # credit here was the one suppression surface the
+                # reviewed-set hardening did not reach, and it kept
+                # interrupted dark rows unadjudicated forever on
+                # every reuse-disabled resume.
                 covered.update(
                     e.key for e in load_entries(out_dir)
-                    if e.verdict != "error"
+                    if e.verdict not in ("error", "dark")
                     and is_function_grade(e)
                     and not getattr(e, "provisional", None)
                 )
@@ -2143,9 +2156,19 @@ def _verify_entries_fold(
     ``source_label`` names the entry source in log lines
     (``same-run`` / ``prior-run``).
 
+    ``dark`` rows (the unresolved gate-resolution bucket) only earn
+    coverage credit on the route that also RE-ADJUDICATES them: the
+    $0 verdict-reuse import, whose imported outcomes the post-loop
+    dark-verification pass walks. Every route that credits without
+    importing — reuse disabled, binary rows, hashless rows, unstamped
+    rows — resurfaces them instead (``dark_unresolved`` in the
+    not-reusable split): plain credit would suppress the very
+    re-review that settles the row.
+
     ``reuse_stats`` (optional dict) accumulates ``function key →
     reason class`` for entries the eligibility screens refused
-    (``provisional`` is screened before hashing; ``context_reduced`` /
+    (``provisional`` is screened before hashing, ``dark_unresolved``
+    wherever the row has no import route; ``context_reduced`` /
     ``model_changed`` / ``strategy_changed`` / ``domain_model_context``
     refuse hash-verified entries) so callers can
     surface the split — an aggregate "N not reusable" hides which
@@ -2204,6 +2227,28 @@ def _verify_entries_fold(
             sum(reuse_blocked.values()), source_label, split,
         )
 
+    def _dark_resurface(key: str, why: str) -> None:
+        # ``dark`` is the unresolved gate-resolution bucket
+        # ("tool-blind, needs concrete verification"): coverage
+        # credit is only safe when the row ALSO rides the $0
+        # verdict-reuse import, because imported outcomes land in
+        # the run's outcome list and the post-loop dark-verification
+        # pass re-walks them. On every other route, credit would
+        # suppress the very re-review that settles the row — the
+        # function rests at "needs concrete verification" forever.
+        # Resurface instead (over-review direction, matching error's
+        # retry contract), counted into the not-reusable split so the
+        # run summary names the driver.
+        reuse_blocked["dark_unresolved"] = (
+            reuse_blocked.get("dark_unresolved", 0) + 1
+        )
+        if reuse_stats is not None:
+            reuse_stats.setdefault(key, "dark_unresolved")
+        logger.debug(
+            "journal-fold: %s row is dark with no re-adjudication "
+            "route (%s) — resurfacing for re-review", key, why,
+        )
+
     to_verify: dict[str, list] = {}
     for entry in entries:
         if entry.verdict == "error" or not is_function_grade(entry):
@@ -2240,6 +2285,13 @@ def _verify_entries_fold(
             # edge_review.reviewed_edge_keys.
             continue
         key = make_function_key(entry.file, entry.function)
+        dark_row = entry.verdict == "dark"
+        if dark_row and reuse_sink is None:
+            # Reuse disabled: no import route exists at all, so no
+            # dark row in this fold can earn credit (the same screen
+            # the plain fold applies).
+            _dark_resurface(key, "verdict reuse disabled")
+            continue
         # Row provenance (core.coverage.journal_mac): the journal is
         # target-writable during runs and import-restorable, so a
         # row's authority is tiered on its MAC. Verified rows keep
@@ -2287,7 +2339,12 @@ def _verify_entries_fold(
             # unhashable binary) — crediting across that would keep a
             # verdict alive over arbitrary rebuilds.
             expected = (binary_hashes or {}).get(key)
-            if expected is not None and expected == entry.source_hash:
+            if dark_row:
+                # Binary rows never reach the reuse import below (the
+                # branch credits and continues), so a dark binary row
+                # has no re-adjudication route even with reuse on.
+                _dark_resurface(key, "binary rows never import")
+            elif expected is not None and expected == entry.source_hash:
                 _credit(key, 0)
             elif verified_row:
                 logger.debug(
@@ -2305,7 +2362,13 @@ def _verify_entries_fold(
             # there is no current source to compare). An UNSTAMPED
             # row with no checkable hash carries nothing — crediting
             # it was the forged-empty-hash suppression channel.
-            if verified_row:
+            if dark_row:
+                # Reuse requires positive hash evidence, so a
+                # hashless dark row can never be imported — and
+                # without the import there is no dark pass to settle
+                # it. Historical suppression is for SETTLED verdicts.
+                _dark_resurface(key, "no hash evidence, no import")
+            elif verified_row:
                 _credit(key, getattr(entry, "line_start", 0))
             else:
                 unstamped_unverifiable += 1
@@ -2420,6 +2483,13 @@ def _verify_entries_fold(
                         "run %r — resurfacing as gap",
                         key, getattr(entry, "run_id", None),
                     )
+                    continue
+                if entry.verdict == "dark":
+                    # Unstamped rows are never imported as reused
+                    # verdicts, so an unstamped dark row has no
+                    # re-adjudication route — legacy tolerance is for
+                    # SETTLED verdicts, not the unresolved bucket.
+                    _dark_resurface(key, "unstamped rows never import")
                     continue
                 unstamped_credited += 1
                 _credit(key, matched_span[0])

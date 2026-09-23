@@ -3,6 +3,8 @@ prior-segment ledger booking. Zero LLM calls."""
 
 from __future__ import annotations
 
+import pytest
+
 from core.audit.cost_tracker import PRIOR_SEGMENTS_PHASE, PhaseCostLedger
 from core.audit.gaps import compute_gaps
 from core.audit.orchestrator import OrchestratorConfig, OrchestratorResult
@@ -754,3 +756,264 @@ class TestPerSiteEligibility:
         )
         assert stats2 == {"auth.c:check_pw": "strategy_changed"}
         assert sink2 == {}
+
+
+class TestDarkRowResumeMatrix:
+    """dark × EVERY fold mode: the resume × reuse × dark matrix.
+
+    ``dark`` is the unresolved gate-resolution bucket ("tool-blind,
+    needs concrete verification"). A dark journal row may be
+    suppressed from the gap list ONLY when it simultaneously rides
+    the $0 verdict-reuse import — imported outcomes carry
+    ``status="dark"`` and the post-loop dark-verification pass
+    re-walks them. On every fold mode without that import route the
+    row must resurface as a gap (over-review direction, matching
+    error's retry contract). The reviewed-set hardening closed the
+    audit-log and journal ``reviewed_set`` suppression surfaces; this
+    matrix pins the third surface — compute_gaps' journal folds — on
+    every mode combination so no untested path can suppress dark.
+
+    Modes (own-journal fold branch × reuse wiring):
+
+    * ``plain``            — fresh run, reuse off
+    * ``plain-same-run``   — same-run resume, reuse off (the cold
+                             profile: ``--no-verdict-reuse`` resume)
+    * ``plain-reuse``      — reuse ON but NOT same-run mode (project
+                             route): the own-journal fold is still
+                             the plain fold and never feeds the sink
+    * ``verified-same-run``— same-run resume with reuse on: the one
+                             mode whose fold imports
+    * ``project``          — prior-run row via the project index,
+                             reuse off
+    * ``project-reuse``    — prior-run row via the project index,
+                             reuse on: imports
+    """
+
+    _MODES = (
+        "plain",
+        "plain-same-run",
+        "plain-reuse",
+        "verified-same-run",
+        "project",
+        "project-reuse",
+    )
+    #: Modes whose fold imports into the reuse sink — the only modes
+    #: where a dark row may be suppressed (it re-adjudicates as an
+    #: imported dark outcome).
+    _IMPORTING = {"verified-same-run", "project-reuse"}
+
+    def _fold(self, tmp_path, mode, verdict):
+        """Run compute_gaps in *mode* over one journaled *verdict* row.
+
+        Returns ``(gap_keys, sink)`` — ``sink`` is the reuse sink that
+        was wired in (empty dict for the reuse-off modes, which pass
+        ``reuse_sink=None``).
+        """
+        target = _write_target(tmp_path)
+        entry = _entry(target, verdict=verdict)
+        sink: dict = {}
+        kwargs: dict = {"current_model": "model-a"}
+        if mode in ("project", "project-reuse"):
+            project = tmp_path / "project"
+            prior_dir = project / "run0"
+            prior_dir.mkdir(parents=True, exist_ok=True)
+            append_entry(prior_dir, entry)
+            merge_into_index(project, prior_dir)
+            kwargs["project_dir"] = project
+        else:
+            kwargs["out_dir"] = _run_dir(tmp_path, entry)
+        kwargs["own_run_reuse"] = mode in (
+            "plain-same-run", "verified-same-run")
+        reuse_on = mode in ("plain-reuse", *self._IMPORTING)
+        kwargs["reuse_sink"] = sink if reuse_on else None
+        gaps = compute_gaps(_checklist(target), [], **kwargs)
+        return _gap_keys(gaps), sink
+
+    @pytest.mark.parametrize("mode", _MODES)
+    def test_dark_never_silently_suppressed(self, tmp_path, mode):
+        gap_keys, sink = self._fold(tmp_path, mode, "dark")
+        if mode in self._IMPORTING:
+            # Suppression is legitimate here BECAUSE the row is
+            # imported: the $0 dark outcome re-enters the post-loop
+            # dark-verification pass.
+            assert "auth.c:check_pw" not in gap_keys, mode
+            assert "auth.c:check_pw" in sink, mode
+            assert sink["auth.c:check_pw"].verdict == "dark", mode
+        else:
+            # No import route → the row must re-enter review.
+            assert "auth.c:check_pw" in gap_keys, (
+                f"mode {mode}: dark row suppressed with no "
+                "re-adjudication route"
+            )
+            assert "auth.c:check_pw" not in sink, mode
+
+    @pytest.mark.parametrize("mode", _MODES)
+    def test_error_control_resurfaces_everywhere(self, tmp_path, mode):
+        gap_keys, sink = self._fold(tmp_path, mode, "error")
+        assert "auth.c:check_pw" in gap_keys, mode
+        assert "auth.c:check_pw" not in sink, mode
+
+    @pytest.mark.parametrize("mode", _MODES)
+    def test_clean_control_suppresses_everywhere(self, tmp_path, mode):
+        gap_keys, _ = self._fold(tmp_path, mode, "clean")
+        assert "auth.c:check_pw" not in gap_keys, mode
+
+
+class TestDarkRowVerifiedFoldRoutes:
+    """Reuse ON is not blanket permission: inside the verified fold,
+    only the route that actually IMPORTS a dark row may credit it.
+    Binary rows, hashless rows, and unstamped rows credit without
+    importing for settled verdicts — for dark they must resurface."""
+
+    def _fold(self, entries, target, current_spans=None,
+              binary_hashes=None):
+        from core.audit.gaps import _verify_entries_fold
+        covered: set = set()
+        sink: dict = {}
+        _verify_entries_fold(
+            covered, entries, target_path=target,
+            current_spans=current_spans or {"auth.c:check_pw": (1, 5)},
+            binary_hashes=binary_hashes,
+            reuse_sink=sink,
+            current_strategies_fn=lambda *_: set(_current_strategies()),
+            current_model="model-a",
+            source_label="test",
+        )
+        return covered, sink
+
+    def _stamped(self, tmp_path, target, **over):
+        """A MAC-stamped row (written through the production writer)."""
+        from core.coverage.journal import load_entries
+        run_dir = tmp_path / "stamp"
+        run_dir.mkdir(exist_ok=True)
+        append_entry(run_dir, _entry(target, **over))
+        return load_entries(run_dir)[-1]
+
+    def test_unstamped_dark_row_never_credits(self, tmp_path):
+        # Unstamped rows are hash-gated fold credit ONLY (no reuse
+        # import) — so an unstamped dark row has no re-adjudication
+        # route and must resurface even though its hash verifies.
+        target = _write_target(tmp_path)
+        covered, sink = self._fold([_entry(target, verdict="dark")], target)
+        assert covered == set()
+        assert sink == {}
+        # Control: the same unstamped row with a settled verdict keeps
+        # the legacy hash-gated suppression.
+        covered, sink = self._fold([_entry(target, verdict="clean")], target)
+        assert covered == {"auth.c:check_pw"}
+        assert sink == {}
+
+    def test_hashless_dark_row_never_credits(self, tmp_path):
+        # Reuse requires positive hash evidence; a verified-but-
+        # hashless dark row cannot import, so it must resurface.
+        target = _write_target(tmp_path)
+        row = self._stamped(tmp_path, target, verdict="dark",
+                            source_hash="")
+        covered, sink = self._fold([row], target)
+        assert covered == set()
+        assert sink == {}
+        # Control: settled hashless verified rows keep the historical
+        # suppression.
+        row = self._stamped(tmp_path, target, verdict="clean",
+                            source_hash="")
+        covered, sink = self._fold([row], target)
+        assert covered == {"auth.c:check_pw"}
+
+    def test_binary_dark_row_never_credits(self, tmp_path):
+        # The binary branch credits and continues without ever
+        # reaching the reuse import — a dark binary row has no
+        # re-adjudication route even with reuse on.
+        target = _write_target(tmp_path)
+        row = self._stamped(tmp_path, target, verdict="dark",
+                            source_hash="bin:deadbeef")
+        covered, sink = self._fold(
+            [row], target,
+            binary_hashes={"auth.c:check_pw": "bin:deadbeef"},
+        )
+        assert covered == set()
+        assert sink == {}
+        # Control: a settled binary row with a matching anchor stays
+        # covered.
+        row = self._stamped(tmp_path, target, verdict="clean",
+                            source_hash="bin:deadbeef")
+        covered, sink = self._fold(
+            [row], target,
+            binary_hashes={"auth.c:check_pw": "bin:deadbeef"},
+        )
+        assert covered == {"auth.c:check_pw"}
+
+    def test_dark_resurface_named_in_reuse_stats(self, tmp_path):
+        # The resurfacing is attributable: the not-reusable split
+        # names the driver so a resume's re-review storm is
+        # explainable from the run summary. (Project-index fold with
+        # reuse off — the verified-fold route that records stats.)
+        target = _write_target(tmp_path)
+        project = tmp_path / "project"
+        prior_dir = project / "run0"
+        prior_dir.mkdir(parents=True)
+        append_entry(prior_dir, _entry(target, verdict="dark"))
+        merge_into_index(project, prior_dir)
+        stats: dict = {}
+        gaps = compute_gaps(
+            _checklist(target), [], project_dir=project,
+            reuse_sink=None, current_model="model-a",
+            reuse_stats=stats,
+        )
+        assert "auth.c:check_pw" in _gap_keys(gaps)
+        assert stats == {"auth.c:check_pw": "dark_unresolved"}
+
+
+class TestDarkRecordSurfaces:
+    """Store/record-layer directions of the dark matrix.
+
+    Same defect class as the fold modes, different surfaces: a dark
+    row must not become coverage through a COVERAGE RECORD
+    (functions_analysed) or through the coverage store's journal
+    import either — neither surface has any re-adjudication route.
+    """
+
+    def _record_gaps(self, tmp_path, status):
+        target = _write_target(tmp_path)
+        record = {
+            "tool": "journal",
+            "functions_analysed": [{
+                "file": "auth.c", "function": "check_pw",
+                "status": status,
+            }],
+        }
+        return _gap_keys(compute_gaps(_checklist(target), [record]))
+
+    @pytest.mark.parametrize("status,suppressed", [
+        ("dark", False),
+        ("error", False),
+        ("clean", True),
+    ])
+    def test_record_surface_dark_never_suppresses(
+            self, tmp_path, status, suppressed):
+        gap_keys = self._record_gaps(tmp_path, status)
+        assert ("auth.c:check_pw" not in gap_keys) is suppressed, status
+
+    @pytest.mark.parametrize("verdict,marked", [
+        ("dark", 0),
+        ("error", 0),
+        ("clean", 1),
+    ])
+    def test_store_import_skips_dark_rows(self, tmp_path, verdict,
+                                          marked):
+        from unittest import mock
+
+        from core.coverage.importer import import_journal
+        from core.coverage.store import CoverageStore
+
+        target = _write_target(tmp_path)
+        entry = _entry(target, verdict=verdict)
+        store = CoverageStore(tmp_path / "coverage.json")
+        with mock.patch(
+            "core.coverage.journal.load_index",
+            return_value={entry.key: entry},
+        ):
+            marks = import_journal(store, tmp_path, _checklist(target))
+        assert marks == marked, verdict
+        assert bool(
+            store.tool_coverage_of_range("auth.c", 1, 5)
+        ) is bool(marked), verdict
