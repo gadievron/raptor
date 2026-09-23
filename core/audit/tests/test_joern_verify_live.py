@@ -51,6 +51,16 @@ void unguarded_copy(char *buf, int len) {
     memcpy(dst, buf, len);
 }
 
+void join_point_copy(char *buf, int len) {
+    if (len < 16) { }
+    memcpy(dst, buf, len);
+}
+
+void early_return_copy(char *buf, int len) {
+    if (len >= 16) return;
+    memcpy(dst, buf, len);
+}
+
 void literal_copy(char *buf, int len) {
     memcpy(dst, buf, strlen("a perfectly ordinary format string") + len);
 }
@@ -164,6 +174,43 @@ class TestLiveVerifyChannels:
             confirmed.outcome, confirmed.errors, confirmed.details,
         )
         assert confirmed.matches, "unguarded sink sites are the evidence"
+
+    def test_join_point_sink_is_not_refuted(self, live):
+        # CDG ground truth: a guard with an EMPTY body followed by
+        # the sink at the join point is the canonical missing-check
+        # shape. Under dominatedBy the condition dominated the join
+        # too and this booked a false REFUTATION with
+        # verification-grade authority (live-reproduced); under
+        # controlledBy the join-point sink is not control-dependent
+        # on the guard and the unguarded site confirms.
+        from core.audit.joern_verify import run_guard_dominance_check
+
+        srv, target = live
+        res = run_guard_dominance_check(
+            target_path=target, file_path="copy.c",
+            function_name="join_point_copy", identifier="len",
+            sink_call="memcpy", server=srv,
+        )
+        assert res.outcome == "confirmed", (
+            res.outcome, res.errors, res.details,
+        )
+
+    def test_early_return_guard_still_refutes(self, live):
+        # The other CDG direction: behind an early-return guard the
+        # sink IS control-dependent on the condition — the
+        # refutation must survive the dominance->control-dependence
+        # swap.
+        from core.audit.joern_verify import run_guard_dominance_check
+
+        srv, target = live
+        res = run_guard_dominance_check(
+            target_path=target, file_path="copy.c",
+            function_name="early_return_copy", identifier="len",
+            sink_call="memcpy", server=srv,
+        )
+        assert res.outcome == "refuted", (
+            res.outcome, res.errors, res.details,
+        )
 
     def test_flow_reachability_confirms_param_to_sink(self, live):
         from core.audit.joern_verify import run_flow_reachability_check

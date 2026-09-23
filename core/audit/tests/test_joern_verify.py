@@ -219,7 +219,11 @@ class TestQueryBuilders:
         assert 'nameExact("memcpy")' in q
         assert "\\\\blen\\\\b" in q
         assert f"RAPTOR_GD_FUNC:{NONCE}:" in q
-        assert "dominatedBy" in q
+        # CDG, never dominators: a condition dominates the join
+        # after the guard too, so dominatedBy falsely refuted the
+        # guard-then-unguarded-sink shape (live-reproduced).
+        assert "controlledBy" in q
+        assert "dominatedBy" not in q
 
     def test_guard_query_passes_validation(self):
         q = build_guard_dominance_query("f", "memcpy", "n", nonce=NONCE)
