@@ -193,7 +193,14 @@ class BoundedParser:
                 self._parser.reset()
             except Exception:  # noqa: BLE001 — reset is best-effort
                 logger.debug("bounded parse: reset failed", exc_info=True)
-            self._record_gap(source, elapsed)
+            try:
+                self._record_gap(source, elapsed)
+            except Exception:  # noqa: BLE001 — the abandonment signal
+                # must stay ParseBudgetExceeded even when the trail
+                # write itself fails; degradation paths key on it.
+                logger.warning(
+                    "bounded parse: gap record failed", exc_info=True,
+                )
             raise ParseBudgetExceeded(
                 f"{self._label or 'tree-sitter'} parse abandoned after "
                 f"{elapsed:.1f}s (budget {self._budget_s:g}s)"
