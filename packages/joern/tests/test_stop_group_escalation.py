@@ -32,6 +32,7 @@ from packages.joern.server import (
     JoernServer,
     _ensure_group_dead,
     _pgid_alive,
+    _proc_starttime,
 )
 
 # Process-group semantics and the zombie-aware liveness probe are
@@ -122,10 +123,17 @@ def _spawn_dead_leader_with_survivor(pgids: list[int]) -> tuple:
     return leader, member_pid
 
 
-def _server_with(proc, pgid) -> JoernServer:
+def _server_with(proc, pgid, member_pid: int | None = None) -> JoernServer:
     srv = JoernServer()
     srv._proc = proc
     srv._pgid = pgid
+    if member_pid is not None:
+        # Mirror boot: the JVM member anchor recorded once the server
+        # answered (the python stand-in has no java comm, so the
+        # escalation's corroboration must ride the anchor — exactly
+        # the identity proof production records for the real JVM).
+        srv._member_pid = member_pid
+        srv._member_starttime = _proc_starttime(member_pid)
     return srv
 
 
@@ -141,7 +149,13 @@ class TestEnsureGroupDead:
         assert proc.stdout is not None
         proc.stdout.readline()
         assert _pgid_alive(proc.pid)
-        assert _ensure_group_dead(proc.pid, label="test")
+        # The stand-in has no java comm, so corroborate the way
+        # production does for the real JVM: the boot-recorded
+        # (pid, starttime) anchor.
+        assert _ensure_group_dead(
+            proc.pid, label="test",
+            member_anchor=(proc.pid, _proc_starttime(proc.pid)),
+        )
         proc.wait(timeout=10)
         assert not _pgid_alive(proc.pid)
 
@@ -175,7 +189,7 @@ class TestStopKillsSurvivingMembers:
         ladder's wait() reaps instantly and never escalates — the
         group verification must kill the member anyway."""
         leader, member_pid = _spawn_dead_leader_with_survivor(_reap_all)
-        srv = _server_with(leader, leader.pid)
+        srv = _server_with(leader, leader.pid, member_pid=member_pid)
         srv.stop()
         assert _wait_gone(member_pid), (
             "SIGTERM-immune group member survived stop()"
@@ -203,7 +217,7 @@ class TestRestartReapsBeforeReplacing:
         self, _reap_all, monkeypatch,
     ):
         leader, member_pid = _spawn_dead_leader_with_survivor(_reap_all)
-        srv = _server_with(leader, leader.pid)
+        srv = _server_with(leader, leader.pid, member_pid=member_pid)
         member_alive_at_start: list[bool] = []
         monkeypatch.setattr(
             srv, "start",
@@ -224,15 +238,18 @@ class TestRestartReapsBeforeReplacing:
         stop() rightly does not block cleanup on that, but the caller
         about to boot a replacement must). Pin the call sequence so
         removing the restart-side re-verification fails here."""
-        leader, _member_pid = _spawn_dead_leader_with_survivor(_reap_all)
+        leader, member_pid = _spawn_dead_leader_with_survivor(_reap_all)
         old_pgid = leader.pid
-        srv = _server_with(leader, old_pgid)
+        srv = _server_with(leader, old_pgid, member_pid=member_pid)
         calls: list[tuple] = []
         real = server_mod._ensure_group_dead
 
-        def _recording(pgid, *, label="", grace_s=None):
+        def _recording(pgid, *, label="", grace_s=None,
+                       member_anchor=None, corroborated=False):
             calls.append((pgid, label))
-            return real(pgid, label=label, grace_s=grace_s)
+            return real(pgid, label=label, grace_s=grace_s,
+                        member_anchor=member_anchor,
+                        corroborated=corroborated)
 
         monkeypatch.setattr(server_mod, "_ensure_group_dead", _recording)
         monkeypatch.setattr(srv, "start", lambda: None)
@@ -386,3 +403,77 @@ class TestNoRegressionFakeProcs:
         srv._pgid = 2_000_000_000
         srv.stop()
         assert srv._proc is None
+
+
+class TestEscalationCorroboration:
+    """The escalation consults the incarnation machinery before
+    signalling: a spawn-time pgid whose every member died can be
+    recycled into an innocent same-uid group by the time a late
+    escalation fires — corroborate, or refuse loudly."""
+
+    def _innocent_group(self, _reap_all) -> subprocess.Popen:
+        # A stranger group: leads its own group, no java/joern comm,
+        # no anchor — the shape a recycled pid presents.
+        proc = subprocess.Popen(
+            [sys.executable, "-c",
+             "import time; print('ready', flush=True); time.sleep(300)"],
+            stdout=subprocess.PIPE, text=True, start_new_session=True,
+        )
+        _reap_all.append(proc.pid)
+        assert proc.stdout is not None
+        proc.stdout.readline()
+        return proc
+
+    def test_uncorroborated_group_is_refused(self, _reap_all):
+        proc = self._innocent_group(_reap_all)
+        assert _ensure_group_dead(proc.pid, label="test") is False
+        assert proc.poll() is None, (
+            "escalation killed a group nothing corroborated as ours"
+        )
+
+    def test_stale_anchor_does_not_corroborate(self, _reap_all):
+        # An anchor whose starttime no longer matches is a recycled
+        # pid — it must not license the kill.
+        proc = self._innocent_group(_reap_all)
+        real_start = _proc_starttime(proc.pid)
+        assert real_start is not None
+        assert _ensure_group_dead(
+            proc.pid, label="test",
+            member_anchor=(proc.pid, real_start + 12345),
+        ) is False
+        assert proc.poll() is None
+
+    def test_matching_anchor_corroborates_and_kills(self, _reap_all):
+        proc = self._innocent_group(_reap_all)
+        assert _ensure_group_dead(
+            proc.pid, label="test",
+            member_anchor=(proc.pid, _proc_starttime(proc.pid)),
+        )
+        proc.wait(timeout=10)
+        assert not _pgid_alive(proc.pid)
+
+    def test_corroborated_flag_licenses_the_kill(self, _reap_all):
+        # stop() passes corroborated=True while it still holds the
+        # unreaped Popen leader — a handle-proven identity.
+        proc = self._innocent_group(_reap_all)
+        assert _ensure_group_dead(proc.pid, label="test",
+                                  corroborated=True)
+        proc.wait(timeout=10)
+        assert not _pgid_alive(proc.pid)
+
+    def test_java_comm_member_corroborates(self, _reap_all, tmp_path):
+        # comm-shape fallback: a member whose comm names java (the
+        # real JVM's shape) corroborates without an anchor.
+        java_ish = tmp_path / "java-standin"
+        java_ish.symlink_to(sys.executable)
+        proc = subprocess.Popen(
+            [str(java_ish), "-c",
+             "import time; print('ready', flush=True); time.sleep(300)"],
+            stdout=subprocess.PIPE, text=True, start_new_session=True,
+        )
+        _reap_all.append(proc.pid)
+        assert proc.stdout is not None
+        proc.stdout.readline()
+        assert _ensure_group_dead(proc.pid, label="test")
+        proc.wait(timeout=10)
+        assert not _pgid_alive(proc.pid)

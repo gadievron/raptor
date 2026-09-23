@@ -597,7 +597,11 @@ def _kill_server(state: dict[str, Any]) -> bool:
         # exists to kill; the captured pgid is pinned by them).
         if _pid_is_our_server(state):
             _signal_server(pid, signal.SIGKILL)
-        _ensure_group_dead(pgid, label=f"lifecycle kill of pid {pid}")
+        _ensure_group_dead(
+            pgid, label=f"lifecycle kill of pid {pid}",
+            member_anchor=(state.get("member_pid"),
+                           state.get("member_starttime")),
+        )
     except (ProcessLookupError, PermissionError):
         pass
     _remove_socket_dir(state)
@@ -689,6 +693,7 @@ def _kill_recorded_member(state: dict[str, Any]) -> bool:
             _signal_server(member, signal.SIGKILL)
         _ensure_group_dead(
             pgid, label=f"lifecycle member kill of pid {member}",
+            member_anchor=(member, recorded_start),
         )
     except (ProcessLookupError, PermissionError):
         pass

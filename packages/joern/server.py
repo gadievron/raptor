@@ -254,11 +254,70 @@ def _pgid_alive(pgid: int | None) -> bool:
     return False
 
 
+def _group_kill_corroborated(
+    pgid: int,
+    member_anchor: tuple[int | None, int | None] | None,
+) -> bool:
+    """Does anything in *pgid* corroborate as OUR Joern server?
+
+    The escalation ladder below signals a pgid recorded at SPAWN
+    time; between the recording and a late escalation the whole group
+    can die and the leader pid be recycled into an innocent same-uid
+    group — the exact class the codebase's incarnation machinery
+    (``_proc_starttime`` anchors, lifecycle's anchored member kill)
+    exists for, which the escalation never consulted. Corroboration,
+    strongest first:
+
+    * member anchor — the boot-recorded ``(pid, starttime)`` pair
+      still matches a live member of this group (starttime is
+      assigned once per incarnation; a recycled pid cannot match);
+    * comm shape — some live member's comm names java/joern (same
+      fallback tier as ``_pid_is_our_server``; a same-uid stranger
+      JVM inside a recycled group id remains a documented residual);
+    * no procfs — accept the coarse killpg answer, exactly the
+      pre-corroboration behaviour (off-Linux).
+
+    Nothing corroborates → False; the caller refuses loudly instead
+    of escalating into an unverified group.
+    """
+    if member_anchor is not None:
+        pid, starttime = member_anchor
+        if (isinstance(pid, int) and not isinstance(pid, bool) and pid > 0
+                and starttime is not None
+                and _proc_starttime(pid) == starttime):
+            try:
+                if os.getpgid(pid) == pgid:
+                    return True
+            except OSError:
+                pass
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        return True
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                if os.getpgid(int(entry.name)) != pgid:
+                    continue
+                comm = Path(f"/proc/{entry.name}/comm").read_text(
+                    encoding="utf-8", errors="replace",
+                ).strip().lower()
+            except OSError:
+                continue
+            if "java" in comm or "joern" in comm:
+                return True
+    return False
+
+
 def _ensure_group_dead(
     pgid: int | None,
     *,
     label: str = "",
     grace_s: float | None = None,
+    member_anchor: tuple[int | None, int | None] | None = None,
+    corroborated: bool = False,
 ) -> bool:
     """Verify the server's whole process GROUP is dead; escalate if not.
 
@@ -273,7 +332,14 @@ def _ensure_group_dead(
 
     Only ever called with a pgid this process recorded at spawn time;
     the own-group guard keeps a corrupted value from killing the
-    caller's own session.
+    caller's own session, and the escalation additionally requires
+    the surviving group to CORROBORATE as ours (see
+    ``_group_kill_corroborated``) — a spawn-time pgid whose every
+    member died can be recycled into an innocent same-uid group by
+    the time a late escalation fires. ``member_anchor`` is the
+    boot-recorded JVM ``(pid, starttime)`` pair when the caller has
+    one; ``corroborated=True`` asserts identity by other means (a
+    still-unreaped ``Popen`` leader, whose pid cannot be recycled).
     """
     # Shape guard before any arithmetic: pgid reaches here from
     # process handles and lifecycle state files (``_proc.pid`` on a
@@ -296,6 +362,16 @@ def _ensure_group_dead(
         return True
     grace = _GROUP_KILL_GRACE_S if grace_s is None else grace_s
     tag = label or f"pgid {pgid}"
+    if not corroborated and not _group_kill_corroborated(pgid, member_anchor):
+        logger.warning(
+            "Joern server process group (%s) survived stop but NO "
+            "member corroborates as the recorded server (pid "
+            "recycled into an unrelated group?) — refusing the "
+            "SIGTERM/SIGKILL escalation; anything genuinely ours "
+            "is leaked, loudly, instead of killing a stranger",
+            tag,
+        )
+        return False
     logger.warning(
         "Joern server process group survived stop (%s) — escalating",
         tag,
@@ -1039,8 +1115,15 @@ class JoernServer:
         # The waits above observed only the LEADER; verify the whole
         # group actually died (and escalate if not) BEFORE the
         # uds/workdir teardown below destroys the only handles that
-        # point at a survivor.
-        _ensure_group_dead(pgid, label=f"stop of pid {pid}")
+        # point at a survivor. A still-unreaped Popen leader proves
+        # the group ours by itself (its pid cannot be recycled while
+        # we hold the handle); the boot-time JVM member anchor covers
+        # the leader-already-reaped case.
+        _ensure_group_dead(
+            pgid, label=f"stop of pid {pid}",
+            member_anchor=(self._member_pid, self._member_starttime),
+            corroborated=self._proc.poll() is None,
+        )
 
         self._proc = None
         self._pgid = None
@@ -1218,6 +1301,9 @@ class JoernServer:
             code_path = self._code_path
             old_pid = self._proc.pid if self._proc is not None else None
             old_pgid = self._pgid
+            # Captured before stop() clears the member fields — the
+            # second grace window below needs the identity anchor.
+            old_anchor = (self._member_pid, self._member_starttime)
             old_port = self._port
             old_socket = self._uds_path
             logger.info("restarting Joern server (stuck query recovery)")
@@ -1253,7 +1339,8 @@ class JoernServer:
             # a replacement JVM is where waiting again is worth it: a
             # survivor holds gigabytes and would accumulate one leaked
             # JVM per recovery.
-            _ensure_group_dead(old_pgid, label=f"restart of pid {old_pid}")
+            _ensure_group_dead(old_pgid, label=f"restart of pid {old_pid}",
+                               member_anchor=old_anchor)
             try:
                 self.start()
             except RuntimeError:
