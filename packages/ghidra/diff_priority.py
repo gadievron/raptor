@@ -10,7 +10,6 @@ The diff is found by scanning the project's output dirs for
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Optional, Set
@@ -50,8 +49,15 @@ def _find_version_diff(target_path: Path) -> Optional[Path]:
 
 def _load_changed_names(diff_path: Path) -> Set[str]:
     """Load changed/added function names from a version-diff.json."""
-    with open(diff_path) as f:
-        data = json.load(f)
+    # RAPTOR-written input, budgeted like the package's other cache
+    # readers; missing/corrupt/oversize all degrade to "no diff".
+    from core.json import load_json
+
+    from .context_inject import _MAX_CACHE_BYTES
+    data = load_json(diff_path, max_bytes=_MAX_CACHE_BYTES)
+    if not isinstance(data, dict):
+        logger.debug("version diff unreadable: %s", diff_path)
+        return set()
 
     names = set()
     for entry in data.get("added", []):
@@ -85,8 +91,13 @@ def apply_diff_priority(
     if not changed_names:
         return 0
 
-    with open(checklist_path) as f:
-        checklist = json.load(f)
+    from core.json import load_json
+
+    from .context_inject import _MAX_CACHE_BYTES
+    checklist = load_json(checklist_path, max_bytes=_MAX_CACHE_BYTES)
+    if not isinstance(checklist, dict):
+        logger.debug("checklist unreadable: %s", checklist_path)
+        return 0
 
     items = []
     for file_entry in checklist.get("files", []):

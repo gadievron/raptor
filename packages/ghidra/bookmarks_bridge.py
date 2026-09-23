@@ -145,11 +145,13 @@ def write_attack_surface_from_bookmarks(
 
     surface_path = output_dir / "attack-surface.json"
     if surface_path.is_file():
-        try:
-            existing = json.loads(surface_path.read_text())
-            if not isinstance(existing, dict):
-                existing = {}
-        except (json.JSONDecodeError, OSError):
+        # Budgeted like the package's other cache readers —
+        # missing/corrupt/oversize all degrade to a fresh document.
+        from core.json import load_json
+
+        from .context_inject import _MAX_CACHE_BYTES
+        existing = load_json(surface_path, max_bytes=_MAX_CACHE_BYTES)
+        if not isinstance(existing, dict):
             existing = {}
     else:
         existing = {}
@@ -219,7 +221,11 @@ def write_checklist_from_bookmarks(
 
     if checklist_path.is_file():
         try:
-            existing = json.loads(checklist_path.read_text())
+            from core.json import load_json
+
+            from .context_inject import _MAX_CACHE_BYTES
+            existing = load_json(checklist_path,
+                                 max_bytes=_MAX_CACHE_BYTES)
             if isinstance(existing, dict):
                 existing_names = set()
                 for fe in existing.get("files", []):
