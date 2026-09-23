@@ -99,6 +99,18 @@ class _ElementWrite:
     rhs: Any                      # tree-sitter node (may be None)
 
 
+def _enclosing_block_end(n: "Node") -> int:
+    """End byte of the nearest enclosing block-like scope — a fresh
+    declarator's vouch-window upper bound. No block ancestor (e.g. a
+    field declarator) ⇒ -1: an empty window, everything refuses."""
+    cur = n.parent
+    while cur is not None:
+        if cur.type in ("block", "constructor_body"):
+            return cur.end_byte
+        cur = cur.parent
+    return -1
+
+
 @dataclass
 class LocalArrayIndex:
     """Per-method-span index of local-array facts. Construct via
@@ -107,6 +119,15 @@ class LocalArrayIndex:
 
     ok: bool = False
     _fresh: set[str] = field(default_factory=set)
+    # name -> [fresh_declarator_start_byte, enclosing_block_end_byte):
+    # the positional vouch window. An access outside it resolves to a
+    # same-named FIELD / outer binding the fresh-array facts say
+    # nothing about (the a1b positional-scope discipline).
+    _windows: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # name -> byte offsets of every recorded access base (reads,
+    # writes, scalar-copy sources) — vouched against _windows in the
+    # post-pass (accesses can precede the declarator in walk order).
+    _access_sites: dict[str, list[int]] = field(default_factory=dict)
     # Names whose single sink-line whole-array occurrence was exempted
     # (see build_local_array_index's sink_exempt).
     _whole_pass_names: set[str] = field(default_factory=set)
@@ -263,6 +284,7 @@ def build_local_array_index(
             return
         name = _text(base)
         consumed.add((base.start_byte, base.end_byte))
+        idx._access_sites.setdefault(name, []).append(base.start_byte)
         idx._line_bases.setdefault(ln, set()).add(name)
         const_index: int | None = None
         if index_node is not None and index_node.type == _INT_LITERAL:
@@ -287,7 +309,6 @@ def build_local_array_index(
             return
         lhs = _text(name_node)
         ln = line_of(decl)
-        consumed.add((name_node.start_byte, name_node.end_byte))
         key = (ln, lhs)
         idx._lhs_writers[key] = idx._lhs_writers.get(key, 0) + 1
         if value is None:
@@ -296,10 +317,17 @@ def build_local_array_index(
         if v is not None and v.type in _FRESH_INITIALIZERS:
             # Fresh array: first fresh declaration tracks; a second
             # declaration of the same name anywhere is shadowing the
-            # gate can't order — untrack.
+            # gate can't order — untrack. ONLY the fresh form consumes
+            # its declarator name: a non-fresh redeclaration
+            # ('String[] a = other;') must stay visible to the
+            # leftover scan, or the re-alias silently rides the first
+            # declaration's tracking (the collection leg's rule).
+            consumed.add((name_node.start_byte, name_node.end_byte))
             if lhs in idx._fresh:
                 idx._violated.add(lhs)
             idx._fresh.add(lhs)
+            idx._windows[lhs] = (
+                decl.start_byte, _enclosing_block_end(decl))
             # 'new String[]{...}' nests its initializer under the
             # creation expression — its elements are element WRITES
             # exactly like the bare '{...}' spelling (missing them
@@ -411,6 +439,17 @@ def build_local_array_index(
                 walk(c)
 
     walk(tree.root_node)
+
+    # Positional vouch: an access whose base byte falls outside the
+    # fresh declarator's window resolves to a same-named FIELD or
+    # outer binding — a different (rewritable) storage location the
+    # in-window write facts say nothing about. Post-pass because an
+    # access can precede the declarator in walk order.
+    for name in idx._fresh:
+        w_lo, w_hi = idx._windows.get(name, (0, -1))
+        if any(not (w_lo <= b < w_hi)
+               for b in idx._access_sites.get(name, ())):
+            idx._violated.add(name)
 
     # Leftover-occurrence scan: any identifier equal to a fresh array
     # name whose byte range wasn't consumed by a permitted appearance

@@ -196,6 +196,62 @@ class TestExemptLine:
         assert not idx.exempt_line(6)
 
 
+class TestPositionalTracking:
+    def test_nonfresh_redeclaration_in_disjoint_block_untracks(self):
+        # Block 1's fresh 'a' dies at its brace; block 2 re-declares
+        # 'a' ALIASING another array. Consuming the declarator name
+        # unconditionally hid the re-alias from the leftover scan —
+        # the sink's read of the aliased array then counted as a
+        # tracked read with ZERO writes ("null default, not attacker
+        # data"). The collection leg already untracks this shape.
+        idx = _index(
+            "        String[] other = getOther();\n"
+            "        {\n"
+            '            String[] a = new String[]{"safe"};\n'
+            "        }\n"
+            "        {\n"
+            "            String[] a = other;\n"
+            "            out.println(a[0]);\n"
+            "        }\n"
+        )
+        assert not idx.tracked("a")
+
+    def test_dead_block_fresh_decl_does_not_vouch_field_reads(self):
+        # The fresh declarator's vouch window ends at its block; an
+        # access outside it resolves to a same-named FIELD (or outer
+        # binding) the fresh-array facts say nothing about. The index
+        # is built over the METHOD span (the production call shape),
+        # so the class-level field declaration is invisible to the
+        # leftover scan — only the positional window can refuse.
+        src = (
+            "import org.owasp.encoder.Encode;\n"
+            "public class T {\n"
+            "    static String[] a;\n"
+            "    public void handle(String x, int i, "
+            "java.io.PrintWriter out) {\n"
+            "        if (i > 0) {\n"
+            '            String[] a = new String[]{"safe"};\n'
+            "        }\n"
+            "        out.println(a[0]);\n"
+            "    }\n}\n"
+        )
+        from core.analysis.java_array_escape import (
+            build_local_array_index,
+        )
+        idx = build_local_array_index(src, (4, 9))
+        assert idx is not None and idx.ok
+        assert not idx.tracked("a")
+
+    def test_in_window_usage_stays_tracked(self):
+        # Control: ordinary single-block usage keeps tracking.
+        idx = _index(
+            '        String[] a = new String[]{"safe"};\n'
+            "        a[1] = Encode.forHtml(x);\n"
+            "        out.println(a[1]);\n"
+        )
+        assert idx.tracked("a")
+
+
 class TestArrayCreationInitializer:
     CATALOG = {"org.owasp.encoder.Encode.forHtml"}
 

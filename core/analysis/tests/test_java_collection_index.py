@@ -536,3 +536,57 @@ class TestCastFoldRule:
     def test_object_cast_refuses(self):
         from core.analysis.const_fold_java import REFUSE
         assert self._fold('(Object) "abc"') is REFUSE
+
+
+class TestPositionalTracking:
+    def test_dead_block_fresh_decl_does_not_vouch_field_ops(self):
+        # The fresh declarator's vouch window ends at its block; an
+        # op outside it targets a same-named FIELD (rewritable by any
+        # code) — the in-window "safe" write says nothing about it.
+        src = (
+            _IMPORTS
+            + "public class T {\n"
+            + "    static HashMap<String, Object> m;\n"
+            + "    public void handle(String x, int i, "
+            "java.io.PrintWriter out) {\n"
+            + "        if (i > 0) {\n"
+            + "            HashMap<String, Object> m = "
+            "new HashMap<String, Object>();\n"
+            + '            m.put("k", "safe");\n'
+            + "        }\n"
+            + '        String bar = (String) m.get("k");\n'
+            + "        out.println(bar);\n"
+            + "    }\n}\n"
+        )
+        # Method-only span (the production call shape): the field
+        # declaration is outside it, so only the positional window
+        # can refuse the out-of-scope op.
+        idx = build_local_collection_index(src, (6, 13))
+        assert idx is not None and idx.ok
+        assert not idx.tracked("m")
+
+    def test_in_window_usage_stays_tracked(self):
+        idx, _ = _index(
+            "        HashMap<String, Object> m = "
+            "new HashMap<String, Object>();\n"
+            '        m.put("k", "safe");\n'
+            '        String bar = (String) m.get("k");\n'
+            "        out.println(bar);\n"
+        )
+        assert idx.tracked("m")
+
+    def test_redeclaration_still_untracks(self):
+        # Existing contract (two-direction control): a second fresh
+        # declaration anywhere untracks.
+        idx, _ = _index(
+            "        {\n"
+            "            HashMap<String, Object> m = "
+            "new HashMap<String, Object>();\n"
+            "        }\n"
+            "        {\n"
+            "            HashMap<String, Object> m = "
+            "new HashMap<String, Object>();\n"
+            '            m.put("k", x);\n'
+            "        }\n"
+        )
+        assert not idx.tracked("m")
