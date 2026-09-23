@@ -383,3 +383,37 @@ class TestBuiltinResetProvenance:
         # but never raise AttributeError.
         with pytest.raises(ValueError, match="refusing"):
             prepare_builtin_seed_corpus(out)
+
+
+def test_generated_seed_copy_is_bounded_against_growth(tmp_path, monkeypatch):
+    """The stat pre-check leaves a grow window before the copy — the
+    copy itself must be a bounded read so a file growing under the
+    scan can never land oversize in the corpus."""
+    import os
+
+    source = tmp_path / "repo"
+    source.mkdir()
+    grower = source / "data.json"
+    grower.write_text("{}" + "x" * 4094, encoding="utf-8")  # 4096 bytes
+    out = tmp_path / "out"
+
+    real_stat = type(grower).stat
+
+    def lying_stat(self, **kw):
+        st = real_stat(self, **kw)
+        if self.name == "data.json" and st.st_size == 4096:
+            vals = list(st)
+            vals[6] = 100  # the pre-growth size the stat check saw
+            return os.stat_result(vals)
+        return st
+
+    monkeypatch.setattr(type(grower), "stat", lying_stat)
+    manifest = prepare_seed_corpus(SeedCorpusOptions(
+        source_dir=source, out_dir=out, max_file_size=1024,
+    ))
+    copied = [s for s in manifest["seeds"] if s["source"] == "data.json"]
+    assert copied == [], "grown file must not be copied past the cap"
+    assert any(
+        sk["path"] == "data.json" and sk["reason"] == "too large"
+        for sk in manifest["skipped"]
+    )

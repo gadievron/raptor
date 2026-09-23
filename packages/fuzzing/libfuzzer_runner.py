@@ -17,7 +17,6 @@ generated harnesses.
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -142,8 +141,14 @@ class LibFuzzerRunner:
         logger.info("  corpus: %s", self.corpus_dir)
         logger.info("  output: %s", self.output_dir)
 
-    @staticmethod
-    def _seed_working_corpus(source: Path, destination: Path) -> None:
+    # Per-file cap for the corpus stager — corpus_manager's bounded-
+    # copy idiom. Real fuzz seeds are kilobytes-to-low-MB; a hostile
+    # in-repo corpus can plant a multi-GB "seed" that copy2 would
+    # duplicate into the run dir.
+    _MAX_SEED_BYTES = 32 * 1024 * 1024
+
+    @classmethod
+    def _seed_working_corpus(cls, source: Path, destination: Path) -> None:
         """Copy caller-provided seeds into the sandbox-writable corpus dir.
 
         Symlinks are rejected at every level, same as the AFL corpus
@@ -152,7 +157,9 @@ class LibFuzzerRunner:
         dir as fuzz inputs handed to the untrusted harness — and into
         persisted run artifacts) or directory-symlink loops that wedge
         the traversal. Only regular files reached through regular
-        directories are copied.
+        directories are copied, and every copy is a bounded read
+        (``_MAX_SEED_BYTES``) so a planted or growing file can never
+        land oversize.
         """
         skipped = 0
         pending: list[Path] = [source]
@@ -173,14 +180,30 @@ class LibFuzzerRunner:
                 if not item.is_file():
                     skipped += 1
                     continue
+                try:
+                    if item.stat().st_size > cls._MAX_SEED_BYTES:
+                        skipped += 1
+                        continue
+                    with item.open("rb") as fh:
+                        # Bounded read — the file may have grown
+                        # between the stat and this read.
+                        data = fh.read(cls._MAX_SEED_BYTES + 1)
+                except OSError:
+                    skipped += 1
+                    continue
+                if len(data) > cls._MAX_SEED_BYTES:
+                    skipped += 1
+                    continue
                 relative = item.relative_to(source)
                 target = destination / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(item, target)
+                target.write_bytes(data)
         if skipped:
             logger.warning(
-                "corpus seeding: skipped %d non-regular entries "
-                "(symlinks / special files / unreadable dirs)", skipped)
+                "corpus seeding: skipped %d non-regular or oversize "
+                "entries (symlinks / special files / unreadable dirs / "
+                "over the %d-byte seed cap)",
+                skipped, cls._MAX_SEED_BYTES)
 
     def run(self, telemetry=None) -> LibFuzzerResult:
         """Run the campaign and return the result.

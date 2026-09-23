@@ -1136,8 +1136,8 @@ class AFLRunner:
             logger.info("=" * 70)
 
             if self.telemetry:
-                max_crash_execs = self._max_crash_execs(
-                    self.output_dir / "main" / "crashes"
+                max_crash_execs = self._max_crash_execs_all(
+                    self.output_dir
                 )
                 self.telemetry.update_stats(
                     total_executions=max(
@@ -1323,16 +1323,32 @@ class AFLRunner:
     @staticmethod
     def _max_crash_execs(crashes_dir: Path) -> int:
         """Use AFL crash filenames as lower-bound exec count when stats lag."""
-        if not crashes_dir.exists():
-            return 0
         max_execs = 0
-        for path in crashes_dir.iterdir():
+        try:
+            entries = list(crashes_dir.iterdir())
+        except OSError:
+            return 0
+        for path in entries:
             if not path.is_file() or not path.name.startswith("id:"):
                 continue
             match = _AFL_CRASH_EXECS_RE.search(path.name)
             if match:
                 max_execs = max(max_execs, int(match.group(1)))
         return max_execs
+
+    @classmethod
+    def _max_crash_execs_all(cls, output_dir: Path) -> int:
+        """Exec lower bound across ALL instance crash dirs — secondary
+        crashes count in the campaign totals, so a secondary's exec
+        metadata must reach telemetry's lower bound too, not just
+        main's."""
+        try:
+            crash_dirs = sorted(output_dir.glob("*/crashes"))
+        except OSError:
+            return 0
+        return max(
+            (cls._max_crash_execs(d) for d in crash_dirs), default=0,
+        )
 
     def _build_afl_command(
         self,

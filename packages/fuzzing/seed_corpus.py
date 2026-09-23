@@ -373,14 +373,26 @@ def prepare_seed_corpus(options: SeedCorpusOptions) -> dict:
             )
             destination = out_dir / destination_relative
             destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, destination)
+            # Bounded copy, not copyfile: the source tree is the
+            # SCANNED repo, and a file can grow between the stat
+            # check above and the copy (corpus_manager's idiom).
+            with path.open("rb") as fh:
+                data = fh.read(options.max_file_size + 1)
+            if len(data) > options.max_file_size:
+                counters[kind] -= 1
+                skipped.append(
+                    {"path": relative_posix, "reason": "too large",
+                     "size": len(data)}
+                )
+                continue
+            destination.write_bytes(data)
             sha256 = _sha256_file(destination)
             seeds.append(
                 {
                     "source": relative_posix,
                     "destination": destination_relative.as_posix(),
                     "kind": kind,
-                    "size": size,
+                    "size": len(data),
                     "sha256": sha256,
                 }
             )
