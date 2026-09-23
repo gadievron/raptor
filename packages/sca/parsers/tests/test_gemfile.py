@@ -297,3 +297,24 @@ def test_discovery_does_not_route_gemfile_modules(tmp_path: Path) -> None:
         and m.is_lockfile
     ]
     assert misclassified == []
+
+
+def test_multi_spec_range_records_corridor(tmp_path):
+    """``gem 'rails', '>= 6.0', '< 7.1'`` is a RANGE with corridor
+    bounds — without them Gemfile ranges never got harden's clamp,
+    unlike the pyproject / requirements / pip-inline corridors."""
+    p = tmp_path / "Gemfile"
+    p.write_text(
+        "source 'https://rubygems.org'\n"
+        "gem 'rails', '>= 6.0', '< 7.1'\n"
+        "gem 'puma', '>= 5.0'\n",
+        encoding="utf-8",
+    )
+    deps = {d.name: d for d in parse_manifest(p)}
+    rails = deps["rails"]
+    assert rails.pin_style is PinStyle.RANGE
+    assert rails.version_floor == "6.0"
+    assert rails.version_ceiling == "7.1"
+    puma = deps["puma"]
+    assert puma.version_floor == "5.0"
+    assert puma.version_ceiling is None
