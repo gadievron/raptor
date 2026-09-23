@@ -1185,7 +1185,11 @@ def run_compiler_analyzer_sweep(
                 # under --analyze.
                 pp_cmd.insert(2, "-D__clang_analyzer__=1")
 
-            def _run_preprocess() -> dict[str, Any]:
+            def _run_closure_vet() -> dict[str, Any]:
+                # The cached record is the VERDICT, never the
+                # preprocessed text: -E output runs to megabytes per
+                # TU and the memo holds up to _TU_CACHE_MAX_ENTRIES
+                # of them for the run's lifetime.
                 scratch_root = str(out_dir) if out_dir else None
                 with scratch_dir(
                     "compiler_pp_", dir=scratch_root,
@@ -1203,35 +1207,30 @@ def run_compiler_analyzer_sweep(
                     )
                     if proc.returncode < 0:
                         raise _AnalyzerSignalKilled(-proc.returncode)
+                if proc.returncode != 0:
                     return {
-                        "returncode": proc.returncode,
-                        "stdout": (
-                            (proc.stdout or "")[:_MAX_PP_TEXT_BYTES + 1]
+                        "witness": "",
+                        "vet_failure": (
+                            f"preprocessor exited {proc.returncode}"
                         ),
                     }
+                witness, failure = _closure_suppression_witness(
+                    (proc.stdout or "")[:_MAX_PP_TEXT_BYTES + 1],
+                    target_path, full_path,
+                )
+                return {"witness": witness, "vet_failure": failure}
 
             vet_failure = ""
-            pp_record: dict[str, Any] | None
             try:
-                pp_record, _pp_cached = _cache.get_or_compute(
-                    _tu_cache_key(pp_cmd, full_path), _run_preprocess,
+                vet_record, _pp_cached = _cache.get_or_compute(
+                    _tu_cache_key(pp_cmd, full_path), _run_closure_vet,
                 )
+                suppression = vet_record["witness"]
+                vet_failure = vet_record["vet_failure"]
             except (subprocess.TimeoutExpired, _AnalyzerSignalKilled,
                     subprocess.SubprocessError, OSError, ValueError,
                     TypeError):
-                pp_record = None
                 vet_failure = "preprocessor run failed"
-            if pp_record is not None:
-                if pp_record["returncode"] != 0:
-                    vet_failure = (
-                        f"preprocessor exited {pp_record['returncode']}"
-                    )
-                else:
-                    suppression, vet_failure = (
-                        _closure_suppression_witness(
-                            pp_record["stdout"], target_path, full_path,
-                        )
-                    )
             if vet_failure and not suppression:
                 details["closure_unvetted"] = vet_failure
                 result = _inconclusive(

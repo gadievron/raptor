@@ -389,6 +389,11 @@ _EXIT_STMT_RE = re.compile(
 )
 
 
+#: Statement-leading label (goto target / case arm). `(?!:)` keeps
+#: C++ scope tokens (`std::x`) from matching.
+_LABEL_RE = re.compile(r"^\s*(?:case\b[^:]*|[A-Za-z_]\w*)\s*:(?!:)")
+
+
 def _exit_only_body(body: str) -> bool:
     """True when the guarded body's last statement leaves the flow."""
     stmts = [s.strip() for s in body.split(";") if s.strip()]
@@ -412,6 +417,11 @@ def _step_guard_polarity(
     direction (an unprovable polarity weakens the prune toward
     keep — it never manufactures an infeasibility receipt).
     """
+    if any(_LABEL_RE.match(ln) for ln in between):
+        # A label between the guard and the step is a goto target:
+        # another path can reach the step without evaluating the
+        # guard, so neither polarity is assertable.
+        return None
     region = " ".join(
         p.strip() for p in [tail, *between] if p.strip()
     ).strip()
@@ -530,6 +540,11 @@ def _path_conditions(
     for step_index, (uri, line) in enumerate(steps):
         lines = _load_source_lines(uri, target_path, cache)
         if not lines or line > len(lines):
+            continue
+        if _LABEL_RE.match(lines[line - 1]):
+            # A goto-target label on the step's OWN line: another
+            # path reaches the step without evaluating any guard
+            # above it — no polarity is assertable for this step.
             continue
         for j in range(line - 1, max(line - 1 - _GUARD_LOOKBACK_LINES, 0), -1):
             kind, cond, tail = _guard_on_line(lines[j - 1])

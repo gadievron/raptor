@@ -392,6 +392,65 @@ class TestGuardPolarity:
         )
         assert _path_conditions([("src/vuln.c", 5)], target, {}) == []
 
+    def test_label_on_the_step_line_drops_condition(
+        self, tmp_path: Path,
+    ):
+        # Reviewer repro shape: the goto target IS the step line —
+        # `if (len < 0) goto out; return;` then `out: memcpy(...)`.
+        # The path through the goto reaches the step with the guard
+        # TRUE; asserting the negation falsely proved a live flow
+        # "mutually exclusive" against a later positive guard.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) goto out;\n"            # 2
+            "    return;\n"                           # 3
+            "out: memcpy(d, s, len);\n"               # 4  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 4)], target, {}) == []
+
+    def test_label_after_the_step_does_not_drop(self, tmp_path: Path):
+        # Third direction: a label AFTER the step is unreachable
+        # before it — the guard still binds normally.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                     # 1
+            "    if (len < 0)\n"                      # 2
+            "        return;\n"                       # 3
+            "    sink(len);\n"                        # 4  <- step
+            "out:\n"                                  # 5
+            "    log();\n"                            # 6
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 4)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+        ]
+
+    def test_live_goto_target_flow_survives_real_smt_prune(
+        self, tmp_path: Path,
+    ):
+        pytest.importorskip("z3")
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) goto out;\n"            # 2
+            "    return;\n"                           # 3
+            "out: memcpy(d, s, len);\n"               # 4  <- step
+            "    if (len < 0) {\n"                    # 5
+            "        memcpy(d, s, len);\n"            # 6  <- step
+            "    }\n"
+            "}\n",
+        )
+        sarif = _sarif_with_flow([("src/vuln.c", 4), ("src/vuln.c", 6)])
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (1, 0)
+        assert receipts == []
+
     def test_live_early_exit_flow_survives_real_smt_prune(
         self, tmp_path: Path,
     ):
@@ -882,3 +941,82 @@ class TestCppNameNormalisation:
         assert '"get_input"' in q
         assert '"copy_bytes"' in q
         assert "ns::" not in q.split("@id")[1]
+
+
+class TestGuardPolarityLabels:
+    def test_label_between_guard_and_step_drops_condition(
+        self, tmp_path: Path,
+    ):
+        # `if (err) goto out;` above a LABELLED statement: another
+        # path reaches the step via goto without evaluating the
+        # guard — neither polarity is assertable.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                # 1
+            "    if (len < 0)\n"                 # 2
+            "        return;\n"                  # 3
+            "retry:\n"                           # 4
+            "    sink(len);\n"                   # 5  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 5)], target, {}) == []
+
+    def test_label_on_the_step_line_drops_condition(
+        self, tmp_path: Path,
+    ):
+        # Reviewer repro shape: the goto target IS the step line —
+        # `if (len < 0) goto out; return;` then `out: memcpy(...)`.
+        # The path through the goto reaches the step with the guard
+        # TRUE; asserting the negation falsely proved a live flow
+        # "mutually exclusive" against a later positive guard.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) goto out;\n"            # 2
+            "    return;\n"                           # 3
+            "out: memcpy(d, s, len);\n"               # 4  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 4)], target, {}) == []
+
+    def test_label_after_the_step_does_not_drop(self, tmp_path: Path):
+        # Third direction: a label AFTER the step is unreachable
+        # before it — the guard still binds normally.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                     # 1
+            "    if (len < 0)\n"                      # 2
+            "        return;\n"                       # 3
+            "    sink(len);\n"                        # 4  <- step
+            "out:\n"                                  # 5
+            "    log();\n"                            # 6
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 4)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+        ]
+
+    def test_live_goto_target_flow_survives_real_smt_prune(
+        self, tmp_path: Path,
+    ):
+        pytest.importorskip("z3")
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) goto out;\n"            # 2
+            "    return;\n"                           # 3
+            "out: memcpy(d, s, len);\n"               # 4  <- step
+            "    if (len < 0) {\n"                    # 5
+            "        memcpy(d, s, len);\n"            # 6  <- step
+            "    }\n"
+            "}\n",
+        )
+        sarif = _sarif_with_flow([("src/vuln.c", 4), ("src/vuln.c", 6)])
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (1, 0)
+        assert receipts == []
