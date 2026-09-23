@@ -126,3 +126,19 @@ def test_package_lock_json_deep_nesting(tmp_path: Path) -> None:
     p = tmp_path / "package-lock.json"
     p.write_text(DEEP_JSON)
     assert parse(p) == []
+
+
+ENTITY_XML = (
+    '<?xml version="1.0"?><!DOCTYPE a [<!ENTITY x "y">]>'
+    "<packages>&x;</packages>"
+)
+
+
+def test_nuget_packages_config_entity_decl(tmp_path: Path) -> None:
+    # defusedxml refuses entity declarations with a DefusedXmlException
+    # (a ValueError subclass) — a refusal, not a ParseError.
+    pytest.importorskip("defusedxml")
+    from packages.sca.parsers.nuget import parse_packages_config
+    p = tmp_path / "packages.config"
+    p.write_text(ENTITY_XML)
+    assert parse_packages_config(p) == []
