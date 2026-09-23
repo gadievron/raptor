@@ -703,13 +703,9 @@ class QueryRunner:
                 # file parses to {} and any valid-JSON dict passes
                 # load_sarif — without a `runs` list it is not a
                 # SARIF document, same failure.
-                reason = (
-                    "SARIF output missing after successful analyze"
-                    if not sarif_path.exists()
-                    else "SARIF output unreadable (parse/size/schema failure)"
-                )
-                errors.append(f"{reason}: {sarif_path}")
-                logger.error("✗ %s: %s", reason, sarif_path)
+                reason = self._unreadable_sarif_reason(sarif_path)
+                errors.append(reason)
+                logger.error("✗ %s", reason)
                 return QueryResult(
                     success=False,
                     language=language,
@@ -1342,9 +1338,10 @@ class QueryRunner:
     def _count_sarif_findings(self, sarif_path: Path) -> int | None:
         """Count findings in a SARIF file — ``None`` when unreadable.
 
-        ``load_sarif`` refuses missing / oversized (CodeQL SARIFs
-        routinely reach hundreds of MB on large targets) / malformed
-        files by returning None. Mapping that refusal to 0 here used
+        ``load_sarif`` refuses missing / oversized (past the
+        corpus-tuned ``SARIF_MAX_BYTES``; see the trade-off note at
+        the constant) / malformed files by returning None. Mapping
+        that refusal to 0 here used
         to let an rc==0 analyze with an unreadable output read
         downstream as a successful zero-finding scan; callers must
         treat None as an analysis failure, mirroring run_suite's
@@ -1373,14 +1370,35 @@ class QueryRunner:
         return total
 
     def _unreadable_sarif_reason(self, sarif_path: Path) -> str:
-        """Failure reason for an rc==0 analyze without readable SARIF
-        (same wording run_suite established)."""
-        reason = (
-            "SARIF output missing after successful analyze"
-            if not sarif_path.exists()
-            else "SARIF output unreadable (parse/size/schema failure)"
+        """Failure reason for an rc==0 analyze without readable SARIF.
+
+        The oversized case is diagnosed with the mechanical facts
+        (actual size vs the parser cap) so an operator whose
+        completed multi-hour analyze was discarded over the size cap
+        can see exactly which limit fired and that the artifact
+        itself is intact — instead of the undifferentiated
+        "parse/size/schema failure" that hid the cheapest recovery
+        (re-running with a raised cap, per SARIF_MAX_BYTES's own
+        move-only-against-a-corpus note).
+        """
+        if not sarif_path.exists():
+            return f"SARIF output missing after successful analyze: {sarif_path}"
+        from core.sarif.parser import SARIF_MAX_BYTES
+        try:
+            size = sarif_path.stat().st_size
+        except OSError:
+            size = -1
+        if size > SARIF_MAX_BYTES:
+            return (
+                f"SARIF output exceeds the parser cap "
+                f"({size} bytes > SARIF_MAX_BYTES={SARIF_MAX_BYTES}): "
+                f"{sarif_path} — the analyze completed and the "
+                f"artifact is intact; the lane failed on the "
+                f"post-parse size refusal"
+            )
+        return (
+            f"SARIF output unreadable (parse/schema failure): {sarif_path}"
         )
-        return f"{reason}: {sarif_path}"
 
     def get_sarif_summary(self, sarif_path: Path,
                           *, sarif_data: dict | None = None) -> dict:
