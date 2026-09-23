@@ -453,8 +453,12 @@ def _walk(root: Path, *, max_depth: int) -> Iterable[Path]:
         if depth >= max_depth:
             dirnames[:] = []
         else:
-            dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS]
-        for fn in filenames:
+        # Sorted so evidence/walk order is filesystem-independent
+        # (parity with reachability._walker's determinism rule).
+            dirnames[:] = sorted(
+                d for d in dirnames if d not in _EXCLUDED_DIRS
+            )
+        for fn in sorted(filenames):
             yield cur / fn
 
 

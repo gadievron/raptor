@@ -309,11 +309,13 @@ def _walk_source_files(target: Path, *, max_depth: int) -> Iterable[Path]:
         if depth >= max_depth:
             dirnames[:] = []
         else:
-            dirnames[:] = [
+        # Sorted so evidence/walk order is filesystem-independent
+        # (parity with reachability._walker's determinism rule).
+            dirnames[:] = sorted(
                 d for d in dirnames
                 if d not in _EXCLUDED_DIRS and d not in TEST_DIR_NAMES
-            ]
-        for fn in filenames:
+            )
+        for fn in sorted(filenames):
             if Path(fn).suffix.lower() not in _SCAN_EXTS:
                 continue
             full = cur / fn

@@ -144,11 +144,41 @@ def scan_target(
 # Internals
 # ---------------------------------------------------------------------------
 
+def _git_config_path(target: Path) -> Path | None:
+    """The repo's config file — ``.git/config`` for a normal clone;
+    for a LINKED WORKTREE ``.git`` is a FILE (``gitdir: <path>``)
+    whose gitdir's ``commondir`` names the shared dir that carries
+    the config. Best-effort: unreadable / unrecognised layouts
+    return None (the posture check skips, as before)."""
+    dot_git = target / ".git"
+    if dot_git.is_dir():
+        return dot_git / "config"
+    if not dot_git.is_file():
+        return None
+    text = _safe_read.read_bounded(dot_git, follow_symlinks=False)
+    if text is None or not text.startswith("gitdir:"):
+        return None
+    gitdir = Path(text[len("gitdir:"):].strip())
+    if not gitdir.is_absolute():
+        gitdir = (target / gitdir).resolve()
+    common_file = gitdir / "commondir"
+    if common_file.is_file():
+        common_text = _safe_read.read_bounded(
+            common_file, follow_symlinks=False,
+        )
+        if common_text:
+            common = Path(common_text.strip())
+            if not common.is_absolute():
+                common = (gitdir / common).resolve()
+            return common / "config"
+    return gitdir / "config"
+
+
 def _detect_github_remote(target: Path) -> str | None:
     """Return ``owner/repo`` for the target's ``origin`` remote, or
     None when the remote isn't a GitHub one (or no .git config)."""
-    config = target / ".git" / "config"
-    if not config.is_file():
+    config = _git_config_path(target)
+    if config is None or not config.is_file():
         return None
     text = _safe_read.read_bounded(config, follow_symlinks=False)
     if text is None:

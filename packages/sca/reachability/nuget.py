@@ -34,7 +34,8 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_MAX_DEPTH = 12
 
-_TEST_DIR_NAMES = {"tests", "test", "Tests", "Test"}
+# Lowercase canon — membership checks fold the path segment first.
+_TEST_DIR_NAMES = {"tests", "test"}
 
 # Leading indent in all three is HORIZONTAL-only ([^\S\n]): under
 # MULTILINE the ``^\s*`` spelling re-scans a run of blank lines from
@@ -162,7 +163,7 @@ def _walk_dotnet_sources(
 
 def _is_test_file(path: Path, target: Path) -> bool:
     rel_parts = path.relative_to(target).parts
-    if any(p.lower() in {"tests", "test"} for p in rel_parts):
+    if any(p.lower() in _TEST_DIR_NAMES for p in rel_parts):
         return True
     return bool(path.stem.lower().endswith(("tests", "test")))
 

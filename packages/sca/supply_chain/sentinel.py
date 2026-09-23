@@ -62,12 +62,27 @@ def _load_sentinels() -> dict[_SentinelKey, list[dict]]:
         logger.warning("sca.supply_chain.sentinel: cannot load %s: %s",
                        _DATA_FILE, e)
         return {}
+    if not isinstance(data, dict):
+        # Sibling loaders isinstance-gate their bundled JSON; a
+        # non-dict document here raised an uncaught AttributeError
+        # (the except above covers OSError/ValueError only).
+        logger.warning(
+            "sca.supply_chain.sentinel: %s is not a JSON object; "
+            "ignoring", _DATA_FILE,
+        )
+        return {}
+    packages = data.get("packages", [])
+    if not isinstance(packages, list):
+        packages = []
     out: dict[_SentinelKey, list[dict]] = {}
-    for entry in data.get("packages", []):
+    for entry in packages:
+        if not isinstance(entry, dict):
+            continue
         eco = entry.get("ecosystem", "")
-        name = entry.get("name", "").lower()
-        if eco and name:
-            out.setdefault((eco, name), []).append(entry)
+        name = entry.get("name", "")
+        if (isinstance(eco, str) and eco
+                and isinstance(name, str) and name):
+            out.setdefault((eco, name.lower()), []).append(entry)
     _CACHE = out
     return _CACHE
 
@@ -86,7 +101,14 @@ def scan_deps(deps: Iterable[Dependency]) -> list[SentinelHit]:
         for entry in entries:
             versions = entry.get("versions", ["*"])
             if "*" in versions or (dep.version and dep.version in versions):
-                dedup_key = f"{dep.ecosystem}:{dep.name}:{dep.version}"
+                # Keyed per INCIDENT, not per dep — two curated
+                # incidents for the same (eco, name, version) are
+                # two findings; the dep-only key silently hid every
+                # incident after the first.
+                dedup_key = (
+                    f"{dep.ecosystem}:{dep.name}:{dep.version}:"
+                    f"{entry.get('incident', '')}:{entry.get('ref', '')}"
+                )
                 if dedup_key in seen:
                     continue
                 seen.add(dedup_key)

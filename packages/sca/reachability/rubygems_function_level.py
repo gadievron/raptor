@@ -16,10 +16,15 @@ the cross-language resolver against OSV symbol data.
 ## Qualified-name shape
 
 Ruby OSV records ship symbols as Ruby module / class paths
-(``ActionDispatch::Routing::Mapper#draw``). We construct
-``<gem>.<symbol>`` and let the resolver match. The Ruby extractor
-produces chains like ``["JSON", "parse"]`` for ``JSON.parse(s)``;
-the resolver tail-matches against ``json.parse``.
+(``ActionDispatch::Routing::Mapper#draw``). Gem names never head
+code namespaces, so the shared extractor runs with
+``dep_is_namespace_head=False``: qualified symbols are emitted
+verbatim (``::`` / ``#`` normalised to dots) and BARE symbols
+become the counted unresolved marker — never a minted
+``<gem>.<symbol>`` prefix, which the resolver could only answer
+NOT_CALLED. The Ruby extractor produces chains like
+``["JSON", "parse"]`` for ``JSON.parse(s)``; the resolver
+tail-matches against the normalised qualified names.
 
 Limitation: Ruby's metaprogramming (define_method, method_missing,
 send) defeats static analysis; the extractor flags ``send`` /

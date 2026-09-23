@@ -207,7 +207,7 @@ def _dep_key(dep: Dependency) -> tuple[str, str, str | None]:
 
 def _families_per_dep(
     findings: list[SupplyChainFinding],
-) -> dict[tuple[str, str, str], frozenset[str]]:
+) -> dict[tuple[str, str, str | None], frozenset[str]]:
     """Bucket findings by per-version dep key, project to family set."""
     by_dep: dict[tuple[str, str, str], set] = defaultdict(set)
     for f in findings:

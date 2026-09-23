@@ -504,3 +504,32 @@ def test_triage_pending_isolates_a_crashing_candidate() -> None:
 
     outcomes = triage_pending([bad, good], evidence_fn, triage_fn)
     assert [o.candidate.name for o in outcomes] == ["good"]
+
+
+def test_apply_auto_legit_concurrent_writers_lose_nothing(tmp_path):
+    """The atomic replace protects against torn FILES, not lost
+    UPDATES: two concurrent triage runs each read, merged their own
+    rows, and the last writer dropped the other's. The sidecar lock
+    serialises the read-modify-write."""
+    import threading
+
+    rl = tmp_path / "reviewed_legit.json"
+    names = [f"legitpkg{i}" for i in range(16)]
+
+    def _file(name: str) -> None:
+        outcomes = triage_pending(
+            [_cand(name, name + "lib")],
+            lambda c: _ev(candidate=c, age_days=2000,
+                          num_versions=20, has_repo=True),
+            lambda c, ev: Verdict(c.name, "legit", "high",
+                                  rationale="stress"),
+        )
+        apply_auto_legit(outcomes, "npm", rl, model="t")
+
+    threads = [threading.Thread(target=_file, args=(n,)) for n in names]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    raw = json.loads(rl.read_text(encoding="utf-8"))
+    assert sorted(raw["npm"].keys()) == sorted(names)

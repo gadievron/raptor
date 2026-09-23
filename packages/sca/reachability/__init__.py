@@ -116,6 +116,13 @@ def scan(
     deps_list = list(deps)
     out: dict[str, Reachability] = {}
 
+    # Per-scan walk memo: the unified walker exists so the
+    # per-ecosystem scanners within THIS scan share one traversal —
+    # it has no mtime axis, so entries outliving the scan serve
+    # stale file lists to long-lived processes re-scanning a target.
+    from ._walker import reset_walk_cache
+    reset_walk_cache()
+
     by_eco: dict[str, list[Dependency]] = defaultdict(list)
     for d in deps_list:
         by_eco[d.ecosystem].append(d)

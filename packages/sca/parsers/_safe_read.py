@@ -57,6 +57,31 @@ _SCAN_ROOT: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
 
 
 @contextlib.contextmanager
+def sidecar_lock(path: Path) -> Iterator[None]:
+    """Exclusive advisory flock on ``<path>.lock`` — serialises a
+    read-modify-write cycle on ``path`` across processes (an atomic
+    replace protects against torn FILES, not lost UPDATES). The lock
+    rides a SIDECAR because ``os.replace`` swaps the data file's
+    inode out from under any lock taken on it, and the lock file is
+    deliberately never unlinked (unlink-after-unlock races split
+    lockers across two inodes — same doctrine as the core sidecar
+    locks). Hosts without ``fcntl`` fall back to unlocked."""
+    lock_path = path.with_name(path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover — non-POSIX fallback
+        yield
+        return
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
 def scan_root_context(root: Path) -> Iterator[None]:
     """Declare the scan root for symlink containment checks."""
     token = _SCAN_ROOT.set(Path(root).resolve())

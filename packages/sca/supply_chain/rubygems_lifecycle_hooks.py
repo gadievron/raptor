@@ -110,8 +110,12 @@ def _iter_extconf_scripts(target: Path) -> Iterable[Path]:
     from ..discovery import EXCLUDED_DIR_NAMES
     import os
     for dirpath, dirnames, filenames in os.walk(target):
-        dirnames[:] = [d for d in dirnames if d not in EXCLUDED_DIR_NAMES]
-        for fn in filenames:
+        # Sorted so evidence order is filesystem-independent (parity
+        # with reachability._walker's determinism rule).
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in EXCLUDED_DIR_NAMES
+        )
+        for fn in sorted(filenames):
             if fn in _EXTCONF_NAMES:
                 yield Path(dirpath) / fn
 

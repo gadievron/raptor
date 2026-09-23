@@ -535,13 +535,17 @@ def _walk_python_sources(target: Path, *, max_depth: int) -> Iterable[Path]:
         if depth >= max_depth:
             dirnames[:] = []
         else:
-            dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIRS]
+        # Sorted so evidence/walk order is filesystem-independent
+        # (parity with reachability._walker's determinism rule).
+            dirnames[:] = sorted(
+                d for d in dirnames if d not in _EXCLUDED_DIRS
+            )
         # Only emit when the current directory or one of its
         # ancestors is a recognised vendor tree. Cheap O(depth)
         # check per dir; doesn't slow the walk noticeably.
         if not any(part in _VENDOR_DIR_NAMES for part in cur.parts):
             continue
-        for fn in filenames:
+        for fn in sorted(filenames):
             if fn.endswith(".py"):
                 yield cur / fn
 

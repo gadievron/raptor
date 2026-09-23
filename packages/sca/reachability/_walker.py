@@ -61,17 +61,22 @@ def walk_source_files(
         cached = _CACHE.get(key)
         if cached is not None:
             return cached
-    base_depth = len(target.parts)
-    out: list[tuple[Path, str]] = []
-    try:
-        walker = os.walk(str(target), followlinks=False)
-    except OSError as e:
+    if not target.is_dir():
+        # ``os.walk`` is lazy AND swallows scandir errors (default
+        # ``onerror=None``) — a nonexistent / unreadable target
+        # silently yields an EMPTY walk; the old try/except around
+        # the generator CONSTRUCTION could never fire. Refuse loudly
+        # and do NOT cache the miss, so a target that appears later
+        # isn't pinned empty for the process.
         logger.debug(
-            "sca.reachability._walker: os.walk failed on %s (%s)",
-            target, e,
+            "sca.reachability._walker: %s is not a directory; "
+            "empty walk (not cached)", target,
         )
         return ()
-    for dirpath, dirnames, filenames in walker:
+    base_depth = len(target.parts)
+    out: list[tuple[Path, str]] = []
+    for dirpath, dirnames, filenames in os.walk(
+            str(target), followlinks=False):
         depth = len(Path(dirpath).parts) - base_depth
         if depth >= max_depth:
             dirnames[:] = []
@@ -97,6 +102,16 @@ def walk_source_files(
             _CACHE.pop(oldest, None)
         _CACHE[key] = result
     return result
+
+
+def reset_walk_cache() -> None:
+    """Drop the memoised walks. ``reachability.scan`` calls this at
+    entry: the cache exists so the per-ecosystem scanners within ONE
+    scan share a single traversal — it has no mtime axis, so letting
+    it outlive the scan serves stale file lists to long-lived
+    processes that scan the same target twice."""
+    with _CACHE_LOCK:
+        _CACHE.clear()
 
 
 def iter_source_files(

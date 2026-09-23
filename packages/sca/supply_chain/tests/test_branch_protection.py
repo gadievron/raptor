@@ -319,3 +319,25 @@ def test_orchestrator_no_op_without_client(tmp_path: Path) -> None:
         if f.kind == "branch_protection_missing_signed_commits"
     ]
     assert bp_findings == []
+
+
+def test_linked_worktree_git_file_resolves_config(tmp_path) -> None:
+    """A linked worktree carries ``.git`` as a FILE pointing at the
+    main repo's worktree gitdir; the posture check used to silently
+    skip such targets (config required ``.git`` to be a directory)."""
+    from packages.sca.supply_chain.branch_protection import (
+        _detect_github_remote,
+    )
+    main = tmp_path / "main"
+    (main / ".git" / "worktrees" / "wt").mkdir(parents=True)
+    (main / ".git" / "config").write_text(
+        '[remote "origin"]\n'
+        "\turl = https://github.com/owner/repo.git\n",
+        encoding="utf-8",
+    )
+    gitdir = main / ".git" / "worktrees" / "wt"
+    (gitdir / "commondir").write_text("../..\n", encoding="utf-8")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {gitdir}\n", encoding="utf-8")
+    assert _detect_github_remote(wt) == "owner/repo"
