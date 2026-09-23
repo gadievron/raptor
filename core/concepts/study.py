@@ -4652,7 +4652,15 @@ def _local_prior_is_fresh(
 
 
 def _find_local_models(output_dir: Path) -> list[Path]:
-    """Find domain-model.json candidates near the output directory."""
+    """Find domain-model.json candidates near the output directory.
+
+    Sibling run dirs are consulted newest-first by mtime (reverse
+    NAME sort only approximates recency for timestamped dirs and is
+    wrong for everything else), and symlinked siblings are skipped —
+    a symlink can point the walk at an out-of-project model (the
+    same-purpose walkers elsewhere skip symlinks; freshness gates
+    downstream bound, but must not be the only defence).
+    """
     candidates = []
     dm = output_dir / "domain-model.json"
     if dm.is_file():
@@ -4661,14 +4669,22 @@ def _find_local_models(output_dir: Path) -> list[Path]:
     # Sibling run directories (same project)
     parent = output_dir.parent
     if parent.is_dir():
-        for sibling in sorted(parent.iterdir(), reverse=True):
-            if sibling == output_dir or not sibling.is_dir():
+        siblings = []
+        for sibling in parent.iterdir():
+            if (sibling == output_dir or sibling.is_symlink()
+                    or not sibling.is_dir()):
                 continue
             sm = sibling / "domain-model.json"
             if sm.is_file():
-                candidates.append(sm)
-                if len(candidates) >= 3:
-                    break
+                try:
+                    mtime = sm.stat().st_mtime
+                except OSError:
+                    continue
+                siblings.append((mtime, sibling.name, sm))
+        for _, _, sm in sorted(siblings, reverse=True):
+            candidates.append(sm)
+            if len(candidates) >= 3:
+                break
 
     return candidates
 

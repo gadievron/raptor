@@ -433,3 +433,30 @@ def test_emit_extension_pack_shim_uses_env_repo_root() -> None:
            / "emit-extension-pack").read_text(encoding="utf-8")
     assert 'sys.path.insert(0, os.environ["RAPTOR_DIR"])' in src
     assert "parents[3]" not in src
+
+
+class TestPromoteSpecPathMatchBidirectional:
+    """promote_spec_on_annotation matches paths in BOTH directions
+    with component boundaries: a spec whose file is MORE qualified
+    than the annotation path still promotes."""
+
+    def test_more_qualified_spec_file_promotes(self, tmp_path):
+        from core.evidence import EvidenceTier
+        from core.iris.api import promote_spec_on_annotation
+        from core.iris.specs import TaintSpec
+        from core.iris.store import load_specs, save_specs
+
+        run_dir = tmp_path / "run"
+        run_dir.mkdir()
+        save_specs(run_dir, [TaintSpec(
+            function="check_pw", file="src/auth/login.py",
+            role="sink",
+        )])
+        promoted = promote_spec_on_annotation(
+            "auth/login.py", "check_pw", "sink",
+            out_dir=run_dir, human_grade=True,
+        )
+        assert promoted, "more-qualified spec file did not promote"
+        spec = load_specs(run_dir)[0]
+        assert spec.evidence_tier == EvidenceTier.XREF_BACKED
+        assert spec.source == "operator_confirmed"

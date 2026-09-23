@@ -3102,3 +3102,48 @@ class TestOrphanInvariantDropRecorded:
         )
         assert model.invariants == []
         assert [d["id"] for d in sink] == ["i"]
+
+
+class TestFindLocalModelsSiblingWalk:
+    """Sibling model discovery skips symlinked run dirs and orders by
+    mtime, not reverse name sort (aligned with the stricter twin)."""
+
+    def test_symlinked_sibling_skipped(self, tmp_path):
+        from core.concepts.study import _find_local_models
+
+        out = tmp_path / "run_b"
+        out.mkdir()
+        real = tmp_path / "run_a"
+        real.mkdir()
+        (real / "domain-model.json").write_text("{}")
+        foreign = tmp_path.parent / f"{tmp_path.name}-foreign"
+        foreign.mkdir()
+        (foreign / "domain-model.json").write_text("{}")
+        (tmp_path / "zz_link").symlink_to(foreign)
+
+        got = _find_local_models(out)
+        assert real / "domain-model.json" in got
+        assert foreign / "domain-model.json" not in got, (
+            "symlinked sibling pointed the walk at an out-of-project "
+            "model"
+        )
+
+    def test_mtime_orders_newest_first(self, tmp_path):
+        import os
+
+        from core.concepts.study import _find_local_models
+
+        out = tmp_path / "run_current"
+        out.mkdir()
+        # Reverse NAME sort would pick zz_old first; mtime must win.
+        old_dir = tmp_path / "zz_old"
+        new_dir = tmp_path / "aa_new"
+        for d, age in ((old_dir, 1000), (new_dir, 10)):
+            d.mkdir()
+            m = d / "domain-model.json"
+            m.write_text("{}")
+            now = m.stat().st_mtime
+            os.utime(m, (now - age, now - age))
+
+        got = _find_local_models(out)
+        assert got[0] == new_dir / "domain-model.json"

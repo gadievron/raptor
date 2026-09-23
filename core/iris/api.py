@@ -269,8 +269,13 @@ def promote_spec_on_annotation(
                 continue
             if not spec.file or not source_file:
                 continue
+            # Bidirectional, component-boundary suffix match (the
+            # recall matcher's path_matches discipline): a spec whose
+            # file is MORE qualified than the annotation path must
+            # promote too — one-direction endswith silently skipped it.
             if not (source_file == spec.file
-                    or source_file.endswith("/" + spec.file)):
+                    or source_file.endswith("/" + spec.file)
+                    or spec.file.endswith("/" + source_file)):
                 continue
             if spec.role != role:
                 continue
