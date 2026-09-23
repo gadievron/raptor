@@ -68,10 +68,12 @@ from pathlib import Path
 
 from core.security.capped_read import read_capped
 from core.security.credential_env import (
+    CONFIG_HOME_REDIRECT_ENV_VARS,
     CREDENTIAL_ENV_FAMILY,
     TOOLCHAIN_HOME_ENV_VARS,
     fold_env_candidate,
     is_credential_redirect_shaped,
+    is_function_injection_shaped,
     is_model_traffic_redirect_shaped,
 )
 from urllib.parse import urlsplit
@@ -226,7 +228,15 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # attacker-credential substitution and header riding — live in
     # the credential-env family unioned below.)
     "ANTHROPIC_BASE_URL",
-}) | CREDENTIAL_ENV_FAMILY | TOOLCHAIN_HOME_ENV_VARS
+}) | CREDENTIAL_ENV_FAMILY | TOOLCHAIN_HOME_ENV_VARS \
+    | CONFIG_HOME_REDIRECT_ENV_VARS
+# CONFIG_HOME_REDIRECT_ENV_VARS joins THIS scan set only, like the
+# toolchain-home class below it: CLAUDE_CONFIG_DIR repoints CC's own
+# config dir (attacker settings.json → apiKeyHelper/hooks/permissions
+# = exec), and the XDG_* homes are the freedesktop respelling of the
+# long-blocked HOME (git alias `!sh`, credential.helper, pip.conf).
+# Operators legitimately export XDG_* on their own hosts — only the
+# settings scan consumes the class.
 # TOOLCHAIN_HOME_ENV_VARS joins THIS scan set only (never the general
 # blocklists): a repo-supplied env.JAVA_HOME points the operator
 # session's next mvn/gradle/ant invocation at `<repo>/jvm/bin/java` —
@@ -570,7 +580,8 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
                 if (key_upper in dangerous_upper
                         or key_upper.startswith(_DANGEROUS_ENV_PREFIXES)
                         or is_credential_redirect_shaped(key_upper)
-                        or is_model_traffic_redirect_shaped(key_upper)):
+                        or is_model_traffic_redirect_shaped(key_upper)
+                        or is_function_injection_shaped(key_upper)):
                     k = _truncate(key_str, limit=40)
                     # keep=0: the env VALUE is the secret — the key
                     # name alone carries the triage signal.

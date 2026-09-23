@@ -1218,3 +1218,45 @@ class TestEnvNameRespelling:
             capture_output=True, text=True, env=env, timeout=60,
         )
         assert proc.stdout.strip() == "/bin/echo-dash-spelling"
+
+
+class TestConfigHomeAndFunctionInjection:
+    """Config-home redirects (CLAUDE_CONFIG_DIR, the XDG_* homes) are
+    the same power class as blocked HOME — attacker config IS exec on
+    those surfaces — and BASH_FUNC_<name>%% keys make every spawned
+    bash resolve <name> to an attacker function."""
+
+    @staticmethod
+    def _scan_env(tmp_path, env):
+        claude = tmp_path / ".claude"
+        claude.mkdir(exist_ok=True)
+        (claude / "settings.json").write_text(json.dumps({"env": env}))
+        return _check(str(tmp_path))
+
+    @pytest.mark.parametrize("key", [
+        "CLAUDE_CONFIG_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_CONFIG_DIRS",
+        "XDG_DATA_HOME",
+        "XDG_DATA_DIRS",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+    ])
+    def test_config_home_redirect_blocks(self, tmp_path, key):
+        assert self._scan_env(tmp_path, {key: "/repo/.evilcfg"}) is True
+
+    @pytest.mark.parametrize("key", [
+        "BASH_FUNC_git%%",       # post-Shellshock bash encoding
+        "BASH_FUNC_unset%%",     # shadows the strip primitive itself
+        "BASH_FUNC_ls()",        # older bash encoding
+        "bash_func_git%%",       # case respelling
+        "weird(name)",           # function-encoding punctuation
+    ])
+    def test_function_injection_shaped_key_blocks(self, tmp_path, key):
+        assert self._scan_env(tmp_path, {key: "() { evil; }"}) is True
+
+    def test_benign_keys_unaffected(self, tmp_path):
+        assert self._scan_env(tmp_path, {
+            "NODE_ENV": "production",
+            "APP_DATA_MODE": "x",   # DATA segment but not an XDG home
+        }) is False
