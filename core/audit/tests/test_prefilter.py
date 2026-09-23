@@ -860,3 +860,90 @@ class TestAccessorTierHonesty:
         ]:
             r = self._run(name, fp, src)
             assert not r.skip_llm, (fp, src)
+
+
+class TestAccessorDefTimeCode:
+    """Def-time-executed expressions (decorators, default args,
+    annotations) are live code the body-shape check never sees — a
+    Call/NamedExpr/Await in any of them refuses the accessor skip.
+    Pre-existing at BASE (adversarial-review member): the AST arm
+    judged only the body statements."""
+
+    def _run(self, src):
+        return run_prefilter(
+            target_path=Path("/nonexistent-target"), file_path="a.py",
+            function_name="g", source=src,
+        )
+
+    def test_decorator_call_refuses(self):
+        r = self._run(
+            "@reg(os.system(c))\ndef g(self):\n    return self._x")
+        assert not r.skip_llm
+
+    def test_walrus_default_refuses(self):
+        r = self._run(
+            "def g(self, n=(m := f(c))):\n    return self._x")
+        assert not r.skip_llm
+
+    def test_return_annotation_call_refuses(self):
+        r = self._run("def g(self) -> f(c):\n    return self._x")
+        assert not r.skip_llm
+
+    def test_param_annotation_call_refuses(self):
+        r = self._run("def g(self, x: f(c)):\n    return self._x")
+        assert not r.skip_llm
+
+    def test_default_call_refuses(self):
+        r = self._run("def g(self, x=f(c)):\n    return self._x")
+        assert not r.skip_llm
+
+    # ── keep direction ───────────────────────────────────────────────
+
+    def test_property_accessor_keeps_skip(self):
+        r = self._run("@property\ndef g(self):\n    return self._x")
+        assert r.skip_llm and "accessor" in r.skip_reason
+
+    def test_plain_annotations_and_defaults_keep_skip(self):
+        for src in (
+            "def g(self) -> bool:\n    return True",
+            "def g(self, x: int = 3):\n    return self._x",
+        ):
+            r = self._run(src)
+            assert r.skip_llm and "accessor" in r.skip_reason, src
+
+
+class TestAccessorSplitSignature:
+    """The BSD/K&R return-type-on-its-own-line form (`int\\nname(...)
+    \\n{\\n\\treturn 0;\\n}`) — the dominant kernel style — was refused
+    wholesale after the whole-body rewrite (the signature matcher only
+    understood one-line signatures). The type-only leading line joins
+    the signature; honesty still rests on the whole-body arm."""
+
+    def _run(self, name, src):
+        return run_prefilter(
+            target_path=Path("/nonexistent-target"), file_path="a.c",
+            function_name=name, source=src,
+        )
+
+    def test_type_on_own_line_field_accessor_skips(self):
+        r = self._run("get_name",
+            "static const char *\nget_name(struct s *x)\n{\n"
+            "\treturn x->name;\n}")
+        assert r.skip_llm and "accessor" in r.skip_reason
+
+    def test_type_on_own_line_constant_return_skips(self):
+        r = self._run("diskmapopen",
+            "int\ndiskmapopen(dev_t dev, int flag, int mode)\n{\n"
+            "\treturn 0;\n}")
+        assert r.skip_llm and "accessor" in r.skip_reason
+
+    def test_statement_first_line_still_refused(self):
+        r = self._run("get_val",
+            "int get_val(struct ctx *x, int v)\n{\n"
+            "*x->owner_uid = v;\nreturn x->val;\n}")
+        assert not r.skip_llm
+
+    def test_two_statement_body_still_refused(self):
+        r = self._run("put",
+            "void\nput(struct obj *p)\n{\np->refs--;\nreturn p->parent;\n}")
+        assert not r.skip_llm
