@@ -447,7 +447,12 @@ def render_directory(out_dir: Path, target: str | None = None) -> str:
             # payload when the envelope itself carries no stamp.
             prov_note = _provenance_note(data)
             if isinstance(data, dict):
-                data = data.get("paths") or data.get("graph_paths") or data.get("items") or []
+                # Shared envelope discipline (see envelope.py): the
+                # previous or-chain accepted a truthy non-list `paths`
+                # value and silently dropped the section.
+                data = unwrap_list(
+                    data, keys=("paths", "graph_paths", "items"),
+                ) or []
                 if not prov_note:
                     prov_note = _provenance_note(data)
             if isinstance(data, list):
@@ -517,13 +522,12 @@ def _load_optional_list(path: Path) -> list | None:
 
 
 def _load_disproven(path: Path) -> list | None:
-    """Load disproven.json — unwraps the {'disproven': [...]} envelope."""
+    """Load disproven.json — unwraps the {'disproven': [...]} envelope
+    through the shared discipline (single-list fallback included)."""
     data = _load_json(path)
     if data is None:
         return None
-    if isinstance(data, dict):
-        return data.get("disproven", [])
-    return data if isinstance(data, list) else None
+    return unwrap_list(data, keys=("disproven",))
 
 
 def render_and_write(out_dir: Path, target: str | None = None) -> Path:
