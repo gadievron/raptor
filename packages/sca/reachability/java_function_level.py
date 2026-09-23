@@ -67,7 +67,7 @@ from typing import Any
 from collections.abc import Iterable
 
 from ..models import Confidence, Dependency, Reachability
-from ._shared import UNRESOLVED_ENTRY
+from ._shared import _NAMESPACE_HEAD_RE, UNRESOLVED_ENTRY
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,14 @@ def _extract_qualified(advisory: Any) -> list[str]:
                 if isinstance(s, str) and s
             ]
             path = imp.get("path")
-            if not isinstance(path, str) or not path:
+            if (not isinstance(path, str) or not path
+                    or not _NAMESPACE_HEAD_RE.fullmatch(path)):
+                # No path, junk path, or a path that is not a Java
+                # package spelling (a ``groupId:artifactId``
+                # coordinate, a slashed filesystem path, ...): a
+                # composed ``<path>.<symbol>`` would be a well-formed
+                # garbage query pairing NOT_CALLED — the same silent
+                # suppression the marker exists to block.
                 out.extend(UNRESOLVED_ENTRY for _ in symbols)
                 continue
             out.extend(f"{path}.{s}" for s in symbols)

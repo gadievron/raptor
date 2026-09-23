@@ -74,8 +74,15 @@ def extract_qualified_symbols(
     Handles the three shapes seen in real OSV records:
 
       * ``imports[].symbols`` (mirrors the Go convention) — each
-        symbol is qualified with the import's ``path``; when the
-        record omits it the flat-list policy below applies.
+        symbol is qualified with the import's ``path`` when the
+        normalised path has the dotted-identifier shape the resolver
+        can bind; a path that fails that grammar (hyphenated /
+        slashed / coordinate spellings) yields the counted
+        :data:`UNRESOLVED_ENTRY` marker per symbol instead — a
+        composed unbindable prefix would pair NOT_CALLED and satisfy
+        the coverage gate, minting the exact false suppression the
+        marker exists to block. When the record omits the path the
+        flat-list policy below applies.
       * ``affects.functions`` — the RustSec convention (the dominant
         Rust advisory producer): fully-qualified
         ``crate::Type::method`` strings (live OSV export shape, e.g.
@@ -157,11 +164,24 @@ def extract_qualified_symbols(
                         out.append(UNRESOLVED_ENTRY)
                 continue
             symbols = imp.get("symbols") or []
+            path_head = _normalise_qualified(path) if path else ""
+            path_ok = bool(
+                path_head and _NAMESPACE_HEAD_RE.fullmatch(path_head)
+            )
             for s in symbols:
                 if not (isinstance(s, str) and s):
                     continue
-                if path:
-                    out.append(_normalise_qualified(f"{path}.{s}"))
+                if path_ok:
+                    out.append(f"{path_head}.{_normalise_qualified(s)}")
+                elif path:
+                    # A string path that fails the resolver's
+                    # dotted-identifier grammar even after separator
+                    # normalisation (hyphenated / slashed / coordinate
+                    # spellings) composes a guaranteed-NOT_CALLED
+                    # query — the same silent-suppression mechanism
+                    # as unconditional dep-name minting, one arm
+                    # over. Count the entry unresolved instead.
+                    out.append(UNRESOLVED_ENTRY)
                 else:
                     _emit(s, out)
         for key in ("affected_symbols", "affected_functions"):
