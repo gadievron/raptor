@@ -1,9 +1,10 @@
 // double_fetch.cocci — Detect TOCTOU via double copy_from_user.
 //
-// The pattern: a function calls copy_from_user (or get_user) on the
-// same userspace pointer more than once. Between fetches, a racing
-// thread can mutate the user buffer, breaking assumptions that the
-// first fetch validated.
+// The pattern: a function calls copy_from_user on the same userspace
+// pointer more than once. Between fetches, a racing thread can
+// mutate the user buffer, breaking assumptions that the first fetch
+// validated. (get_user is NOT covered: it is a macro whose fetch
+// shape differs per size class, and no leg here matches it.)
 //
 // Covers CWE-367: TOCTOU race in userspace reads.
 // @role: verification
