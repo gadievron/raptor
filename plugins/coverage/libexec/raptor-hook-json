@@ -50,8 +50,15 @@ def _get(src: str, key: str) -> None:
     # Scalars, not only strings: .raptor-run.json records session_pid
     # as a JSON int — printing nothing for it silently killed the
     # whole no-jq attribution path (owner comparison never matched).
-    # Mirrors jq -r: strings raw, numbers/bools rendered.
+    # Mirrors jq -r: strings raw, numbers/bools rendered. Strings
+    # carrying control bytes print NOTHING — the source file is
+    # agent/sandbox-writable, an interior newline in a value would
+    # shift $(...) captures and field reads in the bash consumer, and
+    # the jq lane rejects the same class, keeping the two twins in
+    # lock-step (both skip the hostile candidate).
     if isinstance(cur, str) and cur:
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in cur):
+            return
         print(cur)
     elif isinstance(cur, bool):
         print("true" if cur else "false")

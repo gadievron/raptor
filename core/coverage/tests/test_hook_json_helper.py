@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -61,6 +62,47 @@ class TestGet:
         proc = _helper("get", str(f), "output_dir")
         assert proc.returncode == 0
         assert proc.stdout == ""
+
+    def test_control_byte_value_prints_nothing(self, tmp_path):
+        """A status of "running\n<pid>" in the agent-writable
+        .raptor-run.json shifted the bash consumer's field reads —
+        forging the owner check in the jq lane. Both twins now reject
+        control-byte values (the candidate is skipped, in lock-step,
+        never misread)."""
+        f = tmp_path / "run.json"
+        f.write_text(json.dumps({"status": "running\n88771",
+                                 "session_pid": 99999}))
+        proc = _helper("get", str(f), "status")
+        assert proc.returncode == 0
+        assert proc.stdout == ""
+
+    def test_jq_lane_rejects_control_byte_values(self, tmp_path):
+        """The hook's single-spawn jq program (extracted from the hook
+        file itself so this cannot drift) must read a control-byte
+        field as EMPTY: three newline-delimited fields are consumed by
+        three `read`s, and an interior newline in .status otherwise
+        lands the pid of a victim session in the owner field."""
+        jq = shutil.which("jq")
+        if jq is None:
+            pytest.skip("jq not installed")
+        hook_text = HOOK.read_text(encoding="utf-8")
+        m = re.search(r"jq -r '([^']+)'", hook_text)
+        assert m, "hook jq program not found"
+        program = m.group(1)
+        f = tmp_path / "run.json"
+        f.write_text(json.dumps({"status": "running\n88771",
+                                 "session_pid": 99999,
+                                 "target_path": "/tgt"}))
+        proc = subprocess.run([jq, "-r", program, str(f)],
+                              capture_output=True, text=True,
+                              timeout=30, check=False)
+        assert proc.returncode == 0, proc.stderr
+        lines = proc.stdout.split("\n")
+        # status rejected -> empty; owner is field 2 (the real pid),
+        # target field 3 — no shift.
+        assert lines[0] == ""
+        assert lines[1] == "99999"
+        assert lines[2] == "/tgt"
 
     def test_malformed_json_silent(self, tmp_path):
         f = tmp_path / "p.json"

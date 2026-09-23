@@ -110,8 +110,16 @@ if [ -n "$_SESSION_PID" ]; then
             # not silence coverage attribution for the whole session.
             if [ "$HAVE_JQ" = "1" ]; then
                 # Single jq spawn per candidate (three fields,
-                # newline-delimited; missing → empty line).
-                _meta3=$(jq -r '[(.status // ""), (.session_pid // ""), ((.target_path // "") | if type == "string" then . else "" end)] | .[]' "$_rdir/.raptor-run.json" 2>/dev/null || true)
+                # newline-delimited; missing → empty line). Control
+                # bytes in a field value read as EMPTY: the file is
+                # agent/sandbox-writable, and a value like
+                # status="running\n<pid>" otherwise shifts the three
+                # `read`s — forging the owner check and clearing the
+                # target filter. Empty fails the status/owner tests
+                # below, so a hostile record skips THIS candidate —
+                # lock-step with the python twin, which rejects
+                # control-byte values the same way.
+                _meta3=$(jq -r '[(.status // ""), (.session_pid // ""), ((.target_path // "") | if type == "string" then . else "" end)] | map(tostring | if test("[\u0000-\u001F\u007F]") then "" else . end) | .[]' "$_rdir/.raptor-run.json" 2>/dev/null || true)
                 _status=""; _owner=""; _tgt=""
                 {
                     IFS= read -r _status || true
