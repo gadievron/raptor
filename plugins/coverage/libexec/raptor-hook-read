@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # PostToolUse hook for Read — tracks file reads for coverage.
-# Runs async (configured in .claude/settings.json).
+# Runs async (wired in plugins/coverage/hooks/hooks.json; the
+# plugin is loaded by the launcher, not by .claude/settings.json).
 #
 # Finds the active running run via the project symlink, then
 # appends the file path to the run's reads manifest.

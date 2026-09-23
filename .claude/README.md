@@ -4,36 +4,34 @@ This directory contains custom slash commands that let you use RAPTOR with plain
 
 ## Available Slash Commands
 
-### `/raptor` - General RAPTOR Assistant
-The main command that helps you decide which RAPTOR mode to use.
+The primary commands (run `/commands` for the full list):
+
+### `/scan` - Code Scanning
+Runs RAPTOR's code scanning (Semgrep + CodeQL + LLM analysis).
 
 **Examples:**
-- "Hey Claude, /raptor - scan my code for vulnerabilities"
-- "/raptor - I need to fuzz a binary"
-- "/raptor - test my web application"
+- "/scan - scan the current directory"
+- "/scan - check this repository for security issues"
 
-### `/raptor-scan` - Code Scanning
-Runs RAPTOR's autonomous code scanning (Semgrep + CodeQL + LLM analysis).
-
-**Examples:**
-- "/raptor-scan - scan the current directory"
-- "/raptor-scan - check this repository for security issues"
-- "/raptor-scan - find vulnerabilities in /path/to/my/app"
-
-### `/raptor-fuzz` - Binary Fuzzing
-Fuzzes binaries with AFL++ and generates exploits from crashes.
+### `/agentic` - Full Pipeline
+Scan -> dedup -> prep -> LLM analysis with validation methodology.
 
 **Examples:**
-- "/raptor-fuzz - fuzz ./my_binary for 10 minutes"
-- "/raptor-fuzz - test /usr/local/bin/myapp for crashes"
-- "/raptor-fuzz - find bugs in this binary"
+- "/agentic - run the full pipeline on /path/to/my/app"
 
-### `/raptor-web` - Web Application Testing
+### `/fuzz` - Binary Fuzzing
+Fuzzes binaries with AFL++ and analyzes crashes.
+
+**Examples:**
+- "/fuzz - fuzz ./my_binary for 10 minutes"
+
+### `/web` - Web Application Testing
 Scans web applications for OWASP Top 10 vulnerabilities.
 
 **Examples:**
-- "/raptor-web - scan https://myapp.com"
-- "/raptor-web - test my website for XSS and SQLi"
+- "/web - scan https://myapp.com"
+
+(`/raptor`, `/raptor-scan`, `/raptor-fuzz`, `/raptor-web`, `/raptor-frida`, and `/raptor-sca` are compatibility aliases for the same commands.)
 
 ## How to Use
 
@@ -50,7 +48,7 @@ Scans web applications for OWASP Top 10 vulnerabilities.
 ## Example Workflow
 
 ```
-You: /raptor-scan - scan this directory for secrets and vulnerabilities
+You: /scan - scan this directory for secrets and vulnerabilities
 
 Claude: I'll run a comprehensive security scan on the current directory.
         Let me start by running RAPTOR in agentic mode...
@@ -58,9 +56,9 @@ Claude: I'll run a comprehensive security scan on the current directory.
         [Runs: python3 raptor.py agentic --repo /current/path]
 
         ✓ Scan complete! Found 5 vulnerabilities:
-        1. Hardcoded AWS credentials (HIGH) - app/config.py:23
-        2. SQL Injection (CRITICAL) - api/users.py:45
-        3. XSS vulnerability (MEDIUM) - web/templates/index.html:67
+        1. Hardcoded AWS credentials (High) - app/config.py:23
+        2. SQL Injection (Critical) - api/users.py:45
+        3. XSS vulnerability (Medium) - web/templates/index.html:67
         ...
 
         I've also generated:
@@ -119,8 +117,8 @@ Claude will understand your intent and run the appropriate RAPTOR command!
 - Claude Code CLI installed
 - RAPTOR installed (python3, dependencies)
 - For fuzzing: AFL++ properly configured
-- For full analysis: ANTHROPIC_API_KEY or OPENAI_API_KEY set
+- For full analysis: at least one configured LLM provider (Claude Code itself works out of the box; external models are configured per the model catalog — see `libexec/raptor-llm-ask --show-primary`)
 
 ---
 
-**Start using RAPTOR with natural language now!** Just type `/raptor` and tell Claude what you want to test.
+**Start using RAPTOR with natural language now!** Just type `/scan` (or `/commands` for the full list) and tell Claude what you want to test.

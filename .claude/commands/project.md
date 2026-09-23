@@ -89,4 +89,4 @@ Run the command via Bash, then output the result verbatim in a fenced code block
 
 When a project is active (via `/project use <name>`), subsequent commands write their output to the project directory instead of generating timestamped dirs under `out/`.
 
-ARGUMENTS: $ARGS
+ARGUMENTS: $ARGUMENTS

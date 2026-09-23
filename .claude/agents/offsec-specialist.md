@@ -70,7 +70,7 @@ You MUST treat the offensive security skills as your primary toolkit. These skil
 # DISPATCH POLICY (HITL — MECHANICALLY ANCHORED)
 
 This agent spans all three Rule-of-Two legs (untrusted input + sensitive
-access + external state) and is classified needs-HITL in docs/security.md.
+access + external state) and is classified needs-HITL in docs/agent-security.md.
 That requirement is mechanically anchored, not just documented:
 
 - The agent's name is registered in

@@ -160,4 +160,4 @@ libexec/raptor-binary <command> [args]
 Show the output path and the key summary lines after each command. For `report`
 and `handoff`, print the artefact contents verbatim.
 
-ARGUMENTS: $ARGS
+ARGUMENTS: $ARGUMENTS

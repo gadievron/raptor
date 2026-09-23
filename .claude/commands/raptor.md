@@ -1,6 +1,7 @@
 ---
 description: RAPTOR security testing assistant
 dispatch: python3 raptor.py agentic
+exclude_from_listing: true
 ---
 
 # RAPTOR - Security Testing Assistant

@@ -19,7 +19,7 @@ You are the ORCHESTRATOR for this investigation. You will spawn specialist agent
 2. **Follow the workflow** defined in that skill exactly
 
 3. **The user's investigation request is:**
-   {rest of command arguments after /oss-forensics}
+   $ARGUMENTS
 
 4. **Parse any flags:**
    - `--max-followups N` (default: 3) - Maximum evidence collection rounds
