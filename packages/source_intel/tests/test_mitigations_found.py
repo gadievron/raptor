@@ -181,3 +181,54 @@ def test_absence_does_not_emit_hardened_false():
     for entry in m:
         assert "hardened" not in entry.name
         assert "unhardened" not in entry.name
+
+
+def test_comment_planted_cap_constant_mints_no_privilege_gate(tmp_path):
+    """The render-side constant check must mirror the adapter's
+    sanitized verdict-side twin: a root-equivalent constant that
+    appears only in a comment on the line must not mint the
+    privilege_gate mitigation (Stage D consumes it as a discount)."""
+    path = _cap_source_file(
+        tmp_path,
+        "if (!capable(CAP_NET_BIND_SERVICE)) /* CAP_SYS_ADMIN legacy */",
+    )
+    r = SourceIntelResult(capabilities=(CapabilityEvidence(
+        cap_function="capable", location=(path, 5),
+        grade=GRADE_SAME_FUNCTION, enclosing_function="op",
+    ),))
+    assert derive_mitigations_found(r, finding_function="op") == []
+
+
+def test_comment_planted_cap_constant_no_tier1_prose(tmp_path):
+    """Same forgery, prose side: the Tier-1 ROOT-EQUIVALENT
+    \"privilege-gated\" line must not fire from a commented constant."""
+    from packages.source_intel.render import (
+        _privileged_cap_constant_on_line,
+        _render_capability_line,
+    )
+
+    path = _cap_source_file(
+        tmp_path,
+        "if (!capable(CAP_NET_BIND_SERVICE)) /* CAP_SYS_ADMIN legacy */",
+    )
+    assert _privileged_cap_constant_on_line(path, 5) is None
+    line = _render_capability_line(
+        CapabilityEvidence(
+            cap_function="capable", location=(path, 5),
+            grade=GRADE_SAME_FUNCTION, enclosing_function="op",
+        ),
+        "stage_d",
+    )
+    assert "ROOT-EQUIVALENT" not in line
+    assert "privilege-gated" not in line
+
+
+def test_real_cap_constant_still_detected(tmp_path):
+    """Direction pin: the sanitized view must not blank real code —
+    an actual capable(CAP_SYS_ADMIN) call still yields the constant."""
+    from packages.source_intel.render import _privileged_cap_constant_on_line
+
+    path = _cap_source_file(
+        tmp_path, "if (!capable(CAP_SYS_ADMIN)) return -EPERM;",
+    )
+    assert _privileged_cap_constant_on_line(path, 5) == "CAP_SYS_ADMIN"

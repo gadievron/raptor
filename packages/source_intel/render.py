@@ -52,7 +52,6 @@ from packages.source_intel.analyze import (
     SourceIntelResult,
 )
 from typing import TYPE_CHECKING
-from pathlib import Path
 
 if TYPE_CHECKING:
     from core.build.build_flags import BuildFlagsContext
@@ -568,11 +567,14 @@ def _privileged_cap_constant_on_line(
 
     Mirrors the verdict-side ``adapter.py:_line_uses_privileged_cap``
     but returns the constant name rather than a boolean (so the
-    render can include it in the prose)."""
-    try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-    except OSError:
+    render can include it in the prose). The mirror includes the
+    substrate: both read the shared sanitized view, so a constant
+    planted in a comment or string cannot mint Tier-1
+    \"privilege-gated\" prose or a ``privilege_gate`` Mitigation
+    (Stage D consumes both as discounts)."""
+    from packages.source_intel._source_view import sanitized_lines
+    lines = sanitized_lines(file_path)
+    if lines is None:
         return None
     if line_no < 1 or line_no > len(lines):
         return None
