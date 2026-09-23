@@ -1213,3 +1213,60 @@ class TestGuardPolarityLabels:
         kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
         assert (kept, pruned) == (1, 0)
         assert receipts == []
+
+
+def _write_ff_twin_source(tmp_path: Path, pad: str) -> Path:
+    r"""Guarded sink with planted contradictory guards ABOVE it and a
+    comment whose content is attacker-chosen (*pad*).  \n-model layout
+    (what CodeQL numbers): steps at lines 7 and 10, real guard x > 0."""
+    target = tmp_path / "target"
+    (target / "src").mkdir(parents=True)
+    (target / "src" / "vuln.c").write_bytes((
+        f"/* {pad} */\n"              # 1
+        "static void f(int x) {\n"    # 2
+        "    if (x > 5) {\n"          # 3  planted
+        "        mark();\n"           # 4
+        "    }\n"                     # 5
+        "    if (x < 3) {\n"          # 6  planted
+        "        mark2();\n"          # 7  <- step
+        "    }\n"                     # 8
+        "    if (x > 0) {\n"          # 9  the real guard
+        "        sink(x);\n"          # 10 <- step
+        "    }\n"                     # 11
+        "}\n"                         # 12
+    ).encode())
+    return target
+
+
+class TestSourceLineModel:
+    """SARIF line numbers count \n; the loaded source view must too.
+
+    A splitlines() view desyncs on one \f (legal inside a C comment):
+    the guard-harvest window shifts onto attacker-planted contradictory
+    guards, the harvested set goes jointly UNSAT, and the SMT pruner
+    suppresses the REAL finding as a false positive pre-LLM."""
+
+    STEPS = [("src/vuln.c", 7), ("src/vuln.c", 10)]
+
+    def test_comment_form_feeds_cannot_shift_guard_harvest(
+        self, tmp_path: Path,
+    ):
+        clean = _path_conditions(
+            self.STEPS, _write_ff_twin_source(tmp_path / "a", "padding"), {},
+        )
+        evil = _path_conditions(
+            self.STEPS,
+            _write_ff_twin_source(tmp_path / "b", "pad\x0c\x0cding"), {},
+        )
+        assert [(c["text"], c["negated"]) for c in clean] == [
+            ("x < 3", False), ("x > 0", False),
+        ]
+        assert evil == clean
+
+    def test_ff_twin_survives_real_smt_prune(self, tmp_path: Path):
+        pytest.importorskip("z3")
+        target = _write_ff_twin_source(tmp_path, "pad\x0c\x0cding")
+        sarif = _sarif_with_flow(self.STEPS)
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (1, 0)
+        assert receipts == []
