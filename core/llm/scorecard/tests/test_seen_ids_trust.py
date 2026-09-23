@@ -137,3 +137,62 @@ def test_junk_seen_set_shape_is_inert(tmp_path, monkeypatch):
     assert sc.claim_and_record_tool_evidence(
         "dc", "m", "finding-123", "incorrect",
     ) is True
+
+
+class TestUnverifiedStatsNeverGrantReliabilityWeight:
+    """Adversarial-route closure: the calibrated-merge reliability
+    weight consumes ``get_stat`` as AUTHORITY (it steers which model's
+    verdict wins an audit panel merge), but the key-unusable clamp
+    keeps unverified content readable through exactly that surface —
+    a forged 100000-correct cell earned a ~0.99 weight. Stats rows now
+    carry the read's integrity verdict, and the weight treats an
+    untrusted row as uninformative (condemn-toward-abstain: 0.5 moves
+    nothing)."""
+
+    def _forged_reliability_sidecar(self, path: Path) -> None:
+        path.write_text(json.dumps({
+            "version": 2,
+            "models": {"bad-model": {"audit:CWE-89": {
+                "last_seen_at": _now(),
+                "events": {"tool_evidence": {
+                    "2026-09": {"correct": 100000, "incorrect": 0},
+                }},
+            }}},
+        }))
+
+    def test_stats_rows_carry_trust_verdict(self, tmp_path, monkeypatch):
+        _make_key_unusable(tmp_path, monkeypatch)
+        path = tmp_path / "sc.json"
+        self._forged_reliability_sidecar(path)
+        stats = ModelScorecard(path).get_stats()
+        assert stats and all(s.trusted is False for s in stats)
+
+    def test_trusted_read_marks_rows_trusted(self, tmp_path):
+        path = tmp_path / "sc.json"
+        sc = ModelScorecard(path)
+        sc.record_event("dc", "m", "cheap_short_circuit", "correct")
+        stats = sc.get_stats()
+        assert stats and all(s.trusted is True for s in stats)
+
+    def test_calibrated_weight_uninformative_under_clamp(
+        self, tmp_path, monkeypatch,
+    ):
+        from core.audit.calibrated_merge import model_reliability
+
+        _make_key_unusable(tmp_path, monkeypatch)
+        path = tmp_path / "sc.json"
+        self._forged_reliability_sidecar(path)
+        sc = ModelScorecard(path)
+        assert model_reliability(sc, "audit:CWE-89", "bad-model") is None
+
+    def test_calibrated_weight_still_earned_when_trusted(self, tmp_path):
+        from core.audit.calibrated_merge import model_reliability
+
+        path = tmp_path / "sc.json"
+        sc = ModelScorecard(path)
+        for _ in range(8):
+            sc.claim_and_record_tool_evidence(
+                "audit:CWE-89", "m", f"f-{_}", "correct",
+            )
+        weight = model_reliability(sc, "audit:CWE-89", "m")
+        assert weight is not None and weight > 0.5

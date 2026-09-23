@@ -129,6 +129,14 @@ def model_reliability(
         return None
     try:
         stats = scorecard.get_stat(decision_class, model)
+        # This weight is AUTHORITY (it steers which model's verdict
+        # wins the merge), not introspection: a row materialised from
+        # an unverifiable read (the key-unusable clamp keeps forged
+        # content readable) must stay uninformative — a forged
+        # all-correct cell otherwise buys a near-1.0 weight through
+        # the stats surface the trust clamp doesn't cover.
+        if stats is not None and not getattr(stats, "trusted", True):
+            return None
     except Exception:  # never let a store read break a merge
         logger.debug("scorecard read failed for %s/%s",
                      decision_class, model, exc_info=True)
