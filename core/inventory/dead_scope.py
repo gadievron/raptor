@@ -617,8 +617,16 @@ def _detect_ruby(content: str) -> list[DeadRange]:
                 if i + 2 <= j:
                     ranges.append((i + 2, j))
                 break
-            if len(cur) < len(ind):
-                break  # dedented past the opener without a match — bail (sound)
+            if len(cur) <= len(ind) and cur != ind:
+                # Dedented past the opener — or at/inside the opener's
+                # column with a DIFFERENT whitespace mix (space vs tab:
+                # same length, different bytes evades both the
+                # byte-equal closer match above and a length-only
+                # dedent check, letting the scan latch onto a later
+                # end and range live defs dead). Either way the
+                # indentation anchor is broken — bail (sound,
+                # under-detect).
+                break
     return ranges
 
 

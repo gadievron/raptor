@@ -1262,3 +1262,59 @@ def test_rust_lifetime_at_end_of_source_no_error():
     # swallows exceptions into [], hiding an IndexError as a silent
     # behavior change).
     assert detect_dead_scopes("rust", "fn f() { if false { let x: &'") == []
+
+
+# ---------------------------------------------------------------------------
+# Ruby indentation anchoring — whitespace-class confusion. An `end`
+# whose indent has the same LENGTH but different bytes (space vs tab)
+# matches neither the byte-equal closer check nor a length-only dedent
+# bail, so the scan latches onto a later byte-equal `end` and ranges
+# the intervening live defs dead.
+# ---------------------------------------------------------------------------
+
+
+def test_ruby_same_length_different_whitespace_end_bails():
+    _requires_lexical_grammar("ruby")
+    src = (
+        "class A\n"
+        "\tif false\n"
+        "\t\tx = 1\n"
+        " end\n"          # space indent, same length as the tab opener
+        "\tdef vuln\n"
+        "\t\tdangerous\n"
+        "\tend\n"
+        "end\n"
+    )
+    # tree-sitter ground truth: the if node closes at the space-indented
+    # end (line 4); `def vuln` (5-7) is OUTSIDE it. The indentation
+    # anchor cannot see that — it must bail, not range the def dead.
+    assert detect_dead_scopes("ruby", src) == []
+
+
+def test_ruby_byte_equal_indent_still_ranges():
+    _requires_lexical_grammar("ruby")
+    src = (
+        "class A\n"
+        "\tif false\n"
+        "\t\tx = 1\n"
+        "\tend\n"
+        "\tdef vuln\n"
+        "\t\tdangerous\n"
+        "\tend\n"
+        "end\n"
+    )
+    assert detect_dead_scopes("ruby", src) == [(3, 3)]
+
+
+def test_ruby_same_indent_statement_lines_do_not_bail():
+    _requires_lexical_grammar("ruby")
+    # Unindented body (same column as the opener, same bytes) is
+    # tolerated exactly as before — only a whitespace-MIX difference
+    # breaks the anchor.
+    src = (
+        "if false\n"
+        "x = 1\n"
+        "end\n"
+        "def live; end\n"
+    )
+    assert detect_dead_scopes("ruby", src) == [(2, 2)]
