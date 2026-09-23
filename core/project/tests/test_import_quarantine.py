@@ -154,5 +154,95 @@ class TestImportQuarantinesPrivilegedArtifacts(unittest.TestCase):
             self.assertFalse((root2 / "coverage.json").exists())
 
 
+class TestImportQuarantinesCoverageRecords(unittest.TestCase):
+    """Per-run coverage records are a producer-named GLOB family
+    (``coverage-<tool>.json``, legacy ``coverage-record.json``) — the
+    fixed-name quarantine set could never cover them, so a forged
+    archive still minted examined-coverage that shrank the gap-audit
+    residual and passed ``/project coverage --fail-under``."""
+
+    def _build(self, src: Path) -> Path:
+        run = src / "scan_20260101-000000"
+        run.mkdir(parents=True)
+        (run / "findings.json").write_text('{"findings": []}')
+        (run / "coverage-semgrep.json").write_text(json.dumps({
+            "tool": "semgrep",
+            "files_examined": ["src/a.py", "src/evil_marked_reviewed.py"],
+            "timestamp": "2026-01-01T00:00:00+00:00",
+        }))
+        (run / "coverage-read.json").write_text(json.dumps({
+            "tool": "llm-read", "files_examined": ["src/c.py"],
+        }))
+        (run / "coverage-record.json").write_text(json.dumps({
+            "tool": "legacy", "files_examined": ["src/d.py"],
+        }))
+        # Tool-subdir variant the record glob also discovers.
+        (run / "scan").mkdir()
+        (run / "scan" / "coverage-codeql.json").write_text(json.dumps({
+            "tool": "codeql", "files_examined": ["src/e.py"],
+        }))
+        return run
+
+    def test_coverage_records_quarantined(self):
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            src = d / "src" / "myproj"
+            self._build(src)
+            root = _import(d, src)
+            run = root / "scan_20260101-000000"
+            for canonical in (
+                run / "coverage-semgrep.json",
+                run / "coverage-read.json",
+                run / "coverage-record.json",
+                run / "scan" / "coverage-codeql.json",
+            ):
+                self.assertFalse(canonical.exists(),
+                                 f"{canonical} restored at canonical path")
+            q = root / _QUARANTINE / "scan_20260101-000000"
+            self.assertTrue((q / "coverage-semgrep.json").is_file())
+            self.assertTrue((q / "scan" / "coverage-codeql.json").is_file())
+
+    def test_coverage_view_sees_no_forged_records(self):
+        """Consumer-level check: the file-level coverage view over the
+        imported run must not count the archive's records as examined
+        coverage."""
+        from core.coverage.store_summary import file_level_view
+
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            src = d / "src" / "myproj"
+            self._build(src)
+            root = _import(d, src)
+            view = file_level_view([root / "scan_20260101-000000"])
+            self.assertEqual(view.get("tools", {}), {})
+
+
+class TestImportQuarantinesChecklist(unittest.TestCase):
+    """Run-level checklists are what ``_promote_checklist`` elects
+    "newest" and copies to the project level (merging checked_by
+    credit) — a forged archive would mint reviewed checklist state
+    the next start_run promotes into authority."""
+
+    def test_checklists_quarantined(self):
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            src = d / "src" / "myproj"
+            run = src / "scan_20260101-000000"
+            run.mkdir(parents=True)
+            (run / "findings.json").write_text('{"findings": []}')
+            (run / "checklist.json").write_text(
+                '{"items": [{"id": 1, "checked_by": "forged"}]}')
+            (src / "checklist.json").write_text(
+                '{"items": [{"id": 1, "checked_by": "forged-root"}]}')
+            root = _import(d, src)
+            self.assertFalse((root / "checklist.json").exists())
+            self.assertFalse(
+                (root / "scan_20260101-000000" / "checklist.json").exists())
+            q = root / _QUARANTINE
+            self.assertTrue((q / "checklist.json").is_file())
+            self.assertTrue(
+                (q / "scan_20260101-000000" / "checklist.json").is_file())
+
+
 if __name__ == "__main__":
     unittest.main()

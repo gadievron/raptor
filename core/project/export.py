@@ -4,6 +4,7 @@ Exports a project output directory as a zip archive and imports
 zip archives back, with path traversal and symlink validation.
 """
 
+import fnmatch
 import os
 import shutil
 import zipfile
@@ -575,7 +576,27 @@ _PRIVILEGED_FILE_NAMES = frozenset({
     # Derived + recomputable by re-attach, so quarantining costs
     # nothing.
     "re-database.json",
+    # Validation checklist: run-level copies are what
+    # _promote_checklist elects "newest" and copies to the project
+    # level (merging checked_by credit) — a forged archive would
+    # mint reviewed/verified checklist state the next start_run
+    # promotes into authority. Same false-suppression direction as
+    # the coverage records.
+    "checklist.json",
 })
+
+# Glob-shaped privileged families. Per-run coverage records are
+# per-tool files (``coverage-semgrep.json`` / ``coverage-read.json``
+# / legacy ``coverage-record.json``) discovered by consumers via a
+# ``coverage-*.json`` glob (core/coverage/record.py) — a fixed-name
+# set can never cover a producer-named family, which is exactly how
+# the records escaped the first quarantine cut while the project-root
+# store (``coverage.json``) was caught: a forged record minted
+# examined-coverage that shrank the gap-audit residual and passed
+# ``/project coverage --fail-under``.
+_PRIVILEGED_FILE_GLOBS = (
+    "coverage-*.json",
+)
 
 _PRIVILEGED_DIR_NAMES = frozenset({
     "witnesses",          # WitnessStore roots (manifests + blobs)
@@ -627,7 +648,9 @@ def _quarantine_imported_privileged_artifacts(output_dir: Path) -> list[str]:
             # later attach (cache mkdir hits the name collision) —
             # the export-side skip does not bind an archive author.
             if (name in _PRIVILEGED_FILE_NAMES
-                    or name in _PRIVILEGED_DIR_NAMES):
+                    or name in _PRIVILEGED_DIR_NAMES
+                    or any(fnmatch.fnmatch(name, pat)
+                           for pat in _PRIVILEGED_FILE_GLOBS)):
                 src = dp / name
                 rel = src.relative_to(root)
                 dest = _quarantine_dest(qroot, rel)
