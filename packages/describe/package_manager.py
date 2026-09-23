@@ -46,16 +46,6 @@ _KNOWN_PMS = (
 )
 
 
-# Per-PM package-name overrides for binaries whose package
-# name differs across distros. Empty today — every binary
-# /describe currently checks (autoconf / automake / libtool /
-# libtoolize / coccinelle) has the same package name on
-# apt / dnf / pacman / apk / zypper / brew. Extend with
-# ``{"binary": {"pm": "package-name"}}`` when a divergent case
-# materialises.
-_PER_PM_PKG_OVERRIDES: dict = {}
-
-
 @functools.lru_cache(maxsize=1)
 def detect_package_manager() -> str | None:
     """Return the first installed PM from ``_KNOWN_PMS``, or
@@ -100,8 +90,12 @@ def format_install_hint(packages: list[str]) -> str:
         → "install libtool via your system package manager"
                                           (no recognised PM)
     """
+    # Per-PM package-name divergence is the _INSTALL_ADVICE entries'
+    # job (``pm_packages``, resolved by the caller) — a second,
+    # dead-empty override table here invited the two mechanisms to
+    # drift.
     pm = detect_package_manager()
-    pkgs = " ".join(_resolve_pkg(p, pm) for p in packages)
+    pkgs = " ".join(packages)
     sudo = _sudo_prefix()
 
     if pm == "apt":
@@ -120,15 +114,6 @@ def format_install_hint(packages: list[str]) -> str:
         # in that case, which is the right surface).
         return f"brew install {pkgs}"
     return f"install {pkgs} via your system package manager"
-
-
-def _resolve_pkg(pkg: str, pm: str | None) -> str:
-    """Look up the per-PM override for ``pkg`` if one exists,
-    else pass through unchanged."""
-    overrides = _PER_PM_PKG_OVERRIDES.get(pkg)
-    if overrides and pm and pm in overrides:
-        return overrides[pm]
-    return pkg
 
 
 # ---------------------------------------------------------------------------

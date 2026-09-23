@@ -121,3 +121,48 @@ class TestBestEffortAndLoggerRestore:
             restored = (disc.level, pars.level)
         assert result.by_ecosystem == {}
         assert restored == (prev_disc, prev_pars)
+
+
+class TestThreadScopedSuppression:
+    def test_concurrent_threads_records_survive_window(
+        self, tmp_path, monkeypatch,
+    ):
+        """The suppression window is THREAD-scoped: another thread
+        logging through the sca loggers while /describe counts deps
+        keeps its records (a process-global level clamp dropped
+        them)."""
+        import logging
+        import threading
+
+        records: list[str] = []
+
+        class _Cap(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                records.append(record.getMessage())
+
+        disc = logging.getLogger("packages.sca.discovery")
+        cap = _Cap()
+        prev_level = disc.level
+        disc.addHandler(cap)
+        disc.setLevel(logging.INFO)
+
+        def fake_find(_path):
+            # While the suppression window is open, a concurrent
+            # thread emits an INFO record on the same logger.
+            t = threading.Thread(
+                target=lambda: disc.info("concurrent sca info line"),
+            )
+            t.start()
+            t.join(timeout=5)
+            assert not t.is_alive()
+            return []
+
+        monkeypatch.setattr(
+            "packages.sca.discovery.find_manifests", fake_find,
+        )
+        try:
+            detect_dependency_counts(tmp_path)
+        finally:
+            disc.removeHandler(cap)
+            disc.setLevel(prev_level)
+        assert "concurrent sca info line" in records

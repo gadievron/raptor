@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from packages.describe import package_manager as pm_mod
 from packages.describe.package_manager import (
     detect_package_manager,
     format_install_hint,
@@ -308,22 +307,17 @@ class TestFormatInstallHint:
         assert hint == "brew install libtool"
         assert "macOS" not in hint
 
-    def test_per_pm_override_applies(self, monkeypatch):
-        # Synthetic per-PM override → resolves the binary to a
-        # different package name on a specific PM.
-        monkeypatch.setattr(
-            pm_mod, "_PER_PM_PKG_OVERRIDES",
-            {"libtool": {"dnf": "libtool-special"}},
-        )
+    def test_hint_passes_package_names_through(self):
+        # Per-PM name divergence is resolved by the CALLER from the
+        # _INSTALL_ADVICE ``pm_packages`` maps — format_install_hint
+        # renders exactly the names it is given (the second override
+        # table it once consulted was dead-empty and removed).
+        detect_package_manager.cache_clear()
         with patch("shutil.which", side_effect=_which_only({"dnf"})):
             assert (
-                format_install_hint(["libtool"])
+                format_install_hint(["libtool-special"])
                 == "sudo dnf install libtool-special"
             )
-        # And on a different PM, the override doesn't apply.
-        # Cache cleared because the prior detection inside this
-        # test pinned "dnf"; otherwise the lru_cache would
-        # return dnf again.
         detect_package_manager.cache_clear()
         with patch("shutil.which", side_effect=_which_only({"apt"})):
             assert (
