@@ -329,6 +329,14 @@ class JavaScriptExtractor:
         backtick), ``//`` line comments, ``/* */`` block comments, and
         regex literals (``/pattern/``).  Returns a 1-based line number
         or ``None`` when the end cannot be determined.
+
+        Reference scanner: the production path answers every function
+        from ONE lexical pass (:meth:`_scan_events` +
+        :meth:`_fill_line_ends`, the CExtractor idiom) because calling
+        this per header scans to EOF whenever braces never re-balance
+        — quadratic on a crafted file of never-closing openers. Kept
+        as the semantics oracle the event-stream path is
+        differential-tested against.
         """
         depth = 0
         found_open = False
@@ -411,6 +419,181 @@ class JavaScriptExtractor:
 
         return None
 
+    @staticmethod
+    def _scan_events(lines: list[str]) -> list[tuple[int, int]]:
+        """One lexical pass over the whole file: ordered ``(line_idx,
+        delta)`` events for every ``{`` (+1), ``}`` (−1) and ``;`` (0)
+        outside strings, template literals, comments and regex
+        literals — the same skipping rules as :meth:`_find_end`,
+        applied once instead of once per function."""
+        events: list[tuple[int, int]] = []
+        in_string: str | None = None
+        in_regex = False
+        in_block_comment = False
+        prev_significant = '='
+
+        for i, line in enumerate(lines):
+            j = 0
+            while j < len(line):
+                ch = line[j]
+
+                if in_block_comment:
+                    if ch == '*' and j + 1 < len(line) and line[j + 1] == '/':
+                        in_block_comment = False
+                        j += 2
+                        continue
+                    j += 1
+                    continue
+
+                if in_regex:
+                    if ch == '\\':
+                        j += 2
+                        continue
+                    if ch == '/':
+                        in_regex = False
+                    j += 1
+                    continue
+
+                if in_string is not None:
+                    if ch == '\\':
+                        j += 2
+                        continue
+                    if ch == in_string:
+                        in_string = None
+                        prev_significant = ch
+                    j += 1
+                    continue
+
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '*':
+                    in_block_comment = True
+                    j += 2
+                    continue
+
+                if ch == '/' and j + 1 < len(line) and line[j + 1] == '/':
+                    break
+
+                if ch in ('"', "'", '`'):
+                    in_string = ch
+                    j += 1
+                    continue
+
+                if (ch == '/' and j + 1 < len(line)
+                        and prev_significant
+                        in JavaScriptExtractor._REGEX_PREFIX):
+                    in_regex = True
+                    j += 1
+                    continue
+
+                if ch == '{':
+                    events.append((i, 1))
+                elif ch == '}':
+                    events.append((i, -1))
+                elif ch == ';':
+                    events.append((i, 0))
+
+                if not ch.isspace():
+                    prev_significant = ch
+
+                j += 1
+
+        return events
+
+    @classmethod
+    def _fill_line_ends(
+        cls, lines: list[str], functions: list[FunctionInfo],
+    ) -> None:
+        """Post-pass: fill ``line_end`` for every function that lacks it.
+
+        Linear, not per-function — the CExtractor._fill_line_ends
+        idiom: calling :meth:`_find_end` per function scans to EOF
+        whenever braces never re-balance, O(N²) on a crafted file of
+        never-closing openers. Lex the file ONCE into brace/semicolon
+        events, then answer each function from the event stream:
+
+        * ``base`` — brace depth just before the function's first line;
+        * ``q`` — the first open-brace event at/after the start line;
+        * ``s`` — the first semicolon event at/after the start line:
+          when it precedes ``q`` the statement ended before any ``{``
+          (a brace-less arrow function) and the span ends there,
+          matching the reference scanner's ``;``-before-open rule;
+        * otherwise the end is ``q`` itself when preceding closers
+          already put it at/below ``base``, else the first later event
+          where depth returns to ``base`` (next-depth-below index via
+          a monotonic stack over the ±1 brace events).
+
+        Matches the per-function scanner on every input whose start
+        line begins outside a string/comment/regex AND whose first
+        significant character is not ``/`` (the global lex's carried
+        previous-char state can read a leading ``/`` as division
+        where the fresh-state scanner reads a regex literal —
+        unreachable from extract(): every header pattern anchors on
+        word characters, so no extracted function starts at ``/``).
+        When the start line begins INSIDE a string/comment/regex
+        (regex-extractor false positives only), the single global lex
+        is the more faithful of the two.
+        """
+        todo = [
+            f for f in functions
+            if f.line_end is None and f.line_start > 0
+        ]
+        if not todo:
+            return
+        events = cls._scan_events(lines)
+        m = len(events)
+        if m == 0:
+            return
+        ev_line = [e[0] for e in events]
+        depth_after: list[int] = []
+        d = 0
+        for _, delta in events:
+            d += delta
+            depth_after.append(d)
+        # next_open[i] / next_semi[i]: first event index >= i whose
+        # delta is +1 / 0.
+        next_open: list[int | None] = [None] * m
+        next_semi: list[int | None] = [None] * m
+        no: int | None = None
+        ns: int | None = None
+        for i in range(m - 1, -1, -1):
+            if events[i][1] == 1:
+                no = i
+            elif events[i][1] == 0:
+                ns = i
+            next_open[i] = no
+            next_semi[i] = ns
+        # next_below[i]: first brace event j > i with depth_after[j]
+        # == depth_after[i] - 1 (±1 steps make this the first
+        # crossing; semicolon events keep depth flat and never join
+        # the stack).
+        next_below: list[int | None] = [None] * m
+        stack: list[int] = []
+        for j in range(m):
+            if events[j][1] == 0:
+                continue
+            while stack and depth_after[stack[-1]] - 1 == depth_after[j]:
+                next_below[stack.pop()] = j
+            stack.append(j)
+        for func in todo:
+            start0 = func.line_start - 1
+            p = bisect.bisect_left(ev_line, start0)
+            if p >= m:
+                continue
+            q = next_open[p]
+            s = next_semi[p]
+            if s is not None and (q is None or s < q):
+                # Statement ended before any `{`: a brace-less arrow
+                # function (`const add = (a, b) => a + b;`).
+                func.line_end = ev_line[s] + 1
+                continue
+            if q is None:
+                continue
+            base = depth_after[p - 1] if p > 0 else 0
+            end_idx: int | None = q
+            while end_idx is not None and depth_after[end_idx] > base:
+                end_idx = next_below[end_idx]
+            if end_idx is not None:
+                func.line_end = ev_line[end_idx] + 1
+
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
         seen = set()
@@ -428,10 +611,9 @@ class JavaScriptExtractor:
                     name = match.group(1)
                     if name not in seen and name not in ('if', 'for', 'while', 'switch', 'catch'):
                         exported = stripped.startswith('export ')
-                        end_line = self._find_end(lines, i - 1)
                         functions.append(FunctionInfo(
                             name=name, line_start=i,
-                            line_end=end_line,
+                            line_end=None,
                             metadata=FunctionMetadata(
                                 visibility="exported" if exported else None,
                             ),
@@ -439,6 +621,9 @@ class JavaScriptExtractor:
                         seen.add(name)
                     break
 
+        # Post-pass: fill line_end from one shared event stream (the
+        # CExtractor idiom) instead of a per-header scan to EOF.
+        self._fill_line_ends(lines, functions)
         return functions
 
 
@@ -1380,18 +1565,107 @@ class LuaExtractor:
     def _fill_line_ends(
         self, lines: list[str], functions: list[FunctionInfo],
     ) -> None:
-        """Compute ``line_end`` for each function by tracking ``end``/``until``
-        depth from its ``line_start``."""
+        """Compute ``line_end`` for each function from ONE depth pass.
+
+        Linear, not per-function — the CExtractor._fill_line_ends
+        idiom: calling :meth:`_find_end` per function re-strips and
+        re-scans every line to EOF whenever the block never closes,
+        O(N²) on a crafted file of never-closing headers. Instead,
+        strip each masked line ONCE, precompute per-line open counts
+        and the prefix block depth, and answer each function with the
+        reference scanner's per-LINE semantics: the end is the first
+        line at/after the function's first opener line where the
+        depth relative to the function's start returns to ≤ 0.
+
+        The "first prefix-depth ≤ base at/after line o" query is
+        answered with a sparse-table range-minimum + binary search
+        (per-line deltas are arbitrary, so the ±1 monotonic-stack
+        trick the brace extractors use does not apply).
+
+        The reference scanner's ``repeat``/``until`` counters are
+        tracked but never consulted by its return condition
+        (``until`` closes a block ``end`` does not), so the depth
+        pass carries only the ``end``-closed depth — differential-
+        tested equal to the reference.
+        """
         todo = [f for f in functions if f.line_end is None]
         if not todo:
             return
         masked = self._mask_long_comments(lines)
+        n = len(masked)
+        if n == 0:
+            return
+        opens: list[int] = []
+        prefix: list[int] = []
+        d = 0
+        for raw in masked:
+            stripped = self._strip_strings_and_comments(raw)
+            n_open = sum(1 for _ in self._BLOCK_OPEN.finditer(stripped))
+            n_end = sum(1 for _ in self._END.finditer(stripped))
+            opens.append(n_open)
+            d += n_open - n_end
+            prefix.append(d)
+        # next_open_line[i]: first line >= i with an opener.
+        next_open_line: list[int | None] = [None] * n
+        no: int | None = None
+        for i in range(n - 1, -1, -1):
+            if opens[i] > 0:
+                no = i
+            next_open_line[i] = no
+        # Sparse table over prefix for range-minimum queries.
+        log = [0] * (n + 1)
+        for i in range(2, n + 1):
+            log[i] = log[i >> 1] + 1
+        table: list[list[int]] = [prefix]
+        k = 1
+        while (1 << k) <= n:
+            prev = table[k - 1]
+            half = 1 << (k - 1)
+            table.append([
+                min(prev[i], prev[i + half])
+                for i in range(n - (1 << k) + 1)
+            ])
+            k += 1
+
+        def _rmq(lo: int, hi: int) -> int:
+            span = log[hi - lo + 1]
+            return min(table[span][lo],
+                       table[span][hi - (1 << span) + 1])
+
+        def _first_leq(lo: int, val: int) -> int | None:
+            """First line index >= lo with prefix[idx] <= val."""
+            if lo >= n or _rmq(lo, n - 1) > val:
+                return None
+            hi = n - 1
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if _rmq(lo, mid) <= val:
+                    hi = mid
+                else:
+                    lo = mid + 1
+            return lo
+
         for func in todo:
-            func.line_end = self._find_end(masked, func.line_start - 1)
+            start0 = func.line_start - 1
+            if start0 >= n:
+                continue
+            o = next_open_line[start0]
+            if o is None:
+                continue
+            base = prefix[start0 - 1] if start0 > 0 else 0
+            j = _first_leq(o, base)
+            if j is not None:
+                func.line_end = j + 1  # 1-based
 
     def _find_end(self, lines: list[str], start_idx: int) -> int | None:
         """Find the matching ``end`` for a function starting at ``start_idx``
-        (0-based). Returns 1-based line number, or None."""
+        (0-based). Returns 1-based line number, or None.
+
+        Reference scanner (see :meth:`_fill_line_ends` for why the
+        production path answers from one shared depth pass instead of
+        calling this per header); kept as the semantics oracle the
+        depth-pass path is differential-tested against.
+        """
         depth = 0
         repeat_depth = 0
         found_open = False
@@ -1568,18 +1842,24 @@ class ObjCExtractor:
             name = m.group(1)
             if name in seen:
                 continue
-            # Declarations inside @interface end with ';' before any '{'.
-            end = CExtractor._find_end_brace(lines, i)
+            # Declarations inside @interface end with ';' before any
+            # '{' — skip BEFORE any end scan (the scan used to run
+            # first, burning a to-EOF walk per skipped declaration).
             semi = line.find(';')
             if semi >= 0 and '{' not in line[:semi]:
                 continue
             functions.append(FunctionInfo(
                 name=name,
                 line_start=i + 1,
-                line_end=end,
+                line_end=None,
                 signature=line.strip()[:200],
             ))
             seen.add(name)
+        # Method spans from one shared brace-event pass (the
+        # CExtractor idiom — same lexical rules as the per-header
+        # _find_end_brace walk this replaces, which was O(N²) on a
+        # crafted file of never-closing method headers).
+        CExtractor._fill_line_ends(lines, functions)
         # Plain C functions in the same translation unit.
         method_names = set(seen)
         functions.extend(fn for fn in CExtractor().extract(filepath, content) if fn.name not in method_names)
@@ -2041,6 +2321,9 @@ class TreeSitterExtractor:
             msg = f"tree-sitter grammar not available for {language}"
             raise RuntimeError(msg)
         self.parser = parser
+        # Amortized seen-name cache for the C recovery helpers;
+        # reset at the top of every extract().
+        self._seen_cache: tuple[int, set[str]] = (0, set())
 
     def extract(self, filepath: str, content: str, _tree=None) -> list[FunctionInfo]:
         if _tree is None:
@@ -2054,8 +2337,15 @@ class TreeSitterExtractor:
                 logger.warning("tree-sitter parse failed for %s: %s", filepath, e)
                 return []  # Caller will fall back to regex extractor
         self._source_lines = content.splitlines(True)
+        self._seen_cache = (0, set())
         functions: list[FunctionInfo] = []
         self._walk(_tree.root_node, functions, class_name=None, class_attributes=())
+        if self.language in ("c", "cpp"):
+            # Fill the spans the orphan-declarator recovery deferred
+            # (fragmented K&R body openers) from one shared brace-
+            # event pass; every tree-sitter-parsed function already
+            # carries its span and is left untouched.
+            CExtractor._fill_line_ends(self._source_lines, functions)
         return functions
 
     def _class_annotations(self, node) -> list[str]:
@@ -2234,18 +2524,49 @@ class TreeSitterExtractor:
         # rich extraction for the whole file. Children are pushed in
         # reverse so traversal order (and item order) matches the old
         # recursive pre-order walk.
-        stack: list[tuple[Any, str | None, Sequence[str]]] = [
-            (child, class_name, class_attributes)
-            for child in reversed(node.children)
+        # Each frame carries the PARENT node's type, and — for the
+        # C/C++ recovery parents only — the parent's children list
+        # plus the child's index. Node.parent / Node.next_sibling
+        # re-locate the node from the tree root on every access,
+        # O(child index) inside the huge flat ERROR node a fragmented
+        # C parse produces — reading them per function_declarator in
+        # the recovery arm below was quadratic over the whole walk
+        # (and a cursor cannot substitute: TreeCursor treats the node
+        # it was created from as its root and refuses to visit
+        # siblings). The shared children list is one object per
+        # parent; sibling scans stop at the next declarator-class
+        # node, so consecutive recoveries scan disjoint segments —
+        # amortized linear overall.
+        recovery_parent = (
+            self.language in ("c", "cpp")
+            and node.type in ("translation_unit", "ERROR")
+        )
+        kids = node.children
+        stack: list[tuple[
+            Any, str | None, Sequence[str], str,
+            tuple[list, int] | None,
+        ]] = [
+            (kids[i], class_name, class_attributes, node.type,
+             (kids, i) if recovery_parent else None)
+            for i in range(len(kids) - 1, -1, -1)
         ]
 
         def _descend(parent, cname, cattrs) -> None:
+            ptype = parent.type
+            rec = (
+                self.language in ("c", "cpp")
+                and ptype in ("translation_unit", "ERROR")
+            )
+            pkids = parent.children
             stack.extend(
-                (c, cname, cattrs) for c in reversed(parent.children)
+                (pkids[i], cname, cattrs, ptype,
+                 (pkids, i) if rec else None)
+                for i in range(len(pkids) - 1, -1, -1)
             )
 
         while stack:
-            child, class_name, class_attributes = stack.pop()
+            (child, class_name, class_attributes, parent_type,
+             sibling_ctx) = stack.pop()
             if child.type in self.class_types:
                 cname = self._get_name(child)
                 # Class-level stereotype signal: Java modifier annotations
@@ -2329,14 +2650,14 @@ class TreeSitterExtractor:
                 _descend(child, class_name, class_attributes)
             elif (child.type == "function_declarator"
                   and self.language in ("c", "cpp")
-                  and child.parent is not None
-                  and child.parent.type in ("translation_unit", "ERROR")):
+                  and sibling_ctx is not None):
                 # C/C++ fragmented-parse recovery: macros (ZEXPORT,
                 # ZLIB_INTERNAL etc.) between return type and function
                 # name cause tree-sitter to emit the function_declarator
                 # as a top-level sibling instead of inside a
                 # function_definition. Recover the name.
-                self._recover_c_orphan_declarator(child, functions)
+                self._recover_c_orphan_declarator(
+                    child, functions, sibling_ctx)
             elif (child.type == "ERROR"
                   and self.language in ("c", "cpp")
                   and child.end_point[0] - child.start_point[0] > 2):
@@ -2346,7 +2667,29 @@ class TreeSitterExtractor:
             else:
                 _descend(child, class_name, class_attributes)
 
-    def _recover_c_orphan_declarator(self, decl_node: "Node", functions: list[FunctionInfo]) -> None:
+    def _seen_names(self, functions: list[FunctionInfo]) -> set[str]:
+        """Names of every function extracted so far, amortized.
+
+        The recovery helpers used to rebuild ``{f.name for f in
+        functions}`` on EVERY call — a second O(N²) in the same
+        fragmented-parse flood the deferred span fill closes (one set
+        build per recovered function). The cache extends the set with
+        only the entries appended since the previous call; reset per
+        :meth:`extract`. Semantics match the per-call rebuild: the
+        set reflects the list at call time.
+        """
+        cached_len, names = self._seen_cache
+        if cached_len > len(functions):
+            cached_len, names = 0, set()
+        for f in functions[cached_len:]:
+            names.add(f.name)
+        self._seen_cache = (len(functions), names)
+        return names
+
+    def _recover_c_orphan_declarator(
+        self, decl_node: "Node", functions: list[FunctionInfo],
+        sibling_ctx: tuple[list, int],
+    ) -> None:
         """Recover a C function from a top-level function_declarator.
 
         When macros like ZEXPORT sit between the return type and the
@@ -2357,10 +2700,15 @@ class TreeSitterExtractor:
 
         K&R style with macros (``int ZEXPORT inflate(strm, flush)``)
         additionally fragments the body: the opening ``{`` becomes a
-        bare token instead of a compound_statement. In that case, fall
-        back to brace-depth counting via CExtractor._find_end_brace.
+        bare token instead of a compound_statement. In that case the
+        span is deferred to the shared brace-event fill
+        (CExtractor._fill_line_ends, one lexical pass per file, run
+        after the walk) — calling the per-function _find_end_brace
+        walk here scanned to EOF for every fragmented opener that
+        never re-balances, O(N²) on the PRIMARY tree-sitter path for
+        fragmented C parses.
         """
-        seen_names = {f.name for f in functions}
+        seen_names = self._seen_names(functions)
         name = None
         for sub in decl_node.children:
             if sub.type == "identifier":
@@ -2368,24 +2716,29 @@ class TreeSitterExtractor:
                 break
         if not name or name in seen_names or name in CExtractor.KEYWORDS:
             return
-        end_line = decl_node.start_point[0] + 1
-        sib = decl_node.next_sibling
-        while sib is not None:
+        end_line: int | None = decl_node.start_point[0] + 1
+        # Siblings come from the walk's shared children list, not
+        # Node.next_sibling: the sibling accessor re-locates the node
+        # from its parent on every hop, O(child index) inside the
+        # huge ERROR node a fragmented parse produces — the third
+        # quadratic in the same flood. The scan stops at the next
+        # declarator-class node, so consecutive recoveries cover
+        # disjoint segments (amortized linear).
+        siblings, idx = sibling_ctx
+        for j in range(idx + 1, len(siblings)):  # no slice: a copy per
+            sib = siblings[j]                    # recovery is quadratic
             if sib.type == "compound_statement":
                 end_line = sib.end_point[0] + 1
                 break
             if sib.type == "{":
-                brace_line = sib.start_point[0]
-                found = CExtractor._find_end_brace(
-                    self._source_lines, brace_line,
-                )
-                if found:
-                    end_line = found
+                # None = "fill from the shared event stream" (the
+                # same start-line-anchored semantics CExtractor's own
+                # regex path uses for K&R bodies).
+                end_line = None
                 break
             if sib.type in ("function_definition", "function_declarator",
                             "preproc_include", "preproc_define"):
                 break
-            sib = sib.next_sibling
         functions.append(FunctionInfo(
             name=name,
             line_start=decl_node.start_point[0] + 1,
@@ -2399,7 +2752,7 @@ class TreeSitterExtractor:
         Iterative (explicit stack) for the same deep-AST reason as
         ``_walk`` — a fragmented parse can nest ERROR nodes arbitrarily
         deep."""
-        seen_names = {f.name for f in functions}
+        seen_names = self._seen_names(functions)
         # (node, containing-subtree end line) — the end line follows the
         # nearest enclosing recovery node, matching the old recursion.
         stack: list[tuple[Any, int]] = [

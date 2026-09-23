@@ -1076,3 +1076,269 @@ def test_c_repair_pass_still_rescues_macro_fragmented_functions():
     items = extract_items("t.c", "c", src)
     names = {i.name for i in items if i.kind == "function"}
     assert "frag_fn" in names
+
+
+# ---------------------------------------------------------------------------
+# JavaScriptExtractor._fill_line_ends — linear post-pass (the
+# CExtractor idiom ported to the JS fallback)
+# ---------------------------------------------------------------------------
+
+
+class TestJsFillLineEndsLinear:
+    def test_matches_per_function_reference_scanner(self):
+        src = (
+            "function outer(a) {\n"
+            "  const s = \"} not a close\";\n"
+            "  const t = `}` /* } */;\n"
+            "  const re = /}/; // }\n"
+            "  if (a) { return 1; }\n"
+            "}\n"
+            "const add = (a, b) => a + b;\n"
+            "const wrap = function() {\n"
+            "  return () => { f(); };\n"
+            "}\n"
+        )
+        lines = src.split("\n")
+        starts = [1, 7, 8]
+        ref = {
+            s: JavaScriptExtractor._find_end(lines, s - 1) for s in starts
+        }
+        funcs = [FunctionInfo(name=f"fn{s}", line_start=s) for s in starts]
+        JavaScriptExtractor._fill_line_ends(lines, funcs)
+        assert {f.line_start: f.line_end for f in funcs} == ref
+        assert ref == {1: 6, 7: 7, 8: 10}
+
+    def test_braceless_arrow_semicolon_rule_survives(self):
+        # `;` before any `{`: the span must end at the statement, not
+        # adopt the NEXT function's braces.
+        src = (
+            "const add = (a, b) =>\n"
+            "  a + b;\n"
+            "function next() {\n"
+            "  return 2;\n"
+            "}\n"
+        )
+        lines = src.split("\n")
+        funcs = [FunctionInfo(name="add", line_start=1)]
+        JavaScriptExtractor._fill_line_ends(lines, funcs)
+        assert funcs[0].line_end == 2
+        assert JavaScriptExtractor._find_end(lines, 0) == 2
+
+    def test_random_differential_against_reference(self):
+        # Property test: on files built from single-line constructs
+        # (every line starts outside strings/comments/regex — the
+        # documented equivalence domain), the event-stream fill must
+        # agree with the per-function reference scanner at EVERY line.
+        import random
+        rng = random.Random(20260923)
+        pool = [
+            "function f() {",
+            "}",
+            "const a = (x) => x + 1;",
+            "let b = { k: 1 };",
+            "// } stray comment close",
+            "/* { */ call(); /* } */",
+            "const s = \"{ } ; //\";",
+            "const t = '} {';",
+            "const u = `{ ; }`;",
+            "if (x) { y(); }",
+            # `x = /…/`: the `=` prefix makes the regex-literal read
+            # line-local in BOTH lexers (a `return /…/` spelling can
+            # mislex as division from a carried prev-char and leak
+            # regex state across lines — outside the documented
+            # equivalence domain, like a start line inside a comment).
+            "x = /}{/.test(s);",
+            "g(function inner() {",
+            "});",
+            "",
+            "; ;",
+        ]
+        for _ in range(150):
+            lines = [rng.choice(pool) for _ in range(rng.randint(5, 40))]
+            for start in range(1, len(lines) + 1):
+                ref = JavaScriptExtractor._find_end(lines, start - 1)
+                funcs = [FunctionInfo(name="p", line_start=start)]
+                JavaScriptExtractor._fill_line_ends(lines, funcs)
+                assert funcs[0].line_end == ref, (
+                    f"divergence at start={start} for {lines!r}"
+                )
+
+    def test_never_closing_openers_extract_is_linear(self):
+        # A file of N one-line headers each opening a brace that never
+        # closes made every header re-scan to EOF: O(N²) — ~5 s at
+        # n=2000 pre-fix, an effective hang at real bundle sizes.
+        import time
+        n = 20_000
+        src = "\n".join(f"function f{k}() {{ // open" for k in range(n))
+        start = time.perf_counter()
+        funcs = JavaScriptExtractor().extract("f.js", src)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 10.0, f"extract took {elapsed:.1f}s on {n} headers"
+        assert len(funcs) == n
+        assert all(f.line_end is None for f in funcs)
+
+
+# ---------------------------------------------------------------------------
+# LuaExtractor._fill_line_ends — linear post-pass
+# ---------------------------------------------------------------------------
+
+
+class TestLuaFillLineEndsLinear:
+    def test_matches_per_function_reference_scanner(self):
+        src = (
+            "function outer(a)\n"
+            "  local s = \"end function\"\n"
+            "  -- end end end\n"
+            "  if a then\n"
+            "    return 1\n"
+            "  end\n"
+            "end\n"
+            "--[[ function ghost()\n"
+            "end ]]\n"
+            "local f = function(x)\n"
+            "  while x do x = g(x) end\n"
+            "end\n"
+        )
+        ex = LuaExtractor()
+        lines = ex._mask_long_comments(src.split("\n"))
+        starts = [1, 10]
+        ref = {s: ex._find_end(lines, s - 1) for s in starts}
+        funcs = [FunctionInfo(name=f"fn{s}", line_start=s) for s in starts]
+        ex._fill_line_ends(src.split("\n"), funcs)
+        assert {f.line_start: f.line_end for f in funcs} == ref
+        assert ref == {1: 7, 10: 12}
+
+    def test_random_differential_against_reference(self):
+        import random
+        rng = random.Random(20260923)
+        pool = [
+            "function f(a)",
+            "end",
+            "if x then",
+            "for i = 1, 10 do",
+            "while x do",
+            "end end",
+            "local s = \"function end\"",
+            "-- function end",
+            "local t = 'end'",
+            "x = y + 1",
+            "return f(x)",
+            "",
+            "repeat",
+            "until x",
+        ]
+        ex = LuaExtractor()
+        for _ in range(150):
+            raw = [rng.choice(pool) for _ in range(rng.randint(5, 40))]
+            masked = ex._mask_long_comments(raw)
+            for start in range(1, len(raw) + 1):
+                ref = ex._find_end(masked, start - 1)
+                funcs = [FunctionInfo(name="p", line_start=start)]
+                ex._fill_line_ends(raw, funcs)
+                assert funcs[0].line_end == ref, (
+                    f"divergence at start={start} for {raw!r}"
+                )
+
+    def test_never_closing_headers_extract_is_linear(self):
+        import time
+        n = 20_000
+        src = "\n".join(
+            f"function f{k}() -- never closes" for k in range(n)
+        )
+        start = time.perf_counter()
+        funcs = LuaExtractor().extract("f.lua", src)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 10.0, f"extract took {elapsed:.1f}s on {n} headers"
+        assert len(funcs) == n
+        assert all(f.line_end is None for f in funcs)
+
+
+# ---------------------------------------------------------------------------
+# ObjCExtractor — shared brace-event fill, declaration skip first
+# ---------------------------------------------------------------------------
+
+
+class TestObjCExtractorLinear:
+    def test_methods_and_declarations(self):
+        from core.inventory.extractors import ObjCExtractor
+        src = (
+            "@interface Foo\n"
+            "- (void)declaredOnly:(int)x;\n"
+            "@end\n"
+            "@implementation Foo\n"
+            "- (void)realMethod:(int)x {\n"
+            "  if (x) { bar(); }\n"
+            "}\n"
+            "+ (int)classMethod {\n"
+            "  return 1;\n"
+            "}\n"
+            "@end\n"
+            "static int plain_c(void) {\n"
+            "  return 2;\n"
+            "}\n"
+        )
+        funcs = ObjCExtractor().extract("f.m", src)
+        by_name = {f.name: (f.line_start, f.line_end) for f in funcs}
+        assert "declaredOnly" not in by_name
+        assert by_name["realMethod"] == (5, 7)
+        assert by_name["classMethod"] == (8, 10)
+        assert by_name["plain_c"] == (12, 14)
+
+    def test_never_closing_methods_extract_is_linear(self):
+        import time
+        from core.inventory.extractors import ObjCExtractor
+        n = 20_000
+        src = "\n".join(f"- (void)m{k} {{ // open" for k in range(n))
+        start = time.perf_counter()
+        funcs = ObjCExtractor().extract("f.m", src)
+        elapsed = time.perf_counter() - start
+        assert elapsed < 10.0, f"extract took {elapsed:.1f}s on {n} headers"
+        assert len(funcs) == n
+
+
+# ---------------------------------------------------------------------------
+# TreeSitterExtractor C orphan-declarator recovery — deferred span
+# fill + sibling context (fragmented-parse flood)
+# ---------------------------------------------------------------------------
+
+
+@requires_ts("c")
+def test_c_orphan_recovery_span_covers_the_knr_body():
+    # zlib's K&R + macro shape: tree-sitter fragments the parse (the
+    # declarator becomes a sibling of bare `{`); the recovered span
+    # must still cover the whole body, answered from the shared
+    # brace-event fill (the walk-rooted cursor of an intermediate
+    # rewrite could not reach siblings and silently left the span at
+    # the declaration line).
+    src = (
+        "int ZEXPORT inflate(strm, flush)\n"
+        "z_streamp strm;\n"
+        "int flush;\n"
+        "{\n"
+        "    if (strm) { work(); }\n"
+        "    return 0;\n"
+        "}\n"
+        "int tail_fn(void) { return 0; }\n"
+    )
+    funcs = TreeSitterExtractor("c").extract("f.c", src)
+    by_name = {f.name: (f.line_start, f.line_end) for f in funcs}
+    assert by_name["inflate"] == (1, 7)
+
+
+@requires_ts("c")
+def test_c_fragmented_parse_flood_is_linear():
+    # N fragmented K&R headers whose bodies never close: the per-
+    # orphan _find_end_brace walk (plus per-orphan seen-name set
+    # rebuilds and per-orphan Node.parent/next_sibling relocations)
+    # made this O(N²) on the PRIMARY tree-sitter path.
+    import time
+    n = 4000
+    src = "".join(
+        f"int ZEXPORT f{i}(a, b)\nint a; int b;\n{{ x = y[0]\n"
+        for i in range(n)
+    )
+    start = time.perf_counter()
+    funcs = TreeSitterExtractor("c").extract("f.c", src)
+    elapsed = time.perf_counter() - start
+    assert elapsed < 15.0, f"extract took {elapsed:.1f}s on {n} headers"
+    assert len(funcs) == n
