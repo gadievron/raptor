@@ -836,7 +836,8 @@ def main() -> None:
                     print(_red("add requires a <path> argument"))
                     return
                 resolved_path = Path(
-                    _caller_relative(args.path)).expanduser().resolve()
+                    _caller_relative(args.path)
+                    or args.path).expanduser().resolve()
                 if not resolved_path.is_file():
                     # Reject at add-time so the operator sees the typo
                     # NOW, not silently weeks later when the scan
@@ -953,7 +954,8 @@ def main() -> None:
                 # the launcher moved cwd to (the same D18-class rule
                 # every other path-taking subcommand applies).
                 resolved_path = Path(
-                    _caller_relative(args.path)).expanduser().resolve()
+                    _caller_relative(args.path)
+                    or args.path).expanduser().resolve()
                 if (resolved_path.suffix != ".gpr"
                         or not resolved_path.is_file()):
                     # Reject at add-time so the operator sees the typo
@@ -986,7 +988,8 @@ def main() -> None:
                     print(_red("remove requires a <path.gpr> argument"))
                     return
                 resolved = str(Path(
-                    _caller_relative(args.path)).expanduser().resolve())
+                    _caller_relative(args.path)
+                    or args.path).expanduser().resolve())
                 from .project import project_file_lock
                 with project_file_lock(project_file):
                     gproj = mgr.load(name)
