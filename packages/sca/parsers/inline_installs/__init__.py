@@ -747,11 +747,13 @@ def classify_action_ref(ref: str) -> tuple[PinStyle, str | None]:
 
       * 40-char hex SHA → ``GIT`` pin, version = ref (operator's
         pinning to the action's bytes; immutable).
-      * ``v1`` / ``v1.2`` / ``v1.2.3`` / ``release-1.0`` → ``CARET``
-        pin, version = ref (semver-tag convention; the action's
-        owner can re-publish the same tag, hence the supply-chain
-        warning from ``gha_drift``, but it's the standard pin
-        shape and the version IS the ref).
+      * ``v1`` / ``v1.2`` / ``v1.2.3`` (a leading ``v?digit``) →
+        ``CARET`` pin, version = ref (semver-tag convention; the
+        action's owner can re-publish the same tag, hence the
+        supply-chain warning from ``gha_drift``, but it's the
+        standard pin shape and the version IS the ref). Prefixed
+        tags like ``release-1.0`` do NOT match the version shape
+        and classify ``UNKNOWN`` — the ref is kept verbatim.
       * Anything else → ``UNKNOWN``, version = ref.
     """
     if _GHA_SHA_RE.match(ref.lower()):

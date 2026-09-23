@@ -21,7 +21,13 @@ Configurations recognised: ``implementation``, ``api``, ``compileOnly``,
 Confidence is ``medium`` because:
   - String interpolation values (``$version``) we leave as-is in the
     version field — they're not real versions but we can't resolve
-    them without executing the script.
+    them without executing the script. NOTE this diverges from the
+    Maven posture, which refuses unresolved ``${...}`` at apply
+    (nothing reference-shaped reaches dep.version/purl there): a
+    ``$var`` version here IS recorded verbatim and can't OSV-match.
+    Documented divergence — Gradle interpolation has no effective-POM
+    equivalent to resolve against; changing to refusal would drop the
+    dep row entirely rather than surface it unpinnable.
   - Conditional ``if`` / ``when`` branches mean we may emit deps that
     aren't actually included (or miss ones that are).
 
