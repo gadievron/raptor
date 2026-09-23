@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 import re
-from functools import lru_cache
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -603,46 +602,18 @@ def _function_referenced_as_pointer_scan(
     return False
 
 
-def _sanitized_source(file_path: str) -> str | None:
-    """Comment/string-blanked view of a source file — the single
-    lexical substrate for every helper in this module that mints or
-    withholds a verdict-relevant fact from file text.
-
-    source_intel scans the HOSTILE repo: a planted comment or string
-    that merely mentions ``static fn(``, an ``if (p) goto out;``, a
-    privileged ``CAP_`` constant, a downstream size guard, or a
-    fixed-size array declaration must never steer an axis verdict.
-    core/audit routed the identical problem through
-    ``source_view.sanitized_view``; this adopts the same idiom
-    (blanked spans become spaces, newlines survive, so offsets and
-    line numbers map 1:1 onto the original text). Cached per
-    (path, mtime, size) — repeated axis checks hit the same files.
-    """
-    try:
-        st = Path(file_path).stat()
-    except OSError:
-        return None
-    return _sanitized_source_cached(file_path, st.st_mtime_ns, st.st_size)
-
-
-@lru_cache(maxsize=64)
-def _sanitized_source_cached(
-    file_path: str, _mtime_ns: int, _size: int,
-) -> str | None:
-    try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-            text = f.read()
-    except OSError:
-        return None
-    from core.audit.source_view import sanitized_view
-
-    return sanitized_view(text, file_path)
-
-
-def _sanitized_lines(file_path: str) -> list[str] | None:
-    """Line view of :func:`_sanitized_source` (keepends, 1:1 lines)."""
-    text = _sanitized_source(file_path)
-    return None if text is None else text.splitlines(keepends=True)
+# Comment/string-blanked view — the single lexical substrate for
+# every helper in this module that mints or withholds a verdict-
+# relevant fact from file text. Hoisted to the package-shared
+# ``_source_view`` module so analyze.py and render.py read the SAME
+# substrate; see its docstring for the hostile-repo rationale and the
+# byte cap (a consumer's None path is always its conservative
+# direction). Imported here (not in the header block) to keep the
+# module's lexical-substrate seam next to its consumers.
+from packages.source_intel._source_view import (  # noqa: E402
+    sanitized_lines as _sanitized_lines,
+    sanitized_source as _sanitized_source,
+)
 
 
 def _function_is_static(file_path: str, function_name: str) -> bool:
