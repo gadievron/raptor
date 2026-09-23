@@ -844,14 +844,17 @@ class WebScanner:
         self.oob_listener.start()
         return self.oob_listener.mint(context)
 
-    def _authorized_checks(self, check_classes: list) -> list:
+    def _authorized_checks(
+        self, check_classes: list, *, log_skips: bool = True,
+    ) -> list:
         """Checks the run's scope receipt covers, by declared risk tier.
 
         Every check declares the tier its REQUESTS need (passive =
         benign observation, active = crafted probe values, intrusive =
         may change target state). The receipt is consulted per check;
         what the operator's approval level does not cover is skipped
-        loudly, never silently.
+        loudly, never silently. ``log_skips=False`` is for coverage
+        projections re-deriving the same set outside a check phase.
         """
         allowed = []
         skipped: dict[str, list[str]] = {}
@@ -871,12 +874,50 @@ class WebScanner:
                 skipped.setdefault(risk, []).append(cls.__name__)
                 continue
             allowed.append(cls)
-        for risk, names in sorted(skipped.items()):
-            logger.info(
-                "Scope receipt excludes %d %s check(s): %s",
-                len(names), risk, ", ".join(sorted(names)),
-            )
+        if log_skips:
+            for risk, names in sorted(skipped.items()):
+                logger.info(
+                    "Scope receipt excludes %d %s check(s): %s",
+                    len(names), risk, ", ".join(sorted(names)),
+                )
         return allowed
+
+    def _runnable_check_ids(self) -> list[str]:
+        """Check ids THIS run can actually execute.
+
+        Feeds the research-landscape coverage verdict. Registration
+        alone is not coverage: a check the pipeline structurally cannot
+        fire — requires_auth with no session, or a risk tier the scope
+        receipt excludes — must read as not-covered instead of quietly
+        counting a capability that never runs (the self-skip-counts-as-
+        covered shape).
+        """
+        runnable = self._authorized_checks(
+            registry.unauthenticated(), log_skips=False,
+        )
+        if self.session is not None:
+            runnable += self._authorized_checks(
+                registry.authenticated(), log_skips=False,
+            )
+        # getattr: registry doubles without an id must not break the
+        # projection (the same tolerance _authorized_checks extends).
+        ids = [
+            check_id
+            for cls in runnable
+            if (check_id := getattr(cls, "check_id", ""))
+        ]
+        # The fuzzer's confirmed-injection findings are minted under
+        # check_id V5.2.1 (see the fuzz-hit finding builder) without a
+        # registry entry. Count it only when Phase 6 can run under this
+        # receipt (anything above the passive level, or the oracle tool
+        # individually approved); policy doubles without a real receipt
+        # keep it.
+        receipt = getattr(self.execution_policy, "receipt", None)
+        approval = getattr(receipt, "approval_level", None)
+        approved_tools = getattr(receipt, "approved_tools", ()) or ()
+        if approval != "passive" or "raptor-web-oracle" in approved_tools:
+            ids.append("V5.2.1")
+        return ids
 
     def _phase_auth_checks(
         self, discovery: DiscoveryResult, crawl_data: dict | None = None,
@@ -2454,14 +2495,13 @@ class WebScanner:
         research_landscape = assess_research_landscape(
             discovery=discovery,
             crawl_data=crawl_data,
-            # The fuzzer's confirmed-injection findings are minted
-            # under check_id V5.2.1 (see the fuzz-hit finding builder)
-            # without a registry entry — include it so the SSTI/error-
-            # oracle theme reads as covered by the capability that
-            # actually exists instead of a permanent false "gap".
-            registered_check_ids=(
-                [check.check_id for check in registry.all()] + ["V5.2.1"]
-            ),
+            # Only checks THIS run can actually execute count toward
+            # coverage — registration alone let self-skipping checks
+            # (requires_auth with no session, receipt-excluded tiers)
+            # read as covered while never firing. Includes the
+            # registry-less V5.2.1 fuzzing capability when Phase 6 can
+            # run.
+            registered_check_ids=self._runnable_check_ids(),
         )
         urls = list(dict.fromkeys(
             crawl_data.get("discovered_urls")
@@ -2764,14 +2804,13 @@ class WebScanner:
         research_landscape = assess_research_landscape(
             discovery=discovery,
             crawl_data=crawl_data,
-            # The fuzzer's confirmed-injection findings are minted
-            # under check_id V5.2.1 (see the fuzz-hit finding builder)
-            # without a registry entry — include it so the SSTI/error-
-            # oracle theme reads as covered by the capability that
-            # actually exists instead of a permanent false "gap".
-            registered_check_ids=(
-                [check.check_id for check in registry.all()] + ["V5.2.1"]
-            ),
+            # Only checks THIS run can actually execute count toward
+            # coverage — registration alone let self-skipping checks
+            # (requires_auth with no session, receipt-excluded tiers)
+            # read as covered while never firing. Includes the
+            # registry-less V5.2.1 fuzzing capability when Phase 6 can
+            # run.
+            registered_check_ids=self._runnable_check_ids(),
         )
         self._save_artifact(self.out_dir / "research_landscape.json", research_landscape)
 
