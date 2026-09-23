@@ -878,11 +878,15 @@ def save_report(
     lint: list[dict[str, Any]] | None = None,
     drift: dict[str, Any] | None = None,
 ) -> None:
-    """Write the richer operator report for a model."""
+    """Write the richer operator report for a model.
+
+    Atomic like save_model's markdown sibling — a reader (or a crash)
+    mid-write must never observe a truncated report.
+    """
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(
+    write_text_atomically(
+        report_path,
         render_report(model, lint=lint, drift=drift),
-        encoding="utf-8",
     )
 
 

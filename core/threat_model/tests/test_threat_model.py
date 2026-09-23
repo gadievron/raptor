@@ -1412,3 +1412,26 @@ def test_prompt_block_epilogue_derived_model_gets_derived_trailer(
     block = tm.threat_model_prompt_block(tmp_path)
     assert "source=context-map" in block
     assert "operator-owned" not in block
+
+
+def test_save_report_writes_through_the_atomic_chokepoint(
+        tmp_path, monkeypatch):
+    # Same contract as save_model, documented ten lines above it: a
+    # reader (or a crash) mid-write must never observe a truncated
+    # report. Pin the chokepoint adoption, not just the content.
+    import core.threat_model as tm
+
+    calls: list[Path] = []
+    real = tm.write_text_atomically
+
+    def spy(path, text):
+        calls.append(Path(path))
+        return real(path, text)
+
+    monkeypatch.setattr(tm, "write_text_atomically", spy)
+    model = tm.ThreatModel(project_name="p", target=str(tmp_path))
+    report_path = tmp_path / "sub" / "threat-model-report.md"
+    tm.save_report(model, report_path)
+    assert report_path in calls
+    assert "# Threat Model Report" in report_path.read_text(
+        encoding="utf-8")
