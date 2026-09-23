@@ -102,13 +102,48 @@ class NarrowingCastSink extends DataFlow::Node {
  * always contain the function body block, so ANY comparison against a
  * positive constant anywhere in the function suppressed the flow.
  */
-predicate hasRangeGuard(DataFlow::Node node) {
+predicate hasUpperBoundGuard(DataFlow::Node node) {
   exists(GuardCondition guard, Variable v, VariableAccess guardedVa, Expr bound, int k |
     node.asExpr().(VariableAccess).getTarget() = v and
     guardedVa.getTarget() = v and
     // The guard ensures `v < bound + k` in the block containing the
     // guarded use — an upper bound that strictly dominates the cast.
     guard.ensuresLt(guardedVa, bound, k, node.asExpr().getBasicBlock(), true)
+  )
+}
+
+/**
+ * Holds if `node` is guarded by a lower-bound comparison that
+ * controls the block containing the use (`ensuresLt(..., false)` =
+ * `v >= bound + k` dominating the block).
+ */
+predicate hasLowerBoundGuard(DataFlow::Node node) {
+  exists(GuardCondition guard, Variable v, VariableAccess guardedVa, Expr bound, int k |
+    node.asExpr().(VariableAccess).getTarget() = v and
+    guardedVa.getTarget() = v and
+    guard.ensuresLt(guardedVa, bound, k, node.asExpr().getBasicBlock(), false)
+  )
+}
+
+/**
+ * Holds if `node` is range-checked well enough to suppress the flow.
+ *
+ * Truncation is two-sided for SIGNED wide values: a negative value
+ * passes any upper-bound guard (`if (len > INT_MAX) return;`) and
+ * still truncates, so an upper bound alone must not suppress — the
+ * lower bound has to be guarded too. UNSIGNED values carry an
+ * implicit lower bound of zero, so the upper-bound guard is complete
+ * on its own. Like the upper bound, the lower bound is presence-only
+ * (the compared constant is not checked against the narrow type's
+ * range) — suppression-grade recognition here stays a heuristic with
+ * the range-analysis disjunct below as the proof-shaped sibling.
+ */
+predicate hasRangeGuard(DataFlow::Node node) {
+  hasUpperBoundGuard(node) and
+  (
+    node.asExpr().getType().getUnspecifiedType().(IntegralType).isUnsigned()
+    or
+    hasLowerBoundGuard(node)
   )
 }
 
