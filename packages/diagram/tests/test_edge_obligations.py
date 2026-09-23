@@ -31,6 +31,12 @@ def test_caps_are_stated_never_silent():
     out = edge_obligations.generate(_data(n1=35, n2=25))
     assert "+5 more tier-1 edges" in out
     assert "+5 more tier-2 edges" in out
+    # The BOUND itself, not just the marker string: deleting a cap
+    # slice must fail here, not only change the (unpinned) node count.
+    tier1_edges = [ln for ln in out.splitlines() if "-->" in ln]
+    assert len(tier1_edges) == 30
+    tier2_edges = [ln for ln in out.splitlines() if "folded" in ln]
+    assert len(tier2_edges) == 20
 
 
 def test_blind_spots_and_degradation_noted():
@@ -38,3 +44,20 @@ def test_blind_spots_and_degradation_noted():
         _data(blind=7, degraded=["no-domain-model"]))
     assert "Blind spots: 7" in out
     assert "no-domain-model" in out
+
+
+def test_degraded_overflow_carries_more_marker():
+    """The module claims "never a silent cap" — the degraded arm
+    dropped entries past four with no marker."""
+    out = edge_obligations.generate(
+        _data(degraded=[f"d{i}" for i in range(1, 7)]))
+    assert "d1" in out
+    assert "d4" in out
+    assert "(+2 more)" in out
+
+
+def test_degraded_at_cap_has_no_marker():
+    out = edge_obligations.generate(
+        _data(degraded=[f"d{i}" for i in range(1, 5)]))
+    assert "d4" in out
+    assert "more)" not in out
