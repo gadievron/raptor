@@ -166,8 +166,9 @@ def load_packs(packs_dir: Path) -> list[ApiPack]:
     """Load every ``*.json`` pack in ``packs_dir`` (sorted by filename).
 
     Malformed packs are skipped with a warning. Two packs declaring the
-    same ``api`` tag are both kept — rule names are derived from the
-    filename so they cannot collide.
+    same ``api`` tag are both kept — rule names are
+    ``pk<idx>_<api>_<kind>`` and the pack index makes them unique even
+    for duplicate api tags.
     """
     if not packs_dir.is_dir():
         return []

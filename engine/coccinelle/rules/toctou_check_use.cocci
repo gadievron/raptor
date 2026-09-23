@@ -6,12 +6,11 @@
 //    same object without holding a lock.
 // 2. refcount_read() followed by a free assuming the refcount holds.
 //
-// Under-lock suppression uses the position-exclusion technique
-// (format_string.cocci): a safe rule binds the positions of uses
-// reached from a lock acquisition, and the bug rules exclude those
-// positions. Rule-level '!other_rule' dependencies are evaluated
-// file-wide (one locked use anywhere would suppress every unlocked
-// one), so they are not used here.
+// Under-lock suppression is expressed IN-PATTERN (`when !=` guards
+// on lock acquisitions between check and use) — there are no safe
+// rules and no position exclusion here. Rule-level '!other_rule'
+// dependencies are evaluated file-wide (one locked use anywhere
+// would suppress every unlocked one), so they are not used either.
 //
 // Retired legs: list_empty() followed by list_del/list_first_entry.
 // The dominant kernel idiom is a lockless helper whose CALLER holds
