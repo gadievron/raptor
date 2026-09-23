@@ -1855,6 +1855,47 @@ def _append_coverage_progress(proj: Path, run_dir: Path, store,
         )
 
 
+def _already_terminal(output_dir: Path, caller: str,
+                      allow_refail: bool = False) -> bool:
+    """Shared pre-check for the non-complete finalisers (fail_run /
+    cancel_run / interrupt_run): True when the run is ALREADY terminal
+    and the finaliser must return before ANY side effect.
+
+    Re-validate the current status BEFORE the side effects: a sweep's
+    or supervisor-drain's finaliser racing a just-completed run must
+    not re-run the sandbox summary/triage finalisers, manifest
+    conversion, or journal merge against the terminal run dir (the
+    locked ``_update_status`` would refuse the status flip anyway,
+    but by then the finalisers had already rewritten it). Pre-hoist,
+    only fail_run carried this check — cancel_run/interrupt_run
+    re-ran every side effect against completed runs.
+
+    ``allow_refail`` (fail_run only): a failed->failed re-stamp is a
+    SUPPORTED merge lane — a genuine failure landing after a
+    sweep-stamped abandon must consume the ``abandon_sweep`` marker
+    (or a later stray complete_run launders the real failure via the
+    recovery clause), and an idempotent re-fail refreshes the error
+    text. Both contracts are pinned in the abandon-sweep recovery
+    tests; the side effects on that lane are overwrite-idempotent.
+    Best-effort — ``_update_status`` re-validates under the metadata
+    lock.
+    """
+    meta_now = _load_meta(Path(output_dir) / RUN_METADATA_FILE)
+    if not isinstance(meta_now, dict):
+        return False
+    status = meta_now.get("status")
+    if status not in _TERMINAL_STATUSES:
+        return False
+    if allow_refail and status == STATUS_FAILED:
+        return False
+    logger.warning(
+        "%s: %s is already %r — refusing without side effects "
+        "(probable sweep/supervisor racing the run's own finaliser)",
+        caller, output_dir, status,
+    )
+    return True
+
+
 def fail_run(output_dir: Path, error: str | None = None,
              extra: dict[str, Any] | None = None,
              record_timing: bool = True,
@@ -1867,21 +1908,7 @@ def fail_run(output_dir: Path, error: str | None = None,
     hooks) simply make no claim.
     """
     ensure_run_command(output_dir, expected_command)
-    # Re-validate the current status BEFORE any side effect: a sweep's
-    # fail_run racing a real completion must not re-run the sandbox
-    # summary/triage finalisers against an already-terminal run (the
-    # locked ``_update_status`` would refuse the flip anyway, but by
-    # then the finalisers had already touched the run dir). Best-effort
-    # pre-check — _update_status re-validates under the metadata lock.
-    _meta_now = _load_meta(Path(output_dir) / RUN_METADATA_FILE)
-    if (isinstance(_meta_now, dict)
-            and _meta_now.get("status") in _TERMINAL_STATUSES
-            and _meta_now.get("status") != STATUS_FAILED):
-        logger.warning(
-            "fail_run: %s is already %r — refusing without side effects "
-            "(probable sweep racing the run's own finaliser)",
-            output_dir, _meta_now.get("status"),
-        )
+    if _already_terminal(output_dir, "fail_run", allow_refail=True):
         return
     extra = extra or {}
     if error:
@@ -1909,6 +1936,8 @@ def cancel_run(output_dir: Path, extra: dict[str, Any] | None = None,
     :func:`ensure_run_command`.
     """
     ensure_run_command(output_dir, expected_command)
+    if _already_terminal(output_dir, "cancel_run"):
+        return
     _finalize_sandbox_summary(output_dir)
     _triage_verdict = _finalize_sandbox_triage(output_dir)
     if _triage_verdict is not None:
@@ -1933,6 +1962,8 @@ def interrupt_run(output_dir: Path, reason: str | None = None,
     :func:`ensure_run_command`.
     """
     ensure_run_command(output_dir, expected_command)
+    if _already_terminal(output_dir, "interrupt_run"):
+        return
     extra = dict(extra or {})
     if reason:
         extra["interrupt_reason"] = reason
