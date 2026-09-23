@@ -204,10 +204,53 @@ def _iter_markers(path: Path, markers: Iterable[bytes]) -> set[bytes]:
     return found
 
 
+_MAX_ZIP_MEMBERS = 10000
+# Central-directory byte ceiling for the probe. Real bundles stay far
+# under (10k entries x ~100-400 B records); a crafted archive whose
+# EOCD understates its entry count still cannot make ZipFile buffer an
+# oversized directory past this gate.
+_MAX_ZIP_CDIR_BYTES = 8 * 1024 * 1024
+_EOCD_SIG = b"PK\x05\x06"
+
+
+def _zip_central_directory_bounds(path: Path) -> tuple[int, int] | None:
+    """(entry_count, central_directory_bytes) from the end-of-central-
+    directory record, or ``None`` when no EOCD exists (not a zip).
+    Reads only the file tail — never the directory itself. A zip64
+    sentinel (0xFFFF / 0xFFFFFFFF) is returned as-is: anything needing
+    zip64 is far beyond the probe's member cap anyway."""
+    try:
+        size = path.stat().st_size
+        tail_len = min(size, 65536 + 22)   # max comment + EOCD record
+        with path.open("rb") as fh:
+            fh.seek(size - tail_len)
+            tail = fh.read(tail_len)
+    except OSError:
+        return None
+    idx = tail.rfind(_EOCD_SIG)
+    if idx < 0 or len(tail) - idx < 22:
+        return None
+    total = int.from_bytes(tail[idx + 10:idx + 12], "little")
+    cd_size = int.from_bytes(tail[idx + 12:idx + 16], "little")
+    return total, cd_size
+
+
 def _zip_members(path: Path) -> set[str]:
+    # Gate BEFORE parsing: ZipFile(path) materialises the whole
+    # central directory at open (a crafted 200k-entry zip drove ~6x
+    # its file size in peak allocation), so slicing namelist() after
+    # the fact bounded nothing. The EOCD header carries the counts
+    # cheaply; oversize archives are refused up front — this is a
+    # best-effort runtime-signal probe, not an inventory.
+    bounds = _zip_central_directory_bounds(path)
+    if bounds is None:
+        return set()
+    total, cd_size = bounds
+    if total > _MAX_ZIP_MEMBERS or cd_size > _MAX_ZIP_CDIR_BYTES:
+        return set()
     try:
         with zipfile.ZipFile(path) as zf:
-            return set(zf.namelist()[:10000])
+            return set(zf.namelist()[:_MAX_ZIP_MEMBERS])
     except (OSError, zipfile.BadZipFile, RuntimeError):
         return set()
 
