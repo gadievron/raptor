@@ -75,6 +75,69 @@ def test_repo_has_c_cpp_source_bounded_scan(tmp_path):
     ) is False
 
 
+def test_repo_has_c_cpp_source_git_objects_do_not_exhaust_cap(tmp_path):
+    """A populated ``.git`` must not consume the probe budget: 300
+    loose objects walked before one deep real source file previously
+    exhausted the 200-file cap and reported a kernel-style C repo as
+    non-C — silently disabling cocci (default-on), compiler-scan and
+    expanded-semgrep."""
+    objects = tmp_path / ".git" / "objects" / "aa"
+    objects.mkdir(parents=True)
+    for i in range(300):
+        (objects / f"{i:040d}").write_bytes(b"x")
+    deep = tmp_path / "drivers" / "net" / "wireless" / "ath"
+    deep.mkdir(parents=True)
+    (deep / "main.c").write_text("int main(void){return 0;}\n")
+    assert _scanner._repo_has_c_cpp_source(tmp_path) is True
+
+
+def test_repo_has_c_cpp_source_vendored_noise_pruned(tmp_path):
+    """Vendored/build noise dirs are pruned and never consume the
+    budget (same discipline as the hunt dispatcher's sibling)."""
+    vendored = tmp_path / "node_modules" / "dep"
+    vendored.mkdir(parents=True)
+    for i in range(250):
+        (vendored / f"m{i}.js").write_text("\n")
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "main.c").write_text("int main(void){return 0;}\n")
+    assert _scanner._repo_has_c_cpp_source(tmp_path) is True
+
+
+def test_c_cpp_probe_distinguishes_exhaustion_from_no_source(tmp_path):
+    """The tri-state probe: a completed walk with no C source is an
+    honest negative; a budget-exhausted walk is UNDECIDED and must be
+    distinguishable so consumers can be loud about the coverage gap."""
+    for i in range(5):
+        (tmp_path / f"f{i}.py").write_text("\n")
+    assert _scanner._c_cpp_source_probe(tmp_path) == (False, False)
+    for i in range(250):
+        (tmp_path / f"g{i}.txt").write_text("\n")
+    assert _scanner._c_cpp_source_probe(tmp_path) == (False, True)
+
+
+def test_stage_skip_on_probe_exhaustion_is_loud(tmp_path, capsys):
+    """When a stage skips because the probe ran out of budget rather
+    than because the walk proved the repo non-C, the skip must reach
+    the operator on stderr as a gap record — not a debug line."""
+    for i in range(250):
+        (tmp_path / f"g{i}.txt").write_text("\n")
+    out = _scanner.run_compiler_scan_stage(tmp_path, tmp_path)
+    assert out == []
+    err = capsys.readouterr().err
+    assert "compiler-scan" in err
+    assert "probe budget exhausted" in err
+
+
+def test_stage_skip_on_honest_negative_stays_quiet(tmp_path, capsys):
+    """A completed walk that found no C source keeps the historical
+    quiet skip — a Python repo is not a coverage gap."""
+    (tmp_path / "only.py").write_text("\n")
+    out = _scanner.run_compiler_scan_stage(tmp_path, tmp_path)
+    assert out == []
+    assert "probe budget exhausted" not in capsys.readouterr().err
+
+
 # ---------------------------------------------------------------------
 # Shipped rules discovery
 # ---------------------------------------------------------------------

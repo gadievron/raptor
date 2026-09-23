@@ -1798,22 +1798,79 @@ def _join_codeql_stage(
 _COCCI_C_EXTS: tuple = (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh")
 
 
+# Pruned from the bounded probe walk — same discipline as the
+# /understand hunt dispatcher's ``repo_looks_c_cpp`` sibling: hidden
+# dirs (``.git`` alone routinely holds hundreds of loose object files,
+# enough to exhaust the cap before any source dir is reached, readdir
+# order dependent) plus vendored/build noise. Pruned entries never
+# consume the file budget. Trade-off (inherited from the sibling): a
+# repo whose ONLY C source hides under a pruned dir reads as non-C.
+_C_PROBE_SKIP_DIRS: frozenset[str] = frozenset({
+    "node_modules", "__pycache__", "venv", "env",
+    "build", "dist", "target",
+})
+
+
+def _c_cpp_source_probe(repo_path: Path,
+                        max_files_to_check: int = 200) -> tuple[bool, bool]:
+    """Bounded C/C++-presence probe: ``(found, budget_exhausted)``.
+
+    ``(True, _)`` — a C-family source file was seen.
+    ``(False, False)`` — the walk COMPLETED without one: an honest
+    negative, quiet skip is correct.
+    ``(False, True)`` — the budget ran out first: UNDECIDED, and a
+    stage that skips on it must say so loudly (fail-toward-visibility)
+    because a real C repo may sit past the horizon.
+    """
+    if not repo_path.is_dir():
+        return False, False
+    seen = 0
+    for _dirpath, dirnames, filenames in os.walk(repo_path, followlinks=False):
+        dirnames[:] = sorted(
+            d for d in dirnames
+            if d not in _C_PROBE_SKIP_DIRS and not d.startswith(".")
+        )
+        for fn in sorted(filenames):
+            if Path(fn).suffix.lower() in _COCCI_C_EXTS:
+                return True, False
+            seen += 1
+            if seen >= max_files_to_check:
+                return False, True
+    return False, False
+
+
 def _repo_has_c_cpp_source(repo_path: Path,
                            max_files_to_check: int = 200) -> bool:
     """Quick heuristic: does the target have C/C++ source? Used by
     the auto-skip for non-C/C++ targets (cocci is C-family only)."""
-    if not repo_path.is_dir():
+    return _c_cpp_source_probe(repo_path, max_files_to_check)[0]
+
+
+def _skip_stage_without_c_cpp_source(stage: str, repo_path: Path) -> bool:
+    """Shared skip decision for the C-family-only stages (cocci,
+    compiler-scan, expanded-semgrep). True → the stage should skip.
+
+    An exhausted probe budget is reported on stderr as a gap record —
+    pre-fix all three stages degraded to ``logger.debug``, invisible at
+    default verbosity, and the run read as a clean semgrep-only scan.
+    """
+    found, exhausted = _c_cpp_source_probe(repo_path)
+    if found:
         return False
-    seen = 0
-    for entry in repo_path.rglob("*"):
-        if not entry.is_file():
-            continue
-        seen += 1
-        if entry.suffix.lower() in _COCCI_C_EXTS:
-            return True
-        if seen >= max_files_to_check:
-            return False
-    return False
+    if exhausted:
+        print(
+            f"⚠️  {stage}: C/C++ probe budget exhausted before any "
+            f"C-family source was seen — stage skipped. If this target "
+            f"IS C/C++, its findings are being lost; coverage gap.",
+            file=sys.stderr,
+        )
+        logger.warning(
+            "%s: C/C++ presence undecided (probe budget exhausted); "
+            "stage skipped", stage,
+        )
+    else:
+        logger.debug("%s: target has no C/C++ source; skipping", stage)
+    return True
 
 
 def _shipped_cocci_rules_dir() -> Path | None:
@@ -1866,8 +1923,7 @@ def run_cocci(
     if not spatch_available():
         logger.debug("cocci: spatch not on PATH; skipping")
         return []
-    if not _repo_has_c_cpp_source(repo_path):
-        logger.debug("cocci: target has no C/C++ source; skipping")
+    if _skip_stage_without_c_cpp_source("cocci", repo_path):
         return []
 
     effective_rules_dir = rules_dir or _shipped_cocci_rules_dir()
@@ -1966,8 +2022,7 @@ def run_compiler_scan_stage(
     ``run_codeql`` / ``run_cocci`` so the caller's ``sarif_inputs``
     union works without special cases.
     """
-    if not _repo_has_c_cpp_source(repo_path):
-        logger.debug("compiler-scan: target has no C/C++ source; skipping")
+    if _skip_stage_without_c_cpp_source("compiler-scan", repo_path):
         return []
 
     cs = _load_compiler_scan()
@@ -2027,8 +2082,7 @@ def run_expanded_semgrep_stage(
     Returns the list of SARIF paths emitted (same shape as the other
     stage runners).
     """
-    if not _repo_has_c_cpp_source(repo_path):
-        logger.debug("expanded-semgrep: target has no C/C++ source; skipping")
+    if _skip_stage_without_c_cpp_source("expanded-semgrep", repo_path):
         return []
 
     from core.audit import expanded_semgrep as es
