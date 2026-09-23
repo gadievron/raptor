@@ -228,7 +228,11 @@ def annotate_attack_paths(
     original list is never mutated.
     """
     if not evidence_map:
-        return attack_paths
+        # Deep copy on the early return too — the contract above says
+        # callers always own the result; handing back the original
+        # list object invites aliased mutation on the no-evidence
+        # path only.
+        return copy.deepcopy(attack_paths)
 
     result = copy.deepcopy(attack_paths)
 

@@ -331,13 +331,16 @@ class TestAnnotateAttackPaths:
         assert result[0]["proximity"] == 8
 
     def test_empty_evidence_map(self):
-        """Empty evidence map returns input unchanged (no copy needed)."""
+        """Empty evidence map returns an equal COPY — the docstring
+        contract (callers own the result, original never aliased)
+        holds on every path, including the no-evidence early
+        return."""
         paths = [_make_attack_path("P1", [
             {"step": 1, "action": "call open()", "function": "open"},
         ])]
         result = annotate_attack_paths(paths, {})
         assert result == paths
-        assert result is paths
+        assert result is not paths
 
     def test_frida_trace_id_on_path(self):
         """Annotated paths carry frida_trace_id for provenance."""
@@ -990,3 +993,15 @@ class TestContradictedCallsiteFloor:
         assert out[0]["steps"][0]["runtime_evidence"][
             "callsite_match"] is True
         assert out[0]["proximity"] >= PROXIMITY_FLOOR
+
+
+class TestEmptyEvidenceCopyContract:
+    def test_empty_map_early_return_is_a_copy(self):
+        """Docstring contract: callers always own the result — the
+        no-evidence early return handed back the ORIGINAL list
+        object, inviting aliased mutation on that path only."""
+        paths = [{"steps": [{"function": "open"}], "proximity": 1}]
+        out = annotate_attack_paths(paths, {})
+        assert out == paths
+        assert out is not paths
+        assert out[0] is not paths[0]
