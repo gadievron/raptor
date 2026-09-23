@@ -220,10 +220,12 @@ def _write_audit_config(audit_config: dict) -> int:
     the TRACER's exec) and closes its own copy after the fork; the
     tracer closes the inherited fd right after parsing.
 
-    sort_keys=True — the serialised audit config is hashed elsewhere
-    for cache lookups and reproducibility. Without stable key
-    ordering, dict-rebuild order changes (across Python versions /
-    interpreter restarts) would break the cache identity contract.
+    sort_keys=True — deterministic serialisation: no consumer hashes
+    or caches the config (nothing in the tree keys on its bytes),
+    but stable key ordering keeps the fd contents byte-comparable
+    across runs and interpreter dict-order changes, which matters
+    for debugging and for any future consumer that DOES fingerprint
+    it.
     """
     serialised = json.dumps(audit_config, sort_keys=True).encode("utf-8")
     return _evidence_mod.anonymous_fd(serialised)

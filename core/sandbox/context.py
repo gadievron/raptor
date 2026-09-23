@@ -1,9 +1,12 @@
 """The `sandbox()` context manager and the top-level run wrappers.
 
-This is the only module that talks to subprocess directly. It threads
-Landlock + seccomp + rlimits + namespace flags through to subprocess.run,
-handles per-call kwarg validation, and attaches structured sandbox_info
-to each result.
+This is the dispatch chokepoint for sandboxed TARGET execution: it
+threads Landlock + seccomp + rlimits + namespace flags through to the
+spawn backend / subprocess.run, handles per-call kwarg validation, and
+attaches structured sandbox_info to each result. (It is not the only
+module that calls subprocess at all — probes.py runs capability
+probes and _macos_spawn.py owns the darwin arm — but every sandboxed
+target dispatch routes through here.)
 """
 
 import errno
@@ -954,7 +957,9 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                           policy (but then allowed_tcp_ports is useless
                           because the namespace removes all interfaces;
                           mixing the two produces a warning).
-        profile: Named profile ('full', 'network-only', 'none'). Forces
+        profile: Named profile ('full', 'strict', 'target_run',
+                'debug', 'frida', 'network-only', 'none' — the
+                profiles.PROFILES table). Forces
                 block_network to the profile's value AND — when the profile
                 disables Landlock — nulls `target`, `output`, and
                 `allowed_tcp_ports` (with a WARNING log if any were set).
@@ -1218,8 +1223,17 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                       python_runtime_tool_paths()).
         debug:        full, but seccomp permits ptrace (for gdb/rr use cases
                       under /crash-analysis). All other seccomp blocks remain.
+        target_run:   full's layers with the network OPEN (block_network
+                      False) — for targets that must reach the network
+                      under otherwise-full confinement.
+        frida:        network open + Landlock + the frida seccomp profile
+                      (AF_UNIX allowed for frida-helper IPC; memfd exec
+                      carve-out). Consented instrumentation lane.
         network-only: network blocked + rlimits only (no Landlock, no seccomp)
         none:         rlimits only, no isolation
+
+    (Complete member list, kept in sync with profiles.PROFILES — the
+    operator-facing help in cli.py derives from the same table.)
     """
     # Rootfs pre-flight: cheap shape errors raise here (caller bug,
     # ValueError); "the backend can't honour rootfs on this host/config"
