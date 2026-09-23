@@ -117,3 +117,43 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+    def test_struct_field_fd_fcntl_does_not_fire(self, tmp_path):
+        # The common daemon idiom stores the descriptor in a struct
+        # field (srv->listen_fd = socket(...)); an identifier-only
+        # safe set could not bind it, so the correct
+        # fcntl(c->fd, F_SETFD, ...) sequence was reported at
+        # verification grade.
+        results = _run_rule(tmp_path, """\
+            int ok(struct conn *c)
+            {
+                c->fd = socket(2, 1, 0);
+                fcntl(c->fd, F_SETFD, FD_CLOEXEC);
+                return 0;
+            }
+        """)
+        assert results == []
+
+    def test_struct_field_accept_fcntl_does_not_fire(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            int ok(struct conn *c, int s)
+            {
+                c->fd = accept(s, 0, 0);
+                fcntl(c->fd, F_SETFD, FD_CLOEXEC);
+                return 0;
+            }
+        """)
+        assert results == []
+
+    def test_struct_field_fd_without_fcntl_still_fires(self, tmp_path):
+        # Recall guard for the expression-shaped safe arm: the field
+        # binding alone must not suppress anything.
+        results = _run_rule(tmp_path, """\
+            int bug(struct conn *c)
+            {
+                c->fd = socket(2, 1, 0);
+                return 0;
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["rule"] == "socket_no_cloexec"
