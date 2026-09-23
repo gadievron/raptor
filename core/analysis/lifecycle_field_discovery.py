@@ -6,8 +6,14 @@ then scores each field for lifecycle sensitivity based on:
 - Whether the field flows to known sinks
 - Whether writes occur inside lifecycle-critical functions
 
-This provides mechanical field discovery without an LLM pass,
-usable as a fallback when /understand --map hasn't been run.
+This provides mechanical field discovery without an LLM pass.
+
+WIRING STATUS: no pipeline currently calls :func:`discover_state_fields`
+or persists its output — the lane is EXPERIMENTAL/UNWIRED. The /audit
+orchestrator's ``check_lifecycle_at_function`` consumer stays a no-op
+until a producer writes ``state_fields`` into context-map.json (see
+``lifecycle_context_map``). A repository test pins this status in both
+directions: wiring a producer must update these docstrings.
 """
 
 from __future__ import annotations
@@ -220,10 +226,15 @@ def discover_state_fields(
         Minimum sensitivity score to include a field.
     """
     target = Path(target_path)
-    candidates: list[tuple[float, StateField]] = []
+    candidates: list[tuple[float, str, StateField]] = []
 
-    for fi in checklist.get("files", []):
-        file_path = fi.get("path", "")
+    for fi in checklist.get("files", []) or []:
+        if not isinstance(fi, dict):
+            continue
+        # Same path/file fallback as core.inventory.iter_checklist_items
+        # (older artifacts carry "file"); the walk stays file-level
+        # because extraction is per-source-file.
+        file_path = fi.get("path", fi.get("file", ""))
         if not file_path:
             continue
 
@@ -255,11 +266,22 @@ def discover_state_fields(
                 if score < min_score:
                     continue
 
+                # Populate the enclosing function from the checklist's
+                # own item spans — consumers join on
+                # ``site.function == function_name``, so an empty
+                # function makes every downstream lookup vacuous.
+                def _fn_at(line: int) -> str:
+                    from core.analysis.reachability import (
+                        enclosing_function,
+                    )
+                    host = enclosing_function(checklist, file_path, line)
+                    return host.name if host is not None else ""
+
                 write_sites = [
                     WriteSite(
                         file=file_path,
                         line=line,
-                        function="",
+                        function=_fn_at(line),
                         guards=frozenset(),
                     )
                     for line in sites.get("writes", [])
@@ -268,7 +290,7 @@ def discover_state_fields(
                     ReadSite(
                         file=file_path,
                         line=line,
-                        function="",
+                        function=_fn_at(line),
                         guards=frozenset(),
                     )
                     for line in sites.get("reads", [])
@@ -282,14 +304,16 @@ def discover_state_fields(
                     read_sites=read_sites,
                     notes="auto-discovered",
                 )
-                candidates.append((score, sf))
+                candidates.append((score, file_path, sf))
 
     candidates.sort(key=lambda x: x[0], reverse=True)
 
-    seen: set[tuple[str, str]] = set()
+    # Dedup key includes the FILE: same-named structs in different
+    # files are different types and must not collapse.
+    seen: set[tuple[str, str, str]] = set()
     result: list[StateField] = []
-    for score, sf in candidates:
-        key = (sf.struct_type, sf.name)
+    for score, fpath, sf in candidates:
+        key = (fpath, sf.struct_type, sf.name)
         if key in seen:
             continue
         seen.add(key)

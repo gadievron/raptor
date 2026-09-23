@@ -4,6 +4,11 @@ Provides :func:`check_lifecycle_at_function` which the orchestrator
 calls during proactive validation.  Given a function that reads a
 lifecycle-sensitive state field, checks whether the read site is
 covered by the field's write-site preconditions.
+
+WIRING STATUS: the orchestrator call site is live, but no pipeline
+currently produces the ``state_fields`` section it reads, so the
+check is a structural no-op on every run (a one-time debug log makes
+the permanently-empty lane visible). See ``lifecycle_context_map``.
 """
 
 from __future__ import annotations
@@ -37,6 +42,14 @@ def check_lifecycle_at_function(
     """
     fields = load_state_fields(out_dir)
     if not fields:
+        # Once per process: an always-empty lane must be visible, not
+        # silently ride every audit run as dead weight.
+        if not getattr(check_lifecycle_at_function, "_logged_empty",
+                       False):
+            check_lifecycle_at_function._logged_empty = True  # type: ignore[attr-defined]
+            logger.debug(
+                "lifecycle lane: no state_fields in context-map "
+                "(no producer ran) — precondition check skipped")
         return []
 
     findings: list[LifecycleFinding] = []
@@ -51,11 +64,17 @@ def check_lifecycle_at_function(
 
 
 def format_lifecycle_evidence(findings: list[LifecycleFinding]) -> str:
-    """Format lifecycle findings as evidence prose for the LLM reviewer."""
+    """Format lifecycle findings as evidence prose for the LLM
+    reviewer. Field names, invariants, and guard text derive from the
+    scanned repository (and context-map prose), so every interpolated
+    value rides inside one ``wrap_untrusted`` envelope — injection
+    text in a struct name must not read as reviewer instructions."""
     if not findings:
         return ""
 
-    lines = ["## Lifecycle-Precondition Analysis\n"]
+    from core.security.prompt_envelope import wrap_untrusted
+
+    lines = []
     for f in findings:
         lines.append(
             f"**{f.state_field.struct_type}.{f.state_field.name}** "
@@ -67,7 +86,11 @@ def format_lifecycle_evidence(findings: list[LifecycleFinding]) -> str:
         lines.append(f"  Confidence: {f.confidence}")
         lines.append("")
 
-    return "\n".join(lines)
+    return "## Lifecycle-Precondition Analysis\n\n" + wrap_untrusted(
+        "\n".join(lines),
+        kind="lifecycle-evidence",
+        origin="context-map state_fields",
+    )
 
 
 def lifecycle_findings_to_constraints(
