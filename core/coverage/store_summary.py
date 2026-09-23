@@ -436,7 +436,15 @@ def render_run_coverage(run_dir) -> str | None:
 
 
 def store_llm_coverage_percent(view: dict[str, Any]) -> float:
-    """Percent of REVIEWABLE units (function/top_level) with LLM coverage."""
+    """Percent of REVIEWABLE units (function/top_level) with LLM coverage.
+
+    A view with ZERO reviewable units reads as 100.0 (vacuously
+    covered) — callers gating on the number must surface the
+    degenerate-inventory case themselves (see
+    :func:`store_coverage_threshold_met` and the format notice) so an
+    empty or extraction-failed inventory doesn't silently satisfy a
+    ``--fail-under`` gate.
+    """
     total = view.get("llm_reviewable", 0)
     if not total:
         return 100.0
@@ -445,6 +453,16 @@ def store_llm_coverage_percent(view: dict[str, Any]) -> float:
 
 
 def store_coverage_threshold_met(view: dict[str, Any], fail_under: float) -> bool:
+    if not view.get("llm_reviewable", 0):
+        # Degenerate inventory: 0 reviewable units passes ANY
+        # threshold vacuously. Loud, because the common cause is an
+        # empty/failed inventory extraction, not a genuinely
+        # function-free target.
+        from core.logging import get_logger
+        get_logger(__name__).warning(
+            "coverage threshold check: inventory has 0 reviewable "
+            "units — the %.1f%% gate is vacuously satisfied",
+            fail_under)
     return store_llm_coverage_percent(view) >= fail_under
 
 
@@ -613,6 +631,13 @@ def format_store_view(view: dict[str, Any], max_gap: int = 15) -> str:
         lines.append(
             f"    llm-reviewed: {rev}/{reviewable} reviewable units "
             f"({_pct(rev, reviewable):.1f}%) — whole-file reads excluded")
+    else:
+        # Degenerate inventory: any --fail-under gate is vacuously
+        # satisfied at 0 reviewable units — say so instead of
+        # silently omitting the line.
+        lines.append(
+            "    llm-reviewed: 0 reviewable units in the inventory "
+            "(coverage thresholds are vacuously satisfied)")
     v = view.get("verdicts")
     if v:
         lines.append("  Verdict:")

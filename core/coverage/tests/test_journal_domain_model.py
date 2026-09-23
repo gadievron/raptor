@@ -103,3 +103,24 @@ def test_context_legacy_dir_keeps_parent_probe(tmp_path: Path):
     assert ctx is not None
     assert ctx["canonical"] is True
     assert list(ctx["concepts"]) == ["proj.concept"]
+
+
+def test_pin_resolution_error_fails_closed(tmp_path: Path, monkeypatch):
+    # An internal ERROR in run-pin resolution must not re-open the
+    # standalone-run foreign domain-model adoption the pin exists to
+    # prevent — the parent probe is the LEGACY fallback, chosen by
+    # the resolution itself, never by its failure.
+    import json as _json
+
+    from core.coverage.journal import _find_domain_model_file
+
+    run = tmp_path / "run"
+    run.mkdir()
+    foreign = tmp_path / "domain-model.json"       # sibling plant
+    foreign.write_text(_json.dumps({"concepts": []}))
+
+    def _boom(_out_dir):
+        raise RuntimeError("pin substrate broke")
+
+    monkeypatch.setattr("core.run.pin.resolve_run_pin", _boom)
+    assert _find_domain_model_file(run) is None

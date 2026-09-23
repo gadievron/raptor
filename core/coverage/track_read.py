@@ -180,6 +180,11 @@ def _find_global_run():
         for _mtime, d in sorted(entries, key=lambda t: t[0], reverse=True):
             meta_file = d / ".raptor-run.json"
             try:
+                # Same 1 MiB gate as the session-ledger lane above —
+                # the metadata file is attacker-influenced and this
+                # legacy walk must never slurp GBs either.
+                if meta_file.stat().st_size > 1_048_576:
+                    continue
                 meta_text = meta_file.read_text(encoding="utf-8")
             except OSError:
                 continue

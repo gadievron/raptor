@@ -699,9 +699,16 @@ class CoverageStore:
         self, checklist: dict[str, Any], category: str | None = None,
     ) -> list[tuple[str, str, int]]:
         """Inventory functions with no coverage (the gap). When ``category``
-        is given, functions with no coverage *by that category* -- e.g.
-        ``category="llm"`` is the gap ``/audit`` fills. Returns
-        ``[(file, name, line_start)]``."""
+        is given, functions with no coverage *by that category*. Returns
+        ``[(file, name, line_start)]``.
+
+        The check is category-only, NOT depth-aware: any llm-category
+        mark — including a whole-file read/understand mark, which is
+        scanned-depth — clears a function from ``category="llm"``.
+        This is therefore a coarser view than the review gap /audit
+        fills (read is not reviewed); depth-aware consumers use the
+        store-view's ``llm_gap_functions`` (store_summary), which
+        joins depth through the registry."""
         gaps: list[tuple[str, str, int]] = []
         for file, name, lo, hi, _kind in iter_inventory_functions(checklist):
             # No line_end -> probe the single declaration line.

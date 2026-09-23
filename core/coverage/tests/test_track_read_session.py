@@ -173,6 +173,27 @@ class PythonTwinSessionTest(_LedgerCase):
         self.assertEqual(run_dir, str(run))
         self.assertEqual(target, "/t")
 
+    def test_global_fallback_skips_oversize_metadata(self):
+        # Lock-step parity with the session lane's 1 MiB gate: the
+        # legacy walk read .raptor-run.json unbounded while its own
+        # session lane refused oversize files.
+        projects = self.home / ".raptor" / "projects"
+        projects.mkdir(parents=True)
+        proj_dir = self.home / "projout"
+        run = proj_dir / "scan-1"
+        run.mkdir(parents=True)
+        (run / ".raptor-run.json").write_text(
+            '{"status": "running", "pad": "'
+            + "x" * 1_100_000 + '"}')
+        (projects / "p.json").write_text(json.dumps(
+            {"name": "p", "target": "/t", "output_dir": str(proj_dir)}))
+        (projects / ".active").symlink_to("p.json")
+        with patch.dict(os.environ, {}, clear=False), \
+             patch.object(Path, "home", staticmethod(lambda: self.home)):
+            os.environ.pop("RAPTOR_SESSION_PID", None)
+            run_dir, _target = track_read._find_active_run()
+        self.assertIsNone(run_dir)
+
 
 @unittest.skipIf(sys.platform == "win32", "bash hook")
 class BashHookSessionTest(_LedgerCase):

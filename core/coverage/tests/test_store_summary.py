@@ -583,3 +583,26 @@ def test_render_coverage_survives_hostile_run_dir(tmp_path):
     ]}
     report = render_coverage([run], checklist, run / "coverage.json")
     assert report is not None and "Coverage" in report
+
+
+def test_zero_reviewable_units_notice_and_gate_warning(tmp_path, caplog):
+    # A degenerate inventory (0 reviewable units) vacuously satisfies
+    # any --fail-under threshold; both the rendered view and the gate
+    # must say so instead of passing silently.
+    import logging
+
+    from core.coverage.store import CoverageStore
+    from core.coverage.store_summary import (
+        format_store_view,
+        store_coverage_threshold_met,
+        store_llm_coverage_percent,
+        store_view,
+    )
+    checklist = {"files": [{"path": "a.c", "lines": 10, "items": []}]}
+    s = CoverageStore(tmp_path / "coverage.json")
+    v = store_view(s, checklist)
+    assert store_llm_coverage_percent(v) == 100.0
+    assert "0 reviewable units" in format_store_view(v)
+    with caplog.at_level(logging.WARNING):
+        assert store_coverage_threshold_met(v, 95.0)
+    assert any("vacuously" in r.getMessage() for r in caplog.records)
