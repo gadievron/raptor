@@ -99,7 +99,13 @@ except ImportError:                                 # pragma: no cover
 # (PropertyGroup blocks + Directory.Build.props inheritance + tool-
 # conditional properties). Skip those entries rather than emit a
 # wrong (or attacker-tainted) version string.
-_MSBUILD_PROPERTY_RE = re.compile(r"[\$@%]\([^)]+\)")
+# The opening marker alone decides: every use is a boolean search,
+# and requiring the closing ``)`` both cost quadratic scans on
+# hostile version strings (each planted ``$(`` re-scanned the rest)
+# and let an unterminated ``$(...`` slip through as if concrete.
+# Firing on the opener is strictly more conservative — at worst an
+# entry is skipped as unresolvable.
+_MSBUILD_PROPERTY_RE = re.compile(r"[\$@%]\(")
 
 # A single ``$(Name)`` property reference. We resolve these against properties
 # defined IN THE SAME FILE — the dominant pre-CPM pattern, where a

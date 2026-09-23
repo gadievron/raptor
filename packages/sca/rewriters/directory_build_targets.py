@@ -61,14 +61,20 @@ def _build_version_override_pattern(update_name: str) -> re.Pattern:
 
 def _build_child_version_pattern(update_name: str) -> re.Pattern:
     """``<PackageReference Update="X"><Version>OLD</Version></PackageReference>``
-    — older child-element shape."""
+    — older child-element shape.
+
+    Attribute spans are ``[^<>]`` (not ``[^>]``): a raw ``<`` is
+    illegal inside an XML open tag, so real tags match identically,
+    while with ``[^>]`` every planted ``<PackageReference`` inside
+    an unclosed tag re-scanned the rest of it — quadratic on
+    hostile project files."""
     upd = re.escape(update_name)
     return re.compile(
         r"""(?P<open><PackageReference\b)"""
-        r"""(?P<prefix>[^>]*?Update\s*=\s*['"])"""
+        r"""(?P<prefix>[^<>]*?Update\s*=\s*['"])"""
         rf"""(?P<upd>{upd})"""
         r"""(?P<upd_close>['"])"""
-        r"""(?P<gap>[^>]*>\s*<Version>\s*)"""
+        r"""(?P<gap>[^<>]*>\s*<Version>\s*)"""
         r"""(?P<version>[^<]*?)"""
         r"""(?P<post>\s*</Version>\s*</PackageReference>)""",
         re.IGNORECASE,

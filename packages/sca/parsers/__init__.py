@@ -98,9 +98,19 @@ _PARSE_FAILURE_RE = re.compile(
 # identically; the one dropped corner is a degenerate all-whitespace
 # path region, which previously minted a ParseFailure whose path
 # stripped to '' — noise, not signal.
+# Both variable regions are bounded and the path region is tempered
+# against the message head: unbounded fillers let a planted
+# "refusing to read" run inside the path region re-scan the rest of
+# the message from every occurrence — quadratic on hostile path
+# text. 4096 sits at PATH_MAX, far above anything the bounded
+# reader interpolates, and 256 far above any reason the writer
+# emits; a path carrying the head literal itself, or a longer
+# region, stops matching and the line simply stays an unstructured
+# warning (no wrong parse either way).
 _READ_REFUSAL_RE = re.compile(
     r"sca\.parsers:\s+refusing to read\s+"
-    r"(?P<path>\S(?:.*?\S)?)\s+\((?P<reason>[^)]+)\)"
+    r"(?P<path>\S(?:(?:(?!sca\.parsers: refusing).){0,4096}?\S)?)"
+    r"\s+\((?P<reason>[^)]{1,256})\)"
 )
 
 

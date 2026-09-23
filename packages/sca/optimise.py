@@ -682,7 +682,12 @@ def _pin_bare_requirements(
             out_lines.append(raw)
             continue
         # Split off inline comments, preserving them for re-assembly.
-        comment_split = re.split(r"(\s+#)", stripped, maxsplit=1)
+        # (?<!\s) pins the separator to the start of its whitespace
+        # run — a bare unanchored `\s+` re-consumes the run from
+        # every position (quadratic on hostile requirement lines);
+        # the earliest match already starts at the run start, so the
+        # pinned spelling splits identically.
+        comment_split = re.split(r"(?<!\s)(\s+#)", stripped, maxsplit=1)
         line_value = comment_split[0].strip()
         comment_tail = "".join(comment_split[1:])  # separator + comment text
 

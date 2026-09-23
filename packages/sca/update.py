@@ -1156,7 +1156,12 @@ _POM_MAX_CHARS = 1_000_000
 # the lazy tempered-dot regex this replaced, but located via
 # ``str.find`` so malformed input (many openers, no closers) scans
 # linearly instead of backtracking quadratically.
-_POM_BLOCK_OPEN_RE = re.compile(r"<(?:dependency|plugin|parent)\b[^>]*>")
+# The attribute span is ``[^<>]`` (not ``[^>]``): a raw ``<`` is
+# illegal inside an XML open tag, so real tags match identically,
+# while with ``[^>]`` every planted opener inside an unclosed tag
+# re-scanned the rest of it — quadratic on hostile pom text.
+_POM_BLOCK_OPEN_RE = re.compile(
+    r"<(?:dependency|plugin|parent)\b[^<>]*>")
 _POM_BLOCK_CLOSE_TAGS = ("</dependency>", "</plugin>", "</parent>")
 
 
@@ -1224,7 +1229,11 @@ def _rewrite_pom_xml(
         if (f"<groupId>{group}</groupId>" not in block
                 or f"<artifactId>{artifact}</artifactId>" not in block):
             continue
-        if re.search(r"<version>\s*\$\{[^}]+\}\s*</version>", block):
+        # Bounded property-name body: unbounded ``[^}]+`` re-scanned
+        # every planted ``${`` inside an unclosed reference —
+        # quadratic on hostile pom text. 256 is far above any real
+        # Maven property name.
+        if re.search(r"<version>\s*\$\{[^}]{1,256}\}\s*</version>", block):
             return text, False, ("Maven version uses a property reference; "
                                  "edit <properties> manually")
         new_block, n = re.subn(
@@ -1544,12 +1553,18 @@ def _rewrite_requirements_txt(
             if not body:
                 out_lines.append(raw)
                 continue
-            parts = re.split(r"\s+#", body, maxsplit=1)
+            # (?<!\s) pins the separator to the start of its
+            # whitespace run — a bare unanchored `\s+` re-consumes
+            # the run from every position (quadratic on hostile
+            # requirement lines); the earliest match already starts
+            # at the run start, so the pinned spelling splits
+            # identically.
+            parts = re.split(r"(?<!\s)\s+#", body, maxsplit=1)
             line_value = parts[0].strip()
             inline_comment = "  #" + parts[1] if len(parts) > 1 else ""
         else:
             comment_prefix = ""
-            parts = re.split(r"\s+#", stripped, maxsplit=1)
+            parts = re.split(r"(?<!\s)\s+#", stripped, maxsplit=1)
             line_value = parts[0].strip()
             inline_comment = "  #" + parts[1] if len(parts) > 1 else ""
 
@@ -1658,8 +1673,13 @@ _INLINE_INSTALL_CMD_RES = {
     # ``mvn deploy:deploy-file`` uses the same -D switches and is
     # equally rewritable. Matched at the goal-name level so ad-hoc
     # variants (``./mvnw …``) still hit.
+    # The pre-goal token loop is bounded ({0,32}): unbounded, every
+    # planted ``mvn `` token inside a goal-less argument run
+    # re-scanned the rest of the run — quadratic on hostile hook
+    # text. 32 tokens is far above any real mvn invocation's
+    # pre-goal flag count; a longer run stops matching.
     "Maven": re.compile(
-        r"\bmvn(?:w)?\s+(?:[-\w:]+\s+)*"
+        r"\bmvn(?:w)?\s+(?:[-\w:]+\s+){0,32}"
         r"(?:install:install-file|deploy:deploy-file)\b",
         re.IGNORECASE),
 }
