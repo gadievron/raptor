@@ -271,3 +271,72 @@ class TestEnrichTraceWithAssumptionFilter:
         step2 = enriched["steps"][1]
         for s in step2.get("siblings", []):
             assert "lacks_enforcer" not in s
+
+
+class TestSpanContainmentResolution:
+    """Definition points resolve by span containment, never by
+    nearest line_start (which attributed points inside one function
+    to a closer-starting neighbour and failed >20 lines into any
+    long body)."""
+
+    _CHECKLIST = {"files": [{"path": "src/x.c", "items": [
+        {"name": "func_A", "line_start": 50, "line_end": 200},
+        {"name": "func_B", "line_start": 110, "line_end": 260},
+    ]}]}
+
+    def test_point_inside_span_resolves_to_container(self):
+        from core.orchestration.trace_widening import (
+            _resolve_function_from_checklist,
+        )
+        # 100 sits inside func_A (50-200); func_B merely STARTS
+        # closer (110).
+        assert _resolve_function_from_checklist(
+            "src/x.c:100", self._CHECKLIST) == "func_A"
+
+    def test_deep_point_in_long_body_still_resolves(self):
+        from core.orchestration.trace_widening import (
+            _resolve_function_from_checklist,
+        )
+        # 80 is >20 lines past func_A's start — the old +-20 window
+        # returned None.
+        assert _resolve_function_from_checklist(
+            "src/x.c:80", self._CHECKLIST) == "func_A"
+
+    def test_overlap_innermost_wins(self):
+        from core.orchestration.trace_widening import (
+            _resolve_function_from_checklist,
+        )
+        # 150 is inside both spans; the innermost (larger line_start)
+        # wins, matching enclosing_function semantics.
+        assert _resolve_function_from_checklist(
+            "src/x.c:150", self._CHECKLIST) == "func_B"
+
+    def test_point_outside_every_span_is_none(self):
+        from core.orchestration.trace_widening import (
+            _resolve_function_from_checklist,
+        )
+        assert _resolve_function_from_checklist(
+            "src/x.c:20", self._CHECKLIST) is None
+
+    def test_missing_line_end_falls_back_to_preceding_start(self):
+        from core.orchestration.trace_widening import (
+            _resolve_function_from_checklist,
+        )
+        checklist = {"files": [{"path": "src/y.c", "items": [
+            {"name": "early", "line_start": 10},
+            {"name": "late", "line_start": 90},
+        ]}]}
+        assert _resolve_function_from_checklist(
+            "src/y.c:60", checklist) == "early"
+        assert _resolve_function_from_checklist(
+            "src/y.c:95", checklist) == "late"
+
+    def test_legacy_functions_key_and_line_field(self):
+        from core.orchestration.trace_widening import (
+            _resolve_function_from_checklist,
+        )
+        checklist = {"files": [{"path": "src/z.c", "functions": [
+            {"name": "handler", "line": 30},
+        ]}]}
+        assert _resolve_function_from_checklist(
+            "src/z.c:35", checklist) == "handler"
