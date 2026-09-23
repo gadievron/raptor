@@ -6,6 +6,7 @@ import textwrap
 import time
 
 from core.audit.mechanical_gates import (
+    _classify_entry_points,
     build_feeds_security_map,
     build_provenance_map,
     build_security_decision_set,
@@ -89,13 +90,17 @@ class TestBuildProvenanceMap:
         prov = build_provenance_map(cm)
         assert prov["app.py:run_task"][0]["trust"] == "trusted"
 
-    def test_trust_level_overrides_type(self):
+    def test_trust_level_cannot_override_untrusted_type(self):
+        # The map's trust_level is LLM-authored — it may only mark an
+        # entry untrusted. An internal_value stamp on an http entry
+        # point must not flip it to trusted (the old inversion fed
+        # provenance_all_trusted, a live suppression gate).
         cm = _context_map(
             entries=[_ep("EP-3", "handler", "http", trust_level="internal_value")],
             edges=[_edge("handler", "work")],
         )
         prov = build_provenance_map(cm)
-        assert prov["app.py:work"][0]["trust"] == "trusted"
+        assert prov["app.py:work"][0]["trust"] == "untrusted"
 
     def test_attacker_controlled_trust_level(self):
         cm = _context_map(
@@ -1099,3 +1104,44 @@ class TestCalleeDefenseSemantics:
         assert "is defended" not in text
         assert "ASSUM" in text.upper()
         assert "use_buf" in text and "buf" in text
+
+
+class TestOperatorThreatModelOutranksMapTrust:
+    """The context map's trust_level is LLM-authored /understand
+    output (imported unconditionally at prep) — it may only mark an
+    entry UNTRUSTED. Trusted classification comes from the operator's
+    threat model or the type heuristic; a hostile or hallucinated map
+    stamping entry points internal_value must never flip an
+    operator-declared untrusted entry (provenance_all_trusted then
+    resolves corroborated suspicious outcomes to clean)."""
+
+    def test_operator_untrusted_beats_llm_internal_value(self):
+        eps = [{"id": "e1", "name": "parse_upload", "type": "upload",
+                "trust_level": "internal_value"}]
+        tm = {"untrusted_inputs": ["parse_upload"]}
+        out = _classify_entry_points(eps, tm)
+        assert out["e1"]["trust"] == "untrusted"
+
+    def test_llm_trusted_stamp_cannot_beat_untrusted_type(self):
+        eps = [{"id": "e1", "name": "ws", "type": "websocket",
+                "trust_level": "runtime_constant"}]
+        out = _classify_entry_points(eps, None)
+        assert out["e1"]["trust"] == "untrusted"
+
+    def test_llm_untrusted_stamp_still_downgrades(self):
+        eps = [{"id": "e1", "name": "boot", "type": "cli",
+                "trust_level": "attacker_controlled"}]
+        out = _classify_entry_points(eps, None)
+        assert out["e1"]["trust"] == "untrusted"
+
+    def test_operator_trusted_name_still_trusted(self):
+        eps = [{"id": "e1", "name": "load_config", "type": ""}]
+        tm = {"trusted_inputs": ["load_config"]}
+        out = _classify_entry_points(eps, tm)
+        assert out["e1"]["trust"] == "trusted"
+
+    def test_unknown_type_with_llm_trusted_stamp_defaults_untrusted(self):
+        eps = [{"id": "e1", "name": "mystery", "type": "",
+                "trust_level": "internal_value"}]
+        out = _classify_entry_points(eps, None)
+        assert out["e1"]["trust"] == "untrusted"
