@@ -53,7 +53,10 @@ _DISTRO_LIBC: dict[str, LibcVersion] = {
     "debian:buster":   LibcVersion("glibc", (2, 28)),  # 10
     "debian:bullseye": LibcVersion("glibc", (2, 31)),  # 11
     "debian:bookworm": LibcVersion("glibc", (2, 36)),  # 12
-    "debian:trixie":   LibcVersion("glibc", (2, 39)),  # 13
+    # Debian 13 RELEASED with glibc 2.41 (the pre-release row said
+    # 2.39). A too-old floor mis-reports the constraint in verdicts
+    # even though it errs lenient; release rows track released values.
+    "debian:trixie":   LibcVersion("glibc", (2, 41)),  # 13
     # Ubuntu
     "ubuntu:20.04":    LibcVersion("glibc", (2, 31)),
     "ubuntu:focal":    LibcVersion("glibc", (2, 31)),
@@ -61,12 +64,16 @@ _DISTRO_LIBC: dict[str, LibcVersion] = {
     "ubuntu:jammy":    LibcVersion("glibc", (2, 35)),
     "ubuntu:24.04":    LibcVersion("glibc", (2, 39)),
     "ubuntu:noble":    LibcVersion("glibc", (2, 39)),
+    "ubuntu:25.04":    LibcVersion("glibc", (2, 41)),
+    "ubuntu:plucky":   LibcVersion("glibc", (2, 41)),
     # Alpine (musl)
     "alpine:3.16":     LibcVersion("musl", (1, 2, 3)),
     "alpine:3.17":     LibcVersion("musl", (1, 2, 3)),
     "alpine:3.18":     LibcVersion("musl", (1, 2, 4)),
     "alpine:3.19":     LibcVersion("musl", (1, 2, 4)),
     "alpine:3.20":     LibcVersion("musl", (1, 2, 5)),
+    "alpine:3.21":     LibcVersion("musl", (1, 2, 5)),
+    "alpine:3.22":     LibcVersion("musl", (1, 2, 5)),
     # AlmaLinux / Rocky / RHEL
     "almalinux:8":     LibcVersion("glibc", (2, 28)),
     "almalinux:9":     LibcVersion("glibc", (2, 34)),
