@@ -491,10 +491,131 @@ _DIAG_SUPPRESSION_RE = re.compile(
 
 
 def _suppression_witness(source_text: str) -> str:
-    """First diagnostic-suppression construct in the TU, or ''."""
+    """First diagnostic-suppression construct in one file, or ''."""
     from .source_view import sanitized_view
     m = _DIAG_SUPPRESSION_RE.search(sanitized_view(source_text, "tu.c"))
     return m.group(0).strip() if m else ""
+
+
+# ---------------------------------------------------------------------------
+# Include-closure suppression vet (refutation precondition)
+# ---------------------------------------------------------------------------
+# The single-file witness above covers only the text it is handed.
+# GCC/clang diagnostic pragmas without push/pop persist for the REST
+# OF THE TRANSLATION UNIT, including the includer's code after the
+# `#include` — so a one-line repo header forges analyzer silence on a
+# "reliable" family without any construct in the scanned file. The
+# closure vet reads the compiler's own preprocessed output (`-E`):
+# every textual spelling — includes (quoted or `-I`-resolved angle
+# includes), `_Pragma` operators, and token-pasted (`##`) pragma
+# synthesis — lands there as a `#pragma` line or a system-header
+# linemarker, attributed to the file that authored it. Repo-authored
+# closure files additionally get the raw single-file scan, because
+# conditional-compilation tokens (`#ifndef __clang_analyzer__`)
+# resolve away in `-E` output. Any failure to vet fails toward
+# unknown — never toward refuted.
+
+_PP_LINEMARKER_RE = re.compile(
+    r'^#\s*(?:line\s+)?\d+\s+"([^"]*)"((?:\s+\d+)*)\s*$',
+)
+
+# Directive-shaped suppression in PREPROCESSED output. `_Pragma` and
+# `__clang_analyzer__` are deliberately absent: the preprocessor has
+# already expanded the former into `#pragma` lines and resolved the
+# latter's conditionals — both are caught here post-expansion or by
+# the raw per-file scan.
+_PP_SUPPRESSION_RE = re.compile(
+    r"^\s*#\s*pragma\s+(?:GCC|clang)\s+diagnostic\s+ignored"
+    r"|^\s*#\s*pragma\s+(?:GCC|clang)\s+system_header"
+    r"|\[\[\s*(?:clang|gsl)\s*::\s*suppress\b"
+    r"|__attribute__\s*\(\s*\(\s*suppress\b",
+)
+
+_MAX_CLOSURE_FILES = 200
+_MAX_CLOSURE_FILE_BYTES = 2_000_000
+_MAX_PP_TEXT_BYTES = 64_000_000
+
+
+def _repo_authored(name: str, target_resolved: Path) -> bool:
+    """Closure filename the scanned repo controls.
+
+    Anything under the target tree is attacker-authored; compiler
+    pseudo-files (``<built-in>``, ``<command-line>``) and system
+    paths outside the tree are not. Non-absolute and unresolvable
+    names count as repo-authored — unattributable means unvetted,
+    which fails toward refusal.
+    """
+    if not name or name.startswith("<"):
+        return False
+    p = Path(name)
+    if not p.is_absolute():
+        return True
+    try:
+        return p.resolve().is_relative_to(target_resolved)
+    except OSError:
+        return True
+
+
+def _closure_suppression_witness(
+    pp_text: str,
+    target_path: Path,
+    full_path: Path,
+) -> tuple[str, str]:
+    """Suppression witness over the TU's preprocessed closure.
+
+    Returns ``(witness, vet_failure)``: a non-empty *witness* names
+    the first suppression construct attributed to a repo-authored
+    closure file (or a repo file marked as a system header via a
+    flag-3 linemarker); a non-empty *vet_failure* means the closure
+    could not be fully vetted (caps, unreadable file) and refutation
+    must be withheld. Both empty = vetted clean.
+    """
+    try:
+        target_resolved = target_path.resolve()
+    except OSError:
+        return "", "target path unresolvable"
+    if len(pp_text) > _MAX_PP_TEXT_BYTES:
+        return "", "preprocessed output exceeds the scan cap"
+    current = str(full_path)
+    repo_files: dict[str, None] = {}
+    for line in pp_text.splitlines():
+        lm = _PP_LINEMARKER_RE.match(line)
+        if lm:
+            # Flag-3 (system header) markers are NOT a witness here:
+            # the preprocessor emits benign ones around every
+            # system-macro expansion (`NULL` → `# N "tu.c" 3 4`), and
+            # every construct that can put a REPO region into
+            # system-header state is textual in a repo file (pragma /
+            # linemarker — the raw scan below) or lands as a #pragma
+            # line in this output (token-pasted _Pragma — the
+            # directive scan). system_header state also does not
+            # persist across the include return, so a header cannot
+            # silence the includer's code this way.
+            fname = lm.group(1)
+            if _repo_authored(fname, target_resolved):
+                repo_files.setdefault(fname)
+            current = fname
+            continue
+        m = _PP_SUPPRESSION_RE.search(line)
+        if m and _repo_authored(current, target_resolved):
+            return f"{m.group(0).strip()} (in {current})", ""
+    if len(repo_files) > _MAX_CLOSURE_FILES:
+        return "", (
+            f"{len(repo_files)} repo files in the include closure "
+            f"exceed the vet cap ({_MAX_CLOSURE_FILES})"
+        )
+    for fname in repo_files:
+        p = Path(fname)
+        try:
+            if p.stat().st_size > _MAX_CLOSURE_FILE_BYTES:
+                return "", f"closure file {fname} exceeds the byte cap"
+            text = p.read_text(errors="replace")
+        except OSError:
+            return "", f"closure file {fname} unreadable"
+        w = _suppression_witness(text)
+        if w:
+            return f"{w} (in {fname})", ""
+    return "", ""
 
 
 _MARKED_ID_RE = re.compile(r"[`'\"]([A-Za-z_]\w*)[`'\"]")
@@ -1021,6 +1142,79 @@ def run_compiler_analyzer_sweep(
         # clang --analyze. Any suppression construct in the TU
         # fails toward "unknown" — never toward refuted.
         suppression = _suppression_witness(source_text)
+        if not suppression:
+            # "In the TU" means the WHOLE translation unit: a
+            # diagnostic pragma in an included repo header persists
+            # past its #include into the includer's code, so the
+            # closure must be vetted before silence can refute. The
+            # vet runs the compiler's own preprocessor — a spelling
+            # the -E output does not carry cannot act on the
+            # compile either.
+            pp_cmd = [cmd[0], "-E", *include_flags, str(full_path)]
+            if compiler_name == "clang" and mode == "analyze":
+                # Match the analyzer's macro environment so
+                # conditional includes resolve the same way they do
+                # under --analyze.
+                pp_cmd.insert(2, "-D__clang_analyzer__=1")
+
+            def _run_preprocess() -> dict[str, Any]:
+                scratch_root = str(out_dir) if out_dir else None
+                with scratch_dir(
+                    "compiler_pp_", dir=scratch_root,
+                ) as ppdir:
+                    proc = sandbox_run(
+                        pp_cmd,
+                        block_network=True,
+                        target=str(target_path),
+                        output=str(ppdir),
+                        cwd=str(ppdir),
+                        capture_output=True,
+                        text=True,
+                        timeout=_COMPILE_TIMEOUT_S,
+                        caller_label="audit-compiler-sweep",
+                    )
+                    if proc.returncode < 0:
+                        raise _AnalyzerSignalKilled(-proc.returncode)
+                    return {
+                        "returncode": proc.returncode,
+                        "stdout": (
+                            (proc.stdout or "")[:_MAX_PP_TEXT_BYTES + 1]
+                        ),
+                    }
+
+            vet_failure = ""
+            pp_record: dict[str, Any] | None
+            try:
+                pp_record, _pp_cached = _cache.get_or_compute(
+                    _tu_cache_key(pp_cmd, full_path), _run_preprocess,
+                )
+            except (subprocess.TimeoutExpired, _AnalyzerSignalKilled,
+                    subprocess.SubprocessError, OSError, ValueError,
+                    TypeError):
+                pp_record = None
+                vet_failure = "preprocessor run failed"
+            if pp_record is not None:
+                if pp_record["returncode"] != 0:
+                    vet_failure = (
+                        f"preprocessor exited {pp_record['returncode']}"
+                    )
+                else:
+                    suppression, vet_failure = (
+                        _closure_suppression_witness(
+                            pp_record["stdout"], target_path, full_path,
+                        )
+                    )
+            if vet_failure and not suppression:
+                details["closure_unvetted"] = vet_failure
+                result = _inconclusive(
+                    file_path, function_name,
+                    f"include closure could not be vetted "
+                    f"({vet_failure}) — analyzer silence is not "
+                    f"evidence; cannot refute",
+                    details=details,
+                )
+                result.raw_output = raw
+                return result
         if suppression:
             details["suppression_witness"] = suppression
             result = _inconclusive(
