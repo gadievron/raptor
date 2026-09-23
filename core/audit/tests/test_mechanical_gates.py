@@ -198,7 +198,9 @@ class TestFormatCalleeDefenses:
             ),
         ]
         text = format_callee_defenses(summaries)
-        assert "CALLEE DEFENSE" in text
+        # Preconditions are callee ASSUMPTIONS (caller obligations),
+        # never "defended" claims — see TestCalleeDefenseSemantics.
+        assert "CALLEE ASSUMPTION" in text
         assert "validate_input" in text
         assert "path" in text
 
@@ -994,3 +996,106 @@ class TestThreatModelItemTokenisation:
         tm = {"untrusted_inputs": ["upload_handler (user upload)"]}
         prov = build_provenance_map(cm, threat_model=tm)
         assert prov["app.py:sink_a"][0]["trust"] == "untrusted"
+
+
+class TestConstantScopeHoles:
+    """A name is a constant only when NO other binding of it exists
+    anywhere in the tree — a function-local shadow, tuple unpacking,
+    loop/with/walrus binder, parameter, or import alias all
+    invalidate. Keeping the first literal minted "definitively not
+    attacker-controllable" over tainted calls."""
+
+    def test_function_local_shadow_invalidates(self):
+        src = (
+            "CMD = 'ls -l'\n"
+            "def handler(user_input):\n"
+            "    CMD = user_input\n"
+            "    os.system(CMD)\n"
+        )
+        assert detect_constant_dangerous_calls(src, "a.py") == []
+
+    def test_tuple_rebind_invalidates(self):
+        src = (
+            "CMD = 'ls -l'\n"
+            "CMD, OTHER = get_user_input(), 2\n"
+            "os.system(CMD)\n"
+        )
+        assert detect_constant_dangerous_calls(src, "a.py") == []
+
+    def test_for_binder_invalidates(self):
+        src = (
+            "CMD = 'ls'\n"
+            "for CMD in sys.argv:\n"
+            "    pass\n"
+            "os.system(CMD)\n"
+        )
+        assert detect_constant_dangerous_calls(src, "a.py") == []
+
+    def test_walrus_invalidates(self):
+        src = (
+            "CMD = 'ls'\n"
+            "if (CMD := input()):\n"
+            "    os.system(CMD)\n"
+        )
+        assert detect_constant_dangerous_calls(src, "a.py") == []
+
+    def test_parameter_shadow_invalidates(self):
+        src = (
+            "CMD = 'ls'\n"
+            "def f(CMD):\n"
+            "    os.system(CMD)\n"
+        )
+        assert detect_constant_dangerous_calls(src, "a.py") == []
+
+    def test_import_alias_invalidates(self):
+        src = (
+            "CMD = 'ls'\n"
+            "import evil as CMD\n"
+            "os.system(CMD)\n"
+        )
+        assert detect_constant_dangerous_calls(src, "a.py") == []
+
+    def test_plain_rebind_still_invalidates(self):
+        # The landed plain-rebind invalidation keeps working.
+        src = "CMD = 'ls -l'\nCMD = input()\nos.system(CMD)\n"
+        assert detect_constant_dangerous_calls(src, "a.py") == []
+
+    def test_unshadowed_constant_still_detected(self):
+        src = "CMD = 'ls -l'\nos.system(CMD)\n"
+        hits = detect_constant_dangerous_calls(src, "a.py")
+        assert hits and hits[0]["call"] == "os.system"
+
+
+class TestUniversalPreconditionUniverseGate:
+    def test_unsummarized_caller_refuses_the_claim(self):
+        # "ALL callers validate" is only claimable when every caller
+        # HAS a summary — the third, unsummarized caller passes
+        # anything, so the definitive guarantee must not render.
+        callers = [
+            {"file": "a.c", "name": "c1", "call_site": "f(buf)"},
+            {"file": "a.c", "name": "c2", "call_site": "f(buf)"},
+            {"file": "a.c", "name": "c3", "call_site": "f(evil)"},
+        ]
+        summaries = {
+            "a.c:c1": _FakeSummary("c1", [_FakePrecondition("buf", ["buf != NULL"])]),
+            "a.c:c2": _FakeSummary("c2", [_FakePrecondition("buf", ["buf != NULL"])]),
+        }
+        assert detect_universal_preconditions(callers, summaries) == []
+
+
+class TestCalleeDefenseSemantics:
+    def test_precondition_renders_as_assumption_not_defense(self):
+        # A callee precondition is what the callee ASSUMES (the
+        # llm_summaries prompt semantics) — not validation inside the
+        # callee. Rendering it as "flow ... is defended" was an
+        # inverted, suppression-direction hint.
+        summaries = [
+            _FakeSummary(
+                "use_buf",
+                preconditions=[_FakePrecondition("buf", ["buf != NULL"])],
+            ),
+        ]
+        text = format_callee_defenses(summaries)
+        assert "is defended" not in text
+        assert "ASSUM" in text.upper()
+        assert "use_buf" in text and "buf" in text

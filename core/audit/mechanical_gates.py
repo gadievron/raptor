@@ -7,8 +7,9 @@ entirely.
 
 A — input provenance: which entry points reach this function, and their
     trust classification (trusted/untrusted from the threat model).
-B — callee defense: when a callee validates/guards a parameter the
-    reviewed function passes to it, surface that as a defense signal.
+B — callee assumptions: when a callee declares preconditions on a
+    parameter the reviewed function passes to it, surface each as a
+    caller OBLIGATION (the callee assumes it; it does not validate).
 C — security-decision reachability: whether this function's output
     feeds a security-sensitive callee (auth, crypto, access control).
 D — constant arguments: whether a dangerous API call uses only
@@ -242,32 +243,42 @@ def format_callee_defenses(
     callee_summaries: list[Any],
     _callees: list[dict[str, Any]] | None = None,
 ) -> str:
-    """Surface callee preconditions/guards as explicit defense signals.
+    """Surface callee PRECONDITIONS as caller obligations.
 
-    When a callee has preconditions on a parameter, that parameter is
-    validated before reaching any dangerous sink inside the callee.
+    A callee precondition is what the callee ASSUMES about a
+    parameter (the llm_summaries prompt semantics) — it is NOT
+    validation performed inside the callee, so it must never render
+    as "flow through this callee is defended" (an inverted,
+    suppression-direction hint). Rendered as an obligation instead —
+    the reviewed function must establish the assumption before the
+    call — and tier-tagged so LLM-extracted prose never reads as a
+    mechanical guarantee.
     """
     if not callee_summaries:
         return ""
-    defenses: list[str] = []
+    obligations: list[str] = []
     for summary in callee_summaries:
         preconditions = getattr(summary, "preconditions", None) or []
         func_name = getattr(summary, "function", "?")
         if not preconditions:
             continue
+        tier = getattr(summary, "evidence_tier", None)
+        tier_tag = f" [{getattr(tier, 'value', tier)}]" if tier else ""
         for pre in preconditions:
             param = getattr(pre, "param", "?")
             conditions = getattr(pre, "conditions", [])
             if conditions:
                 cond_str = ", ".join(str(c)[:80] for c in conditions[:3])
-                defenses.append(
-                    f"CALLEE DEFENSE: `{func_name}()` validates param "
-                    f"`{param}` with: {cond_str} — flow through this "
-                    f"callee is defended."
+                obligations.append(
+                    f"CALLEE ASSUMPTION{tier_tag}: `{func_name}()` "
+                    f"ASSUMES param `{param}` satisfies: {cond_str} — "
+                    f"the callee does not itself guarantee this; check "
+                    f"whether THIS function establishes it before the "
+                    f"call."
                 )
-    if not defenses:
+    if not obligations:
         return ""
-    return "\n".join(defenses[:10])
+    return "\n".join(obligations[:10])
 
 
 # ── C: Security-decision reachability ─────────────────────────────
@@ -420,18 +431,26 @@ def detect_constant_dangerous_calls(
 def _collect_module_constants(tree: ast.Module) -> dict[str, Any]:
     """Collect module-level constant assignments (NAME = literal).
 
-    A later NON-literal rebinding (``CMD = input()``) invalidates the
-    name: keeping the first literal let detect_constant_dangerous_calls
-    report a tainted call as all-constant ("definitively not
-    attacker-controllable") — a false-suppression hint.
+    A name is a constant only when NO other binding of it exists
+    anywhere in the tree: a later non-literal module rebinding
+    (``CMD = input()``), a tuple/list unpacking, a function-local
+    shadow, a for/with/walrus binder, a parameter, an import alias,
+    or a global/nonlocal declaration all invalidate — keeping the
+    first literal let detect_constant_dangerous_calls report a
+    tainted call as all-constant ("definitively not
+    attacker-controllable"), a false-suppression hint. Deliberately
+    scope-blind: refusing the hint costs nothing, minting it wrongly
+    steers suppression.
     """
     constants: dict[str, Any] = {}
+    defining_targets: set[int] = set()
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
             if isinstance(target, ast.Name) and target.id.isupper():
                 if isinstance(node.value, ast.Constant):
                     constants[target.id] = node.value.value
+                    defining_targets.add(id(target))
                 else:
                     constants.pop(target.id, None)
         elif isinstance(node, (ast.AugAssign, ast.AnnAssign)):
@@ -442,8 +461,28 @@ def _collect_module_constants(tree: ast.Module) -> dict[str, Any]:
                     node, ast.AnnAssign,
                 ) and target.id.isupper():
                     constants[target.id] = value.value
+                    defining_targets.add(id(target))
                 else:
                     constants.pop(target.id, None)
+    if not constants:
+        return constants
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            and node.id in constants
+            and id(node) not in defining_targets
+        ):
+            constants.pop(node.id, None)
+        elif isinstance(node, ast.arg) and node.arg in constants:
+            constants.pop(node.arg, None)
+        elif isinstance(node, ast.alias):
+            constants.pop(node.asname or node.name.split(".")[0], None)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            for name in node.names:
+                constants.pop(name, None)
+        if not constants:
+            break
     return constants
 
 
@@ -607,6 +646,16 @@ def detect_universal_preconditions(
     """
     if not callers or not taint_summaries:
         return []
+
+    # Universe gate: "ALL callers validate" is only claimable when
+    # every caller HAS a summary — quantifying over the summarized
+    # subset rendered a definitive false guarantee ("CANNOT reach
+    # this function unvalidated") while an unsummarized caller passes
+    # anything.
+    for c in callers:
+        key = f"{c.get('file', '')}:{c.get('name', '')}"
+        if taint_summaries.get(key) is None:
+            return []
 
     param_guards: dict[str, list[set[str]]] = {}
     param_arg_verified: dict[str, bool] = {}
