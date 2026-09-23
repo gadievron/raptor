@@ -273,6 +273,64 @@ def test_abort_dominance_pure_helper(tmp_path):
     assert _abort_dominates_finding(finding, crossing) is False
 
 
+def test_comment_planted_brace_cannot_forge_dominates_suppression(tmp_path):
+    """End-to-end differential: DOMINATES bypasses every proximity
+    gate in the adapter, so a comment-planted ``}`` before a branch-
+    local abort must not flip a memory-corruption finding 300+ lines
+    below to NOT_EXPLOITABLE. Control and hostile twin differ ONLY in
+    the forged comment brace; both must behave like the control."""
+    from packages.source_intel.analyze import _classify_call_site_grade
+
+    fired = {}
+    for label, comment in (
+        ("control", "        /* benign */\n"),
+        ("hostile", "        /*\n}\n        */\n"),
+    ):
+        src = tmp_path / f"{label}.c"
+        src.write_text(
+            "int victim(char *src, unsigned long attacker_len)\n"
+            "{\n"
+            "    if (rare_debug_cond) {\n"
+            + comment +
+            "        BUG_ON(bad_state);\n"
+            "    }\n"
+            + "".join(f"    /* filler {i} */\n" for i in range(350))
+            + "    memcpy(dst, src, attacker_len);\n"
+            "    return 0;\n"
+            "}\n"
+        )
+        lines = src.read_text().splitlines()
+        abort_line = next(
+            i for i, ln in enumerate(lines, 1) if "BUG_ON" in ln)
+        sink_line = next(
+            i for i, ln in enumerate(lines, 1) if "memcpy" in ln)
+        grade = _classify_call_site_grade(str(src), abort_line)
+        result = SourceIntelResult(
+            target=str(tmp_path),
+            aborts=(AbortEvidence(
+                macro="BUG_ON",
+                location=(str(src), abort_line),
+                grade=grade,
+                enclosing_function=_enclosing_function(
+                    str(src), abort_line),
+            ),),
+        )
+        finding = Finding(
+            finding_id="f1", producer="codeql",
+            rule_id="cpp/unbounded-write", message="m",
+            source=Step(file_path=str(src), line=sink_line, column=1,
+                        snippet="memcpy"),
+            sink=Step(file_path=str(src), line=sink_line, column=1,
+                      snippet="memcpy"),
+        )
+        fired[label] = _abort_dominates_finding(
+            finding, result, repo_root=tmp_path)
+    assert fired["control"] is False
+    assert fired["hostile"] is False, (
+        "forged comment brace minted DOMINATES and suppressed the finding"
+    )
+
+
 # =====================================================================
 # Render
 # =====================================================================
@@ -309,3 +367,21 @@ def test_abort_evidence_with_conditional_caveat():
     text = "\n".join(lines)
     assert "CONDITIONAL" in text
     assert "CONFIG_PARANOID" in text
+
+
+def test_enclosing_function_ignores_openers_inside_block_comments(tmp_path):
+    """A function-opener-shaped line on the interior of a block
+    comment must not win the backward walk — misattributed enclosing
+    functions flip same-function abort/capability matching."""
+    f = tmp_path / "c.c"
+    f.write_text(
+        "void real_fn(void)\n"     # 1
+        "{\n"                      # 2
+        "    /*\n"                 # 3
+        "int fake_fn(void)\n"      # 4 — comment interior
+        "{\n"                      # 5 — comment interior
+        "    */\n"                 # 6
+        "    BUG();\n"             # 7
+        "}\n"                      # 8
+    )
+    assert _enclosing_function(str(f), 7) == "real_fn"

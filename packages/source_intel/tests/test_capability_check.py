@@ -301,3 +301,18 @@ def test_capability_dominance_pure_helper(tmp_path):
         enclosing_function="other_fn",
     ),))
     assert _privileged_capability_dominates(finding, sibling) is False
+
+
+def test_local_fallback_cap_check_ignores_comment_content(tmp_path):
+    """The import-cycle fallback twin of ``_line_uses_privileged_cap``
+    must carry the same forgery defence as the adapter original: a
+    privileged constant that appears only in a trailing comment must
+    not mint privilege-gate evidence."""
+    from packages.source_intel.analyze import _local_line_uses_privileged_cap
+
+    f = tmp_path / "cap.c"
+    f.write_text(
+        "if (!capable(CAP_NET_BIND_SERVICE)) /* CAP_SYS_ADMIN legacy */\n"
+        "    return -EPERM;\n"
+    )
+    assert _local_line_uses_privileged_cap(str(f), 1) is False
