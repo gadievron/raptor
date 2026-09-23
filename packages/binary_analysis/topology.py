@@ -9,6 +9,7 @@ pretending the relationship is exploitable.
 
 from __future__ import annotations
 
+import glob
 import os
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,12 @@ def _find_declared_artifact(bundle_root: Path, name: str) -> Path | None:
         if path.is_file() and path.resolve().is_relative_to(resolved_root):
             return path
     try:
-        for path in bundle_root.rglob(name):
+        # The name comes from a hostile Info.plist: escape glob
+        # metacharacters so a declared name of '*' cannot bind an
+        # arbitrary bundle file as the "declared privileged helper"
+        # (or make the walk pathologically expensive). The rglob is a
+        # filename lookup, never a pattern.
+        for path in bundle_root.rglob(glob.escape(name)):
             if path.is_file() and path.resolve().is_relative_to(resolved_root):
                 return path
     except OSError:
