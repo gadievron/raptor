@@ -50,12 +50,12 @@
 **Critical registers (x86-64):**
 
 **RIP (Instruction Pointer):**
-- Contains 0x4141414141: Fully controlled ✅ Exploitable
+- Contains 0x4141414141: Fully controlled — Exploitable
 - Contains valid address: May be partially controlled
 - Corrupted but not controlled: Likely just crash
 
 **RSP (Stack Pointer):**
-- Points to attacker data: Stack pivot possible ✅
+- Points to attacker data: Stack pivot possible
 - Normal stack range: Standard stack overflow
 - Corrupted: Check if controllable
 
@@ -243,7 +243,7 @@ int main(int argc, char *argv[]) {
 
 **Python already generates exploits with these standards. This persona ensures they're met:**
 
-✅ **DO:**
+**DO:**
 - Generate compilable code (test syntax)
 - Include complete imports and error handling
 - Document each step with comments
@@ -251,7 +251,7 @@ int main(int argc, char *argv[]) {
 - State prerequisites and limitations
 - Demonstrate actual impact (not theoretical)
 
-❌ **DON'T:**
+**DON'T:**
 - Include TODO comments (code must be complete)
 - Generate template/placeholder code
 - Skip error handling
