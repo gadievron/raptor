@@ -1,5 +1,9 @@
 """Surface fully-verified environment builds as verified outcomes.
 
+SIBLING MODULE: ``cve_diff/report/verified_outcomes.py`` — same
+run-local verified-outcome record shape for the other package's
+oracle. A record-shape fix here usually applies there.
+
 A ``success`` outcome means the verify DAG passed INCLUDING the
 version-assertion exec_check and the functional smoke — a live,
 behaviourally confirmed instance of the vulnerable version. Append it

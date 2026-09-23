@@ -204,6 +204,11 @@ _TOKEN_CACHE: dict[str, str | bool] = {"resolved": False, "value": ""}
 def resolve_github_token() -> str:
     """Pick the GitHub token from env or `gh` CLI.
 
+    SIBLINGS (a fix here usually applies there):
+    ``cve_env/infra/service_health.py::_resolve_github_token_for_probe``
+    and ``cve_diff/infra/service_health.py::probe_github`` — all three
+    fork ``gh auth token`` with a sanitised env.
+
     Order of precedence:
       1. ``GITHUB_TOKEN`` env var (explicit, highest priority)
       2. ``gh auth token`` (the `gh` CLI's stored token; macOS keychain on

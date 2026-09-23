@@ -1,5 +1,9 @@
 """Surface consensus-confirmed discoveries as verified outcomes.
 
+SIBLING MODULE: ``cve_env/infra/verified_outcomes.py`` — same
+run-local verified-outcome record shape for the other package's
+oracle. A record-shape fix here usually applies there.
+
 When the 2-method pointer consensus (OSV references + NVD Patch-tagged
 references — ``report/consensus.py``) independently agrees with the
 pipeline's extracted fix pointer, that is an oracle-grade confirmation

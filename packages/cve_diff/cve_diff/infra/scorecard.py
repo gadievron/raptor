@@ -1,5 +1,9 @@
 """Scorecard feed for the discovery agent.
 
+SIBLING MODULE: ``cve_env/infra/scorecard.py`` — the build-side feed
+with the same no-record policy over ``core/llm/scorecard``. A
+feed-policy fix here usually applies there.
+
 Records one ``TOOL_EVIDENCE`` observation per adjudicated discovery
 pick onto the ``(model, "cve-diff:discovery")`` cell of RAPTOR's
 model scorecard (``core/llm/scorecard``). Adjudication is mechanical,
