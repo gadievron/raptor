@@ -497,13 +497,39 @@ class StreamDelta:
     chunk: StreamChunk
 
 
+# One alias for the loop's terminal-outcome vocabulary —
+# :attr:`LoopTerminated.reason` and :attr:`ToolLoopResult.terminated_by`
+# carry the SAME string by contract, and two hand-synced Literal unions
+# were a silent drift channel (a value added to one but not the other
+# type-checks fine at every call site that only touches one).
+TerminationReason = Literal[
+    "complete",                  # COMPLETE response from model
+    "terminal_tool",             # model called designated terminal tool
+    "max_iterations",            # loop hit max_iterations cap
+    "max_cost_usd",              # cumulative cost crossed cap
+    "max_seconds",               # wall-clock budget exceeded
+    "max_total_tokens",          # cumulative input+output tokens crossed cap
+    "max_tokens",                # provider truncated response (no tool calls)
+    "refused",                   # provider safety / content filter
+    "tool_error",                # handler exception under terminate_on_handler_error
+    "tool_timeout",              # handler timeout under terminate_on_handler_error
+                                 # (without that flag, both convert to an
+                                 # is_error ToolResult and the loop continues)
+    "context_overflow",          # request would exceed context window
+    "provider_error",            # transport / API failure after retries
+    "credit_exhausted",          # account out of credit / billing failure
+    "give_up",                   # caller-supplied should_continue returned False
+]
+
+
 @dataclass(frozen=True)
 class LoopTerminated:
     """Emitted as the final event of a :meth:`ToolUseLoop.run` call.
 
     ``reason`` mirrors :attr:`ToolLoopResult.terminated_by` — the same
-    string is in both places so consumers can either subscribe to
-    events live or inspect the result after the fact.
+    string is in both places (one shared :data:`TerminationReason`
+    alias) so consumers can either subscribe to events live or inspect
+    the result after the fact.
 
     ``iterations`` always reports turns completed: pre-flight gate
     termination at iteration N reports ``N`` (N turns 0..N-1 done);
@@ -511,24 +537,7 @@ class LoopTerminated:
     0..N done). Same convention as :attr:`ToolLoopResult.iterations`.
     """
 
-    reason: Literal[
-        "complete",                  # COMPLETE response from model
-        "terminal_tool",             # model called designated terminal tool
-        "max_iterations",            # loop hit max_iterations cap
-        "max_cost_usd",              # cumulative cost crossed cap
-        "max_seconds",               # wall-clock budget exceeded
-        "max_total_tokens",          # cumulative input+output tokens crossed cap
-        "max_tokens",                # provider truncated response (no tool calls)
-        "refused",                   # provider safety / content filter
-        "tool_error",                # handler exception under terminate_on_handler_error
-        "tool_timeout",              # handler timeout under terminate_on_handler_error
-                                     # (without that flag, both convert to an
-                                     # is_error ToolResult and the loop continues)
-        "context_overflow",          # request would exceed context window
-        "provider_error",            # transport / API failure after retries
-        "credit_exhausted",          # account out of credit / billing failure
-        "give_up",                   # caller-supplied should_continue returned False
-    ]
+    reason: TerminationReason
     iterations: int
     total_cost_usd: float
     error_message: str | None = None
@@ -582,22 +591,7 @@ class ToolLoopResult:
     total_input_tokens: int
     total_output_tokens: int
     total_cost_usd: float
-    terminated_by: Literal[
-        "complete",
-        "terminal_tool",
-        "max_iterations",
-        "max_cost_usd",
-        "max_seconds",
-        "max_total_tokens",
-        "max_tokens",
-        "refused",
-        "tool_error",
-        "tool_timeout",
-        "context_overflow",
-        "provider_error",
-        "credit_exhausted",
-        "give_up",
-    ]
+    terminated_by: TerminationReason
     error_message: str | None = None
     # Per-turn token accounting — one (input, output) tuple per
     # assistant turn appended THIS RUN, in append order,
