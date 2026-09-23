@@ -172,8 +172,22 @@ def _apply_one_from(
             + edit.new_value
             + new_text[m.end(2):]
         )
+    # Verdict parity with the shared driver and the sibling
+    # rewriters: when OTHER-valued occurrences of the same image
+    # remain, the apply is explicitly ``partial`` — a bare
+    # ``applied`` reported a clean rewrite over a mixed file.
+    stray_values = sorted(
+        {m.group(2) for m in matches}
+        - {edit.old_value, edit.new_value},
+    )
+    reason = "applied"
+    if stray_values:
+        reason = (
+            f"partial: {len(target_matches)} occurrence(s) bumped; "
+            f"other value(s) left in place: {stray_values!r}"
+        )
     return new_text, RewriteResult(
-        edit=edit, applied=True, reason="applied",
+        edit=edit, applied=True, reason=reason,
     )
 
 
