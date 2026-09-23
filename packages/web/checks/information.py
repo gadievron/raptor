@@ -184,8 +184,16 @@ class VerboseHttpMethodsCheck(Check):
             parsed = urlparse(target_url)
             base = f"{parsed.scheme}://{parsed.netloc}"
             try:
+                # allow_redirects=False: the check needs only the FIRST
+                # response's Allow header. Following a target-controlled
+                # Location on this off-client lane (requests' default)
+                # walked the scanner past _is_in_scope, the private-IP/
+                # DNS-rebinding gate, and the execution-policy audit —
+                # and let a different host supply the graded evidence.
+                # Sibling off-client probe tls.py passes the same flag.
                 opts = req_lib.options(
                     base + "/", timeout=10, verify=client.verify_ssl,
+                    allow_redirects=False,
                 )
             except req_lib.RequestException:
                 note_transport_error(client)
