@@ -244,6 +244,9 @@ def main() -> int:
             oa_config = OpenAntConfig(
                 core_path=Path(args.openant_core),
                 gate_provenance=gate_provenance,
+                expect_clean_pinned=(
+                    (gate_provenance or {}).get("consent")
+                    == "clean-pinned"),
             )
         else:
             oa_config = get_config(raptor_dir=_BASE)

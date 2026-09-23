@@ -3740,10 +3740,13 @@ def main() -> int:
             from packages.openant.config import OpenAntConfig
 
             if getattr(args, "openant_core", None):
+                _gate_prov = getattr(args, "openant_gate_provenance", None)
                 oa_config = OpenAntConfig(
                     core_path=Path(args.openant_core),
-                    gate_provenance=getattr(
-                        args, "openant_gate_provenance", None),
+                    gate_provenance=_gate_prov,
+                    expect_clean_pinned=(
+                        (_gate_prov or {}).get("consent")
+                        == "clean-pinned"),
                 )
             else:
                 oa_config = get_config(raptor_dir=script_root)
