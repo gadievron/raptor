@@ -39,6 +39,11 @@ static thread_state_t* get_thread_state(void) {
     thread_state_t *state = pthread_getspecific(thread_key);
     if (!state) {
         state = calloc(1, sizeof(thread_state_t));
+        if (!state) {
+            /* OOM: instrumentation must degrade to no-op, never
+             * crash the traced program with its own NULL deref. */
+            return NULL;
+        }
         state->tid = trace_gettid();
         
         char filename[256];

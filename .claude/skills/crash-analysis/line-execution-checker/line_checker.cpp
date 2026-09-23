@@ -163,7 +163,15 @@ Query parse_query(const std::string& arg) {
     
     Query q;
     q.file = arg.substr(0, colon);
-    q.line = std::stoi(arg.substr(colon + 1));
+    try {
+        q.line = std::stoi(arg.substr(colon + 1));
+    } catch (const std::exception&) {
+        // Non-numeric or out-of-range line part: take the usage
+        // path, not an uncaught-exception terminate.
+        std::cerr << "Invalid line number: " << arg
+                  << " (use file:line)" << std::endl;
+        exit(2);
+    }
     return q;
 }
 
