@@ -101,6 +101,65 @@ class TestLlmLaneReadmitsIntact:
         assert env["OPENAI_API_KEY"] == "sk-op"
 
 
+class TestGetLlmEnvFirstPartyAuthCarry:
+    """The CARRY seam derives from the canonical vocabulary.
+
+    ``get_llm_env`` is where ``raptor.py`` hands every analysis-script
+    child its LLM environment. The child is where the claudecode
+    transport and the Anthropic SDK actually run: ``cc_subprocess_env``
+    overlays ``ANTHROPIC_*``/``CLAUDE_CODE_*`` from the CHILD's own
+    environ, so a member missing HERE is auth-starvation on env-token
+    installs (``ANTHROPIC_AUTH_TOKEN`` gateway auth,
+    ``CLAUDE_CODE_OAUTH_TOKEN`` headless setup-token). The derivation
+    pins below are the closure oracle: the key table must contain the
+    WHOLE first-party trio by construction, not by hand-typed
+    enumeration — the strip twin (``strip_llm_env_vars``) already
+    derives from ``CREDENTIAL_BEARING_ENV_VARS``; this is the
+    symmetric carry-side treatment.
+    """
+
+    def test_first_party_trio_derived_into_key_table(self):
+        from core.security.credential_env import (
+            ANTHROPIC_FIRST_PARTY_AUTH_VARS,
+        )
+        missing = set(ANTHROPIC_FIRST_PARTY_AUTH_VARS) - set(
+            RaptorConfig.LLM_API_KEY_VARS
+        )
+        assert missing == set(), missing
+
+    def test_custom_headers_member_present(self):
+        # Rides gateway Authorization overrides — an operator whose
+        # install authenticates via ANTHROPIC_CUSTOM_HEADERS is
+        # auth-starved in every child without it.
+        assert "ANTHROPIC_CUSTOM_HEADERS" in RaptorConfig.LLM_API_KEY_VARS
+
+    def test_get_llm_env_carries_whole_trio(self, monkeypatch):
+        """Carry direction: every trio member set in the operator env
+        reaches the LLM-child env (pre-fix only ANTHROPIC_API_KEY
+        did)."""
+        from core.security.credential_env import (
+            ANTHROPIC_FIRST_PARTY_AUTH_VARS,
+        )
+        for name in ANTHROPIC_FIRST_PARTY_AUTH_VARS:
+            monkeypatch.setenv(name, f"tok-{name}")
+        env = RaptorConfig.get_llm_env()
+        for name in ANTHROPIC_FIRST_PARTY_AUTH_VARS:
+            assert env.get(name) == f"tok-{name}", name
+
+    def test_untrusted_env_still_strips_trio(self, monkeypatch):
+        """Strip direction unchanged: the safe-env baseline for
+        untrusted subprocesses must never gain the trio through the
+        carry-side derivation."""
+        from core.security.credential_env import (
+            ANTHROPIC_FIRST_PARTY_AUTH_VARS,
+        )
+        for name in ANTHROPIC_FIRST_PARTY_AUTH_VARS:
+            monkeypatch.setenv(name, "attacker-visible")
+        env = RaptorConfig.get_safe_env()
+        for name in ANTHROPIC_FIRST_PARTY_AUTH_VARS:
+            assert name not in env, name
+
+
 class TestStripLlmEnvVars:
     def test_drops_credential_bearing_family(self):
         env = {name: "v" for name in CREDENTIAL_BEARING_ENV_VARS}

@@ -16,6 +16,7 @@ from typing import ClassVar
 # allowlist does not grant — the child died ModuleNotFoundError
 # whenever the parent process had not already imported the module.
 from core.security.credential_env import (
+    ANTHROPIC_FIRST_PARTY_AUTH_VARS,
     CREDENTIAL_BEARING_ENV_VARS,
     CREDENTIAL_GENERAL_BLOCKLIST_VARS,
     is_credential_env_pattern_member,
@@ -1158,7 +1159,24 @@ class RaptorConfig:
     # fuzz harnesses) must never see credentials.  get_llm_env() layers
     # them on top of get_safe_env() for our own LLM-calling scripts.
     LLM_API_KEY_VARS = (
-        "ANTHROPIC_API_KEY",
+        # First-party Claude/Anthropic auth — DERIVED from the
+        # canonical vocabulary, never hand-typed: the trio must reach
+        # LLM children as a unit. The child is where the claudecode
+        # transport and the Anthropic SDK run (cc_subprocess_env
+        # overlays ANTHROPIC_*/CLAUDE_CODE_* from the CHILD's own
+        # environ), so a member missing here auth-starves every LLM
+        # child on env-token installs (ANTHROPIC_AUTH_TOKEN gateway
+        # auth; CLAUDE_CODE_OAUTH_TOKEN headless setup-token) while
+        # keychain/~/.claude installs mask the gap. The strip twin
+        # (strip_llm_env_vars) already derives from
+        # CREDENTIAL_BEARING_ENV_VARS; this is the symmetric
+        # carry-side treatment, pinned both directions in
+        # tests/test_credential_env_consumption.py.
+        *ANTHROPIC_FIRST_PARTY_AUTH_VARS,
+        # Operator-configured extra request headers — rides gateway
+        # Authorization overrides, so it is credential posture, and
+        # the SDK reads it in the child.
+        "ANTHROPIC_CUSTOM_HEADERS",
         "OPENAI_API_KEY",
         "GEMINI_API_KEY",
         "MISTRAL_API_KEY",
