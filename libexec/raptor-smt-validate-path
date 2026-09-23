@@ -90,6 +90,10 @@ from packages.exploit_feasibility.smt_path import validate_path  # noqa: E402
 
 # attack-paths.json is a RAPTOR-written run artifact.
 _MAX_ATTACK_PATHS_BYTES = 64 * 1024 * 1024
+#: --stdin payloads share the file-read ceiling: every other
+#: read in this script is budgeted, and an unbounded
+#: json.load(sys.stdin) buffers whatever the pipe supplies.
+_MAX_STDIN_BYTES = 64 * 1024 * 1024
 
 
 def _err(msg: str) -> int:
@@ -229,8 +233,12 @@ def main() -> int:
             return result_or_code
         conditions, trace_profile = result_or_code
     elif args.stdin:
+        raw = sys.stdin.read(_MAX_STDIN_BYTES + 1)
+        if len(raw) > _MAX_STDIN_BYTES:
+            return _err(
+                f"--stdin payload exceeds {_MAX_STDIN_BYTES} bytes")
         try:
-            payload = json.load(sys.stdin)
+            payload = json.loads(raw)
         except json.JSONDecodeError as e:
             return _err(f"invalid JSON on stdin: {e}")
         if not isinstance(payload, list):
