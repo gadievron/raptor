@@ -38,7 +38,11 @@ def run_is_imported(run_dir: Path) -> bool:
     marker = Path(run_dir) / IMPORTED_RUN_MARKER_FILE
     if not marker.is_file():
         return False
-    data = load_json(marker)
+    # Budgeted: a legitimate marker is ~100 bytes, the run dir is
+    # child-writable, and this predicate runs per sibling in merge /
+    # report / gate loops — an oversize plant reads as "not imported"
+    # (planting one only DEMOTES a run's standing anyway).
+    data = load_json(marker, max_bytes=1024 * 1024)
     return bool(isinstance(data, dict) and data.get("imported"))
 
 
@@ -143,12 +147,16 @@ MAX_FINDINGS_JSON_BYTES = 64 * 1024 * 1024
 
 
 def _load_size_gated_json(path: Path) -> Any | None:
-    """``load_json`` with a pre-parse ``st_size`` gate.
+    """``load_json`` under the findings-file byte budget.
 
     Returns ``None`` for missing files (matching ``load_json``) and
     for files over :data:`MAX_FINDINGS_JSON_BYTES` — the skip is
-    logged at warning so an operator investigating a missing run in
-    a report sees why.
+    logged at warning citing the gate so an operator investigating a
+    missing run in a report sees why. The budget is ALSO passed as
+    ``max_bytes`` — load_json re-checks it on the OPEN fd and after a
+    capped read, so a file that grows between the advisory ``stat()``
+    and the read is refused instead of buffered unbounded (the
+    previous name-based pre-gate alone left exactly that window).
     """
     try:
         size = path.stat().st_size
@@ -161,7 +169,7 @@ def _load_size_gated_json(path: Path) -> Any | None:
             path, size, MAX_FINDINGS_JSON_BYTES,
         )
         return None
-    return load_json(path)
+    return load_json(path, max_bytes=MAX_FINDINGS_JSON_BYTES)
 
 
 def load_findings_from_dir(run_dir: Path) -> list[dict[str, Any]]:

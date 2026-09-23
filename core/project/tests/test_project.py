@@ -829,3 +829,60 @@ class TestRenamePinRewriteLocked(unittest.TestCase):
         self.assertEqual(moved.read_text(encoding="utf-8"), payload,
                          "oversize marker was parsed and rewritten")
 
+
+class TestSweepOversizeMarker(unittest.TestCase):
+    """An oversize .raptor-run.json plant (sandbox-writable) must not
+    crash the sweep consumers. Pre-fix the sweep's BARE read parsed
+    the plant, decided to fail the run, and the BUDGETED fail_run then
+    refused the same file — an uncaught error out of
+    get_run_dirs(sweep=True) took /project report, export, and the
+    startup sweep down with one file."""
+
+    def setUp(self):
+        self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        base = Path(self.tmpdir.name)
+        out_base = base / "out" / "projects"
+        _ob = patch("core.project.project.DEFAULT_OUTPUT_BASE", out_base)
+        _ob.start()
+        self.addCleanup(_ob.stop)
+        self.mgr = ProjectManager(projects_dir=base / "projects")
+        self.target = str(base / "code")
+        Path(self.target).mkdir()
+
+    def test_oversize_marker_is_skipped_not_a_crash(self):
+        import json as _json
+        p = self.mgr.create("proj", self.target)
+        run = Path(p.output_dir) / "scan_20260101_000000"
+        run.mkdir(parents=True)
+        marker = run / ".raptor-run.json"
+        payload = _json.dumps({
+            "version": 2, "command": "scan",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "status": "running", "session_pid": 4194001,
+            "pad": "A" * (8 * 1024 * 1024),
+        })
+        marker.write_text(payload, encoding="utf-8")
+        # Must neither raise nor fail-stamp the unreadable marker.
+        dirs = p.get_run_dirs(sweep=True)
+        self.assertEqual([d.name for d in dirs],
+                         ["scan_20260101_000000"])
+        self.assertEqual(marker.read_text(encoding="utf-8"), payload)
+
+    def test_in_budget_dead_session_still_swept(self):
+        # Two-direction: the budget must not turn the sweep off.
+        import json as _json
+
+        from core.json import load_json
+        p = self.mgr.create("proj", self.target)
+        run = Path(p.output_dir) / "scan_20260101_000000"
+        run.mkdir(parents=True)
+        marker = run / ".raptor-run.json"
+        marker.write_text(_json.dumps({
+            "version": 2, "command": "scan",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "status": "running", "session_pid": 4194001,
+        }), encoding="utf-8")
+        with patch("core.run.metadata._pid_alive", lambda pid: False):
+            p.get_run_dirs(sweep=True)
+        self.assertEqual(load_json(marker)["status"], "failed")

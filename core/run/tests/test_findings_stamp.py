@@ -286,3 +286,43 @@ def test_canonical_shape_accepts_stamped_ref(tmp_path: Path) -> None:
 ])
 def test_canonical_shape_rejects_forgeries(candidate) -> None:
     assert not is_canonical_ref_shape(candidate)
+
+
+def test_stamp_skips_oversize_findings_file(tmp_path, caplog):
+    """_stamp_file runs inside complete_run — an oversize findings.json
+    plant in the sandbox-writable run dir must be skipped with a
+    warning (the budget class every other findings reader applies),
+    never read wholesale and rewritten by the finaliser."""
+    import logging
+
+    from core.run.findings import stamp_findings_in_run
+    (tmp_path / ".raptor-run.json").write_text(json.dumps({
+        "version": 2, "command": "scan",
+        "timestamp": "2026-01-01T00:00:00+00:00", "status": "running",
+    }), encoding="utf-8")
+    payload = ('{"findings": [{"id": "f1", "pad": "'
+               + "A" * (65 * 1024 * 1024) + '"}]}')
+    (tmp_path / "findings.json").write_text(payload, encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        counts = stamp_findings_in_run(tmp_path)
+    assert counts["files_skipped"] == 1
+    assert counts["files_stamped"] == 0
+    assert (tmp_path / "findings.json").read_text(
+        encoding="utf-8") == payload
+    assert any("findings gate" in r.message or "unreadable" in
+               r.message.lower() for r in caplog.records)
+
+
+def test_stamp_still_stamps_in_budget_file(tmp_path):
+    # Two-direction guard for the budget gate.
+    from core.run.findings import stamp_findings_in_run
+    (tmp_path / ".raptor-run.json").write_text(json.dumps({
+        "version": 2, "command": "scan",
+        "timestamp": "2026-01-01T00:00:00+00:00", "status": "running",
+    }), encoding="utf-8")
+    (tmp_path / "findings.json").write_text(
+        json.dumps({"findings": [{"id": "f1"}]}), encoding="utf-8")
+    counts = stamp_findings_in_run(tmp_path)
+    assert counts["findings_stamped"] == 1
+    data = json.loads((tmp_path / "findings.json").read_text())
+    assert data["findings"][0]["provenance_refs"]

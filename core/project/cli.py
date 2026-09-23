@@ -1790,11 +1790,17 @@ def _count_sarif_results_in_dir(run_dir: Path) -> int:
     loop this replaces raised on a non-dict run entry, taking the
     whole /project status rendering down with one malformed file.
     """
+    from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
     from core.json import load_json
     from core.sarif.parser import count_results
     count = 0
     for sarif_path in run_dir.glob("*.sarif"):
-        count += count_results(load_json(sarif_path))
+        # Budgeted (run-artifact class): /project status loads every
+        # run's SARIF wholesale just to COUNT — an oversize plant in a
+        # sandbox-writable run dir must degrade to 0, not buffer
+        # unbounded per file listed.
+        count += count_results(
+            load_json(sarif_path, max_bytes=RUN_ARTIFACT_MAX_BYTES))
     return count
 
 
@@ -1848,10 +1854,11 @@ def _get_output_summary(run_dir, meta):
             # concurrent marker writers (a pin rewrite, another status
             # invocation) and clobbered their update. Re-load inside
             # the lock and add ONLY the cache keys.
-            from core.json import load_json
-            from core.run.metadata import _metadata_lock
+            # _load_meta, not bare load_json: the marker is sandbox-
+            # writable and every reader carries the metadata budget.
+            from core.run.metadata import _load_meta, _metadata_lock
             with _metadata_lock(meta_path):
-                fresh = load_json(meta_path)
+                fresh = _load_meta(meta_path)
                 if isinstance(fresh, dict):
                     fresh["output_summary"] = result
                     fresh["output_summary_v"] = summary_version
@@ -2535,6 +2542,7 @@ def _print_run_provenance(project, run_query) -> None:
 def _print_coverage(project, detailed: bool=False, fail_under=None):
     """Print project coverage — the unified store-backed report (coverage
     state + per-run execution detail), plus the ``--fail-under`` check."""
+    from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
     from core.coverage.store_summary import (
         coverage_view,
         format_store_threshold_result,
@@ -2550,11 +2558,15 @@ def _print_coverage(project, detailed: bool=False, fail_under=None):
         import logging as _logging
         _logging.getLogger(__name__).warning("failed to list run dirs: %s", exc)
         run_dirs = []
-    checklist = load_json(base / "checklist.json")
+    # Checklists live in sandbox-writable run dirs — run-artifact
+    # budget, same class the coverage readers already apply.
+    checklist = load_json(base / "checklist.json",
+                          max_bytes=RUN_ARTIFACT_MAX_BYTES)
     if not isinstance(checklist, dict):
         checklist = None
         for d in run_dirs:
-            cl = load_json(d / "checklist.json")
+            cl = load_json(d / "checklist.json",
+                           max_bytes=RUN_ARTIFACT_MAX_BYTES)
             if isinstance(cl, dict):
                 checklist = cl
                 break

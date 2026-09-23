@@ -1130,10 +1130,13 @@ def _zombie_correct(records: list[dict]) -> None:
             r["status"] = "failed"
             continue
         try:
-            if meta.stat().st_size > _MAX_ENTRY_BYTES * 16:
-                continue  # attacker-influenced file — never slurp GBs
+            # max_bytes, not a name-based stat pre-gate: load_json
+            # checks the budget on the OPEN fd and re-checks after a
+            # capped read, so an attacker-influenced file that grows
+            # between the check and the read is refused, never
+            # slurped (the previous stat-then-load left that window).
             from core.json import load_json
-            data = load_json(meta)
+            data = load_json(meta, max_bytes=_MAX_ENTRY_BYTES * 16)
             status = (data or {}).get("status", "")
         except Exception:  # noqa: BLE001 — correction is best-effort
             continue

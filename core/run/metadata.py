@@ -2430,6 +2430,16 @@ def _update_status(output_dir: Path, status: str,
     with _metadata_lock(path):
         metadata = _load_meta(path)
         if metadata is None:
+            if path.exists():
+                # The file is THERE but the budgeted read refused it
+                # (oversize plant / unreadable) — a FileNotFoundError
+                # here misled callers that had just enumerated the
+                # file. Same malformed-on-disk contract (ValueError)
+                # as the non-dict branch below.
+                msg = (f"Unreadable {RUN_METADATA_FILE} in {output_dir}"
+                       f" — over budget or malformed; refusing the "
+                       f"status update")
+                raise ValueError(msg)
             msg = f"No {RUN_METADATA_FILE} in {output_dir} — call start_run() first"
             raise FileNotFoundError(msg)
         if not isinstance(metadata, dict):
