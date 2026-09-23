@@ -1287,3 +1287,30 @@ class TestConfigHomeAndFunctionInjection:
             "NODE_ENV": "production",
             "APP_DATA_MODE": "x",   # DATA segment but not an XDG home
         }) is False
+
+
+class TestHelperKeyTranscriptionDiscipline:
+    """The dangerous-settings-key universe is hand-picked; every past
+    miss in this family (otelHeadersHelper, statusLine,
+    permissions-widening) was a documented key the list lacked. The
+    header must carry the credential_env surface discipline —
+    source / transcribed / completeness — so drift is a dated,
+    reviewable claim."""
+
+    def test_helper_keys_header_carries_discipline_fields(self):
+        import re as _re
+        from pathlib import Path as _Path
+        src = (_Path(__file__).resolve().parents[1]
+               / "cc_trust.py").read_text(encoding="utf-8")
+        # The comment block immediately above _CREDENTIAL_HELPER_KEYS.
+        head = src[:src.index("_CREDENTIAL_HELPER_KEYS = (")]
+        block = head[head.rfind("\n\n"):]
+        for field in ("source=", "transcribed=", "completeness="):
+            assert field in block, (
+                f"_CREDENTIAL_HELPER_KEYS header lost its {field!r} "
+                "line — the hand-picked universe needs a dated "
+                "transcription claim, not a guess"
+            )
+        # Staleness tripwire: the transcription stamp must be a real
+        # date so 'when was this last walked' has a mechanical answer.
+        assert _re.search(r"transcribed= \d{4}-\d{2}-\d{2}", block)
