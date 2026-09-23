@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 
 from ._yaml_fast import safe_load
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -76,12 +77,12 @@ def best_effort_line(text: str, spec: str) -> int:
     """First 1-based line whose text contains ``spec`` (or, failing
     that, the spec's action name) — used for walk-only hits, where
     the YAML parse has no positions.  Falls back to line 1."""
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    for line_no, line in enumerate(split_lines(text), start=1):
         if spec in line:
             return line_no
     action = spec.rsplit("@", 1)[0]
     if action:
-        for line_no, line in enumerate(text.splitlines(), start=1):
+        for line_no, line in enumerate(split_lines(text), start=1):
             if action in line:
                 return line_no
     return 1

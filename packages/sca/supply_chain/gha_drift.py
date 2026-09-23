@@ -40,6 +40,7 @@ from ..parsers._base import build_purl
 from ..parsers.inline_installs import classify_action_ref
 from ._closest_manifest import rel_to_target as _rel
 from typing import TYPE_CHECKING
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -118,7 +119,7 @@ def _scan_text(
     target: Path,
 ) -> Iterable[GhaDriftFinding]:
     seen_specs: set[str] = set()
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    for line_no, line in enumerate(split_lines(text), start=1):
         m = _USES_RE.match(line)
         if not m:
             continue

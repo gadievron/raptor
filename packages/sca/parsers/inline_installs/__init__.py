@@ -76,6 +76,8 @@ from ...file_shapes import is_dockerfile as _is_dockerfile
 # Composite-action manifests carry run:/uses: steps too — the
 # broader predicate is deliberate for the inline-install lane.
 from ...file_shapes import is_gha_workflow_or_action as _is_gha_workflow
+from core.source.lines import split_lines
+
 from ._managers import (
     _MANAGERS,
     _NAME_RE,
@@ -731,7 +733,7 @@ def _extract_gha_uses(
             source_extra={"ref": ref, "line": line_no},
         )
 
-    for line_no, raw in enumerate(text.splitlines(), start=1):
+    for line_no, raw in enumerate(split_lines(text), start=1):
         m = _GHA_USES_RE.match(raw)
         if not m:
             continue
