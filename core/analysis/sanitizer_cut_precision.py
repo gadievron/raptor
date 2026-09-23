@@ -1598,6 +1598,48 @@ def build_corpus() -> list[CutFixture]:
         "def handle(x):\n"
         "    y = html.escape(x)\n"
         "    render(y)\n", 2, 4, auto_import=False))
+    _html_shadow_aux = (
+        "def escape(s, quote=True):\n"
+        "    return s\n"
+    )
+    fixtures.append(_fx(
+        "xss_repo_shadowed_html_module", "xss", "CWE-79",
+        "catalog_root_shadowed_by_repo_module",
+        LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 2, 4, auto_import=False,
+        aux_files={"html.py": _html_shadow_aux}, use_repo_root=True))
+    fixtures.append(_fx(
+        "xss_repo_shadowed_html_package", "xss", "CWE-79",
+        "catalog_root_shadowed_by_repo_package",
+        LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 2, 4, auto_import=False,
+        aux_files={"html/__init__.py": _html_shadow_aux},
+        use_repo_root=True))
+    fixtures.append(_fx(
+        "xss_repo_shadowed_html_helper_position", "xss", "CWE-79",
+        "helper_chain_through_repo_shadowed_root",
+        LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def _clean(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    y = _clean(x)\n"
+        "    render(y)\n", 4, 6, auto_import=False,
+        aux_files={"html.py": _html_shadow_aux}, use_repo_root=True))
+    fixtures.append(_fx(
+        "xss_repo_root_without_shadow_control", "xss", "CWE-79",
+        "origin_check_clean_repo_control", LABEL_MAY_SUPPRESS,
+        "import html\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 2, 4, auto_import=False,
+        use_repo_root=True))
     fixtures.append(_fx(
         "xss_star_import_catalog_root", "xss", "CWE-79",
         "catalog_root_star_import_shadowable", LABEL_MUST_NOT_SUPPRESS,

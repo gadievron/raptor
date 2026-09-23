@@ -214,6 +214,34 @@ def all_sanitizer_callables(language: str) -> set[str]:
     }
 
 
+def repo_shadows_module_root(
+    repo_root: str, root: str,
+) -> bool:
+    """True when the scanned repo ships an import-resolvable module
+    that shadows ``root`` — ``<repo_root>/<root>.py`` or
+    ``<repo_root>/<root>/__init__.py``.
+
+    Import-target ORIGIN check: ``import html`` inside such a repo
+    resolves to the REPO's file at runtime (the script directory
+    precedes the stdlib on sys.path), so the written name is the
+    repo's object, not the stdlib/site-packages identity a catalog
+    entry names. A malformed root refuses too (True) — the caller is
+    deciding whether to TRUST an identity, and an unclassifiable one
+    must not be trusted.
+    """
+    if not root or not root.isidentifier():
+        return True
+    try:
+        from pathlib import Path as _Path
+
+        base = _Path(repo_root)
+        return (base / f"{root}.py").is_file() or (
+            base / root / "__init__.py"
+        ).is_file()
+    except OSError:
+        return True
+
+
 # ---------------------------------------------------------------------------
 # CFG recognizer
 # ---------------------------------------------------------------------------
@@ -302,6 +330,7 @@ __all__ = [
     "SanitizerBinding",
     "all_sanitizer_callables",
     "match_sanitizers_in_cfg",
+    "repo_shadows_module_root",
     "nodes_of",
     "sanitizer_callables_for_cwe",
     "sink_classes_for_cwe",

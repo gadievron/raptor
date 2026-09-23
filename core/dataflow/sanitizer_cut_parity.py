@@ -192,7 +192,15 @@ def value_bound_verdict_for(finding: dict[str, Any]) -> str:
         from core.analysis.sanitizer_cut import evaluate_finding
     except ImportError:                                     # pragma: no cover
         return VERDICT_UNRESOLVED
-    resolved = resolve_finding(finding)
+    # Thread the finding's repo_root into resolution too: the
+    # inter-procedural leg's origin checks (repo-shadowed module
+    # roots) key on it, and the telemetry gate must evaluate the
+    # same joins production does. Absent → legacy behaviour.
+    resolved = resolve_finding(
+        finding,
+        target_root=(str(finding.get("repo_root"))
+                     if finding.get("repo_root") else None),
+    )
     if not isinstance(resolved, ResolvedFinding):
         return VERDICT_UNRESOLVED
     java_text = None

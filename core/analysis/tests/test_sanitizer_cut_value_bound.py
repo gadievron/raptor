@@ -877,3 +877,74 @@ class TestUnboundCatalogRootRefused:
             source_symbols={"x"}, sink_arg="y",
         )
         assert result.verdict == VERDICT_SUPPRESS
+
+
+class TestRepoShadowedModuleOrigin:
+    """Origin resolution: a repo shipping its own html.py (or
+    html/__init__.py) makes `import html` resolve to the REPO's file
+    at runtime — the self-import alone no longer proves the catalog
+    identity. The trust route is self-import AND no repo-resolvable
+    shadow."""
+
+    _SRC = (
+        "import html\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n"
+    )
+
+    def _evaluate3(self, repo_root):
+        cfg = build_python_cfg(self._SRC, "handle")
+        assert cfg is not None
+        sink = _node_with_call(cfg, "render")
+        return evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"}, sink_arg="y",
+            repo_root=str(repo_root) if repo_root else None,
+        )
+
+    def test_flat_shadow_refuses(self, tmp_path):
+        (tmp_path / "html.py").write_text("def escape(s):\n    return s\n")
+        assert self._evaluate3(tmp_path).verdict == VERDICT_NO_SUPPRESS
+
+    def test_package_shadow_refuses(self, tmp_path):
+        (tmp_path / "html").mkdir()
+        (tmp_path / "html" / "__init__.py").write_text(
+            "def escape(s):\n    return s\n")
+        assert self._evaluate3(tmp_path).verdict == VERDICT_NO_SUPPRESS
+
+    def test_clean_repo_root_keeps_suppression(self, tmp_path):
+        # Recall pin: repo_root given, no shadow shipped.
+        assert self._evaluate3(tmp_path).verdict == VERDICT_SUPPRESS
+
+    def test_no_repo_root_keeps_legacy(self):
+        assert self._evaluate3(None).verdict == VERDICT_SUPPRESS
+
+    def test_helper_chain_shadow_no_binding(self, tmp_path):
+        from core.analysis.finding_resolver import (
+            ResolvedFinding,
+            resolve_finding,
+        )
+        src = (
+            "import html\n"
+            "def _clean(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    y = _clean(x)\n"
+            "    render(y)\n"
+        )
+        (tmp_path / "app.py").write_text(src)
+        (tmp_path / "html.py").write_text("def escape(s):\n    return s\n")
+        finding = {
+            "cwe": "CWE-79", "file_path": str(tmp_path / "app.py"),
+            "source_line": 4, "sink_line": 6, "language": "python",
+        }
+        shadowed = resolve_finding(finding, target_root=tmp_path)
+        assert isinstance(shadowed, ResolvedFinding)
+        assert shadowed.inter_proc_bindings == frozenset()
+        # Recall pin: without the shadow file the binding returns.
+        (tmp_path / "html.py").unlink()
+        clean = resolve_finding(finding, target_root=tmp_path)
+        assert isinstance(clean, ResolvedFinding)
+        assert len(clean.inter_proc_bindings) == 1
