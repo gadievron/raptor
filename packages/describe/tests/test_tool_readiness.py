@@ -116,6 +116,66 @@ class TestCheckCodeql:
         assert adv.pm_packages.get("brew") == "libtool"
 
 
+class TestBuildDepUniverse:
+    """The dep table's key universe derives from the detector's emit
+    vocabulary — a hand-typed list drifted to 8 missing systems (false
+    '✓ build deps ok' for each) and 2 rows the detector never emits."""
+
+    def test_universe_matches_detector_emit_vocabulary(self):
+        from core.build.build_detector import BuildDetector
+        from packages.describe.tool_readiness import _BUILD_SYSTEM_DEPS
+        emit = {
+            bs_type
+            for per_lang in BuildDetector.BUILD_SYSTEMS.values()
+            for bs_type in per_lang
+        }
+        assert set(_BUILD_SYSTEM_DEPS) == emit
+
+    def test_gomod_missing_go_warns_not_ok(self):
+        # The confirmed false signal: detector emits `gomod`, the
+        # table had no row, so `go` absent from PATH still rendered
+        # "✓ build deps ok for gomod".
+        def _which(cmd):
+            return None if cmd == "go" else "/usr/bin/" + cmd
+        with patch("shutil.which", side_effect=_which):
+            with patch(
+                "packages.describe.tool_readiness._bin_version",
+                return_value="2.18.4",
+            ):
+                result = _check_codeql(_shape(
+                    primary_language="go",
+                    languages={"go": 100},
+                    language_breakdown={"go": 100.0},
+                    build_systems={"go": "gomod"},
+                ))
+        assert result.status == "warn"
+        assert "go" in result.detail
+
+    def test_unknown_build_system_reports_no_data_not_ok(self):
+        # Honest "?" when there is no dep data — never "deps verified".
+        with patch("shutil.which", return_value="/usr/bin/x"):
+            with patch(
+                "packages.describe.tool_readiness._bin_version",
+                return_value="2.18.4",
+            ):
+                result = _check_codeql(_shape(
+                    build_systems={"cpp": "not-a-real-system"},
+                ))
+        assert result.status == "unknown"
+        assert "no dependency data" in result.detail
+
+    def test_no_detected_build_system_is_honest(self):
+        with patch("shutil.which", return_value="/usr/bin/x"):
+            with patch(
+                "packages.describe.tool_readiness._bin_version",
+                return_value="2.18.4",
+            ):
+                result = _check_codeql(_shape(build_systems={}))
+        assert result.status == "ok"
+        assert "build deps ok" not in result.detail
+        assert "no build system detected" in result.detail
+
+
 # ---------------------------------------------------------------------------
 # _check_coccinelle
 # ---------------------------------------------------------------------------
