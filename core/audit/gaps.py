@@ -93,9 +93,13 @@ _PHP_INCLUDE_KEYWORD_RE = re.compile(
 # constant — makes the statement a request-controllable dispatcher
 # (``include($_GET['page'] . '.php')`` is the classic local-file-
 # inclusion shape), which is exactly handler code, never wiring.
+# The optional parens gate their own whitespace ((?:\(\s*)? /
+# (?:\s*\))?): the naive \s*\(?\s* put two whitespace runs around
+# an optional atom — quadratic on an "include"-opening statement
+# ending in a long space run. Match set unchanged.
 _PHP_LITERAL_INCLUDE_RE = re.compile(
-    r"^(?:include|include_once|require|require_once)\b\s*\(?\s*"
-    r"(?:'[^'\n]*'|\"[^\"\n]*\")\s*\)?\s*$",
+    r"^(?:include|include_once|require|require_once)\b\s*(?:\(\s*)?"
+    r"(?:'[^'\n]*'|\"[^\"\n]*\")(?:\s*\))?\s*$",
 )
 
 

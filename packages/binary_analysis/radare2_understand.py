@@ -227,8 +227,14 @@ _DANGEROUS_IMPORTS = frozenset(
 # Not %%-exact: a "%% d"-style sequence still matches through the
 # space flag ("100%% done" qualifies) — accepted selection noise,
 # bounded by the pass caps.
+# Flag and width runs are BOUNDED ({0,8}): the flag class and \d
+# overlap on '0', so unbounded runs split a hostile zero-run at
+# every position — quadratic in the candidate-string length. Real
+# printf specs carry <=5 flags and a few width digits; beyond the
+# bound the candidate simply falls through to the sentence-shape
+# check instead of scanning without bound.
 _PRINTF_CONVERSION_RE = re.compile(
-    r"%[-+ #0]*\d*(?:\.\d+)?(?:hh?|ll?|[Lqjzt])?[diouxXeEfgGaAcsp]"
+    r"%[-+ #0]{0,8}\d{0,8}(?:\.\d+)?(?:hh?|ll?|[Lqjzt])?[diouxXeEfgGaAcsp]"
 )
 
 _ANCHOR_MIN_LEN = 8

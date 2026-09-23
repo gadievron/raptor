@@ -440,6 +440,12 @@ _SANITISERS = frozenset({
     # (investigation._md_escape: thin wrapper over md_inline —
     # table-cell grade for binary-derived names).
     "_md_escape",
+    # investigation's render-site hardening for the string-anchor
+    # surfaces: _md_escape PLUS code-span backtick and [text](url)
+    # link-form neutralisation — strictly stronger than _md_escape,
+    # so recognising it never weakens the gate (see its docstring
+    # for why it is not folded into _md_escape).
+    "_md_neutral",
     # coverage store_summary's terminal chokepoint for journal/
     # inventory-derived names (_defang: sanitise_for_terminal +
     # length bound). Recognising the name puts the gate back on

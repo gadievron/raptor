@@ -18,6 +18,7 @@ are skipped when it is not installed.
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -340,10 +341,14 @@ class TestLiveAdjudication:
             target = tmp_path / f"f.{ext}"
             target.write_text("<?php\n$x = mt_rand();\n")
             targets.append(str(target))
+        # PYTHONPATH dropped like the runtime spawn path does: the CI
+        # preflight dependency simulation hides modules via a stub
+        # PYTHONPATH, which must not leak into the semgrep child.
         proc = subprocess.run(
             ["semgrep", "scan", "--config", str(rule), "--metrics",
              "off", "--json", "--quiet", *targets],
             capture_output=True, text=True, timeout=180, check=False,
+            env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
         )
         assert proc.returncode == 0, proc.stderr[:500]
         scanned = {
