@@ -404,30 +404,60 @@ def _strip_python_like(
                 i = _python_fstring_end(
                     chars, source, i, keep_strings=keep_strings)
                 continue
+            if interp in ("ruby", "shell"):
+                # Interpolation-aware walk in BOTH view modes: only
+                # the walk finds the TRUE closing quote once a kept
+                # expression contains a nested double-quoted string
+                # (`"#{ f("#{a}") }"` — pairing the outer quote with
+                # the nested opener resumed the scan inside the
+                # interpolation, where `#{` read as a comment and
+                # blanked live code after the string to end of line).
+                # Same recursion contract as _python_fstring_end.
+                i = _interp_string_end(
+                    chars, source, i, interp, keep_strings=keep_strings)
+                continue
             triple = source[i:i + 3] in ('"""', "'''")
             if triple:
                 close = source.find(source[i:i + 3], i + 3)
                 end = n if close < 0 else close + 3
                 if not keep_strings:
-                    _blank_interpolated(
-                        chars, source, i + 3, max(i + 3, end - 3), interp)
+                    _blank(chars, i + 3, max(i + 3, end - 3))
                 i = end
             else:
                 # Shell single-quoted strings have NO escapes: `'\''`
                 # ends at the second quote. Treating `\'` as an escape
                 # desynced quote state and blanked live code after the
                 # real closer to end of line (the swallow direction).
+                # EXCEPT $'…' (ANSI-C quoting), where escapes DO
+                # apply — ending that form at `\'` inverted the same
+                # desync.
                 end = _string_end(
                     source, i, ch,
-                    escapes=not (lang in ("shell", "bash") and ch == "'"))
+                    escapes=_quote_escapes(source, i, ch, lang))
                 if not keep_strings:
-                    _blank_interpolated(
-                        chars, source, i + 1,
-                        min(end, n) - 1 if end <= n else n, interp)
+                    _blank(
+                        chars, i + 1,
+                        min(end, n) - 1 if end <= n else n)
                 i = end
         else:
             i += 1
     return "".join(chars)
+
+
+def _quote_escapes(
+    source: str, i: int, quote: str, lang: str | None,
+) -> bool:
+    """Whether backslash escapes apply inside the plain string literal
+    opened at ``i`` — per-language quote grammar, single-homed so the
+    top-level scan and the nested-string arm of the interpolation
+    walk can never disagree (they did: the nested arm applied the
+    default escape model to shell single quotes, swallowing live
+    code)."""
+    if lang in ("shell", "bash") and quote == "'":
+        # POSIX single quotes have no escapes; $'…' is ANSI-C quoting
+        # where they DO apply.
+        return i > 0 and source[i - 1] == "$"
+    return True
 
 
 def _interp_kind(
@@ -466,88 +496,132 @@ def _interp_kind(
     return None
 
 
-def _blank_interpolated(
-    chars: list[str], source: str, start: int, end: int,
-    interp: str | None,
-) -> None:
-    """Blank the string body ``chars[start:end]``, keeping
-    interpolation EXPRESSIONS visible as code (``interp`` from
-    :func:`_interp_kind`; None blanks the whole body). Ruby and
-    shell grammars only — python f-strings route through
-    :func:`_python_fstring_end`, which models their full nesting
-    grammar.
+#: Nesting bound for the ruby/shell interpolation walk — same
+#: degradation contract as ``_PY_FSTRING_MAX_DEPTH``: past the cap
+#: the walk stops and the remainder stays visible (over-inclusion,
+#: never a swallow). Real code nests a handful of levels; only a
+#: planted `"#{"`*N bomb approaches the cap.
+_INTERP_MAX_DEPTH = 50
 
-    Nested string literals inside a kept expression blank their own
-    contents (they are string data again — mirroring the template
-    arm). An unterminated expression keeps the rest of the body
-    visible (over-inclusion — costs a review, never a swallow).
+
+def _interp_string_end(
+    chars: list[str], source: str, i: int, kind: str, *,
+    keep_strings: bool, depth: int = 0,
+) -> int:
+    """Consume the ruby/shell double-quoted string opened at ``i``,
+    blanking literal text while interpolation EXPRESSIONS stay
+    visible as code (under ``keep_strings`` nothing blanks, but the
+    walk still lexes the full grammar — only the walk finds the true
+    closing quote once a kept expression contains a nested
+    double-quoted string).
+
+    Ruby ``#{…}`` and shell ``$(…)``/``${…}``/backticks are modeled;
+    nested double-quoted strings inside a kept expression recurse
+    with the same grammar (their literal text blanks as data, their
+    own interpolations stay visible — mirroring
+    :func:`_python_fstring_end`). LITERAL text stops at a newline
+    (the plain multi-line double-quote residual is unchanged); a
+    kept expression may span lines (it is code either way). Returns
+    the index just past the closing quote.
     """
-    if interp is None:
-        _blank(chars, start, end)
-        return
-    j = start
-    while j < end:
+    n = len(source)
+    if depth >= _INTERP_MAX_DEPTH:
+        return n
+    j = i + 1
+
+    def blank1(k: int) -> None:
+        if not keep_strings and chars[k] != "\n":
+            chars[k] = " "
+
+    while j < n:
         ch = source[j]
         if ch == "\\":
             # Pair-blank: ruby and shell escapes genuinely suppress
             # interpolation ("\#{…}", "\$(", "\`" are literal data
             # in the running language).
-            for k in range(j, min(j + 2, end)):
-                if chars[k] != "\n":
-                    chars[k] = " "
+            blank1(j)
+            if j + 1 < n:
+                blank1(j + 1)
             j += 2
             continue
-        if interp == "ruby":
-            if source.startswith("#{", j):
-                # The `#` sigil blanks (a line-leading `#` in the
-                # view would read as a comment/directive to textual
-                # line filters); the braced expression stays visible.
-                chars[j] = " "
-                j = _keep_expr(chars, source, j + 2, end, "{", "}")
-                continue
-        elif interp == "shell":
+        if kind == "ruby" and source.startswith("#{", j):
+            # The `#` sigil blanks (a line-leading `#` in the view
+            # would read as a comment/directive to textual line
+            # filters); the braced expression stays visible.
+            blank1(j)
+            j = _interp_expr(
+                chars, source, j + 2, kind, "{", "}",
+                keep_strings=keep_strings, depth=depth)
+            continue
+        if kind == "shell":
             if source.startswith("$(", j):
-                j = _keep_expr(chars, source, j + 2, end, "(", ")")
+                j = _interp_expr(
+                    chars, source, j + 2, kind, "(", ")",
+                    keep_strings=keep_strings, depth=depth)
                 continue
             if source.startswith("${", j):
-                j = _keep_expr(chars, source, j + 2, end, "{", "}")
+                j = _interp_expr(
+                    chars, source, j + 2, kind, "{", "}",
+                    keep_strings=keep_strings, depth=depth)
                 continue
             if ch == "`":
                 # Backtick command substitution runs inside double
                 # quotes — code, same class as $( ).
                 k = j + 1
-                while k < end and source[k] != "`":
+                while k < n and source[k] != "`":
                     k += 2 if source[k] == "\\" else 1
-                j = min(k + 1, end)
+                j = min(k + 1, n)
                 continue
-        if ch != "\n":
-            chars[j] = " "
+        if ch == '"':
+            return j + 1
+        if ch == "\n":
+            return j + 1
+        blank1(j)
         j += 1
+    return n
 
 
-def _keep_expr(
-    chars: list[str], source: str, j: int, end: int,
-    opener: str, closer: str,
+def _interp_expr(
+    chars: list[str], source: str, j: int, kind: str,
+    opener: str, closer: str, *, keep_strings: bool, depth: int = 0,
 ) -> int:
-    """Skip past an interpolation expression (kept visible), blanking
-    only nested string-literal CONTENTS inside it. Returns the index
-    just past the matching closer (or ``end`` when unterminated —
-    the remainder stays visible, the over-inclusion direction)."""
-    depth = 1
-    while j < end and depth:
+    """Scan the interpolation expression whose opener precedes ``j``,
+    keeping it visible as code while nested string literals get their
+    own treatment: double-quoted strings recurse into
+    :func:`_interp_string_end` (data again, own fields visible),
+    single-quoted literals blank their contents under the language's
+    escape model (:func:`_quote_escapes` — shell single quotes have
+    none). Returns the index just past the matching closer;
+    unterminated expressions — including nesting past
+    ``_INTERP_MAX_DEPTH`` — keep the remainder visible
+    (over-inclusion, never a swallow).
+    """
+    n = len(source)
+    if depth >= _INTERP_MAX_DEPTH:
+        return n
+    depth += 1
+    lang = "shell" if kind == "shell" else "ruby"
+    level = 1
+    while j < n and level:
         c = source[j]
         if c == opener:
-            depth += 1
+            level += 1
             j += 1
         elif c == closer:
-            depth -= 1
+            level -= 1
             j += 1
-        elif c in ('"', "'"):
-            e = _string_end(source, j, c)
-            for k in range(j + 1, min(e, end) - 1):
-                if chars[k] != "\n":
+        elif c == '"':
+            j = _interp_string_end(
+                chars, source, j, kind,
+                keep_strings=keep_strings, depth=depth)
+        elif c == "'":
+            e = _string_end(
+                source, j, c,
+                escapes=_quote_escapes(source, j, c, lang))
+            for k in range(j + 1, min(e, n) - 1):
+                if not keep_strings and chars[k] != "\n":
                     chars[k] = " "
-            j = min(e, end)
+            j = e
         else:
             j += 1
     return j
