@@ -301,6 +301,53 @@ class TestFormatting:
 # ---------------------------------------------------------------------------
 
 
+class TestBodyRoundTripFraming:
+    """models.py claims the body round-trips; pin exactly what that
+    means: interior lines (whitespace-only included) are exact,
+    edge newlines are trimmed by the section framing."""
+
+    def test_whitespace_only_first_body_line_survives(self, tmp_path):
+        # Regression: the MULTILINE meta regex's trailing \s*$ used
+        # to swallow the whitespace-only line after the meta comment.
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="   \nfirst real line",
+            metadata={"source": "agent"},
+        ))
+        ann = read_annotation(tmp_path, "a.py", "f")
+        assert ann.body == "   \nfirst real line"
+        # Stable across a sibling rewrite.
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="g", body="x",
+        ))
+        assert read_annotation(tmp_path, "a.py", "f").body == \
+            "   \nfirst real line"
+
+    def test_interior_blank_lines_exact(self, tmp_path):
+        body = "para one\n\n  indented\n\npara two"
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body=body,
+            metadata={"source": "agent"},
+        ))
+        assert read_annotation(tmp_path, "a.py", "f").body == body
+
+    def test_edge_newlines_are_trimmed(self, tmp_path):
+        # Documented framing loss (models.py): leading/trailing
+        # newlines don't survive the on-disk section framing.
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="\n\nedges\n\n",
+        ))
+        assert read_annotation(tmp_path, "a.py", "f").body == "edges"
+
+    def test_meta_less_section_keeps_leading_whitespace_line(
+        self, tmp_path,
+    ):
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="   \nreal",
+        ))
+        ann = read_annotation(tmp_path, "a.py", "f")
+        assert ann.body == "   \nreal"
+
+
 class TestAdversarialInputs:
     def test_rejects_function_name_with_newline(self, tmp_path):
         """Newline in function name would let an attacker forge fake

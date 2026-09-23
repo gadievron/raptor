@@ -540,10 +540,16 @@ def _parse_section(
         meta_search = ""
     else:
         rest = section[nl + 1:]
-        meta_match = _META_RE.match(rest)
+        # Bound the meta match to the FIRST line only: _META_RE's
+        # trailing \s*$ is MULTILINE and would otherwise swallow a
+        # following whitespace-only body line into the match,
+        # dropping it from the body.
+        line_end = rest.find("\n")
+        head = rest if line_end == -1 else rest[:line_end]
+        meta_match = _META_RE.match(head)
         if meta_match:
             meta_search = meta_match.group(1)
-            body = rest[meta_match.end():]
+            body = "" if line_end == -1 else rest[line_end + 1:]
         else:
             meta_search = ""
             body = rest
