@@ -389,7 +389,7 @@ def ingest_scan_findings(run_dir: Path, target_path: Optional[str] = None,
     if not findings or not isinstance(findings, list):
         return None
 
-    target = str(target_path or _infer_run_target(run_dir))
+    target = _resolve_ingest_target(run_dir, target_path, "scan")
     if not target:
         return None
     if graph_path is None:
@@ -429,7 +429,9 @@ def ingest_codeql_sarif(run_dir: Path, target_path: Optional[str] = None,
     if not sarif_paths:
         return None
 
-    target = str(target_path or _infer_run_target(run_dir))
+    target = _resolve_ingest_target(run_dir, target_path, "codeql")
+    if not target:
+        return None
     if graph_path is None:
         graph_path = graph_path_for_run(run_dir, target or None)
     ingested = False
@@ -470,7 +472,9 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
     if not outcomes or not isinstance(outcomes, list):
         return None
 
-    target = str(target_path or _infer_run_target(run_dir))
+    target = _resolve_ingest_target(run_dir, target_path, "validation")
+    if not target:
+        return None
     if graph_path is None:
         graph_path = graph_path_for_run(run_dir, target or None)
     snap_id = make_snapshot_id(target, _hash_json(outcomes), str(run_dir.resolve()))
@@ -545,7 +549,9 @@ def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None,
     if not (run_dir / JOURNAL_FILENAME).exists():
         return None
 
-    target = str(target_path or _infer_run_target(run_dir))
+    target = _resolve_ingest_target(run_dir, target_path, "audit")
+    if not target:
+        return None
     if graph_path is None:
         graph_path = graph_path_for_run(run_dir, target or None)
 
@@ -664,6 +670,25 @@ def _upsert_snapshot(conn, snap_id: str, target: str, run_dir: Path, *, producer
         """,
         (snap_id, target, datetime.now(timezone.utc).isoformat(), str(run_dir.resolve()), producer),
     )
+
+
+def _resolve_ingest_target(run_dir: Path, target_path: Optional[str],
+                           lane: str) -> str:
+    """Resolve a findings-shaped lane's target; refuse empty loudly.
+
+    A snapshot with ``target_path=''`` is unmatchable by every
+    target-scoped query (see :func:`_infer_run_target`) — better to
+    skip the ingest than to mint invisible memory. Returns '' after
+    printing the skip message.
+    """
+    target = str(target_path or _infer_run_target(run_dir))
+    if not target:
+        print(
+            f"graph: {lane} ingest skipped (no target resolvable for "
+            f"{run_dir.name})",
+            file=sys.stderr,
+        )
+    return target
 
 
 def _infer_run_target(run_dir: Path) -> str:
