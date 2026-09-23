@@ -1,3 +1,8 @@
+---
+description: Show or update RAPTOR resource tuning (max / balanced / default profiles)
+dispatch: libexec/raptor-tune $ARGUMENTS
+---
+
 # /tune — Resource Tuning
 
 Show or update RAPTOR resource tuning.
