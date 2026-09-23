@@ -73,8 +73,11 @@ class LibFuzzerResult:
 class LibFuzzerRunner:
     """Run a libFuzzer harness."""
 
+    # \b pins the corp count to its full number — the digits group
+    # and the lazy filler overlapped on digits (quadratic on a
+    # crafted stats line). Earliest-match captures unchanged.
     _STATS_RE = re.compile(
-        r"#(\d+)\s+(?:DONE|REDUCE|RELOAD|NEW|pulse)\s+cov:\s*(\d+)\s+ft:\s*(\d+)\s+corp:\s*(\d+).*?exec/s:\s*(\d+)"
+        r"#(\d+)\s+(?:DONE|REDUCE|RELOAD|NEW|pulse)\s+cov:\s*(\d+)\s+ft:\s*(\d+)\s+corp:\s*(\d+)\b.*?exec/s:\s*(\d+)"
     )
 
     def __init__(
