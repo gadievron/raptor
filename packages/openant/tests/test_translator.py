@@ -375,3 +375,83 @@ class TestDedupKeyCweIntegrity(unittest.TestCase):
         }]})
         self.assertIsNone(out[0]["cwe_id"])
         self.assertEqual(out[0]["rule_id"], "openant/unknown")
+
+
+class TestNeverRaisesOnShapeDrift(unittest.TestCase):
+    """The translator's never-raises contract must hold for shape
+    drift, not just value drift: the warn-not-refuse unpinned posture
+    makes drifted OpenAnt output an expected input, and under /agentic
+    a raising translator silently zeroed a paid run's findings behind
+    a blanket-except log line (with --openant-only the run then failed
+    with the WRONG reason)."""
+
+    def test_non_dict_pipeline_output_is_empty(self):
+        with self.assertLogs("raptor", level="WARNING"):
+            self.assertEqual(translate_pipeline_output(["oops"]), [])
+
+    def test_non_list_findings_is_empty(self):
+        with self.assertLogs("raptor", level="WARNING"):
+            self.assertEqual(
+                translate_pipeline_output({"findings": "abc"}), [])
+
+    def test_non_dict_entries_skipped_and_counted(self):
+        with self.assertLogs("raptor", level="WARNING") as cm:
+            out = translate_pipeline_output(
+                {"findings": ["oops", 42, None, {
+                    "id": "VULN-001",
+                    "stage1_verdict": "vulnerable",
+                    "location": {"file": "a.py", "function": "f"},
+                    "cwe_id": 78,
+                    "description": "d",
+                }]})
+        self.assertEqual(len(out), 1)
+        self.assertTrue(any("3 non-dict" in m for m in cm.output))
+
+    def test_non_dict_location_is_tolerated(self):
+        out = translate_pipeline_output({"findings": [{
+            "id": "VULN-001",
+            "stage1_verdict": "vulnerable",
+            "location": "nope",
+            "cwe_id": 78,
+            "description": "d",
+        }]})
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["file"], "")
+
+    def test_non_string_verdict_is_unknown_not_a_crash(self):
+        with self.assertLogs("raptor", level="WARNING"):
+            out = translate_pipeline_output({"findings": [{
+                "id": "VULN-001",
+                "stage1_verdict": 7,
+                "location": {"file": "a.py", "function": "f"},
+                "cwe_id": 78,
+                "description": "d",
+            }]})
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["level"], "note")
+
+    def test_dict_shaped_text_fields_coerced_empty(self):
+        out = translate_pipeline_output({"findings": [{
+            "id": {"e": 1},
+            "stage1_verdict": "vulnerable",
+            "stage2_verdict": {"e": 1},
+            "location": {"file": "a.py", "function": {"e": 1}},
+            "cwe_id": 78,
+            "description": {"e": 1},
+            "vulnerable_code": {"e": 1},
+            "name": {"e": 1},
+        }]})
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["snippet"], "")
+        self.assertEqual(out[0]["message"], "")
+        self.assertEqual(out[0]["metadata"]["vuln_name"], "")
+
+    def test_scalar_fields_stringified(self):
+        out = translate_pipeline_output({"findings": [{
+            "id": 12,
+            "stage1_verdict": "vulnerable",
+            "location": {"file": "a.py", "function": "f"},
+            "cwe_id": 78,
+            "description": "d",
+        }]})
+        self.assertEqual(out[0]["finding_id"], "openant:12")
