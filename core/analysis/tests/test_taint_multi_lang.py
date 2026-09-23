@@ -932,3 +932,86 @@ def test_closed_nested_named_function_keeps_outer_extent():
     outer = summaries["outer"]
     assert any(r.sink_call == "eval" for r in outer.taint_rules)
     assert "inner" in outer.callees
+
+
+class TestPhpBodyBounds:
+    """The PHP extractor kept the unbounded ``_find_brace_end`` call
+    (and the per-match remainder slice) after the other extractors
+    were bounded — 2000 unclosed PHP headers ran ~37s (O(N*L), each
+    extent to EOF, re-scanned by the brace matcher, the sink regexes,
+    and the callee extractor). Same bounds as the sibling extractors:
+    unclosed bodies clamp at the next header / per-body cap via the
+    shared per-file scan budget."""
+
+    def test_php_unclosed_bodies_clamped_at_next_header(self):
+        from core.analysis.taint_multi_lang import _extract_php_functions
+        content = "<?php\n" + "".join(
+            f"function f{i}($a, $b) {{ g(\n" for i in range(50)
+        )
+        results = _extract_php_functions(content)
+        spans = sorted((s, e) for _n, _p, s, e in results)
+        assert len(spans) == 50
+        # No run-to-EOF overlap survives.
+        for (_s1, e1), (s2, _e2) in zip(spans, spans[1:]):
+            assert e1 <= s2
+
+    def test_php_hostile_header_flood_is_linear_time(self):
+        import time
+
+        from core.analysis.taint_multi_lang import (
+            extract_summaries_for_file,
+        )
+        content = "<?php\n" + "".join(
+            f"function f{i}($a, $b) {{ g(\n" for i in range(2000)
+        )
+        t0 = time.perf_counter()
+        extract_summaries_for_file(content, "x.php")
+        elapsed = time.perf_counter() - t0
+        # ~37s pre-fix; generous CI headroom while still failing the
+        # quadratic form by an order of magnitude.
+        assert elapsed < 5.0
+
+    def test_php_hash_comment_brace_still_masked(self):
+        """The bounded path must forward ``hash_comments`` — a ``}``
+        inside a ``#`` line comment would otherwise close the body
+        early and silently drop the sinks after it."""
+        from core.analysis.taint_multi_lang import (
+            extract_summaries_for_file,
+        )
+        content = (
+            "<?php\n"
+            "function handler($cmd) {\n"
+            "    # closing brace in comment }\n"
+            "    system($cmd);\n"
+            "}\n"
+        )
+        summaries = extract_summaries_for_file(content, "x.php")
+        rules = summaries["handler"].taint_rules
+        assert any(r.sink_call == "system" for r in rules)
+
+    def test_php_ordinary_closed_bodies_unchanged(self):
+        from core.analysis.taint_multi_lang import (
+            _extract_php_functions,
+            extract_summaries_for_file,
+        )
+        content = (
+            "<?php\n"
+            "function handler($cmd) {\n"
+            "    system($cmd);\n"
+            "}\n"
+            "function other($x) {\n"
+            "    return $x;\n"
+            "}\n"
+        )
+        extents = _extract_php_functions(content)
+        names = [n for n, _p, _s, _e in extents]
+        assert names == ["handler", "other"]
+        # Closed bodies keep their true extents: each body ends at
+        # its own closing brace — not at the next header or a cap,
+        # and never swallowing the following function.
+        for _n, _p, start, end in extents:
+            assert content[end - 1] == "}"
+            assert "function" not in content[start:end]
+        summaries = extract_summaries_for_file(content, "x.php")
+        rules = summaries["handler"].taint_rules
+        assert any(r.sink_call == "system" for r in rules)

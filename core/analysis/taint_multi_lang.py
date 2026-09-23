@@ -760,23 +760,30 @@ def _extract_php_functions(
 ) -> list[tuple[str, list[str], int, int]]:
     """Extract PHP function/method definitions with bodies."""
     results = []
-    for match in _PHP_FUNC.finditer(content):
+    matches = list(_PHP_FUNC.finditer(content))
+    scan_state = _new_scan_state(content)
+    for i, match in enumerate(matches):
         name = match.group(1)
         params = _parse_php_params(match.group(2))
-        # Opening brace after the signature (skips a return type).
-        rest = content[match.end():]
-        brace_offset = rest.find("{")
-        if brace_offset < 0:
+        # Opening brace after the signature (skips a return type) —
+        # searched in place and only within the signature-plausible
+        # window (the per-match remainder slice was itself O(L)
+        # memory traffic).
+        open_pos = content.find("{", match.end(), match.end() + 1000)
+        if open_pos < 0:
             continue
         # Body-less declarations (interface/abstract methods) end in
         # ';' before any brace — the next '{' belongs to a later
         # definition and must not be claimed as this one's body.
-        semi_offset = rest.find(";")
-        if 0 <= semi_offset < brace_offset:
+        if content.find(";", match.end(), open_pos) >= 0:
             continue
-        body_start = match.end() + brace_offset + 1
-        body_end = _find_brace_end(
-            content, match.end() + brace_offset, hash_comments=True,
+        body_start = open_pos + 1
+        next_start = (
+            matches[i + 1].start() if i + 1 < len(matches) else None
+        )
+        body_end = _bounded_body_end(
+            content, open_pos, next_start, scan_state,
+            hash_comments=True,
         )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
@@ -927,6 +934,7 @@ def _bounded_body_end(
     scan_state: dict[str, int],
     *,
     rust_lifetimes: bool = False,
+    hash_comments: bool = False,
 ) -> int:
     """Body end for the brace at ``open_pos``, bounded two ways.
 
@@ -946,6 +954,7 @@ def _bounded_body_end(
         return clamp
     end = _find_brace_end(
         content, open_pos, rust_lifetimes=rust_lifetimes,
+        hash_comments=hash_comments,
         limit=cap_limit,
     )
     scan_state["used"] += max(0, end - open_pos)
