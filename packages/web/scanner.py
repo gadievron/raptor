@@ -700,22 +700,24 @@ class WebScanner:
         logger.info("Running %d unauthenticated checks", len(check_classes))
         discovery_ctx = self._merged_discovery_ctx(discovery, crawl_data)
 
-        # Unauthenticated posture must be measured unauthenticated. When
-        # Phase 1 authenticated the scan, self.client's cookie jar holds
-        # the operator session — running these checks on it (a) measures
-        # CORS/cache/cookie posture in the wrong auth context, and (b)
-        # lets the login-probing checks clobber the session: a framework
-        # that rotates or invalidates the cookie on a login POST logs
-        # the scan out mid-phase (Phase 5 then skips ALL authenticated
-        # checks), and a successful default-credential login replaces
-        # the operator's principal for the rest of the scan. A fresh
-        # client (separate cookie jar, same scope/policy/rate limit)
-        # isolates them.
-        probe_client = self.client
-        unauth_client: WebClient | None = None
-        if self.session is not None:
-            unauth_client = self._make_principal_client()
-            probe_client = unauth_client
+        # Unauthenticated posture must be measured unauthenticated, and
+        # the SHARED client's principal must survive this phase — in
+        # BOTH auth arms. When Phase 1 authenticated the scan,
+        # self.client's cookie jar holds the operator session and the
+        # login-probing checks can clobber it (cookie rotation on a
+        # login POST logs the scan out mid-phase; a default-credential
+        # success replaces the operator's principal). On UNAUTHENTICATED
+        # scans the hazard runs the other way: a successful
+        # DefaultCredentialsCheck login GRANTS a session cookie into the
+        # shared jar (the grant is exactly the signal the check keys
+        # on), silently swapping the scan principal to the discovered
+        # admin for phases 6/6v/6o while findings stay stamped
+        # auth_context="unauthenticated" — mislabeled evidence and
+        # unconsented intrusiveness escalation. A fresh client (separate
+        # cookie jar, same scope/policy/rate limit) isolates the phase
+        # unconditionally; one extra Session per run is the whole cost.
+        unauth_client: WebClient = self._make_principal_client()
+        probe_client = unauth_client
 
         try:
             for cls in check_classes:
@@ -737,8 +739,7 @@ class WebScanner:
                     client=probe_client,
                 )
         finally:
-            if unauth_client is not None:
-                unauth_client.close()
+            unauth_client.close()
         self._log_check_failures("Phase 4", "passive_checks")
         logger.info("Phase 4 complete: %d findings", len(findings))
         self._phases_completed.append("passive_checks")
