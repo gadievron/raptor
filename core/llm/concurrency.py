@@ -291,10 +291,12 @@ def run_parallel(
     terminal ``LLMBudgetExceededError``, whose own contract says loop
     dispatchers must stop when they see it: a caller that needs
     budget-stop semantics must classify it inside *fn* or *on_error*
-    (the way ``core/iris/synthesise.py`` and ``core/llm/ranking.py``
-    do). Post-exhaustion items refuse cheaply at ``_check_budget``, so
-    the damage of not classifying is bounded to per-item results that
-    cannot distinguish "budget stop" from "analysis failed".
+    (the way ``core/iris/synthesise.py`` does; ``core/llm/ranking.py``
+    instead deliberately ABSORBS every batch failure — a dropped
+    observation — and relies on its trial-level abort for budget
+    stops). Post-exhaustion items refuse cheaply at ``_check_budget``,
+    so the damage of not classifying is bounded to per-item results
+    that cannot distinguish "budget stop" from "analysis failed".
     """
     if not items:
         return []

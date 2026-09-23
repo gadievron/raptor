@@ -2664,7 +2664,13 @@ class LLMClient:
 
         Thread-safe: stats tracking uses _stats_lock for concurrent access.
         """
-        # Check budget
+        # Check budget BEFORE the cache lookup — deliberately. A cache
+        # replay is free, but serving it from an exhausted client
+        # would make post-exhaustion behaviour depend on what happens
+        # to be cached: some calls succeed silently, others raise, and
+        # loop drivers keep iterating instead of seeing the uniform
+        # terminal LLMBudgetExceededError their stop contract keys on.
+        # Exhaustion means STOP, not "limp through cache hits".
         if not self._check_budget():
             msg = (
                 f"LLM budget exceeded: ${self.total_cost:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
@@ -3044,7 +3050,10 @@ class LLMClient:
                         _attempt_log(
                             "Attempt %d/%d failed for %s/%s after "
                             "%.0fs: %s",
-                            attempt + 1, self.config.max_retries,
+                            # Denominator mirrors the loop's own
+                            # max(..., 1) clamp — max_retries=0 means
+                            # "single attempt", not "Attempt 1/0".
+                            attempt + 1, max(self.config.max_retries, 1),
                             _esc_np(model.provider),
                             _esc_np(model.model_name),
                             time.monotonic() - attempt_start, _safe_e,
@@ -3213,7 +3222,13 @@ class LLMClient:
 
         Thread-safe: stats tracking uses _stats_lock for concurrent access.
         """
-        # Check budget
+        # Check budget BEFORE the cache lookup — deliberately. A cache
+        # replay is free, but serving it from an exhausted client
+        # would make post-exhaustion behaviour depend on what happens
+        # to be cached: some calls succeed silently, others raise, and
+        # loop drivers keep iterating instead of seeing the uniform
+        # terminal LLMBudgetExceededError their stop contract keys on.
+        # Exhaustion means STOP, not "limp through cache hits".
         if not self._check_budget():
             msg = (
                 f"LLM budget exceeded: ${self.total_cost:.4f} spent > ${self.config.max_cost_per_scan:.4f} limit. "
@@ -3696,7 +3711,10 @@ class LLMClient:
                         _attempt_log(
                             "Attempt %d/%d failed for %s/%s after "
                             "%.0fs: %s",
-                            attempt + 1, self.config.max_retries,
+                            # Denominator mirrors the loop's own
+                            # max(..., 1) clamp — max_retries=0 means
+                            # "single attempt", not "Attempt 1/0".
+                            attempt + 1, max(self.config.max_retries, 1),
                             _esc_np(model.provider),
                             _esc_np(model.model_name),
                             time.monotonic() - attempt_start, _safe_e,
@@ -3838,7 +3856,15 @@ class LLMClient:
             stats = {
                 "total_requests": self.request_count,
                 "total_cost": self.total_cost,
-                "budget_remaining": self.config.max_cost_per_scan - self.total_cost,
+                # Same figures enforcement gates on — cap minus any
+                # held reserve, spend as max(client, provider ledger).
+                # ``cap - total_cost`` overstated admissible headroom
+                # whenever the provider ledger led or a reserve was
+                # held.
+                "budget_remaining": (
+                    self._effective_cap_locked()
+                    - self._effective_spent_locked()
+                ),
                 "providers": provider_stats,
                 "task_type_costs": dict(self.task_type_costs),
             }

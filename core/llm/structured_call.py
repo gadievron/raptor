@@ -267,12 +267,17 @@ def unwrap_structured_response(
 
 __all__ = [
     "AUTH_KEYWORDS_RE",
+    "AUTH_STATUS_RE",
     "BLOCKED_KEYWORDS_RE",
     "RATE_LIMIT_KEYWORDS_RE",
+    "REFUSAL_TEXT_RE",
     "TIMEOUT_KEYWORDS_RE",
     "StructuredCallResult",
     "classify_error_text",
     "is_auth_error_text",
+    "is_auth_status_text",
+    "is_content_filter_error",
     "is_content_filter_text",
+    "is_refusal_error",
     "unwrap_structured_response",
 ]
