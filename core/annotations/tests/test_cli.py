@@ -31,16 +31,23 @@ class _Result:
     stderr: str
 
 
-def _run(*args, env=None, input_text=None, tty=(), stdin_path=None):
+def _run(*args, env=None, input_text=None, tty=(), stdin_path=None,
+         setsid=False):
     """Run the CLI with --base resolved by caller in args.
 
     ``tty``: names among ``stdin``/``stdout``/``stderr`` to attach to
     a pty slave, making them real TTYs in the child (streams so
     attached are not captured). ``stdin_path``: redirect stdin from a
     file (the ``add ... < notes.txt`` shape); mutually exclusive with
-    ``input_text`` and ``"stdin" in tty``.
+    ``input_text`` and ``"stdin" in tty``. ``setsid``: run the child
+    as its own session leader (the ``script -qec`` laundering shape).
+
+    Hermetic env: the launcher's agent-session marker is stripped so
+    the recorded ``envm`` stamp doesn't depend on where the suite
+    runs; tests exercising the marker pass it back via ``env=``.
     """
     real_env = dict(os.environ)
+    real_env.pop("CLAUDECODE", None)
     real_env["_RAPTOR_TRUSTED"] = "1"
     if env:
         real_env.update(env)
@@ -52,6 +59,7 @@ def _run(*args, env=None, input_text=None, tty=(), stdin_path=None):
             text=True,
             input=input_text,
             check=False,
+            start_new_session=setsid,
         )
         return _Result(result.returncode, result.stdout, result.stderr)
 
@@ -72,7 +80,8 @@ def _run(*args, env=None, input_text=None, tty=(), stdin_path=None):
             kwargs["stdin"] = stdin_file
         proc = subprocess.Popen(
             [sys.executable, str(CLI), *args],
-            env=real_env, text=True, **kwargs,
+            env=real_env, text=True, start_new_session=setsid,
+            **kwargs,
         )
         send = input_text if kwargs["stdin"] == subprocess.PIPE else None
         out, err = proc.communicate(input=send, timeout=60)
@@ -820,12 +829,75 @@ class TestProvenanceQuirks:
         assert not (tmp_path / "src" / "a.py.md").exists()
 
     def test_meta_tty_and_provenance_are_reserved(self, tmp_path):
-        for pair in ("tty=stdin", "provenance=interactive-tty"):
+        for pair in ("tty=stdin", "provenance=interactive-tty",
+                     "sid=inherited", "envm=trusted", "parents=bash",
+                     "corroboration=pre-era"):
             r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
                      "--meta", pair, "-m", "x")
             assert r.returncode == 2, pair
             assert "reserved" in r.stderr
         assert not (tmp_path / "src" / "a.py.md").exists()
+
+
+class TestPtyLaunderingCorroboration:
+    """The pty-wrapper laundering closure: a pty makes every fd a
+    genuine TTY, so the fd stamp alone cannot distinguish
+    ``script -qec 'raptor-annotate add ...'`` from an operator add.
+    The corroboration facts the CLI records must demote the stock
+    laundering shapes while leaving genuine interactive adds graded.
+    """
+
+    def test_setsid_pty_wrapper_is_demoted(self, tmp_path):
+        # The script(1) exec shape: child is its own session leader
+        # with all fds on a pty. The stamp is truthfully interactive
+        # but records sid=self -> readers demote to hint tier.
+        r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
+                 "-m", "x", tty=("stdin", "stdout", "stderr"),
+                 setsid=True)
+        assert r.returncode == 0, r.stderr
+        meta = _meta_of(tmp_path, "src/a.py", "f")
+        assert meta["source"] == "human"  # default still fd-derived
+        assert meta["provenance"] == "interactive-tty"
+        assert meta["sid"] == "self"
+        from core.annotations import is_human_grade
+        assert not is_human_grade(meta)
+
+    def test_agent_session_pty_is_demoted(self, tmp_path):
+        # An in-session agent driving a pty wrapper keeps the
+        # launcher marker (the dispatch trust gate requires one of
+        # the two markers) — recorded and demoting even when the
+        # wrapper forks an intermediate that hides sid=self.
+        r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
+                 "-m", "x", tty=("stdin", "stdout", "stderr"),
+                 env={"CLAUDECODE": "1"})
+        assert r.returncode == 0, r.stderr
+        meta = _meta_of(tmp_path, "src/a.py", "f")
+        assert "claudecode" in meta["envm"].split(",")
+        from core.annotations import is_human_grade
+        assert not is_human_grade(meta)
+
+    def test_genuine_interactive_add_stays_gradeable(self, tmp_path):
+        # Shell-launched interactive add: inherited session, no agent
+        # marker, shell-first parent chain -> human grade holds.
+        r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
+                 "-m", "x", tty=("stdin", "stdout", "stderr"))
+        assert r.returncode == 0, r.stderr
+        meta = _meta_of(tmp_path, "src/a.py", "f")
+        assert meta["sid"] == "inherited"
+        assert "claudecode" not in meta["envm"].split(",")
+        assert meta["parents"]
+        from core.annotations import is_human_grade
+        assert is_human_grade(meta)
+
+    def test_corroboration_facts_always_recorded(self, tmp_path):
+        # Non-interactive adds record the same facts — the audit
+        # trail is unconditional, not interactive-only.
+        r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
+                 "-m", "x")
+        assert r.returncode == 0, r.stderr
+        meta = _meta_of(tmp_path, "src/a.py", "f")
+        for key in ("sid", "envm", "parents"):
+            assert meta.get(key), key
 
 
 class TestEditRestamp:

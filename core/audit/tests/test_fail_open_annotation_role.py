@@ -46,6 +46,8 @@ class TestAnnotationRoleProvenance:
         ev = _resolve(_write(tmp_path / "ann", {
             "status": "trust_boundary", "source": "human",
             "provenance": "interactive-tty", "tty": "stdin",
+             "sid": "inherited", "envm": "trusted",
+             "parents": "bash",
         }))
         assert ev is not None
         assert ev.grade == GRADE_REGISTRY
@@ -86,6 +88,8 @@ class TestAnnotationRoleProvenance:
             RoleContext(annotations_dir=_write(tmp_path / "ann", {
                 "status": "sink", "source": "human",
                 "provenance": "interactive-tty", "tty": "stdin",
+             "sid": "inherited", "envm": "trusted",
+             "parents": "bash",
             })),
         )
         assert ev is None

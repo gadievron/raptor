@@ -314,6 +314,8 @@ class TestSanitizeSinkGroundTruth:
             body="Raw SQL executor — callers must escape first.",
             metadata={"status": "sink", "source": "human",
                       "provenance": "interactive-tty", "tty": "stdin",
+             "sid": "inherited", "envm": "trusted",
+             "parents": "bash",
                       "cwe": "CWE-89"},
         ))
         save_specs(out, [TaintSpec(

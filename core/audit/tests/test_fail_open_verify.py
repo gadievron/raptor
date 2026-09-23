@@ -124,6 +124,8 @@ def _annotations_dir(tmp_path, source_file, function, status):
         body="fixture", metadata={
             "status": status, "source": "human",
             "provenance": "interactive-tty", "tty": "stdin",
+             "sid": "inherited", "envm": "trusted",
+             "parents": "bash",
         },
     ))
     return base

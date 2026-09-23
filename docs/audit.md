@@ -352,10 +352,13 @@ Corrections are appended as fresh review-journal entries (with the prior
 verdict and lesson recorded): disproven findings are downgraded to `clean`,
 missed vulnerabilities are upgraded to `finding`, corroborated findings get
 a confirmation entry.  Nothing is rewritten in place, and human-grade
-annotations (`source=human` with an interactive-TTY provenance stamp, or
-legacy pre-stamp notes) veto feedback for their function entirely; agent
-notes and human claims stamped non-interactive only serve as the prior
-claim when no journal entry exists.
+annotations (`source=human` with a corroborated interactive-TTY provenance
+stamp, or legacy pre-stamp notes) veto feedback for their function
+entirely; agent notes and human claims stamped non-interactive — or
+interactive but uncorroborated (a pty wrapper makes `isatty` true by
+design, so readers also check the recorded session-leader shape,
+environment markers, and parent chain) — only serve as the prior claim
+when no journal entry exists.
 
 Downgrades are refereed: a `ruled_out` may take a **tool-evidenced**
 finding to `clean` only when the ruling carries a mechanical

@@ -35,11 +35,15 @@ class TestAnnotationsInCoverage(unittest.TestCase):
         write_annotation(ann, Annotation(
             file="src/foo.py", function="alpha", body="clean",
             metadata={"source": "human", "status": "clean",
-                      "provenance": "interactive-tty", "tty": "stdin"}))
+                      "provenance": "interactive-tty", "tty": "stdin",
+             "sid": "inherited", "envm": "trusted",
+             "parents": "bash"}))
         write_annotation(ann, Annotation(
             file="src/foo.py", function="beta", body="bug",
             metadata={"source": "human", "status": "finding",
-                      "provenance": "interactive-tty", "tty": "stdin"}))
+                      "provenance": "interactive-tty", "tty": "stdin",
+             "sid": "inherited", "envm": "trusted",
+             "parents": "bash"}))
         rec = build_from_annotations(ann)
         assert rec is not None
         write_record(run_dir, rec, tool_name="annotations")
@@ -78,7 +82,9 @@ class TestAnnotationsInCoverage(unittest.TestCase):
             write_annotation(ann, Annotation(
                 file="src/foo.py", function="alpha", body="clean",
                 metadata={"source": "human", "status": "clean",
-                          "provenance": "interactive-tty", "tty": "stdin"}))
+                          "provenance": "interactive-tty", "tty": "stdin",
+             "sid": "inherited", "envm": "trusted",
+             "parents": "bash"}))
             write_annotation(ann, Annotation(
                 file="src/foo.py", function="gamma", body="agent note",
                 metadata={"source": "agent", "status": "clean",

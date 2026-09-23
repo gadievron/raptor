@@ -43,9 +43,13 @@ class Annotation:
         ``write_annotation(..., overwrite="respect-manual")`` skips
         writes whose existing record has ``source=human`` so
         scripted passes never clobber operator notes.
-      * ``tty`` / ``provenance``: the invocation-context stamp the
-        CLI records on every add/edit — which std fds were TTYs,
-        and the derived ``interactive-tty`` / ``non-tty`` tag (see
+      * ``tty`` / ``provenance`` / ``sid`` / ``envm`` / ``parents``
+        / ``corroboration``: the invocation-context stamp the CLI
+        records on every add/edit — which std fds were TTYs, the
+        derived ``interactive-tty`` / ``non-tty`` tag, and the
+        corroborating context (session-leader shape, environment
+        markers, parent-chain summary) that lets readers demote
+        pty-wrapper laundering (see
         :mod:`core.annotations.provenance`). Annotations without
         the stamp are legacy only when their file predates the
         stamp era (date-fenced — see ``STAMP_ERA_START``); readers

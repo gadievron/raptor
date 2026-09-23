@@ -81,7 +81,9 @@ class TestLearnedSources:
             # cannot use the legacy grandfather clause).
             metadata={
                 "status": "suspicious", "source": "human",
-                "provenance": "interactive-tty",
+                "provenance": "interactive-tty", "tty": "stdin",
+                "sid": "inherited", "envm": "trusted",
+                "parents": "bash",
             },
         ))
         ctx = RoleContext(annotations_dir=base)
@@ -347,7 +349,8 @@ class TestAnnotationProvenanceGate:
     def test_stamped_human_annotation_is_registry_grade(self, tmp_path):
         ev = self._bind(tmp_path, {
             "status": "suspicious", "source": "human",
-            "provenance": "interactive-tty",
+            "provenance": "interactive-tty", "tty": "stdin",
+            "sid": "inherited", "envm": "trusted", "parents": "bash",
         })
         assert ev is not None
         assert ev.grade == GRADE_REGISTRY

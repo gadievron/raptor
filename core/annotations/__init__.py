@@ -18,13 +18,18 @@ Provenance model (see :mod:`core.annotations.provenance`):
 ``metadata.source`` is caller-asserted — honest framing: nothing
 here proves a human typed the note, and cryptographic
 proof-of-human was deliberately rejected as overkill. Instead every
-CLI add/edit records the invocation context (which std fds were
-TTYs) alongside the claim, so a laundered "human" note is
-structurally detectable rather than impossible: readers grant
-human-grade weight only to ``source=human`` plus an interactive
-stamp (or legacy stamp-less notes), and demote everything else to
-their machine/hint tier. A genuinely human but fully-detached add
-(cron, all fds redirected) is stamped ``non-tty``; re-run
+CLI add/edit records the invocation context alongside the claim:
+which std fds were TTYs, plus corroborating context (session-leader
+shape, agent-session environment markers, a parent-chain summary),
+because a pty wrapper makes ``isatty`` true by design. The
+guarantee is no SILENT forgery, not impossibility — a determined
+local attacker can fake all of it, but the stock laundering routes
+self-identify in the recorded context, and every grant rests on an
+operator-auditable record. Readers grant human-grade weight only to
+``source=human`` plus a corroborated interactive stamp (or legacy
+stamp-less notes behind the era fence), and demote everything else
+to their machine/hint tier. A genuinely human but fully-detached
+add (cron, all fds redirected) is stamped ``non-tty``; re-run
 interactively or accept hint-tier weight.
 
 Why markdown not JSON:
@@ -54,6 +59,7 @@ from __future__ import annotations
 
 from .models import Annotation
 from .provenance import (
+    CORROBORATION_ERA_START,
     IMPORTED,
     INTERACTIVE_TTY,
     LEGACY,
@@ -77,6 +83,7 @@ from .storage import (
 )
 
 __all__ = [
+    "CORROBORATION_ERA_START",
     "IMPORTED",
     "INTERACTIVE_TTY",
     "LEGACY",

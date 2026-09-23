@@ -50,14 +50,20 @@ stale options:
 
 Provenance: every ``add`` / ``edit`` stamps the invocation context
 into the metadata (``tty=<which fds were TTYs>``,
-``provenance=interactive-tty|non-tty``). ``source`` remains
-caller-asserted, but the stamp records the context that can
-contradict it — readers grant human-grade weight only to
-``source=human`` notes with an interactive stamp (or legacy
-pre-stamp notes). A human running fully detached (cron, all fds
-redirected) is stamped ``non-tty`` even with ``--source human``;
-remedy: re-run the add interactively, or accept hint-tier weight.
-See ``core.annotations.provenance`` for the model.
+``provenance=interactive-tty|non-tty``, plus the corroborating
+context ``sid`` / ``envm`` / ``parents`` — a pty wrapper makes
+``isatty`` true by design, so readers also check session-leader
+shape, agent-session environment markers, and the recorded parent
+chain). ``source`` remains caller-asserted, but the stamp records
+the context that can contradict it — readers grant human-grade
+weight only to ``source=human`` notes with a corroborated
+interactive stamp (or legacy pre-stamp notes). A human running
+fully detached (cron, all fds redirected) is stamped ``non-tty``
+even with ``--source human``; a human running under ``script -c``
+or inside an agent session records demoting corroboration. Remedy
+for both: re-run the add from a plain interactive shell, or accept
+hint-tier weight. See ``core.annotations.provenance`` for the
+model.
 """
 from __future__ import annotations
 

@@ -535,7 +535,7 @@ class TestImportValidationResults:
         ann_path = ann_dir / "src" / "vuln.c.md"
         content = ann_path.read_text().replace(
             "source=llm",
-            "source=human provenance=interactive-tty tty=stdin",
+            "source=human provenance=interactive-tty tty=stdin sid=inherited envm=trusted parents=bash",
         )
         ann_path.write_text(content)
 
@@ -946,7 +946,7 @@ class TestProvenanceGatedVeto:
         _write_annotation_meta(
             ann_dir, "src/vuln.c", "vuln_fn",
             "status=finding source=human "
-            "provenance=interactive-tty tty=stdin",
+            "provenance=interactive-tty tty=stdin sid=inherited envm=trusted parents=bash",
             "Manually verified by operator",
         )
         result = import_validation_results(
@@ -1422,7 +1422,7 @@ class TestDowngradeReferee:
         _write_annotation_meta(
             ann_dir, "src/vuln.c", "vuln_fn",
             "status=finding source=human "
-            "provenance=interactive-tty tty=stdin",
+            "provenance=interactive-tty tty=stdin sid=inherited envm=trusted parents=bash",
             "operator confirmed",
         )
         report = self._report(tmp_path, {
