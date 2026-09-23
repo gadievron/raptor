@@ -83,14 +83,62 @@ _pin_install_lock = threading.Lock()
 _pin_local = threading.local()
 _original_getaddrinfo = None
 
+# Trailing label separators (ASCII dot plus the IDNA/UTS46 dot
+# variants U+3002, U+FF0E, U+FF61): a fully-qualified spelling of a
+# hostname names the same host, so pins must fold it away.
+_HOST_DOT_VARIANTS = ".。．｡"
+
+
+def _canonical_pin_host(host: object) -> str:
+    """Fold a hostname into the one canonical form pins are keyed on.
+
+    The pin is only sound when it is keyed on the SAME form the socket
+    layer later resolves. urllib3 hands ``getaddrinfo`` the IDNA2008
+    punycode form of the URL host, while ``urlparse().hostname`` yields
+    the unicode form — keying the pin on the latter made it miss for
+    every non-ASCII hostname (live second resolution: the exact
+    rebinding TOCTOU the pin exists to close). Both the pin key and the
+    wrapper's lookup key go through this fold, so any spelling of the
+    same host (mixed case, trailing FQDN dot, unicode dot variants,
+    unicode vs punycode) lands on one key.
+
+    Total: never raises. Returns "" for values that cannot name a
+    resolvable host (``None``, non-ASCII bytes, IDNA-invalid unicode) —
+    "" never appears as a pin key, so the wrapper treats it as a miss.
+    """
+    if host is None:
+        return ""
+    if isinstance(host, (bytes, bytearray)):
+        try:
+            text = bytes(host).decode("ascii")
+        except UnicodeDecodeError:
+            return ""
+    else:
+        text = str(host)
+    text = text.rstrip(_HOST_DOT_VARIANTS).lower()
+    if not text or text.isascii():
+        return text
+    try:
+        import idna
+        return idna.encode(text, uts46=True).decode("ascii")
+    except Exception:
+        # IDNA2008-invalid unicode hostname: no canonical ASCII form
+        # exists, so no pin can be keyed for it. Callers that VALIDATE
+        # (block_private_ips) fail closed on ""; the lookup wrapper
+        # falls through to live resolution, which the transport layer
+        # rejects for the same reason.
+        return ""
+
 
 def _pinning_getaddrinfo(host, port, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
     pins = getattr(_pin_local, "stack", None)
     if pins:
-        for mapping in reversed(pins):
-            addrs = mapping.get(host)
-            if addrs is not None:
-                return addrs
+        key = _canonical_pin_host(host)
+        if key:
+            for mapping in reversed(pins):
+                addrs = mapping.get(key)
+                if addrs is not None:
+                    return addrs
     return _original_getaddrinfo(host, port, *args, **kwargs)
 
 
@@ -212,8 +260,24 @@ class WebClient:
             return None
         default_port = 443 if parsed.scheme == "https" else 80
         port = parsed.port or default_port
+        # Canonicalise ONCE (IDNA2008 punycode) and use the ASCII form
+        # for BOTH the validation resolution and the pin key. Resolving
+        # the unicode form judged a DIFFERENT registrable domain than
+        # the one the transport connects to (CPython's str-host path
+        # uses the legacy IDNA2003 codec: 'faß.de' -> 'fass.de', while
+        # urllib3 connects to 'xn--fa-hia.de'), and keying the pin on
+        # the unicode form made it miss the socket layer's punycode
+        # lookup — a live second resolution for every IDN hostname.
+        pin_key = _canonical_pin_host(hostname)
+        if not pin_key:
+            msg = (
+                f"Blocked request: hostname {hostname!r} has no valid "
+                f"IDNA2008 form, so its resolution cannot be validated "
+                f"or pinned"
+            )
+            raise ValueError(msg)
         try:
-            addrs = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+            addrs = socket.getaddrinfo(pin_key, port, proto=socket.IPPROTO_TCP)
         except socket.gaierror as exc:
             msg = f"DNS resolution failed for {hostname}: {exc}"
             raise ValueError(msg) from exc
@@ -230,7 +294,7 @@ class WebClient:
                     f"to scan internal targets)"
                 )
                 raise ValueError(msg)
-        return (hostname, port, addrs)
+        return (pin_key, port, addrs)
 
     @staticmethod
     @contextlib.contextmanager
@@ -257,7 +321,10 @@ class WebClient:
         if stack is None:
             stack = []
             _pin_local.stack = stack
-        stack.append({hostname: addrs})
+        # Same fold as the wrapper's lookup side: pin key and lookup
+        # key must be computed by ONE function or they drift apart
+        # (the pre-fix bug class).
+        stack.append({_canonical_pin_host(hostname) or hostname: addrs})
         try:
             yield
         finally:
