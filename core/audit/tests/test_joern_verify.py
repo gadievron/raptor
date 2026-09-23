@@ -105,7 +105,10 @@ class TestChainEntries:
 
     @pytest.mark.parametrize("cwe", sorted(FLOW_CWES))
     def test_flow_entry_for_every_flow_cwe(self, cwe):
-        entry = flow_chain_entry(cwe)
+        # CWE-116's legs are language-gated to c/cpp (joern_langs,
+        # fail-closed without file context) — a C target exercises
+        # every family; ungated families ignore the argument.
+        entry = flow_chain_entry(cwe, "src/main.c")
         assert entry is not None
         assert entry["type"] == "joern_flow"
         assert entry["config"]["sinks"]
