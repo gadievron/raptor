@@ -859,6 +859,80 @@ def _build_candidate_flows(
     return candidate_flows, evidence
 
 
+def _build_string_anchors(
+    manifest: BinaryManifest,
+    context: BinaryContextMap,
+) -> tuple[list[dict[str, Any]], list[BinaryEvidenceRecord]]:
+    """Project the r2 string-anchor pass into structural review leads.
+
+    An anchor-dense function (many diagnostic-shaped strings
+    referenced) is a likely parser or handler — valuable on stripped
+    binaries where nothing else is format-aware. It is NOT a finding
+    and not taint proof; every emitted record says so.
+    """
+    entries: list[dict[str, Any]] = []
+    evidence: list[BinaryEvidenceRecord] = []
+    functions_by_addr = {
+        int(fn.address): fn
+        for fn in context.interesting_functions
+        if fn.address is not None
+    }
+    for item in getattr(context, "string_anchor_functions", []) or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        try:
+            addr = int(item.get("address") or 0)
+        except (TypeError, ValueError):
+            addr = 0
+        count = int(item.get("anchor_string_count") or 0)
+        if not name or count <= 0 or _is_runtime_support_name(name):
+            continue
+        # Sample strings were escaped at capture (hostile binary
+        # bytes); pass them through untouched.
+        samples = [str(s) for s in (item.get("sample_strings") or [])]
+        bound = functions_by_addr.get(addr)
+        record = make_evidence(
+            manifest.binary_sha256,
+            kind="string_anchor_candidate",
+            source="radare2_axtj",
+            summary=(
+                f"{count} diagnostic-shaped string(s) referenced "
+                f"from {name!r}"
+            ),
+            tier=EvidenceTier.XREF_BACKED,
+            confidence="candidate",
+            reproducible=True,
+            tool="radare2",
+            location=f"{manifest.binary_path}@{_address(addr)}",
+            data={
+                "function": name,
+                "address": _address(addr),
+                "anchor_string_count": count,
+                "sample_strings": samples,
+            },
+        )
+        evidence.append(record)
+        entries.append({
+            "id": _metadata_item_id("BANCHOR", name, addr),
+            "kind": "string_anchor",
+            "name": name,
+            "address": _address(addr),
+            "anchor_string_count": count,
+            "sample_strings": samples,
+            "bound_function_id": _fn_id("BFN", bound) if bound is not None else "",
+            "confidence": "candidate",
+            "evidence_tier": EvidenceTier.XREF_BACKED.value,
+            "evidence_note": (
+                "Anchor-dense functions are likely parsers or handlers; "
+                "this is a structural review lead, not a finding and not "
+                "taint proof."
+            ),
+            "evidence_ids": [record.id],
+        })
+    return entries, evidence
+
+
 def _context_map(
     manifest: BinaryManifest,
     context: BinaryContextMap,
@@ -886,6 +960,9 @@ def _context_map(
 
     candidate_flows, flow_evidence = _build_candidate_flows(manifest, context, sink_details)
     generated_evidence.extend(flow_evidence)
+
+    string_anchor_leads, anchor_evidence = _build_string_anchors(manifest, context)
+    generated_evidence.extend(anchor_evidence)
 
     class_inventory: list[dict[str, Any]] = []
     framework_callback_candidates: list[dict[str, Any]] = []
@@ -1080,6 +1157,7 @@ def _context_map(
             if _is_runtime_support_name(fn.name)
         ],
         "candidate_flows": candidate_flows,
+        "string_anchor_functions": string_anchor_leads,
         "unchecked_flows": [],
         "runtime_signals": [signal.to_dict() for signal in manifest.runtime_signals],
         "runtime_observations": _runtime_observation_summary(
@@ -1108,6 +1186,7 @@ def _context_map(
             "No trust boundary or unchecked flow is emitted without runtime or trace evidence.",
             "Name-based entry points are candidates until a runtime observation or format-specific contract confirms them.",
             "Framework callback selectors are metadata-backed candidates until a runtime observation proves they fire.",
+            "A string-anchor lead marks a likely parser or handler; it is not a finding and not taint proof.",
             "Only the selected Mach-O slice receives deep analysis; other slices remain header-backed inventory until separately mapped.",
             "Decompiler output is persisted for operator review but remains decompiler-inferred evidence.",
         ],
@@ -1153,6 +1232,13 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
         f"- Security-relevant imported primitive candidates: {len(context.get('sink_details') or [])}",
         f"- Security-relevant non-sink surfaces: {len(context.get('surface_details') or []) - len(context.get('sink_details') or [])}",
         f"- Candidate call-graph flows: {len(context.get('candidate_flows') or [])}",
+        # A skipped anchor pass must not read as "ran and found
+        # nothing" — the two are different operator facts.
+        (
+            "- String-anchor function leads: (skipped)"
+            if scope.get("string_anchor_pass") == "skipped"
+            else f"- String-anchor function leads: {len(context.get('string_anchor_functions') or [])}"
+        ),
         f"- Decompiled functions persisted: {coverage.get('decompiled_functions') or 0} / {coverage.get('recovered_functions') or 0}",
         f"- Runtime observation summaries: {len(context.get('runtime_observations') or [])}",
         f"- Runtime input callsites bound to recovered functions: {len(context.get('runtime_input_flows') or [])}",
@@ -1840,6 +1926,7 @@ def analyse_blackbox_binary(
     quick: bool = False,
     max_decompile: int = 20,
     slice_arch: str | None = None,
+    string_anchors: bool = True,
     runtime_dir: Path | None = None,
     fuzz_dir: Path | None = None,
     constraint_file: Path | None = None,
@@ -1868,6 +1955,10 @@ def analyse_blackbox_binary(
             # extraction — as does the compare-binary pass below.
             extract_cfgs=not quick,
             slice_arch=slice_arch,
+            # Bounded diagnostic-string anchor pass (see
+            # radare2_understand._extract_string_anchors). Default on;
+            # operators skip it via --no-string-anchors.
+            string_anchors=string_anchors,
         )
     except Exception as exc:
         logger.warning("radare2 analysis failed for %s: %s", binary, exc, exc_info=True)
@@ -1970,6 +2061,15 @@ def analyse_blackbox_binary(
         runtime_input_flows,
     )
     evidence.extend(context_evidence)
+    # Stamp whether the string-anchor pass actually ran: the report
+    # must distinguish "skipped" (flag off, quick mode, or no deep r2
+    # analysis at all) from "ran and found nothing".
+    context_map["analysis_scope"]["string_anchor_pass"] = (
+        "skipped"
+        if (quick or not string_anchors
+            or manifest.analysis_depth in {"metadata_only", "unavailable"})
+        else "ran"
+    )
     external_ingress, ingress_evidence = recover_external_ingress(manifest, context_map)
     evidence.extend(ingress_evidence)
     context_map["external_ingress_candidates"] = external_ingress

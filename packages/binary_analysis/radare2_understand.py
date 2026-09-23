@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import threading
@@ -73,6 +74,7 @@ from core.function_taxonomy import (
 )
 from core.analysis.cfg_metrics import cyclomatic_number
 from core.json import save_json
+from core.security.log_sanitisation import escape_nonprintable
 
 from .function_cfg import (
     BasicBlockCFG,
@@ -218,6 +220,43 @@ _DANGEROUS_IMPORTS = frozenset(
     | _T_NET | _T_PARSER | _T_INT_PARSE | _T_TOCTOU
     | _T_STREAM | _T_IPC
 )
+
+
+# printf-style conversion specifier — the strongest structural marker
+# of a diagnostic/format string ("failed to read %s at offset %d").
+# Not %%-exact: a "%% d"-style sequence still matches through the
+# space flag ("100%% done" qualifies) — accepted selection noise,
+# bounded by the pass caps.
+_PRINTF_CONVERSION_RE = re.compile(
+    r"%[-+ #0]*\d*(?:\.\d+)?(?:hh?|ll?|[Lqjzt])?[diouxXeEfgGaAcsp]"
+)
+
+_ANCHOR_MIN_LEN = 8
+_ANCHOR_MAX_LEN = 200
+_ANCHOR_MIN_PRINTABLE_RATIO = 0.9
+
+
+def _is_diagnostic_string(text: str) -> bool:
+    """Structural test for diagnostic/error-message shaped strings.
+
+    STRUCTURAL features only — length, printability, printf
+    conversions, sentence-like punctuation. Deliberately no product or
+    domain vocabulary: the string-anchor pass must work unchanged on
+    any target. Mostly-printable (rather than fully printable) because
+    hostile or merely odd binaries embed stray control bytes in
+    otherwise real diagnostics; emission escapes them.
+    """
+    if not _ANCHOR_MIN_LEN <= len(text) <= _ANCHOR_MAX_LEN:
+        return False
+    printable = sum(1 for c in text if c.isprintable() or c in "\n\t")
+    if printable / len(text) < _ANCHOR_MIN_PRINTABLE_RATIO:
+        return False
+    if _PRINTF_CONVERSION_RE.search(text):
+        return True
+    # Sentence-like: terminal punctuation or a labelled clause
+    # ("invalid magic: expected ...").
+    stripped = text.rstrip()
+    return stripped.endswith((".", "!", "?")) or ": " in text
 
 
 def _inventory_interest_key(raw: Any) -> tuple[int, int, int, str]:
@@ -386,6 +425,12 @@ class BinaryContextMap:
     # are simply absent from the dict.
     export_types: dict[str, str] = field(default_factory=dict)
     strings_sample: list[str] = field(default_factory=list)
+    # Top anchor-dense functions from the string-anchor pass: dicts of
+    # {name, address (int), anchor_string_count, sample_strings}. The
+    # sample strings are already escaped (escape_nonprintable) at
+    # capture — they originate in a hostile binary. A likely
+    # parser/handler lead, never a finding.
+    string_anchor_functions: list[dict[str, Any]] = field(default_factory=list)
     classes: list[RecoveredClassInfo] = field(default_factory=list)
 
     fuzz_priorities: list[dict[str, Any]] = field(default_factory=list)
@@ -462,6 +507,16 @@ class BinaryContextMap:
             "exports": self.exports,
             "export_types": dict(self.export_types),
             "strings_sample": self.strings_sample[:50],
+            "string_anchor_functions": [
+                {
+                    "name": str(item.get("name") or ""),
+                    "address": hex(int(item.get("address") or 0)),
+                    "anchor_string_count": int(item.get("anchor_string_count") or 0),
+                    "sample_strings": list(item.get("sample_strings") or []),
+                }
+                for item in self.string_anchor_functions
+                if isinstance(item, dict)
+            ],
             "classes": [item.to_dict() for item in self.classes],
             "fuzz_priorities": self.fuzz_priorities,
             "notes": self.notes,
@@ -673,6 +728,16 @@ class BinaryUnderstand:
     _MAX_METHODS_PER_CLASS = 512
     _MAX_FIELDS_PER_CLASS = 256
 
+    # String-anchor pass bounds. The pass costs one izj plus at most
+    # _MAX_ANCHOR_XREF_LOOKUPS axtj lookups (cheap in-memory queries);
+    # the caps keep the added r2 work bounded on string-heavy binaries
+    # while still covering the diagnostic-string population that
+    # matters for parser discovery.
+    _MAX_ANCHOR_STRINGS = 3000       # izj entries scanned
+    _MAX_ANCHOR_XREF_LOOKUPS = 512   # diagnostic strings xref-resolved
+    _MAX_ANCHOR_FUNCTIONS = 20       # top-K anchor-dense functions kept
+    _ANCHOR_SAMPLE_STRINGS = 3       # sample strings kept per function
+
     # Transitive-call BFS hop limit. Real-world CVE chains often span
     # 4-5 hops (e.g. NiRClientHandle → NiRExRouteCon → NiRRouteRepl →
     # NiBufIRouteToTable → memcpy). Depth 5 catches these without the
@@ -686,6 +751,7 @@ class BinaryUnderstand:
         quick: bool = False,
         extract_cfgs: bool = False,
         max_functions: int | None = None,
+        string_anchors: bool = True,
     ) -> BinaryContextMap:
         """Run the full analysis pipeline.
 
@@ -696,6 +762,12 @@ class BinaryUnderstand:
         (``_MAX_FUNCTIONS`` when None). Raise it for large binaries
         where the default would blind-spot the map; lower it to bound
         per-function r2 work on constrained runs.
+
+        ``string_anchors=False`` skips the bounded string-anchor pass
+        (diagnostic-string xref grouping — see
+        ``_extract_string_anchors``). On by default; the pass is
+        capped so its added r2 work stays small. Ignored under
+        ``quick``.
 
         ``extract_cfgs=True`` additionally populates each interesting
         function's ``basic_block_cfg`` (via r2 ``afbj``, cached per
@@ -797,6 +869,11 @@ class BinaryUnderstand:
                     self._extract_classes(r2, ctx)
                     self._extract_entry_points(ctx)
                     self._extract_strings(r2, ctx, limit=max_strings)
+                    # Bounded diagnostic-string anchor pass. Runs after
+                    # _extract_functions so anchors bind to recovered
+                    # function names.
+                    if string_anchors:
+                        self._extract_string_anchors(r2, ctx)
                     self._tag_dangerous_callers(r2, ctx)
                     # Transitive analysis MUST follow _tag_dangerous_
                     # callers because it reads ctx.dangerous_sinks for
@@ -1226,6 +1303,104 @@ class BinaryUnderstand:
             if len(strings) >= limit:
                 break
         ctx.strings_sample = strings
+
+    def _extract_string_anchors(self, r2, ctx: BinaryContextMap) -> None:
+        """Bounded string-anchor pass: rank functions by how many
+        diagnostic-shaped strings they reference.
+
+        On large stripped executables the ingress ranking degrades to
+        bare libc imports because symbol names carry nothing
+        format-aware to rank on. Diagnostic/error strings survive
+        stripping, and the functions referencing many of them are very
+        likely parsers or handlers — a strong mechanical review anchor.
+        Selection is structural only (see ``_is_diagnostic_string``);
+        anchor density is structure, not taint proof, and consumers
+        must present these as review leads, never findings.
+        """
+        try:
+            strings_raw = json.loads(
+                self._cmd_deg(r2, ctx, "izj", self._T_QUERY,
+                              what="string anchors (izj)") or "[]")
+        except R2SessionLost:
+            raise
+        except Exception as e:  # noqa: BLE001 — r2 output is hostile; degrade
+            logger.debug("string-anchor extraction failed: %s", e)
+            return
+        if not isinstance(strings_raw, list):
+            return
+
+        selected: list[tuple[int, str]] = []
+        for s in strings_raw[:self._MAX_ANCHOR_STRINGS]:
+            if len(selected) >= self._MAX_ANCHOR_XREF_LOOKUPS:
+                break
+            if not isinstance(s, dict):
+                continue  # r2 output is hostile; skip malformed elements
+            text = str(s.get("string", ""))
+            try:
+                vaddr = int(s.get("vaddr"))
+            except (ValueError, TypeError, OverflowError):
+                # OverflowError: json.loads accepts Infinity/NaN and
+                # int() refuses them — never-raise contract.
+                continue
+            if _is_diagnostic_string(text):
+                selected.append((vaddr, text))
+
+        fn_by_addr = {
+            int(fn.address): fn
+            for fn in ctx.interesting_functions
+            if fn.address is not None
+        }
+        by_function: dict[int, dict[str, Any]] = {}
+        for vaddr, text in selected:
+            try:
+                refs = json.loads(
+                    self._cmd_deg(r2, ctx, f"axtj @ {vaddr}",
+                                  self._T_XREF,
+                                  what=f"string xrefs @ {hex(vaddr)}")
+                    or "[]")
+            except R2SessionLost:
+                raise
+            except Exception:  # noqa: BLE001 — r2 output is hostile; degrade
+                refs = []
+            if not isinstance(refs, list):
+                refs = []
+            seen_fns: set[int] = set()
+            for ref in refs:
+                if not isinstance(ref, dict):
+                    continue
+                try:
+                    fcn_addr = int(ref.get("fcn_addr"))
+                except (ValueError, TypeError, OverflowError):
+                    continue
+                if fcn_addr in seen_fns:
+                    continue  # one string counts once per function
+                seen_fns.add(fcn_addr)
+                bound = fn_by_addr.get(fcn_addr)
+                name = (bound.name if bound is not None
+                        else str(ref.get("fcn_name") or ""))
+                if not name:
+                    continue
+                entry = by_function.setdefault(fcn_addr, {
+                    # Escaped at capture, like the samples below: the
+                    # name is hostile-binary content and rides into
+                    # every downstream JSON artifact and report.
+                    "name": escape_nonprintable(name),
+                    "address": fcn_addr,
+                    "anchor_string_count": 0,
+                    "sample_strings": [],
+                })
+                entry["anchor_string_count"] += 1
+                if len(entry["sample_strings"]) < self._ANCHOR_SAMPLE_STRINGS:
+                    # Escaped at capture: the bytes come straight out
+                    # of a hostile binary and later land in operator
+                    # reports and LLM prompts.
+                    entry["sample_strings"].append(escape_nonprintable(text))
+
+        ranked = sorted(
+            by_function.values(),
+            key=lambda item: (-item["anchor_string_count"], item["address"]),
+        )
+        ctx.string_anchor_functions = ranked[:self._MAX_ANCHOR_FUNCTIONS]
 
     def _tag_dangerous_callers(self, r2, ctx: BinaryContextMap) -> None:
         """For each function, record any dangerous import it calls.
@@ -1807,6 +1982,7 @@ def analyse_binary_context(
     extract_cfgs: bool = False,
     slice_arch: str | None = None,
     max_functions: int | None = None,
+    string_anchors: bool = True,
 ) -> BinaryContextMap:
     """Run radare2 analysis and optionally persist the context map.
 
@@ -1832,6 +2008,9 @@ def analyse_binary_context(
     default when None); over-cap inventories are truncated to the
     most interesting entries deterministically, with a ctx.notes
     record of the drop.
+
+    ``string_anchors=False`` skips the bounded diagnostic-string
+    anchor pass (default on; ignored under ``quick``).
     """
     if slice_arch is None:
         analyser = BinaryUnderstand(binary_path, llm=llm)
@@ -1843,6 +2022,7 @@ def analyse_binary_context(
         quick=quick,
         extract_cfgs=extract_cfgs,
         max_functions=max_functions,
+        string_anchors=string_anchors,
     )
     if out_path:
         context.write(out_path)
