@@ -162,3 +162,51 @@ class TestNearbySinksScalarCoercion:
         out = understand_module._hunt_pattern_with_seeds("pattern", seeds)
         assert "near sinks: )" in out or "near sinks: " in out
         assert "not" not in out.split("near sinks:")[1].splitlines()[0]
+
+
+class TestSeedSanitiserDepthBound:
+    """An ingest-admitted deep prop must not kill the --trace dispatch.
+
+    core.json.load_json (every graph ingest reader) admits nesting up
+    to 1024 levels, but the recursive sanitiser used to RecursionError
+    just under 1000 — a producer-bounded (ingestable) row crashed the
+    seed injection. The sanitiser now caps traversal depth with an
+    explicit truncation marker.
+    """
+
+    @staticmethod
+    def _deep(n, leaf="tail"):
+        value = leaf
+        for _ in range(n):
+            value = {"k": value}
+        return value
+
+    def test_ingest_depth_ceiling_survives(self, understand_module):
+        # 1024 = the ingest readers' own depth gate: everything they
+        # admit, the sanitiser must survive.
+        payload = self._deep(1024)
+        out = understand_module._sanitise_graph_seed_values(payload)
+        assert isinstance(out, dict)
+
+    def test_deep_tail_truncates_with_marker(self, understand_module):
+        payload = self._deep(200, leaf="secret-tail")
+        out = understand_module._sanitise_graph_seed_values(payload)
+        # Walk to the truncation point: the marker replaces the deep
+        # remainder instead of carrying it onward.
+        node = out
+        depth = 0
+        while isinstance(node, dict):
+            node = next(iter(node.values()))
+            depth += 1
+        assert isinstance(node, str)
+        assert "depth" in node  # the explicit truncation marker
+        assert "secret-tail" not in str(out)
+
+    def test_shallow_values_unaffected_by_cap(self, understand_module):
+        from core.security.prompt_output_sanitise import sanitise_string
+
+        hostile = "![leak](http://collector.example/x)"
+        payload = {"entry": {"name": hostile, "line": 7}}
+        out = understand_module._sanitise_graph_seed_values(payload)
+        assert out["entry"]["line"] == 7
+        assert out["entry"]["name"] == sanitise_string(hostile, max_chars=200)
