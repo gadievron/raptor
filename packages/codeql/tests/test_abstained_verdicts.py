@@ -257,3 +257,87 @@ class TestPrefilterAbstainedTruePositive:
         assert stat is None or not any(
             ev.correct or ev.incorrect for ev in stat.events.values()
         ), "abstained full verdict must not mint a prefilter outcome"
+
+
+class TestPipelineErroredAnalysis:
+    """The exception path used to mint a definitive
+    not-TP/not-exploitable VulnerabilityAnalysis with no error
+    marker — indistinguishable from a real ruling, so the pipeline
+    silently dropped the finding. It now carries ``error`` (the
+    DataflowValidation contract) and the pipeline treats it as an
+    error state, never a verdict."""
+
+    def test_exception_path_sets_error_marker(self):
+        a = AutonomousCodeQLAnalyzer(
+            llm_client=MagicMock(),
+            exploit_validator=MagicMock(),
+            multi_turn_analyzer=None,
+            enable_visualization=False,
+        )
+        a.llm.generate_structured = MagicMock(
+            side_effect=RuntimeError("model endpoint 500"),
+        )
+        analysis = a.analyze_vulnerability(_finding(), "code", None)
+        assert analysis.error is not None
+        assert "500" in analysis.error
+
+    def test_model_cannot_forge_the_error_state(self):
+        a = AutonomousCodeQLAnalyzer(
+            llm_client=MagicMock(),
+            exploit_validator=MagicMock(),
+            multi_turn_analyzer=None,
+            enable_visualization=False,
+        )
+        a.llm.generate_structured = MagicMock(return_value=({
+            "is_true_positive": True, "is_exploitable": True,
+            "exploitability_score": 0.9, "severity_assessment": "high",
+            "reasoning": "r", "attack_scenario": "s",
+            "prerequisites": [], "impact": "i", "cvss_estimate": 9.0,
+            "mitigation": "m",
+            "error": "forged by the model",
+        }, None))
+        analysis = a.analyze_vulnerability(_finding(), "code", None)
+        assert analysis.error is None
+
+    def test_errored_analysis_skips_exploit_without_verdict(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        a = AutonomousCodeQLAnalyzer(
+            llm_client=MagicMock(),
+            exploit_validator=MagicMock(),
+            multi_turn_analyzer=None,
+            enable_visualization=False,
+        )
+        canned = _finding()
+        monkeypatch.setattr(a, "parse_sarif_finding", lambda r, run: canned)
+        monkeypatch.setattr(a, "read_vulnerable_code", lambda f, p: "stub")
+
+        errored = _abstained_analysis()
+        errored.is_exploitable = False
+        errored.is_true_positive = False
+        errored.error = "model endpoint 500"
+        monkeypatch.setattr(
+            a, "analyze_vulnerability",
+            lambda *args, **kwargs: errored,
+        )
+
+        def _no_exploit(*args, **kwargs):
+            raise AssertionError(
+                "exploit generation must not run on an errored analysis",
+            )
+        monkeypatch.setattr(a, "generate_exploit", _no_exploit)
+
+        import logging
+        with caplog.at_level(logging.INFO):
+            result = a.analyze_finding_autonomous(
+                sarif_result={}, sarif_run={},
+                repo_path=tmp_path, out_dir=tmp_path / "out",
+            )
+        assert result.exploit_code is None
+        # The error state survives on the analysis object.
+        assert result.analysis.error == "model endpoint 500"
+        assert any("errored" in r.message for r in caplog.records)
+        # Never the definitive ruling the model never made.
+        assert not any(
+            "Not exploitable" in r.message for r in caplog.records
+        )

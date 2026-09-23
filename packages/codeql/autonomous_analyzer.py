@@ -81,7 +81,16 @@ def _artifact_safe_id(finding: CodeQLFinding) -> str:
 
 @dataclass
 class VulnerabilityAnalysis:
-    """LLM analysis result."""
+    """LLM analysis result.
+
+    ``error``: set when the analysis ERRORED (exception in the LLM
+    call / parse path) rather than ruled. The bool fields then hold
+    conservative defaults, not verdicts — consumers must treat an
+    error-state result like an abstention (no verdict exists), never
+    as a not-TP / not-exploitable ruling. Same contract as
+    ``DataflowValidation.error``, which grew the field for exactly
+    this class.
+    """
     is_true_positive: bool
     is_exploitable: bool
     exploitability_score: float  # 0.0-1.0
@@ -92,6 +101,7 @@ class VulnerabilityAnalysis:
     impact: str
     cvss_estimate: float  # 0.0-10.0
     mitigation: str
+    error: str | None = None
 
 
 # Dict schema for LLM structured generation (consistent with other callers)
@@ -836,6 +846,10 @@ class AutonomousCodeQLAnalyzer:
             # Filter to only include VulnerabilityAnalysis fields to prevent TypeErrors
             valid_fields = {f.name for f in VulnerabilityAnalysis.__dataclass_fields__.values()}
             filtered_response = {k: v for k, v in response_dict.items() if k in valid_fields}
+            # `error` is runner-owned state (set only by the exception
+            # path below) — a model-emitted "error" key must not put a
+            # successful analysis into the error state.
+            filtered_response.pop("error", None)
 
             # Log any unexpected fields for debugging
             unexpected_fields = set(response_dict.keys()) - valid_fields
@@ -884,7 +898,12 @@ class AutonomousCodeQLAnalyzer:
         except Exception as e:  # noqa: BLE001 — defensive: degrade, never crash the pipeline
             self.logger.error("Vulnerability analysis failed: %s", e)
 
-            # Return conservative default
+            # Conservative defaults PLUS the error marker: without
+            # it, the exception path minted a definitive
+            # not-TP/not-exploitable verdict indistinguishable from
+            # a real ruling, and the pipeline silently dropped the
+            # finding (abstain doctrine: an errored analysis is an
+            # error state, never a verdict).
             return VulnerabilityAnalysis(
                 is_true_positive=False,
                 is_exploitable=False,
@@ -895,7 +914,8 @@ class AutonomousCodeQLAnalyzer:
                 prerequisites=[],
                 impact="Unknown",
                 cvss_estimate=0.0,
-                mitigation="Review manually"
+                mitigation="Review manually",
+                error=str(e),
             )
 
     def generate_exploit(
@@ -1331,17 +1351,20 @@ class AutonomousCodeQLAnalyzer:
             repo_path=repo_path,
         )
 
-        if analysis.is_exploitable is None:
-            # Model-emitted literal null lands as None on the
-            # dataclass despite the bool annotation — the deep
-            # analysis abstained. Skip exploit generation (no tokens
-            # on a verdict the model never gave) but log the
-            # abstention instead of minting a definitive "not
-            # exploitable"; the analysis object carries the honest
-            # None downstream.
+        if analysis.error is not None or analysis.is_exploitable is None:
+            # No verdict exists: either the analysis ERRORED (the
+            # exception path's bools are conservative defaults, not
+            # rulings) or a model-emitted literal null landed as
+            # None on the dataclass despite the bool annotation
+            # (abstention). Skip exploit generation (no tokens on a
+            # verdict the model never gave) but log honestly instead
+            # of minting a definitive "not exploitable"; the
+            # analysis object carries the error/None downstream.
             self.logger.info(
-                "⊘ Deep analysis abstained on exploitability — "
-                "skipping exploit generation (no verdict)",
+                "⊘ Deep analysis %s — skipping exploit generation "
+                "(no verdict)",
+                "errored" if analysis.error is not None
+                else "abstained on exploitability",
             )
             return AutonomousAnalysisResult(
                 finding=finding,
