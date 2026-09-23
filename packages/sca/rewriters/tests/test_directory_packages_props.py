@@ -259,10 +259,17 @@ def test_attr_pattern_repeated_open_tags_without_close_is_fast():
     """A hostile text of repeated ``<PackageVersion `` openers with no
     ``>`` anywhere: the shared attr-pattern builder's unbounded tag
     spans scanned to EOF per anchor — quadratic (measured 4x per size
-    doubling). The bounded span keeps each anchor's scan O(1); wall
-    bound follows the suite's <5s convention. Scoped to the shared
-    builder on purpose — the per-file child-element patterns carry
-    the same shape but belong to the escalated trailing-span class."""
+    doubling). The bounded span keeps each anchor's scan O(1).
+    CPU-time bound (``process_time``), not wall: the linear scan is
+    genuine multi-hundred-millisecond regex work, and on a loaded
+    shared runner sibling processes once pushed the wall clock past
+    the bound with the CPU cost unchanged. The pump size gives both
+    directions margin under the 5s bound: the bounded pattern clears
+    it several times over on a slow runner (~0.6s CPU here), the
+    pre-fix unbounded shape exceeds it several times over on a fast
+    one (~18s CPU here). Scoped to the shared builder on purpose —
+    the per-file child-element patterns carry the same shape but
+    belong to the escalated trailing-span class."""
     import time
 
     from packages.sca.rewriters import build_element_attr_version_pattern
@@ -271,10 +278,10 @@ def test_attr_pattern_repeated_open_tags_without_close_is_fast():
         ("PackageVersion", "GlobalPackageReference"),
         "Include", "Newtonsoft.Json", "Version",
     )
-    text = "<PackageVersion " * 40000
-    start = time.monotonic()
+    text = "<PackageVersion " * 16000
+    start = time.process_time()
     assert list(pat.finditer(text)) == []
-    assert time.monotonic() - start < 5.0
+    assert time.process_time() - start < 5.0
 
 
 def test_attribute_heavy_open_tag_still_rewrites(tmp_path: Path):
