@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Merge a raptor-sandbox-observe probe profile into context-map.json.
+
+Usage: raptor-enrich-context-map-observe <understand_dir> --binary <path>
+           [-- <arg>...]
+
+Reads ``<understand_dir>/probe.json`` (raptor-sandbox-observe --json
+output) and ``<understand_dir>/context-map.json``, merges the runtime
+observation under a ``runtime_observation`` key, and writes the map
+back. The workdir, binary path and probe arguments arrive as argv
+DATA — the previous instruction-file ``python3 -c "..."`` block
+spliced them into a double-quoted program, letting the shell expand
+``$(...)`` carried in a pasted value.  Idempotent (re-merge replaces
+the ``runtime_observation`` section).
+"""
+import argparse
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.artifacts.context_map_budget import (  # noqa: E402
+    save_context_map,
+)
+from core.json import load_json  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="raptor-enrich-context-map-observe",
+        description=(
+            "Merge a raptor-sandbox-observe probe profile into "
+            "context-map.json."
+        ),
+    )
+    parser.add_argument("understand_dir", help="path to /understand run dir")
+    parser.add_argument("--binary", required=True,
+                        help="binary the probe executed")
+    parser.add_argument("probe_args", nargs="*",
+                        help="arguments the probe ran the binary with "
+                             "(after --)")
+    args = parser.parse_args()
+
+    workdir = Path(args.understand_dir).resolve()
+    context_map_path = workdir / "context-map.json"
+    probe_path = workdir / "probe.json"
+    for required in (context_map_path, probe_path):
+        if not required.is_file():
+            print(f"raptor-enrich-context-map-observe: missing {required}",
+                  file=sys.stderr)
+            return 1
+
+    from core.sandbox.observe_context_merge import (
+        merge_observation_into_context_map,
+    )
+    from core.sandbox.observe_profile import ConnectTarget, ObserveProfile
+
+    context_map = load_json(context_map_path)
+    probe = load_json(probe_path)
+    profile = ObserveProfile(
+        paths_read=probe["paths_read"],
+        paths_written=probe["paths_written"],
+        paths_stat=probe["paths_stat"],
+        connect_targets=[
+            ConnectTarget(**t) for t in probe["connect_targets"]
+        ],
+    )
+    merged = merge_observation_into_context_map(
+        context_map, profile,
+        binary=args.binary,
+        command=[args.binary, *args.probe_args],
+    )
+    # Producer chokepoint: compact encoding + size budget (bounded
+    # readers cap on file bytes — never pretty-print this artifact).
+    save_context_map(context_map_path, merged)
+    print(f"runtime_observation merged into {context_map_path}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

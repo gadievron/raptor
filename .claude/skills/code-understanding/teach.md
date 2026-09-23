@@ -28,37 +28,12 @@ The goal is not general documentation — it is targeted understanding of the me
 Before reading code, recall prior study concepts from SAGE and check if they are still fresh. Run:
 
 ```bash
-python3 -c "
-import sys, os, json; sys.path.insert(0, os.environ['RAPTOR_DIR'])
-from core.sage.hooks import recall_concepts_for_teach
-from core.concepts.study import _verify_evidence_hashes, _extract_evidence_hashes
-from pathlib import Path
-
-rows = recall_concepts_for_teach(
-    repo_path='<resolved_target>',
-    subject='<teach_subject>',
-)
-source_root = Path('<resolved_target>')
-verified = []
-unverified = []
-for r in rows:
-    content = r.get('content', '')
-    if _extract_evidence_hashes(content) and _verify_evidence_hashes(content, source_root):
-        verified.append(content)
-    elif content:
-        unverified.append(content)
-
-print(json.dumps({'verified': len(verified), 'unverified': len(unverified)}))
-for v in verified:
-    print('--- VERIFIED ---')
-    print(v)
-for u in unverified:
-    print('--- UNVERIFIED ---')
-    print(u[:500])
-if not verified and not unverified:
-    print('No prior concepts found.')
-"
+libexec/raptor-teach-recall <resolved_target> <teach_subject>
 ```
+
+Both values ride as argv data (a multi-word subject needs no quoting — extra arguments join the subject). Never paste either value into a `python3 -c` program instead: the shell expands `$(...)` inside a double-quoted block before python runs.
+
+The output is one JSON summary line (`{"verified": N, "unverified": N}`) followed by `--- VERIFIED ---` / `--- UNVERIFIED ---` concept blocks, or `No prior concepts found.`
 
 **If SAGE returns verified concepts** (evidence hashes match current source): check whether the concept names and descriptions are actually relevant to `<teach_subject>` (semantic search can return unrelated concepts from the same domain). If relevant, present them directly as the teach output. Format as the standard TEACH output (Mechanism, Security properties, Relevant to analysis) drawn from the concept's description, invariants, contracts, and evidence. **Skip TEACH-1/2/3** — no LLM call needed, no code reading needed. The concept was already studied and the source hasn't changed. If not relevant, treat as "no prior concepts found".
 
@@ -99,33 +74,29 @@ Do not leave the analyst in a state of uncertainty — the teach explanation mus
 
 After completing a fresh analysis (TEACH-1/2/3), store the findings as structured concepts to SAGE so they can be recalled next time — by teach (caching) or by study (cross-pollination).
 
-```bash
-python3 -c "
-import sys, os, json; sys.path.insert(0, os.environ['RAPTOR_DIR'])
-from core.sage.hooks import store_teach_concepts
+First write the teach JSON to a file with the **Write tool** (never onto a command line — it quotes target-authored source bytes verbatim, and the shell would expand `$(...)` carried in them):
 
-stored = store_teach_concepts(
-    repo_path='<resolved_target>',
-    teach_json=<TEACH_JSON>,
-)
-print(f'Stored {stored} concepts to SAGE')
-"
+1. Write the JSON object described below to `$WORKDIR/teach-concepts.json`.
+2. Run:
+
+```bash
+libexec/raptor-teach-store <resolved_target> "$WORKDIR/teach-concepts.json"
 ```
 
-Where `<TEACH_JSON>` is a Python dict literal you construct from the analysis:
+It prints `Stored N concepts to SAGE`. The file's content is a JSON object you construct from the analysis:
 
-```python
+```jsonc
 {
     "subject": "<teach_subject>",
     "source_root": "<resolved_target>",
     "concepts": [
         {
-            "id": "<subject>_<aspect>",  # e.g. "scatterlist_lifetime"
+            "id": "<subject>_<aspect>",  // e.g. "scatterlist_lifetime"
             "description": "<one-line: what this concept is>",
-            "confidence": "traced",      # traced | corroborated | documented
+            "confidence": "traced",      // traced | corroborated | documented
             "evidence": [
                 {
-                    "type": "code_path",  # code_path | type_definition | api_pattern
+                    "type": "code_path",  // code_path | type_definition | api_pattern
                     "file": "relative/path/to/file.c",
                     "line": 42,
                     "observation": "<what you observed at this location>"
@@ -139,8 +110,8 @@ Where `<TEACH_JSON>` is a Python dict literal you construct from the analysis:
             "concept": "<concept_id>",
             "statement": "<what must always be true>",
             "negation": "<what happens when violated — the bug class>",
-            "relevant_cwes": ["CWE-416"],  # optional
-            "mechanism_tags": ["lifetime", "refcount"]  # optional
+            "relevant_cwes": ["CWE-416"],  // optional
+            "mechanism_tags": ["lifetime", "refcount"]  // optional
         }
     ],
     "contracts": [

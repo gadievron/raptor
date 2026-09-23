@@ -43,15 +43,10 @@ This starts the run lifecycle, builds the checklist, and imports any /understand
 If the target has a project threat model, load it before starting Stage A:
 
 ```bash
-python3 -c "
-import sys, os; sys.path.insert(0, os.environ['RAPTOR_DIR'])
-from pathlib import Path
-from core.threat_model import threat_model_prompt_block
-block = threat_model_prompt_block(Path('$TARGET_PATH'))
-if block: print(block)
-else: print('No project threat model found.')
-"
+libexec/raptor-threat-model prompt-block "$TARGET_PATH"
 ```
+
+The target path rides as argv data — never paste it into a `python3 -c` program (the shell expands `$(...)` inside a double-quoted block before python runs). It prints the prompt block, or `No project threat model found.`
 
 When present, use it as operator-owned context throughout all LLM stages (A-D, F):
 - Prioritise focus areas and verification expectations

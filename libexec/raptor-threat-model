@@ -59,6 +59,9 @@ Commands:
   diff [project] --context-map <path>
                              Compare model against a fresh context-map
   report [project]           Write threat-model-report.md
+  prompt-block <target>      Print the LLM prompt block for a target's
+                             project threat model (prints a "No project
+                             threat model found." line when absent)
   add --field <f> --value <v>  Add a value to a list field
   remove --field <f> --value <v>  Remove a value from a list field
   build [agentic args]       Run /understand-backed threat-model-only phase
@@ -99,6 +102,29 @@ case "$cmd" in
         ;;
     use-stale)
         exec "$RAPTOR_DIR/libexec/raptor-agentic" --threat-model-only --threat-model-use-stale "$@"
+        ;;
+    prompt-block)
+        # The target path travels as ARGV DATA ("$1") into a
+        # single-quoted heredoc program — instruction files previously
+        # spliced it into a double-quoted `python3 -c` block, letting
+        # the shell expand $(...) inside a pasted value.
+        if [ "$#" -ne 1 ]; then
+            echo "raptor-threat-model: prompt-block requires exactly one <target> argument" >&2
+            exit 3
+        fi
+        export RAPTOR_DIR
+        exec python3 - "$1" <<'PY'
+import os
+import sys
+
+sys.path.insert(0, os.environ["RAPTOR_DIR"])
+from pathlib import Path
+
+from core.threat_model import threat_model_prompt_block
+
+block = threat_model_prompt_block(Path(sys.argv[1]))
+print(block if block else "No project threat model found.")
+PY
         ;;
     *)
         echo "raptor-threat-model: unknown command: $cmd" >&2
