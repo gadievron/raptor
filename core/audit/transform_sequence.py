@@ -557,13 +557,22 @@ _C_EXTS = frozenset((".c", ".h", ".cc", ".cpp", ".cxx", ".go", ".js", ".ts"))
 # precision in this tree-sitter-absent fallback.
 # Horizontal-only indent — the MULTILINE ^\s* idiom is quadratic
 # on blank-line runs (identical match set per line).
+# Bounded iteration counts on the keyword and type loops: the two
+# loops overlap on every word (keywords are \w+), so the unbounded
+# spelling let a qualifier-word line with no paren drive the engine
+# through every split of the run between them — worse than quadratic
+# on hostile lines. Bound trade-off, both directions: larger keeps
+# absurd headers matching but raises the per-line backtracking
+# ceiling; smaller is faster but a real header beyond the bound
+# stops matching. 16 words per loop sits far above real headers
+# while capping per-line work at a constant.
 _FUNC_HEADER_RE = re.compile(
     r"^[^\S\n]*(?:(?:static|inline|void|int|char|unsigned|const|auto|"
     r"func|function|export|async|public|private|protected|"
     r"internal|override|virtual|abstract|final|synchronized|"
-    r"fn|def)\s+)+"
+    r"fn|def)\s+){1,16}"
     r"(?:\([^)]*\)\s+)?"  # Go method receiver: func (s *Server) Handle(
-    r"(?:\w+\s+)*"         # return type(s): int, *Item, []byte
+    r"(?:\w+\s+){0,16}"    # return type(s): int, *Item, []byte
     r"(\w+)\s*\(",
     re.MULTILINE,
 )
