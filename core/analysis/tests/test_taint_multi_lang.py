@@ -910,3 +910,25 @@ class TestOverlappingBodyBounds:
         summaries = extract_summaries_for_file(content, "x.js")
         rules = summaries["handler"].taint_rules
         assert any(r.sink_call == "eval" for r in rules)
+
+
+def test_closed_nested_named_function_keeps_outer_extent():
+    """A properly closed outer body containing a nested NAMED
+    function must keep its full extent — clamping at the next header
+    truncated pervasive benign code (sinks after the nested def were
+    lost). Only unclosed bodies (or bodies past the per-file scan
+    budget) clamp at the next header."""
+    from core.analysis.taint_multi_lang import extract_summaries_for_file
+    content = (
+        "function outer(a) {\n"
+        "  function inner(b) {\n"
+        "    return b;\n"
+        "  }\n"
+        "  eval(a);\n"
+        "  return inner(a);\n"
+        "}\n"
+    )
+    summaries = extract_summaries_for_file(content, "x.js")
+    outer = summaries["outer"]
+    assert any(r.sink_call == "eval" for r in outer.taint_rules)
+    assert "inner" in outer.callees
