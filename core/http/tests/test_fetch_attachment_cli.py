@@ -207,3 +207,138 @@ class TestTerminalEscapeScrub:
         assert out.startswith("OK: ")
         assert "\x1b" not in out
         assert "\x07" not in out
+
+
+class TestDestSymlinkRace:
+    """The final-component write uses O_NOFOLLOW: an is_symlink()
+    probe followed by write_bytes left a check-then-use window a
+    run-dir-writing racer could win. The open itself must refuse."""
+
+    def test_symlinked_dest_refused_at_open(
+        self, cli, monkeypatch, workdir, tmp_path_factory,
+    ):
+        import core.http.egress_backend as egress_backend
+
+        class _FakeClient:
+            def __init__(self, allowed_hosts):
+                pass
+
+            def get_bytes(self, url: str) -> bytes:
+                return b"crashdata"
+
+        monkeypatch.setattr(egress_backend, "EgressClient", _FakeClient)
+        victim = tmp_path_factory.mktemp("victim") / "target-file"
+        (workdir / "attachments").mkdir()
+        (workdir / "attachments" / "crash.bin").symlink_to(victim)
+
+        rc = _main(
+            cli, monkeypatch, workdir,
+            str(workdir / "attachments" / "crash.bin"),
+        )
+        assert rc == 1
+        assert not victim.exists()
+
+    def test_probe_then_write_window_is_closed(
+        self, cli, monkeypatch, workdir, tmp_path_factory,
+    ):
+        """Deterministically play the racer winning the old
+        is_symlink()-then-write_bytes window: every probe reports
+        clean while the symlink is already in place. Only an
+        atomic-refusal open (O_NOFOLLOW) protects the victim."""
+        import core.http.egress_backend as egress_backend
+
+        class _FakeClient:
+            def __init__(self, allowed_hosts):
+                pass
+
+            def get_bytes(self, url: str) -> bytes:
+                return b"crashdata"
+
+        monkeypatch.setattr(egress_backend, "EgressClient", _FakeClient)
+        victim = tmp_path_factory.mktemp("victim") / "target-file"
+        (workdir / "attachments").mkdir()
+        (workdir / "attachments" / "crash.bin").symlink_to(victim)
+        monkeypatch.setattr(Path, "is_symlink", lambda self: False)
+
+        rc = _main(
+            cli, monkeypatch, workdir,
+            str(workdir / "attachments" / "crash.bin"),
+        )
+        assert rc == 1
+        assert not victim.exists()
+
+
+class TestParentDirSymlinkRace:
+    """The attachments/ PARENT component: probing it by name and then
+    re-resolving the path for mkdir/write AFTER the network fetch left
+    a window spanning the whole download in which a racer could swap
+    attachments/ for a symlink and redirect the write. The directory
+    is anchored to an fd before the fetch; the write never re-resolves
+    the path."""
+
+    def test_racer_winning_every_probe_is_refused(
+        self, cli, monkeypatch, workdir, tmp_path_factory,
+    ):
+        """attachments/ is already a symlink and the racer wins every
+        by-name probe (is_symlink reports clean). Only the anchored
+        O_NOFOLLOW directory open refuses — O_NOFOLLOW on the final
+        write component does not cover intermediate directories."""
+        import core.http.egress_backend as egress_backend
+
+        class _FakeClient:
+            def __init__(self, allowed_hosts):
+                pass
+
+            def get_bytes(self, url: str) -> bytes:
+                return b"crashdata"
+
+        monkeypatch.setattr(egress_backend, "EgressClient", _FakeClient)
+        victim_dir = tmp_path_factory.mktemp("victim")
+        (workdir / "attachments").symlink_to(victim_dir)
+        monkeypatch.setattr(Path, "is_symlink", lambda self: False)
+
+        rc = _main(
+            cli, monkeypatch, workdir,
+            str(workdir / "attachments" / "crash.bin"),
+        )
+        assert rc == 1
+        assert not (victim_dir / "crash.bin").exists()
+
+    def test_swap_during_fetch_cannot_redirect_the_write(
+        self, cli, monkeypatch, workdir, tmp_path_factory,
+    ):
+        """Deterministically play the racer swapping attachments/ for
+        a symlink WHILE the download is in flight: the stubbed fetch
+        performs the swap before returning the body. The write must
+        land in the directory anchored before the fetch, never in the
+        victim directory the symlink points at."""
+        import core.http.egress_backend as egress_backend
+
+        victim_dir = tmp_path_factory.mktemp("victim")
+        attachments = workdir / "attachments"
+        aside = workdir / "attachments.aside"
+
+        class _SwappingClient:
+            def __init__(self, allowed_hosts):
+                pass
+
+            def get_bytes(self, url: str) -> bytes:
+                # The racer wins during the network round-trip.
+                attachments.rename(aside)
+                attachments.symlink_to(victim_dir)
+                return b"crashdata"
+
+        monkeypatch.setattr(egress_backend, "EgressClient", _SwappingClient)
+        rc = _main(
+            cli, monkeypatch, workdir,
+            str(workdir / "attachments" / "crash.bin"),
+        )
+        assert not (victim_dir / "crash.bin").exists(), (
+            "swap during fetch redirected the write"
+        )
+        # The anchored fd still names the pre-fetch directory: the
+        # download lands there (at its post-rename location) — inode
+        # identity, not path identity, and it confers nothing on the
+        # racer.
+        assert rc == 0
+        assert (aside / "crash.bin").read_bytes() == b"crashdata"

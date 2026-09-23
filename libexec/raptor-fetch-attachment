@@ -27,7 +27,9 @@ the instrumented target program, nothing else.
 
 Exit codes: 0 success, 1 download/validation failure, 2 usage error.
 """
+import errno
 import re
+import stat
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -84,6 +86,54 @@ def _confine_dest(dest_arg: str, report_path: Path) -> Path | None:
     name = _SAFE_NAME_CHARS.sub("_", name)
     name = name.lstrip(".-")[:_MAX_NAME_LEN] or "attachment.bin"
     return report_path.resolve().parent / "attachments" / name
+
+
+# Flags for the anchored directory opens below. getattr fallbacks keep
+# the script importable where a flag is missing; the fstat(S_ISDIR)
+# check on the OPENED fd carries the directory guarantee either way.
+_O_DIR_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+
+
+def _open_attachments_dir(attachments_dir: Path) -> int:
+    """Open ``attachments_dir`` as an fd via an anchored component walk.
+
+    The base (the resolved bug-report directory — canonical, so a
+    symlink at its final component can only be a post-resolve swap) is
+    opened with O_DIRECTORY|O_NOFOLLOW, then the ``attachments``
+    component is created and opened relative to that fd (``dir_fd``),
+    each fd verified S_ISDIR by fstat — never by name. A symlink at
+    either component refuses (ELOOP) instead of being followed: a
+    by-name probe (``is_symlink()``) races a concurrent swap, an
+    already-opened fd cannot be redirected.
+
+    Returns the directory fd (caller closes). Raises OSError on any
+    refusal.
+    """
+    base_fd = os.open(str(attachments_dir.parent), _O_DIR_FLAGS)
+    try:
+        if not stat.S_ISDIR(os.fstat(base_fd).st_mode):
+            raise OSError(errno.ENOTDIR, "not a directory",
+                          str(attachments_dir.parent))
+        try:
+            os.mkdir(attachments_dir.name, 0o755, dir_fd=base_fd)
+        except FileExistsError:
+            pass  # whatever exists is vetted by the anchored open below
+        fd = os.open(attachments_dir.name, _O_DIR_FLAGS, dir_fd=base_fd)
+    finally:
+        os.close(base_fd)
+    try:
+        if not stat.S_ISDIR(os.fstat(fd).st_mode):
+            raise OSError(errno.ENOTDIR, "not a directory",
+                          str(attachments_dir))
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def _attachment_urls(report: object) -> set:
@@ -145,28 +195,65 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    if dest.parent.is_symlink():
-        print(
-            f"refusing download: {dest.parent} is a symlink — the "
-            "attachments directory must be a real directory",
-            file=sys.stderr,
-        )
+    # Anchor the attachments directory to an fd BEFORE the fetch and
+    # hold it across the download: a by-name probe here followed by a
+    # path-resolved mkdir/write AFTER the network round-trip leaves a
+    # window spanning the whole fetch in which a racer with the
+    # run-dir write grant (exactly the grant sandboxed target code
+    # holds) swaps attachments/ for a symlink and redirects the write.
+    # Every write below goes through this fd; the path is never
+    # re-resolved once the fetch has started.
+    try:
+        dir_fd = _open_attachments_dir(dest.parent)
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.ENOTDIR):
+            print(
+                f"refusing download: {dest.parent} is not a real "
+                "directory — the attachments directory must be a "
+                "directory, not a symlink or other file",
+                file=sys.stderr,
+            )
+        else:
+            print(f"download failed: cannot prepare {dest.parent}: {e}",
+                  file=sys.stderr)
         return 1
 
     from core.http import HttpError
     from core.http.egress_backend import EgressClient
     client = EgressClient(allowed_hosts=[parts.hostname])
     try:
-        body = client.get_bytes(url)
-    except HttpError as e:
-        print(f"download failed: {_sft(str(e), max_len=300)}", file=sys.stderr)
-        return 1
+        try:
+            body = client.get_bytes(url)
+        except HttpError as e:
+            print(f"download failed: {_sft(str(e), max_len=300)}",
+                  file=sys.stderr)
+            return 1
 
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.is_symlink():
-        print(f"refusing download: {dest} is a symlink", file=sys.stderr)
-        return 1
-    dest.write_bytes(body)
+        # O_NOFOLLOW closes the same check-then-write window on the
+        # FINAL component: an is_symlink() probe followed by
+        # write_bytes let a symlink swapped in between redirect the
+        # write. The open refuses with ELOOP, and dir_fd anchors it
+        # to the directory opened before the fetch.
+        try:
+            fd = os.open(
+                dest.name,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o644,
+                dir_fd=dir_fd,
+            )
+        except OSError as e:
+            if e.errno == errno.ELOOP:
+                print(f"refusing download: {dest} is a symlink",
+                      file=sys.stderr)
+                return 1
+            print(f"download failed: cannot write {dest}: {e}",
+                  file=sys.stderr)
+            return 1
+    finally:
+        os.close(dir_fd)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(body)
     if str(dest) != sys.argv[3]:
         print(f"note: destination confined to {dest}", file=sys.stderr)
     print(f"OK: {_sft(url, max_len=300)} -> {dest} ({len(body)} bytes)")
