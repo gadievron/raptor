@@ -100,8 +100,19 @@ _STRUCT_DEF_RE = re.compile(
 # to either side — ``char *name;`` used to be skipped because the
 # star was only accepted as part of the TYPE token, leaving every
 # later offset 8 bytes short), field name, optional array dims.
+# Type and name must be separated by whitespace or a star run
+# ((?:\s|(?=\*))): the previous ``(\w+)\s*(\*+\s*)?(\w+)`` let the
+# two word groups sit ADJACENT, so a long identifier run with no
+# ``;`` made the engine try every split of the run between them —
+# cubic in the line length. The only dropped shape is a single
+# unseparated word splitting into type+name (``ab;`` as type ``a``
+# name ``b``), which is not a C field declaration. The array tail
+# folds its trailing whitespace into the gated group.
+# The leading \b keeps an unanchored scan from restarting inside an
+# identifier run (every interior position was a fresh match start,
+# each rescanning the rest of the run — the residual quadratic).
 _STRUCT_FIELD_RE = re.compile(
-    r'(\w+)\s*(\*+\s*)?(\w+)'
+    r'\b(\w+)(?:\s|(?=\*))\s*(\*+\s*)?(\w+)'
     r'(?:\[(\d+)\])?\s*;',
 )
 
