@@ -535,6 +535,12 @@ _MAX_CLOSURE_FILES = 200
 _MAX_CLOSURE_FILE_BYTES = 2_000_000
 _MAX_PP_TEXT_BYTES = 64_000_000
 
+# Source-level linemarker / #line directive (any flags), scanned on
+# RAW repo text — the sanitized view blanks the quoted path.
+_SRC_LINEMARKER_RE = re.compile(
+    r'^[ \t]*#[ \t]*(?:line[ \t]+)?\d+[ \t]+"([^"]*)"', re.MULTILINE,
+)
+
 
 def _repo_authored(name: str, target_resolved: Path) -> bool:
     """Closure filename the scanned repo controls.
@@ -577,7 +583,13 @@ def _closure_suppression_witness(
     if len(pp_text) > _MAX_PP_TEXT_BYTES:
         return "", "preprocessed output exceeds the scan cap"
     current = str(full_path)
-    repo_files: dict[str, None] = {}
+    # Files to raw-scan: the TU plus every repo file the preprocessor
+    # actually OPENED (flag-1 enter markers). Flag-less markers are
+    # renames (#line directives) — the named path may not exist as a
+    # file at all (generated sources cite their grammar files), but
+    # its region's text lives in the physical file that carries the
+    # directive, which IS scanned.
+    repo_files: dict[str, None] = {str(full_path): None}
     for line in pp_text.splitlines():
         lm = _PP_LINEMARKER_RE.match(line)
         if lm:
@@ -591,8 +603,8 @@ def _closure_suppression_witness(
             # directive scan). system_header state also does not
             # persist across the include return, so a header cannot
             # silence the includer's code this way.
-            fname = lm.group(1)
-            if _repo_authored(fname, target_resolved):
+            fname, flags = lm.group(1), lm.group(2).split()
+            if "1" in flags and _repo_authored(fname, target_resolved):
                 repo_files.setdefault(fname)
             current = fname
             continue
@@ -615,6 +627,22 @@ def _closure_suppression_witness(
         w = _suppression_witness(text)
         if w:
             return f"{w} (in {fname})", ""
+        # Attribution laundering: a plain linemarker in a repo file
+        # re-attributes its own subsequent lines — including a
+        # token-pasted pragma expanded there — to any path it names,
+        # so the pp walk above would classify the construct as
+        # system-authored. A repo linemarker naming a path OUTSIDE
+        # the target tree makes attribution unverifiable: refuse.
+        # In-tree names (bison/flex-generated sources cite their
+        # grammar files) stay vetted — their regions classify as
+        # repo-authored either way.
+        for lm in _SRC_LINEMARKER_RE.finditer(text):
+            if not _repo_authored(lm.group(1), target_resolved):
+                return "", (
+                    f"linemarker in {fname} re-attributes lines to "
+                    f"{lm.group(1) or '<empty>'} — suppression "
+                    f"attribution unverifiable"
+                )
     return "", ""
 
 
