@@ -133,6 +133,38 @@ def test_daily_sweep_covers_every_repo_invariant_detector() -> None:
     )
 
 
+def test_auto_pr_publishers_rebase_onto_main() -> None:
+    """Every auto-PR publish workflow must replay its commit onto
+    current main before force-pushing its ``auto/`` branch — a branch
+    cut from the dispatch-time checkout goes stale when the crons run
+    back-to-back, and a stale base turns any file overlap into a
+    conflicted PR (recorded incident; the fix had been copied to five
+    of the six publishers and skipped the one writing the most
+    conflict-prone file). The universe is derived: any workflow
+    carrying the family's force-with-lease branch push is a member."""
+    workflows_dir = REPO / ".github" / "workflows"
+    # The family signature: a lease-guarded push of the workflow's own
+    # PR branch (quoted "$BRANCH" variable or a literal branch name —
+    # sca-self-bump spells its branch inline).
+    push_marker = "git push --force-with-lease origin "
+    members = sorted(
+        p.name for p in workflows_dir.glob("*.y*ml")
+        if push_marker in p.read_text(encoding="utf-8")
+    )
+    assert len(members) >= 6, (
+        f"auto-PR publisher derivation went vacuous ({members})"
+    )
+    missing = sorted(
+        name for name in members
+        if "git rebase origin/main"
+        not in (workflows_dir / name).read_text(encoding="utf-8")
+    )
+    assert not missing, (
+        f"auto-PR publisher(s) without the fetch+rebase-onto-main "
+        f"block: {missing}"
+    )
+
+
 def test_readme_links_to_ci_controls_doc() -> None:
     readme = _read("README.md")
     assert "## How RAPTOR checks itself" in readme
