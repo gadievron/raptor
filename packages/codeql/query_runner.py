@@ -864,7 +864,11 @@ class QueryRunner:
                 sarif_path=None,
                 findings_count=0,
                 duration_seconds=time.time() - start_time,
-                errors=[result.stderr] if result.stderr else [],
+                # Same cap as run_suite's stderr capture: this rides
+                # uncapped into the report JSON otherwise, and
+                # analyze stderr can carry megabytes of extractor
+                # diagnostics quoting hostile source.
+                errors=[result.stderr[:1000]] if result.stderr else [],
                 suite_name="custom",
             )
 

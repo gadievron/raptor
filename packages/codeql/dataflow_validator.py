@@ -318,7 +318,10 @@ def _steering_target(conditions: list) -> str | None:
         return None
     for tok in _STEER_IDENT_RE.findall(conditions[-1].text):
         low = tok.lower()
-        if low in _STEER_NON_VARS or low.startswith("0x"):
+        # Hex literals need no guard here: _STEER_IDENT_RE requires a
+        # leading letter/underscore, so a token can never start "0x",
+        # and the digit lookbehind stops a mid-literal "x10" match.
+        if low in _STEER_NON_VARS:
             continue
         return low
     return None

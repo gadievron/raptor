@@ -688,9 +688,12 @@ class LanguageDetector:
         return supported
 
     # Class-level cache: the installed CLI's extractor set doesn't
-    # change mid-process. None = not probed yet; frozenset() = probe
-    # failed (conservative: probed languages read as unavailable, the
-    # statically-supported set is unaffected).
+    # change mid-process. None = not probed yet. Only SUCCESSFUL
+    # probes are cached: a transient `codeql resolve languages`
+    # failure used to lock in frozenset() for the process lifetime,
+    # silently dropping every probed language (rust) for the whole
+    # run — the current call still answers unavailable
+    # (conservative), but the next call re-probes.
     _extractor_langs: "frozenset[str] | None" = None
 
     def _extractor_available(self, language: str) -> bool:
@@ -705,6 +708,7 @@ class LanguageDetector:
         cls = type(self)
         if cls._extractor_langs is None:
             langs: set[str] = set()
+            probe_ok = False
             try:
                 import re
                 import subprocess
@@ -728,15 +732,27 @@ class LanguageDetector:
                         check=False, env=RaptorConfig.get_safe_env(),
                     )
                     if result.returncode == 0:
+                        probe_ok = True
                         # Lines look like: "rust (/path/to/extractor)"
                         for line in result.stdout.splitlines():
                             m = re.match(r"^\s*([a-z][\w+-]*)\s*\(", line)
                             if m:
                                 langs.add(m.group(1))
+                    else:
+                        logger.warning(
+                            "codeql resolve languages exited %s — "
+                            "probed languages read as unavailable for "
+                            "this call; will re-probe",
+                            result.returncode,
+                        )
             except Exception as e:  # noqa: BLE001 — probe must never crash detection
                 logger.debug("codeql extractor probe failed: %s", e)
                 langs = set()
-            cls._extractor_langs = frozenset(langs)
+            if probe_ok:
+                cls._extractor_langs = frozenset(langs)
+            # Failed probes are NOT cached (see the class attribute
+            # comment): answer conservatively now, re-probe next call.
+            return language in langs
         return language in cls._extractor_langs
 
 

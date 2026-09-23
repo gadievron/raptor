@@ -813,3 +813,55 @@ class TestModernTsJsSpellings:
             _write(tmp_path, f"src/App{i}.vue", "<template></template>\n")
         detected = LanguageDetector(tmp_path).detect_languages(min_files=1)
         assert "javascript" in detected
+
+
+class TestExtractorProbeFailureNotCached:
+    """A transient `codeql resolve languages` failure must not lock
+    in an empty extractor set for the process lifetime — pre-fix a
+    single failed probe silently dropped rust for the whole run."""
+
+    def _reset(self):
+        LanguageDetector._extractor_langs = None
+
+    def _cli(self, tmp_path: Path, ok: bool) -> Path:
+        stub = tmp_path / ("codeql-ok" if ok else "codeql-bad")
+        if ok:
+            stub.write_text(
+                "#!/bin/sh\necho 'rust (/opt/bundle/rust)'\n",
+            )
+        else:
+            stub.write_text("#!/bin/sh\nexit 1\n")
+        stub.chmod(0o755)
+        return stub
+
+    def test_failed_probe_reprobes_next_call(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        self._reset()
+        try:
+            det = LanguageDetector(tmp_path)
+            monkeypatch.setenv("CODEQL_CLI", str(self._cli(tmp_path, ok=False)))
+            # Failed probe: conservative answer, nothing cached.
+            assert det._extractor_available("rust") is False
+            assert LanguageDetector._extractor_langs is None
+            # Transient failure cleared — the next call recovers.
+            monkeypatch.setenv("CODEQL_CLI", str(self._cli(tmp_path, ok=True)))
+            assert det._extractor_available("rust") is True
+            assert LanguageDetector._extractor_langs == frozenset({"rust"})
+        finally:
+            self._reset()
+
+    def test_successful_probe_still_cached(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        self._reset()
+        try:
+            good = self._cli(tmp_path, ok=True)
+            monkeypatch.setenv("CODEQL_CLI", str(good))
+            det = LanguageDetector(tmp_path)
+            assert det._extractor_available("rust") is True
+            # Cached — swapping the CLI away no longer changes the answer.
+            monkeypatch.setenv("CODEQL_CLI", str(self._cli(tmp_path, ok=False)))
+            assert det._extractor_available("rust") is True
+        finally:
+            self._reset()

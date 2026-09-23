@@ -1,5 +1,6 @@
 """Tests for CodeQL database manager build command handling."""
 
+import json
 import os
 import stat
 import subprocess as sp
@@ -1176,3 +1177,146 @@ class TestCacheTtlKnob:
         monkeypatch.setattr(RaptorConfig, "CODEQL_DB_CACHE_DAYS", 3,
                             raising=False)
         assert mgr.get_cached_database(repo, "cpp") is None
+
+
+class TestCleanupOrphanMetadata:
+    """cleanup_old_databases must unlink metadata whose DB dir is
+    already gone — pre-fix orphan *-metadata.json files were
+    re-parsed by every future cleanup pass forever."""
+
+    def _plant_old_metadata(self, db_manager, db_exists: bool):
+        slot = db_manager.db_root / "abc"
+        slot.mkdir(parents=True)
+        db_path = slot / "python-db"
+        if db_exists:
+            db_path.mkdir()
+        meta = slot / "python-metadata.json"
+        meta.write_text(json.dumps({
+            "created_at": "2020-01-01T00:00:00+00:00",
+            "database_path": str(db_path),
+        }))
+        return meta, db_path
+
+    def test_orphan_metadata_unlinked(self, db_manager, tmp_path):
+        meta, _ = self._plant_old_metadata(db_manager, db_exists=False)
+        db_manager.cleanup_old_databases(days=7)
+        assert not meta.exists(), "orphan metadata must be unlinked"
+
+    def test_orphan_metadata_kept_on_dry_run(self, db_manager, tmp_path):
+        meta, _ = self._plant_old_metadata(db_manager, db_exists=False)
+        db_manager.cleanup_old_databases(days=7, dry_run=True)
+        assert meta.exists()
+
+    def test_live_pair_still_deleted_together(self, db_manager, tmp_path):
+        meta, db_path = self._plant_old_metadata(db_manager, db_exists=True)
+        db_manager.cleanup_old_databases(days=7)
+        assert not db_path.exists()
+        assert not meta.exists()
+
+
+class TestRepoHashComputedOnce:
+    def test_create_database_computes_repo_hash_once(
+            self, db_manager, tmp_path):
+        """Each compute is a `git status --porcelain` + per-path
+        stats; create_database used to recompute up to 4x."""
+        calls = {"n": 0}
+
+        def counting_hash(repo_path):
+            calls["n"] += 1
+            return "abc"
+
+        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical.parent.mkdir(parents=True)
+
+        def fake_sandbox_run(cmd, **kwargs):
+            staging_arg = Path(cmd[3])
+            staging_arg.mkdir(parents=True, exist_ok=True)
+            (staging_arg / "db-info.json").write_text("{}")
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = ""
+            r.stderr = ""
+            return r
+
+        with patch('core.sandbox.run', side_effect=fake_sandbox_run), \
+             patch.object(db_manager, '_count_database_files',
+                          return_value=1), \
+             patch.object(db_manager, 'save_metadata'), \
+             patch.object(db_manager, 'compute_repo_hash',
+                          side_effect=counting_hash), \
+             patch.object(db_manager, 'get_database_dir',
+                          return_value=canonical):
+            result = db_manager.create_database(tmp_path, "python", None)
+        assert result.success is True
+        assert calls["n"] == 1, (
+            f"compute_repo_hash ran {calls['n']}x in one create — "
+            f"memoise it once at the top"
+        )
+
+
+class TestForceEvictionFailure:
+    def test_failed_force_eviction_does_not_serve_the_forced_away_db(
+            self, db_manager, tmp_path):
+        """force=True whose eviction rename FAILS (canonical still
+        present) must not hand the surviving old canonical back as
+        cached=True via the lost-promote-race branch — the operator
+        asked for fresh."""
+        canonical = tmp_path / "cache" / "abc" / "python-db"
+        canonical.parent.mkdir(parents=True)
+        canonical.mkdir()
+        (canonical / "codeql-database.yml").write_text("language: python\n")
+        (canonical / "stale-marker").write_text("old")
+        old_db = canonical / "db-python"
+        old_db.mkdir()
+        (old_db / "trie.bin").write_bytes(b"o" * 150_000)
+
+        real_rename = os.rename
+        state = {"evict_blocked": False}
+
+        def flaky_rename(src, dst):
+            # Fail ONLY the force-eviction rename (canonical -> .stale.*);
+            # allow the promote-time eviction and the staging promote.
+            if (str(src) == str(canonical) and ".stale." in str(dst)
+                    and not state["evict_blocked"]):
+                state["evict_blocked"] = True
+                raise OSError("EACCES: eviction rename denied")
+            return real_rename(src, dst)
+
+        def fake_sandbox_run(cmd, **kwargs):
+            staging_arg = Path(cmd[3])
+            staging_arg.mkdir(parents=True, exist_ok=True)
+            (staging_arg / "codeql-database.yml").write_text(
+                "language: python\n",
+            )
+            fresh = staging_arg / "db-python"
+            fresh.mkdir()
+            (fresh / "trie.bin").write_bytes(b"n" * 150_000)
+            (staging_arg / "fresh-marker").write_text("new")
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = ""
+            r.stderr = ""
+            return r
+
+        with patch('core.sandbox.run', side_effect=fake_sandbox_run), \
+             patch.object(db_manager, '_count_database_files',
+                          return_value=1), \
+             patch.object(db_manager, 'save_metadata'), \
+             patch.object(db_manager, 'compute_repo_hash',
+                          return_value='abc'), \
+             patch.object(db_manager, 'get_database_dir',
+                          return_value=canonical), \
+             patch('packages.codeql.database_manager.os.rename',
+                   side_effect=flaky_rename):
+            result = db_manager.create_database(
+                tmp_path, "python", None, force=True,
+            )
+
+        assert result.success is True
+        assert result.cached is False, (
+            "the DB the operator forced away was served back as cached"
+        )
+        final = Path(result.database_path)
+        assert (final / "fresh-marker").exists(), (
+            "final DB must be OUR fresh build, not the stale survivor"
+        )

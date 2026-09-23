@@ -75,7 +75,11 @@ def _artifact_safe_id(finding: CodeQLFinding) -> str:
     digest = hashlib.sha256(
         finding.file_path.encode("utf-8", "surrogatepass"),
     ).hexdigest()[:8]
-    rule = str(finding.rule_id).replace("/", "_")
+    # Same character-class sanitisation as the basename: rule ids are
+    # normally [a-z0-9/-]+ but nothing pins that — with --trust-repo a
+    # hostile in-repo pack controls them, and a bare '/'-only replace
+    # let control chars / backslashes ride into artifact filenames.
+    rule = _re.sub(r"[^A-Za-z0-9_.-]", "_", str(finding.rule_id))[:64]
     return f"{rule}_{basename}_{digest}_{finding.start_line}"
 
 
@@ -1193,10 +1197,12 @@ class AutonomousCodeQLAnalyzer:
         # exactly as they are there; the previous inline
         # ``may_suppress`` copy silently ignored manual_override.
         suppress = False
+        suppressed_func = ""
         if reachability_verdict:
             loc = self._locate_finding_function(finding, repo_path)
             if loc is not None:
                 rel_path, func_name, line_start = loc
+                suppressed_func = func_name
                 from core.analysis.reach_chokepoint import check_suppress
                 # loc is non-None only when the inventory is a dict
                 # (see _locate_finding_function).
@@ -1242,7 +1248,10 @@ class AutonomousCodeQLAnalyzer:
                     "rule_id": _rule,
                     "file_path": _file,
                     "line": _line,
-                    "function": "",
+                    # The function the chokepoint actually resolved —
+                    # suppressions.jsonl's contract carries it, and
+                    # suppress=True implies the lookup succeeded.
+                    "function": suppressed_func,
                 }
                 record_suppression(
                     Path(_out),
