@@ -251,3 +251,95 @@ class TestSupersetGrantRefused:
                 shutil.rmtree(p_path, ignore_errors=True)
             elif p_path.exists():
                 p_path.unlink()
+
+
+class TestGrantReVetSharesDiscoveryPredicates:
+    """The grant re-vet exists because a symlink swapped between
+    discovery and grant must not widen the read sandbox — so every
+    predicate discovery applies must hold at the grant too. The
+    shared-temp-root block had drifted out: for a target extracted
+    under /tmp the walked-ancestor bases contain /tmp itself, so a
+    discovery→grant swap to /tmp/include (creatable by ANY local
+    user) was granted as both a compiler -I and a dry-run readable
+    path."""
+
+    def _swap_target(self, tmp_path):
+        # Layout the discovery rescue fires on, rooted under the
+        # shared temp dir like routinely-extracted targets are.
+        proj = tmp_path / "proj"
+        inc = proj / "include"
+        inc.mkdir(parents=True)
+        (inc / "api.h").write_text("// header\n")
+        src = proj / "src"
+        src.mkdir()
+        (src / "main.c").write_text(
+            '#include <api.h>\nint main(void){return 0;}\n')
+        return proj, inc, src
+
+    def test_discovery_to_grant_swap_is_refused(self, tmp_path, monkeypatch):
+        import os
+        import shutil
+        import tempfile
+
+        # The shared temp root, simulated like the sibling
+        # discovery-side suite does; the target sits at
+        # <temp-root>/proj/src, so the walked-ancestor bases contain
+        # the temp root itself — the exact layout where parent
+        # containment alone admits <temp-root>/include.
+        fake_tmp = tmp_path / "faketmp"
+        poison = fake_tmp / "include"
+        poison.mkdir(parents=True)
+        (poison / "poison.h").write_text("// header")
+        monkeypatch.setattr(tempfile, "gettempdir", lambda: str(fake_tmp))
+
+        proj, inc, src = self._swap_target(fake_tmp)
+        detector = BuildDetector(src)
+        orig = BuildDetector._discover_ancestor_includes
+
+        def swapping(self, max_depth=3):
+            res = orig(self, max_depth=max_depth)
+            if res:
+                # The interleave: after discovery vets the real dir,
+                # replace it with a symlink to the shared temp root's
+                # include dir.
+                shutil.rmtree(inc)
+                os.symlink(poison, inc)
+            return res
+
+        calls: list = []
+
+        def fake_dry_run(script_path, language=None, extra_readable=None):
+            calls.append(list(extra_readable or []))
+            return []
+
+        with mock.patch.object(
+            BuildDetector, "_discover_ancestor_includes", swapping,
+        ), mock.patch.object(
+            detector, "_dry_run", side_effect=fake_dry_run,
+        ):
+            bs = detector.synthesise_build_command("cpp")
+        assert bs is not None
+        assert calls, "synthesise_build_command never dry-ran"
+        granted = [p for grant in calls for p in grant]
+        for p in granted:
+            assert Path(p).resolve(strict=False) != poison.resolve(), (
+                f"swapped include dir granted: {granted}"
+            )
+
+    def test_unswapped_ancestor_include_still_granted(self, tmp_path):
+        # Two-direction control: the legit in-tree rescue keeps
+        # working through the shared-predicate re-vet.
+        proj, inc, src = self._swap_target(tmp_path)
+        detector = BuildDetector(src)
+        calls: list = []
+
+        def fake_dry_run(script_path, language=None, extra_readable=None):
+            calls.append(list(extra_readable or []))
+            return []
+
+        with mock.patch.object(
+            detector, "_dry_run", side_effect=fake_dry_run,
+        ):
+            detector.synthesise_build_command("cpp")
+        granted = [p for grant in calls for p in grant]
+        assert str(inc) in granted

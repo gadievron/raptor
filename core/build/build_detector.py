@@ -464,6 +464,47 @@ class BuildDetector:
             env_detect=config.get("env_detect", []),
         )
 
+    @staticmethod
+    def _ancestor_include_refusal(
+        resolved: Path,
+        repo_resolved: Path,
+        bases: list,
+    ) -> str | None:
+        """Reason an ancestor-include candidate must be refused, or
+        ``None`` when it is grantable. ONE home for the predicate set,
+        applied at BOTH discovery and the pre-dry-run grant re-vet: the
+        re-vet exists because a symlink swapped between discovery and
+        grant must not widen the read sandbox, so a predicate the
+        re-vet lacks is a predicate the swap defeats (the shared-temp
+        block had drifted out of the re-vet — a discovery→grant swap
+        to ``/tmp/include``, creatable by ANY local user, passed for
+        targets extracted under /tmp).
+
+        ``bases`` is the containment set: the single walked ancestor
+        at discovery; the walked-ancestor parents at the grant site.
+        """
+        import tempfile
+        tmp_roots = {
+            "/tmp", "/var/tmp",
+            os.path.realpath(tempfile.gettempdir()),
+        }
+        s = str(resolved)
+        # System paths could never be the target's own include/ dir
+        # (path-boundary compare: /etcetera is not /etc).
+        for blocked in ("/etc", "/proc", "/sys", "/dev", "/boot"):
+            if s == blocked or s.startswith(blocked + os.sep):
+                return "system path"
+        # <shared-temp-root>/include is creatable by any local user.
+        if str(resolved.parent) in tmp_roots:
+            return "direct child of a shared temp root"
+        if resolved == Path(resolved.anchor):
+            return "filesystem root"
+        if repo_resolved.is_relative_to(resolved):
+            return "superset of the target"
+        if not any(resolved.is_relative_to(base) for base in bases):
+            return "outside the walked ancestor subtree"
+        return None
+
     def _discover_ancestor_includes(self, max_depth: int = 3) -> list[str]:
         """Find ``include/`` directories at ancestors of ``self.repo_path``.
 
@@ -518,33 +559,21 @@ class BuildDetector:
                 continue
             # Sanity-check the resolved path BEFORE the recursive
             # header walk (a hostile resolution must not even be
-            # enumerated). Reject anything that resolves to a
-            # system path like /etc, /proc, /sys, /dev — these
-            # could not legitimately be the "include/" dir of
-            # the operator's source target. Re-apply the
-            # temp-root block on the RESOLVED path so a symlink
-            # (include -> /tmp/include) can't smuggle a shared
-            # temp root's include dir back in. And refuse any
+            # enumerated). The predicate set is shared with the
+            # pre-dry-run grant re-vet (`_ancestor_include_refusal`)
+            # so the two sites cannot drift: system paths, shared
+            # temp roots, filesystem root, repo supersets, and any
             # resolution that leaves the ancestor subtree the
-            # candidate was found in: the rescue exists for IN-TREE
-            # sibling include dirs only, so `include -> /usr`,
-            # `-> /home/...`, `-> /` (root / repo-superset) are all
-            # out-of-tree grants — downstream they become both a
-            # compile `-I<dir>` and a dry-run sandbox readable grant
-            # on host content the operator never scoped in.
-            blocked = ("/etc", "/proc", "/sys", "/dev", "/boot")
-            if (
-                any(str(inc_resolved).startswith(b) for b in blocked)
-                or str(inc_resolved.parent) in tmp_roots
-                or inc_resolved == Path(inc_resolved.anchor)
-                or repo_resolved.is_relative_to(inc_resolved)
-                or not inc_resolved.is_relative_to(current)
-            ):
+            # candidate was found in — the rescue exists for IN-TREE
+            # sibling include dirs only; downstream a grant becomes
+            # both a compile `-I<dir>` and a dry-run sandbox readable
+            # grant on host content the operator never scoped in.
+            reason = self._ancestor_include_refusal(
+                inc_resolved, repo_resolved, [current])
+            if reason is not None:
                 logger.debug(
-                    "Skipping ancestor include candidate %s "
-                    "(resolves to a system path or a superset of "
-                    "the target)",
-                    include_dir,
+                    "Skipping ancestor include candidate %s (%s)",
+                    include_dir, reason,
                 )
                 continue
             if self._has_c_header(inc_resolved):
@@ -1141,17 +1170,19 @@ class BuildDetector:
                 resolved = Path(candidate).resolve(strict=False)
             except OSError:
                 continue
-            if (
-                resolved == Path(resolved.anchor)
-                or repo_resolved.is_relative_to(resolved)
-                or not any(
-                    resolved.is_relative_to(base) for base in allowed_bases
-                )
-            ):
+            # Same predicate set as discovery (shared helper): a
+            # symlink swapped between discovery and grant must not
+            # smuggle in anything discovery would have refused —
+            # including a shared temp root's include dir, which for a
+            # /tmp-extracted target the parent-containment check
+            # alone admits (the walked-ancestor bases contain /tmp
+            # itself there).
+            reason = self._ancestor_include_refusal(
+                resolved, repo_resolved, allowed_bases)
+            if reason is not None:
                 logger.warning(
                     "Refusing dry-run read grant for include dir %s — "
-                    "it resolves outside the target's ancestor subtree",
-                    candidate,
+                    "%s", candidate, reason,
                 )
                 continue
             ancestor_read_dirs.append(candidate)
