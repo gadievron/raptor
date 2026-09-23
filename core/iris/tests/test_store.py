@@ -776,3 +776,49 @@ class TestStoreLock:
             assert not done.wait(0.3)
         t.join(timeout=10)
         assert done.is_set()
+
+
+class TestAssumptionEvictionAtPersist:
+    """persist_refined_specs evicts deleted-file assumptions beside
+    the spec eviction (the merge is add/upgrade-only, so without it
+    the store grows monotonically and stale assumptions feed prompts
+    and the bypass runner every round)."""
+
+    @staticmethod
+    def _assumption(file):
+        return SafetyAssumption(
+            target="t_" + file.replace("/", "_").replace(".", "_"),
+            file=file, assumption="x",
+            category=AssumptionCategory.ORDERING,
+            enforced_by=["check"],
+        )
+
+    def test_deleted_file_assumption_evicted(self, tmp_path):
+        from core.iris.store import load_assumptions, persist_refined_specs
+
+        target = tmp_path / "repo"
+        target.mkdir()
+        (target / "live.c").write_text("int x;\n")
+
+        run_dir = tmp_path / "project" / "run_001"
+        run_dir.mkdir(parents=True)
+        save_specs(
+            run_dir, [_make_spec(file="live.c")],
+            assumptions=[
+                self._assumption("live.c"),
+                self._assumption("gone.c"),
+                self._assumption(""),  # exempt: nothing to be stale against
+            ],
+            target_path=target,
+        )
+        dest = persist_refined_specs(
+            run_dir, [_make_spec(file="live.c")],
+            history=[{"round": 0, "n_specs": 1, "n_confirmed": 1,
+                      "aborted": False}],
+            target_path=target,
+        )
+        assert dest is not None
+        files = sorted(a.file for a in load_assumptions(run_dir))
+        assert files == ["", "live.c"], (
+            f"expected gone.c evicted, empty-file kept: {files}"
+        )
