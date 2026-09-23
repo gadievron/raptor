@@ -120,12 +120,20 @@ def translate_pipeline_output(pipeline_output: dict) -> list[dict]:
             "skipped — re-verify the checkout against the pinned "
             "commit", skipped_malformed)
     if unknown_verdicts:
+        # Bounded sample: the spellings are hostile-influenced, so the
+        # warning names at most 5 of them, each capped — an unbounded
+        # interpolation of every distinct spelling let a drifted (or
+        # hostile) pipeline output inflate the log line without limit.
+        sample = sorted(unknown_verdicts)
+        shown = [v[:80] for v in sample[:5]]
+        if len(sample) > 5:
+            shown.append(f"... {len(sample) - 5} more distinct spelling(s)")
         logger.warning(
             "OpenAnt schema drift? %d finding(s) carry unknown "
             "stage1_verdict value(s) %s — kept at level=note; re-verify "
             "the checkout against the pinned commit",
             sum(unknown_verdicts.values()),
-            sorted(unknown_verdicts),
+            shown,
         )
     return result
 

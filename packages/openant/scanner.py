@@ -258,6 +258,22 @@ def _parse_tree_payload(
     return entries
 
 
+def _survey_name(rel: str, platform: str | None = None) -> str:
+    """Spelling used for the survey's untracked membership test.
+
+    On macOS the filesystem hands back NFD spellings of names the
+    tree stores in NFC — a byte-wise set difference then counts a
+    genuinely clean tracked file as untracked (false-refusal
+    direction). Fold to NFC on darwin only; elsewhere names compare
+    byte-wise as before (Linux filesystems are normalization-
+    preserving, and folding there could alias distinct names).
+    """
+    if (platform or sys.platform) == "darwin":
+        import unicodedata
+        return unicodedata.normalize("NFC", rel)
+    return rel
+
+
 # Ceiling on tree entries walked by the survey. The verified walk can
 # only ever traverse the GENUINE pinned content (every tree self-hashes
 # against the pin-anchored chain), so this is a robustness backstop,
@@ -447,29 +463,40 @@ def _pinned_tree_deviations(core_path: Path) -> dict[str, int] | None:
         if h.hexdigest() != oid:
             modified += 1
 
-    # Untracked = ON DISK but not in HEAD's tree, derived WITHOUT the
-    # index: a filesystem walk (minus the toplevel .git) set-differenced
-    # against the tree paths. Ignored and index-staged files count the
-    # same as any other file the pinned commit does not contain.
+    # Untracked = ON DISK but not in the pin's tree, derived WITHOUT
+    # the index: a filesystem walk (minus the toplevel .git)
+    # set-differenced against the tree paths. Ignored and index-staged
+    # files count the same as any other file the pinned commit does
+    # not contain. Membership tests go through _survey_name so a
+    # macOS filesystem's NFD spellings of tracked names do not count
+    # clean files as deviations (refusal direction).
+    tracked_names = {_survey_name(t) for t in tracked}
     untracked = 0
     try:
         for root, dirs, files in os.walk(top, followlinks=False):
             rel_root = os.path.relpath(root, top)
             if rel_root == ".":
                 dirs[:] = [d for d in dirs if d != ".git"]
+                # A `.git` FILE at the toplevel is the worktree-style
+                # checkout marker (its pointed-to gitdir is what the
+                # verified object reads above already went through) —
+                # counting it untracked made genuinely clean
+                # worktree-checkouts refuse-unless-consented, the same
+                # false-refusal class as __pycache__.
+                files = [f for f in files if f != ".git"]
             # Symlinks to directories are tree ENTRIES (link blobs) but
             # os.walk reports them in `dirs` and never descends: count
-            # each one not in HEAD's tree instead of losing it.
+            # each one not in the pin's tree instead of losing it.
             for d in list(dirs):
                 dpath = os.path.join(root, d)
                 if os.path.islink(dpath):
                     dirs.remove(d)
                     drel = d if rel_root == "." else os.path.join(rel_root, d)
-                    if drel not in tracked:
+                    if _survey_name(drel) not in tracked_names:
                         untracked += 1
             for name in files:
                 rel_file = name if rel_root == "." else os.path.join(rel_root, name)
-                if rel_file not in tracked:
+                if _survey_name(rel_file) not in tracked_names:
                     untracked += 1
     except OSError:
         return None
