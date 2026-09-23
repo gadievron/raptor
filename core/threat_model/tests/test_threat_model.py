@@ -1532,3 +1532,46 @@ def test_outcome_category_match_attaches_across_all_categories():
         {"finding_id": "F-OTHER", "cwe_id": "CWE-79"},
         {"id": "T-1", "category": "command_execution"},
     ) is None
+
+
+def test_enrich_demotes_case_variant_operator_tier_spellings(tmp_path):
+    # The prompt-block readers normalise the source spelling (lowercase
+    # + charset strip) before granting operator tier, so the enrich
+    # demotion must compare the same normal form: a case-variant
+    # spelling that stays undemoted keeps operator provenance over
+    # context-map-derived content — neutraliser skipped, operator-owned
+    # framing granted.
+    from core.threat_model import ThreatModel
+    cm = {"unchecked_flows": [{"entry_point": "e", "sink": "s"}],
+          "entry_points": [{"id": "e"}], "sinks": [{"id": "s"}]}
+    for spelling in ("Manual", "MANUAL", "Operator", " manual"):
+        model = ThreatModel(project_name="p", target=str(tmp_path),
+                            source=spelling)
+        enrich_from_context_map(model, cm)
+        assert model.source == "enriched", (
+            f"source spelling {spelling!r} evaded the demotion"
+        )
+
+
+def test_source_trust_readers_agree_on_variant_spellings():
+    # Both readers key trust off the SAME normalisation: the
+    # prompt-block tier grant and the untrusted-block kind label must
+    # never disagree on a spelling.
+    from core.threat_model import ThreatModel, threat_model_untrusted_blocks
+    model = ThreatModel(project_name="p", target="/target",
+                        source=" Manual")
+    with patch("core.threat_model.load_for_target", return_value=model), \
+         patch("core.threat_model.graph_risk_context_for_target",
+               return_value=""):
+        block = threat_model_prompt_block(Path("/target"))
+        ublocks = threat_model_untrusted_blocks(Path("/target"))
+    assert "source=manual]" in block          # tier granted on render …
+    assert ublocks[0].kind == "operator-threat-model"  # … kind agrees
+
+    derived = ThreatModel(project_name="p", target="/target",
+                          source="Understand_Graph")
+    with patch("core.threat_model.load_for_target", return_value=derived), \
+         patch("core.threat_model.graph_risk_context_for_target",
+               return_value=""):
+        dblocks = threat_model_untrusted_blocks(Path("/target"))
+    assert dblocks[0].kind == "untrusted-derived-threat-model"

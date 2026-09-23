@@ -745,7 +745,7 @@ def enrich_from_context_map(model: ThreatModel, context_map: dict[str, Any]) -> 
     if not model.assumptions:
         model.assumptions = seed.assumptions
 
-    if model.source in _OPERATOR_TIER_SOURCES:
+    if _source_trust_key(model.source) in _OPERATOR_TIER_SOURCES:
         model.source = "enriched"
     model.updated_at = datetime.now(timezone.utc).isoformat()
     return _clip_model_strings(model)
@@ -764,8 +764,24 @@ _MODEL_PROSE_FIELDS = frozenset({"summary", "notes"})
 #: neutraliser skip and operator framing, so the enrich demotion MUST
 #: key off the same tuple — a spelling trusted by the readers but not
 #: demoted on enrich would let context-map-derived content ride
-#: operator provenance.
+#: operator provenance. Membership is only ever tested against
+#: ``_source_trust_key``'s normal form, never the raw field.
 _OPERATOR_TIER_SOURCES: tuple[str, ...] = ("operator", "manual")
+
+
+def _source_trust_key(source: Any) -> str:
+    """Normalise a model ``source`` spelling to its trust-comparison
+    form — THE one normalisation every ``_OPERATOR_TIER_SOURCES``
+    membership test shares (the enrich demotion, the prompt-block tier
+    grant, the untrusted-block kind label). The readers normalise
+    (lowercase + charset strip) before granting operator tier, so any
+    comparison that skips the same normalisation disagrees with them on
+    variant spellings: a raw-compared demotion let ``"Manual"`` keep
+    operator provenance over context-map-derived content. Compare the
+    derived form, never the raw field.
+    """
+    text = str(source or "operator").lower()
+    return re.sub(r"[^a-z0-9_-]", "", text) or "operator"
 
 
 def _clip_model_strings(model: ThreatModel) -> ThreatModel:
@@ -1103,8 +1119,7 @@ def threat_model_prompt_block(target: Path) -> str:
     has_operator_block = False
     if model:
         content = prompt_context(model)
-        source = str(model.source or "operator").lower()
-        source = re.sub(r"[^a-z0-9_-]", "", source) or "operator"
+        source = _source_trust_key(model.source)
         if source in _OPERATOR_TIER_SOURCES:
             has_operator_block = True
         else:
@@ -1172,7 +1187,7 @@ def threat_model_untrusted_blocks(target: Path) -> list[UntrustedBlock]:
     from core.security.prompt_envelope import UntrustedBlock
     blocks: list[UntrustedBlock] = []
     if model:
-        source = str(model.source or "operator").lower()
+        source = _source_trust_key(model.source)
         kind_label = (
             "operator-threat-model"
             if source in _OPERATOR_TIER_SOURCES
