@@ -1365,3 +1365,39 @@ class TestAutofetchOverlongFallback:
         text = "a note (with a long tail " + "y" * 9000 + ") end"
         out = wrap_untrusted(text, kind="k", origin="o")
         assert "[REDACTED-AUTOFETCH-MARKUP]" not in out
+
+
+class TestStyleArmBounded:
+    """The `<style>` element arm must stay linear on hostile input:
+    the old body+close alternative (`.*?</style>` under DOTALL)
+    re-scanned to end-of-input at every unclosed open — quadratic,
+    ~2s at 8K repeats and unbounded on a multi-MB repo file transiting
+    the always-on envelope path."""
+
+    def test_style_open_tag_defanged(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for probe in ("<style>", "<style type=text/css>",
+                      "<STYLE media=screen>"):
+            assert "<style" not in _strip_autofetch_markup(probe).lower()
+
+    def test_import_inside_style_body_still_stripped(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        out = _strip_autofetch_markup("<style>@import url(//evil)</style>")
+        assert "@import" not in out
+        assert "<style" not in out
+
+    def test_overlong_style_attribute_run_defanged(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        out = _strip_autofetch_markup("<style " + "a" * 9000)
+        assert not out.startswith("<style")
+
+    def test_repeated_unclosed_style_opens_linear(self):
+        import time
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        start = time.monotonic()
+        out = _strip_autofetch_markup("<style>" * 20_000)
+        elapsed = time.monotonic() - start
+        # Quadratic behaviour costs >10s here; linear is milliseconds.
+        # Generous headroom for loaded CI runners.
+        assert elapsed < 5.0
+        assert "<style>" not in out

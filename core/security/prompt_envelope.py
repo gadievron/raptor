@@ -193,13 +193,18 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     # covered). Redacting through `url(` breaks the fetch; the tail
     # stays behind as inert text.
     r'|style\s*=\s*[^>]{0,8192}?url\s*\('
-    # `<style>` with body OR a self-contained tag. The original pattern
-    # required `</style>`, so a malformed `<style>...` (no close tag) or
-    # a self-closing variant slipped through. `\b[^>]*>` matches either,
-    # the body+close path is kept as a separate alternative for the
-    # @import-inside-style case.
-    r'|<style\b[^>]*>.*?</style>'
-    r'|<style\b[^>]*>'
+    # `<style>` open tag, bounded like every other tag arm. The old
+    # body+close alternative (`<style\b[^>]*>.*?</style>` under
+    # DOTALL) was quadratic on repeated unclosed opens: at each
+    # `<style…>` the lazy `.*?</style>` scanned to end-of-input before
+    # the bare-open arm matched — O(k·n), ~2s at 8K repeats and
+    # unbounded on a multi-MB hostile file transiting this always-on
+    # envelope path. Dropping it loses nothing: the bare-open arm
+    # already defangs the tag (an unopened `</style>` is inert), and
+    # the `@import url(` arm below catches fetches inside what was the
+    # body. The open arm's attribute run is bounded at 8 KB with the
+    # over-long fallback joining the family arm further down.
+    r'|<style\b[^>]{0,8192}>'
     r'|@import\s+url\([^)]*\)'
     # Reference-style link/image DEFINITION — `[label]: destination`.
     # The explicit-scheme arm above this comment block predates these
@@ -256,7 +261,7 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     r'|\[[^\]]{0,8192}\]\(//(?=[^)]{8192})'
     r'|<(?:img|image|iframe|object|embed|video|audio|source|track'
     r'|input|frame|link|script|base|form|use|bgsound|applet|portal'
-    r'|svg|meta)\b(?=[^>]{8192})'
+    r'|svg|meta|style)\b(?=[^>]{8192})'
     r'|<a[\s/](?=[^>]{8192})',
     re.IGNORECASE | re.DOTALL,
 )
