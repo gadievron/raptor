@@ -137,7 +137,7 @@ This investigation used the following evidence sources:
 - **Wayback Machine**: Archived web snapshots
 - **Local Git Analysis**: Dangling commits and reflog
 
-All evidence was verified against original sources before inclusion.
+Evidence verification is tri-state. List which items were Verified against original sources and which were Not Checked (verification skipped: no BigQuery credentials, local-git sources) — copy the split from the verification report; only write "all evidence was verified" when the Not Checked list is genuinely empty.
 ```
 
 ### 3. Return
