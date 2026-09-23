@@ -3741,6 +3741,29 @@ def run_sandboxed(
             # by another thread at fork; `resource` is imported at
             # module level for exactly this branch). Same fork-safety
             # contract as the main child fork above.
+            #
+            # Resolve the tracer's import root PRE-FORK, in the
+            # parent, where logging works. PYTHONPATH-to-child is
+            # sys.path-equivalent injection, so the path-safety
+            # doctrine applies: RAPTOR_DIR is authoritative. The
+            # Path(__file__) fallback is a BLESSED doctrine
+            # exception, decided here rather than left implicit —
+            # this lane must stay usable as a library (bare callers
+            # without the launcher), and a hard KeyError would kill
+            # runs the fallback serves correctly on single-checkout
+            # hosts; the multi-checkout ambiguity is surfaced loudly
+            # instead of guessed silently.
+            _tracer_raptor_dir = os.environ.get("RAPTOR_DIR")
+            if _tracer_raptor_dir is None:
+                _tracer_raptor_dir = str(
+                    Path(__file__).resolve().parent.parent.parent
+                )
+                logger.warning(
+                    "spawn audit: RAPTOR_DIR unset — tracer will "
+                    "import from the tree containing this module "
+                    "(%s); on multi-checkout hosts export RAPTOR_DIR "
+                    "to pin the intended tree", _tracer_raptor_dir,
+                )
             tracer_pid = os.fork()
             if tracer_pid == 0:
                 # ===== TRACER SUBPROCESS =====
@@ -3844,12 +3867,9 @@ def run_sandboxed(
                 # is deliberately not used here (unlike the isolated
                 # `python3 -I` seatbelt shim, which can afford it).
                 try:
-                    raptor_dir = os.environ.get("RAPTOR_DIR")
-                    if raptor_dir is None:
-                        # Last-resort: derive from this module's path.
-                        raptor_dir = str(
-                            Path(__file__).resolve().parent.parent.parent
-                        )
+                    # Resolved pre-fork in the parent (see the fork
+                    # site) — the child only closes over it.
+                    raptor_dir = _tracer_raptor_dir
                     # Tightly-controlled env: PYTHONPATH for module
                     # resolution, minimal PATH, nothing inherited.
                     # We do NOT use `-I` (isolated mode) because that
