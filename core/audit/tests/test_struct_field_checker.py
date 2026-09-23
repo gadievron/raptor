@@ -162,3 +162,33 @@ class TestXrefSeamSeparator:
         monkeypatch.setattr(sfc, "_extract_struct_layouts", spy)
         sfc.check_struct_field_copy("f", "int a;", xref_source="int b;")
         assert captured["text"] == "int a;\nint b;"
+
+
+class TestStructFieldWhitespaceRun:
+    def test_identifier_run_is_fast(self):
+        """Hostile struct body that is one long identifier/digit run
+        with no ';': the previous spelling let the type and name
+        groups sit adjacent, so the engine tried every split of the
+        run between them — cubic. The separator requirement plus the
+        leading word boundary make it linear."""
+        from core.audit.struct_field_checker import _STRUCT_FIELD_RE
+        from core.testing.wallclock import cpu_budget
+
+        with cpu_budget(1.0, what="identifier-run field scan"):
+            assert _STRUCT_FIELD_RE.search("0" * 200000) is None
+
+    def test_field_forms_still_match(self):
+        from core.audit.struct_field_checker import _STRUCT_FIELD_RE
+
+        for decl, groups in (
+            ("uint32_t len;", ("uint32_t", None, "len", None)),
+            ("char *name;", ("char", "*", "name", None)),
+            ("u8 buf[64];", ("u8", None, "buf", "64")),
+            ("struct foo ** next;", ("foo", "** ", "next", None)),
+        ):
+            m = _STRUCT_FIELD_RE.search(decl)
+            assert m is not None, decl
+            assert m.groups() == groups, (decl, m.groups())
+        # A single unseparated word is NOT a field declaration (the
+        # previous spelling split it into fabricated type+name).
+        assert _STRUCT_FIELD_RE.search("tree;") is None
