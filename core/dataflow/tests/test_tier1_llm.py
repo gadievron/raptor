@@ -10,7 +10,18 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from core.dataflow import tier1_llm as t1
+from core.smt_solver import z3_available
+
+# z3 is an optional dependency: tests whose pinned verdict requires the
+# Tier 0 prover to actually run (SOUND, or a DECLINE issued past the
+# solver gate) skip when it is absent.
+_requires_z3 = pytest.mark.skipif(
+    not z3_available(),
+    reason="z3-solver not installed",
+)
 
 
 def _fake_complete(reply: str):
@@ -349,6 +360,7 @@ def test_find_best_validator_line_returns_none_when_all_after_sink(tmp_path: Pat
     assert "no occurrence" in r.reasoning
 
 
+@_requires_z3
 def test_sound_via_charset_with_llm_pointing_at_line(tmp_path: Path):
     """LLM correctly identifies a charset validator on a line that
     Tier 0's mechanical extractor wouldn't have parsed as a guard-
@@ -487,6 +499,7 @@ def test_line_invokes_library_call_accepts_real_shapes():
 # Non-Python function-boundary gate (charset + known-safe-call paths)
 # ---------------------------------------------------------------------------
 
+@_requires_z3
 def test_charset_declines_across_function_boundary_js(tmp_path: Path):
     """Validator in helper A, sink in helper B (same JS file): the
     Python path has AST dominance, but the non-Python path used only
@@ -762,6 +775,7 @@ def test_sink_uri_inner_dotdot_resolving_inside_still_reads(tmp_path: Path):
     assert r.status is t1.Tier0Status.SOUND
 
 
+@_requires_z3
 def test_charset_branch_wrapped_declines_js(tmp_path: Path):
     """Tier 1B charset (guard) kind, non-Python: the guard-and-exit
     line sits inside an ``if (opts.strict) { ... }`` block that closes
@@ -794,6 +808,7 @@ def test_charset_branch_wrapped_declines_js(tmp_path: Path):
     assert "unconditionally" in r.reasoning
 
 
+@_requires_z3
 def test_charset_unconditional_guard_still_sound_js(tmp_path: Path):
     """Two-direction: the same guard executed unconditionally in the
     sink's function keeps its SOUND verdict (the guard's own
@@ -821,6 +836,7 @@ def test_charset_unconditional_guard_still_sound_js(tmp_path: Path):
     assert r.status is t1.Tier0Status.SOUND
 
 
+@_requires_z3
 def test_charset_branch_wrapped_declines_python_tier1b(tmp_path: Path):
     """Tier 1B charset kind, Python: dominance flows through
     validator_dominates_sink, which now carries the enclosing-
@@ -1555,6 +1571,7 @@ def test_known_safe_call_comment_decoy_declines_js(tmp_path: Path):
     assert "no occurrence" in r.reasoning
 
 
+@_requires_z3
 def test_charset_comment_decoy_declines_js(tmp_path: Path):
     """Charset lane through the full try_tier1b path: the guard exists
     only inside a block comment, the claimed line is supplied as a
