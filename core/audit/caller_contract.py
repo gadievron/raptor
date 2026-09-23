@@ -172,9 +172,16 @@ def _infer_def_end(
         resolved = (target_path / rel_file).resolve()
         if not resolved.is_relative_to(target_path.resolve()):
             return line_start
-        lines = resolved.read_text(errors="replace").splitlines()
     except OSError:
         return line_start
+    # House-capped read (64 MiB budget): a planted blob must be
+    # refused, not buffered — this runs on the default review path.
+    from .context import _read_target_text
+
+    text = _read_target_text(resolved)
+    if text is None:
+        return line_start
+    lines = text.splitlines()
     depth = 0
     opened = False
     end = min(len(lines), line_start - 1 + _MAX_DEF_SCAN_LINES)
@@ -204,9 +211,17 @@ def _site_excerpt(
             if not resolved.is_relative_to(target_path.resolve()):
                 file_cache[rel_file] = None
             else:
-                file_cache[rel_file] = resolved.read_text(
-                    errors="replace",
-                ).splitlines()
+                # House-capped read (64 MiB budget): the FULL text of
+                # every call-site file is cached here on the default
+                # review path for contract-risk functions, amplified
+                # per function — a planted blob must be refused, not
+                # buffered (+200 MiB RSS for one 100 MiB file).
+                from .context import _read_target_text
+
+                text = _read_target_text(resolved)
+                file_cache[rel_file] = (
+                    text.splitlines() if text is not None else None
+                )
         except OSError:
             file_cache[rel_file] = None
     lines = file_cache[rel_file]

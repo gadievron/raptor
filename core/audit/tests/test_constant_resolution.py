@@ -376,6 +376,20 @@ class TestScanComplexity:
             defs = _scan_definitions(tmp_path)
         assert len(defs) == n
 
+    def test_over_cap_file_is_skipped_not_buffered(
+        self, tmp_path, monkeypatch,
+    ):
+        # House 64 MiB budget (cap monkeypatched small): a planted
+        # blob is refused; other files still scan.
+        import core.audit.constant_resolution as cr
+
+        monkeypatch.setattr(cr, "_MAX_SOURCE_FILE_BYTES", 64)
+        _write_file(tmp_path, "big.h", "#define HUGE 1\n" + "x" * 200)
+        _write_file(tmp_path, "ok.h", "#define OK 2\n")
+        defs = cr._scan_definitions(tmp_path)
+        assert "OK" in defs
+        assert "HUGE" not in defs
+
     def test_line_mapping_survives_continuations(self, tmp_path):
         # Line numbers must stay correct through the "\\\n" joining
         # the mapping exists for — including a definition whose OWN

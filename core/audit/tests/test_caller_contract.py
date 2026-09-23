@@ -277,6 +277,43 @@ class TestDigest:
         assert len(digest["sites"]) == MAX_SITES_RENDERED
 
 
+class TestCappedReads:
+    """Target-source reads pay the house 64 MiB budget (a planted
+    blob's only effect is memory exhaustion — refuse, never buffer).
+    The cap is monkeypatched small so no giant fixture is written."""
+
+    def test_site_excerpt_refuses_over_cap_file(self, tmp_path, monkeypatch):
+        import core.audit.context as ctx_mod
+        from core.audit.caller_contract import _site_excerpt
+
+        monkeypatch.setattr(ctx_mod, "_MAX_SOURCE_FILE_BYTES", 64)
+        (tmp_path / "big.c").write_text("x" * 100 + "\ncall_here();\n")
+        cache: dict = {}
+        assert _site_excerpt(tmp_path, "big.c", 2, cache) == ""
+        assert cache["big.c"] is None
+
+    def test_site_excerpt_reads_under_cap_file(self, tmp_path, monkeypatch):
+        import core.audit.context as ctx_mod
+        from core.audit.caller_contract import _site_excerpt
+
+        monkeypatch.setattr(ctx_mod, "_MAX_SOURCE_FILE_BYTES", 4096)
+        (tmp_path / "ok.c").write_text("int a;\ncall_here();\n")
+        out = _site_excerpt(tmp_path, "ok.c", 2, {})
+        assert "call_here" in out
+
+    def test_infer_def_end_refuses_over_cap_file(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.audit.context as ctx_mod
+        from core.audit.caller_contract import _infer_def_end
+
+        monkeypatch.setattr(ctx_mod, "_MAX_SOURCE_FILE_BYTES", 64)
+        (tmp_path / "big.c").write_text(
+            "void f(void) {\n" + "// pad\n" * 40 + "}\n",
+        )
+        assert _infer_def_end(tmp_path, "big.c", 1) == 1
+
+
 class TestPromptRendering:
     def _digest(self, **over):
         base = {
