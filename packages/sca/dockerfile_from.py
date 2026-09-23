@@ -88,6 +88,7 @@ from core.oci.sbom import (
 
 from .file_shapes import is_dockerfile as _is_dockerfile
 from .models import Confidence, Dependency, PinStyle
+from .parsers._base import PARSE_ESCAPE_ERRORS
 
 logger = logging.getLogger(__name__)
 
@@ -960,7 +961,7 @@ def find_compose_image_refs(target: Path) -> list[ImageRefSource]:
                 continue
             try:
                 data = safe_load(text)
-            except yaml.YAMLError:
+            except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
                 continue
             if not isinstance(data, dict):
                 continue
@@ -1008,7 +1009,7 @@ def find_gitlab_ci_image_refs(target: Path) -> list[ImageRefSource]:
                 continue
             try:
                 data = safe_load(text)
-            except yaml.YAMLError:
+            except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
                 continue
             if not isinstance(data, dict):
                 continue
@@ -1094,7 +1095,7 @@ def find_kubernetes_image_refs(target: Path) -> list[ImageRefSource]:
                 continue
             try:
                 docs = list(safe_load_all(text))
-            except yaml.YAMLError:
+            except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
                 continue
             for doc in docs:
                 if not isinstance(doc, dict):

@@ -26,6 +26,7 @@ from ..models import (
     Confidence, Dependency, Manifest,
 )
 from ..parsers import _safe_read
+from ..parsers._base import PARSE_ESCAPE_ERRORS
 from . import _hook_patterns, _own_host
 from typing import TYPE_CHECKING
 
@@ -209,7 +210,7 @@ def _declared_build_value(manifest_path: Path) -> object:
         return None
     try:
         data = tomllib.loads(text)
-    except tomllib.TOMLDecodeError:
+    except (tomllib.TOMLDecodeError, *PARSE_ESCAPE_ERRORS):  # hostile-input escape classes
         return None
     package = data.get("package")
     if not isinstance(package, dict):
