@@ -363,6 +363,8 @@ def main() -> int:
     # ------------------------------------------------------------------
     duration = time.time() - workflow_start
 
+    cost = _reconcile_run_cost(oa_out, scan_result.get("token_usage") or {})
+
     final_report = {
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "repository": str(repo_path),
@@ -389,6 +391,7 @@ def main() -> int:
             "openant_findings": str(findings_path),
             "pipeline_output": str(oa_out / "pipeline_output.json"),
         },
+        "cost": cost,
     }
 
     report_path = out_dir / "raptor_openant_report.json"
@@ -404,10 +407,44 @@ def main() -> int:
     print("=" * 70)
     print(f"\n  Findings:  {len(translated)}")
     print(f"  Duration:  {duration:.1f}s")
+    print(f"  Cost:      ${cost['total_usd']:.4f}")
     print(f"  Output:    {out_dir}")
     print(f"  Report:    {report_path}")
 
     return 0
+
+
+def _reconcile_run_cost(oa_out: Path, token_usage: dict) -> dict:
+    """The run's LLM cost, max-of-ledgers across the two sides that
+    can each under-report.
+
+    OpenAnt's own tracker prices from ITS catalog (a gateway-served
+    model absent there books $0 + warning); dispatcher-gateway runs
+    settle the scoped token's booked spend into
+    ``openant-gateway-spend.json`` (absent entirely on direct-
+    credential runs, where the child's ledger is the only one). Same
+    max-not-sum contract as the CC child reconciliation — both
+    ledgers measure the SAME calls from opposite ends of the wire.
+    """
+    try:
+        openant_usd = max(float(token_usage.get("total_cost_usd") or 0.0),
+                          0.0)
+    except (TypeError, ValueError):
+        openant_usd = 0.0
+    gateway_usd = 0.0
+    from core.json import load_json
+    data = load_json(oa_out / "openant-gateway-spend.json")
+    if isinstance(data, dict):
+        try:
+            gateway_usd = max(
+                float(data.get("dispatcher_spent_usd") or 0.0), 0.0)
+        except (TypeError, ValueError):
+            gateway_usd = 0.0
+    return {
+        "total_usd": max(openant_usd, gateway_usd),
+        "openant_reported_usd": openant_usd,
+        "gateway_ledger_usd": gateway_usd,
+    }
 
 
 def _write_skip_report(out_dir: Path, repo_path: Path, error: str,
