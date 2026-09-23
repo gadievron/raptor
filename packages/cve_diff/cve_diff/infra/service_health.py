@@ -33,6 +33,7 @@ import time
 from dataclasses import dataclass
 
 from core.http import HttpError
+from core.security.log_sanitisation import sanitise_for_terminal
 from core.http.urllib_backend import UrllibClient
 
 
@@ -47,8 +48,16 @@ class HealthResult:
     def as_row(self) -> str:
         status = "✓" if self.ok else "✗"
         latency = f"{self.latency_ms:>6.0f} ms" if self.latency_ms < 99999 else "  --"
-        rl = f" [{self.rate_limit}]" if self.rate_limit else ""
-        return f"  {status}  {self.name:<22} {latency}  {self.detail[:60]}{rl}"
+        # ``detail`` / ``rate_limit`` carry live-network error text
+        # (HttpError bodies, response header hints): a proxied or
+        # MITM'd endpoint can put ANSI/OSC bytes there, and this row
+        # reaches the operator TTY through the registered CLI writers.
+        # Escape + bound at the render (the old bare [:60] slice
+        # bounded length but relayed escape bytes verbatim).
+        detail = sanitise_for_terminal(self.detail, max_len=60)
+        rl = (f" [{sanitise_for_terminal(self.rate_limit, max_len=40)}]"
+              if self.rate_limit else "")
+        return f"  {status}  {self.name:<22} {latency}  {detail}{rl}"
 
 
 _TIMEOUT_S = 10

@@ -660,6 +660,72 @@ def test_rule_catches_helper_returning_foreign_key():
     assert any(v.detail == "summary" for v in audit_source(src))
 
 
+def test_rule_catches_attribute_form_helper_return_at_sink():
+    """Method-spelled module-local helper (`self.render()`): same
+    tainted return as the bare-Name shape, previously invisible —
+    the service-health `as_row` relay class."""
+    src = (
+        "class T:\n"
+        "    def render(self):\n"
+        "        return self.data['title']\n"
+        "    def show(self):\n"
+        "        print(self.render())\n"
+    )
+    assert any(v.detail == "render" for v in audit_source(src))
+
+
+def test_rule_catches_object_receiver_helper_at_sink():
+    """Any-receiver method call at a SINK position: `r.as_row()`
+    accumulated into the printed table."""
+    src = (
+        "class R:\n"
+        "    def as_row(self):\n"
+        "        return self.data['detail']\n"
+        "\n"
+        "def table(rows):\n"
+        "    lines = []\n"
+        "    for r in rows:\n"
+        "        lines.append(r.as_row())\n"
+        "    print('\\n'.join(lines))\n"
+    )
+    assert any(v.detail == "as_row" for v in audit_source(src))
+
+
+def test_attribute_form_sanitised_helper_stays_clean():
+    src = (
+        "class T:\n"
+        "    def render(self):\n"
+        "        return sanitise_for_terminal(self.data['title'])\n"
+        "    def show(self):\n"
+        "        print(self.render())\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_object_receiver_assignment_position_is_documented_residual():
+    """Assignment-position matching for NON-self receivers is
+    deliberately out (documented residual, same shape as the
+    widened-name round-trip): short helper names collide with common
+    method spellings (`gate.to_dict()`, `drain.collect()`) and
+    letting them drive the taint engine cascaded taint through
+    whole-function plumbing. Pin the boundary so a change is a
+    decision, not drift."""
+    src = (
+        "class G:\n"
+        "    def to_dict(self):\n"
+        "        return self.data['raw']\n"
+        "\n"
+        "def main(gate):\n"
+        "    meta = gate.to_dict()\n"
+        "    print(meta)\n"
+    )
+    # Known-direction pin: the local round-trip through a non-self
+    # receiver is NOT caught. If this starts firing, the boundary
+    # moved — re-run the tree-wide amplification measurement before
+    # accepting.
+    assert audit_source(src) == []
+
+
 def test_clean_helper_call_stays_clean():
     """A module-local helper whose return is sanitised does not mark
     its callers."""

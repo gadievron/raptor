@@ -25,6 +25,26 @@ def test_health_result_row_renders_failure() -> None:
     assert "http 503" in row
 
 
+def test_health_result_row_escapes_hostile_error_text() -> None:
+    """``detail`` and ``rate_limit`` carry live-network error text
+    (HttpError bodies, response header hints): a proxied/MITM'd
+    endpoint can put ANSI/OSC bytes there, and the row reaches the
+    operator TTY through registered CLI writers. Escaped + bounded at
+    the render, per the terminal-relay (B1) discipline."""
+    r = HealthResult(
+        name="NVD API", ok=False, latency_ms=12.0,
+        detail="\x1b]0;pwned\x07network: err\x1b[31m",
+        rate_limit="x\x1b[0m" + "y" * 200,
+    )
+    row = r.as_row()
+    assert "\x1b" not in row
+    assert "\x07" not in row
+    assert "network" in row
+    # Length still bounded (pre-fix hard [:60] slice; now an escaped
+    # bounded render with an explicit elision marker).
+    assert len(row) < 400
+
+
 def test_render_table_flags_critical_failures() -> None:
     results = [
         HealthResult("DNS resolution", True, 5),

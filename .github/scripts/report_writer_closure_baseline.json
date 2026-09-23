@@ -693,6 +693,12 @@
     },
     "raptor_fuzzing.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
+    },
+    "core/audit/evidence_fusion.py::format_fused_evidence::unsanitised_llm_value::to_prompt_section": {
+      "note": "prompt-builder lane, not an operator report/terminal writer: the fused-evidence block is rendered for the review PROMPT and its ONLY consumer (orchestrator._store_fused_evidence -> context.format_context_for_prompt) routes it through the defend_repo_text prompt-defence chokepoint before it is stored; pinned by TestFusedEvidenceReachesThePrompt.test_stored_block_is_defended"
+    },
+    "packages/codeql/autonomous_analyzer.py::AutonomousCodeQLAnalyzer.analyze_finding_autonomous::unsanitised_llm_value::exploit_code": {
+      "note": "artifact, not display: the exploit PoC file's contract is the raw LLM-generated code (same adjudicated split as the replay --json artifact lane); the write path is safe_id-derived and the operator-facing log line prints only the path; surfaced by the attribute-form helper-return arm widening"
     }
   },
   "bash_manual_audit": {

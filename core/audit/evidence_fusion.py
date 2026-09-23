@@ -49,12 +49,23 @@ class FusedEvidence:
     detail: str | None = None
 
     def to_prompt_section(self) -> str:
+        from .prompt_defence import sanitise_for_prompt
+
         src_tags = ", ".join(
             s.value.split(":")[-1] for s in self.sources
         )
+        # The description quotes repo/tool-derived text and this is a
+        # LINE-SHAPED row in the trusted skeleton: a newline in it is
+        # a forged-heading primitive (the downstream defence preserves
+        # newlines for source-grade blocks). Flatten at the producer —
+        # string grade: single-line, line-splice normalised, with a
+        # cap wide enough for prose descriptions.
+        desc = sanitise_for_prompt(
+            self.description, "string", "fused-evidence",
+        )
         return (
             f"- [{self.confidence.value.upper()}] "
-            f"({src_tags}) {self.description}"
+            f"({src_tags}) {desc}"
         )
 
 

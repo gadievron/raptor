@@ -71,6 +71,23 @@ def test_health_result_as_row_failed() -> None:
     assert "http 503" in row
 
 
+def test_health_result_as_row_escapes_hostile_error_text() -> None:
+    """``detail`` / ``rate_limit`` carry live-network error text —
+    ANSI/OSC bytes from a proxied/MITM'd endpoint must not reach the
+    operator TTY raw (terminal-relay discipline; twin of the
+    cve_diff pin)."""
+    r = HealthResult(
+        "Bar", ok=False, latency_ms=12.0,
+        detail="\x1b]0;pwned\x07network: err\x1b[31m",
+        rate_limit="x\x1b[0m" + "y" * 200,
+    )
+    row = r.as_row()
+    assert "\x1b" not in row
+    assert "\x07" not in row
+    assert "network" in row
+    assert len(row) < 400
+
+
 # -- DNS canary -----------------------------------------------------------
 
 

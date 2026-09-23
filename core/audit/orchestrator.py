@@ -29526,7 +29526,7 @@ def _fuse_all_evidence(ctx: dict[str, Any]) -> None:
     cross-source fusion to corroborate signals before the LLM review.
     Populates ctx["fused_evidence"] with the rendered text.
     """
-    from .evidence_fusion import format_fused_evidence, fuse_evidence
+    from .evidence_fusion import fuse_evidence
     from .evidence_grade import Confidence, EvidenceSource, GradedEvidence
 
     mechanical = ctx.pop("_graded_mechanical", [])
@@ -29583,15 +29583,47 @@ def _fuse_all_evidence(ctx: dict[str, Any]) -> None:
     if total < 2:
         if mechanical:
             fused = fuse_evidence(mechanical, [], [], [], [])
-            fused_text = format_fused_evidence(fused)
-            if fused_text:
-                ctx["fused_evidence"] = fused_text
+            _store_fused_evidence(ctx, fused)
         return
 
     fused = fuse_evidence(mechanical, spec_ev, ns_ev, contract_ev, ts_ev)
+    _store_fused_evidence(ctx, fused)
+
+
+def _store_fused_evidence(ctx: dict[str, Any], fused: list) -> None:
+    """Render + defend the fused-evidence block and attach it to ctx.
+
+    ``fused_evidence`` is consumed by the prompt assembly
+    (core/audit/context.py) as its own section. The rendered lines
+    embed tool/spec descriptions that quote repo-derived text, so the
+    block rides the same prompt-defence chokepoint as every other
+    repo-derived context block (control-char sanitisation + injection
+    scan feeding ctx['injection_warnings']) before it is stored.
+    """
+    from .evidence_fusion import (
+        compute_injection_priority,
+        format_fused_evidence,
+    )
+
     fused_text = format_fused_evidence(fused)
-    if fused_text:
-        ctx["fused_evidence"] = fused_text
+    if not fused_text:
+        return
+    from .context import defend_repo_text
+    ctx["fused_evidence"] = defend_repo_text(
+        ctx, fused_text,
+        location=f"{ctx.get('file', '?')}:{ctx.get('function', '?')} "
+                 "(fused evidence)",
+    )
+    # The fusion module's own PromptSection priority contract: the
+    # block sheds at the tier of its STRONGEST item (corroborated /
+    # high-confidence evidence is the point of fusion and must not
+    # shed with the low-tier enrichment blocks).
+    ctx["fused_evidence_priority"] = min(
+        (compute_injection_priority(
+            f.confidence, f.corroboration_count > 1)
+         for f in fused),
+        default=2,
+    )
 
 
 def _merge_validate_evidence(bridge_result, evidence_index) -> None:
