@@ -81,6 +81,21 @@ _PROPRIETARY_MARKERS = (
     "no part of this",
 )
 
+# The subset of proprietary markers strong enough to join the
+# earliest-position race against OSS fingerprints (see
+# ``_classify_text``). "all rights reserved" is deliberately EXCLUDED
+# from the race in both directions of the trade-off: it is standard
+# boilerplate ABOVE the intro marker of every BSD-style header (racing
+# it would misclassify BSD texts as proprietary), while as a
+# no-fingerprint fallback it still signals proprietary (dropping it
+# there would stop flagging classic all-rights-reserved notices).
+_STRONG_PROPRIETARY_MARKERS = (
+    "proprietary",
+    "confidential",
+    "internal use only",
+    "no part of this",
+)
+
 # Heuristic text fingerprints for the most common OSS licenses,
 # fallback when no SPDX-Identifier header is present. Each entry is
 # ``(spdx_id, marker_text)``; the first marker that hits wins.
@@ -422,7 +437,21 @@ def _classify_text(text: str) -> tuple:
             spdx = _classify_gpl_version(text, family, pos, default_ver)
             earliest_pos = pos
             earliest_spdx = spdx
-    if earliest_spdx is not None:
+    # Proprietary declarations join the earliest-position race: a
+    # LICENSE that OPENS with "PROPRIETARY AND CONFIDENTIAL" and later
+    # names a bundled third-party license is proprietary — pre-fix the
+    # markers were consulted only after the fingerprint race, so any
+    # bundled-license mention won and the operator never saw the
+    # CodeQL-terms warning. Strong markers only; see
+    # ``_STRONG_PROPRIETARY_MARKERS`` for why "all rights reserved"
+    # does not race.
+    prop_pos: int | None = None
+    for marker in _STRONG_PROPRIETARY_MARKERS:
+        pos = lowered.find(marker)
+        if pos != -1 and (prop_pos is None or pos < prop_pos):
+            prop_pos = pos
+    if earliest_spdx is not None and earliest_pos is not None and (
+            prop_pos is None or earliest_pos < prop_pos):
         return earliest_spdx, "oss", "medium"
     for marker in _PROPRIETARY_MARKERS:
         if marker in lowered:
