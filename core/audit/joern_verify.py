@@ -521,8 +521,17 @@ def build_guard_dominance_query(
         '    var raptorUngN = 0\n'
         '    var raptorGrdN = 0\n'
         '    raptorSinks.foreach { s =>\n'
-        '      val doms = s.dominatedBy.id.toSet\n'
-        '      val guards = raptorConds.filter(c => doms.contains(c.id))\n'
+        # Control-dependence, NOT dominance: a condition node
+        # dominates both branches AND the join after them, so
+        # `if (len < 64) { }` followed by an unguarded memcpy read
+        # as "guarded" under dominatedBy — a false refutation on the
+        # canonical missing-check shape (live-reproduced on a real
+        # server at this base). controlledBy is the CDG relation: a
+        # sink inside the guarded branch (or behind an early-return
+        # guard) IS control-dependent on the condition; a sink at
+        # the join point is NOT.
+        '      val ctrls = s.controlledBy.id.toSet\n'
+        '      val guards = raptorConds.filter(c => ctrls.contains(c.id))\n'
         '      if (guards.isEmpty) {\n'
         '        raptorUngN += 1\n'
         '        if (raptorUngN <= 50) {\n'
