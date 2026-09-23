@@ -192,6 +192,31 @@ class TestCallerCallSiteBlocks:
         # The actual invocation line from the caller's source.
         assert "dispatch(b);" in block.content
 
+    def test_call_site_lines_width_capped(self, monkeypatch, tmp_path: Path):
+        """call_site is a RAW target-source line (the upstream
+        enrichment attaches it with no per-line bound, only a whole
+        file cap) — the only un-clipped dynamic field in this module
+        pre-fix. A single minified line must not ride into the
+        UntrustedBlock at full width."""
+        import core.audit.context as cactx
+
+        from packages.llm_analysis.flow_context_inject import (
+            _build_caller_block,
+        )
+
+        long_line = "z" * 500_007
+        monkeypatch.setattr(
+            cactx, "collect_caller_call_sites",
+            lambda *a, **k: [{
+                "name": "handle_query", "file": "src/http.c",
+                "line_start": 10, "call_site": long_line,
+            }],
+        )
+        block = _build_caller_block({}, "src/svc.c", "dispatch", tmp_path)
+        assert block is not None
+        longest = max(len(line) for line in block.content.splitlines())
+        assert longest <= 210, f"unclipped snippet line: {longest} chars"
+
     def test_no_callers_no_block(self, tmp_path: Path):
         repo = _repo(tmp_path)
         udir = _write_understand_dir(tmp_path, traces=[])

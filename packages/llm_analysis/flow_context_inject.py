@@ -317,7 +317,15 @@ def _build_caller_block(
         lines.append(f"- {_clip(caller.get('name', ''), 80)} at {where}")
         call_site = caller.get("call_site")
         if call_site:
-            lines.extend(f"    {snippet_line}" for snippet_line in str(call_site).splitlines()[:3])
+            # Width-capped like every other dynamic field in this
+            # module: the snippet is a raw target-source line
+            # (core.audit.context attaches it with no per-line bound),
+            # so a single minified line otherwise rides into the
+            # prompt at up to the upstream file cap.
+            lines.extend(
+                f"    {_clip(snippet_line, 200)}"
+                for snippet_line in str(call_site).splitlines()[:3]
+            )
     return UntrustedBlock(
         content="\n".join(lines),
         kind="caller-call-sites",
