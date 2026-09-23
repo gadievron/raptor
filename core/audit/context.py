@@ -1844,8 +1844,14 @@ def format_context_for_prompt(
                 for o in injected
                 if _obs_directory(o.get("source", "")) == current_dir
             })
+            # current_dir is a repo-derived path fragment — rendered
+            # into a trusted heading, so it goes through the
+            # identifier defence like every sibling section's
+            # identifiers (a newline-bearing directory name would
+            # forge a peer heading).
             obs_parts.append(
-                f"\n### Subsystem patterns for {current_dir}/ "
+                f"\n### Subsystem patterns for "
+                f"{_defend_identifier(current_dir, max_length=512)}/ "
                 f"(from {total_in_dir} functions reviewed)"
             )
             obs_parts.extend(f"- {pat}" for pat in patterns)
@@ -1865,7 +1871,15 @@ def format_context_for_prompt(
             "before inheriting the callee's verdict."
         )
         for obs in injected:
-            source = obs.get("source", "?")
+            # The observation label is `file:function` — repo-derived
+            # (Linux filenames may contain newlines), so it renders
+            # through the identifier defence; a hostile name would
+            # otherwise forge a trusted-shaped line for every LATER
+            # review in the run. The text half is defended at the
+            # producer (_sanitise_observation).
+            source = _defend_identifier(
+                obs.get("source", "?"), max_length=512,
+            )
             text = obs.get("text", "")
             obs_parts.append(f"- [{source}] {text}")
         sections.append(PromptSection(
@@ -1874,8 +1888,13 @@ def format_context_for_prompt(
     if ctx.get("fuzz_coverage"):
         fc = ctx["fuzz_coverage"]
         fp = ["\n### Fuzz coverage (does NOT replace review)"]
-        harness = fc.get("harness", "unknown")
-        iters = fc.get("iterations", "?")
+        # Run-artifact-derived fields rendered into trusted prose /
+        # backticks — same identifier defence as sibling sections.
+        harness = _defend_identifier(
+            fc.get("harness", "unknown"), max_length=256,
+        )
+        iters = _defend_identifier(fc.get("iterations", "?"),
+                                   max_length=64)
         fp.append(
             f"This function was exercised by fuzzer harness `{harness}` "
             f"({iters} iterations). Fuzz coverage means the function "
@@ -1884,9 +1903,15 @@ def format_context_for_prompt(
             f"input handling has been stress-tested."
         )
         if fc.get("crashes"):
-            fp.append(f"**Crashes found:** {fc['crashes']}")
+            fp.append(
+                f"**Crashes found:** "
+                f"{_defend_identifier(fc['crashes'], max_length=64)}"
+            )
         if fc.get("corpus_size"):
-            fp.append(f"**Corpus size:** {fc['corpus_size']}")
+            fp.append(
+                f"**Corpus size:** "
+                f"{_defend_identifier(fc['corpus_size'], max_length=64)}"
+            )
         sections.append(PromptSection("fuzz_coverage", "\n".join(fp), 0))
 
     if ctx.get("type_definitions"):
