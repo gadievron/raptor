@@ -419,10 +419,21 @@ class TestTierSelection:
             matches=[{"file": "other_file.py", "line": 200}],
             summary="1 match in 1 file",
         )
-        # Tier 2 → no matches → refuted
-        adapter.run.return_value = ToolEvidence(
+        # Tier 2 → no matches → refuted. Vacuity probes see non-empty
+        # endpoint models so the refutation stands (the vacuity
+        # control has its own tests in TestTier2VacuityControl).
+        empty = ToolEvidence(
             tool="codeql", rule="<template>", success=True,
             matches=[], summary="no matches",
+        )
+        probe_hit = ToolEvidence(
+            tool="codeql", rule="<probe>", success=True,
+            matches=[{"file": "x.py", "line": 1, "message": "n"}],
+            summary="1 match",
+        )
+        adapter.run.side_effect = (
+            lambda rule, *a, **k:
+            probe_hit if "IRIS is" in str(rule) else empty
         )
 
         llm = MagicMock()
@@ -443,7 +454,8 @@ class TestTierSelection:
         assert tier == "template"
         assert result.verdict == "refuted"
         adapter.run_prebuilt_query.assert_called_once()
-        adapter.run.assert_called_once()
+        # Flow query + 2 vacuity probes on the zero-flow refutation.
+        assert adapter.run.call_count == 3
 
     def test_prebuilt_no_matches_falls_through_to_tier2(self):
         """Tier 1's source model may not cover the LLM's claim (e.g.
@@ -717,6 +729,106 @@ class TestTierSelection:
         ):
             _validate_one_hypothesis(h, f, adapter, llm, deep_validate=True)
         # Only 1 attempt — no retry on non-compile errors
+        assert adapter.run.call_count == 1
+
+
+class TestTier2VacuityControl:
+    """Zero-flow Tier 2 refutations must survive a predicate-vacuity
+    control: an LLM-written isSource/isSink body that selects zero
+    nodes anywhere makes 'no flow' vacuously true — the coverage gate
+    (file/function presence) cannot see that, and the refuted verdict
+    would drive recommends_downgrade into a hard downgrade."""
+
+    def _db(self, tmp_path):
+        import zipfile
+        db = tmp_path / "db"
+        db.mkdir()
+        (db / "codeql-database.yml").write_text("")
+        with zipfile.ZipFile(db / "src.zip", "w") as zf:
+            zf.writestr("repo/x.py", "def f():\n    pass\n")
+        from packages.llm_analysis.dataflow_validation import _db_indexed_files
+        _db_indexed_files.cache_clear()
+        return db
+
+    def _run(self, tmp_path, adapter_returns):
+        from packages.hypothesis_validation import Hypothesis
+        h = Hypothesis(claim="user input flows to sink",
+                       target=Path("/repo"), cwe="CWE-9999")
+        # No function name → layer-2 coverage passes; python → layer 3
+        # disabled: the coverage gate is POSITIVELY ok, so pre-fix the
+        # zero-match run minted "refuted".
+        f = {"file_path": "x.py", "start_line": 10, "tool": "semgrep"}
+        adapter = MagicMock()
+        adapter._database_path = self._db(tmp_path)
+        adapter.run.side_effect = adapter_returns
+        llm = MagicMock()
+        llm.generate_structured.return_value = {
+            "source_predicate_body": "none()",
+            "sink_predicate_body": "exists(Call c)",
+            "expected_evidence": "...", "reasoning": "...",
+        }
+        with patch(
+            "packages.llm_analysis.dataflow_validation.discover_prebuilt_query",
+            return_value=None,
+        ):
+            result, tier = _validate_one_hypothesis(
+                h, f, adapter, llm, deep_validate=True,
+            )
+        return result, tier, adapter
+
+    @staticmethod
+    def _ev(matches):
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        return ToolEvidence(tool="codeql", rule="...", success=True,
+                            matches=matches, summary=f"{len(matches)} match(es)")
+
+    def test_vacuous_source_withholds_refutation(self, tmp_path):
+        result, tier, adapter = self._run(
+            tmp_path, [self._ev([]), self._ev([])],  # flow, isSource probe
+        )
+        assert tier == "template"
+        assert result.verdict == "inconclusive"
+        assert "vacuous source model" in result.reasoning
+        assert adapter.run.call_count == 2
+        probe_rule = adapter.run.call_args_list[1].args[0]
+        assert "IrisConfig::isSource(n)" in probe_rule
+
+    def test_vacuous_sink_withholds_refutation(self, tmp_path):
+        node = [{"file": "x.py", "line": 1, "message": "n"}]
+        result, tier, adapter = self._run(
+            tmp_path,
+            [self._ev([]), self._ev(node), self._ev([])],
+        )
+        assert result.verdict == "inconclusive"
+        assert "vacuous sink model" in result.reasoning
+        assert adapter.run.call_count == 3
+        assert "IrisConfig::isSink(n)" in adapter.run.call_args_list[2].args[0]
+
+    def test_nonvacuous_zero_flow_still_refutes(self, tmp_path):
+        # Two-direction: when both endpoint models demonstrably select
+        # nodes, the zero-flow refutation stands.
+        node = [{"file": "x.py", "line": 1, "message": "n"}]
+        result, tier, adapter = self._run(
+            tmp_path,
+            [self._ev([]), self._ev(node), self._ev(node)],
+        )
+        assert result.verdict == "refuted"
+        assert adapter.run.call_count == 3
+
+    def test_probe_failure_refuses_to_refute(self, tmp_path):
+        from packages.hypothesis_validation.adapters.base import ToolEvidence
+        failed = ToolEvidence(tool="codeql", rule="...", success=False,
+                              error="evaluator crashed", matches=[])
+        result, tier, adapter = self._run(
+            tmp_path, [self._ev([]), failed],
+        )
+        assert result.verdict == "inconclusive"
+        assert "vacuity probe failed" in result.reasoning
+
+    def test_confirmed_flow_pays_no_probe_cost(self, tmp_path):
+        match = [{"file": "x.py", "line": 10, "message": "flow"}]
+        result, tier, adapter = self._run(tmp_path, [self._ev(match)])
+        assert result.verdict == "confirmed"
         assert adapter.run.call_count == 1
 
 
@@ -2402,6 +2514,20 @@ class TestValidateDataflowClaims:
             tool="codeql", rule="<r>", success=True,
             matches=[], summary="no matches",
         )
+        probe_hit = ToolEvidence(
+            tool="codeql", rule="<probe>", success=True,
+            matches=[{"file": "x.c", "line": 1, "message": "n"}],
+            summary="1 match",
+        )
+
+        def _adapter_run(rule, *a, **k):
+            # Vacuity probes see non-empty endpoint models so the
+            # zero-flow refutation stands (the vacuity control has
+            # its own tests in TestTier2VacuityControl).
+            if "IRIS is" in str(rule):
+                return probe_hit
+            return empty
+
         llm_client = MagicMock()
         llm_client.generate_structured.return_value = {
             "source_predicate_body": "n instanceof X",
@@ -2413,7 +2539,7 @@ class TestValidateDataflowClaims:
             return_value=True,
         ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.run",
-            return_value=empty,
+            side_effect=_adapter_run,
         ):
             m = validate_dataflow_claims(
                 findings=[{"finding_id": "F1", "tool": "semgrep",
@@ -2447,6 +2573,17 @@ class TestValidateDataflowClaims:
         }
         ev = ToolEvidence(tool="codeql", rule="<r>", success=True,
                           matches=[], summary="no matches")
+        probe_hit = ToolEvidence(
+            tool="codeql", rule="<probe>", success=True,
+            matches=[{"file": "a.c", "line": 1, "message": "n"}],
+            summary="1 match",
+        )
+
+        def _adapter_run(rule, *a, **k):
+            # Non-vacuous endpoint models: the zero-flow refutation
+            # stands (vacuity control tested in TestTier2VacuityControl).
+            return probe_hit if "IRIS is" in str(rule) else ev
+
         llm_client = MagicMock()
         llm_client.generate_structured.return_value = {
             "source_predicate_body": "n instanceof X",
@@ -2465,7 +2602,7 @@ class TestValidateDataflowClaims:
             return_value=True,
         ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.run",
-            return_value=ev,
+            side_effect=_adapter_run,
         ) as mock_run:
             m = validate_dataflow_claims(
                 findings=[
@@ -2480,8 +2617,9 @@ class TestValidateDataflowClaims:
                 llm_client=llm_client,
                 deep_validate=True,
             )
-        # F1: 1 Tier 2 call. F2: cache hit, 0 calls.
-        assert mock_run.call_count == 1
+        # F1: 1 Tier 2 flow call + 2 vacuity probes on its zero-flow
+        # refutation. F2: cache hit, 0 calls.
+        assert mock_run.call_count == 3
         assert m["n_validated"] == 1
         assert m["n_cache_hits"] == 1
         assert m["n_eligible"] == 2
@@ -4185,6 +4323,17 @@ class TestCacheKeyIncludesTierInputs:
         }
         ev = ToolEvidence(tool="codeql", rule="<r>", success=True,
                           matches=[], summary="no matches")
+        probe_hit = ToolEvidence(
+            tool="codeql", rule="<probe>", success=True,
+            matches=[{"file": "a.c", "line": 1, "message": "n"}],
+            summary="1 match",
+        )
+
+        def _adapter_run(rule, *a, **k):
+            # Non-vacuous endpoint models: the zero-flow refutation
+            # stands (vacuity control tested in TestTier2VacuityControl).
+            return probe_hit if "IRIS is" in str(rule) else ev
+
         llm_client = MagicMock()
         llm_client.generate_structured.return_value = {
             "source_predicate_body": "n instanceof X",
@@ -4199,7 +4348,7 @@ class TestCacheKeyIncludesTierInputs:
             return_value=True,
         ), patch(
             "packages.hypothesis_validation.adapters.CodeQLAdapter.run",
-            return_value=ev,
+            side_effect=_adapter_run,
         ) as mock_run:
             m = validate_dataflow_claims(
                 findings=[
@@ -4214,11 +4363,12 @@ class TestCacheKeyIncludesTierInputs:
                 llm_client=llm_client,
             )
         # F1: default gate off → Tier 2/3 skipped (no adapter.run).
-        # F2: auto-gate on (path_conditions) → its OWN Tier 2 run.
+        # F2: auto-gate on (path_conditions) → its OWN Tier 2 run
+        # (flow query + 2 vacuity probes on the zero-flow refutation).
         assert m["n_cache_hits"] == 0
         assert m["n_validated"] == 2
         assert m["n_deep_validate_auto_enabled"] == 1
-        assert mock_run.call_count == 1  # F2's tier 2 run only
+        assert mock_run.call_count == 3  # F2's tier 2 run only
 
     def test_smt_witness_attached_to_every_duplicate_finding(self, tmp_path):
         """Cache hits still get the per-finding Tier 4 side-band: the

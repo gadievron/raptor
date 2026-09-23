@@ -38,6 +38,7 @@ from packages.hypothesis_validation.runner import validate
 from .dataflow_dispatch_client import DispatchClient
 from .dataflow_query_builder import (
     TEMPLATE_PREDICATE_SCHEMA,
+    build_predicate_probe_query,
     build_template_query,
     discover_prebuilt_query,
     infer_cwe_from_rule_id,
@@ -1401,6 +1402,24 @@ def _try_template_with_retry(
                 ev, finding,
                 codeql_db=getattr(adapter, "_database_path", None),
             )
+            if verdict == "refuted":
+                # Predicate-vacuity control: the coverage gate proves
+                # the DB contains the finding's file/function, but not
+                # that the LLM's endpoint models select ANY node — a
+                # vacuous isSource/isSink body makes "no flow"
+                # vacuously true and would hard-downgrade a real
+                # finding. Only would-be refutations pay the probe
+                # cost (same compiled DB, warm evaluator).
+                vacuity = _template_vacuity_reason(
+                    adapter, language, predicates, hypothesis.target,
+                )
+                if vacuity is not None:
+                    result = _wrap_result(ev, "inconclusive", tier="template")
+                    result.reasoning = (
+                        "[template] zero-flow refutation withheld — "
+                        + vacuity
+                    )
+                    return result, True, attempt
             return (
                 _wrap_result(ev, verdict, tier="template"),
                 True,
@@ -1426,6 +1445,59 @@ def _try_template_with_retry(
         False,
         0,
     )
+
+
+def _template_vacuity_reason(
+    adapter: Any,
+    language: str,
+    predicates: dict,
+    target: Path,
+) -> str | None:
+    """Predicate-vacuity control for Tier 2 zero-flow refutations.
+
+    A zero-match taint query refutes only when its endpoint models
+    actually select something. The three-layer coverage gate
+    (`_refutation_coverage_ok`) verifies the DB contains the finding's
+    file and function — it cannot see that an LLM-written isSource or
+    isSink body selects zero nodes anywhere, which makes "no flow"
+    vacuously true. Each predicate is run standalone through the same
+    adapter/DB (mechanical selector assembled by
+    `build_predicate_probe_query`; warm evaluator, no LLM call).
+
+    Returns a refuse-to-refute reason when a predicate is vacuous or a
+    probe could not run, None when both predicates demonstrably select
+    nodes. Same condemn-toward-abstain posture as the coverage gate:
+    every failure direction degrades to inconclusive, never to
+    refuted. Analogue of the negative controls elsewhere in the repo
+    (patch_gate's unpatched-copy control, checker_synthesis'
+    _fix_mutant_control) — Tier 2 previously had none.
+    """
+    role_labels = (("source", "isSource"), ("sink", "isSink"))
+    for role, label in role_labels:
+        probe = build_predicate_probe_query(
+            language=language,
+            source_predicate_body=predicates.get("source_predicate_body", ""),
+            sink_predicate_body=predicates.get("sink_predicate_body", ""),
+            probe_role=role,
+        )
+        if probe is None:
+            return f"could not build the {label} vacuity probe query"
+        try:
+            ev = adapter.run(probe, target)
+        except Exception as e:  # noqa: BLE001 — probe failure must abstain, not crash
+            return f"{label} vacuity probe errored: {e}"
+        if not ev.success:
+            return (
+                f"{label} vacuity probe failed: "
+                f"{(ev.error or 'no error detail')[:200]}"
+            )
+        if not ev.matches:
+            return (
+                f"{label} predicate selected 0 nodes in the whole "
+                f"database — vacuous {role} model, 'no flow' would be "
+                "vacuously true"
+            )
+    return None
 
 
 def _is_compile_error(error_text: str) -> bool:
