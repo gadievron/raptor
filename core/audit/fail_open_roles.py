@@ -332,11 +332,20 @@ _ROLE_ANNOTATION_STATUSES = frozenset({
     "sink", "trust_boundary", "entry_point",
 })
 
-# IRIS/taint evidence tiers corroborated enough to be registry-grade.
-_CORROBORATED_SPEC_TIERS = frozenset({
-    "observed_runtime", "replayed_crash", "smt_proved",
-    "xref_backed", "header_backed",
-})
+# IRIS/taint evidence tiers corroborated enough to be registry-grade:
+# everything ranking at or above HEADER_BACKED. Derived from the
+# canonical ladder, not spelled as literals — a literal copy silently
+# excluded members added to the enum later, inverting the ordering
+# this policy means to express.
+def _corroborated_spec_tiers() -> frozenset[str]:
+    from core.evidence import TIER_RANK, EvidenceTier
+    floor = TIER_RANK[EvidenceTier.HEADER_BACKED]
+    return frozenset(
+        tier.value for tier, rank in TIER_RANK.items() if rank >= floor
+    )
+
+
+_CORROBORATED_SPEC_TIERS = _corroborated_spec_tiers()
 
 
 @dataclass

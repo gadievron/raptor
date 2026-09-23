@@ -8,6 +8,10 @@ Tier ordering (strongest to weakest):
     OBSERVED_RUNTIME  — Frida/runtime instrumentation saw it happen
     REPLAYED_CRASH    — ASan/fuzz witness reproduced the bug
     SMT_PROVED        — Z3/SMT solver proved the constraint (un)satisfiable
+    CORPUS_CORROBORATED — two independent witnesses agree (e.g. static
+                        structure and sample-corpus statistics)
+    DECODED_INSTRUCTION — a decoded instruction at a concrete address
+                        (e.g. a cmp check-site with its operand)
     XREF_BACKED       — CPG/dataflow/call-graph structural guarantee
     HEADER_BACKED     — ELF/Mach-O headers, symbol tables, AST extraction
     DECOMPILER_INFERRED — decompiled pseudo-code (approximate)
@@ -40,17 +44,41 @@ class EvidenceTier(str, Enum):
     OBSERVED_RUNTIME = "observed_runtime"
     REPLAYED_CRASH = "replayed_crash"
     SMT_PROVED = "smt_proved"
+    CORPUS_CORROBORATED = "corpus_corroborated"
+    DECODED_INSTRUCTION = "decoded_instruction"
     XREF_BACKED = "xref_backed"
     HEADER_BACKED = "header_backed"
     DECOMPILER_INFERRED = "decompiler_inferred"
     HEURISTIC = "heuristic"
 
 
-# Ordered strongest-to-weakest for comparison.
+# Ordered strongest-to-weakest for comparison. Ranks are relative
+# positions only — every reader compares TIER_RANK entries against
+# each other; the integers are never serialised (artifacts carry the
+# tier VALUE strings), so inserting members renumbers safely.
+#
+# DECODED_INSTRUCTION sits directly ABOVE XREF_BACKED: a decoded
+# instruction (a real cmp with its operand at a concrete address) is
+# byte-level ground truth of the analysed artifact, while xref/CPG/
+# call-graph edges are tool-RECONSTRUCTED structure (indirect-call
+# resolution, dataflow approximation) one step further from the
+# bytes. Ranking it below XREF_BACKED would let a reconstructed edge
+# outrank a deterministically decoded check-site; ranking it above
+# CORPUS_CORROBORATED would let a single witness outrank two
+# independent witnesses agreeing.
+#
+# CORPUS_CORROBORATED sits below SMT_PROVED: two independent
+# observational witnesses agreeing (e.g. a decoded parser check-site
+# and sample-corpus field statistics describing the same format) beat
+# either witness alone, but agreement is still observation, not a
+# solver proof — above SMT_PROVED it would launder correlation into
+# proof tier.
 TIER_RANK: dict[EvidenceTier, int] = {
-    EvidenceTier.OBSERVED_RUNTIME: 6,
-    EvidenceTier.REPLAYED_CRASH: 5,
-    EvidenceTier.SMT_PROVED: 4,
+    EvidenceTier.OBSERVED_RUNTIME: 8,
+    EvidenceTier.REPLAYED_CRASH: 7,
+    EvidenceTier.SMT_PROVED: 6,
+    EvidenceTier.CORPUS_CORROBORATED: 5,
+    EvidenceTier.DECODED_INSTRUCTION: 4,
     EvidenceTier.XREF_BACKED: 3,
     EvidenceTier.HEADER_BACKED: 2,
     EvidenceTier.DECOMPILER_INFERRED: 1,
