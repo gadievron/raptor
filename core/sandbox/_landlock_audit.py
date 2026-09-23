@@ -77,9 +77,14 @@ warnings.filterwarnings(
 
 
 # Default tracer-ready timeout. The tracer's PTRACE_SEIZE +
-# SETOPTIONS dance is microseconds on a healthy host; allow 5s
-# to absorb pathological scheduler stalls (CI under heavy load).
-_TRACER_READY_TIMEOUT_S = 5.0
+# SETOPTIONS dance is microseconds on a healthy host; the budget only
+# binds the WEDGED-tracer case (a dead tracer delivers EOF instantly),
+# so it trades wedge-detection latency against false kills on a badly
+# stalled host. 15s matches the spawn lane's tracer-ready deadline —
+# the two lanes fail the same way at the same threshold; a shorter
+# value here previously bought nothing but a 3x-earlier misdiagnosis
+# window on loaded CI hosts.
+_TRACER_READY_TIMEOUT_S = 15.0
 
 # How long to wait for the tracer to exit on its own after the target
 # is reaped. A healthy tracer exits promptly once its last tracee is
@@ -807,16 +812,30 @@ def run_landlock_audit(
 
         # Wait for tracer to signal ready (or die).
         ready = b""
+        ready_timed_out = False
         try:
             rlist, _, _ = select.select([t_ready_r], [], [], _TRACER_READY_TIMEOUT_S)
             if rlist:
                 ready = os.read(t_ready_r, 1)
+            else:
+                ready_timed_out = True
         finally:
             _close_safely(t_ready_r)
             t_ready_r = -1
         if not ready:
             # Tracer failed before signalling. Reap it for diag,
-            # kill the still-blocked target, raise.
+            # kill the still-blocked target, raise. On the deadline
+            # path the tracer may still be ALIVE but wedged (import
+            # stall, PTRACE_SEIZE hang, SIGSTOP) — kill it FIRST so
+            # the diagnostic waitpid cannot block forever (mirrors
+            # _spawn's kill-first twin; pre-fix one wedged tracer
+            # parked this parent in an unbounded blocking waitpid,
+            # with the target child parked on its go-pipe for the
+            # same duration and the caller's timeout= never engaged
+            # — the deadline is computed after this handshake).
+            if ready_timed_out:
+                with contextlib.suppress(ProcessLookupError, OSError):
+                    os.kill(tracer_pid, 9)
             tracer_status = None
             try:
                 _, tracer_status = os.waitpid(tracer_pid, 0)
@@ -837,10 +856,23 @@ def run_landlock_audit(
                     f" (tracer exit code "
                     f"{os.WEXITSTATUS(tracer_status)})"
                 )
+            if ready_timed_out:
+                # We SIGKILLed it ourselves above; a signal/exit-code
+                # diagnostic would misattribute that.
+                cause = (
+                    f"tracer did not signal ready within the "
+                    f"{_TRACER_READY_TIMEOUT_S:g}s deadline (wedged "
+                    f"during attach or a badly stalled host) — killed"
+                )
+                rc_hint = ""
+            else:
+                cause = (
+                    "likely PTRACE_SEIZE rejected (Yama scope, "
+                    "container cap-drop, AppArmor)"
+                )
             msg = (
                 f"audit-mode tracer failed to attach to sandboxed "
-                f"child{rc_hint} — likely PTRACE_SEIZE rejected "
-                f"(Yama scope, container cap-drop, AppArmor)"
+                f"child{rc_hint} — {cause}"
             )
             raise RuntimeError(msg)
 
