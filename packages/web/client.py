@@ -58,11 +58,20 @@ _CLOSE_ERRORS = (
     urllib3.exceptions.HTTPError,
 )
 
-# Cap on buffered response body. A hostile in-scope endpoint can
-# serve multi-GB responses (or chunked-encoding slowloris) and OOM
-# the scanner. 128 MiB is generous for real HTML / API responses
-# (typical pages <1 MiB) and catches the catastrophic shapes.
+# Caps on the buffered response body — hostile endpoints attack in
+# BOTH directions. Memory: multi-GB responses OOM the scanner; 128 MiB
+# is generous for real HTML / API responses (typical pages <1 MiB).
+# Time: the request `timeout` is a PER-READ socket timeout, so a
+# chunked-encoding slowloris sending one byte per window keeps every
+# read alive and stalls the sequential check pipeline indefinitely —
+# the byte cap alone never fires against it. The wall-clock deadline
+# runs from the start of the body read; 60s lets a well-behaved
+# endpoint deliver the full 128 MiB at ~2 MiB/s while cutting a
+# dripping endpoint off in bounded time (raising it tolerates slower
+# legitimate servers at the cost of longer hostile stalls per request;
+# lowering it truncates slow-but-real large bodies).
 _MAX_RESPONSE_BYTES = 128 * 1024 * 1024
+_MAX_BODY_READ_SECONDS = 60.0
 
 # Cap on request_history length — without this, long-running scans
 # against large targets accumulate hundreds of MB (full request +
@@ -140,6 +149,28 @@ def _pinning_getaddrinfo(host, port, *args, **kwargs):  # noqa: ANN001, ANN002, 
                 if addrs is not None:
                     return addrs
     return _original_getaddrinfo(host, port, *args, **kwargs)
+
+
+def _shutdown_response_socket(response: requests.Response) -> None:
+    """Best-effort shutdown of a streamed response's underlying socket.
+
+    Used by the body-read watchdog: a thread blocked in ``recv`` is NOT
+    woken by ``close()`` on the socket object — only ``shutdown()``
+    makes the pending read return. Walks the requests -> urllib3 ->
+    http.client -> SocketIO private chain defensively; when any hop is
+    missing (mocked responses, future library layouts) it silently
+    does nothing and the caller's ``close()`` remains the fallback.
+    """
+    raw = getattr(response, "raw", None)
+    http_response = getattr(raw, "_fp", None)
+    sock_file = getattr(http_response, "fp", None)
+    sock = getattr(getattr(sock_file, "raw", None), "_sock", None)
+    if sock is None:
+        connection = getattr(raw, "_connection", None)
+        sock = getattr(connection, "sock", None)
+    if sock is not None:
+        with contextlib.suppress(OSError, ValueError):
+            sock.shutdown(socket.SHUT_RDWR)
 
 
 def _ensure_pin_wrapper_installed() -> None:
@@ -496,14 +527,38 @@ class WebClient:
 
     def _enforce_response_cap(self, response: requests.Response) -> None:
         """Read the streamed body into ``response._content`` up to
-        :data:`_MAX_RESPONSE_BYTES`. If the body exceeds the cap,
-        truncate and close the connection — the caller sees a body
-        capped near ``_MAX_RESPONSE_BYTES`` (it may overshoot by up
-        to one 64 KiB read chunk) rather than the process OOMing on
-        a hostile multi-GB response.
+        :data:`_MAX_RESPONSE_BYTES` and within
+        :data:`_MAX_BODY_READ_SECONDS`. If the body exceeds either
+        bound, truncate and close the connection — the caller sees a
+        body capped near the byte limit (it may overshoot by up to one
+        64 KiB read chunk) rather than the process OOMing on a hostile
+        multi-GB response, and a drip-fed body (each read succeeding
+        inside the per-read socket timeout, forever) hands back what
+        arrived instead of stalling the scan pipeline.
         """
+        chunks: list[bytes] = []
+        # Watchdog, not an in-loop clock check: a dripping server keeps
+        # the SINGLE blocking read inside iter_content alive (each byte
+        # restarts the per-recv socket timeout and the buffered read
+        # does not yield until its chunk fills), so loop-body code
+        # never runs while the stall lasts. Closing the response from
+        # the timer thread unblocks the read; the buffered prefix is
+        # kept.
+        expired = threading.Event()
+
+        def _expire() -> None:
+            expired.set()
+            # shutdown() BEFORE close(): closing a socket object does
+            # not wake a thread blocked in recv on it — shutdown does
+            # (the read returns EOF immediately).
+            _shutdown_response_socket(response)
+            with contextlib.suppress(*_CLOSE_ERRORS):
+                response.close()
+
+        watchdog = threading.Timer(_MAX_BODY_READ_SECONDS, _expire)
+        watchdog.daemon = True
+        watchdog.start()
         try:
-            chunks: list[bytes] = []
             total = 0
             for chunk in response.iter_content(chunk_size=64 * 1024):
                 if not chunk:
@@ -521,10 +576,22 @@ class WebClient:
                         response.close()
                     break
             response._content = b"".join(chunks)
-        except requests.exceptions.RequestException:
+        except (requests.exceptions.RequestException, *_CLOSE_ERRORS,
+                ValueError):
             # Let the caller see whatever was buffered; do not raise
-            # from the cap-enforcer.
+            # from the cap-enforcer. The extra classes are what the
+            # watchdog's close() makes the blocked read raise
+            # (protocol errors, closed-file ValueError).
             response._content = b"".join(chunks) if chunks else b""
+        finally:
+            watchdog.cancel()
+            if expired.is_set():
+                logger.warning(
+                    "WebClient: response body still streaming after "
+                    "%.0fs at %s; truncated (drip-fed/slowloris shape)",
+                    _MAX_BODY_READ_SECONDS,
+                    self._redact_for_logging(response.url or "<unknown>"),
+                )
 
     def get(self, path: str, params: dict | None = None,
             headers: dict | None = None,
