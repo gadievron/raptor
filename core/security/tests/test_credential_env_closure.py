@@ -281,6 +281,61 @@ class TestTrustGateLane:
             _DANGEROUS_ENV_VARS
         )
 
+    def test_cc_trust_standalone_fallback_superset_of_core_config(self):
+        # The REAL direction: on a full install the effective set
+        # unions core.config in, so the assertion above is true by
+        # construction and structurally blind to fallback drift — a
+        # degraded install (core.config unimportable) scans with
+        # _COMPREHENSIVE_DANGEROUS_ENV_VARS ALONE, and that set had
+        # silently lacked 27 members including exec-grade
+        # GCONV_PATH/PHPRC. Every core/config member must be carried
+        # by the standalone set itself; add new members to BOTH homes.
+        from core.security.cc_trust import (
+            _COMPREHENSIVE_DANGEROUS_ENV_VARS,
+        )
+        missing = (frozenset(RaptorConfig.DANGEROUS_ENV_VARS)
+                   - _COMPREHENSIVE_DANGEROUS_ENV_VARS)
+        assert not missing, (
+            f"cc_trust standalone fallback lacks {sorted(missing)} — "
+            "mirror the new DANGEROUS_ENV_VARS member(s) into "
+            "_COMPREHENSIVE_DANGEROUS_ENV_VARS so degraded installs "
+            "keep parity"
+        )
+
+    def test_degraded_install_scan_blocks_loader_members(self, tmp_path):
+        # Behavioural half: with core.config blocked at import, the
+        # settings scan must still flag members only the full list
+        # used to carry.
+        import json
+        import subprocess
+        import sys
+        claude = tmp_path / ".claude"
+        claude.mkdir()
+        (claude / "settings.json").write_text(json.dumps({
+            "env": {"GCONV_PATH": "/repo/g", "PHPRC": "/repo/php.ini"},
+        }))
+        code = (
+            "import sys\n"
+            "import importlib.abc\n"
+            "class _Block(importlib.abc.MetaPathFinder):\n"
+            "    def find_spec(self, name, path=None, target=None):\n"
+            "        if name == 'core.config'"
+            " or name.startswith('core.config.'):\n"
+            "            raise ImportError('blocked: degraded install')\n"
+            "sys.meta_path.insert(0, _Block())\n"
+            "from core.security.cc_trust import check_repo_claude_trust\n"
+            "assert check_repo_claude_trust(sys.argv[1],"
+            " trust_override=False)\n"
+            "print('DEGRADED-BLOCKS')\n"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(tmp_path)],
+            capture_output=True, text=True, timeout=60,
+            cwd=str(Path(__file__).resolve().parents[3]),
+        )
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        assert "DEGRADED-BLOCKS" in proc.stdout
+
 
 # --- 13-14: remaining blocklist lanes (behavioral) ------------------
 

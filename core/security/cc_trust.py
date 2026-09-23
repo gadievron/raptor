@@ -228,6 +228,27 @@ _COMPREHENSIVE_DANGEROUS_ENV_VARS = frozenset({
     # attacker-credential substitution and header riding — live in
     # the credential-env family unioned below.)
     "ANTHROPIC_BASE_URL",
+    # Degraded-install parity with RaptorConfig.DANGEROUS_ENV_VARS.
+    # The union with core.config below makes any gap here invisible
+    # on a full install, but the standalone fallback (core.config
+    # unimportable — stripped-down CC install, partial repo) IS the
+    # scan set, and it silently lacked 27 members including
+    # exec-grade loaders. The closure test pins the real direction
+    # (RaptorConfig.DANGEROUS_ENV_VARS ⊆ this set), so future
+    # core/config additions fail CI until mirrored here.
+    #   loader / runtime injection:
+    "GCONV_PATH", "GLIBC_TUNABLES", "LD_DEBUG", "LD_PROFILE",
+    "LD_SHOW_AUXV", "DYLD_FRAMEWORK_PATH",
+    "PHPRC", "PHP_INI_SCAN_DIR", "EMACSLOADPATH",
+    #   allocator knobs (heap-behaviour tuning primitives):
+    "MALLOC_ARENA_MAX", "MALLOC_CHECK_", "MALLOC_CONF",
+    "MALLOC_MMAP_THRESHOLD_", "MALLOC_PERTURB_",
+    "MALLOC_TRIM_THRESHOLD_", "JE_MALLOC_CONF",
+    #   resolver / locale / auth redirection:
+    "HOSTALIASES", "LOCALDOMAIN", "RES_OPTIONS", "NLSPATH", "LOCPATH",
+    "KRB5_CONFIG", "KRB5CCNAME", "GNUTLS_SYSTEM_PRIORITY_FILE",
+    #   daemon / environment redirection:
+    "DOCKER_HOST", "TMPDIR", "VIRTUAL_ENV",
 }) | CREDENTIAL_ENV_FAMILY | TOOLCHAIN_HOME_ENV_VARS \
     | CONFIG_HOME_REDIRECT_ENV_VARS
 # CONFIG_HOME_REDIRECT_ENV_VARS joins THIS scan set only, like the
