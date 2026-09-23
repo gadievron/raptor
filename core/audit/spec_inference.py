@@ -101,7 +101,11 @@ _NAME_INTENT: list[tuple] = [
 
 _PARAM_PRECONDITIONS: list[tuple] = [
     (re.compile(r"__user\b"), "pointer is user-space (must copy_from_user)"),
-    (re.compile(r"\bsize_t\b.*\blen\b|\bsize_t\b.*\bsize\b|\bsize_t\b.*\bcount\b"),
+    # Bounded type-to-name gap: a real parameter declaration never
+    # spans 300 chars, and an unbounded gap is re-scanned from every
+    # planted ``size_t`` on hostile source.
+    (re.compile(r"\bsize_t\b.{0,300}\blen\b|\bsize_t\b.{0,300}\bsize\b"
+                r"|\bsize_t\b.{0,300}\bcount\b"),
      "length parameter must be bounds-checked"),
     (re.compile(r"\bconst\s+char\s*\*"), "string pointer must not be NULL"),
     (re.compile(r"\bFILE\s*\*"), "file handle must be open and valid"),
@@ -536,25 +540,28 @@ def _infer_negative_specs(
                 ))
 
 
+# The captured condition is bounded: real assertion conditions sit
+# far below the bound, and an unbounded lazy body is re-expanded from
+# every planted macro head on hostile source (quadratic).
 _ASSERTION_PATTERNS: list[tuple] = [
-    (re.compile(r"\bBUG_ON\s*\((.+?)\)"), "invariant"),
-    (re.compile(r"\bWARN_ON\s*\((.+?)\)"), "postcondition"),
-    (re.compile(r"\bBUILD_BUG_ON\s*\((.+?)\)"), "compile_time_invariant"),
-    (re.compile(r"\blockdep_assert_held\s*\((.+?)\)"), "lock_precondition"),
-    (re.compile(r"\blockdep_assert_held_read\s*\((.+?)\)"), "lock_precondition"),
-    (re.compile(r"\bassert\s*\((.+?)\)"), "precondition"),
-    (re.compile(r"\bASSERT\s*\((.+?)\)"), "precondition"),
-    (re.compile(r"\bCHECK\s*\((.+?)\)"), "precondition"),
-    (re.compile(r"\bDCHECK\s*\((.+?)\)"), "precondition"),
-    (re.compile(r"\bg_assert\s*\((.+?)\)"), "precondition"),
-    (re.compile(r"\bg_return_if_fail\s*\((.+?)\)"), "precondition"),
+    (re.compile(r"\bBUG_ON\s*\((.{1,1000}?)\)"), "invariant"),
+    (re.compile(r"\bWARN_ON\s*\((.{1,1000}?)\)"), "postcondition"),
+    (re.compile(r"\bBUILD_BUG_ON\s*\((.{1,1000}?)\)"), "compile_time_invariant"),
+    (re.compile(r"\blockdep_assert_held\s*\((.{1,1000}?)\)"), "lock_precondition"),
+    (re.compile(r"\blockdep_assert_held_read\s*\((.{1,1000}?)\)"), "lock_precondition"),
+    (re.compile(r"\bassert\s*\((.{1,1000}?)\)"), "precondition"),
+    (re.compile(r"\bASSERT\s*\((.{1,1000}?)\)"), "precondition"),
+    (re.compile(r"\bCHECK\s*\((.{1,1000}?)\)"), "precondition"),
+    (re.compile(r"\bDCHECK\s*\((.{1,1000}?)\)"), "precondition"),
+    (re.compile(r"\bg_assert\s*\((.{1,1000}?)\)"), "precondition"),
+    (re.compile(r"\bg_return_if_fail\s*\((.{1,1000}?)\)"), "precondition"),
     # The condition group ends non-whitespace or is a single char
     # ((.*?\S|.)): the naive ``(.+?)\s*,`` overlapped the lazy group
     # and the whitespace span — quadratic on an assert-opening line
     # ending in a whitespace run with no comma. Captures unchanged.
-    (re.compile(r"\bg_return_val_if_fail\s*\((.*?\S|.)\s*,"), "precondition"),
-    (re.compile(r"\bprecondition\s*\((.+?)\)"), "precondition"),
-    (re.compile(r"\bPy_CHECK_TYPE\s*\((.+?)\)"), "type_precondition"),
+    (re.compile(r"\bg_return_val_if_fail\s*\((.{0,1000}?\S|.)\s*,"), "precondition"),
+    (re.compile(r"\bprecondition\s*\((.{1,1000}?)\)"), "precondition"),
+    (re.compile(r"\bPy_CHECK_TYPE\s*\((.{1,1000}?)\)"), "type_precondition"),
 ]
 
 
@@ -729,7 +736,11 @@ def _check_precondition_in_source(
 
     caller_source = sanitized_view(caller_source, file_path)
     if check_type == "null_check":
-        var_match = re.search(r"(\w+)\s*(?:!=\s*(?:NULL|0)|!= null)", precondition)
+        # \b pins the variable to a word start — an unpinned \w+ is
+        # re-scanned from every position of a hostile identifier run.
+        var_match = re.search(
+            r"\b(\w+)\s*(?:!=\s*(?:NULL|0)|!= null)", precondition,
+        )
         if var_match:
             var = var_match.group(1)
             # gated optional bang (the \s*!?\s* chain was
