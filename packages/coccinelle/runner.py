@@ -363,7 +363,20 @@ def run_rule(
             returncode=-1,
         )
 
-    rule_text = rule.read_text(encoding="utf-8")
+    # Structured degradation, never a raise: every other failure shape
+    # in this runner returns a SpatchResult, and one undecodable
+    # (operator-authored latin-1 comment suffices) or unreadable rule
+    # file used to raise out of run_rule/run_rules/run_rules_batched —
+    # aborting the whole multi-rule sweep and losing every
+    # already-computed result.
+    try:
+        rule_text = rule.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as e:
+        return SpatchResult(
+            rule=rule_name, rule_path=str(rule),
+            errors=[f"Rule file unreadable (must be UTF-8 text): {e}"],
+            returncode=-1,
+        )
 
     # Scripting gate — refuse before any tempfile write or spatch
     # invocation. See contains_script_block / allow_scripting docs.
@@ -697,7 +710,20 @@ def run_rules_batched(
     refused: dict[str, SpatchResult] = {}
     alias_of: dict[str, str] = {}
     for r in rules:
-        text = r.read_text(encoding="utf-8")
+        # Same structured degradation as run_rule: an undecodable or
+        # unreadable rule gets its own error result; the remaining
+        # rules still batch and run.
+        try:
+            text = r.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError) as e:
+            refused[r.stem] = SpatchResult(
+                rule=r.stem, rule_path=str(r),
+                errors=[
+                    f"Rule file unreadable (must be UTF-8 text): {e}",
+                ],
+                returncode=-1,
+            )
+            continue
         # Scripting gate — same policy as run_rule, applied before the
         # batch tempfile is written. Refused rules never reach spatch.
         if not allow_scripting and contains_script_block(text):
