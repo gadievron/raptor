@@ -492,7 +492,48 @@ def _mark_imported_runs(output_dir: Path, archive_sha256: str) -> None:
                 or child.name in GENERATED_PROJECT_DIRS):
             continue
         save_json(child / IMPORTED_RUN_MARKER_FILE, payload)
+        _neutralise_imported_liveness(child)
         _namespace_imported_provenance_refs(child)
+
+
+def _neutralise_imported_liveness(run_dir: Path) -> None:
+    """Rewrite a restored ``status=running`` run marker to
+    ``interrupted`` and strip its session/tool identity stamps.
+
+    A restored ``.raptor-run.json`` claiming ``running`` describes a
+    session on the EXPORTING machine at export time (or a forged claim
+    from an unsigned archive) — never a process this machine's
+    lifecycle owns. Left verbatim, its foreign session stamp reads as
+    unverifiable-alive forever: every future ``start_run`` in the
+    project hits the contention gate, clean/merge/delete refuse, and
+    the abandon sweep (correctly fail-open on foreign stamps) never
+    clears it. ``interrupted`` is honest — the run did not complete
+    inside THIS project — and non-terminal state is exactly what an
+    unsigned archive must not mint. Best-effort: an unreadable or
+    oversized marker is left for the size-gated consumers to refuse.
+    """
+    from core.run.metadata import RUN_METADATA_FILE, STATUS_RUNNING, _load_meta
+    marker = run_dir / RUN_METADATA_FILE
+    if not marker.is_file():
+        return
+    try:
+        meta = _load_meta(marker)
+    except OSError:
+        return
+    if not isinstance(meta, dict) or meta.get("status") != STATUS_RUNNING:
+        return
+    meta["status"] = "interrupted"
+    meta["import_liveness_neutralised"] = True
+    for stamp in ("session_pid", "tool_pid", "session_start",
+                  "session_boot_id", "session_pidns",
+                  "session_machine_id", "session_id"):
+        meta.pop(stamp, None)
+    save_json(marker, meta)
+    logger.info(
+        "import: neutralised restored running marker in %s "
+        "(status=running -> interrupted; session stamps stripped)",
+        run_dir.name,
+    )
 
 
 # --- Privileged-artifact quarantine ---------------------------------

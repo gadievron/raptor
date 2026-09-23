@@ -273,3 +273,129 @@ class HostileSiblingMetadataTest(RunContentionBase):
         self.assertNotIn("\x1b", msg, "raw ESC reached the message")
         self.assertNotIn("\x07", msg)
         self.assertLess(len(msg), 800, "unbounded field flooded the message")
+
+
+class ForeignStampedHolderTest(RunContentionBase):
+    """Foreign-stamped / import-restored ``status=running`` markers.
+
+    A foreign session stamp (other machine or pid namespace) is
+    unverifiable here and reads fail-open ALIVE to the sweeps — which
+    made one planted or import-restored marker a PERMANENT contention
+    holder: every future start_run refused, forever, with no sweep
+    ever clearing it. The gate now (a) skips import-marked runs, and
+    (b) applies an age ceiling to foreign-stamped holders whose run
+    dir is write-quiet. The sweeps stay fail-open (pinned below).
+    """
+
+    def _write_foreign_sibling(self, name="agentic_20260101_000000",
+                               timestamp="2026-01-01T00:00:00+00:00"):
+        d = self._write_sibling(name=name, command="agentic",
+                                session_pid=4194000)
+        meta = load_json(d / RUN_METADATA_FILE)
+        meta.update({
+            "timestamp": timestamp,
+            "session_start": "123456",
+            "session_boot_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeffff0000",
+            "session_pidns": "999999999",
+        })
+        save_json(d / RUN_METADATA_FILE, meta)
+        return d
+
+    def _foreign_patches(self):
+        return [
+            patch("core.project.sessions._foreign_entry",
+                  lambda fields: True),
+            patch("core.project.sessions._prior_boot_entry",
+                  lambda fields: False),
+        ]
+
+    def _scan(self):
+        return _live_conflicting_run(
+            self.project_out, self.project_out / "agentic_new",
+            SELF_SESSION)
+
+    def test_old_quiet_foreign_holder_stops_contending(self):
+        self._write_foreign_sibling()  # year-old timestamp
+        patches = self._foreign_patches() + [
+            patch("core.run.metadata._run_recently_active",
+                  lambda d: False),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.assertIsNone(self._scan())
+        # Sweep direction stays fail-open: the marker itself is
+        # untouched (status stays running; only the GATE stops
+        # honouring it).
+        d = self.project_out / "agentic_20260101_000000"
+        self.assertEqual(
+            load_json(d / RUN_METADATA_FILE)["status"], "running")
+
+    def test_recent_foreign_holder_still_contends(self):
+        # Two-direction: inside the ceiling the fail-open contention
+        # protection holds (a genuinely live cross-machine run).
+        from datetime import datetime, timezone
+        self._write_foreign_sibling(
+            timestamp=datetime.now(timezone.utc).isoformat())
+        patches = self._foreign_patches() + [
+            patch("core.run.metadata._run_recently_active",
+                  lambda d: False),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.assertIsNotNone(self._scan())
+
+    def test_active_foreign_holder_still_contends_past_ceiling(self):
+        # Write activity in the run dir keeps the hold even past the
+        # timestamp ceiling — a live run keeps writing.
+        self._write_foreign_sibling()
+        patches = self._foreign_patches() + [
+            patch("core.run.metadata._run_recently_active",
+                  lambda d: True),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.assertIsNotNone(self._scan())
+
+    def test_missing_timestamp_does_not_extend_the_hold(self):
+        # A forged marker must not earn a LONGER hold by omitting the
+        # field the ceiling reads.
+        d = self._write_foreign_sibling()
+        meta = load_json(d / RUN_METADATA_FILE)
+        del meta["timestamp"]
+        save_json(d / RUN_METADATA_FILE, meta)
+        patches = self._foreign_patches() + [
+            patch("core.run.metadata._run_recently_active",
+                  lambda d: False),
+        ]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        self.assertIsNone(self._scan())
+
+    def test_imported_running_marker_never_contends(self):
+        # Import-restored runs carry the marker; their status describes
+        # the EXPORTING machine's session, never a holder here — even
+        # with an alive-looking local pid.
+        d = self._write_sibling(command="agentic")  # OTHER_SESSION alive
+        from core.project.findings_utils import IMPORTED_RUN_MARKER_FILE
+        save_json(d / IMPORTED_RUN_MARKER_FILE, {"imported": True})
+        self.assertIsNone(self._scan())
+
+    def test_sweep_fail_open_projection_unchanged(self):
+        # _session_alive_for_meta must keep reading foreign as ALIVE
+        # (the sweeps' fail-open contract); the gate consumes the
+        # tri-state instead.
+        from core.run.metadata import (
+            _session_alive_for_meta,
+            _session_liveness_for_meta,
+        )
+        meta = {"session_pid": 4194000, "session_start": "123456",
+                "session_boot_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeffff0000"}
+        for p in self._foreign_patches():
+            p.start()
+            self.addCleanup(p.stop)
+        self.assertEqual(_session_liveness_for_meta(meta), "foreign")
+        self.assertTrue(_session_alive_for_meta(meta))
