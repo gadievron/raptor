@@ -139,5 +139,137 @@ class TestLoadUnderstandContextSurfacesProvenance(unittest.TestCase):
             self.assertTrue(prov["legacy"])
 
 
+def _strings_of(obj):
+    """Yield every string value in a JSON-shaped structure."""
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for value in obj.values():
+            yield from _strings_of(value)
+    elif isinstance(obj, list):
+        for value in obj:
+            yield from _strings_of(value)
+
+
+class TestImportGraphAttackPathsStamps(unittest.TestCase):
+    """The graph lane routes through the same chokepoint as its siblings.
+
+    Hostile-labelled graph paths (terminal-escape bytes in label,
+    missing_boundary, evidence, raw node props) must be defanged and
+    stamped in BOTH artifacts the lane writes.
+    """
+
+    HOSTILE = "evil\x1b[2J\x1b]0;pwned\x07label"
+
+    def _run_graph_import(self, validate_dir: Path) -> dict:
+        import core.understand_graph as graph_mod
+
+        def _fake_attack_paths(*_a, **_k):
+            return [{
+                "id": "gp-1",
+                "entry": {"label": self.HOSTILE, "id": "e1",
+                          "raw": {"notes": self.HOSTILE}},
+                "sink": {"label": "sink", "id": "s1"},
+                "steps": [],
+                "unchecked": True,
+                "missing_boundary": self.HOSTILE,
+                "evidence": {"note": self.HOSTILE},
+                "confidence": "candidate",
+            }]
+
+        original = graph_mod.attack_paths
+        graph_mod.attack_paths = _fake_attack_paths
+        try:
+            return ub._import_graph_attack_paths(
+                Path("/nonexistent.db"), "/tmp/target", validate_dir)
+        finally:
+            graph_mod.attack_paths = original
+
+    def test_graph_lane_defangs_and_stamps_both_artifacts(self):
+        with TemporaryDirectory() as tmp:
+            validate_dir = Path(tmp)
+            stats = self._run_graph_import(validate_dir)
+            self.assertEqual(stats["imported_as_paths"], 1)
+
+            paths = load_json(validate_dir / "attack-paths.json")
+            entry = paths[0]
+            self.assertEqual(entry["provenance"]["generator"],
+                             "understand-bridge")
+            self.assertTrue(entry["provenance"]["untrusted"])
+            # The label reached the persisted name defanged: escape
+            # bytes become literal text, never real control chars.
+            self.assertIn("evil", entry["name"])
+            for value in _strings_of(entry):
+                self.assertNotIn("\x1b", value)
+                self.assertNotIn("\x07", value)
+
+            graph_paths = load_json(
+                validate_dir / "graph-priority-paths.json")
+            self.assertEqual(graph_paths[0]["provenance"]["generator"],
+                             "understand-bridge")
+            self.assertTrue(graph_paths[0]["provenance"]["untrusted"])
+            # No-schema artifact embeds raw node dicts — every string
+            # is defanged, including nested raw props and evidence.
+            for value in _strings_of(graph_paths):
+                self.assertNotIn("\x1b", value)
+                self.assertNotIn("\x07", value)
+
+    def test_graph_lane_merges_into_existing_paths_and_stamps_all(self):
+        with TemporaryDirectory() as tmp:
+            validate_dir = Path(tmp)
+            save_json(validate_dir / "attack-paths.json", [
+                {"id": "AP-EXISTING", "proximity": 3},
+            ])
+            stats = self._run_graph_import(validate_dir)
+            self.assertEqual(stats["imported_as_paths"], 1)
+            paths = load_json(validate_dir / "attack-paths.json")
+            by_id = {p["id"]: p for p in paths}
+            self.assertIn("AP-EXISTING", by_id)
+            self.assertTrue(by_id["AP-EXISTING"]["provenance"]["untrusted"])
+            self.assertTrue(by_id["gp-1"]["provenance"]["untrusted"])
+
+
+class TestGraphContextMapWriteStamps(unittest.TestCase):
+    """The graph-context arm stamps the context-map.graph.json it writes."""
+
+    def test_graph_context_map_is_stamped_and_defanged(self):
+        import core.understand_graph as graph_mod
+
+        hostile = "boundary gap \x1b[2J prose"
+        fake_map = {
+            "entry_points": [], "sources": [],
+            "trust_boundaries": [], "boundary_details": [],
+            "sinks": [], "sink_details": [],
+            "unchecked_flows": [{"entry_point": "e1", "sink": "s1",
+                                 "missing_boundary": hostile}],
+        }
+
+        with TemporaryDirectory() as tmp:
+            validate_dir = Path(tmp)
+            graph_db = validate_dir / "graph.sqlite3"
+            graph_db.write_bytes(b"")
+
+            originals = (graph_mod.build_context_map,
+                         graph_mod.graph_path_for_run,
+                         graph_mod.attack_paths)
+            graph_mod.build_context_map = lambda *_a, **_k: (
+                {k: list(v) for k, v in fake_map.items()}, set())
+            graph_mod.graph_path_for_run = lambda *_a, **_k: graph_db
+            graph_mod.attack_paths = lambda *_a, **_k: []
+            try:
+                ub.load_understand_graph_context(validate_dir, "/tmp/target")
+            finally:
+                (graph_mod.build_context_map,
+                 graph_mod.graph_path_for_run,
+                 graph_mod.attack_paths) = originals
+
+            written = load_json(validate_dir / "context-map.graph.json")
+            self.assertEqual(written["provenance"]["generator"],
+                             "understand-bridge")
+            self.assertTrue(written["provenance"]["untrusted"])
+            self.assertNotIn(
+                "\x1b", written["unchecked_flows"][0]["missing_boundary"])
+
+
 if __name__ == "__main__":
     unittest.main()
