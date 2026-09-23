@@ -37,6 +37,7 @@ language's string/comment grammar generatively.
 from __future__ import annotations
 
 import random
+import re
 
 from core.audit.prefilter import _is_trivial_wrapper
 
@@ -227,6 +228,46 @@ class TestJsAmbiguousSlashRefusal:
             "}"
         )
         assert _refused(src, "javascript")
+
+    def test_char_class_after_paren_gate_discriminating_fixture(self):
+        # Gate-discriminating shape: a char class right after `)` —
+        # the one context ONLY the ambiguous-slash gate covers (no
+        # backslash for the backslash gate, no pointer-arith spelling,
+        # no other refusal applies). With the gate regressed this
+        # shape SKIPS and the one-planted-line suppression primitive
+        # re-opens; every other slash fixture in this battery is
+        # co-refused by an unrelated gate and cannot see that
+        # regression.
+        src = (
+            "const wrap = (c) => {\n"
+            "  if (x) /[//]y/.test(c); fs.unlinkSync(c);\n"
+            "  return helper(c);\n"
+            "}"
+        )
+        assert _refused(src, "javascript")
+
+    def test_ambiguous_gate_kills_its_own_mutant(self, monkeypatch):
+        # Discrimination proved in-process: with the gate disabled
+        # the fixture above flips to a skip. A refactor deleting or
+        # weakening _JS_AMBIGUOUS_SLASH_RE now fails THIS battery
+        # instead of staying green on co-refused fixtures.
+        import core.audit.prefilter as pf
+        src = (
+            "const wrap = (c) => {\n"
+            "  if (x) /[//]y/.test(c); fs.unlinkSync(c);\n"
+            "  return helper(c);\n"
+            "}"
+        )
+        assert _refused(src, "javascript")
+        monkeypatch.setattr(
+            pf, "_JS_AMBIGUOUS_SLASH_RE", re.compile(r"(?!x)x"),
+        )
+        skip, _ = pf._is_trivial_wrapper(src, "javascript", None)
+        assert skip, (
+            "fixture no longer gate-discriminating — another gate "
+            "co-refuses it; replace with a shape only the "
+            "ambiguous-slash gate covers"
+        )
 
     def test_char_class_comment_mint_known_direction_pin(self):
         # DECLARED OPEN residual (suppression direction, js/ts
