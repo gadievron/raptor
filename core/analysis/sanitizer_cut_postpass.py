@@ -220,6 +220,30 @@ class PostpassStats:
         }
 
 
+# Per-file read cap for the postpass's own text loads. The wall
+# budget bounds TIME, not memory: the per-run text/source caches held
+# every examined file's full content, so a repo of huge files (or one
+# planted multi-GB source) grew the caches unboundedly. Oversized
+# files read as unreadable — the refusal direction (a finding on such
+# a file loses suppression evidence, never gains it).
+_MAX_SOURCE_READ_BYTES = 10 * 1024 * 1024
+
+
+def _read_source_capped(path: Path) -> str | None:
+    """Capped best-effort source read: None on IO failure or when the
+    file exceeds :data:`_MAX_SOURCE_READ_BYTES`."""
+    try:
+        if path.stat().st_size > _MAX_SOURCE_READ_BYTES:
+            logger.debug(
+                "sanitizer-cut post-pass: %s exceeds %d bytes; "
+                "treating as unreadable", path, _MAX_SOURCE_READ_BYTES,
+            )
+            return None
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+
+
 def _sink_method_span(
     resolved_path: Path,
     sink_line: int,
@@ -232,9 +256,9 @@ def _sink_method_span(
     """
     try:
         if resolved_path not in text_cache:
-            text_cache[resolved_path] = resolved_path.read_text(
-                encoding="utf-8", errors="replace",
-            )
+            text_cache[resolved_path] = _read_source_capped(
+                resolved_path,
+            ) or ""
         text = text_cache[resolved_path]
         if not text:
             return None
@@ -331,9 +355,8 @@ def _scan_file_for_kinds(
     kinds_table = _SOURCE_KINDS.get(language) or {}
     if not kinds_table and not extra_patterns:
         return []
-    try:
-        text = file_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    text = _read_source_capped(file_path)
+    if text is None:
         return None
 
     active: dict[str, dict[str, Any]] = {}
@@ -728,12 +751,9 @@ def run_postpass(
                     break
                 if language == "java":
                     if resolved_path not in text_cache:
-                        try:
-                            text_cache[resolved_path] = resolved_path.read_text(
-                                encoding="utf-8", errors="replace",
-                            )
-                        except OSError:
-                            text_cache[resolved_path] = ""
+                        text_cache[resolved_path] = _read_source_capped(
+                            resolved_path,
+                        ) or ""
                     java_text = text_cache[resolved_path] or None
                 else:
                     java_text = None
