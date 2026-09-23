@@ -89,9 +89,17 @@ def _candidates(repo: Path) -> list[str]:
     buffer-capture harness (raptor-self-test's child harness logs into
     an in-memory buffer, never a TTY).
     """
+    # Universe = every tracked tree that hosts runtime Python: core/,
+    # packages/, engine/, plugins/ (in-session hook launchers included),
+    # libexec/ launchers, and the root raptor*.py modules — the same
+    # runtime universe the repo's other tree-wide gates walk. The
+    # closure claim is tree-wide, so a new runtime tree must be added
+    # HERE (and a fixture row in the candidate-universe test) or the
+    # gate silently never sees it.
     proc = subprocess.run(
         ["git", "-C", str(repo), "ls-files",
-         "core", "packages", "libexec", "raptor*.py"],
+         "core", "packages", "engine", "plugins", "libexec",
+         "raptor*.py"],
         capture_output=True, text=True, check=True,
     )
     rels = []
