@@ -169,3 +169,39 @@ class TestNonDowngradePathsKeepPlainFreshness:
                     str(target), "--file", "app.py", "--function",
                     "f", "--out", str(out)) == 0
         assert _record(cli, monkeypatch, target, out, "clean") == 0
+
+
+class TestConfirmOnlySilenceStillUnlocksRetraction:
+    """Interaction pin: confirm-only sweep silence vs the G3 unlock.
+
+    Two doctrines meet on one journal row, and the composed behavior
+    is deliberate — assert it so any future change to either side is
+    made knowingly:
+
+    - G3's retraction unlock keys on EXECUTION, not refutation: any
+      tool-produced outcome other than "error" (and never a
+      manual-attestation row) proves a tool actually ran since the
+      last record. The gate forbids retraction on the agent's bare
+      word — not retraction informed by a run.
+    - A confirm-only rule's zero-match is capped at "inconclusive" by
+      the sweep layer: silence adjudicates only the rule's sub-shape,
+      never the dispatched class, so the row's CONTENT can never be
+      cited as a class refutation.
+
+    An inconclusive row from an executed confirm-only rule therefore
+    DOES unlock the retraction lane: it is execution evidence, while
+    the verdict itself remains the operator's judgment. If retraction
+    should ever require a mechanically refuting outcome instead, that
+    is a G3 policy change — not a sweep-layer one.
+    """
+
+    def test_confirm_only_inconclusive_row_unlocks_clean(
+            self, cli, scratch, monkeypatch):
+        target, out = scratch
+        _seed_suspicious(cli, monkeypatch, target, out)
+        # The row shape the semgrep auto-run branch writes when a
+        # curated `# raptor: confirm-only` rule scans zero matches:
+        # executed (tool-produced rule_source, not an attestation),
+        # outcome capped at "inconclusive" — never "refuted".
+        _plant_executed_sweep(out, outcome="inconclusive")
+        assert _record(cli, monkeypatch, target, out, "clean") == 0
