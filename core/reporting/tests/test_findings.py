@@ -492,3 +492,29 @@ class TerminalStatusBucketsTest(unittest.TestCase):
         line = findings_summary_line(counts)
         self.assertIn("1 Not Disproven", line)
         self.assertIn("1 Confirmed (Unverified)", line)
+
+
+class TestChainBreaksShapes(unittest.TestCase):
+    """feasibility.chain_breaks is finding-supplied JSON — only a
+    list renders as blockers; dict shapes crashed the slice and
+    string shapes rendered one comma-joined character per blocker."""
+
+    def _detail(self, chain_breaks):
+        finding = {
+            "id": "F-1", "vuln_type": "buffer_overflow",
+            "file": "a.c", "line": 1,
+            "feasibility": {"chain_breaks": chain_breaks},
+        }
+        return build_finding_detail(finding, 1).content
+
+    def test_list_renders_blockers(self):
+        content = self._detail(["no gadget", "full RELRO"])
+        self.assertIn("**Blockers:** no gadget, full RELRO", content)
+
+    def test_dict_shape_no_crash_no_blockers(self):
+        content = self._detail({"a": 1})
+        self.assertNotIn("Blockers", content)
+
+    def test_string_shape_not_split_per_char(self):
+        content = self._detail("nope")
+        self.assertNotIn("n, o, p", content)
