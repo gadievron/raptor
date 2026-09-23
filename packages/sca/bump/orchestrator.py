@@ -443,8 +443,25 @@ def _enumerate_candidates(
                 continue
             upstream = lookup_upstream(arg_name)
             if upstream is None:
-                # No upstream source — silent skip (operator can
-                # add via the inline-comment override path).
+                # No upstream source, so no bump target can be
+                # proposed. When the ARG is a RECOGNISED version-pin
+                # family (a _BUILTIN_ARG_MAP key — which includes the
+                # runtime/base-image ARGs deliberately mapped to no
+                # ecosystem: PYTHON_VERSION, GO_VERSION,
+                # UBUNTU_VERSION, ...) the gap is operator-relevant
+                # and surfaces in ``skipped`` instead of vanishing.
+                # Unrecognised ARGs stay silent (arbitrary build args
+                # are noise); the inline-comment override remains the
+                # operator escape hatch either way.
+                if arg_name in _BUILTIN_ARG_MAP:
+                    skipped.append((
+                        arg_name, dockerfile,
+                        "recognised version-pin ARG with no "
+                        "upstream-latest source (runtime/base-image "
+                        "axis is deliberately unmapped) — bump "
+                        "target cannot be proposed; use an inline "
+                        "# raptor-sca: override to remap or skip",
+                    ))
                 continue
             cache_key = (upstream.kind, upstream.coordinate)
             if cache_key in latest_cache:
