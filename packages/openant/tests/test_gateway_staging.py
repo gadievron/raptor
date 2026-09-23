@@ -425,6 +425,87 @@ class TestGatewayRouteResolution(_GatewayHarness):
         self.assertEqual(mint["models"], ["anthropic.claude-fable-5"])
 
 
+class TestLoopbackReachableFromSandboxLane(unittest.TestCase):
+    """Live pin of the gateway's one sandbox assumption: the OpenAnt
+    child runs network-allowed (``block_network=False``, no TCP
+    allowlist), so it keeps the HOST network namespace and can dial a
+    host-loopback listener — on the mount-ns lane (which replaces the
+    filesystem view, not the netns) and on the mount-unavailable
+    fallback alike. A future sandbox change that unshared the netns
+    for this call shape would silently strand every gateway run at
+    connect time; this test makes it loud."""
+
+    def _probe(self, **extra):
+        import http.server
+        import threading
+
+        from core.sandbox.context import run as sandbox_run
+        from core.config import RaptorConfig
+
+        class _H(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a, **k):
+                return
+
+            def do_GET(self):
+                body = b"ok"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), _H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with tempfile.TemporaryDirectory(dir="/var/tmp") as td:
+                base = Path(td)
+                (base / "src").mkdir()
+                (base / "out").mkdir()
+                script = base / "src" / "probe.py"
+                script.write_text(
+                    "import urllib.request\n"
+                    "print(urllib.request.urlopen("
+                    f"'http://127.0.0.1:{srv.server_address[1]}/', "
+                    "timeout=10).read().decode())\n")
+                try:
+                    proc = sandbox_run(
+                        [sys.executable, str(script)],
+                        block_network=False,
+                        target=str(base / "src"),
+                        output=str(base / "out"),
+                        tool_paths=[sys.exec_prefix],
+                        capture_output=True, text=True, timeout=120,
+                        env=RaptorConfig.get_safe_env(),
+                        env_caller_filtered=True,
+                        caller_label="openant-gateway-lane-probe",
+                        **extra,
+                    )
+                except BaseException as e:  # noqa: BLE001
+                    # SandboxSetupError is a BaseException by contract;
+                    # a runner whose kernel lacks the lane entirely is
+                    # a host limitation, not a gateway regression.
+                    if type(e).__name__ != "SandboxSetupError":
+                        raise
+                    self.skipTest(f"sandbox lane unavailable here: {e}")
+            return proc
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+    @unittest.skipUnless(sys.platform == "linux", "linux sandbox lanes")
+    def test_default_lane_reaches_host_loopback(self):
+        proc = self._probe()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
+
+    @unittest.skipUnless(sys.platform == "linux", "linux sandbox lanes")
+    def test_mount_unavailable_fallback_reaches_host_loopback(self):
+        with patch("core.sandbox.context.check_mount_available",
+                   return_value=False):
+            proc = self._probe()
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("ok", proc.stdout)
+
+
 class TestRunCostReconciliation(unittest.TestCase):
     """The run report's cost line is max-of-ledgers: OpenAnt's own
     tracker (blind to models absent from its catalog) vs the gateway
