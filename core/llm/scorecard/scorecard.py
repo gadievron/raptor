@@ -75,6 +75,11 @@ logger = get_logger()
 # otherwise repeat it on every lock cycle.
 _unverified_warned_paths: set = set()
 
+# Same once-per-process discipline for the malformed-shape refusal
+# below — a read-heavy workload over a junk-shaped sidecar must not
+# repeat the warning per cell per read.
+_malformed_warned_paths: set = set()
+
 
 # v2 (2026-05): per-event-type counts are stratified into "YYYY-MM" age buckets
 # (``events[type] = {"2026-05": {"correct", "incorrect"}, ...}``) instead of a
@@ -418,6 +423,39 @@ def _safe_float(v, default: float = 0.0) -> float:
     """Float counterpart to :func:`_safe_int`. Wrong-type values → default."""
     from core.llm.coerce import to_float_safe
     return to_float_safe(v, default=default)
+
+
+def _warn_malformed_once(path: Path, detail: str) -> None:
+    """One warning per sidecar path per process when a read surface
+    skips a malformed shape. The skip itself is the structured
+    refusal — the sidecar parses as JSON but an inner shape is junk
+    (forged under the key-unusable clamp, or hand-corrupted), and the
+    module's demote-never-error doctrine applies to shapes exactly as
+    it does to verification failures."""
+    key = str(path)
+    if key in _malformed_warned_paths:
+        return
+    _malformed_warned_paths.add(key)
+    logger.warning(
+        "scorecard: malformed cell shape(s) in %s (%s) — skipped at read; the shapes never steer routing. Repair or reset the sidecar to clear this.", path, detail,
+    )
+
+
+def _cell_event_buckets(cell: dict, event_type: str) -> dict:
+    """One event type's bucket map from a cell, shape-guarded.
+
+    The read counterpart of ``_ensure_cell``'s write-path
+    normalisation: a missing ``events`` key, a non-dict ``events``
+    value, or a non-dict bucket map (all reachable via a forged
+    sidecar kept readable under the key-unusable clamp, or via
+    hand-edited pre-MAC history) reads as "no observations" instead
+    of raising out of the trust-policy query. Non-mutating — read
+    surfaces must never rewrite unverified content in place."""
+    events = cell.get("events")
+    if not isinstance(events, dict):
+        return {}
+    buckets = events.get(event_type)
+    return buckets if isinstance(buckets, dict) else {}
 
 
 def _empty_events() -> dict[str, dict[str, dict[str, int]]]:
@@ -816,7 +854,7 @@ class ModelScorecard:
         if override == "force_fall_through":
             return Policy.FALL_THROUGH
 
-        ev = cell["events"].get(EventType.CHEAP_SHORT_CIRCUIT, {})
+        ev = _cell_event_buckets(cell, EventType.CHEAP_SHORT_CIRCUIT)
         policy = self._measured_policy(
             ev, self.freshness_half_life_days,
             sample_size_floor=sample_size_floor,
@@ -1018,7 +1056,20 @@ class ModelScorecard:
         out: list[DecisionClassStats] = []
         with self._with_lock(write=False) as data:
             for model, by_dc in (data.get("models") or {}).items():
+                # Same isinstance discipline as measure_freshness_impact:
+                # a junk per-model value or cell (readable-but-unverified
+                # forgery, hand-edit) is skipped with a once-per-path
+                # warning, never a crash.
+                if not isinstance(by_dc, dict):
+                    _warn_malformed_once(
+                        self.path, f"non-dict value for model {model!r}")
+                    continue
                 for dc, cell in by_dc.items():
+                    if not isinstance(cell, dict):
+                        _warn_malformed_once(
+                            self.path,
+                            f"non-dict cell at {model!r}/{dc!r}")
+                        continue
                     out.append(self._cell_to_stats(
                         model, dc, cell,
                         freshness_half_life_days=freshness_half_life_days))
@@ -1064,7 +1115,13 @@ class ModelScorecard:
             models = data.get("models") or {}
 
             if all_:
-                deleted = sum(len(by_dc) for by_dc in models.values())
+                # Non-dict per-model values hold no countable cells
+                # (junk shapes from a forged / hand-corrupted file);
+                # the wipe below removes them regardless.
+                deleted = sum(
+                    len(by_dc) for by_dc in models.values()
+                    if isinstance(by_dc, dict)
+                )
                 data["models"] = {}
                 return deleted
 
@@ -1081,12 +1138,23 @@ class ModelScorecard:
                 if model is not None and m_key != model:
                     continue
                 by_dc = models[m_key]
+                if not isinstance(by_dc, dict):
+                    # Junk shape: no cells to walk. Left in place —
+                    # reads skip it; ``reset --all`` clears it.
+                    continue
                 for dc_key in list(by_dc.keys()):
                     if (decision_class is not None
                             and dc_key != decision_class):
                         continue
                     if cutoff_iso is not None:
-                        seen = by_dc[dc_key].get("last_seen_at", "")
+                        cell = by_dc[dc_key]
+                        # A non-dict cell carries no timestamp: like
+                        # a timestampless cell below, an age-filtered
+                        # reset keeps it (scoped/full resets remove).
+                        seen = (
+                            cell.get("last_seen_at", "")
+                            if isinstance(cell, dict) else ""
+                        )
                         if not seen:
                             # No timestamp (e.g. adopted legacy
                             # history): age is unknown, so an
@@ -1172,6 +1240,43 @@ class ModelScorecard:
                 f"{version!r}"
             )
             raise ValueError(msg)
+        # Shape-validate BEFORE stamping. Adoption asserts operator
+        # trust in the content, and the read/trust surfaces treat
+        # trusted content as well-formed — a junk per-model value or
+        # cell adopted here would surface later as read crashes (or
+        # crash the auto-GC inside the locked write below). Bad input
+        # gets the documented ValueError instead; the sidecar stays
+        # untouched and unstamped.
+        models = adopted.get("models")
+        if models is None:
+            models = {}
+            adopted["models"] = models
+        if not isinstance(models, dict):
+            msg = (
+                f"cannot adopt {source}: 'models' must be a JSON "
+                f"object, got {type(models).__name__}"
+            )
+            raise ValueError(msg)
+        for model_key, by_dc in models.items():
+            if not isinstance(by_dc, dict):
+                msg = (
+                    f"cannot adopt {source}: value for model "
+                    f"{model_key!r} must be a JSON object, got "
+                    f"{type(by_dc).__name__}"
+                )
+                raise ValueError(msg)
+            for dc_key, cell in by_dc.items():
+                if not isinstance(cell, dict):
+                    msg = (
+                        f"cannot adopt {source}: cell at "
+                        f"{model_key!r}/{dc_key!r} must be a JSON "
+                        f"object, got {type(cell).__name__}"
+                    )
+                    raise ValueError(msg)
+                # Dict cells missing/mis-shaping ``events`` are
+                # hand-edited-history territory, not junk — normalise
+                # (idempotent; already-bucketed cells untouched).
+                _migrate_events_v1_to_v2(cell)
         with self._with_lock() as data:
             data.clear()
             data.update(adopted)
@@ -1184,21 +1289,54 @@ class ModelScorecard:
         self, data: dict, model: str, decision_class: str,
     ) -> dict | None:
         """Return the raw cell dict if it exists, else None.
-        Caller holds the lock."""
-        return (
-            data.get("models", {})
-                .get(model, {})
-                .get(decision_class)
-        )
+
+        Shape-guarded at every level: a non-dict ``models`` value,
+        per-model value, or cell reads as "no cell" (structured
+        refusal — the trust query then answers ``LEARNING``) rather
+        than raising out of the trust surface. Caller holds the lock.
+        """
+        models = data.get("models")
+        if not isinstance(models, dict):
+            return None
+        by_dc = models.get(model)
+        if not isinstance(by_dc, dict):
+            if by_dc is not None:
+                _warn_malformed_once(
+                    self.path, f"non-dict value for model {model!r}")
+            return None
+        cell = by_dc.get(decision_class)
+        if not isinstance(cell, dict):
+            if cell is not None:
+                _warn_malformed_once(
+                    self.path,
+                    f"non-dict cell at {model!r}/{decision_class!r}")
+            return None
+        return cell
 
     def _ensure_cell(
         self, data: dict, model: str, decision_class: str,
     ) -> dict:
         """Return the raw cell dict, creating with defaults if
-        absent. Caller holds the lock."""
-        models = data.setdefault("models", {})
-        by_dc = models.setdefault(model, {})
+        absent. Caller holds the lock.
+
+        Write-path shape normalisation (mirrors the events handling
+        below): a non-dict ``models`` value or per-model value —
+        reachable only through a forged or hand-corrupted sidecar —
+        is replaced with a fresh dict. A junk shape holds no
+        recoverable observations, and the write path's contract is
+        to normalise defensively rather than crash the locked write.
+        """
+        models = data.get("models")
+        if not isinstance(models, dict):
+            models = {}
+            data["models"] = models
+        by_dc = models.get(model)
+        if not isinstance(by_dc, dict):
+            by_dc = {}
+            models[model] = by_dc
         cell = by_dc.get(decision_class)
+        if not isinstance(cell, dict):
+            cell = None
         if cell is None:
             now = _now_iso()
             cell = {
@@ -1244,7 +1382,7 @@ class ModelScorecard:
     ) -> DecisionClassStats:
         events = {}
         for et in ALL_EVENT_TYPES:
-            buckets = cell["events"].get(et, {})
+            buckets = _cell_event_buckets(cell, et)
             if freshness_half_life_days:
                 wc, wi = weighted_counts(
                     buckets, freshness_half_life_days,
@@ -1262,6 +1400,10 @@ class ModelScorecard:
             # rounding in the counts.
             c, i = round(wc), round(wi)
             events[et] = _EventCounts(correct=c, incorrect=i)
+        # Shape-guarded like the events walk: a junk samples value
+        # reads as "no samples" rather than iterating a string.
+        raw_samples = cell.get("disagreement_samples")
+        samples = list(raw_samples) if isinstance(raw_samples, list) else []
         return DecisionClassStats(
             decision_class=decision_class,
             model=model,
@@ -1270,7 +1412,7 @@ class ModelScorecard:
             model_version=cell.get("model_version", ""),
             policy_override=cell.get("policy_override", "auto"),
             events=events,
-            disagreement_samples=list(cell.get("disagreement_samples") or []),
+            disagreement_samples=samples,
             calls=_safe_int(cell.get("calls"), 0),
             cost_usd=_safe_float(cell.get("cost_usd"), 0.0),
             tokens=_safe_int(cell.get("tokens"), 0),
@@ -1586,17 +1728,31 @@ class ModelScorecard:
                 # Operator-active model — preserve all its cells.
                 continue
             by_dc = models[m_key]
+            if not isinstance(by_dc, dict):
+                # Junk shape (forged / hand-corrupted): carries no
+                # last_seen_at, so like a timestampless cell it is
+                # never age-GC'd. Reads skip it; the GC walk — which
+                # runs inside ``_LockCtx.__exit__`` — must not crash
+                # over it either.
+                continue
             for dc_key in list(by_dc.keys()):
                 cell = by_dc[dc_key]
+                if not isinstance(cell, dict):
+                    # Same rule as a junk by_dc above.
+                    continue
                 seen = cell.get("last_seen_at", "")
-                if seen and seen < cutoff_iso:
+                if isinstance(seen, str) and seen and seen < cutoff_iso:
                     # Tally before deletion so the log line is
                     # informative without a separate scan. Counts are
                     # age-bucketed (v2) — flatten across buckets.
-                    for et_counts in (cell.get("events") or {}).values():
-                        c, i = flatten_counts(et_counts)
-                        events_correct += c
-                        events_incorrect += i
+                    events = cell.get("events")
+                    if isinstance(events, dict):
+                        for et_counts in events.values():
+                            if not isinstance(et_counts, dict):
+                                continue
+                            c, i = flatten_counts(et_counts)
+                            events_correct += c
+                            events_incorrect += i
                     del by_dc[dc_key]
                     per_model_counts[m_key] = (
                         per_model_counts.get(m_key, 0) + 1)
