@@ -478,8 +478,13 @@ _COPY_CALLS = frozenset({
     "bcopy", "wmemcpy", "wmemmove", "wcscpy", "wcsncpy",
 })
 
+# The pragma body is line-bounded (\s[^\n]*): the naive ``\s+.*``
+# overlapped the whitespace run and the dot-star — quadratic on a
+# '#pragma'-opening line ending in a long whitespace run. A pragma
+# is one logical line, so the dropped cross-line corner (token on a
+# LATER line than the directive) was never valid C.
 _STACK_PROTECTOR_DISABLE_RE = re.compile(
-    r"#\s*pragma\s+.*(?:no_stack_protector|optimize\s*\(\s*\"no-stack-protector\"\s*\))"
+    r"#\s*pragma\s[^\n]*(?:no_stack_protector|optimize\s*\(\s*\"no-stack-protector\"\s*\))"
     r"|__attribute__\s*\(\s*\(\s*no_stack_protector\s*\)\s*\)"
     r"|__attribute__\s*\(\s*\(\s*optimize\s*\(\s*\"no-stack-protector\"\s*\)\s*\)\s*\)",
 )

@@ -583,7 +583,12 @@ _DANGEROUS_MACROS = frozenset({
 # Captures the DOTTED callee form (subprocess.run, pickle.loads): a
 # bare-word capture could never match the dotted _DANGEROUS_PY_APIS
 # entries, so dangerous one-line delegates skipped as trivial.
-_WRAPPER_CALL_RE = re.compile(r'\b((?:\w+\.)*\w+)\s*\(')
+# Bounded segment loop: every '.'-boundary in a dotted run is a \b,
+# so an unanchored scan restarted at each segment and re-walked the
+# rest of the chain — quadratic on a long synthetic chain with no
+# paren. 32 segments sits far above real dotted callees (trade-off
+# both directions: larger admits absurd chains, smaller drops them).
+_WRAPPER_CALL_RE = re.compile(r'\b((?:\w+\.){0,32}\w+)\s*\(')
 
 #: The js/ts slash context the lexer heuristic cannot decide (regex
 #: vs division after `)` / `]`) — the wrapper skip refuses instead
@@ -600,8 +605,13 @@ _JS_AMBIGUOUS_SLASH_RE = re.compile(r"[)\]]\s*/")
 #: char-class spelling), see the refusal-site comment.
 _JS_INVALID_SLASH_RE = re.compile(r"[)\]\"'`\w]\s*/[^\n\\]*\\")
 _WRAPPER_RETURN_CALL_RE = re.compile(r'return\s+(\w+)\s*\(')
+# The subscript body is \S-headed ([^\]\s][^]]*): the naive
+# ``\[\s*[^]]+\]`` overlapped the whitespace span and the body on
+# whitespace — quadratic on a '['-opening expression ending in a
+# whitespace run. The dropped corner is a whitespace-only subscript
+# ('x[  ]'), not real C.
 _WRAPPER_PTR_ARITH_RE = re.compile(
-    r'(?<!\w->)\w+\s*\+\s*\w|\w+\s*\[\s*[^]]+\]|'
+    r'(?<!\w->)\w+\s*\+\s*\w|\w+\s*\[\s*[^\]\s][^]]*\]|'
     r'\(\s*\w+\s*\*\s*\)|'
     r'\(\s*(?:unsigned\s+)?(?:char|int|long|short|void)\s*\*\s*\)',
 )
@@ -3542,7 +3552,8 @@ def _check_perl_patterns(
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
 
-        if re.search(r'\beval\s*\(?\s*["\$]', stripped):
+        # gated optional paren (the \(?\s* pair was quadratic)
+        if re.search(r'\beval\s*(?:\(\s*)?["\$]', stripped):
             result.hits.append(PrefilterHit(
                 rule_id="perl-eval",
                 message="eval with variable — code injection risk",
@@ -3550,7 +3561,7 @@ def _check_perl_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\b(?:system|exec)\s*\(?\s*["\$]', stripped):
+        if re.search(r'\b(?:system|exec)\s*(?:\(\s*)?["\$]', stripped):
             result.hits.append(PrefilterHit(
                 rule_id="perl-command-exec",
                 message="system/exec — command injection risk",
@@ -3567,7 +3578,7 @@ def _check_perl_patterns(
             ))
 
         if re.search(
-            r'\bopen\s*\(?\s*\w+\s*,\s*["\$]', stripped,
+            r'\bopen\s*(?:\(\s*)?\w+\s*,\s*["\$]', stripped,
         ) and re.search(r'\||\>', stripped):
                 result.hits.append(PrefilterHit(
                     rule_id="perl-open-pipe",
@@ -3622,7 +3633,7 @@ def _check_perl_patterns(
             ))
 
         if re.search(
-            r'\bchmod\s*\(?\s*0?777|\bchmod\b.*\$',
+            r'\bchmod\s*(?:\(\s*)?0?777|\bchmod\b.*\$',
             stripped,
         ):
             result.hits.append(PrefilterHit(

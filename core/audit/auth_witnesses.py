@@ -147,8 +147,14 @@ def scan_null_concat(
     concat_vars: dict[str, tuple[int, str]] = {}
     for i, line in enumerate(lines):
         for g in nullable_getters:
+            # The whitespace after '=' is subsumed by the filler
+            # class ([^=\n] includes horizontal whitespace, and the
+            # line loop never feeds a newline), so the naive
+            # ``=\s*[^=\n]*`` overlapped two unbounded spans —
+            # quadratic on an assignment line ending in a long
+            # whitespace run with no concatenation.
             m = re.search(
-                r"(?:(?P<var>\w+)\s*=\s*)?[^=\n]*\+\s*" + re.escape(g)
+                r"(?:(?P<var>\w+)\s*=)?[^=\n]*\+\s*" + re.escape(g)
                 + r"\s*\(",
                 line,
             )

@@ -142,3 +142,41 @@ class TestXrefSegmentScoping:
             "handle", _PRIMARY_DISPATCHES, xref_source=_XREF_TWO_SINKS,
         )
         assert len(findings) == 2
+
+
+class TestComparisonWhitespaceRuns:
+    def test_identifier_and_whitespace_runs_are_fast(self):
+        """Representative hostile shapes for the audit quad batch:
+        an identifier/digit run inside an if-condition (the lazy
+        filler, LHS and RHS groups overlapped on word chars) and a
+        recv-call ending in a whitespace run (the argument groups
+        overlapped the whitespace spans). Both quadratic before the
+        \\b pins / \\S-headed arguments; linear now."""
+        from core.audit.proto_length_checker import (
+            _MAX_CHECK_RE,
+            _RECV_RE,
+        )
+        from core.testing.wallclock import cpu_budget
+
+        with cpu_budget(1.0, what="if-condition digit run"):
+            assert _MAX_CHECK_RE.search(
+                "if (" + "0" * 200000 + "!",
+            ) is None
+        with cpu_budget(1.0, what="recv whitespace run"):
+            assert _RECV_RE.search(
+                "recv(fd, buf" + " " * (1 << 16) + "!",
+            ) is None
+
+    def test_comparison_forms_still_match(self):
+        from core.audit.proto_length_checker import (
+            _MAX_CHECK_RE,
+            _RECV_RE,
+        )
+
+        m = _MAX_CHECK_RE.search("if (len > MAX_LEN) {")
+        assert m is not None
+        assert (m.group(1), m.group(2), m.group(3)) == \
+            ("len", ">", "MAX_LEN")
+        m = _RECV_RE.search("recv(sock, buf, sizeof buf, 0)")
+        assert m is not None
+        assert m.group(3) == "buf"

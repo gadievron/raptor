@@ -311,8 +311,13 @@ def _collect_branches_ts(
 
 # Indent captures are HORIZONTAL-only ([^\S\n]): the MULTILINE
 # ^\s* idiom is quadratic on blank-line runs in scanned source.
+# The case/when expression groups are \S-headed: the naive
+# ``case\s+(.+?)`` overlapped the whitespace run and the lazy group
+# — quadratic on a 'case'-opening line ending in a whitespace run
+# with no ':'. The greedy ``\s+`` already owned the leading
+# whitespace, so captures are unchanged.
 _CASE_HEADER_RE = re.compile(
-    r"^([^\S\n]*)(?:case\s+(.+?):|when\s+(.+?)(?::|\s|$)|default\s*:)",
+    r"^([^\S\n]*)(?:case\s+(\S.*?):|when\s+(\S.*?)(?::|\s|$)|default\s*:)",
     re.MULTILINE,
 )
 

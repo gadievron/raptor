@@ -2942,8 +2942,11 @@ def _extract_type_definition(
         re.compile(
             rf'^\s*(?:typedef\s+)?struct\s+{re.escape(type_name)}\s*\{{',
         ),
+        # (?=\S) pins the whitespace run to end at the tail (same
+        # language — the dot-star absorbed any remainder), killing
+        # the run-vs-dot-star split that was quadratic here.
         re.compile(
-            rf'^\s*typedef\s+.*\b{re.escape(type_name)}\s*;',
+            rf'^\s*typedef\s+(?=\S).*\b{re.escape(type_name)}\s*;',
         ),
         re.compile(
             rf'^\s*(?:typedef\s+)?enum\s+{re.escape(type_name)}\s*\{{',
@@ -2962,8 +2965,17 @@ def _extract_type_definition(
     # Multi-line typedef: ``typedef struct { ... } Name;``
     # Must be applied against the full content block so the DOTALL
     # dot matches the newlines between braces.
+    # The optional struct tag gates its own trailing whitespace
+    # ((?:\w+\s*)?): the naive ``\s+\w*\s*`` put two whitespace
+    # spans around the optional tag — quadratic on a
+    # 'typedef struct'-opening run with no brace. The brace body is
+    # bounded (16384 chars — far above real typedef structs;
+    # trade-off both directions: larger admits huge bodies but
+    # raises per-anchor re-scan reach, smaller drops them) so a
+    # planted brace-less run cannot make every line anchor re-scan
+    # the whole tail. Match set otherwise unchanged.
     multiline_pat = re.compile(
-        rf'^[^\S\n]*typedef\s+struct\s+\w*\s*\{{[^}}]*\}}\s*{re.escape(type_name)}\s*;',
+        rf'^[^\S\n]*typedef\s+struct\s+(?:\w+\s*)?\{{[^}}]{{0,16384}}\}}\s*{re.escape(type_name)}\s*;',
         re.DOTALL | re.MULTILINE,
     )
     m = multiline_pat.search(content)

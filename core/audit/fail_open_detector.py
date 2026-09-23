@@ -109,15 +109,20 @@ _IS_NOT_NONE_RE = re.compile(r"\bif\s+(\w+)\s+is\s+not\s+None\b")
 # LHS: simple var, len(var), var.length, var.size(), var.count()
 _LHS = r"(?:\w+(?:\(\w+\))?(?:\.(?:length|size|count)(?:\(\))?)?)"
 _RHS = r"(?:\w+|\d+)"
+# ``\s*\n?\s*`` is one whitespace run (\s already matches the
+# newline): the three-piece spelling stacked unbounded spans around
+# the redundant \n? — quadratic on an if-line followed by a long
+# whitespace run with no break/return. ``\s*`` alone is the same
+# language.
 _CAP_BREAK_RE = re.compile(
     # Python: if LHS >= RHS: break/return
-    rf"\bif\s+{_LHS}\s*(?:>=|>|==)\s*{_RHS}\s*:\s*\n?\s*(?:break|return)\b"
+    rf"\bif\s+{_LHS}\s*(?:>=|>|==)\s*{_RHS}\s*:\s*(?:break|return)\b"
     # C/Java/JS: if (LHS >= RHS) break;/return;
-    rf"|\bif\s*\(\s*{_LHS}\s*(?:>=|>|==)\s*{_RHS}\s*\)\s*\n?\s*(?:break|return)\s*;"
+    rf"|\bif\s*\(\s*{_LHS}\s*(?:>=|>|==)\s*{_RHS}\s*\)\s*(?:break|return)\s*;"
     # C/Java/JS: if (LHS >= RHS) { break; } (with braces)
-    rf"|\bif\s*\(\s*{_LHS}\s*(?:>=|>|==)\s*{_RHS}\s*\)\s*\{{\s*\n?\s*(?:break|return)\b"
+    rf"|\bif\s*\(\s*{_LHS}\s*(?:>=|>|==)\s*{_RHS}\s*\)\s*\{{\s*(?:break|return)\b"
     # Go: if LHS >= RHS { break/return
-    rf"|\bif\s+{_LHS}\s*(?:>=|>|==)\s*{_RHS}\s*\{{\s*\n?\s*(?:break|return)\b",
+    rf"|\bif\s+{_LHS}\s*(?:>=|>|==)\s*{_RHS}\s*\{{\s*(?:break|return)\b",
     re.MULTILINE,
 )
 
@@ -127,7 +132,8 @@ _TRUNCATION_SIGNAL_RE = re.compile(
     r'(?:truncat|capped|incomplete|"truncated"|"partial"'
     # Python: return results, True/False
     r"|return\s+\w+\s*,\s*(?:True|False|truncated|capped)"
-    r"|return\s+\(?\s*\w+\s*,\s*(?:True|False)\s*\)?"
+    # gated optional paren — the naive \(?\s* pair was quadratic
+    r"|return\s+(?:\(\s*)?\w+\s*,\s*(?:True|False)\s*\)?"
     # Go: return results, true/false
     r"|return\s+\w+\s*,\s*(?:true|false)\b"
     # JS: { results, truncated: true }

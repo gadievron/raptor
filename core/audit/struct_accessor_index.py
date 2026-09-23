@@ -96,10 +96,13 @@ _UNLOCK_CALL_RE = re.compile(
     re.IGNORECASE,
 )
 
+# The optional '&' gates its own trailing whitespace — the naive
+# ``\s*&?\s*`` pair was quadratic on a lock call followed by a
+# whitespace run.
 _LOCK_NAME_RE = re.compile(
     r"\b(?:mutex_lock|spin_lock\w*|down_read|down_write"
     r"|read_lock|write_lock|rcu_read_lock"
-    r"|pthread_mutex_lock)\s*\(\s*&?\s*(\w+(?:->\w+)*)",
+    r"|pthread_mutex_lock)\s*\(\s*(?:&\s*)?(\w+(?:->\w+)*)",
 )
 
 _NOISE_FIELDS = frozenset({

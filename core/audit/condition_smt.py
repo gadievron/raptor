@@ -719,7 +719,10 @@ def declared_signedness(var_name: str, source: str) -> bool | None:
         r"|__[su](?:8|16|32|64)"
         r"|[su](?:8|16|32|64)"
         r"|size_t|ssize_t|off_t|loff_t|uintptr_t|ptrdiff_t)"
-        r"\s+\**\s*" + re.escape(var_name) + r"\b",
+        # The star run gates its own trailing whitespace: the naive
+        # ``\s+\**\s*`` put two whitespace spans around it —
+        # quadratic on a type token followed by a whitespace run.
+        r"\s+(?:\*+\s*)?" + re.escape(var_name) + r"\b",
     )
     m = type_re.search(source)
     if not m:
@@ -3311,12 +3314,21 @@ _GO_CAST_RE = re.compile(
     r"(\w+)\s*(?::?=)\s*((?:u?int(?:8|16|32|64)?|byte|rune|uint|uintptr))\s*\(\s*(\w+)\s*\)"
 )
 
+# The optional second assignee gates its own trailing whitespace
+# ((?:,\s*\w+\s*)?): the naive ``\s*(?:,\s*\w+)?\s*`` put two
+# whitespace spans around it — quadratic on an assignment line
+# ending in a whitespace run.
 _GO_ATOI_RE = re.compile(
-    r"(\w+)\s*(?:,\s*\w+)?\s*(?::?=)\s*strconv\.(?:Atoi|ParseInt|ParseUint)\s*\("
+    r"(\w+)\s*(?:,\s*\w+\s*)?(?::?=)\s*strconv\.(?:Atoi|ParseInt|ParseUint)\s*\("
 )
 
+# One branch per RHS shape (math token or bare word), each gating
+# its own trailing whitespace: the naive
+# ``\s*(?:math\.Max|math\.Min)?\w*\s*\{`` chained whitespace spans
+# around two optional atoms — quadratic on an if-line ending in a
+# whitespace run with no brace. Same match set.
 _GO_BOUNDS_CHECK_RE = re.compile(
-    r"if\s+\w+\s*[<>]=?\s*(?:math\.Max|math\.Min)?\w*\s*\{"
+    r"if\s+\w+\s*[<>]=?\s*(?:(?:math\.Max|math\.Min)\w*\s*|\w+\s*)?\{"
     r"|if\s+\w+\s*<\s*0\s*(?:\|\||&&)"
     r"|if\s+\w+\s*>\s*math\.Max"
 )
@@ -3447,12 +3459,17 @@ def _var_only_in_call_args(rhs: str, var_name: str) -> bool:
 # strto*/ato* family. Target-specific parse wrappers are NOT listed —
 # they arrive via the learned vocabulary, never hardcoded.
 _PARSED_INT_ASSIGN_RES: tuple[re.Pattern, ...] = (
+    # Same gated-assignee respelling as _GO_ATOI_RE above.
     re.compile(
-        r"(\w+)\s*(?:,\s*\w+)?\s*(?::?=)\s*"
+        r"(\w+)\s*(?:,\s*\w+\s*)?(?::?=)\s*"
         r"strconv\.(?:Atoi|ParseInt|ParseUint)\s*\(",
     ),
+    # The cast interior subsumes its leading whitespace
+    # ([\w\s*] includes whitespace): the naive ``\(\s*[\w\s*]+``
+    # overlapped two unbounded spans — quadratic on a cast-opening
+    # line ending in a whitespace run. Same language.
     re.compile(
-        r"(\w+)\s*=\s*(?:\(\s*[\w\s*]+\)\s*)?"
+        r"(\w+)\s*=\s*(?:\([\w\s*]+\)\s*)?"
         r"(?:strtou?ll?|strtou?l|atoi|atoll?|strtou?imax|strtoumax)"
         r"\s*\(",
     ),
@@ -3477,8 +3494,11 @@ _PARSE_CALL_BODY_RE = re.compile(
 )
 
 _GO_FUNC_DEF_RE = re.compile(r"^func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(")
+# Bounded head window: the unbounded lazy head overlapped the star
+# run and the name on word/star chars — quadratic even at the
+# anchored match call. 256 chars sits far above real C heads.
 _C_FUNC_DEF_RE = re.compile(
-    r"^[A-Za-z_][\w\s*]*?\**(\w+)\s*\(",
+    r"^[A-Za-z_][\w\s*]{0,256}?\**(\w+)\s*\(",
 )
 _C_KEYWORD_STARTS = ("if", "for", "while", "switch", "return", "else")
 
@@ -3630,8 +3650,12 @@ def check_parsed_int_contract(
     parsed_vars: dict[str, int] = {}
     wrapper_re = None
     if parse_wrappers:
+        # Bounded assignee loop: the loop and the final name overlap
+        # on word chars, so the unbounded spelling cost every split
+        # of an assignee run with no '=' — quadratic. Sixteen
+        # assignees sits far above real code.
         wrapper_re = re.compile(
-            r"((?:\w+\s*,\s*)*\w+)\s*(?::?=)\s*(?:\w+\.)?(?:"
+            r"((?:\w+\s*,\s*){0,16}\w+)\s*(?::?=)\s*(?:\w+\.)?(?:"
             + "|".join(re.escape(w) for w in sorted(parse_wrappers))
             + r")\s*\(",
         )
@@ -5104,10 +5128,15 @@ def check_race_protection(
 # Hypothesis disproof
 # ---------------------------------------------------------------------------
 
+# Every whitespace run is pinned with (?=\S) — the run ends where
+# the non-whitespace tail begins (same language: the following lazy
+# classes absorbed any remainder) — so the runs cannot split against
+# the lazy filler: the naive spelling was quadratic on an
+# 'integer overflow'-opening hypothesis ending in a whitespace run.
 _INT_HYPO_RE = re.compile(
     r"(?:integer|int)\s*(?:overflow|underflow|wraparound)"
-    r".*?(?:in|of|when|during)\s+"
-    r"(?:the\s+)?(?:calculation|multiplication|expression|addition|subtraction)?"
+    r".*?(?:in|of|when|during)\s+(?=\S)"
+    r"(?:the\s+(?=\S))?(?:calculation|multiplication|expression|addition|subtraction)?"
     r"[^.]*?(`[^`]+`|[a-zA-Z_]\w*(?:\s*[*+\-]\s*[a-zA-Z_]\w*)*)",
     re.IGNORECASE,
 )

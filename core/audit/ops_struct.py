@@ -20,7 +20,10 @@ _STRUCT_INIT_RE = re.compile(
 #: any member sharing the initialiser's closing line — each miss
 #: silently dropped an indirect entry point from the reachability
 #: exemption.
-_FIELD_ASSIGN_RE = re.compile(r"\.\s*(\w+)\s*=\s*&?\s*([A-Za-z_]\w*)")
+#: The `&` gates its own trailing whitespace: `\s*&?\s*` stacked two
+#: unbounded whitespace spans — quadratic on a member line whose `=` is
+#: followed by a long space run.
+_FIELD_ASSIGN_RE = re.compile(r"\.\s*(\w+)\s*=\s*(?:&\s*)?([A-Za-z_]\w*)")
 
 _NON_FUNC_VALUES = frozenset({
     "NULL", "0", "1", "true", "false", "TRUE", "FALSE",

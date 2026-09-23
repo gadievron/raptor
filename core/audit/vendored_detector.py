@@ -174,8 +174,10 @@ _TABLE_LINE_RE = re.compile(
     rf"^\s*(?:\{{\s*)?{_NUM}(?:\s*,\s*{_NUM})*"
     rf"\s*(?:,\s*)?(?:\}}+\s*)?(?:,\s*)?$"
 )
+# Gated optional paren — the naive ``\(?\s*`` pair was quadratic
+# on a define-opening row ending in a whitespace run.
 _DEFINE_CONST_RE = re.compile(
-    r"^\s*#\s*define\s+\w+\s+\(?\s*(?:0[xX][0-9a-fA-F]+|\d+)"
+    r"^\s*#\s*define\s+\w+\s+(?:\(\s*)?(?:0[xX][0-9a-fA-F]+|\d+)"
 )
 
 # One-liner-swarm shape: dozens of tiny functions with near-zero

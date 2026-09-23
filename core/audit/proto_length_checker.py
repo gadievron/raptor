@@ -70,11 +70,17 @@ class ProtoLengthFinding:
         return d
 
 
+# The buffer and length arguments are \S-headed: the naive
+# ``,\s*([^,]+)`` overlapped the whitespace span and the argument on
+# whitespace — quadratic on a recv-opening line ending in a
+# whitespace run with no comma. Captures unchanged (the greedy \s*
+# already owned the leading whitespace); the dropped corner is a
+# whitespace-only argument, not real C.
 _RECV_RE = re.compile(
     r'\b(recv|recvfrom|read|fread|recvmsg)\s*\('
-    r'([^,]+),'       # fd / stream
-    r'\s*([^,]+),'    # buffer
-    r'\s*([^,)]+)',   # length
+    r'([^,]+),'                  # fd / stream
+    r'\s*([^,\s][^,]*),'        # buffer
+    r'\s*([^,)\s][^,)]*)',      # length
 )
 
 _BYTE_EXTRACT_RE = re.compile(
@@ -100,21 +106,27 @@ _COPY_RE = re.compile(
     r'\b(memcpy|memmove|bcopy|strncpy)\s*\(([^,]+),([^,]+),([^)]+)\)',
 )
 
+# Same \S-headed argument respelling as _RECV_RE above.
 _SECOND_RECV_RE = re.compile(
-    r'\b(recv|recvfrom|read|fread)\s*\(([^,]+),\s*([^,]+),\s*([^,)]+)',
+    r'\b(recv|recvfrom|read|fread)\s*\(([^,]+),\s*([^,\s][^,]*),\s*([^,)\s][^,)]*)',
 )
 
 # Operator captured: acceptance must be direction-aware — a
 # comparison only bounds the variable it caps ABOVE (see
 # _var_has_upper_bound).
+# \b pins the LHS group to a word start and the RHS group to its
+# full word — each overlapped the neighbouring filler on word chars
+# (quadratic on an identifier run with no operator or paren).
+# Earliest-match captures unchanged.
 _MAX_CHECK_RE = re.compile(
     r'(?:if|while)\s*\([^)]*?'
-    r'(\w+)\s*(>=|<=|>|<)\s*(\w+|\d+(?:x[\da-fA-F]+)?)'
+    r'\b(\w+)\s*(>=|<=|>|<)\s*(\w+|\d+(?:x[\da-fA-F]+)?)\b'
     r'[^)]*\)',
 )
 
+# Same \b pin as _MAX_CHECK_RE above.
 _RETURN_CHECK_RE = re.compile(
-    r'if\s*\([^)]*?(\w+)\s*(?:>|>=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)[^)]*\)'
+    r'if\s*\([^)]*?\b(\w+)\s*(?:>|>=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)\b[^)]*\)'
     r'\s*\{[^}]*?(?:return|goto|break|exit)',
 )
 

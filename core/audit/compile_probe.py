@@ -152,17 +152,21 @@ def _find_toolchain(lang: str) -> tuple[str, str] | None:
 _VALUE = r"([-+]?0[xX][0-9a-fA-F]+|[-+]?\d+)"
 
 # sizeof(struct foo) / alignof(x) / offsetof(struct s, m) claims
+# The optional verb gates its own trailing whitespace: the naive
+# ``\s*(?:VERB)?\s*`` put two unbounded whitespace spans around it —
+# quadratic on a sizeof-claim ending in a whitespace run.
 _BUILTIN_EXPR_RE = re.compile(
     r"((?:sizeof|_Alignof|alignof|offsetof)\s*\(\s*[^()]{1,80}\))\s*"
-    r"(?:is|==|equals?|equal to|set to)?\s*"
+    r"(?:(?:is|==|equals?|equal to|set to)\s*)?"
     rf"[`'\"]?{_VALUE}[`'\"]?",
     re.IGNORECASE,
 )
 
 # plain identifier claim: "Is STATE_DONE 3?" / "MAX_BUF == 4096"
+# Same gated-verb respelling as _BUILTIN_EXPR_RE above.
 _IDENT_EXPR_RE = re.compile(
     r"[`'\"]?([A-Za-z_]\w*)[`'\"]?\s*"
-    r"(?:is|==|equals?|equal to|set to|defined as)?\s*"
+    r"(?:(?:is|==|equals?|equal to|set to|defined as)\s*)?"
     rf"[`'\"]?{_VALUE}[`'\"]?",
 )
 

@@ -147,11 +147,14 @@ _COPY_SINKS = re.compile(
     r"|sendmsg|send|write)\s*\(",
 )
 
+# Gated optional atoms ('&', the zero literal) — the naive
+# ``\s*&?\s*`` / ``\{\s*0?\s*\}`` chains were quadratic on call
+# shapes followed by whitespace runs.
 _ZERO_INIT = re.compile(
-    r"\bmemset\s*\(\s*&?\s*(\w+)"
-    r"|\b(\w+)\s*=\s*\{\s*0?\s*\}"
+    r"\bmemset\s*\(\s*(?:&\s*)?(\w+)"
+    r"|\b(\w+)\s*=\s*\{\s*(?:0\s*)?\}"
     r"|\b(\w+)\s*=\s*\{\s*\.\w+\s*="
-    r"|\bmemcpy\s*\(\s*&?\s*(\w+)\s*,",
+    r"|\bmemcpy\s*\(\s*(?:&\s*)?(\w+)\s*,",
 )
 
 _STRUCT_DECL = re.compile(

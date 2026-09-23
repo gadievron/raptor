@@ -102,8 +102,11 @@ def is_contract_risk_function(
     if not params:
         return False
     param_alt = "|".join(re.escape(p) for p in params)
+    # The optional '&' gates its own trailing whitespace: the naive
+    # ``\s*&?\s*`` put two unbounded whitespace spans around it —
+    # quadratic on a call-opening line ending in a whitespace run.
     dealloc_on_param = re.compile(
-        rf"\b{_DEALLOC_NAME}\s*\(\s*&?\s*(?:{param_alt})\b",
+        rf"\b{_DEALLOC_NAME}\s*\(\s*(?:&\s*)?(?:{param_alt})\b",
         re.IGNORECASE,
     )
     return bool(dealloc_on_param.search(source))

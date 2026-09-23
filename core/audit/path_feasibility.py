@@ -121,8 +121,10 @@ def extract_conditions_from_hypothesis(
     - "provided that Y > 0"
     """
 
+    # Gated optional paren — the naive ``\(?\s*`` pair was
+    # quadratic on a keyword followed by a whitespace run.
     if_patterns = re.findall(
-        r'(?:if|when|where|provided that|assuming)\s*\(?\s*'
+        r'(?:if|when|where|provided that|assuming)\s*(?:\(\s*)?'
         r'([a-zA-Z_]\w*\s*(?:[<>=!]+|!=|==)\s*(?:\w+|0x[0-9a-fA-F]+|\d+))',
         hypothesis,
         re.IGNORECASE,
