@@ -60,6 +60,7 @@ import errno
 import json
 import logging
 import os
+import re
 import stat
 import unicodedata
 from dataclasses import dataclass, field
@@ -619,6 +620,20 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
             for env_key, env_val in env_cfg.items():
                 key_str = str(env_key)
                 key_upper = fold_env_candidate(key_str)
+                # Fail closed on NON-IDENTIFIER keys before any name
+                # matching: legitimate env names are portable
+                # identifiers, and a key like "LD_PRELOAD=/e.so:"
+                # (value "") smuggles a dangerous assignment past
+                # every name test if a lenient consumer applies env
+                # as key+"="+value — the same '='-bearing-key class
+                # the container launcher refuses. NUL / newline /
+                # space-bearing keys ride the same gate.
+                if not re.fullmatch(r"[A-Z0-9_]+", key_upper):
+                    fs.findings.append(Finding(
+                        f"env {_truncate(key_str, limit=40)} "
+                        "(non-identifier key)",
+                        _mask(str(env_val), keep=0), True))
+                    continue
                 # Prefix families (RAPTOR_/SAGE_/CLAUDE_CODE_USE_/
                 # OTEL_EXPORTER_OTLP_) are flagged regardless of the
                 # specific var — see _DANGEROUS_ENV_PREFIXES. The

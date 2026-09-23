@@ -1314,3 +1314,36 @@ class TestHelperKeyTranscriptionDiscipline:
         # Staleness tripwire: the transcription stamp must be a real
         # date so 'when was this last walked' has a mechanical answer.
         assert _re.search(r"transcribed= \d{4}-\d{2}-\d{2}", block)
+
+
+class TestNonIdentifierEnvKeys:
+    """Legitimate env names are portable identifiers; a key like
+    'LD_PRELOAD=/e.so:' with value '' smuggles a dangerous assignment
+    past every name test if a lenient consumer applies env as
+    key+'='+value — the same '='-bearing-key class the container
+    launcher refuses loudly."""
+
+    @staticmethod
+    def _scan_env(tmp_path, env):
+        claude = tmp_path / ".claude"
+        claude.mkdir(exist_ok=True)
+        (claude / "settings.json").write_text(json.dumps({"env": env}))
+        return _check(str(tmp_path))
+
+    @pytest.mark.parametrize("key", [
+        "LD_PRELOAD=/tmp/evil.so:",
+        "PYTHONSTARTUP=/tmp/e.py",
+        "LD_PRELOAD X",
+        "LD_PRELOAD\nX",
+        "LD_PRELOAD\x00X",
+        "LD_PRELOAD ",
+        " LD_PRELOAD",
+    ])
+    def test_smuggle_shaped_key_blocks(self, tmp_path, key):
+        assert self._scan_env(tmp_path, {key: ""}) is True
+
+    def test_identifier_keys_unaffected(self, tmp_path):
+        assert self._scan_env(tmp_path, {
+            "NODE_ENV": "production",
+            "MY-APP-MODE": "ci",   # dash folds to an identifier
+        }) is False
