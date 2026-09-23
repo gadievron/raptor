@@ -42,7 +42,15 @@ from core.security.prompt_output_sanitise import (
 
 
 def md_fence(value: Any, *, max_chars: int = 10_000) -> str:
-    """Defang a value for rendering inside a fenced code block."""
+    """Defang a value for rendering inside a fenced code block.
+
+    Contract: the wrapping fence must be BACKTICKS. Fence-break
+    protection defangs 3+ backtick runs only — a ``~~~`` wrapper gets
+    no protection (a value containing ``~~~`` would close it), and
+    tilde runs inside the value are NOT defanged because ``~~~x`` is
+    legitimate code (JS triple-NOT). A repo-wide pin keeps writers on
+    backtick fences.
+    """
     return sanitise_code(str(value), max_chars=max_chars)
 
 

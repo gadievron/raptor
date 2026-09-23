@@ -135,3 +135,27 @@ def test_md_fence_preserves_code_verbatim():
     and raw `<...>` are legitimate code the wrapping fence isolates."""
     from core.security.markdown_render import md_fence
     assert md_fence("#include <a>\n*ptr") == "#include <a>\n*ptr"
+
+
+def test_no_registered_writer_opens_tilde_fences():
+    """md_fence's fence-break defang covers backtick runs only; a
+    ~~~-wrapped fence gets no protection (and in-value tilde runs
+    are legitimate code, so they are deliberately not defanged).
+    Writers must fence with backticks — pinned across the registry."""
+    from pathlib import Path
+    from core.security.report_writer_audit import (
+        _MERMAID_FENCE_FILES,
+        _REPORT_WRITER_FILES,
+    )
+    repo = Path(__file__).resolve().parents[3]
+    offenders = []
+    for rel in _REPORT_WRITER_FILES + _MERMAID_FENCE_FILES:
+        p = repo / rel
+        if not p.exists():
+            continue
+        if "~~~" in p.read_text(encoding="utf-8"):
+            offenders.append(rel)
+    assert not offenders, (
+        f"tilde fences in registered writers {offenders} — md_fence "
+        "protects backtick fences only; use ``` wrappers"
+    )
