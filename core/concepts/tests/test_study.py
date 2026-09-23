@@ -3065,6 +3065,56 @@ class TestStudyOutputCap:
         from core.concepts.study import _study_max_output_tokens
         assert _study_max_output_tokens() == 8000
 
+    def test_always_thinking_models_get_thinking_headroom(self):
+        """On models whose always-on reasoning bills inside max_tokens
+        (and cannot be capped per request), a ceiling sized for the
+        text alone is consumed by thinking on large prompts — the
+        request budget doubles so the text floor survives."""
+        from core.concepts.study import _study_max_output_tokens
+        assert _study_max_output_tokens("claude-fable-5") == 32768
+        assert _study_max_output_tokens("anthropic.claude-fable-5") == 32768
+
+    def test_pre_thinking_tier_keeps_text_budget(self):
+        from core.concepts.study import _study_max_output_tokens
+        assert _study_max_output_tokens("claude-opus-4-6") == 16384
+        assert _study_max_output_tokens("") == 16384
+        assert _study_max_output_tokens(None) == 16384
+
+    def test_env_override_scales_thinking_headroom(self, monkeypatch):
+        """The env knob sets the TEXT budget; the thinking headroom
+        scales with it in both directions."""
+        monkeypatch.setenv("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "8000")
+        from core.concepts.study import _study_max_output_tokens
+        assert _study_max_output_tokens("claude-fable-5") == 16000
+
+    def test_batch_ceiling_derives_from_text_budget_only(self):
+        """Thinking headroom must not admit more items per batch: the
+        per-item output estimate covers TEXT, and a batch sized to the
+        doubled request ceiling would need text past its share."""
+        from core.concepts.study import (
+            _PHASE2_ITEM_OUTPUT_TOKENS_EST,
+            _phase2_batch_ceiling,
+            _study_text_output_tokens,
+        )
+        assert _phase2_batch_ceiling() == (
+            _study_text_output_tokens() // _PHASE2_ITEM_OUTPUT_TOKENS_EST
+        )
+
+    def test_batch_call_carries_thinking_headroom_for_client_model(self):
+        from unittest.mock import MagicMock
+
+        from core.concepts.model import StudyItem
+        from core.concepts.study import run_phase2
+        client = MagicMock()
+        client.model = "claude-fable-5"
+        client.generate_structured.return_value = (
+            {"concepts": [], "invariants": [], "contracts": [],
+             "bug_patterns": []}, "raw")
+        run_phase2([StudyItem(id="i", kind="function", name="f",
+                              file="a.c")], "t", client)
+        kwargs = client.generate_structured.call_args.kwargs
+        assert kwargs.get("max_tokens") == 32768
+
 
 class TestThreatFrameDerivation:
     def _model(self, *, with_transfer: bool):
