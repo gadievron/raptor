@@ -243,12 +243,14 @@ def check_safe_teardown(
     barrier_pos: list[tuple[int, int]] = []   # waiting or RCU calls
     waiting = rcu = False
     for i, line in enumerate(lines):
-        m = async_re.search(line)
-        # A waiting variant (timer_delete_sync) contains the async
-        # spelling as a prefix — only count a true async call.
-        if m and not re.search(
-            re.escape(m.group(1)) + r"_sync\s*\(", line,
-        ):
+        # The async pattern requires `(` directly after the name, so
+        # a waiting variant (timer_delete_sync) can never match it —
+        # every match IS a true async call, and all of them count.
+        # (A same-line "contains _sync(" disambiguator here could
+        # only ever fire on the two-call-one-line shape, where it
+        # dropped a REAL async cancel: `del_timer(&a->t);
+        # del_timer_sync(&b->t); … kfree(a);` certified safe.)
+        for m in async_re.finditer(line):
             async_lines.append(i)
             async_pos.append((i, m.start()))
         for fm in free_re.finditer(line):

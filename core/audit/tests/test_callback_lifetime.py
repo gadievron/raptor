@@ -587,6 +587,67 @@ class TestSafeTeardownSameLineAsync:
         assert r.safe is False
         assert "async" in r.reason
 
+    def test_same_line_sync_sibling_does_not_drop_real_async(self):
+        # The async pattern requires `(` right after the name, so it
+        # can never match inside `..._sync(` — the old same-line
+        # "contains _sync(" disambiguator could only ever fire on the
+        # two-call-one-line shape, where it dropped a REAL async
+        # cancel and certified async-cancel-then-free safe.
+        from core.audit.callback_lifetime import check_safe_teardown
+        r = check_safe_teardown(
+            "void teardown(struct A *a, struct B *b)\n{\n"
+            "    del_timer(&a->timer); del_timer_sync(&b->timer);\n"
+            "    kfree(a);\n"
+            "}\n",
+        )
+        assert r.safe is False
+        assert "async" in r.reason
+
+    def test_own_line_async_control_still_flags(self):
+        from core.audit.callback_lifetime import check_safe_teardown
+        r = check_safe_teardown(
+            "void teardown(struct A *a, struct B *b)\n{\n"
+            "    del_timer(&a->timer);\n"
+            "    del_timer_sync(&b->timer);\n"
+            "    kfree(a);\n"
+            "}\n",
+        )
+        assert r.safe is False
+
+    def test_multiple_async_cancels_on_one_line_all_count(self):
+        # First-match-only under-counted the same direction: the
+        # SECOND async cancel on the line precedes the free too.
+        from core.audit.callback_lifetime import check_safe_teardown
+        r = check_safe_teardown(
+            "void t(struct dev *d)\n{\n"
+            "  cancel_work_sync(&d->work);\n"
+            "  kfree(d); del_timer(&d->t1); del_timer(&d->t2);\n"
+            "}\n",
+        )
+        # free precedes both async cancels on the line — the async
+        # arm must not fire; but a free AFTER them must.
+        assert "async cancel" not in (r.reason or "")
+        r2 = check_safe_teardown(
+            "void t(struct dev *d)\n{\n"
+            "  cancel_work_sync(&d->work);\n"
+            "  del_timer(&d->t1); del_timer(&d->t2); kfree(d);\n"
+            "}\n",
+        )
+        assert r2.safe is False
+        assert "async" in r2.reason
+
+    def test_waiting_variant_alone_stays_safe(self):
+        # Two-direction pin: only-waiting teardown keeps its safe
+        # verdict (the _sync spelling never counts as async).
+        from core.audit.callback_lifetime import check_safe_teardown
+        r = check_safe_teardown(
+            "void t(struct dev *d)\n{\n"
+            "  del_timer_sync(&d->timer);\n"
+            "  kfree(d);\n"
+            "}\n",
+        )
+        assert r.safe is True
+
     def test_same_line_free_then_async_cancel_not_flagged_by_async_arm(
         self,
     ):
