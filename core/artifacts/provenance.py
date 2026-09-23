@@ -428,7 +428,11 @@ CONTEXT_MAP_TEXT_SCHEMA: dict = {
             "implication": _FT,
         }}},
         "entry_points": {"items": {"properties": {
+            # trust is marked on sources too — the threat-model
+            # builder reads it from BOTH record shapes into
+            # operator-facing summaries.
             "notes": _FT, "accepts": _FT, "description": _FT,
+            "trust": _FT,
         }}},
         "sink_details": {"items": {"properties": {
             "notes": _FT, "description": _FT,
@@ -438,6 +442,14 @@ CONTEXT_MAP_TEXT_SCHEMA: dict = {
         }}},
         "unchecked_flows": {"items": {"properties": {
             "missing_boundary": _FT, "notes": _FT,
+        }}},
+        # hardcoded_secrets is a fixed, consumed context-map key (the
+        # threat-model builder extracts labels from it). Only LABEL
+        # fields are marked as free text; value-carrying fields are
+        # dropped or redacted wholesale by the consumer's redaction
+        # lane and must not be "sanitised and kept" here.
+        "hardcoded_secrets": {"items": {"properties": {
+            "name": _FT, "notes": _FT, "description": _FT,
         }}},
     },
 }
