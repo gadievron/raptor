@@ -1186,11 +1186,6 @@
     "count": 13,
     "kind": "literal"
   },
-  "core/inventory/exclusions.py::_GENERATED_PATH_HINTS": {
-    "count": 12,
-    "kind": "literal",
-    "note": "path-convention tokens corroborating generated-file markers, not API names"
-  },
   "core/inventory/extractors.py::C_TYPE_HINTS": {
     "count": 18,
     "kind": "literal"
