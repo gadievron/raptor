@@ -662,8 +662,13 @@ class _ScriptedFailureProvider(_FakeBase):
             msg = "stream failed mid-turn (ConnectionResetError): boom"
             raise RuntimeError(msg)
         if step == "fail_credit":
+            # SDK billing errors carry the HTTP status; the credit
+            # classifier requires that transport corroboration (a
+            # bare message is an uncorroborated content match).
             msg = "400 your credit balance is too low"
-            raise RuntimeError(msg)
+            err = RuntimeError(msg)
+            err.status_code = 400  # type: ignore[attr-defined]
+            raise err
         if step == "fail_mid":
             yield StreamChunk(type="text_delta", text="partial")
             msg = "stream failed mid-turn (ConnectionResetError): boom"
