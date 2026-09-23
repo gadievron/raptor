@@ -119,5 +119,48 @@ class TestReportSeverityFirstCut(unittest.TestCase):
         self.assertNotIn("Report truncated", out)
 
 
+class TestReportWriteSurvivesCLocale(unittest.TestCase):
+    """The fence defang inserts ZWSP, so the report is non-ASCII
+    exactly when hostile content fired the defence — an encoding-less
+    write_text crashed under a C locale (PYTHONCOERCECLOCALE=0
+    PYTHONUTF8=0 LC_ALL=C)."""
+
+    def test_report_written_under_c_locale(self):
+        import os
+        import subprocess
+        import sys as _sys
+        repo_root = Path(__file__).parents[3]
+        script = (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "sys.path.insert(0, sys.argv[1])\n"
+            "import raptor_openant\n"
+            "f = {'finding_id': 'openant:V1', 'cwe_id': 'CWE-78',\n"
+            "     'file': 'a.py', 'level': 'warning', 'message': 'm',\n"
+            "     'snippet': 'a\\n```\\nb',\n"
+            "     'metadata': {'function': 'f', 'vuln_name': 'n',\n"
+            "                  'stage1_verdict': 'vulnerable',\n"
+            "                  'stage2_verdict': ''}}\n"
+            "raptor_openant._write_markdown_report(\n"
+            "    Path(sys.argv[2]), [f], Path('/repo'), 1.0)\n"
+        )
+        env = {**os.environ, "PYTHONCOERCECLOCALE": "0",
+               "PYTHONUTF8": "0", "LC_ALL": "C", "LANG": "C"}
+        with tempfile.TemporaryDirectory() as td:
+            proc = subprocess.run(
+                [_sys.executable, "-c", script, str(repo_root), td],
+                capture_output=True, text=True, timeout=60,
+                cwd=str(repo_root), env=env)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            data = (Path(td) / "openant-report.md").read_bytes()
+        self.assertIn("\u200b".encode("utf-8"), data,
+                      "defang ZWSP expected in the fence-carrying report")
+
+    def test_stderr_log_write_names_utf8(self):
+        scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
+        block = scanner_src.split("openant.stderr.log")[1][:200]
+        self.assertIn('encoding="utf-8"', block)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -716,7 +716,11 @@ def _run_subprocess(
                     f"\n\n[truncated — original was {len(proc.stderr)} bytes, "
                     f"capped at {STDERR_MAX_BYTES}]\n"
                 )
-            (out_dir / "openant.stderr.log").write_text(stderr_to_write)
+            # Explicit encoding: the subprocess stderr quotes hostile
+            # target content — an encoding-less write crashed under a
+            # C locale exactly when the content was non-ASCII.
+            (out_dir / "openant.stderr.log").write_text(
+                stderr_to_write, encoding="utf-8")
         except OSError:
             pass
 
