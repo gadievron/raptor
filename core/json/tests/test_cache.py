@@ -513,3 +513,21 @@ def test_memo_touch_keeps_hot_entry_alive(tmp_path: Path) -> None:
     assert "hot" in c._memo
     assert "cold_1" not in c._memo
     assert c.memo_evictions >= 1
+
+
+def test_nul_byte_key_degrades_never_crashes(tmp_path: Path) -> None:
+    # An embedded NUL survives segment sanitisation (unlike "..", it
+    # aliases nothing — the path simply cannot exist on disk) but the
+    # filesystem call itself raises ValueError, an exception type the
+    # OSError-only degrade handlers did not cover. Keys carry
+    # externally-influenced package names, and the documented
+    # contract is cache-degrades-never-crashes — so a NUL key must be
+    # a silent miss, not a consumer crash. Degenerate segments
+    # (".."), which CAN alias, stay loudly refused (pinned above).
+    cache = JsonCache(root=tmp_path)
+    cache.put("pkg\x00name", {"v": 1}, ttl_seconds=60)
+    assert cache.get("pkg\x00name", ttl_seconds=60) is None
+    cache.invalidate("pkg\x00name")
+    # And the cache still works for sane keys afterwards.
+    cache.put("pkg-name", {"v": 2}, ttl_seconds=60)
+    assert cache.get("pkg-name", ttl_seconds=60) == {"v": 2}
