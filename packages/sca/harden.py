@@ -66,7 +66,7 @@ from core.logging import configure_cli_logging
 
 from . import SCA_CACHE_ROOT, default_client
 from .discovery import find_manifests
-from .models import Dependency, PinStyle, cve_ids
+from .models import Dependency, PinStyle, canonical_cve_id, cve_ids
 from .osv import OsvClient
 from .parsers import parse_manifest
 from .parsers._safe_read import scan_root_context
@@ -1131,14 +1131,18 @@ def _cve_aliases(advisory) -> list[str]:
 
 
 def _advisory_in_kev(advisory, kev) -> bool:
-    """True if any of the advisory's IDs are in CISA KEV."""
+    """True if any of the advisory's CVE ids are in CISA KEV.
+
+    Ids resolve through ``canonical_cve_id`` so distro-namespaced
+    primaries (``UBUNTU-CVE-*`` with empty alias lists) join the
+    CVE-keyed KEV catalog like every other enrichment consumer.
+    """
     if kev is None:
         return False
-    osv_id = getattr(advisory, "osv_id", None) or ""
-    if osv_id and kev.contains(osv_id):
-        return True
-    for a in getattr(advisory, "aliases", None) or []:
-        if isinstance(a, str) and kev.contains(a):
+    for cand in (getattr(advisory, "osv_id", None),
+                 *(getattr(advisory, "aliases", None) or [])):
+        canonical = canonical_cve_id(cand)
+        if canonical is not None and kev.contains(canonical):
             return True
     return False
 

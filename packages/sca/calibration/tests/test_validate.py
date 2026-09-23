@@ -45,6 +45,36 @@ def test_extract_cve_ids_skips_informational():
     ) == []
 
 
+def test_extract_cve_ids_distro_primary_resolves_to_cve():
+    """Debian / Ubuntu / Alpine secdb records carry the CVE embedded
+    in the PRIMARY id with an EMPTY alias list — the exploited-label
+    join must land on the canonical CVE key."""
+    for primary in (
+        "DEBIAN-CVE-2026-54369",
+        "UBUNTU-CVE-2017-18018",
+        "ALPINE-CVE-2024-0001",
+    ):
+        expected = primary.split("-", 1)[1]
+        assert _extract_cve_ids(
+            {"id": primary, "aliases": []},
+        ) == [expected], primary
+
+
+def test_extract_cve_ids_distro_informational_still_skipped():
+    assert _extract_cve_ids(
+        {"id": "DEBIAN-CVE-2026-54369", "aliases": [],
+         "informational": "unsound"},
+    ) == []
+
+
+def test_extract_cve_ids_lowercase_spellings_normalised():
+    """The ground-truth signal maps are keyed uppercase; a lowercase
+    feed spelling must not silently lose its label join."""
+    assert _extract_cve_ids(
+        {"id": "cve-2023-1234", "aliases": ["cve-2020-0001"]},
+    ) == ["CVE-2020-0001", "CVE-2023-1234"]
+
+
 # ---------------------------------------------------------------------------
 # _ranks — average-rank for ties
 # ---------------------------------------------------------------------------
@@ -298,6 +328,42 @@ def test_validate_corpus_per_ecosystem_breakdown(tmp_path: Path) -> None:
     # Synthetic corpus has only PyPI — breakdown should reflect that.
     assert "PyPI" in report.by_ecosystem
     assert report.by_ecosystem["PyPI"]["total"] == 60
+    # Every synthetic advisory carries a CVE-joinable id — the
+    # label-coverage column must say so beside with_signal / ρ.
+    assert report.by_ecosystem["PyPI"]["with_cve"] == 60
+
+
+def test_validate_corpus_distro_primary_labels_exploited(
+    tmp_path: Path,
+) -> None:
+    """A ``DEBIAN-CVE-*``-primary finding whose embedded CVE is in
+    ``kev_signals`` must count as ``with_signal`` (label=1) and as
+    CVE-joinable in the per-ecosystem coverage — pre-fix the whole
+    distro-secdb corpus population sat at with_cve=0/with_signal=0."""
+    corpus_dir = tmp_path / "calibration"
+    corpus_dir.mkdir()
+    (corpus_dir / "kev_signals.json").write_text(json.dumps({
+        "_source": {"license": "PD", "url": "x",
+                    "fetched_at": "2024-01-01"},
+        "signals": {"CVE-2017-18018": {"kev": True}},
+    }))
+    samples_dir = corpus_dir / "project_samples" / "Ubuntu"
+    samples_dir.mkdir(parents=True)
+    (samples_dir / "img.json").write_text(json.dumps({
+        "_source": {"license": "MIT", "url": "x"},
+        "findings": [
+            {"ecosystem": "Ubuntu", "raptor_risk_estimate": 0.9,
+             "advisory": {"id": "UBUNTU-CVE-2017-18018",
+                          "aliases": []}},
+            {"ecosystem": "Ubuntu", "raptor_risk_estimate": 0.1,
+             "advisory": {"id": "UBUNTU-CVE-2020-99990",
+                          "aliases": []}},
+        ],
+    }))
+    report = validate_corpus(corpus_dir)
+    assert report.findings_with_signal == 1
+    assert report.by_ecosystem["Ubuntu"]["with_signal"] == 1
+    assert report.by_ecosystem["Ubuntu"]["with_cve"] == 2
 
 
 def test_validate_corpus_provenance_captured(tmp_path: Path) -> None:
