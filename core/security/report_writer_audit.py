@@ -1417,8 +1417,20 @@ def _sanitiser_shadow_scan(tree: ast.AST, rel: str) -> list[Violation]:
                     or (n.attr == "escape"
                         and isinstance(n.value, ast.Name)
                         and n.value.id in ("html", "markupsafe"))):
-                if not (n.attr == node.name and isinstance(n, ast.Attribute)
-                        and n is node):
+                # Mirror the Name branch's self-reference exclusion:
+                # `self.<own name>` / `cls.<own name>` inside the def
+                # is recursion, not building on a canonical sanitiser
+                # (a module-qualified `mod.<same name>` IS canonical —
+                # the aliasing-wrapper shape). The previous guard
+                # compared the Attribute to the FunctionDef (`n is
+                # node`, always False), making the wrapper dead and
+                # accepting bare self-recursion as canonical.
+                is_self_recursion = (
+                    n.attr == node.name
+                    and isinstance(n.value, ast.Name)
+                    and n.value.id in ("self", "cls")
+                )
+                if not is_self_recursion:
                     ok = True
                     break
         if not ok:
