@@ -38,6 +38,45 @@ class TestUnwrapList:
         assert unwrap_list(None, keys=("paths",)) is None
 
 
+class TestRemainingHandRolledLoaders:
+    """envelope.py claims "every loader must route through here" — the
+    renderer kept two hand-rolled unwraps (disproven.json and the
+    graph-priority-paths ``or``-chain)."""
+
+    def test_disproven_nonstandard_single_list_envelope_used(self, tmp_path):
+        (tmp_path / "attack-tree.json").write_text(json.dumps({
+            "root": "R",
+            "nodes": [
+                {"id": "R", "goal": "g", "technique": "t",
+                 "status": "exploring", "leads_to": "F1"},
+                {"id": "F1", "goal": "f", "technique": "t",
+                 "status": "disproven", "leads_to": ""},
+            ],
+        }), encoding="utf-8")
+        # Payload under a nonstandard key, single list in the dict —
+        # the shared fallback finds it; the hand-rolled
+        # data.get("disproven", []) silently dropped it.
+        (tmp_path / "disproven.json").write_text(json.dumps({
+            "entries": [{"finding": "F1", "why_wrong": "guard present"}],
+        }), encoding="utf-8")
+        out = render_directory(tmp_path)
+        assert "ruled out: guard present" in out
+
+    def test_graph_paths_non_list_paths_value_falls_through(self, tmp_path):
+        # `paths` truthy but not a list: the or-chain accepted it,
+        # failed the isinstance guard, and silently dropped the whole
+        # section; unwrap_list tries the next known key.
+        (tmp_path / "graph-priority-paths.json").write_text(json.dumps({
+            "paths": {"not": "a list"},
+            "graph_paths": [{"id": "GP-1",
+                             "entry": {"label": "main"},
+                             "sink": {"label": "exec"}}],
+        }), encoding="utf-8")
+        out = render_directory(tmp_path)
+        assert "Graph Priority Paths" in out
+        assert "GP-1_ENTRY" in out
+
+
 class TestGenerateFromFileEnvelopes:
     def _write(self, tmp_path: Path, name: str, payload) -> Path:
         p = tmp_path / name
