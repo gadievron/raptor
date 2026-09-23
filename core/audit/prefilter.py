@@ -1237,7 +1237,20 @@ def _text_wrapper_escape(
         (for chained assignments), or None when unaccountable."""
         pos = _c_find_assign(stmt)
         if pos is None:
-            return set(), True  # expression statement — no binding
+            # Expression statement — no binding, but its references
+            # are JUDGED value escapes. The `[;{}\n]` split turns a
+            # JS/TS `${…}` template interpolation into exactly this
+            # shape (`const t = \`$` + `x && execSync`): pre-fix the
+            # fragment's refs were returned unjudged, so a dangerous
+            # ref escaping as an interpolation VALUE journalled
+            # mechanically clean even though both judged views showed
+            # it (the one-element-outside-the-derivation member of
+            # the escape rebase). Judging every expression fragment
+            # is the file's stated doctrine — over-exclusion costs
+            # one review; a hidden value escape mints a false clean.
+            value = (_c_value_refs(stmt), True)
+            judged.append(value)
+            return value
         lhs_end, rhs_start, compound = pos
         lhs = stmt[:lhs_end].strip()
         rhs = stmt[rhs_start:].strip()
@@ -1644,8 +1657,12 @@ def _is_trivial_wrapper(
     # Whole-value escape analysis over the language's real binding
     # grammar: bindings feed the callee/reference fixpoint resolution,
     # and every value-escape position (binding value, signature
-    # default, call argument, return, yield) is judged against the
-    # exclusion. An unaccountable body refuses the skip.
+    # default, call argument, return, yield, and bare expression
+    # fragments — which is where the `[;{}\n]` split lands `${…}`
+    # template-interpolation values) is judged against the exclusion.
+    # An unaccountable body refuses the skip. Position coverage is
+    # pinned, not claimed: TestTemplateInterpolationValueEscape holds
+    # the interpolation/expression-fragment members.
     wrapper_params: set[str] = set()
     if lang == "python":
         escape = _py_wrapper_escape(source)
