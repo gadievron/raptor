@@ -58,14 +58,18 @@ class SentinelCollapse:
 
 # Patterns where a variable is coerced through a falsy check and
 # replaced with an empty container, collapsing None into []/{}/""/0.
+# The variable groups are \b-pinned to a word START: an unanchored
+# bare `\w+` re-scans a hostile identifier run from every offset
+# (quadratic), and the dropped matches are only mid-word suffixes
+# (`x1f` inside `0x1f`) — false tokens, never real variables.
 _FALSY_COERCION_PATTERNS: list[re.Pattern[str]] = [
     # x if x else []  /  x if x else {}
     re.compile(
-        r"""(?P<var>\w+)\s+if\s+(?P=var)\s+else\s+(?P<default>\[\]|\{\})""",
+        r"""\b(?P<var>\w+)\s+if\s+(?P=var)\s+else\s+(?P<default>\[\]|\{\})""",
     ),
     # x or []  /  x or {}
     re.compile(
-        r"""(?P<var>\w+)\s+or\s+(?P<default>\[\]|\{\})""",
+        r"""\b(?P<var>\w+)\s+or\s+(?P<default>\[\]|\{\})""",
     ),
     # list(x) if x else []  /  dict(x) if x else {}
     re.compile(
@@ -161,9 +165,10 @@ _CACHE_WRITE_NONE = re.compile(
 )
 
 # cached or default  /  cached if cached else default
+# Both variable groups \b-pinned (see _FALSY_COERCION_PATTERNS).
 _CACHE_READ_COERCE = re.compile(
-    r"""(?P<var>\w+)\s+or\s+(?P<default>\[\]|\{\}|0|""|'')"""
-    r"""|(?P<var2>\w+)\s+if\s+(?P=var2)\s+else\s+(?P<default2>\[\]|\{\}|0|""|'')""",
+    r"""\b(?P<var>\w+)\s+or\s+(?P<default>\[\]|\{\}|0|""|'')"""
+    r"""|\b(?P<var2>\w+)\s+if\s+(?P=var2)\s+else\s+(?P<default2>\[\]|\{\}|0|""|'')""",
 )
 
 
@@ -218,8 +223,12 @@ def _detect_cache_sentinel(
 # ---------------------------------------------------------------------------
 
 # func returns (nil, err) but caller only checks err, not nil-vs-not-found
+# The block body is bounded: unbounded `[^}]*` re-scans a hostile
+# brace-free run from every `if err != nil {` occurrence — quadratic.
+# A real error-check block sits far under 4000 chars; beyond the
+# bound the block stops matching instead of scanning without bound.
 _GO_NIL_RETURN_ON_ERR = re.compile(
-    r"\bif\s+err\s*!=\s*nil\s*\{[^}]*return\s+nil\b",
+    r"\bif\s+err\s*!=\s*nil\s*\{[^}]{0,4000}return\s+nil\b",
     re.DOTALL,
 )
 # caller ignores ok: val := cache[key]  (no comma-ok)
@@ -324,8 +333,9 @@ def _detect_go_sentinel(
 # Sub-detector (e): JS/TS sentinel confusion
 # ---------------------------------------------------------------------------
 
+# Variable group \b-pinned (see _FALSY_COERCION_PATTERNS).
 _JS_OPTIONAL_CHAIN_DEFAULT = re.compile(
-    r"(\w+)\?\.\w+\s*\|\|\s*(\[\]|\{\}|\"\")",
+    r"\b(\w+)\?\.\w+\s*\|\|\s*(\[\]|\{\}|\"\")",
 )
 
 _JS_FALSY_COERCION = [
@@ -336,8 +346,8 @@ _JS_FALSY_COERCION = [
     # (the bare-identifier patterns below would otherwise match the
     # same line as `y || []` and win with the wrong variable).
     _JS_OPTIONAL_CHAIN_DEFAULT,
-    re.compile(r"(\w+)\s*\|\|\s*(\[\]|\{\})"),
-    re.compile(r"(\w+)\s*\?\?\s*(\[\]|\{\})"),
+    re.compile(r"\b(\w+)\s*\|\|\s*(\[\]|\{\})"),
+    re.compile(r"\b(\w+)\s*\?\?\s*(\[\]|\{\})"),
 ]
 
 
@@ -656,8 +666,9 @@ def _find_coercion_of_call(
             continue
 
         # Look for: result = callee(...)  followed by  result or []
+        # (\b-pinned variable group, see _FALSY_COERCION_PATTERNS)
         call_pat = re.search(
-            rf"(\w+)\s*=\s*(?:\w+\.)?{re.escape(callee_name)}\s*\(",
+            rf"\b(\w+)\s*=\s*(?:\w+\.)?{re.escape(callee_name)}\s*\(",
             line,
         )
         if call_pat:

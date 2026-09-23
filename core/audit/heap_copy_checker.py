@@ -67,33 +67,41 @@ class HeapCopyFinding:
 
 
 # Patterns for checked-copy wrappers: fn(dst, dst_size, src, count)
+# The wrapper-name prefix and every argument window are BOUNDED:
+# unbounded, hostile source that repeats the call head inside one
+# delimiter-free run makes every occurrence re-scan the rest of the
+# run — quadratic. Real wrapper names sit far under 256 chars and
+# real argument expressions far under 1024; past a bound the call
+# stops matching instead of scanning without bound.
 _CHECKED_COPY_RE = re.compile(
-    r'\b(\w*(?:memcpy|memmove)\w*)\s*\('
-    r'([^,]+),'          # dst
-    r'([^,]+),'          # dst_size
-    r'([^,]+),'          # src
-    r'([^)]+)\)',        # count
+    r'\b(\w{0,256}(?:memcpy|memmove)\w*)\s*\('
+    r'([^,]{1,1024}),'          # dst
+    r'([^,]{1,1024}),'          # dst_size
+    r'([^,]{1,1024}),'          # src
+    r'([^)]{1,1024})\)',        # count
 )
 
 # Standard copy: memcpy(dst, src, len) / memmove(dst, src, len)
 _STD_COPY_RE = re.compile(
     r'\b(memcpy|memmove)\s*\('
-    r'([^,]+),'         # dst
-    r'([^,]+),'         # src
-    r'([^)]+)\)',       # len
+    r'([^,]{1,1024}),'         # dst
+    r'([^,]{1,1024}),'         # src
+    r'([^)]{1,1024})\)',       # len
 )
 
 # strcpy(dst, src) — unbounded by definition
 _STRCPY_RE = re.compile(
     r'\b(strcpy)\s*\('
-    r'([^,]+),'         # dst
-    r'([^)]+)\)',       # src
+    r'([^,]{1,1024}),'         # dst
+    r'([^)]{1,1024})\)',       # src
 )
 
 # malloc/calloc/realloc
+# Variable group \b-pinned (mid-word suffix matches were false
+# tokens); cast and argument windows bounded like the copy patterns.
 _ALLOC_RE = re.compile(
-    r'(\w+)\s*=\s*(?:\([^)]*\)\s*)?'
-    r'(malloc|calloc|realloc)\s*\(([^)]+)\)',
+    r'\b(\w+)\s*=\s*(?:\([^)]{0,256}\)\s*)?'
+    r'(malloc|calloc|realloc)\s*\(([^)]{1,1024})\)',
 )
 
 # Stack array: type name[SIZE]
@@ -110,10 +118,17 @@ _STACK_ARRAY_RE = re.compile(
 # so a long identifier run with no operator (or no closing paren)
 # cost every split of the run — quadratic. Earliest-match captures
 # unchanged.
+# Both condition windows are BOUNDED (comparison within 150 chars
+# of the open paren, close paren within 150 chars of the
+# comparison): unbounded, a paren-free hostile run dense in
+# comparison teasers costs every window split from every `if (` —
+# worse than quadratic. A real condition sits far under 150 chars;
+# past the bound the check is not seen, which only widens the
+# finding (a bounds check missed is never a suppressed one).
 _COMPARISON_RE = re.compile(
-    r'\b(?:if|while)\s*\([^)]*?'
+    r'\b(?:if|while)\s*\([^)]{0,150}?'
     r'\b(\w+)\s*([<>]=?|==|!=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)\b'
-    r'[^)]*\)',
+    r'[^)]{0,150}\)',
 )
 
 # Function parameter extraction
@@ -392,8 +407,11 @@ def check_decompiled_function(
     return findings
 
 
+# Argument window bounded: unbounded `[^)]*` re-scans a paren-free
+# hostile run from every identifier-plus-paren occurrence —
+# quadratic. Real argument lists sit far under 400 chars.
 _CALL_WITH_ARGS_RE = re.compile(
-    r'\b(\w+)\s*\(([^)]*)\)',
+    r'\b(\w+)\s*\(([^)]{0,400})\)',
 )
 
 

@@ -76,15 +76,24 @@ class ProtoLengthFinding:
 # whitespace run with no comma. Captures unchanged (the greedy \s*
 # already owned the leading whitespace); the dropped corner is a
 # whitespace-only argument, not real C.
+#
+# All argument/cast windows in this pattern group are BOUNDED: with
+# an unbounded window, hostile source that repeats the call head
+# inside one delimiter-free run makes every head occurrence re-scan
+# the rest of the run — quadratic in the function-source length. A
+# real C argument expression sits far under the bounds (256 for a
+# single cast/index operand, 1024 for an argument that may wrap
+# across lines); past the bound the call stops matching instead of
+# scanning without bound.
 _RECV_RE = re.compile(
     r'\b(recv|recvfrom|read|fread|recvmsg)\s*\('
-    r'([^,]+),'                  # fd / stream
-    r'\s*([^,\s][^,]*),'        # buffer
-    r'\s*([^,)\s][^,)]*)',      # length
+    r'([^,]{1,1024}),'                  # fd / stream
+    r'\s*([^,\s][^,]{0,1023}),'        # buffer
+    r'\s*([^,)\s][^,)]{0,1023})',      # length
 )
 
 _BYTE_EXTRACT_RE = re.compile(
-    r'\b(\w+)\s*=\s*(?:\([^)]*\)\s*)?'
+    r'\b(\w+)\s*=\s*(?:\([^)]{0,256}\)\s*)?'
     r'(?:ntohs|ntohl|ntohll|be16toh|be32toh|be64toh|'
     r'le16toh|le32toh|le64toh|'
     r'EXTRACT_16BITS|EXTRACT_32BITS)\s*\(',
@@ -92,23 +101,26 @@ _BYTE_EXTRACT_RE = re.compile(
 
 _FIELD_READ_RE = re.compile(
     r'\b(\w+)\s*=\s*'
-    r'(?:\*\s*\([^)]*\)\s*\([^)]+\)|'          # *(type*)(buf + off)
+    r'(?:\*\s*\([^)]{0,256}\)\s*\([^)]{1,256}\)|'  # *(type*)(buf + off)
     r'[a-zA-Z_]\w*(?:->|\.)\w+|'               # struct->field / struct.field
-    r'(?:\([^)]*\)\s*)?[a-zA-Z_]\w*\[[^\]]+\]' # (cast)buf[idx]
+    r'(?:\([^)]{0,256}\)\s*)?[a-zA-Z_]\w*\[[^\]]{1,256}\]'  # (cast)buf[idx]
     r')\s*;',
 )
 
+# Variable group \b-pinned to a word start: unanchored bare `\w+`
+# re-scans a hostile identifier run from every offset (quadratic);
+# the dropped matches are mid-word suffix false tokens only.
 _ALLOC_RE = re.compile(
-    r'(\w+)\s*=\s*(?:\([^)]*\)\s*)?(malloc|calloc|realloc)\s*\(([^)]+)\)',
+    r'\b(\w+)\s*=\s*(?:\([^)]{0,256}\)\s*)?(malloc|calloc|realloc)\s*\(([^)]{1,1024})\)',
 )
 
 _COPY_RE = re.compile(
-    r'\b(memcpy|memmove|bcopy|strncpy)\s*\(([^,]+),([^,]+),([^)]+)\)',
+    r'\b(memcpy|memmove|bcopy|strncpy)\s*\(([^,]{1,1024}),([^,]{1,1024}),([^)]{1,1024})\)',
 )
 
 # Same \S-headed argument respelling as _RECV_RE above.
 _SECOND_RECV_RE = re.compile(
-    r'\b(recv|recvfrom|read|fread)\s*\(([^,]+),\s*([^,\s][^,]*),\s*([^,)\s][^,)]*)',
+    r'\b(recv|recvfrom|read|fread)\s*\(([^,]{1,1024}),\s*([^,\s][^,]{0,1023}),\s*([^,)\s][^,)]{0,1023})',
 )
 
 # Operator captured: acceptance must be direction-aware — a
@@ -118,16 +130,24 @@ _SECOND_RECV_RE = re.compile(
 # full word — each overlapped the neighbouring filler on word chars
 # (quadratic on an identifier run with no operator or paren).
 # Earliest-match captures unchanged.
+# Both condition windows are BOUNDED (comparison within 200 chars of
+# the open paren, close paren within 200 chars of the comparison):
+# unbounded, a paren-free hostile run dense in comparison teasers
+# costs every window split from every `if (` occurrence — worse than
+# quadratic. A real C condition sits far under 200 chars; past the
+# bound the check is not seen, which only widens the finding (a
+# bounds check missed is never a suppressed one).
 _MAX_CHECK_RE = re.compile(
-    r'(?:if|while)\s*\([^)]*?'
+    r'(?:if|while)\s*\([^)]{0,200}?'
     r'\b(\w+)\s*(>=|<=|>|<)\s*(\w+|\d+(?:x[\da-fA-F]+)?)\b'
-    r'[^)]*\)',
+    r'[^)]{0,200}\)',
 )
 
-# Same \b pin as _MAX_CHECK_RE above.
+# Same \b pin and window bounds as _MAX_CHECK_RE above; the brace
+# body window is bounded like _GO-style blocks (1000 chars).
 _RETURN_CHECK_RE = re.compile(
-    r'if\s*\([^)]*?\b(\w+)\s*(?:>|>=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)\b[^)]*\)'
-    r'\s*\{[^}]*?(?:return|goto|break|exit)',
+    r'if\s*\([^)]{0,200}?\b(\w+)\s*(?:>|>=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)\b[^)]{0,200}\)'
+    r'\s*\{[^}]{0,1000}?(?:return|goto|break|exit)',
 )
 
 

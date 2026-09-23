@@ -216,8 +216,11 @@ def _read_function_source(
 def _extract_c_function(source: str, name: str) -> str | None:
     """Extract a C function body (heuristic brace-matching)."""
     # Find the function definition: type name(...)  {
+    # Parameter window bounded: unbounded `[^)]*` re-scans a
+    # paren-free hostile run from every name occurrence — quadratic.
+    # Real parameter lists sit far under 1024 chars.
     pattern = re.compile(
-        rf'\b{re.escape(name)}\s*\([^)]*\)\s*\{{',
+        rf'\b{re.escape(name)}\s*\([^)]{{0,1024}}\)\s*\{{',
         re.MULTILINE,
     )
     m = pattern.search(source)
@@ -331,12 +334,16 @@ def _check_null_termination(
 
     # Also look for the specific parameter if given
     if parameter:
+        # Same-line gap and index windows bounded: unbounded `.*`
+        # re-scans a hostile newline-free run from every parameter
+        # mention — quadratic. A real statement sits far under the
+        # bounds (300-char line gap, 256-char index expression).
         param_null = re.compile(
-            rf'\b{re.escape(parameter)}\b.*=\s*[\'"]?\\0[\'"]?\s*;'
+            rf'\b{re.escape(parameter)}\b.{{0,300}}=\s*[\'"]?\\0[\'"]?\s*;'
             rf'|'
-            rf'\b{re.escape(parameter)}\s*\[.*\]\s*=\s*[\'"]?\\0[\'"]?\s*;'
+            rf'\b{re.escape(parameter)}\s*\[.{{0,256}}\]\s*=\s*[\'"]?\\0[\'"]?\s*;'
             rf'|'
-            rf'\b{re.escape(parameter)}\s*\[.*\]\s*=\s*0\s*;',
+            rf'\b{re.escape(parameter)}\s*\[.{{0,256}}\]\s*=\s*0\s*;',
         )
         if param_null.search(source):
             found_patterns.append(f"explicit \\0 on '{parameter}'")
@@ -400,10 +407,13 @@ _BOUNDS_PATTERNS = [
     re.compile(r"\b\w+_LEN\b"),
     re.compile(r"\b\w+_SIZE\b"),
     re.compile(r"\b\w+_CAP\b"),
-    # Comparison operators near length/size variables
-    re.compile(r"\b\w*len\w*\s*[<>=!]+"),
-    re.compile(r"\b\w*size\w*\s*[<>=!]+"),
-    re.compile(r"\b\w*cap\w*\s*[<>=!]+"),
+    # Comparison operators near length/size variables. The name
+    # prefix is bounded: unbounded `\w*` before the keyword costs
+    # every split of a hostile word run per word start; real
+    # identifiers sit far under 256 chars.
+    re.compile(r"\b\w{0,256}len\w*\s*[<>=!]+"),
+    re.compile(r"\b\w{0,256}size\w*\s*[<>=!]+"),
+    re.compile(r"\b\w{0,256}cap\w*\s*[<>=!]+"),
 ]
 
 
@@ -478,7 +488,10 @@ _SANITIZE_PATTERNS = [
     re.compile(r"\bparameteriz\w*\b", re.IGNORECASE),
     re.compile(r"\bprepared?\s+statement\b", re.IGNORECASE),
     re.compile(r"\bplaceholder\b", re.IGNORECASE),
-    re.compile(r"%s.*execute\b"),
+    # Bounded same-line gap (unbounded `.*` after a plantable "%s"
+    # head is quadratic on hostile text; real co-occurrence is
+    # within a statement).
+    re.compile(r"%s.{0,1000}execute\b"),
     re.compile(r"\?\s*,"),
 ]
 
