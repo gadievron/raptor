@@ -55,7 +55,8 @@ class TestReadVulnerableCodeEndLineFallback:
             repo,
         )
         assert vuln.read_vulnerable_code() is True
-        assert vuln.full_code == "// line 2\n// line 3\n"
+        # \n-model join: the slice carries no trailing newline
+        assert vuln.full_code == "// line 2\n// line 3"
 
     def test_no_line_numbers_still_head_fallback(self, tmp_path):
         repo = self._repo_with_big_file(tmp_path)
