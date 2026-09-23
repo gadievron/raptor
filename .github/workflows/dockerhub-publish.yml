@@ -18,8 +18,12 @@ name: Publish devcontainer image to Docker Hub
 # AFTER the operator's tag push and force-moves the tag to the stamp
 # commit — pushed with the workflow GITHUB_TOKEN, and token-initiated
 # pushes never trigger workflows. Building :<version> from the
-# original tag-push event therefore ships the PRE-STAMP tree (the
-# image self-reports the previous version forever). So release.yml
+# original tag-push event therefore ships the PRE-STAMP tree. (Today
+# that tree builds an identical image — the Dockerfile COPYs only
+# requirements*.txt, no stamp target — but the versioned image must
+# be built from the ref it claims to be, and any future COPY of
+# stamped files inherits correctness instead of silently shipping
+# the previous version.) So release.yml
 # dispatches THIS workflow with the tag name once the re-tag has
 # landed (workflow_dispatch IS deliverable by GITHUB_TOKEN — the
 # documented exception to the no-retrigger rule), and the tag-push

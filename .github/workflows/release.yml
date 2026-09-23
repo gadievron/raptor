@@ -125,8 +125,12 @@ jobs:
       # tag: the force-moved tag was pushed with the workflow token,
       # and token-initiated pushes never trigger workflows — without
       # this dispatch, dockerhub-publish would build :<version> from
-      # the pre-stamp commit and the shipped image would self-report
-      # the previous version forever. workflow_dispatch is the
+      # the pre-stamp commit. (Today the two trees build identical
+      # images — the Dockerfile COPYs only requirements*.txt, no
+      # stamp target — but the versioned image must be built from
+      # the ref it claims to be, and any future COPY of stamped
+      # files inherits correctness instead of silently shipping the
+      # previous version.) workflow_dispatch is the
       # documented exception deliverable by GITHUB_TOKEN. Runs
       # unconditionally after the stamp step: on a re-release the tag
       # already points at the stamped commit, and the dispatch is
