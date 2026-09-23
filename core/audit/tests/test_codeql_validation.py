@@ -451,6 +451,199 @@ class TestGuardPolarity:
         assert (kept, pruned) == (1, 0)
         assert receipts == []
 
+    def test_brace_sharing_exit_arm_harvests_negated(
+        self, tmp_path: Path,
+    ):
+        # The arm's closing brace shares the STEP's line (K&R-compact
+        # / minified / generated C): the step is the fall-through of
+        # an exit-only arm, NOT its body.  Judging it "inside the
+        # arm" asserted the guard with inverted polarity — with an
+        # ordinary sibling guard on the flow, the pair proved unsat
+        # and minted a proof-grade smt_path_infeasible on a
+        # trivially-live path.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "        return;\n"                       # 3
+            "    } memcpy(d, s, len);\n"              # 4  <- step
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 4)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+        ]
+
+    def test_brace_sharing_non_exit_arm_drops_condition(
+        self, tmp_path: Path,
+    ):
+        # Same brace-sharing shape, non-exit arm: whether the arm ran
+        # is unknowable at the step — neither polarity is assertable.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                     # 1
+            "    if (len < 0) {\n"                    # 2
+            "        len = 0;\n"                      # 3
+            "    } sink(len);\n"                      # 4  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 4)], target, {}) == []
+
+    def test_nested_close_on_step_line_still_positive(
+        self, tmp_path: Path,
+    ):
+        # The step-line brace closes a NESTED block; the guard's own
+        # arm is still open — the provable positive assertion (a true
+        # prune input) must survive the brace-sharing defence.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int n) {\n"                       # 1
+            "    if (n > 0) {\n"                      # 2
+            "        {\n"                             # 3
+            "            log(n);\n"                   # 4
+            "        } sink(n);\n"                    # 5  <- step
+            "    }\n"                                 # 6
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 5)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("n > 0", False),
+        ]
+
+    def test_brace_prefixed_label_on_step_line_drops_condition(
+        self, tmp_path: Path,
+    ):
+        # `} out: step;` — the label escapes a line-start label check
+        # behind the brace prefix, but it is still a goto target: the
+        # goto path reaches the step with the guard TRUE, so neither
+        # polarity holds (the exit-only arm here ends in `goto`, the
+        # shape that would otherwise earn the negation).
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "        goto out;\n"                     # 3
+            "    } out: memcpy(d, s, len);\n"         # 4  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 4)], target, {}) == []
+
+    def test_literal_brace_in_arm_does_not_defeat_the_census(
+        self, tmp_path: Path,
+    ):
+        # A `{` inside a string literal is data: counting it made the
+        # brace-sharing step "nested" again and re-minted the
+        # inverted-polarity positive assertion.  The census runs on
+        # literal/comment-blanked text.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            'void g(char *d, char *s, int len) {\n'   # 1
+            '    if (len < 0) {\n'                    # 2
+            '        log("{");\n'                     # 3
+            '        return;\n'                       # 4
+            '    } memcpy(d, s, len);\n'              # 5  <- step
+            '}\n',
+        )
+        conds = _path_conditions([("src/vuln.c", 5)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+        ]
+
+    def test_comment_brace_on_guard_tail_does_not_defeat_the_census(
+        self, tmp_path: Path,
+    ):
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                     # 1
+            "    if (len < 0) { // sanity {\n"        # 2
+            "        return;\n"                       # 3
+            "    } sink(len);\n"                      # 4  <- step
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 4)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+        ]
+
+    def test_unblankable_region_abstains(self, tmp_path: Path):
+        # A block comment running past the region (and a raw string,
+        # whose delimiter grammar defeats a quote scanner) leave the
+        # brace census unusable — the polarity abstains rather than
+        # censusing data as code.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "open.c").write_text(
+            "void f(int len) {\n"                     # 1
+            "    if (len < 0) {\n"                    # 2
+            "        return; /* trailing\n"           # 3
+            "    } sink(len);\n"                      # 4  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/open.c", 4)], target, {}) == []
+        (target / "src" / "raw.c").write_text(
+            'void f(int len) {\n'                     # 1
+            '    if (len < 0) {\n'                    # 2
+            '        log(R"({)");\n'                  # 3
+            '        return;\n'                       # 4
+            '    } sink(len);\n'                      # 5  <- step
+            '}\n',
+        )
+        assert _path_conditions([("src/raw.c", 5)], target, {}) == []
+
+    def test_live_brace_sharing_flow_survives_real_smt_prune(
+        self, tmp_path: Path,
+    ):
+        # End-to-end regression pin: exit-only arm closing on the
+        # step's line + an ordinary `len >= 0` guard downstream —
+        # live for any len >= 0, and pruned pre-fix.
+        pytest.importorskip("z3")
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "        return;\n"                       # 3
+            "    } memcpy(d, s, len);\n"              # 4  <- step
+            "    if (len >= 0) {\n"                   # 5
+            "        memcpy(d, s, len);\n"            # 6  <- step
+            "    }\n"                                 # 7
+            "}\n",
+        )
+        sarif = _sarif_with_flow([("src/vuln.c", 4), ("src/vuln.c", 6)])
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (1, 0)
+        assert receipts == []
+
+    def test_brace_sharing_negation_still_feeds_true_prunes(
+        self, tmp_path: Path,
+    ):
+        # No over-correction: the fall-through NEGATION harvested at a
+        # brace-sharing step still combines with a later positive
+        # guard into a genuinely infeasible — prunable — path.
+        pytest.importorskip("z3")
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void g(char *d, char *s, int len) {\n"   # 1
+            "    if (len < 0) {\n"                    # 2
+            "        return;\n"                       # 3
+            "    } log(len);\n"                       # 4  <- step
+            "    if (len < 0) {\n"                    # 5
+            "        memcpy(d, s, len);\n"            # 6  <- step
+            "    }\n"                                 # 7
+            "}\n",
+        )
+        sarif = _sarif_with_flow([("src/vuln.c", 4), ("src/vuln.c", 6)])
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (0, 1)
+        assert receipts[0]["verdict"] == "smt_path_infeasible"
+
     def test_live_early_exit_flow_survives_real_smt_prune(
         self, tmp_path: Path,
     ):

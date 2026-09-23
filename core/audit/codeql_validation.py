@@ -406,10 +406,85 @@ def _exit_only_body(body: str) -> bool:
     return _EXIT_STMT_RE.match(stmts[-1]) is not None
 
 
+#: C/C++ raw-string opener: its delimiter grammar defeats a quote
+#: scanner, so a region carrying one is not brace-censusable.
+_RAW_STRING_RE = re.compile(r'\b(?:u8|[uUL])?R"')
+
+
+def _blank_c_literals(parts: list[str]) -> tuple[list[str], bool]:
+    """Blank C string/char literals and comments out of source-line
+    texts (single linear pass, comment state carried across lines;
+    contents become spaces so brace and statement positions
+    survive).  The polarity census counts braces and reads exit
+    statements from these texts — a ``{`` inside ``log("{")`` or a
+    comment is DATA, and counting it flips the arm/step judgment
+    back to the inverted-polarity assertion this census exists to
+    prevent.
+
+    Returns ``(blanked, censusable)`` — ``censusable`` is False when
+    the text cannot be blanked faithfully: a raw string opens, a
+    string/char literal runs off its line (ill-formed C), or a block
+    comment is still open at the end.  Callers must abstain, never
+    census the raw text.
+    """
+    out: list[str] = []
+    state = ""  # "" | "str" | "chr" | "blk"
+    for text in parts:
+        if state != "blk" and _RAW_STRING_RE.search(text):
+            return parts, False
+        buf: list[str] = []
+        i = 0
+        n = len(text)
+        while i < n:
+            ch = text[i]
+            if state in ("str", "chr"):
+                if ch == "\\":
+                    buf.append("  ")
+                    i += 2
+                    continue
+                if ch == ('"' if state == "str" else "'"):
+                    state = ""
+                    buf.append(ch)
+                else:
+                    buf.append(" ")
+                i += 1
+                continue
+            if state == "blk":
+                if ch == "*" and i + 1 < n and text[i + 1] == "/":
+                    state = ""
+                    buf.append("  ")
+                    i += 2
+                    continue
+                buf.append(" ")
+                i += 1
+                continue
+            if ch in ('"', "'"):
+                state = "str" if ch == '"' else "chr"
+                buf.append(ch)
+                i += 1
+                continue
+            if ch == "/" and i + 1 < n:
+                if text[i + 1] == "/":
+                    break  # line comment: the rest of THIS line
+                if text[i + 1] == "*":
+                    state = "blk"
+                    buf.append("  ")
+                    i += 2
+                    continue
+            buf.append(ch)
+            i += 1
+        if state in ("str", "chr"):
+            # A literal cannot span source lines in well-formed C.
+            return parts, False
+        out.append("".join(buf))
+    return out, state == ""
+
+
 def _step_guard_polarity(
     kind: str,
     tail: str,
     between: list[str],
+    step_line: str,
 ) -> str | None:
     """Polarity with which a guard binds the step that follows it.
 
@@ -420,27 +495,83 @@ def _step_guard_polarity(
     undecidable, so the condition must not be asserted in either
     direction (an unprovable polarity weakens the prune toward
     keep — it never manufactures an infeasibility receipt).
+
+    ``step_line`` is the step's OWN source line: an arm can close on
+    it, BEFORE the step statement (``if (c) { return; } step;`` —
+    K&R-compact / minified / generated C).  That closure is invisible
+    to tail+between inspection, and judging the step "inside the
+    arm" asserts the guard with INVERTED polarity — the one shape
+    that lets a trivially-live path prove "mutually exclusive" and
+    mint a proof-grade infeasibility receipt.  Only the line's
+    leading close-braces are read; when they leave the arm/step
+    relation ambiguous the polarity is dropped, never guessed.
+
+    The brace census runs on literal/comment-blanked text (a ``{``
+    inside ``log("{")`` or a comment is data, and counting it
+    re-mints the inverted-polarity assertion); a region that cannot
+    be blanked faithfully is not censused — it abstains.
     """
     if any(_LABEL_RE.match(ln) for ln in between):
         # A label between the guard and the step is a goto target:
         # another path can reach the step without evaluating the
         # guard, so neither polarity is assertable.
         return None
+    lead_closers = 0
+    i = 0
+    while i < len(step_line) and step_line[i] in " \t}":
+        if step_line[i] == "}":
+            lead_closers += 1
+        i += 1
+    if lead_closers and _LABEL_RE.match(step_line[i:]):
+        # `} out: step;` — the brace prefix hides the label from a
+        # line-start label check, but it is still a goto target:
+        # another path reaches the step with the guard TRUE.
+        return None
+    blanked, censusable = _blank_c_literals([tail, *between])
+    if not censusable:
+        # Raw string / unterminated literal / comment running past
+        # the region: the brace census would count data as code.
+        return None
     region = " ".join(
-        p.strip() for p in [tail, *between] if p.strip()
+        p.strip() for p in blanked if p.strip()
     ).strip()
     if re.search(r"\belse\b", region):
         return None
     if region.startswith("{"):
         if "}" not in region:
-            # Brace opened and never closed before the step — the
-            # step is inside the guarded arm.
-            return "positive"
+            depth = region.count("{")
+            if lead_closers < depth:
+                # Brace opened and never closed before the step;
+                # any step-line closers close NESTED opens — the
+                # guard's arm is still open at the step.
+                return "positive"
+            if (lead_closers == depth and kind == "if"
+                    and _exit_only_body(region[1:])):
+                # The arm closes on the step line before the step:
+                # the step is the fall-through of an exit-only arm,
+                # so the condition holds NEGATED.
+                return "negated"
+            # Arm closed at the step line with a non-exit body (the
+            # arm may or may not have run), or more closers than
+            # opens (the relation is not linear text): drop it.
+            return None
         body, _, after = region[1:].partition("}")
         if after.strip():
             return None
+        if lead_closers:
+            # The guard's arm already closed inside *between*; the
+            # step line's leading `}` closes an OUTER scope opened
+            # before the guard — the guard→step relation is not a
+            # linear fall-through.
+            return None
         if kind == "if" and _exit_only_body(body):
             return "negated"
+        return None
+    if lead_closers:
+        # Braceless arm / bare fall-through with a `}` before the
+        # step: the brace closes a scope opened BEFORE the guard (a
+        # loop or switch body), so the step can be reached from
+        # iterations whose last guard evaluation is unknowable.
         return None
     if not region:
         # Nothing between the guard and the step line: the step IS
@@ -555,7 +686,9 @@ def _path_conditions(
             if cond is None:
                 continue
             between = lines[j:line - 1]
-            polarity = _step_guard_polarity(kind, tail, between)
+            polarity = _step_guard_polarity(
+                kind, tail, between, lines[line - 1],
+            )
             if polarity is not None:
                 negated = polarity == "negated"
                 if (cond, negated) not in seen:
