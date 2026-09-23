@@ -1728,3 +1728,69 @@ def test_parent_declared_bom_not_baked_into_cached_parent_view(
         pom_inheritance.set_inheritance_resolver(None)
     assert _find(deps_a, ":lib").version == "9.9.9"
     assert _find(deps_b, ":lib").version == "5.5.5"
+
+
+def test_inherited_embedded_property_ref_resolves_child_wins(
+    tmp_path: Path,
+):
+    """A parent-managed ``<version>2.${jackson.minor}.0</version>``
+    with the property defined in parent AND child resolves child-wins
+    at apply (2.17.0). The whole-string-only pass left it unresolved
+    — OSV can't match ``2.${jackson.minor}.0`` — AND let it through
+    the whole-string-only refusal gate into dep.version and purl."""
+    _write(tmp_path, "pom.xml", '''\
+<project>
+  <groupId>corp</groupId><artifactId>par</artifactId><version>1</version>
+  <properties><jackson.minor>9</jackson.minor></properties>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.${jackson.minor}.0</version></dependency>
+  </dependencies></dependencyManagement>
+</project>
+''')
+    child = _write(tmp_path, "app/pom.xml", '''\
+<project>
+  <parent><groupId>corp</groupId><artifactId>par</artifactId>
+    <version>1</version></parent>
+  <groupId>corp</groupId><artifactId>app</artifactId><version>1</version>
+  <properties><jackson.minor>17</jackson.minor></properties>
+  <dependencies>
+    <dependency><groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId></dependency>
+  </dependencies>
+</project>
+''')
+    deps = _parse_with_resolver(child, None)
+    dep = _find(deps, ":jackson-databind")
+    assert dep.version == "2.17.0"
+    assert dep.purl.endswith("@2.17.0")
+
+
+def test_inherited_embedded_unresolvable_ref_is_refused(tmp_path: Path):
+    """An embedded reference NO scope defines is refused at apply —
+    the dep stays unpinned; the raw ``${...}`` never reaches
+    dep.version or the purl."""
+    _write(tmp_path, "pom.xml", '''\
+<project>
+  <groupId>corp</groupId><artifactId>par</artifactId><version>1</version>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>corp</groupId><artifactId>ctrl</artifactId>
+      <version>2.${undefined.minor}.0</version></dependency>
+  </dependencies></dependencyManagement>
+</project>
+''')
+    child = _write(tmp_path, "app/pom.xml", '''\
+<project>
+  <parent><groupId>corp</groupId><artifactId>par</artifactId>
+    <version>1</version></parent>
+  <groupId>corp</groupId><artifactId>app</artifactId><version>1</version>
+  <dependencies>
+    <dependency><groupId>corp</groupId><artifactId>ctrl</artifactId></dependency>
+  </dependencies>
+</project>
+''')
+    deps = _parse_with_resolver(child, None)
+    dep = _find(deps, ":ctrl")
+    assert dep.version is None
+    assert "${" not in (dep.purl or "")

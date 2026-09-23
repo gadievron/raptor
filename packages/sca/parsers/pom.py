@@ -248,13 +248,18 @@ def _apply_inherited_view(
         # a child's property override applies here (Maven's
         # effective-POM precedence); resolving against the view's
         # ancestor-only properties reported the parent's stale pin.
-        from . import pom_inheritance as _inh
-        resolved = _inh._resolve_property(inherited, properties)
-        if not resolved or (
-            resolved.startswith("${") and resolved.endswith("}")
-        ):
-            # No scope defines the property: ``${jackson.version}``
-            # is not a version — letting it flow verbatim into
+        # EMBEDDED references (``2.${jackson.minor}.0``) resolve the
+        # same way — the old whole-string-only pass left them
+        # unresolved AND let them through the whole-string-only
+        # refusal gate below, the exact poisoned state the gate
+        # exists to stop.
+        resolved, fully = _inh._resolve_property_refs(
+            inherited, properties, origin=str(dep.declared_in),
+        )
+        if not resolved or not fully or "${" in resolved:
+            # Some reference no scope defines (or a property whose
+            # own value is still ``${...}``-shaped): the result is
+            # not a version — letting it flow verbatim into
             # ``dep.version`` / purl poisons CVE matching. Leave the
             # dep unpinned instead.
             continue
