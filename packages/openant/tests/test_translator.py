@@ -4,7 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parents[4]))  # repo root
+sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
 
 from packages.openant.translator import (
     translate_pipeline_output,
@@ -181,10 +181,6 @@ class TestDeduplicateWithSarif(unittest.TestCase):
         merged, dropped = deduplicate_with_sarif(oa, [])
         self.assertEqual(dropped, 0)
         self.assertEqual(len(merged), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestUnknownVerdictsStayVisible(unittest.TestCase):
@@ -515,3 +511,7 @@ class TestMetadataCaps(unittest.TestCase):
         self.assertEqual(meta["vuln_name"], "Command Injection")
         self.assertEqual(meta["attack_vector"], "short impact")
         self.assertEqual(meta["function"], "handler")
+
+
+if __name__ == "__main__":
+    unittest.main()

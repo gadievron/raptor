@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).parents[4]))  # repo root
+sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
 
 from packages.openant.config import OpenAntConfig
 from packages.openant.scanner import _build_subprocess_env

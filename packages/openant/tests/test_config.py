@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).parents[4]))  # repo root
+sys.path.insert(0, str(Path(__file__).parents[3]))  # repo root
 
 from packages.openant.config import (
     OpenAntConfig,
@@ -103,10 +103,6 @@ class TestIsAvailable(unittest.TestCase):
             core = _make_fake_core(Path(tmp))
             with patch.dict(os.environ, {OPENANT_CORE_ENV: str(core)}, clear=False):
                 self.assertTrue(is_available())
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestSupplyChainPin(unittest.TestCase):
@@ -345,6 +341,8 @@ class TestCheckoutPinRefForgery(unittest.TestCase):
                     prov = scanner.checkout_provenance(core)
             self.assertIs(prov["matches"], True)
             self.assertEqual(prov["head"], head)
+
+
 class TestFromEnvValidatesKnobs(unittest.TestCase):
     """OpenAntConfig.from_env read OPENANT_MODEL / OPENANT_LEVEL raw
     beside the module's own env_choice validator — any get_config()
@@ -394,3 +392,45 @@ class TestFromEnvValidatesKnobs(unittest.TestCase):
             self.assertIn("OPENANT_MODEL_CHOICES", src, launcher)
             self.assertIn("OPENANT_LEVEL_CHOICES", src, launcher)
             self.assertNotIn('("opus", "sonnet")', src, launcher)
+
+
+class TestSuiteHygiene(unittest.TestCase):
+    """Direct invocation (python3 <file>) must run the SAME tests
+    pytest collects: a mid-file unittest.main() strands every class
+    defined after it (the landed-fix oracles ran green while silently
+    skipped), and a parents-4 sys.path spelling points ABOVE the
+    repo root, killing the direct lane outright."""
+
+    _TEST_FILES = (
+        "test_cli_exit_paths.py", "test_config.py",
+        "test_phase1b_integration.py", "test_raptor_dispatch.py",
+        "test_report_writer.py", "test_scanner.py",
+        "test_translator.py",
+    )
+
+    def test_main_block_is_last(self):
+        import ast
+        for name in self._TEST_FILES:
+            src = (Path(__file__).parent / name).read_text()
+            tree = ast.parse(src)
+            main_idx = [
+                i for i, node in enumerate(tree.body)
+                if isinstance(node, ast.If)
+                and getattr(getattr(node.test, "left", None),
+                            "id", "") == "__name__"
+            ]
+            self.assertEqual(len(main_idx), 1, name)
+            self.assertEqual(
+                main_idx[0], len(tree.body) - 1,
+                f"{name}: statements (stranded test classes?) after "
+                f"the unittest.main() guard")
+
+    def test_sys_path_points_at_repo_root(self):
+        needle = "parents[" + "4]"  # split so this file never matches
+        for name in self._TEST_FILES:
+            src = (Path(__file__).parent / name).read_text()
+            self.assertNotIn(needle, src, name)
+
+
+if __name__ == "__main__":
+    unittest.main()
