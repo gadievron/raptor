@@ -45,3 +45,30 @@ def test_fifo_returns_none_without_blocking(tmp_path):
 
 def test_directory_returns_none(tmp_path):
     assert read_capped(tmp_path, 100) is None
+
+
+def test_fd_closed_exactly_once_by_owner(tmp_path, monkeypatch):
+    """The raw fd is owned by read_capped's finally block: the fdopen
+    wrapper must NOT close it too. A double-close is a real bug class
+    in threaded callers — between the two closes another thread can be
+    handed the same fd number, and the second close silently destroys
+    the stranger's descriptor."""
+    p = tmp_path / "f.txt"
+    p.write_bytes(b"content")
+
+    closed: list[int] = []
+    failed: list[int] = []
+    real_close = os.close
+
+    def spying_close(fd: int) -> None:
+        try:
+            real_close(fd)
+        except OSError:
+            failed.append(fd)
+            raise
+        closed.append(fd)
+
+    monkeypatch.setattr(os, "close", spying_close)
+    assert read_capped(p, 100) == b"content"
+    assert failed == [], "explicit close hit an already-closed fd"
+    assert len(closed) == 1
