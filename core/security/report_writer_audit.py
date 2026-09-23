@@ -570,6 +570,9 @@ _REPORT_WRITER_FILES = (
     "core/sandbox/triage.py",
     "packages/binary_analysis/blamed_lines.py",
     "packages/binary_analysis/cli.py",
+    # corpus_profile: format-profile.md / seed-manifest writer over
+    # hostile sample bytes — escape-at-capture + hex-only rendering.
+    "packages/binary_analysis/corpus_profile.py",
     "packages/binary_analysis/harness.py",
     "packages/binary_analysis/investigation.py",
     "packages/binary_analysis/pipeline.py",
