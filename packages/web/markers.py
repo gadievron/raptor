@@ -22,8 +22,15 @@ import re
 # already present in the baseline; the verification oracle's control
 # legs do the same job on replay).
 MARKER_RES: dict[str, re.Pattern] = {
+    # Co-occurrence gaps and the uid() body are bounded: unbounded,
+    # a crafted response that repeats the head token ("mysql",
+    # "uid=0(", "[extensions]") re-scans the rest of the body from
+    # every occurrence — quadratic under Python's backtracking
+    # matcher. Real marker lines sit well inside the bounds, and the
+    # bounds stay at 1000 or below: these patterns are also exported
+    # to ffuf, whose RE2 engine rejects repeat counts above 1000.
     "sqli": re.compile(
-        r"(?:sql\s+syntax|mysql.*error|pg_query|"
+        r"(?:sql\s+syntax|mysql.{0,1000}error|pg_query|"
         r"unterminated\s+string|unclosed\s+quotation|"
         r"quoted\s+string\s+not\s+properly\s+terminated|"
         r"sqlexception|pg::syntaxerror|sqlite3::exception|"
@@ -32,14 +39,14 @@ MARKER_RES: dict[str, re.Pattern] = {
         re.IGNORECASE,
     ),
     "command_injection": re.compile(
-        r"^root:[^:]*:\d+:\d+:|/bin/(?:ba)?sh\b|uid=\d+\([^)]+\)|"
+        r"^root:[^:]*:\d+:\d+:|/bin/(?:ba)?sh\b|uid=\d+\([^)]{1,1000}\)|"
         r"volume serial number|windows ip configuration",
         re.IGNORECASE | re.MULTILINE,
     ),
     "path_traversal": re.compile(
         r"^root:x:\d+:\d+:|^(?:daemon|nobody):x:|\[boot loader\]|"
         r"\[operating systems\]|for 16-bit app support|"
-        r"\[extensions\].*\[fonts\]",
+        r"\[extensions\].{0,1000}\[fonts\]",
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
     ),
     "ssti": re.compile(r"\b(?:49|7777777)\b"),

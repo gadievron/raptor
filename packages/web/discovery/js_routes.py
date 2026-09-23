@@ -43,7 +43,12 @@ _ROUTE_PATTERNS = [
     re.compile(r'''['"`](/api[^'"`\s]{0,4095})['"`]'''),
 ]
 
-_SCRIPT_SRC_RE = re.compile(r'''<script[^>]+src\s*=\s*['"]([^'"]+)['"]''', re.I)
+# The tag interior is bounded ({1,500}): unbounded, a crafted page
+# that repeats "<script" makes every occurrence re-scan the rest of
+# the page — quadratic. Real script tags put src= well inside the
+# bound (attributes before src are a handful of tokens).
+_SCRIPT_SRC_RE = re.compile(
+    r'''<script[^>]{1,500}src\s*=\s*['"]([^'"]+)['"]''', re.I)
 
 
 def extract_js_routes(client: "WebClient", base_url: str) -> List[str]:

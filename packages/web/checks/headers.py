@@ -236,7 +236,10 @@ class ServerVersionCheck(Check):
         powered = resp.headers.get("X-Powered-By", "")
 
         findings = []
-        version_re = re.compile(r"\d+\.\d+")
+        # (?<!\d) pins each attempt to the start of a digit run: a
+        # bare \d+ head re-scans a hostile digit run from every
+        # offset — quadratic. Dropped starts are mid-number tokens.
+        version_re = re.compile(r"(?<!\d)\d+\.\d+")
 
         if server and version_re.search(server):
             findings.append(self._result(

@@ -1656,7 +1656,10 @@ def cleanup_cpg(cpg: JoernCPG) -> None:
         logger.warning("cleanup_cpg failed: %s", e)
 
 
-_CALL_RE = re.compile(r"(\w+)\s*\(")
+# \b pins each attempt to a word start: a bare \w+ head re-scans a
+# hostile identifier run from every offset — quadratic. Dropped
+# starts are mid-word false tokens only.
+_CALL_RE = re.compile(r"\b(\w+)\s*\(")
 
 
 def _infer_function(code: str) -> str:
