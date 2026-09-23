@@ -1529,7 +1529,7 @@ Available Modes:
   binary      - Black-box binary investigation and evidence collection
   fuzz        - Binary fuzzing with AFL++
   web         - Web application security testing
-  agentic     - Full autonomous workflow (Semgrep + LLM analysis; --codeql adds CodeQL)
+  agentic     - Full autonomous workflow (Semgrep + CodeQL + LLM analysis; --no-codeql skips CodeQL)
   codeql      - CodeQL-only analysis
   analyze     - LLM-powered vulnerability analysis (requires SARIF input)
   describe    - Pre-flight inspection: target type, tool readiness, cost estimate

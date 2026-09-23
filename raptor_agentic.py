@@ -1793,7 +1793,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full autonomous workflow (Semgrep + LLM analysis; CodeQL is opt-in via --codeql)
+  # Full autonomous workflow (Semgrep + CodeQL + LLM analysis;
+  # raptor.py enables CodeQL by default — --no-codeql skips it)
   python3 raptor.py agentic --repo /path/to/code
 
   # Semgrep only

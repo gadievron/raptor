@@ -102,7 +102,8 @@ def enrich_with_ast_view(
     one). When omitted, builds one over ``target_path``.
 
     Returns the count of steps enriched. Idempotent — re-running
-    overwrites prior enrichment with fresh data.
+    PRESERVES steps that already carry an ``ast_view`` (carried
+    forward from an earlier run) and only fills the missing ones.
     """
     if not isinstance(trace, dict):
         return 0
