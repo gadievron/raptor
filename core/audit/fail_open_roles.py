@@ -700,6 +700,22 @@ def _sink_catalog_role(
     return None
 
 
+# Consumer-side caps for registry-sourced convention patterns. The
+# repo-wide regex census covers repo-authored pattern LITERALS; a
+# SecurityConvention's pattern string arrives at runtime through the
+# learned-vocabulary registry, so nothing else keeps a future producer
+# census-honest. Today's only producer emits escaped-literal call
+# shapes (census-linear), so both caps are defence in depth:
+# a learned name is identifier-sized (>512 chars is junk — refuse the
+# pattern), and the haystack is one function's source (64 KiB is far
+# above real function bodies — a longer decoy is searched only in its
+# first window; trade-off: a genuine convention match past the window
+# of a pathologically long function is missed, versus an unvetted
+# pattern scanning an unbounded attacker-authored body).
+_CONVENTION_PATTERN_MAX_LEN = 512
+_CONVENTION_SOURCE_WINDOW = 64 * 1024
+
+
 def _convention_role(
     names: Sequence[str], enclosing_source: str, ctx: RoleContext,
 ) -> RoleEvidence | None:
@@ -718,7 +734,7 @@ def _convention_role(
         if getattr(conv, "occurrences", 0) < MIN_CONVENTION_OCCURRENCES:
             continue
         pattern = getattr(conv, "pattern", "")
-        if not pattern:
+        if not pattern or len(pattern) > _CONVENTION_PATTERN_MAX_LEN:
             continue
         try:
             conv_re = re.compile(pattern)
@@ -734,7 +750,8 @@ def _convention_role(
                     provenance=f"convention:{pattern}",
                     grade=GRADE_REGISTRY,
                 )
-        if enclosing_source and conv_re.search(enclosing_source):
+        if enclosing_source and conv_re.search(
+                enclosing_source[:_CONVENTION_SOURCE_WINDOW]):
             return RoleEvidence(
                 kind=concern,
                 source="convention",
