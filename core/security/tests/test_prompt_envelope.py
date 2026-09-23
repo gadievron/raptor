@@ -1613,3 +1613,87 @@ class TestEntityColonSchemes:
         start = time.monotonic()
         _strip_autofetch_markup("[c](" + "&#58;" * 20_000 + ")")
         assert time.monotonic() - start < 5.0
+
+
+class TestBalancedBracketLabels:
+    """CommonMark link text nests balanced brackets, and markdown-it
+    accepts UNBOUNDED depth — the flat label grammar stopped at the
+    first ']', so `![a[b]](https://evil/x.png)` was a zero-click
+    fetching image. The widened grammar removes the whole construct
+    for realistic depths; the closer-anchored belts destroy the
+    `](dest)` tail at ANY depth."""
+
+    HOSTILE = (
+        "![a[b]](https://evil.example/x.png)",
+        "[a[b]](https://evil.example/leak)",
+        "![a[b[c]]](https://evil.example/x.png)",
+        "[a[b[c[d]]]](https://evil.example/leak)",       # out-nests grammar
+        "![a[b[c[d[e[f]]]]]](https://evil.example/x.png)",
+        "[a[b]](https&colon;//evil.example/leak)",       # nested + encoded
+        "![a[b]](//evil.example/x.png)",
+        "[a[b](https://evil.example/leak)",              # unbalanced: inner link
+    )
+
+    def test_nested_label_fetches_defanged_all_lanes(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        from core.security.prompt_output_sanitise import (
+            sanitise_inline,
+            sanitise_string,
+        )
+        for p in self.HOSTILE:
+            for fn in (_strip_autofetch_markup, sanitise_string,
+                       sanitise_inline):
+                out = fn(p)
+                # the fetch needs the literal `](dest)` closer — it
+                # must be gone whatever the label depth
+                assert "](https://evil" not in out, (fn.__name__, p, out)
+                assert "](//evil" not in out, (fn.__name__, p, out)
+                assert "](https&colon;" not in out, (fn.__name__, p, out)
+
+    def test_renderer_adjudication_unbounded_depth(self):
+        """The depth adjudication: markdown-it renders nested labels
+        at every probed depth, so no finite label grammar suffices
+        alone — the closer-anchored belts are the guarantee. Skips
+        hermetically when the renderer is absent."""
+        pytest.importorskip("markdown_it")
+        from markdown_it import MarkdownIt
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        md = MarkdownIt()
+        for depth in (1, 2, 3, 6):
+            label = "a" + "[b" * depth + "]" * depth
+            raw = f"![{label}](https://evil.example/x.png)"
+            assert 'src="https://evil' in md.render(raw), depth
+            out = _strip_autofetch_markup(raw)
+            assert 'src="https://evil' not in md.render(out), (depth, out)
+
+    def test_whole_construct_removed_at_realistic_depths(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for p in ("![a[b]](https://evil/x.png)",
+                  "![a[b[c]]](https://evil/x.png)"):
+            out = _strip_autofetch_markup(p)
+            assert out == "[REDACTED-AUTOFETCH-MARKUP]", (p, out)
+
+    def test_benign_bracketed_labels_and_code_untouched(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for p in ("[see [1]](docs/page)",
+                  "arr[i](x) and dict[key](arg)",
+                  "f(x)[0](y) code chain",
+                  "prose [with] brackets (and parens)",
+                  "[docs](relative/path%20with%20space)"):
+            assert _strip_autofetch_markup(p) == p, p
+
+    def test_absolute_link_posture_consistent(self):
+        # A bracketed label must not CHANGE the lane posture: the
+        # absolute-scheme link strips exactly like its unbracketed twin.
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        b = _strip_autofetch_markup("[see [1]](https://good.example/doc)")
+        u = _strip_autofetch_markup("[see 1](https://good.example/doc)")
+        assert "REDACTED" in b and "REDACTED" in u
+
+    def test_nested_label_floods_linear(self):
+        import time
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        start = time.monotonic()
+        _strip_autofetch_markup("[" * 60_000 + "](https://e)")
+        _strip_autofetch_markup(("[a[b[" + "x" * 100 + "]]]") * 2_000)
+        assert time.monotonic() - start < 5.0
