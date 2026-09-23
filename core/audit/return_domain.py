@@ -38,6 +38,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
+from core.source.lines import split_lines
 from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
@@ -1193,7 +1194,7 @@ def _peer_checks(
         lang = _language_of(fp)
         if lang not in _C_LANGUAGES:
             continue
-        for idx, line_text in enumerate(source.splitlines(), 1):
+        for idx, line_text in enumerate(split_lines(source), 1):
             if (fp, idx) == exclude:
                 continue
             m = pattern.search(line_text)

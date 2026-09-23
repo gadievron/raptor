@@ -29,6 +29,7 @@ from core.inventory.macro_resolve import (
     _iter_enum_bodies,
     _parse_enumerator_value,
 )
+from core.source.lines import split_lines
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -314,7 +315,7 @@ def _compute_conditional_depths(text: str) -> dict[int, int]:
     """
     depths: dict[int, int] = {}
     depth = 0
-    for i, raw_line in enumerate(text.splitlines(), 1):
+    for i, raw_line in enumerate(split_lines(text), 1):
         stripped = raw_line.lstrip()
         if stripped.startswith("#"):
             if _IF_RE.match(raw_line):

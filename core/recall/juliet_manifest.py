@@ -33,6 +33,7 @@ from pathlib import Path
 from core.json import save_json
 from core.recall.manifest import SCHEMA_VERSION
 from core.recall.pinned_clone import verify_pinned_clone
+from core.source.lines import split_lines
 
 #: Public mirror of the NIST Juliet Java suite (v1.2 content).
 JULIET_REPO_URL = "https://github.com/find-sec-bugs/juliet-test-suite"
@@ -281,7 +282,7 @@ _FORWARD_RE = re.compile(r"\.\s*badSink\s*\(")
 def _method_spans(text: str) -> list[tuple[int, str]]:
     """(line, name) for every bad*/good* declaration, in order."""
     out: list[tuple[int, str]] = []
-    for i, line in enumerate(text.splitlines(), 1):
+    for i, line in enumerate(split_lines(text), 1):
         m = _DECL_RE.match(line)
         if m:
             out.append((i, m.group(1)))
@@ -307,7 +308,7 @@ def _chain_sink_file(files: dict[str, str]) -> tuple[str, str] | None:
         body_start = min(bad_lines)
         body_end = min(good_lines) - 1
         body = "\n".join(
-            files[terminal].splitlines()[body_start - 1:body_end])
+            split_lines(files[terminal])[body_start - 1:body_end])
         if _FORWARD_RE.search(body):
             return None  # chosen terminal still forwards — ambiguous
         return terminal, ""

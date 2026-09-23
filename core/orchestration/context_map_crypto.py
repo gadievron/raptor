@@ -31,6 +31,7 @@ from typing import Any
 
 from core.json import load_json
 from core.paths import confine
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -217,7 +218,7 @@ def enrich_with_crypto_inventory(
         spans = spans_by_file.get(fp)
         file_sites = 0
         capped = False
-        for lineno, line in enumerate(text.splitlines(), start=1):
+        for lineno, line in enumerate(split_lines(text), start=1):
             if capped or file_sites >= _MAX_FILE_SITES:
                 break
             for api, kind, pattern in matchers:

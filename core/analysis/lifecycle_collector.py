@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+from core.source.lines import split_lines
 
 from .cfg_conditions import _CONDITION_LABEL_RE
 from .lifecycle_model import Guard, ReadSite, WriteSite
@@ -128,7 +129,7 @@ def collect_field_sites_from_source(
         re.compile(rf"\.({re.escape(field_name)})\s*=(?!=)"),
     ]
 
-    for lineno, line_text in enumerate(source.splitlines(), 1):
+    for lineno, line_text in enumerate(split_lines(source), 1):
         is_write = any(p.search(line_text) for p in assign_patterns)
         is_access = any(p.search(line_text) for p in access_patterns)
 

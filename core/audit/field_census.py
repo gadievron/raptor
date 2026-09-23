@@ -49,6 +49,7 @@ from typing import Any
 from collections.abc import Iterable
 
 from core.json import load_json, save_json
+from core.source.lines import split_lines
 
 from .struct_accessor_index import _MIN_FIELD_LEN, _NOISE_FIELDS, _detect_lock
 
@@ -972,7 +973,7 @@ def _scan_file_regex(
             lock_cache[span.name] = _detect_lock(segment)
         return lock_cache[span.name]
 
-    for lineno, text in enumerate(source.splitlines(), 1):
+    for lineno, text in enumerate(split_lines(source), 1):
         span = _span_for_line(spans, lineno)
         function = span.name if span else ""
         params = span.params if span else ()
