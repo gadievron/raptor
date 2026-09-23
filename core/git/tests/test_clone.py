@@ -1500,3 +1500,20 @@ def test_git_failure_messages_are_length_capped(tmp_path: Path) -> None:
     msg = str(exc_info.value)
     assert len(msg) < 3000
     assert msg.startswith("git clone failed:")
+
+
+def test_writable_path_refuses_opt_srv_root_prefixes() -> None:
+    """The denylist's own rationale ("not in system-state locations")
+    covers /opt, /srv, and /root exactly as much as the listed
+    members: add-on package trees, served content, and the superuser
+    home are host state a hostile git server must not gain write scope
+    over."""
+    from core.git.clone import _validate_writable_path
+    for bad in (
+        Path("/opt/scratch/clone"),
+        Path("/opt/clone"),      # writable scope would be /opt itself
+        Path("/srv/www/clone"),
+        Path("/root/work/clone"),
+    ):
+        with pytest.raises(ValueError, match="pseudo-fs|system-state|root"):
+            _validate_writable_path(bad, role="target")

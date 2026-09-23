@@ -431,6 +431,14 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
     #                        directly AT /var/tmp still refuses:
     #                        its parent — the writable scope — is
     #                        /var itself).
+    #   /opt/...           — add-on package trees (root-owned per
+    #                        FHS); a workspace under /opt is
+    #                        conceivable but the documented scratch
+    #                        locations cover the legitimate cases, so
+    #                        the system-state reading wins.
+    #   /srv/...           — served content (web roots, ftp trees).
+    #   /root/...          — the superuser home: dotfiles, keys,
+    #                        cron-adjacent state.
     #
     # Reject these prefixes outright. Operator-legitimate sandbox
     # work belongs under /tmp, /var/tmp, $HOME, or a dedicated
@@ -447,6 +455,7 @@ def _validate_writable_path(p: Path, *, role: str) -> None:
     _DENY_PREFIXES = (
         "/dev/", "/proc/", "/sys/", "/run/",
         "/etc/", "/boot/", "/usr/", "/var/",
+        "/opt/", "/srv/", "/root/",
     )
     _DENY_EXEMPT_PREFIXES = ("/var/tmp/",)
     for candidate in (str(p), str(resolved)):
