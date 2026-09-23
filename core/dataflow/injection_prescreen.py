@@ -63,6 +63,7 @@ from core.dataflow.smt_barrier import (
     extract_validator_from_line,
     extractor_languages,
     prove_neutralizes,
+    split_source_lines,
     substitution_dominates_sink,
     validator_dominates_sink,
 )
@@ -262,7 +263,7 @@ def _read_source(repo_root: Path, rel_path: str) -> str | None:
 
 
 def _line_text(source_text: str, line: int) -> str:
-    lines = source_text.splitlines()
+    lines = split_source_lines(source_text)
     if 1 <= line <= len(lines):
         return lines[line - 1]
     return ""

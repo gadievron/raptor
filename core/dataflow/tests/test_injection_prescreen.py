@@ -889,3 +889,33 @@ class TestArgvContextDangerModel:
             rule_id="java/command-line-injection", cwe="CWE-88",
         )
         assert verdict is not None and verdict.refuted is True
+
+
+class TestExoticLineTerminators:
+    """Producers count lines by \\n; str.splitlines() also breaks on
+    U+2028 etc., so one exotic terminator planted in a line-1 comment
+    shifted every line-keyed judgment and the guard became unfindable
+    (signal loss on attacker-chosen input)."""
+
+    def test_u2028_in_comment_does_not_shift_line_judgments(self, tmp_path):
+        js = (
+            "function run(x) {\n"
+            "  // prose\u2028still line two\n"
+            "  if (!/^[a-z0-9]+$/.test(x)) return;\n"   # line 3 = guard
+            "  exec(x);\n"                               # line 4 = sink
+            "}\n"
+        )
+        (tmp_path / "shift.js").write_text(js)
+        verdict = prescreen_finding(
+            paths=[_path("shift.js", 2, [3], 4)], repo_root=tmp_path,
+            rule_id="js/command-injection", cwe="CWE-78",
+        )
+        assert verdict is not None and verdict.refuted is True
+
+    def test_split_source_lines_is_newline_only(self):
+        from core.dataflow.smt_barrier import split_source_lines
+        text = "a\u2028bc\n2nd\r\n3rd\n"
+        lines = split_source_lines(text)
+        assert lines[0] == "a\u2028bc"
+        assert lines[1] == "2nd\r"
+        assert lines[2] == "3rd"

@@ -61,6 +61,7 @@ from core.dataflow.smt_barrier import (
     _same_function_in_order,
     _validator_in_branch,
     prove_neutralizes,
+    split_source_lines,
     substitution_dominates_sink,
     validator_dominates_sink,
 )
@@ -154,7 +155,7 @@ def _validator_line_in_diff(fix_diff: str, claimed_line: str) -> bool:
     needle = claimed_line.strip()
     if not needle:
         return False
-    for raw in fix_diff.splitlines():
+    for raw in split_source_lines(fix_diff):
         if not raw.startswith("+") or raw.startswith("+++"):
             continue
         if raw[1:].strip() == needle:
@@ -224,7 +225,7 @@ def _find_best_validator_line(
         return None
     view = code_view_lines(source_text, language)
     candidates = []
-    for idx, ln in enumerate(source_text.splitlines()):
+    for idx, ln in enumerate(split_source_lines(source_text)):
         if ln.strip() != needle or idx + 1 >= sink_line:
             continue
         first = len(ln) - len(ln.lstrip())
@@ -461,7 +462,7 @@ def _transform_binding_targets(
     # split; a delimiter inside a string literal only narrows a
     # segment further — it can never join two statements — so the
     # crude split errs toward refusal.
-    lines = source_text.splitlines()
+    lines = split_source_lines(source_text)
     if not (0 < validator_line <= len(lines)):
         return set()
     line = lines[validator_line - 1]
@@ -583,7 +584,7 @@ def _try_known_safe_call(
     # Chain check — only Python has an AST chain tracker for now.  For
     # non-Python we conservatively require the chain variable to
     # appear textually at the sink line.
-    sink_lines = source_text.splitlines()
+    sink_lines = split_source_lines(source_text)
     sink_line_text = sink_lines[sink_line - 1] if 0 < sink_line <= len(sink_lines) else ""
     if language == "python" and tree is not None:
         # The sanitizing binding on the validator line is exactly the
@@ -776,7 +777,7 @@ def try_tier1b(
                 f"(branch-wrapped or tracker-inconclusive)",
                 spec=mech,
             )
-        sink_lines = source_text.splitlines()
+        sink_lines = split_source_lines(source_text)
         sink_line_text = (sink_lines[sink_line - 1]
                           if 0 < sink_line <= len(sink_lines) else "")
         if language == "python":
