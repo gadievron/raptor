@@ -14,6 +14,16 @@ from pathlib import Path
 import pytest
 
 from core.dataflow import smt_barrier as sb
+from core.smt_solver import z3_available
+
+# z3 is an optional dependency: tests that need a real solver verdict
+# (a prove/try_tier0 run that must reach z3 to produce its pinned status)
+# skip when it is absent. Degradation tests that pin the z3-absent
+# behaviour stay unmarked and always run.
+_requires_z3 = pytest.mark.skipif(
+    not z3_available(),
+    reason="z3-solver not installed",
+)
 
 # ---------------------------------------------------------------------------
 # Validator extractor.
@@ -269,6 +279,7 @@ def test_guard_dominance_requires_call_in_test():
 # SMT proof: regex-intersection emptiness.
 # ---------------------------------------------------------------------------
 
+@_requires_z3
 def test_prove_unsat_for_whoogle_charset_vs_pathtrav():
     # Soundness: '.' is now in the pathtrav danger model ('..' segments
     # escape via multi-component joins the charset model cannot see),
@@ -280,6 +291,7 @@ def test_prove_unsat_for_whoogle_charset_vs_pathtrav():
     assert "UNSAT" in v.reasoning
 
 
+@_requires_z3
 def test_prove_sat_for_dot_admitting_charset_vs_pathtrav():
     """Regression (danger-model completeness): a '.'-admitting charset
     can build '..' segments; whether that traverses depends on the
@@ -291,6 +303,7 @@ def test_prove_sat_for_dot_admitting_charset_vs_pathtrav():
     assert v.counterexample == "."
 
 
+@_requires_z3
 def test_prove_sat_for_digits_and_space_charset_vs_sqli():
     """Regression: digits-and-space charsets are NOT sound for sqli —
     in an unquoted numeric context ``1 OR 1`` needs no quote chars."""
@@ -299,6 +312,7 @@ def test_prove_sat_for_digits_and_space_charset_vs_sqli():
     assert v.sound is False
 
 
+@_requires_z3
 def test_prove_digits_only_charset_still_sound_for_sqli():
     """Boost value preserved: a pure numeric charset is provably safe
     in both quoted and unquoted SQL contexts."""
@@ -307,6 +321,7 @@ def test_prove_digits_only_charset_still_sound_for_sqli():
     assert v.sound is True
 
 
+@_requires_z3
 def test_prove_sat_for_redirect_admitting_charset_vs_cmdi():
     """Regression: '>' needs no separator to redirect (``foo>x``)."""
     spec = sb.ValidatorSpec("charset", "arg", "A-Za-z0-9>", "+...", 0)
@@ -315,6 +330,7 @@ def test_prove_sat_for_redirect_admitting_charset_vs_cmdi():
     assert v.counterexample == ">"
 
 
+@_requires_z3
 def test_prove_sat_for_weak_validator():
     """Charset that permits '/' MUST be declined, with '/' as the
     counterexample input."""
@@ -325,6 +341,7 @@ def test_prove_sat_for_weak_validator():
     assert "SAT" in v.reasoning
 
 
+@_requires_z3
 def test_prove_sink_class_aware_whoogle_charset_vs_sqli():
     """The whoogle charset is sound for pathtrav (separators excluded) but
     NOT for sqli — the charset still allows '-'.  Demonstrates the danger
@@ -556,6 +573,7 @@ def test_substitution_dominance_false_across_functions():
     assert sb.substitution_dominates_sink(src, 2, 6, "x") is False
 
 
+@_requires_z3
 def test_try_tier0_sound_on_charset_sub_archetype(tmp_path: Path):
     """End-to-end: pure path-traversal substitution that strips both
     separators -> SOUND via Tier 0."""
@@ -583,6 +601,7 @@ def test_try_tier0_sound_on_charset_sub_archetype(tmp_path: Path):
     assert "set inclusion" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_declined_when_substitution_misses_danger(tmp_path: Path):
     """Gerapy-shape: strips ; & $ but misses | for cmdi -> DECLINED."""
     (tmp_path / "app.py").write_text(
@@ -649,6 +668,7 @@ def test_extract_java_with_throw():
     assert spec is not None and spec.charset == "a-z0-9"
 
 
+@_requires_z3
 def test_extract_java_decodes_string_escape_layer():
     r"""Java source ``"[A-Za-z0-9\\-_]+"`` reaches the regex engine as
     ``[A-Za-z0-9\-_]+`` — a literal ``-``, not a ``\``..``_`` range.
@@ -912,6 +932,7 @@ def test_crosses_function_boundary_returns_false_when_no_boundary():
     assert sb._crosses_function_boundary(src, 2, 4, "javascript") is False
 
 
+@_requires_z3
 def test_try_tier0_declined_when_js_crosses_function_boundary(tmp_path: Path):
     """End-to-end: JS validator in one helper, sink in another. Tier 0
     must DECLINE because the validator's `return` exits the wrong
@@ -943,6 +964,7 @@ def test_try_tier0_declined_when_js_crosses_function_boundary(tmp_path: Path):
     assert "function boundary" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_not_applicable_when_validator_var_not_at_sink(tmp_path: Path):
     """Bug 15 (UNSOUND): fix adds a validator for `x` and a sink for `y`
     in the same function. Tier 0 must NOT apply the validator's
@@ -971,6 +993,7 @@ def test_try_tier0_not_applicable_when_validator_var_not_at_sink(tmp_path: Path)
     assert "no chain member reaches" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_sound_when_validated_var_threads_through_assignment(tmp_path: Path):
     """Whoogle-shape: validated ``name`` flows through
     ``cfg = os.path.join(BASE, name)`` to the sink ``open(cfg)``.
@@ -1159,6 +1182,7 @@ def test_chain_validator_line_binding_not_killed():
     ) is True
 
 
+@_requires_z3
 def test_try_tier0_variable_match_uses_word_boundary(tmp_path: Path):
     """Word-boundary match: validator's `name` must not falsely match
     `surname` at the sink line."""
@@ -1226,6 +1250,7 @@ def test_crosses_function_boundary_js_detects_generator_function():
     assert sb._crosses_function_boundary(src2, 3, 6, "javascript") is True
 
 
+@_requires_z3
 def test_validator_block_in_try_with_bare_except_declines(tmp_path: Path):
     """Bug 19: validator's `raise` inside try/except: bare catch lets
     the raise be swallowed → value reaches sink unvalidated → must
@@ -1257,6 +1282,7 @@ def test_validator_block_in_try_with_bare_except_declines(tmp_path: Path):
     assert "does not dominate" in r.reasoning
 
 
+@_requires_z3
 def test_validator_block_in_try_with_exception_catch_declines(tmp_path: Path):
     """Same bug but with `except Exception:` — also catches everything
     the validator raises."""
@@ -1286,6 +1312,7 @@ def test_validator_block_in_try_with_exception_catch_declines(tmp_path: Path):
     assert r.status is sb.Tier0Status.NOT_APPLICABLE
 
 
+@_requires_z3
 def test_validator_block_with_specific_except_class_still_dominates(tmp_path: Path):
     """``except OSError:`` doesn't catch the ValueError raised by the
     validator — dominance still holds."""
@@ -1315,6 +1342,7 @@ def test_validator_block_with_specific_except_class_still_dominates(tmp_path: Pa
     assert r.status is sb.Tier0Status.SOUND
 
 
+@_requires_z3
 def test_validator_with_return_inside_try_still_dominates(tmp_path: Path):
     """Return is NOT catchable — even ``except:`` doesn't intercept it.
     Dominance still holds when the failure branch uses ``return``."""
@@ -1383,6 +1411,7 @@ def test_extract_unknown_language_returns_none():
     assert sb.extract_validator(diff, language="cobol") is None
 
 
+@_requires_z3
 def test_try_tier0_sound_on_js_archetype(tmp_path: Path):
     """End-to-end JS: guard-and-exit + path-traversal sink -> SOUND."""
     (tmp_path / "app.js").write_text(
@@ -1406,6 +1435,7 @@ def test_try_tier0_sound_on_js_archetype(tmp_path: Path):
     assert "UNSAT" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_sound_on_java_archetype(tmp_path: Path):
     (tmp_path / "App.java").write_text(
         "void load(String name) {\n"                                                       # line 1
@@ -1427,6 +1457,7 @@ def test_try_tier0_sound_on_java_archetype(tmp_path: Path):
     assert r.status is sb.Tier0Status.SOUND
 
 
+@_requires_z3
 def test_try_tier0_sound_on_ruby_archetype(tmp_path: Path):
     (tmp_path / "app.rb").write_text(
         "def get_config(name)\n"                                           # line 1
@@ -1471,6 +1502,7 @@ def test_try_tier0_declines_line_anchored_ruby_guard(tmp_path: Path):
     assert r.status is not sb.Tier0Status.SOUND
 
 
+@_requires_z3
 def test_try_tier0_not_applicable_when_substitution_var_reassigned(tmp_path: Path):
     """Substitution would be sound on its own, but a later reassignment
     undoes it -> Tier 0 must DECLINE the suppression."""
@@ -1526,6 +1558,7 @@ def _write_post_fix_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@_requires_z3
 def test_try_tier0_sound_on_whoogle_archetype(tmp_path: Path):
     """End-to-end: validator extracted, dominance proven via AST source-
     order + exit-on-fail, Z3 proves the language intersection empty."""
@@ -1539,6 +1572,7 @@ def test_try_tier0_sound_on_whoogle_archetype(tmp_path: Path):
     assert "UNSAT" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_declined_when_validator_allows_danger(tmp_path: Path):
     """Weak validator (permits '/') -> DECLINED with counterexample."""
     (tmp_path / "app.py").write_text(
@@ -1563,6 +1597,7 @@ def test_try_tier0_declined_when_validator_allows_danger(tmp_path: Path):
     assert r.counterexample in {"/", "."}
 
 
+@_requires_z3
 def test_try_tier0_not_applicable_when_no_validator(tmp_path: Path):
     r = sb.try_tier0(
         fix_diff="+x = 1\n+y = 2\n", repo_root=tmp_path,
@@ -1571,6 +1606,7 @@ def test_try_tier0_not_applicable_when_no_validator(tmp_path: Path):
     assert "no recognised" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_not_applicable_when_validator_block_doesnt_exit(tmp_path: Path):
     """Validator's ``if not X:`` body just logs — value reaches sink
     unsanitized -> Tier 0 must decline."""
@@ -1596,6 +1632,7 @@ def test_try_tier0_not_applicable_when_validator_block_doesnt_exit(tmp_path: Pat
     assert "does not dominate" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_not_applicable_when_validator_not_in_post_fix_source(
         tmp_path: Path):
     """Diff claims to add the validator, but the post-fix file doesn't
@@ -1610,6 +1647,7 @@ def test_try_tier0_not_applicable_when_validator_not_in_post_fix_source(
     assert "not findable" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_not_applicable_when_source_file_missing(tmp_path: Path):
     """No post-fix source file at all -> clean fall-through."""
     r = sb.try_tier0(
@@ -1666,12 +1704,14 @@ def test_try_tier0_z3_unavailable_degrades(monkeypatch, tmp_path: Path):
     ("cmdi", "A-Za-z0-9_%", False),
     ("cmdi", "A-Za-z0-9_!", False),
 ])
+@_requires_z3
 def test_prove_table_per_sink_class(sink_class, charset, expect_sound):
     spec = sb.ValidatorSpec("charset", "x", charset, "+...", 0)
     v = sb.prove_neutralizes(spec, sink_class)
     assert v.sound is expect_sound
 
 
+@_requires_z3
 def test_prove_empty_charset_is_sound():
     """An empty character class rejects all input — trivially sound."""
     spec = sb.ValidatorSpec("charset", "x", "", "+...", 0)
@@ -1765,6 +1805,7 @@ def test_charclass_descending_escaped_range_degrades_to_literals():
     assert sb._expand_charset_body("a-\\-") == {"a", "-"}
 
 
+@_requires_z3
 def test_prove_charset_escaped_left_endpoint_not_sound():
     """The F301 PoC guard: ``^[\\--z]+$`` accepts every pathtrav /
     cmdi / xss danger char (``/ ; <`` are all inside 0x2D..0x7A) —
@@ -2109,6 +2150,7 @@ def test_lexical_branch_wrap_exempts_guards_own_block():
     assert sb._lexical_validator_in_branch(src, 3, 6, guard_shaped=True) is False
 
 
+@_requires_z3
 def test_try_tier0_declined_when_java_guard_branch_wrapped(tmp_path: Path):
     """End-to-end Java: the guard-and-exit line sits inside an
     `if (strict) { ... }` block that closes before the sink — the sink
@@ -2138,6 +2180,7 @@ def test_try_tier0_declined_when_java_guard_branch_wrapped(tmp_path: Path):
     assert "enclosing conditional" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_declined_when_python_guard_branch_wrapped(tmp_path: Path):
     (tmp_path / "app.py").write_text(
         "def load(name):\n"                                     # line 1
@@ -2176,6 +2219,7 @@ _TRAVERSAL_DIFF = (
 )
 
 
+@_requires_z3
 def test_try_tier0_refuses_sink_uri_escaping_repo_root(tmp_path: Path):
     """``sink_uri`` comes from SARIF over an untrusted repo; a
     traversal-shaped URI must not walk the Tier-0 read outside the
@@ -2199,6 +2243,7 @@ def test_try_tier0_refuses_sink_uri_escaping_repo_root(tmp_path: Path):
     assert "outside the repo root" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_refuses_symlink_escape(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -2218,6 +2263,7 @@ def test_try_tier0_refuses_symlink_escape(tmp_path: Path):
     assert "outside the repo root" in r.reasoning
 
 
+@_requires_z3
 def test_try_tier0_inner_dotdot_resolving_inside_still_reads(tmp_path: Path):
     """Two-direction: a URI with an inner `..` that still resolves
     INSIDE the repo is legitimate and must keep working."""
@@ -2298,6 +2344,7 @@ def test_plain_call_assignment_still_not_in_branch():
     assert sb._validator_in_branch(tree, 3, 4) is False
 
 
+@_requires_z3
 def test_try_tier0_declined_on_ternary_substitution(tmp_path: Path):
     """End-to-end: the ternary substitution certified SOUND while the
     sink stayed live on the ``cond``-falsy arm — Tier 0 must decline."""
@@ -2332,6 +2379,7 @@ def test_try_tier0_declined_on_ternary_substitution(tmp_path: Path):
 # the same, and the value reaches the sink unvalidated.
 # ---------------------------------------------------------------------------
 
+@_requires_z3
 def test_validator_raise_swallowed_by_matching_except_declines(tmp_path: Path):
     (tmp_path / "app.py").write_text(
         "def f(x):\n"
@@ -2359,6 +2407,7 @@ def test_validator_raise_swallowed_by_matching_except_declines(tmp_path: Path):
     assert r.status is sb.Tier0Status.NOT_APPLICABLE
 
 
+@_requires_z3
 def test_validator_raise_swallowed_by_tuple_except_declines(tmp_path: Path):
     """The matching class hiding inside a tuple handler swallows too."""
     (tmp_path / "app.py").write_text(
@@ -2387,6 +2436,7 @@ def test_validator_raise_swallowed_by_tuple_except_declines(tmp_path: Path):
     assert r.status is sb.Tier0Status.NOT_APPLICABLE
 
 
+@_requires_z3
 def test_validator_raise_caught_by_superclass_declines(tmp_path: Path):
     """``except LookupError:`` catches the KeyError the guard raises —
     builtin subclass relationships must count as catching."""
@@ -2416,6 +2466,7 @@ def test_validator_raise_caught_by_superclass_declines(tmp_path: Path):
     assert r.status is sb.Tier0Status.NOT_APPLICABLE
 
 
+@_requires_z3
 def test_validator_raise_of_nonbuiltin_class_declines(tmp_path: Path):
     """A non-builtin exception class is statically unresolvable — the
     handler may catch it, so certifying would gamble on soundness."""
@@ -2445,6 +2496,7 @@ def test_validator_raise_of_nonbuiltin_class_declines(tmp_path: Path):
     assert r.status is sb.Tier0Status.NOT_APPLICABLE
 
 
+@_requires_z3
 def test_validator_raise_with_reraising_matching_except_still_dominates(tmp_path: Path):
     """Two-direction: a matching handler whose body re-raises keeps the
     failure path exiting — dominance genuinely holds."""
@@ -2538,6 +2590,7 @@ def test_lexical_branch_wrap_one_line_self_guard_still_certifies():
     assert sb._lexical_validator_in_branch(src, 3, 4, guard_shaped=True) is False
 
 
+@_requires_z3
 def test_try_tier0_declined_on_one_line_wrapped_java_guard(tmp_path: Path):
     (tmp_path / "App.java").write_text(
         "void load(String name) {\n"                                                                      # line 1
@@ -2571,6 +2624,7 @@ _EXCEPT_STAR = pytest.mark.skipif(
 
 
 @_EXCEPT_STAR
+@_requires_z3
 def test_validator_raise_swallowed_by_except_star_declines(tmp_path: Path):
     (tmp_path / "app.py").write_text(
         "def f(x):\n"
@@ -2599,6 +2653,7 @@ def test_validator_raise_swallowed_by_except_star_declines(tmp_path: Path):
 
 
 @_EXCEPT_STAR
+@_requires_z3
 def test_validator_raise_with_reraising_except_star_still_dominates(tmp_path: Path):
     """Two-direction: a re-raising ``except*`` handler keeps the
     failure path exiting."""
@@ -2697,6 +2752,7 @@ def test_lexical_guard_shaped_plain_prev_statement_still_certifies():
     assert sb._lexical_validator_in_branch(src, 4, 5, guard_shaped=True) is False
 
 
+@_requires_z3
 def test_try_tier0_declined_on_prev_line_wrapped_java_guard(tmp_path: Path):
     (tmp_path / "App.java").write_text(
         "void load(String name) {\n"                                                              # line 1
@@ -3675,6 +3731,7 @@ def test_find_validator_line_prefers_sink_function_occurrence():
     assert sb.find_validator_line(src, spec, sink_line=10) == 8
 
 
+@_requires_z3
 def test_try_tier0_sound_when_first_occurrence_is_in_another_function(
         tmp_path: Path):
     src = (
