@@ -1060,11 +1060,18 @@ def _select_diff_snapshots(conn, target_path: Optional[str], *, base_snapshot: O
     ).fetchall()
     if not head and rows:
         head = rows[0]
-    if not base:
-        # Never default the base to the row that IS the head.
-        candidates = [r for r in rows if not (head and r["id"] == head["id"])]
-        if candidates:
-            base = candidates[0]
+    if not base and head is not None:
+        # The defaulted base is the newest snapshot NOT NEWER than the
+        # head (and never the head itself): defaulting to the global
+        # newest against an explicitly older head produced a
+        # time-reversed drift verdict — genuinely NEW surface reported
+        # as removed.
+        base = conn.execute(
+            f"SELECT * FROM snapshots WHERE {' AND '.join(clauses)} "
+            "AND created_at <= ? AND id != ? "
+            "ORDER BY created_at DESC LIMIT 1",  # noqa: S608 — clauses are literals, values bound
+            (*params, head["created_at"], head["id"]),
+        ).fetchone()
     return base, head
 
 

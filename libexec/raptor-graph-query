@@ -44,6 +44,15 @@ def _term_block(value: object, max_len: int = 8_000) -> str:
     return out
 
 
+def _limit_type(value: str) -> int:
+    """--limit floor at parse time: 0 silently blanks the SQL lanes
+    and a negative value is LIMIT -n = unbounded in SQLite."""
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("--limit must be >= 1")
+    return number
+
+
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="raptor-graph-query",
@@ -61,8 +70,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--sink", help="Filter paths by sink ID, name, or location")
     p.add_argument("--unchecked-only", action="store_true", help="Only show paths with no mapped effective boundary")
     p.add_argument("--by-cwe", help="Filter paths by CWE/CWE-like token")
-    p.add_argument("--limit", type=int, default=None,
-                   help="Maximum rows to return (per-lane default when omitted)")
+    p.add_argument("--limit", type=_limit_type, default=None,
+                   help="Maximum rows to return, >= 1 (per-lane default when omitted)")
     p.add_argument("--diff", action="store_true", help="Diff the latest two graph snapshots")
     p.add_argument("--base-snapshot", help="Base snapshot ID for --diff")
     p.add_argument("--head-snapshot", help="Head snapshot ID for --diff")

@@ -72,10 +72,14 @@ def ingest_run(run_dir: Path, target_path: Optional[str] = None,
     if not any([isinstance(context_map, dict), isinstance(variants, (dict, list)), trace_paths, any(p.exists() for p in result_paths)]):
         return None
 
+    # Shape-guarded pre-envelope reads: a truthy non-dict context-map
+    # (or a non-dict meta) must not AttributeError out of the function
+    # before the ingest envelope even opens.
+    meta = context_map.get("meta") if isinstance(context_map, dict) else None
     target = str(
         target_path
         or checklist.get("target_path")
-        or (context_map or {}).get("meta", {}).get("target", "")
+        or (meta.get("target", "") if isinstance(meta, dict) else "")
         or ""
     )
     if graph_path is None:
@@ -498,7 +502,9 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
                     # names this exact idiom). Identity = the composed
                     # stable_key or a props-extracted id; a rule id shared
                     # across findings is NOT an identity, so no exact
-                    # match mints no edge.
+                    # match mints no edge. The props extracts CAST to
+                    # TEXT: a JSON integer id (7) must equal the ref
+                    # string ('7') instead of silently never joining.
                     ref = str(finding_ref)
                     for kind in ("scan_finding", "codeql_result", "unchecked_flow"):
                         row = conn.execute(
@@ -506,8 +512,8 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
                             SELECT id FROM nodes
                             WHERE kind=? AND stale=0
                               AND (stable_key=?
-                                   OR json_extract(props_json, '$.id')=?
-                                   OR json_extract(props_json, '$.finding_id')=?)
+                                   OR CAST(json_extract(props_json, '$.id') AS TEXT)=?
+                                   OR CAST(json_extract(props_json, '$.finding_id') AS TEXT)=?)
                             LIMIT 1
                             """,
                             (kind, stable_key(kind, ref), ref, ref),
@@ -708,9 +714,11 @@ def _infer_run_target(run_dir: Path) -> str:
         return str(checklist["target_path"])
     context_map = load_json(run_dir / "context-map.json")
     if isinstance(context_map, dict):
-        target = (context_map.get("meta") or {}).get("target")
-        if target:
-            return str(target)
+        # meta itself is artifact-controlled: a list-shaped meta must
+        # not AttributeError out of every lane's target resolution.
+        cm_meta = context_map.get("meta")
+        if isinstance(cm_meta, dict) and cm_meta.get("target"):
+            return str(cm_meta["target"])
     return ""
 
 
@@ -834,6 +842,16 @@ def ingest_annotations(
     if not annotations:
         return None
 
+    if not target:
+        # Same contract as the findings lanes: a target-less snapshot
+        # is unmatchable by every target-scoped query.
+        print(
+            f"graph: annotation ingest skipped (no target for "
+            f"{run_dir.name})",
+            file=sys.stderr,
+        )
+        return None
+
     if graph_path is None:
         graph_path = graph_path_for_run(run_dir, target or None)
     snap_id = make_snapshot_id(
@@ -868,6 +886,30 @@ def ingest_annotations(
         print(f"graph: annotation ingest skipped ({exc})", file=sys.stderr)
         return None
     return graph_path
+
+
+def _rebuild_temp_owner_dead(name: str) -> bool:
+    """Whether the pid embedded in a ``.rebuild-<pid>-…`` temp name no
+    longer runs. Unparseable pids and alive/unknown owners read as NOT
+    dead (leave the file alone); our own pid is fair game — a same-pid
+    leftover cannot be a live concurrent rebuild.
+    """
+    parts = name.split("-", 2)
+    if len(parts) < 3:
+        return False
+    try:
+        pid = int(parts[1])
+    except ValueError:
+        return False
+    if pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False  # alive under another uid
+    return False  # alive
 
 
 def rebuild_graph(project_dir: Path) -> Optional[Path]:
@@ -906,12 +948,26 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
         )
         return None
 
-    # Fresh temp store beside the live one; clear leftovers from ANY
-    # previously interrupted rebuild first (pid-suffixed, so a crashed
-    # rebuild's temp would otherwise accumulate forever).
+    # Fresh temp store beside the live one; clear leftovers from
+    # previously interrupted rebuilds (pid-suffixed, so a crashed
+    # rebuild's temp would otherwise accumulate forever). Only DEAD
+    # owners' temps are swept — a concurrent rebuild's live temp must
+    # not be deleted out from under it — and a planted directory (or
+    # any other unlink failure) is reported and skipped, never a
+    # crash into /project graph rebuild.
     temp_path = graph_path.with_name(f".rebuild-{os.getpid()}-{graph_path.name}")
     for stale in graph_path.parent.glob(f".rebuild-*-{graph_path.name}*"):
-        stale.unlink(missing_ok=True)
+        if not _rebuild_temp_owner_dead(stale.name):
+            continue
+        try:
+            stale.unlink(missing_ok=True)
+        except OSError:
+            from core.security.log_sanitisation import sanitise_for_terminal
+            print(
+                f"graph: rebuild could not clear stale temp "
+                f"{sanitise_for_terminal(stale.name)}; skipping it",
+                file=sys.stderr,
+            )
 
     run_dirs: list[tuple[str, Path]] = []
     for child in sorted(project_dir.iterdir()):

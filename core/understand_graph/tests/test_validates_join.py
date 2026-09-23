@@ -151,3 +151,30 @@ def test_props_id_equality_joins_scan_findings(tmp_path):
     assert ids == {"SCAN-7"}, (
         "a rule id shared across findings is not a finding identity"
     )
+
+
+def test_numeric_props_id_joins_by_value(tmp_path):
+    """A finding whose props carry a JSON INTEGER id must join a
+    matching outcome ref — the untyped extract compared 7 (integer)
+    against '7' (text) and silently never joined."""
+    from core.understand_graph import ingest_scan_findings
+
+    target = tmp_path / "target"
+    run_dir = tmp_path / "run"
+    graph_path = _write_two_flow_run(run_dir, target)
+
+    save_json(run_dir / "findings.json", [
+        {"id": 7, "rule_id": "r1", "file": "server.c",
+         "function": "handle_request", "severity": "high", "message": "m"},
+    ])
+    (run_dir / ".raptor-run.json").write_text(
+        json.dumps({"target_path": str(target)}), encoding="utf-8")
+    assert ingest_scan_findings(run_dir, str(target)) is not None
+
+    save_json(run_dir / "validation-outcomes.json",
+              [{"finding_id": 7, "status": "exploitable"}])
+    ingest_validation_outcomes(run_dir, str(target))
+
+    targets = _validates_targets(graph_path)
+    assert len(targets) == 1
+    assert targets[0].startswith("scan_finding://")

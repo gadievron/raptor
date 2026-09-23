@@ -101,3 +101,14 @@ def test_explicit_target_still_ingests(tmp_path, lane):
         hypotheses=[{"mechanism": "m", "confidence": "high"}],
     ))
     assert lane(run_dir) is not None
+
+
+def test_annotation_lane_refuses_empty_target(tmp_path, capsys):
+    from core.understand_graph import ingest_annotations
+
+    run_dir = tmp_path / "run"
+    ann_dir = run_dir / "annotations"
+    ann_dir.mkdir(parents=True)
+    (ann_dir / "a.c.md").write_text(
+        "## f\n<!-- status=clean source=human -->\nok\n", encoding="utf-8")
+    _assert_refused(run_dir, ingest_annotations(run_dir, ""), capsys)

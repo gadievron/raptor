@@ -201,10 +201,85 @@ def test_rebuild_clears_stale_temp_from_crashed_rebuild(tmp_path):
 
     graph_dir = project_dir / "graph"
     graph_dir.mkdir()
-    stale = graph_dir / ".rebuild-99999-raptor.graph.sqlite"
+    # pid far above any real pid_max: provably dead owner.
+    stale = graph_dir / ".rebuild-999999999-raptor.graph.sqlite"
     stale.write_bytes(b"stale temp from a crashed rebuild")
 
     result = rebuild_graph(project_dir)
     assert result is not None
     assert not stale.exists()
     assert not list(graph_dir.glob(".rebuild-*"))
+
+
+def test_ingest_run_survives_non_dict_context_map_shapes(tmp_path):
+    """Target resolution runs BEFORE the ingest envelope: a truthy
+    non-dict context-map (or a list-shaped meta) must degrade, never
+    AttributeError out of the function."""
+    target = tmp_path / "target"
+    target.mkdir()
+
+    run_a = tmp_path / "run-a"
+    run_a.mkdir()
+    (run_a / "context-map.json").write_text("5", encoding="utf-8")
+    (run_a / "variants.json").write_text("[]", encoding="utf-8")
+    assert ingest_run(run_a) is None or ingest_run(run_a).exists()
+
+    run_b = tmp_path / "run-b"
+    run_b.mkdir()
+    (run_b / "context-map.json").write_text(
+        json.dumps({"meta": [1, 2]}), encoding="utf-8")
+    result = ingest_run(run_b)
+    assert result is None or result.exists()
+
+
+def test_findings_lanes_survive_junk_context_map_during_inference(tmp_path, capsys):
+    """_infer_run_target dereferences the context-map meta on EVERY
+    findings lane when no explicit target is passed — a list-shaped
+    meta crashed all of them pre-envelope."""
+    from core.understand_graph import (
+        ingest_scan_findings,
+        ingest_validation_outcomes,
+    )
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "context-map.json").write_text(
+        json.dumps({"meta": [1, 2]}), encoding="utf-8")
+    save_json(run_dir / "findings.json",
+              [{"rule_id": "r", "file": "a.c", "function": "f"}])
+    save_json(run_dir / "validation-outcomes.json",
+              [{"finding_id": "x", "status": "confirmed"}])
+
+    # No inferable target -> loud refusal, never an AttributeError.
+    assert ingest_scan_findings(run_dir) is None
+    assert ingest_validation_outcomes(run_dir) is None
+    assert "skip" in capsys.readouterr().err.lower()
+
+
+def test_stale_temp_sweep_spares_live_owners_and_planted_dirs(tmp_path):
+    """The sweep must not delete a CONCURRENT rebuild's live temp, and
+    a planted directory under the temp name is skipped with a report,
+    never an IsADirectoryError out of /project graph rebuild."""
+    import os
+
+    target = tmp_path / "target"
+    target.mkdir()
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    (project_dir / ".raptor-project-root").touch()
+    _write_run_artifacts(project_dir / "run_b", target)
+
+    graph_dir = project_dir / "graph"
+    graph_dir.mkdir()
+    # A live owner's temp: use our parent pid (alive for the test's
+    # duration, never our own pid).
+    live = graph_dir / f".rebuild-{os.getppid()}-raptor.graph.sqlite"
+    live.write_bytes(b"live concurrent rebuild temp")
+    # A dead owner's temp planted as a DIRECTORY.
+    planted = graph_dir / ".rebuild-999999999-raptor.graph.sqlite"
+    planted.mkdir()
+
+    result = rebuild_graph(project_dir)
+    assert result is not None
+    assert live.exists(), "a live concurrent rebuild's temp was deleted"
+    assert planted.is_dir(), "planted directory should be skipped, not removed"
