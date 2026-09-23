@@ -52,9 +52,13 @@ def shim_mod():
             os.environ["_RAPTOR_TRUSTED"] = old
 
 
-def _pin_of(path: Path) -> tuple[str, int, int]:
+def _pin_of(path: Path, btime: "float | None | str" = "auto"
+            ) -> tuple[str, int, int, "float | None"]:
     st = os.lstat(path)
-    return (str(path), int(st.st_dev), int(st.st_ino))
+    if btime == "auto":
+        raw = getattr(st, "st_birthtime", None)
+        btime = float(raw) if raw is not None else None
+    return (str(path), int(st.st_dev), int(st.st_ino), btime)
 
 
 def _classify(reason: str) -> str:
@@ -69,10 +73,10 @@ def _classify(reason: str) -> str:
     return f"UNRECOGNISED:{reason}"
 
 
-def _both_verdicts(shim_mod, pin: tuple[str, int, int]):
+def _both_verdicts(shim_mod, pin: tuple[str, int, int, "float | None"]):
     """(core_verdict, shim_verdict) as None-or-shape strings."""
-    path, dev, ino = pin
-    core_reason = _macos_spawn._grant_pin_mismatch(path, dev, ino)
+    path, dev, ino, btime = pin
+    core_reason = _macos_spawn._grant_pin_mismatch(path, dev, ino, btime)
     core_verdict = _classify(core_reason) if core_reason else None
     shim_hit = shim_mod._pin_violation([pin])
     shim_verdict = None if shim_hit is None else _classify(shim_hit[1])
@@ -130,6 +134,38 @@ class TestGrantPinEquivalence:
         other.rename(f)
         core, shim = _both_verdicts(shim_mod, pin)
         assert core == shim == "swapped"
+
+    def test_recycled_inode_btime_mismatch(self, shim_mod, tmp_path):
+        """dev/ino EQUAL but the birth-time witness differs — the
+        unlink+recreate signature on an inode-recycling filesystem.
+        Staged by forging the pinned birth time against the live file
+        (the observable is identical either way: the path re-stats
+        with the pinned dev/ino but not the pinned birth time). Both
+        sides must refuse, including on hosts whose stat reports NO
+        birth time (a pin that carries the witness never downgrades
+        to dev+ino-only equivalence)."""
+        f = tmp_path / "granted.txt"
+        f.write_text("x")
+        st = os.lstat(f)
+        real_btime = getattr(st, "st_birthtime", None)
+        forged = (real_btime + 1.0) if real_btime is not None else 123.0
+        pin = _pin_of(f, btime=forged)
+        core, shim = _both_verdicts(shim_mod, pin)
+        assert core == shim == "swapped"
+
+    def test_btime_none_pin_skips_only_that_arm(self, shim_mod,
+                                                tmp_path):
+        """A pin whose capture host observed no birth time (btime
+        None) still enforces the vanish/symlink/dev-ino arms and holds
+        on an intact file — on both sides."""
+        f = tmp_path / "granted.txt"
+        f.write_text("x")
+        pin = _pin_of(f, btime=None)
+        core, shim = _both_verdicts(shim_mod, pin)
+        assert core is None and shim is None
+        f.unlink()
+        core, shim = _both_verdicts(shim_mod, pin)
+        assert core == shim == "vanished"
 
 
 # Synthetic (pid, ppid, pgid) tables covering every attribution shape

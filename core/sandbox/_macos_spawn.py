@@ -374,15 +374,27 @@ def _darwin_nproc_kernel_clamp() -> int | None:
     return None
 
 
-def _grant_pin_mismatch(path: str, dev: int, ino: int) -> str:
+def _grant_pin_mismatch(path: str, dev: int, ino: int,
+                        btime: "float | None" = None) -> str:
     """Reason string when ``path`` no longer carries its pinned
-    identity, or "" while the pin holds. One lstat decides all three
+    identity, or "" while the pin holds. One lstat decides all four
     tamper shapes: the path vanished, a symlink now sits at it (lstat
     reports the LINK, so a symlink to the original inode — a
     relocate-and-link-back — is caught too, not just links to foreign
-    victims), or a different filesystem object was renamed into it
-    (dev/ino mismatch). Mirrored inline in libexec/raptor-seatbelt-shim
-    (`python -I`, cannot import this module) — keep the two in sync."""
+    victims), a different filesystem object was renamed into it
+    (dev/ino mismatch), or the birth-time witness stopped matching
+    with dev/ino EQUAL — the unlink+recreate signature on a
+    filesystem that recycles freed inode numbers, which a dev/ino-only
+    pin cannot see. This pin is serialized to the watcher shim (env,
+    across an exec), so no held fd can anchor it; the birth time is
+    the secondary identity witness. ``btime is None`` means the
+    capture host could not observe a birth time (identity-weak pin,
+    stamped on the result) — the arm is skipped rather than silently
+    treated as matching; a pin CARRYING a birth time that the current
+    stat cannot reproduce refuses (fail closed), never downgrades to
+    dev+ino-only equivalence. Mirrored inline in
+    libexec/raptor-seatbelt-shim (`python -I`, cannot import this
+    module) — keep the two in sync."""
     import stat as _stat
     try:
         st = os.lstat(path)
@@ -393,6 +405,12 @@ def _grant_pin_mismatch(path: str, dev: int, ino: int) -> str:
     if (int(st.st_dev), int(st.st_ino)) != (int(dev), int(ino)):
         return (f"changed identity (dev/ino "
                 f"{st.st_dev}/{st.st_ino} != pinned {dev}/{ino})")
+    if btime is not None:
+        current_btime = getattr(st, "st_birthtime", None)
+        if current_btime != btime:
+            return (f"changed identity (birth time "
+                    f"{current_btime} != pinned {btime} with dev/ino "
+                    f"matching — a recycled inode number)")
     return ""
 
 
@@ -810,6 +828,25 @@ def run_sandboxed(cmd: list[str], *,
     # system-owned paths outside same-UID rename control and are
     # deliberately not pinned.
     _grant_pins: list[dict] = []
+    # Serialized pins cannot hold an fd (they cross an exec into the
+    # `python -I` shim), so the (dev, ino) identity alone is forgeable
+    # on a filesystem that recycles freed inode numbers: an
+    # unlink+recreate swap can re-mint the pinned pair. The birth time
+    # is the secondary identity witness — a recreated object carries a
+    # NEW birth time even when it inherits the old inode number. When
+    # the capture host reports no birth time the pin is IDENTITY-WEAK:
+    # recorded as such on the result (grant_pin_identity_degraded) so
+    # readers never mistake a recycling-blind pin for the full
+    # guarantee — the remaining arms (vanish / symlink / dev-ino)
+    # still enforce. Honest bounds: APFS allocates inode numbers
+    # monotonically (never recycled), so on the default macOS
+    # filesystem dev/ino is already recycle-proof and the witness is
+    # belt-and-braces for HFS+ and network mounts; and a birth time is
+    # owner-settable (setattrlist crtime), so a DELIBERATE same-UID
+    # forger sits outside what a serialized pin can refuse — the same
+    # unsandboxed-accomplice boundary the watcher residuals above
+    # document.
+    _weak_grant_pins: list[str] = []
     import stat as _stat_mod
     for _gp in dict.fromkeys(
             p for p in (target, output,
@@ -833,10 +870,15 @@ def run_sandboxed(cmd: list[str], *,
             # grant. A file-only grant therefore carries no pin
             # (documented residual).
             continue
+        _pin_btime = getattr(_st, "st_birthtime", None)
+        if _pin_btime is None:
+            _weak_grant_pins.append(_resolved)
         _grant_pins.append({
             "path": _resolved,
             "dev": int(_st.st_dev),
             "ino": int(_st.st_ino),
+            "btime": (float(_pin_btime)
+                      if _pin_btime is not None else None),
         })
 
     # 1. Build SBPL profile from the kwargs.
@@ -1305,7 +1347,7 @@ def run_sandboxed(cmd: list[str], *,
     # sandbox. From here the watcher shim owns the check.
     for _pin in _grant_pins:
         _pin_err = _grant_pin_mismatch(
-            _pin["path"], _pin["dev"], _pin["ino"])
+            _pin["path"], _pin["dev"], _pin["ino"], _pin["btime"])
         if _pin_err:
             # The status/death pipes were already created — close all
             # four ends before raising (this refusal predates the
@@ -1502,4 +1544,12 @@ def run_sandboxed(cmd: list[str], *,
     if not hasattr(result, "sandbox_info"):
         result.sandbox_info = {}
     result.sandbox_info.setdefault("backend", "macos-seatbelt")
+    if _weak_grant_pins:
+        # Identity-weak pins (no birth-time witness at capture): the
+        # dev/ino arms enforced for the whole run, but an
+        # unlink+recreate swap on an inode-recycling filesystem was
+        # invisible to them. Stamp the paths so a "no P report" run is
+        # never silently read as the full pin guarantee.
+        result.sandbox_info.setdefault(  # type: ignore[attr-defined]
+            "grant_pin_identity_degraded", sorted(_weak_grant_pins))
     return result
