@@ -151,10 +151,11 @@ class TestSecondScanDriftDetected:
             "exec": ["execve"],
         }
         assert f.evidence["added_buckets"] == ["exec"]
-        # Baseline updated
+        # Baseline RETAINED on drift — the signal must re-fire until
+        # the operator re-baselines (fingerprint --save).
         from core.binary import load_fingerprint
         baseline2 = load_fingerprint(store_dir, ref)
-        assert baseline2.binary_sha256 == "B"
+        assert baseline2.binary_sha256 == "A"
 
     def test_medium_severity_drift_on_string_overflow_add(
         self, stub_pipeline, tmp_path,
@@ -306,3 +307,45 @@ class TestMultipleRefs:
         # Only alpine drifted
         assert len(findings) == 1
         assert findings[0].evidence["ref"] == ref_a
+
+
+class TestBaselineRetainedOnDrift:
+    def test_drift_does_not_absorb_the_new_fingerprint(
+        self, stub_pipeline, tmp_path,
+    ):
+        """A drifted (possibly malicious) fingerprint must NOT become
+        the next baseline: absorbing it made the drift a one-shot
+        signal — the next scan compared malicious-to-malicious and
+        went quiet. The baseline is retained so the finding re-fires
+        until the operator re-baselines (fingerprint --save); only
+        clean comparisons refresh it."""
+        ref = "docker.io/library/alpine:3.18"
+        store_dir = tmp_path / "fp_store"
+
+        baseline = _fp(sha="A", buckets={"alloc": ["calloc"]})
+        save_fingerprint(store_dir, ref, baseline)
+        drifted = _fp(
+            sha="B",
+            buckets={"alloc": ["calloc"], "exec": ["execve"]},
+        )
+        stub_pipeline["refs"] = [
+            _StubImageRefSource(ref, tmp_path / "Dockerfile"),
+        ]
+        stub_pipeline["fingerprints"][ref] = drifted
+
+        first = detect_image_drift(
+            tmp_path, oci_client=object(),
+            fingerprint_store_dir=store_dir,
+        )
+        assert len(first) == 1
+
+        from core.binary import load_fingerprint
+        retained = load_fingerprint(store_dir, ref)
+        assert retained.binary_sha256 == "A"
+
+        # Second scan, image still drifted → the signal RE-FIRES.
+        second = detect_image_drift(
+            tmp_path, oci_client=object(),
+            fingerprint_store_dir=store_dir,
+        )
+        assert len(second) == 1
