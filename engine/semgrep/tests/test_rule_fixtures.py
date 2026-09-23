@@ -101,7 +101,8 @@ _CASES = {
     ),
     "injection/sql-concat.yaml": (
         ["sqlconcat_pos.java", "sqlconcat_pos.py", "sqlconcat_pos.js",
-         "sqlconcat_pos.php"],
+         "sqlconcat_pos.php", "sqlconcat_ws_pos.java",
+         "sqlconcat_ws_pos.py"],
         ["sqlconcat_neg.java", "sqlconcat_neg.py"],
     ),
     "logging/logs-secrets.yaml": (
