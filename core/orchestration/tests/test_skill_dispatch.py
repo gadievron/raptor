@@ -408,6 +408,25 @@ class TruncationTests(unittest.TestCase):
         kept = truncate_findings_by_signal(findings, 4)
         self.assertEqual([f["id"] for f in kept], [0, 1, 2, 3])
 
+    def test_sarif_level_ranks_when_signals_absent(self):
+        findings = [
+            {"ruleId": "a", "level": "note"},
+            {"ruleId": "b", "level": "warning"},
+            {"ruleId": "c", "level": "error"},
+            {"ruleId": "d"},  # absent level == SARIF default (warning)
+        ]
+        kept = truncate_findings_by_signal(findings, 3)
+        self.assertEqual([f["ruleId"] for f in kept], ["c", "b", "d"])
+
+    def test_sarif_level_never_outranks_signal_fields(self):
+        findings = [
+            {"id": "noisy-error", "level": "error"},
+            {"id": "exploitable-note", "level": "note",
+             "is_exploitable": True},
+        ]
+        kept = truncate_findings_by_signal(findings, 1)
+        self.assertEqual(kept[0]["id"], "exploitable-note")
+
     def test_default_cap_matches_constant(self):
         findings = [{"id": i} for i in range(MAX_VALIDATE_FINDINGS + 7)]
         self.assertEqual(len(truncate_findings_by_signal(findings)),

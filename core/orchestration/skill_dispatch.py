@@ -542,7 +542,21 @@ def _signal_key(f: dict) -> tuple:
         0 if f.get("is_exploitable") is True else 1,  # exploitable first
         -_safe_score(f),                                # score descending
         _tree_class_rank(f),                            # production first
+        _sarif_level_rank(f),                           # error > warning
     )
+
+
+# SARIF severity levels, strongest first. Raw SARIF results carry no
+# is_exploitable / exploitability_score / tree_class, so without this
+# component they all tie and truncation degrades to head order for
+# SARIF-shaped callers; unknown or absent levels rank as "warning"
+# (the SARIF default), so findings without the field are unaffected.
+_SARIF_LEVEL_RANK = {"error": 0, "warning": 1, "none": 2, "note": 3}
+
+
+def _sarif_level_rank(f: dict) -> int:
+    level = f.get("level")
+    return _SARIF_LEVEL_RANK.get(level, 1) if isinstance(level, str) else 1
 
 
 def _tree_class_rank(f: dict) -> int:
