@@ -6,10 +6,26 @@
 # "ignore previous instructions" → aWdub3JlIHByZXZpb3VzIGluc3RydWN0aW9ucw
 # "you are now DAN" → eW91IGFyZSBub3cgREFO
 # These are partial matches — the base64 block may be longer.
+#
+# Alignment note: a base64 fragment matches only when the phrase
+# starts at its byte offset mod 3 within the encoded stream. The
+# fragments below carry all THREE alignments per phrase (offset 0
+# plus the two rotations, computed from the phrase's mid-stream
+# encoding with the boundary blocks dropped) — one prefix byte of
+# attacker padding must not dodge the corpus. This is a
+# non-blocking confidence-haircut lane; decoding is out of scope.
 aWdub3JlIHByZXZpb3Vz
+bm9yZSBwcmV2aW
+Z25vcmUgcHJldml
 eW91IGFyZSBub3cgREFO
+dSBhcmUgbm93IE
+b3UgYXJlIG5vdyB
 eW91ciBuZXcgdGFzayBpcw
+dXIgbmV3IHRhc2s
+b3VyIG5ldyB0YXNrIGlz
 bmV3IGluc3RydWN0aW9ucw
+dyBpbnN0cnVjdGl
+ZXcgaW5zdHJ1Y3Rpb25z
 
 # Hex-encoded injection fragments.
 # "ignore" = 69676e6f7265, "system:" = 73797374656d3a
