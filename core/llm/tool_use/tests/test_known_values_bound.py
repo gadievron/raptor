@@ -100,3 +100,33 @@ def test_large_non_json_blob_bounded_end_to_end():
     }
     values = _extract_values_from_json(" ".join(toks))
     assert len(values) <= _MAX_KNOWN_VALUES
+
+
+class TestNumericLeavesDiscoverable:
+    """The gate requires numerically-typed values to have been
+    'discovered in string form' (str(val) membership) — but the
+    extractor collected str leaves only, so a numeric JSON field
+    (pid, port, count) was permanently blocked for any x-source gated
+    tool argument: no way to discover it. Numeric leaves now register
+    their str() form, keeping the >=3-char rule."""
+
+    def test_int_leaf_registers_string_form(self):
+        from core.llm.tool_use.loop import _iter_undiscovered_values
+        vals = _extract_values_from_json('{"pid": 1234, "host": "srv1"}')
+        assert "1234" in vals
+        assert list(_iter_undiscovered_values(1234, vals)) == []
+        assert list(_iter_undiscovered_values("1234", vals)) == []
+
+    def test_float_leaf_registers_string_form(self):
+        vals = _extract_values_from_json('{"score": 3.75}')
+        assert "3.75" in vals
+
+    def test_bool_and_short_numbers_excluded(self):
+        vals = _extract_values_from_json(
+            '{"flag": true, "tiny": 12, "ok": 456}',
+        )
+        # bool is structural (the gate passes it unconditionally);
+        # numbers under the min token length keep the string rule.
+        assert "True" not in vals and "true" not in vals
+        assert "12" not in vals
+        assert "456" in vals
