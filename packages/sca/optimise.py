@@ -208,6 +208,7 @@ def main(argv: Sequence[str]) -> int:
     if major_blocked and not args.no_llm:
         llm_approved, llm_verdicts = _analyze_major_bumps(
             major_blocked, vuln_plans, target,
+            promote=args.llm_approve_major,
         )
 
     # Default: plan only. --apply writes in-place, --out writes proposed/.
@@ -871,12 +872,21 @@ def _analyze_major_bumps(
     major_blocked: dict[tuple[str, str, str], _PlanEntry],
     vuln_plans: dict[tuple[str, str, str], _PlanEntry],
     target: Path,
+    *,
+    promote: bool = False,
 ) -> tuple[set, dict]:
     """Run LLM impact analysis on major-blocked CVE fixes.
 
     For each blocked dep, asks the LLM whether the major bump is safe
-    given the project's actual call sites.  "safe" verdicts are moved
-    from *major_blocked* into *vuln_plans* so they get applied.
+    given the project's actual call sites. By default every verdict —
+    including a high-confidence "safe" — is ANNOTATION only: the bump
+    stays blocked, because LLM output is not operator consent
+    (``--allow-major`` is the documented opt-in for applying a major
+    bump, and the assessment reads target-tree call sites, so the tree
+    can steer the classification of its own bump). Only with
+    ``promote=True`` (the operator's explicit ``--llm-approve-major``)
+    are high-confidence "safe" verdicts moved from *major_blocked*
+    into *vuln_plans* for application.
 
     Returns ``(llm_approved_keys, remaining_verdicts)``.  Both are
     empty when no LLM is available — the caller falls back to
@@ -926,17 +936,17 @@ def _analyze_major_bumps(
         if verdict is None:
             continue
 
-        # Auto-promotion floor: only a HIGH-confidence "safe" verdict
-        # moves a mechanically-blocked major bump into the applied
-        # plan — ``--allow-major`` is the operator's opt-in for
-        # exactly this, and a low-confidence LLM "safe" silently
-        # granting it defeats the mechanical gate. Trade-off, both
-        # directions: raising the floor to high leaves more
-        # CVE-fixing bumps in the manual-review bucket (they still
-        # pass ``refuse_unsafe_target`` and are one flag away);
-        # lowering it back to any-"safe" lets a hedged verdict apply
-        # a breaking major without operator consent.
-        if verdict.verdict == "safe" and verdict.confidence == "high":
+        # Promotion needs BOTH gates: the operator's explicit
+        # ``--llm-approve-major`` (LLM output never substitutes the
+        # documented ``--allow-major`` consent on its own) AND the
+        # high-confidence floor. Trade-off on the floor, both
+        # directions: raising it to high leaves more CVE-fixing bumps
+        # in the manual-review bucket (they still pass
+        # ``refuse_unsafe_target`` and are one flag away); lowering
+        # it back to any-"safe" lets a hedged verdict apply a
+        # breaking major.
+        if (promote and verdict.verdict == "safe"
+                and verdict.confidence == "high"):
             vuln_plans[key] = major_blocked.pop(key)
             approved.add(key)
         else:
@@ -1033,7 +1043,9 @@ def _print_dry_run(
                     site = sanitise_string(bc.site, max_chars=200)
                     breaks = sanitise_string(bc.what_breaks, max_chars=300)
                     print(f"        {site}: {breaks}")
-        print("\n  Re-run with --allow-major to include these.\n")
+        print("\n  Re-run with --allow-major to include these "
+              "(or --llm-approve-major to apply only the LLM-safe "
+              "subset).\n")
 
     print("Run with --apply to modify files in-place, "
           "or --out <dir> to write proposed/ for review.")
@@ -1126,6 +1138,12 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     p.add_argument("--out",
                    help="write proposed/ to this directory for review "
                         "(mutually exclusive with --apply)")
+    p.add_argument("--llm-approve-major", action="store_true",
+                   help="apply major-bump CVE fixes the LLM assesses "
+                        "safe with high confidence. Without this flag "
+                        "the LLM verdict is annotation only — applying "
+                        "a major bump requires the operator's "
+                        "--allow-major (or this flag).")
     p.add_argument("--allow-major", action="store_true",
                    help="allow CVE-fix upgrades that cross a major version")
     p.add_argument("--git-patch", action="store_true",
