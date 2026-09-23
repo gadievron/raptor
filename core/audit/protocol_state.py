@@ -173,6 +173,17 @@ _FIELD_ACCESS_RE = re.compile(
 _FIELD_CHAIN_RE = re.compile(
     r"(?<![\w.])([A-Za-z_]\w*)((?:\s*(?:->|\.)\s*[A-Za-z_]\w*)+)",
 )
+# Companion for chains whose receiver ends in a subscript or call
+# (``arr[0].fld.sub``, ``bufs[i].hdr.len``): the pinned pattern cannot
+# span ``[...]``/``(...)``, so the chain AFTER the closing bracket
+# would go uncensused.  Dot connector only — after ``->`` the pin
+# above already admits the identifier (``>`` is outside its class),
+# so a wider companion would double-count.  The closer lookbehind
+# keeps attempts sparse and the bounded chain keeps each linear.
+_FIELD_CHAIN_AFTER_CLOSER_RE = re.compile(
+    r"(?<=[\])])\s*\.\s*([A-Za-z_]\w*)"
+    r"((?:\s*(?:->|\.)\s*[A-Za-z_]\w*){1,32})",
+)
 _CHAIN_IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 # Write tails: simple/compound assignment (all C compound operators —
 # ``*=`` ``/=`` ``%=`` included; their omission read multiplicative
@@ -378,7 +389,8 @@ def build_state_field_index(
 
         for line_no, raw in enumerate(source.splitlines(), start=1):
             code = raw.split("//", 1)[0]
-            for m in _FIELD_CHAIN_RE.finditer(code):
+            for m in (*_FIELD_CHAIN_RE.finditer(code),
+                      *_FIELD_CHAIN_AFTER_CLOSER_RE.finditer(code)):
                 idents = _CHAIN_IDENT_RE.findall(m.group(0))
                 tail = code[m.end():]
                 wm = _WRITE_TAIL_RE.match(tail)
