@@ -527,12 +527,15 @@ def _parse_meta(comment_body: str) -> dict[str, str]:
 
 def _format_meta(metadata: dict[str, str]) -> str:
     """Render ``metadata`` back to the comment's body string. Keys
-    sorted for stable output; values quoted only when they contain
-    spaces or quotes."""
+    sorted for stable output; values quoted when they contain ANY
+    whitespace (matching the bare-value parser's \\S+ boundary —
+    quoting only on spaces let a hand-edited quoted value containing
+    a tab re-emit bare and silently truncate at the tab on the next
+    parse), quote characters, or are empty."""
     parts: list[str] = []
     for k in sorted(metadata):
         v = str(metadata[k])
-        if (" " in v) or ('"' in v) or v == "":
+        if re.search(r"\s", v) or ('"' in v) or v == "":
             v_escaped = v.replace('\\', '\\\\').replace('"', '\\"')
             parts.append(f'{k}="{v_escaped}"')
         else:
