@@ -312,14 +312,15 @@ def _check_binary_oracle(shape: TargetShape) -> ToolCheck | None:
     # don't produce the ELF artefacts the oracle parses.
     if shape.primary_language not in ("cpp", "rust", "go"):
         return None
-    target = shape.target_path
-    common_build_dirs = (
-        "build", "target/release", "target/debug",
-        "bazel-bin", "cmake-build-debug", "cmake-build-release",
+    # The oracle's OWN detection universe (named build dirs + Rust
+    # cross-target globs + the in-source top-level arm) — a hand-typed
+    # 6-dir subset here said "will activate after build" for meson
+    # builddir, in-source autotools builds and cross-compiled Rust,
+    # all targets where the oracle WOULD activate.
+    from core.analysis.binary_oracle_autodetect import (
+        build_artefact_dirs_present,
     )
-    has_artefacts = any(
-        (target / d).exists() for d in common_build_dirs
-    )
+    has_artefacts = build_artefact_dirs_present(shape.target_path)
     if has_artefacts:
         return ToolCheck(
             name="Binary oracle",

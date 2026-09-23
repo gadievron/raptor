@@ -97,6 +97,38 @@ class _Candidate:
     kind: Literal["library", "executable"]
 
 
+def build_artefact_dirs_present(target_root: Path) -> bool:
+    """Cheap advisory probe: would :func:`detect_binaries` have
+    anywhere to look?
+
+    True when any named build dir or Rust cross-target dir exists, or
+    the source root's top level carries an ELF candidate
+    (autotools-style in-source builds). Mirrors detect_binaries'
+    search universe WITHOUT the provenance/DWARF work, so advisory
+    consumers (/describe readiness) key off the oracle's own dirs
+    instead of hand-typing a list that drifts.
+    """
+    target_root = Path(target_root)
+    if not target_root.is_dir():
+        return False
+    if any((target_root / d).is_dir() for d in _BUILD_DIRS):
+        return True
+    for pattern in _RUST_TARGET_GLOBS:
+        if any(hit.is_dir() for hit in target_root.glob(pattern)):
+            return True
+    # Source-root arm: top-level ELF candidates only — the same "."
+    # bucket detect_binaries scans.
+    try:
+        for p in target_root.iterdir():
+            if p.is_file():
+                cand = _classify_candidate(p)
+                if cand is not None and _is_elf(cand.path):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def detect_binaries(
     target_root: Path,
     target_kind: TargetKind = "auto",

@@ -265,6 +265,37 @@ class TestCheckBinaryOracle:
 # ---------------------------------------------------------------------------
 
 
+class TestBinaryOracleDirUniverse:
+    """The readiness probe keys off the oracle's own detection
+    universe — a hand-typed 6-dir subset said "will activate after
+    build" for targets the oracle WOULD activate on."""
+
+    def _check(self, tmp_path):
+        return _check_binary_oracle(_shape(target_path=tmp_path))
+
+    def test_meson_builddir_counts_as_artefacts(self, tmp_path):
+        (tmp_path / "builddir").mkdir()
+        assert self._check(tmp_path).status == "ok"
+
+    def test_rust_cross_target_counts_as_artefacts(self, tmp_path):
+        (tmp_path / "target" / "x86_64-unknown-linux-gnu"
+         / "release").mkdir(parents=True)
+        assert self._check(tmp_path).status == "ok"
+
+    def test_in_source_elf_counts_as_artefacts(self, tmp_path):
+        binary = tmp_path / "zpipe"
+        binary.write_bytes(b"\x7fELF" + b"\x00" * 12)
+        binary.chmod(0o755)
+        assert self._check(tmp_path).status == "ok"
+
+    def test_clean_source_tree_still_warns(self, tmp_path):
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.c").write_text("int main(){}\n")
+        result = self._check(tmp_path)
+        assert result.status == "warn"
+        assert "will activate after build" in result.detail
+
+
 class TestNoLlmCheckByDesign:
     def test_no_check_llm_function_exported(self):
         # /describe and /doctor have separate concerns; LLM
