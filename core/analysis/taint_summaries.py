@@ -311,10 +311,13 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
 # clean sanitizer for a raw pass-through at import time), so a
 # decorated def's summary must degrade to unknown — the name-keyed
 # joins would otherwise certify the BODY of a function the runtime
-# name no longer points at. Seed set only; kept deliberately small
-# because an over-wide allowlist reopens the forge.
+# name no longer points at. Seed set only (<= 9 names per the vocab
+# doctrine); kept deliberately small because an over-wide allowlist
+# reopens the forge. ``@property`` is deliberately absent: a property
+# is consumed as an attribute read, never as a call-shaped join, so
+# degrading it costs nothing.
 _SEMANTICS_PRESERVING_DECORATORS = frozenset({
-    "staticmethod", "classmethod", "property",
+    "staticmethod", "classmethod",
     "abstractmethod", "abc.abstractmethod",
     "functools.wraps", "functools.lru_cache", "functools.cache",
     "override", "typing.override",
