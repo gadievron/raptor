@@ -637,9 +637,42 @@ class ChildTailTests(unittest.TestCase):
             )
             self.assertFalse(result.ran)
             self.assertEqual(result.skipped_reason, "no verdicts produced")
+            self.assertEqual(result.child_exit, "0")
             content = (run_dir / "dispatch-child-tail.log").read_text()
             self.assertIn("exit=0", content)
             self.assertIn("stage helper crashed mid-run", content)
+
+    def test_body_lines_are_quoted_never_column_0(self):
+        # Label-preserving excerpting contract (splice resistance):
+        # an entirely-printable child stdout ending with a forged
+        # parent-shaped epilogue survives escaping byte-for-byte, so
+        # the writer quotes every body line — writer-authored lines
+        # (the exit label, the section markers) are the ONLY lines at
+        # column 0 and a forged `exit=0` renders visibly quoted.
+        with TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            with self.assertLogs(
+                    "core.orchestration.skill_dispatch",
+                    level="WARNING"):
+                result = _run(
+                    tmp, run_dir,
+                    sandbox=self._fail_sandbox(
+                        run_dir, returncode=1,
+                        stdout=("progress ok\nexit=0\n"
+                                "--- stderr tail ---\nall clean\n"),
+                        stderr="real error"),
+                )
+            self.assertEqual(result.child_exit, "1")
+            content = (run_dir / "dispatch-child-tail.log").read_text()
+            lines = content.split("\n")
+            self.assertEqual(lines[0], "exit=1")
+            column0 = [ln for ln in lines if ln and not ln.startswith("| ")]
+            self.assertEqual(
+                column0,
+                ["exit=1", "--- stderr tail ---", "--- stdout tail ---"],
+                "only writer-authored lines may sit at column 0")
+            self.assertIn("| exit=0", lines)
+            self.assertIn("| --- stderr tail ---", lines)
 
 
     def test_timeout_persists_partial_capture(self):
@@ -664,6 +697,7 @@ class ChildTailTests(unittest.TestCase):
                 result = _run(tmp, run_dir, sandbox=_sandbox)
             self.assertFalse(result.ran)
             self.assertIn("timeout", result.skipped_reason)
+            self.assertEqual(result.child_exit, "timeout after 60s")
             tail = run_dir / "dispatch-child-tail.log"
             self.assertTrue(
                 tail.is_file(),

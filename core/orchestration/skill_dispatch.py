@@ -323,7 +323,15 @@ def _persist_child_tail(
     both streams to root-cause without re-running a multi-minute
     child. Stream content quotes hostile-target bytes — escaped
     (newlines kept: it is a multi-line narrative) before landing in an
-    operator-readable file. Best-effort — never let forensics fail the
+    operator-readable file, and every body line carries the ``| ``
+    quote prefix so writer-authored lines (the ``exit=`` authority
+    label, the section markers) are the only lines at column 0.
+    Escaping alone is not splice resistance here: with newlines
+    preserved, an entirely-printable child stdout could end with a
+    forged ``exit=0`` line plus duplicate section markers that read
+    exactly like parent-authored text (and a windowed excerpt of the
+    artifact then LED with the forgery once the genuine line 1 fell
+    out of the window). Best-effort — never let forensics fail the
     failure path. ``exit_label`` replaces the numeric exit on paths
     with no real exit status (the timeout kill).
     """
@@ -333,9 +341,9 @@ def _persist_child_tail(
                       else str(proc.returncode))
     content = (
         f"exit={exit_text}\n--- stderr tail ---\n"
-        + _esc((proc.stderr or "")[-_CHILD_TAIL_PERSIST_CHARS:])
+        + _quote_body((proc.stderr or "")[-_CHILD_TAIL_PERSIST_CHARS:])
         + "\n--- stdout tail ---\n"
-        + _esc((proc.stdout or "")[-_CHILD_TAIL_PERSIST_CHARS:])
+        + _quote_body((proc.stdout or "")[-_CHILD_TAIL_PERSIST_CHARS:])
         + "\n"
     )
     try:
@@ -365,6 +373,19 @@ def _esc(s: str) -> str:
     from core.security.log_sanitisation import escape_nonprintable
 
     return escape_nonprintable(s, preserve_newlines=True)
+
+
+def _quote_body(s: str) -> str:
+    """Escape a child stream tail and quote every line with ``| ``.
+
+    The prefix makes the artifact's in-band markers forgery-evident:
+    untrusted body lines can never sit at column 0, so a column-0
+    ``exit=`` or ``--- … tail ---`` line is writer-authored by
+    construction (a child-emitted ``| exit=0`` renders as
+    ``| | exit=0`` — visibly quoted). See the label-preserving
+    excerpting contract in :mod:`core.security.log_sanitisation`.
+    """
+    return "\n".join("| " + line for line in _esc(s).split("\n"))
 
 
 def missing_validation_report(run_dir: Path) -> str | None:
@@ -400,11 +421,20 @@ class SkillDispatchResult:
     ``run_dir`` is set as soon as the lifecycle started, including on
     failure paths, so callers can surface the partially-populated run
     directory to the operator.
+
+    ``child_exit`` is the parent-observed exit of the child process
+    (numeric exit status, or the timeout label) — ``None`` when no
+    child ever produced one (launch/sandbox-setup failures). It is
+    the OUT-OF-BAND copy of the tail artifact's line-1 authority
+    label: consumers that excerpt ``dispatch-child-tail.log`` must
+    re-emit exit authority from this field, never recover it from
+    artifact bytes (the artifact lives in a child-writable directory).
     """
     ran: bool
     skipped_reason: str | None = None
     run_dir: Path | None = None
     duration_s: float = 0.0
+    child_exit: str | None = None
 
 
 class StageError(Exception):
@@ -919,7 +949,8 @@ def run_skill_dispatch(
             logger.warning("%s timed out after %ds", log_label, timeout_s)
             return SkillDispatchResult(
                 ran=False, skipped_reason=f"timeout after {timeout_s}s",
-                run_dir=run_dir, duration_s=time.monotonic() - t0)
+                run_dir=run_dir, duration_s=time.monotonic() - t0,
+                child_exit=f"timeout after {timeout_s}s")
         except OSError as e:
             lifecycle_settled = True
             fail_lifecycle(run_dir, f"launch failed: {e}")
@@ -953,7 +984,8 @@ def run_skill_dispatch(
             return SkillDispatchResult(
                 ran=False,
                 skipped_reason=f"subprocess returned {proc.returncode}",
-                run_dir=run_dir, duration_s=time.monotonic() - t0)
+                run_dir=run_dir, duration_s=time.monotonic() - t0,
+                child_exit=str(proc.returncode))
 
         if validate_outputs is not None:
             error = validate_outputs(run_dir)
@@ -967,13 +999,15 @@ def run_skill_dispatch(
                 logger.warning("%s: %s", log_label, error)
                 return SkillDispatchResult(
                     ran=False, skipped_reason=error, run_dir=run_dir,
-                    duration_s=time.monotonic() - t0)
+                    duration_s=time.monotonic() - t0,
+                    child_exit=str(proc.returncode))
 
         complete_lifecycle(run_dir)
         lifecycle_settled = True
 
         return SkillDispatchResult(ran=True, run_dir=run_dir,
-                                   duration_s=time.monotonic() - t0)
+                                   duration_s=time.monotonic() - t0,
+                                   child_exit=str(proc.returncode))
 
     except Exception:
         # Make sure the lifecycle is marked failed before propagating.
