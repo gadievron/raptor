@@ -135,47 +135,59 @@ def _best_match(
             continue
         if w.arch not in (pair.arch, "any", "universal2"):
             continue
-        # OS-family check. macOS / Windows tags don't satisfy a
-        # Linux project pair and vice-versa. The platform_matrix
-        # only currently emits Linux pairs (with libc) or
-        # libc=None for Windows/macOS pairs.
-        if pair.libc is None:
-            # Project pair is non-Linux — wheel must match the OS.
-            # We don't distinguish macOS / Windows in PlatformPair
-            # today; fall through and let arch match decide.
-            if w.os == "windows":
+        # OS-family check on the pair's EXPLICIT os field. macOS /
+        # Windows tags don't satisfy a Linux project pair and
+        # vice-versa. The old dispatch overloaded ``libc is None`` as
+        # "non-Linux", which mis-filed every Linux-provenance pair
+        # whose libc is undetermined (bake / build-push / unknown
+        # base image): their manylinux wheels were rejected (false
+        # incompat findings) while win_amd64 wheels matched (false
+        # clean verdicts). A pair minted WITHOUT an os (external
+        # constructor) keeps the historical inference — a declared
+        # libc implies Linux; libc-less falls to the legacy
+        # Windows/macOS arm at the bottom.
+        if pair.os == "linux" or (pair.os is None and pair.libc is not None):
+            # Linux pair → wheel must be Linux; libc gates only when
+            # BOTH sides declare one (libc=None means "no libc
+            # constraint" — the documented lenient behaviour).
+            if w.os != "linux":
+                continue
+            if pair.libc is None or w.libc is None:
                 candidates.append(w)
                 continue
-            if w.os == "macosx":
-                # macOS version gating: a project pinned to macos-13
-                # (pair.macos_version=(13, 0)) can install
-                # ``macosx_11_0_arm64`` wheels but NOT
-                # ``macosx_14_0_arm64`` wheels. When pair.macos_version
-                # is set + wheel declares a tag version, reject too-new
-                # wheels. When EITHER side is missing version info,
-                # fall through to "arch match decides" (the existing
-                # lenient behaviour).
-                if (pair.macos_version is not None
-                        and w.macos_version is not None
-                        and w.macos_version > pair.macos_version):
-                    # Wheel requires a NEWER macOS than the project
-                    # accepts — not a fit.
-                    continue
-                candidates.append(w)
-            continue
-        # Linux pair → wheel must be Linux + libc family + version OK.
-        if w.os != "linux":
-            continue
-        if w.libc is None:
-            # Raw ``linux_x86_64`` tag — no libc constraint declared.
-            # Treat as OK (the wheel might still fail at runtime but
-            # we have no signal to gate on).
+            if w.libc.family != pair.libc.family:
+                continue
+            if w.libc.version > pair.libc.version:
+                # Wheel requires NEWER libc than project provides →
+                # not a fit.
+                continue
             candidates.append(w)
             continue
-        if w.libc.family != pair.libc.family:
+        if pair.os == "windows":
+            if w.os == "windows":
+                candidates.append(w)
             continue
-        if w.libc.version > pair.libc.version:
-            # Wheel requires NEWER libc than project provides → not a fit.
+        # pair.os == "macosx", or the legacy os-less libc-less shape
+        # (pre-os constructors for Windows/macOS runners). The legacy
+        # shape can't tell Windows from macOS, so it accepts Windows
+        # wheels too — exactly the pre-os behaviour.
+        if pair.os is None and w.os == "windows":
+            candidates.append(w)
+            continue
+        if w.os != "macosx":
+            continue
+        # macOS version gating: a project pinned to macos-13
+        # (pair.macos_version=(13, 0)) can install
+        # ``macosx_11_0_arm64`` wheels but NOT ``macosx_14_0_arm64``
+        # wheels. When pair.macos_version is set + wheel declares a
+        # tag version, reject too-new wheels. When EITHER side is
+        # missing version info, fall through to "arch match decides"
+        # (the existing lenient behaviour).
+        if (pair.macos_version is not None
+                and w.macos_version is not None
+                and w.macos_version > pair.macos_version):
+            # Wheel requires a NEWER macOS than the project
+            # accepts — not a fit.
             continue
         candidates.append(w)
 
@@ -349,7 +361,8 @@ _RECOMMENDATION_CACHE: dict[
     tuple[
         str,
         frozenset[
-            tuple[str, LibcVersion | None, tuple[int, int] | None]
+            tuple[str, LibcVersion | None, str | None,
+                  tuple[int, int] | None]
         ],
     ],
     str | None,
@@ -357,21 +370,23 @@ _RECOMMENDATION_CACHE: dict[
 
 
 def _matrix_cache_key(matrix: ProjectPlatformMatrix) -> frozenset[
-    tuple[str, LibcVersion | None, tuple[int, int] | None]
+    tuple[str, LibcVersion | None, str | None, tuple[int, int] | None]
 ]:
     """Build a cache key that ignores ``PlatformPair.source``.
 
-    Two matrices with the same ``{(arch, libc, macos_version)}`` set
-    produce the same recommendation regardless of which Dockerfile /
-    GHA / etc. each pair was discovered from.
+    Two matrices with the same ``{(arch, libc, os, macos_version)}``
+    set produce the same recommendation regardless of which
+    Dockerfile / GHA / etc. each pair was discovered from.
 
     ``macos_version`` MUST be in the key — a project on macos-13 and
     one on macos-14 have different acceptable-wheel windows
     (macos-13 rejects ``macosx_14_arm64`` wheels). Sharing a cache
-    entry would mis-recommend.
+    entry would mis-recommend. ``os`` MUST be in the key for the same
+    reason — a Linux pair and an unknown-OS pair with equal
+    (arch, libc) accept different wheel sets.
     """
     return frozenset(
-        (p.arch, p.libc, p.macos_version) for p in matrix.pairs
+        (p.arch, p.libc, p.os, p.macos_version) for p in matrix.pairs
     )
 
 
