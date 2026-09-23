@@ -773,6 +773,15 @@ def _build_osv_evidence(out_dir: Path, http: Any) -> BuildResult:
 # an exploit. We already capture vulnerability-knowledge via OSV's
 # core advisory graph; this signal is specifically for "exploit
 # code is one click away".
+#
+# Hand-curated universe feeding a ground-truth label source —
+# accepted deliberately (which hosts publish EXPLOITS is operator
+# judgment; no mechanical source exists). Named refresh trigger:
+# review when osv_evidence record_count stalls while the corpus
+# grows, or when EVIDENCE refs to an unlisted exploit-archive host
+# start appearing — the emitted ``exploit_host_allowlist``
+# provenance block makes the active universe auditable per
+# snapshot.
 _OSV_EVIDENCE_EXPLOIT_HOSTS = frozenset({
     "exploit-db.com",
     "packetstormsecurity.com",

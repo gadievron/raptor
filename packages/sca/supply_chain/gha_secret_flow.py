@@ -143,7 +143,15 @@ _MAX_BALANCED_WALK_BYTES = 100_000  # ``_find_balanced`` walk limit
 _MAX_HEREDOC_BODY_BYTES = 100_000   # per-heredoc close-search window
 
 
-# Trusted-consumer allowlist (lazy-loaded).
+# Trusted-consumer allowlist (lazy-loaded from
+# data/gha_trusted_secret_consumers.json). Hand-curated AND
+# suppression-direction (a listed action's secret flow is not
+# flagged) — accepted deliberately: "which actions legitimately
+# receive secrets" is inherently operator judgment with no
+# mechanical source to derive from. Review trigger: when a listed
+# action changes ownership/publisher or a new secret-consuming
+# action becomes common enough that operators keep hand-waiving it,
+# adjudicate the JSON entry — never auto-extend.
 _TRUSTED: set[str] | None = None
 
 
