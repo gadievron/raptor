@@ -76,8 +76,11 @@ def build_web_attempt(
     response_evidence["verification_status"] = result.status
     response_evidence["reason"] = result.reason
     if result.refuted_by_control:
-        # The flag the verified-outcomes projection gates REFUTED on:
-        # only a positive control experiment may set it.
+        # Explicit control-experiment marker: only a positive control
+        # may set it. (The verified-outcomes projection gates REFUTED
+        # on verification_status above — equivalent for oracle-graded
+        # results, since status is "refuted" exactly when this flag is
+        # set — so this field is evidence provenance, not the gate.)
         response_evidence["refuted_by_control"] = True
 
     evidence = WebEvidence(

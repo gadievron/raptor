@@ -133,3 +133,17 @@ class TestSignalCollectionIsBounded:
         assert "x0" in tokens
         assert not any("beyond_cap_marker" in t or "beyond-cap-marker" in t
                        for t in tokens)
+
+
+class TestLandscapeProvenanceClaims:
+    def test_archive_years_reviewed_derive_from_cited_sources(self):
+        from packages.web.research_landscape import (
+            RESEARCH_THEMES,
+            assess_research_landscape,
+        )
+
+        landscape = assess_research_landscape(
+            discovery=None, crawl_data={}, registered_check_ids=[],
+        )
+        cited = sorted({y for t in RESEARCH_THEMES for y in t.years})
+        assert landscape["archive_years_reviewed"] == cited

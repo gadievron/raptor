@@ -103,9 +103,12 @@ class VerificationResult:
     # Per-leg observations, bounded excerpts only — feeds the
     # WebEvidence.response_evidence record.
     observations: dict[str, Any] = field(default_factory=dict)
-    # True when the control experiment positively refuted the signal.
-    # This is the flag the verified-outcomes projection gates REFUTED
-    # on — a mere failed replay never sets it.
+    # True when the control experiment positively refuted the signal —
+    # a mere failed replay never sets it. The verified-outcomes
+    # projection gates REFUTED on ``verification_status`` (set from
+    # ``status``, which is "refuted" exactly when this flag is true);
+    # this flag rides the evidence record as the explicit control-
+    # experiment marker.
     refuted_by_control: bool = False
     reason: str = ""
 
