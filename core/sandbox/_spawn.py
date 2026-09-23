@@ -2211,6 +2211,9 @@ def run_sandboxed(
         from core.security.credential_env import (
             is_credential_shaped as _is_cred_shaped,
         )
+        from core.security.credential_env import (
+            is_model_traffic_redirect_shaped as _is_redirect_shaped,
+        )
         # Shape sweep over the image's OWN names: the exact-name sets
         # cannot enumerate every credential the operator's launcher
         # environment happens to carry (GITHUB_TOKEN / GH_TOKEN /
@@ -2232,7 +2235,16 @@ def run_sandboxed(
                         _nm_s = _nm.decode("utf-8")
                     except UnicodeDecodeError:
                         continue
-                    if _is_cred_shaped(_nm_s):
+                    if (_is_cred_shaped(_nm_s)
+                            or _is_redirect_shaped(_nm_s)):
+                        # Credential-shaped names AND model-traffic
+                        # redirect knobs (ANTHROPIC_*BASE_URL /
+                        # AWS_ENDPOINT_URL* / CLAUDE_CODE_SKIP_*):
+                        # a gateway endpoint identifies the
+                        # deployment even when every key is
+                        # elsewhere — the same class the OLLAMA_HOST
+                        # entry below is hand-listed for, derived
+                        # from the vocabulary instead of enumerated.
                         _image_shaped_names.add(_nm_s)
         except OSError:
             pass
@@ -2243,9 +2255,14 @@ def run_sandboxed(
              *_CRED_BEARING_scrub,
              *_image_shaped_names,
              "RAPTOR_DIR",
-             # Endpoint-locating values: the LLM backend location and
-             # proxy URLs (which may embed credentials) identify the
-             # deployment even when every key is elsewhere.
+             # Endpoint-locating values with NO derived predicate:
+             # the local-LLM backend location and proxy URLs (which
+             # may embed credentials) identify the deployment even
+             # when every key is elsewhere. The provider-gateway
+             # half of this class (ANTHROPIC_*BASE_URL and kin) is
+             # derived via is_model_traffic_redirect_shaped in the
+             # image sweep above — only the members the vocabulary
+             # deliberately does not model stay hand-listed here.
              "OLLAMA_HOST",
              "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
              "http_proxy", "https_proxy", "all_proxy"}))
