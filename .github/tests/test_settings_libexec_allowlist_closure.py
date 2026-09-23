@@ -94,6 +94,10 @@ PENDING_OPERATOR_DECISION: dict[str, str] = {
     "raptor-smt-check-oob": "Z3 checker (pure compute)",
     "raptor-smt-check-overflow": "Z3 checker (pure compute)",
     "raptor-smt-check-overflow-to-oob": "Z3 checker (pure compute)",
+    "raptor-fetch-anchor": "session-scoped WebFetch-anchor writer for "
+                           "the crash-report-fetcher (writes one file "
+                           "under .claude/run/); grant owed with the "
+                           "rest of this worklist",
 }
 
 

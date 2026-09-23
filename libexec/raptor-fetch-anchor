@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Manage the crash-report-fetcher's session-scoped WebFetch anchor.
+
+Usage:
+  raptor-fetch-anchor write <bug-tracker-url>
+  raptor-fetch-anchor append <hostname>
+  raptor-fetch-anchor path
+
+The anchor pins the fetcher agent's WebFetch to the bug tracker's
+registrable domain (PreToolUse hook). It is SESSION-SCOPED —
+``.claude/run/crash-report-fetcher-<session>.anchor``, where
+``<session>`` is this launcher session's RAPTOR_SESSION_PID
+(``default`` outside the launcher) — because a single repo-global
+path was last-writer-wins across concurrent investigations: run B's
+write re-pinned run A's fetcher mid-run, and A's appended attachment
+hosts became fetchable by B. The hook resolves the same placeholder
+from the same inherited environment, so writer and enforcer always
+agree on the path. The URL/hostname arrive as argv DATA.
+
+``append`` is the consent-gated extra-host addition (see the
+crash-analysis agent's instruction: may-ask-gated, non-interactive
+fallback records the denial without extending).
+"""
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def _anchor_path() -> Path:
+    session = os.environ.get("RAPTOR_SESSION_PID", "").strip() or "default"
+    root = Path(__file__).resolve().parents[1]
+    return root / ".claude" / "run" / f"crash-report-fetcher-{session}.anchor"
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("Usage: raptor-fetch-anchor write <url> | append <hostname> "
+              "| path", file=sys.stderr)
+        return 1
+    cmd = sys.argv[1]
+    anchor = _anchor_path()
+
+    if cmd == "path":
+        print(anchor)
+        return 0
+
+    if cmd == "write":
+        if len(sys.argv) != 3:
+            print("Usage: raptor-fetch-anchor write <bug-tracker-url>",
+                  file=sys.stderr)
+            return 1
+        url = sys.argv[2]
+        if not url.startswith("https://"):
+            print("raptor-fetch-anchor: anchor URL must be https://",
+                  file=sys.stderr)
+            return 1
+        anchor.parent.mkdir(parents=True, exist_ok=True)
+        anchor.write_text(url + "\n", encoding="utf-8")
+        print(anchor)
+        return 0
+
+    if cmd == "append":
+        if len(sys.argv) != 3:
+            print("Usage: raptor-fetch-anchor append <hostname>",
+                  file=sys.stderr)
+            return 1
+        host = sys.argv[2].strip().lower()
+        if (not host or "/" in host or ":" in host or host.startswith("-")
+                or any(ord(c) < 0x21 or ord(c) == 0x7F for c in host)):
+            print(f"raptor-fetch-anchor: not a bare hostname: {host!r}",
+                  file=sys.stderr)
+            return 1
+        if not anchor.is_file():
+            print(f"raptor-fetch-anchor: no anchor at {anchor} — write "
+                  "the bug-tracker URL first", file=sys.stderr)
+            return 1
+        with anchor.open("a", encoding="utf-8") as fh:
+            fh.write(host + "\n")
+        print(anchor)
+        return 0
+
+    print(f"raptor-fetch-anchor: unknown command {cmd!r}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
