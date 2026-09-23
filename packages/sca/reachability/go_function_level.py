@@ -156,6 +156,12 @@ def _extract_qualified(advisory: Any, dep_name: str) -> list[str]:
             path = imp.get("path")
             junk_path = path is not None and not isinstance(path, str)
             symbols = imp.get("symbols") or []
+            if not isinstance(symbols, list):
+                # Junk-shaped container (a bare string iterates
+                # char-by-char into garbage queries): one counted
+                # marker instead.
+                out.append(UNRESOLVED_ENTRY)
+                continue
             for s in symbols:
                 if not (isinstance(s, str) and s):
                     continue

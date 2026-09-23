@@ -545,3 +545,105 @@ def test_failed_inventory_build_not_retried_per_tier(
     assert len(calls) == 1, calls
     # Tier skipped → the module-level verdict is preserved.
     assert out[dep.key()].verdict == "imported"
+
+
+def test_go_junk_advisory_symbol_element_does_not_crash_scan(
+    tmp_path: Path,
+) -> None:
+    """One non-string element in an OSV ``imports[].symbols`` list
+    must degrade to the counted unresolved marker — not propagate a
+    TypeError through resolve_dep and kill the whole scan. String
+    siblings in the same list keep working."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.go").write_text(
+        'package main\n\n'
+        'import "golang.org/x/crypto/ssh"\n\n'
+        'func main() {\n\tssh.ParsePrivateKey(nil)\n}\n',
+        encoding="utf-8",
+    )
+    dep = _dep("golang.org/x/crypto", ecosystem="Go", version="0.10.0")
+    osv_results = [
+        _FakeOsvResult(
+            dep_key=dep.key(),
+            advisories=[
+                _FakeAdvisory(ecosystem_specific={
+                    "imports": [
+                        {"path": "golang.org/x/crypto/ssh",
+                         "symbols": [123, "ParsePrivateKey"]},
+                    ],
+                }),
+            ],
+        ),
+    ]
+    out = scan(repo, [dep], osv_results=osv_results)
+    assert out[dep.key()].verdict == "likely_called"
+
+
+def test_go_junk_only_advisory_symbols_stay_imported(
+    tmp_path: Path,
+) -> None:
+    """An advisory whose symbols are ALL junk elements keeps the
+    module-level verdict (imported) — visible marker, no crash, no
+    fabricated upgrade."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.go").write_text(
+        'package main\n\n'
+        'import "golang.org/x/crypto/ssh"\n\n'
+        'func main() {\n\tssh.Dial("tcp", "h:22", nil)\n}\n',
+        encoding="utf-8",
+    )
+    dep = _dep("golang.org/x/crypto", ecosystem="Go", version="0.10.0")
+    osv_results = [
+        _FakeOsvResult(
+            dep_key=dep.key(),
+            advisories=[
+                _FakeAdvisory(ecosystem_specific={
+                    "imports": [
+                        {"path": "golang.org/x/crypto/ssh",
+                         "symbols": [123, None]},
+                    ],
+                }),
+            ],
+        ),
+    ]
+    out = scan(repo, [dep], osv_results=osv_results)
+    assert out[dep.key()].verdict == "imported"
+
+
+def test_go_string_valued_symbols_container_not_iterated_charwise(
+    tmp_path: Path,
+) -> None:
+    """A STRING-valued ``symbols`` container used to iterate
+    char-by-char, turning one advisory into single-letter grep
+    probes — spurious identifier matches upgraded the verdict from
+    garbage data. A non-list container is junk-shaped and degrades
+    to the marker."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "main.go").write_text(
+        'package main\n\n'
+        'import "golang.org/x/crypto/ssh"\n\n'
+        'func main() {\n\tl := 1\n\t_ = l\n\tssh.Dial("tcp", "h:22", nil)\n}\n',
+        encoding="utf-8",
+    )
+    dep = _dep("golang.org/x/crypto", ecosystem="Go", version="0.10.0")
+    osv_results = [
+        _FakeOsvResult(
+            dep_key=dep.key(),
+            advisories=[
+                _FakeAdvisory(ecosystem_specific={
+                    "imports": [
+                        {"path": "golang.org/x/crypto/ssh",
+                         # "Dial" IS called — but as a container this
+                         # is junk, and its chars ('l' matches the
+                         # local identifier) must not become probes.
+                         "symbols": "Dial"},
+                    ],
+                }),
+            ],
+        ),
+    ]
+    out = scan(repo, [dep], osv_results=osv_results)
+    assert out[dep.key()].verdict == "imported"

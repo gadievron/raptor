@@ -1021,3 +1021,41 @@ def test_nuget_hyphenated_package_fold_is_upgrade_only():
         _run_named("nuget_function_level", "My-Pkg", "NuGet", uncalled)
         == "imported"
     )
+
+
+def test_symbols_container_junk_degrades_to_counted_marker():
+    """A STRING-valued (or otherwise non-list) ``imports[].symbols``
+    container iterates CHAR-BY-CHAR through every extractor that
+    trusts its shape — each character composes a well-formed garbage
+    query pairing NOT_CALLED, so one junk-shaped advisory field
+    vacuously satisfied the coverage gate and minted the
+    high-confidence suppression on a genuinely-called function. A
+    junk-shaped container degrades to ONE counted unresolved marker:
+    visible, never queried, blocks the downgrade."""
+    cases = [
+        ("npm_function_level", "lodash", "npm",
+         {"imports": [{"path": "lo-dash", "symbols": "get"}]},
+         {"lodash": "lodash"}, (("lodash", "get"),)),
+        ("python_function_level", "pyyaml", "PyPI",
+         {"imports": [{"path": "yaml", "symbols": "load"}]},
+         {"yaml": "yaml"}, (("yaml", "load"),)),
+        ("go_function_level", "example.com/lib", "Go",
+         {"imports": [{"path": "example.com/lib", "symbols": "Parse"}]},
+         {"lib": "example.com/lib"}, (("lib", "Parse"),)),
+        ("java_function_level", "com.example:foo", "Maven",
+         {"imports": [{"path": "com.example.foo",
+                       "symbols": "readValue"}]},
+         {"Mapper": "com.example.foo.Mapper"}, (("Mapper", "readValue"),)),
+        ("cargo_function_level", "my_crate", "Cargo",
+         {"imports": [{"path": "my_crate", "symbols": "from_str"}]},
+         {"my_crate": "my_crate"}, (("my_crate", "from_str"),)),
+    ]
+    for module_name, dep_name, eco, es, imports, chains in cases:
+        scenario = _Scenario(es, None, imports, chains,
+                             expected="imported")
+        verdict = _run_named(module_name, dep_name, eco, scenario)
+        assert verdict != "not_function_reachable", (
+            f"{module_name}: junk-shaped symbols container minted "
+            f"the suppression"
+        )
+        assert verdict == "imported", (module_name, verdict)

@@ -123,8 +123,15 @@ def _extract_qualified(advisory: Any) -> list[str]:
         for imp in source.get("imports") or []:
             if not isinstance(imp, dict):
                 continue
+            raw_symbols = imp.get("symbols") or []
+            if not isinstance(raw_symbols, list):
+                # Junk-shaped container (a bare string iterates
+                # char-by-char into garbage queries): one counted
+                # marker instead.
+                out.append(UNRESOLVED_ENTRY)
+                continue
             symbols = [
-                s for s in (imp.get("symbols") or [])
+                s for s in raw_symbols
                 if isinstance(s, str) and s
             ]
             path = imp.get("path")
