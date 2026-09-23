@@ -1,6 +1,5 @@
 """Tests for graph store Phase A expansion — new producers, consumers, and hardening."""
 
-import json
 import sqlite3
 from pathlib import Path
 
@@ -146,25 +145,27 @@ def _write_validation_outcomes(run_dir: Path) -> None:
 
 
 def _write_audit_journal(run_dir: Path) -> None:
+    """Write a journal row through the REAL producer — the pre-fix
+    fixture hand-invented a {"type": "hypothesis"} vocabulary no
+    producer speaks, certifying a lane the pipeline never exercised."""
+    from core.coverage.journal import ReviewJournalEntry, append_entry, now_iso
+
     run_dir.mkdir(parents=True, exist_ok=True)
-    lines = [
-        json.dumps({
-            "type": "hypothesis",
-            "function": "handle_request",
-            "file": "server.c",
-            "cwe": "CWE-78",
-            "status": "formed",
-            "description": "Unsanitised user input reaches system()",
-        }),
-        json.dumps({
-            "type": "tool_verdict",
-            "tool": "semgrep",
-            "hypothesis_id": "handle_request::CWE-78",
-            "verdict": "confirmed",
-            "evidence": "Rule matched: command-injection pattern",
-        }),
-    ]
-    (run_dir / "review-journal.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    append_entry(run_dir, ReviewJournalEntry(
+        ts=now_iso(),
+        run_id="run-1",
+        file="server.c",
+        function="handle_request",
+        verdict="suspicious",
+        source_hash="ab" * 8,
+        cwe="CWE-78",
+        hypotheses=[{
+            "mechanism": "Unsanitised user input reaches system()",
+            "confidence": "high",
+        }],
+        evidence_tools=["semgrep"],
+        tools_dispatched=["semgrep"],
+    ))
 
 
 # ---------------------------------------------------------------------------

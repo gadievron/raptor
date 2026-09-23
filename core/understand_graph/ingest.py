@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -499,46 +498,56 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None)
 
 
 def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None) -> Optional[Path]:
-    """Ingest /audit journal entries into the graph.
+    """Ingest /audit review-journal rows into the graph.
 
-    Creates hypothesis and tool_verdict nodes.
+    The vocabulary is derived from the journal's REAL producer
+    (core.coverage.journal.ReviewJournalEntry via append_entry):
+    hypotheses live in each row's nested ``hypotheses`` list and tool
+    receipts in ``evidence_tools``. The pre-fix dispatch keyed on a
+    ``type``/``kind`` field no producer writes, so every real journal
+    ingested 0 nodes while still committing an empty producer='audit'
+    snapshot — the only rows it COULD ingest were planted ones.
+
+    Rows load through the journal subsystem's own tolerant reader
+    (per-row quarantine — a torn tail from an interrupted append
+    costs that row, never the whole ingest; size-capped like every
+    other run-artifact read) and each minted node records the row's
+    MAC provenance (verified / unstamped / tampered) so
+    authority-tier consumers can filter; the graph's own grain is
+    hint-tier prompt seeding. When nothing review-shaped ingests, the
+    snapshot upsert rolls back — no junk empty snapshots in
+    snapshot-ordered consumers.
     """
+    from core.coverage import journal_mac
+    from core.coverage.journal import JOURNAL_FILENAME, load_entries
+
     run_dir = Path(run_dir)
-    journal_path = run_dir / "review-journal.jsonl"
-    if not journal_path.exists():
+    if not (run_dir / JOURNAL_FILENAME).exists():
         return None
 
     target = str(target_path or _infer_run_target(run_dir))
     graph_path = graph_path_for_run(run_dir, target or None)
 
-    entries: list[dict[str, Any]] = []
-    raw = read_capped(journal_path, _ARTIFACT_MAX_BYTES)
-    if raw is None:
-        return None
-    try:
-        for line in raw.decode("utf-8", "replace").splitlines():
-            line = line.strip()
-            if line:
-                entries.append(json.loads(line))
-    except json.JSONDecodeError:
-        return None
+    entries = load_entries(run_dir)
     if not entries:
         return None
 
-    snap_id = make_snapshot_id(target, _hash_json(entries), str(run_dir.resolve()))
+    snap_id = make_snapshot_id(
+        target, _hash_json([e.to_dict() for e in entries]),
+        str(run_dir.resolve()),
+    )
+    minted = 0
     conn = open_graph(graph_path)
     conn.isolation_level = None
     try:
         conn.execute("BEGIN IMMEDIATE")
         _upsert_snapshot(conn, snap_id, target, run_dir, producer="audit")
         for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            entry_type = entry.get("type") or entry.get("kind") or ""
-            if entry_type in ("hypothesis", "hypothesis_formed"):
-                _ingest_hypothesis_entry(conn, snap_id, entry)
-            elif entry_type in ("tool_verdict", "verification", "tool_result"):
-                _ingest_tool_verdict_entry(conn, snap_id, entry)
+            minted += _ingest_journal_row(
+                conn, snap_id, entry, journal_mac.entry_provenance(entry))
+        if not minted:
+            conn.execute("ROLLBACK")
+            return None
         conn.execute("COMMIT")
     except (sqlite3.Error, KeyError, TypeError, ValueError) as exc:
         try:
@@ -550,6 +559,74 @@ def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None) ->
     finally:
         conn.close()
     return graph_path
+
+
+def _ingest_journal_row(conn, snap_id: str, entry: Any, provenance: str) -> int:
+    """Mint hypothesis + tool_verdict nodes from ONE producer row.
+
+    Returns the number of nodes minted. Producer shape:
+    ``hypotheses`` is a list of ``{mechanism, confidence, ...}``
+    dicts; ``evidence_tools`` names the tools whose OUTPUT the
+    verdict carries (the confirming receipt — never the dispatched
+    union).
+    """
+    minted = 0
+    fn_ref = function_ref(entry.file, entry.function)
+    fn_key = stable_key("function", fn_ref)
+    fn_row = conn.execute(
+        "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
+        (fn_key,),
+    ).fetchone()
+
+    hyp_ids: list[str] = []
+    for hypothesis in entry.hypotheses or []:
+        if not isinstance(hypothesis, dict):
+            continue
+        mechanism = str(
+            hypothesis.get("mechanism")
+            or hypothesis.get("text")
+            or hypothesis.get("description")
+            or ""
+        ).strip()
+        if not mechanism:
+            continue
+        cwe = str(hypothesis.get("cwe") or entry.cwe or "")
+        key = f"{fn_ref}::{cwe}::{short_hash(mechanism, length=12)}"
+        hyp_id = _upsert_node(conn, snap_id, "hypothesis", key, {
+            "function": entry.function,
+            "file": entry.file,
+            "cwe": cwe,
+            "description": mechanism,
+            "confidence": str(hypothesis.get("confidence") or ""),
+            "status": entry.verdict,
+            "run_id": entry.run_id,
+            "mac_provenance": provenance,
+        })
+        minted += 1
+        hyp_ids.append(hyp_id)
+        if fn_row:
+            _upsert_edge(conn, snap_id, "AFFECTS", hyp_id, fn_row["id"])
+
+    for tool in entry.evidence_tools or []:
+        tool_name = str(tool).strip()
+        if not tool_name:
+            continue
+        key = (f"{tool_name}::{fn_ref}::"
+               f"{short_hash(f'{entry.ts}::{entry.verdict}', length=12)}")
+        tv_id = _upsert_node(conn, snap_id, "tool_verdict", key, {
+            "tool": tool_name,
+            "verdict": entry.verdict,
+            "function": entry.function,
+            "file": entry.file,
+            "run_id": entry.run_id,
+            "mac_provenance": provenance,
+        })
+        minted += 1
+        # Direct-id edges: the receipt and the hypotheses share the
+        # row, so no lookup (and no substring join) is ever needed.
+        for hyp_id in hyp_ids:
+            _upsert_edge(conn, snap_id, "TESTED_BY", hyp_id, tv_id)
+    return minted
 
 
 # ---------------------------------------------------------------------------
@@ -672,50 +749,6 @@ def _extract_function_from_sarif(result: dict[str, Any]) -> str:
             if isinstance(ll, dict) and ll.get("name"):
                 return str(ll["name"])
     return "?"
-
-
-def _ingest_hypothesis_entry(conn, snap_id: str, entry: dict[str, Any]) -> None:
-    target_fn = entry.get("function") or entry.get("target") or ""
-    cwe = entry.get("cwe") or ""
-    key = f"{target_fn}::{cwe}::{content_hash(entry)}"
-    props = {
-        "function": target_fn,
-        "cwe": cwe,
-        "status": entry.get("status") or "formed",
-        "strategy": entry.get("strategy") or "",
-        "description": entry.get("description") or entry.get("hypothesis") or "",
-        "file": entry.get("file") or "",
-    }
-    hyp_id = _upsert_node(conn, snap_id, "hypothesis", key, props)
-    if target_fn:
-        fn_key = stable_key("function", function_ref(props.get("file", ""), target_fn))
-        fn_row = conn.execute(
-            "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
-            (fn_key,),
-        ).fetchone()
-        if fn_row:
-            _upsert_edge(conn, snap_id, "AFFECTS", hyp_id, fn_row["id"])
-
-
-def _ingest_tool_verdict_entry(conn, snap_id: str, entry: dict[str, Any]) -> None:
-    tool = entry.get("tool") or entry.get("verifier") or "?"
-    hyp_ref = entry.get("hypothesis_id") or entry.get("hypothesis") or ""
-    key = f"{tool}::{hyp_ref}::{content_hash(entry)}"
-    props = {
-        "tool": tool,
-        "hypothesis_ref": hyp_ref,
-        "verdict": entry.get("verdict") or entry.get("result") or "inconclusive",
-        "evidence": entry.get("evidence") or entry.get("output") or "",
-    }
-    tv_id = _upsert_node(conn, snap_id, "tool_verdict", key, props)
-    if hyp_ref:
-        escaped = _like_escape(hyp_ref)
-        rows = conn.execute(
-            "SELECT id FROM nodes WHERE kind='hypothesis' AND stable_key LIKE ? ESCAPE '\\' AND stale=0 LIMIT 1",
-            (f"hypothesis://{escaped}%",),
-        ).fetchall()
-        for row in rows:
-            _upsert_edge(conn, snap_id, "TESTED_BY", row["id"], tv_id)
 
 
 def _list(value: Any) -> list[dict[str, Any]]:
