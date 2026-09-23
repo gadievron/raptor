@@ -443,3 +443,77 @@ def test_cut_set_contains_actual_cfg_nodes():
     for n in result.cut_set:
         assert isinstance(n, PyCFGNode)
         assert n in set(cfg.nodes())
+
+
+class TestLegacySinkInCutNotTrivial:
+    """Legacy (no value context) path: a sanitizer ON the sink node
+    used to count as a trivial cut — sink(escape(other), tainted)
+    read as fully sanitized one caller-invariant away from
+    enforcement. The cut is re-asked over the non-sink sanitizer
+    nodes; on-path sanitizers keep suppressing."""
+
+    def _cfg(self, src):
+        from core.analysis.cfg_builder import build_python_cfg
+        cfg = build_python_cfg(src, "handle")
+        assert cfg is not None
+        return cfg
+
+    def _sink(self, cfg, call_name):
+        from core.analysis.cfg_builder import PyCFGNode
+        return next(
+            n for n in cfg.nodes()
+            if isinstance(n, PyCFGNode) and call_name in n.calls
+        )
+
+    def test_sanitizer_on_sink_node_refuses_legacy(self):
+        from core.analysis.sanitizer_cut import (
+            VERDICT_NO_SUPPRESS,
+            evaluate_finding,
+        )
+        src = (
+            "def handle(tainted, other):\n"
+            "    render(html.escape(other), tainted)\n"
+        )
+        cfg = self._cfg(src)
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], self._sink(cfg, "render"),
+            cwe="CWE-79", language="python",
+        )
+        assert result.verdict == VERDICT_NO_SUPPRESS
+
+    def test_on_path_sanitizer_still_suppresses_legacy(self):
+        from core.analysis.sanitizer_cut import (
+            VERDICT_SUPPRESS,
+            evaluate_finding,
+        )
+        src = (
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        cfg = self._cfg(src)
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], self._sink(cfg, "render"),
+            cwe="CWE-79", language="python",
+        )
+        assert result.verdict == VERDICT_SUPPRESS
+
+    def test_value_bound_same_node_sanitize_at_sink_unchanged(self):
+        # The VALUE-BOUND path keeps its same-node semantics — this
+        # guard is scoped to the legacy branch only.
+        from core.analysis.sanitizer_cut import (
+            VERDICT_SUPPRESS,
+            evaluate_finding,
+        )
+        src = (
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        cfg = self._cfg(src)
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], self._sink(cfg, "render"),
+            cwe="CWE-79", language="python",
+            source_symbols={"x"}, sink_arg="y",
+        )
+        assert result.verdict == VERDICT_SUPPRESS
