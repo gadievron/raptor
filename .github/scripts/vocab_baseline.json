@@ -1076,8 +1076,14 @@
     "note": "LLM transport-routing env vars carried into LLM child envs (backend-selection flags and AWS profile/region names - infrastructure constants, not a learnable name vocabulary); same class as cc_proxy_hosts._PROVIDER_ENV_KEYS"
   },
   "core/config/__init__.py::SAFE_ENV_ALLOWLIST": {
-    "count": 28,
-    "kind": "literal"
+    "count": 32,
+    "kind": "literal",
+    "note": "subprocess env allowlist (infrastructure env-var names, not a learned name vocabulary); grew by the RAPTOR_SANITIZER_CUT* transport family"
+  },
+  "core/config/__init__.py::TARGET_ENV_STRIP_SET": {
+    "count": 13,
+    "kind": "literal",
+    "note": "target-facing env strip set (trust markers, session credential, framework-identity tells incl. the RAPTOR_SANITIZER_CUT* transport family) - infrastructure env-var names, not a learned name vocabulary; crossed the seed threshold when the sanitizer-cut transport joined"
   },
   "core/config/__init__.py::TOOL_DEPS": {
     "count": 10,
@@ -1760,7 +1766,7 @@
     "kind": "literal"
   },
   "libexec/raptor-seatbelt-shim::_strip": {
-    "count": 10,
+    "count": 15,
     "kind": "literal",
     "note": "target environment-strip tuple mirrored from core.config.TARGET_ENV_STRIP_SET for the isolated macOS shim, not a learned name vocabulary"
   },
