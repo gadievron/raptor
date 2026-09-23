@@ -29,7 +29,7 @@ REPO = Path(__file__).resolve().parents[3]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from core.sandbox import context, landlock as landlock_mod, seccomp as seccomp_mod  # noqa: E402
+from core.sandbox import context, landlock as landlock_mod, probes as probes_mod, seccomp as seccomp_mod  # noqa: E402
 from core.sandbox.profiles import DEFAULT_PROFILE, PROFILES  # noqa: E402
 
 pytestmark = pytest.mark.skipif(
@@ -98,6 +98,16 @@ def _resolved_enforcement(
                           return_value=True),
         mock.patch.object(context, "_make_preexec_fn",
                           side_effect=preexec_stub),
+        # The engage gate runs a REAL `unshare` CLI probe (context
+        # imports it per call, so it dodges the context-namespace
+        # patches above): on userns-denied hosts (stock container
+        # seccomp, restricted-userns distros) it refuses and the
+        # namespace-tier profiles raise before the stubbed backend
+        # ever records their enforcement. Pin it True like every
+        # other availability probe — these tests pin the profile →
+        # enforcement TABLE, not host capability.
+        mock.patch.object(probes_mod, "check_unshare_engages",
+                          return_value=(True, "")),
     ]
     if profiles_table is not None:
         patchers.append(mock.patch.object(context, "PROFILES",
