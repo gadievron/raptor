@@ -118,9 +118,20 @@ def _census() -> tuple[tuple[str, ...], tuple[str, ...]]:
     sites: list[str] = []
     unwrapped: list[str] = []
     for path in _runtime_sources():
+        text = path.read_text(encoding="utf-8", errors="replace")
+        # Token pre-filter before the (expensive) ast.parse: any
+        # construction this census can flag needs an import that
+        # spells the literal module name — `import tree_sitter` or
+        # `from tree_sitter import ...` (aliasing renames the BOUND
+        # name, never the imported one) — so a source without the
+        # token has no reachable site by construction. Cuts the parse
+        # set from the whole runtime tree (~1.5k files) to the few
+        # dozen that mention it; parsing the full tree blew the CI
+        # per-test budget under a loaded worker.
+        if "tree_sitter" not in text:
+            continue
         try:
-            tree = ast.parse(path.read_text(encoding="utf-8",
-                                            errors="replace"))
+            tree = ast.parse(text)
         except SyntaxError:
             continue
         constructions = _parser_constructions(tree)
