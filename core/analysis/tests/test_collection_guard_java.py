@@ -252,6 +252,74 @@ class TestCollectionResolution:
         assert collection_guard_reason(src, 5, "x", "CWE-79") is None
 
 
+class TestStaticFieldBindingIdentity:
+    """The field the guard binds must be the field the runtime
+    receiver reads: same-file lookup restricted to the sink's
+    enclosing class, and a package-visible field needs the same
+    mutation-anywhere proof the cross-file path demands."""
+
+    def test_wrong_class_same_file_field_never_binds(self):
+        # The sink's class A extends B (potentially inheriting a
+        # mutable 'allowed' from another file); unrelated class C in
+        # the SAME file declares a constant one. Whole-file search
+        # bound C's literals while the runtime receiver is B's field.
+        src = ("public class C {\n"
+               "    static final java.util.List<String> allowed ="
+               ' java.util.List.of("safe");\n'
+               "}\n"
+               "class A extends B {\n"
+               "    public void handle(String x, "
+               "java.io.PrintWriter out) {\n"
+               "        if (allowed.contains(x)) {\n"
+               "            out.println(x);\n"
+               "        }\n    }\n}\n")
+        assert 'out.println(x);' in src.splitlines()[6]
+        assert collection_guard_reason(src, 7, "x", "CWE-79") is None
+
+    VULN = ("public class Vuln {\n"
+            "    static final java.util.List<String> allowed ="
+            ' java.util.Arrays.asList("home", "about");\n'
+            "    public void handle(String x, "
+            "java.io.PrintWriter out) {\n"
+            "        if (!allowed.contains(x)) { return; }\n"
+            "        out.println(x);\n    }\n}\n")
+
+    def test_package_visible_field_foreign_mutation_refuses(
+            self, tmp_path):
+        # Arrays.asList is set()-mutable even when the field is
+        # final; a package-visible field is writable from any file.
+        (tmp_path / "Vuln.java").write_text(self.VULN,
+                                            encoding="utf-8")
+        (tmp_path / "Other.java").write_text(
+            "public class Other {\n"
+            "    void poke(String taint) "
+            "{ Vuln.allowed.set(0, taint); }\n"
+            "}\n", encoding="utf-8")
+        assert collection_guard_reason(
+            self.VULN, 5, "x", "CWE-79",
+            source_root=str(tmp_path)) is None
+
+    def test_package_visible_field_without_root_refuses(self):
+        # No tree to scan = no immutability proof for a
+        # package-visible field.
+        assert collection_guard_reason(
+            self.VULN, 5, "x", "CWE-79") is None
+
+    def test_package_visible_field_clean_tree_binds(self, tmp_path):
+        # Control: the mutation scan over a clean tree keeps the
+        # binding (the analysed file itself is not a foreign use).
+        (tmp_path / "Vuln.java").write_text(self.VULN,
+                                            encoding="utf-8")
+        (tmp_path / "Reader.java").write_text(
+            "public class Reader {\n"
+            "    boolean ok(String v) "
+            "{ return Vuln.allowed.contains(v); }\n"
+            "}\n", encoding="utf-8")
+        assert collection_guard_reason(
+            self.VULN, 5, "x", "CWE-79",
+            source_root=str(tmp_path)) is not None
+
+
 class TestDangerModels:
     def test_dangerous_literal_refuses_sqli(self):
         src = ("public class T {\n"
@@ -513,9 +581,12 @@ class TestQualifiedSpellingDiscipline:
     the one the cross-file immutability scan accepts (field position,
     receiver of contains())."""
 
+    # ``private``: a package-visible field additionally requires the
+    # tree-wide mutation scan (source_root) — this class pins the
+    # SAME-FILE occurrence discipline in isolation.
     _TEMPLATE = (
         "public class T {\n"
-        "    static final java.util.List<String> allowed = "
+        "    private static final java.util.List<String> allowed = "
         'java.util.Arrays.asList("safe");\n'
         "    void poison(String evil) { MUTATOR }\n"
         "    public void handle(String x, java.io.PrintWriter out) {\n"
