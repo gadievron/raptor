@@ -30,6 +30,7 @@ from typing import Any
 
 from core.json import load_json, save_json
 
+from ._artifact_lock import run_artifacts_lock
 from .graph_store import BinaryGraphStore, graph_path_for_run, stable_node_id
 from .investigation import _md_escape
 
@@ -629,21 +630,26 @@ def generate_binary_harness(
         **generated,
     }
     save_json(spec_path, spec)
-    checklist = load_json(run_dir / "binary-checklist.json")
-    if isinstance(checklist, dict):
-        plans = [
-            item for item in checklist.get("harness_plans", [])
-            if isinstance(item, dict) and item.get("id") != spec["id"]
-        ]
-        plans.append({
-            "id": spec["id"],
-            "ingress_id": ingress.get("id"),
-            "family": spec["family"],
-            "status": spec["status"],
-            "artifacts": spec["artifacts"],
-        })
-        checklist["harness_plans"] = plans
-        save_json(run_dir / "binary-checklist.json", checklist)
+    # The checklist load → mutate → save window runs under the per-run
+    # artifacts lock: an unserialised concurrent writer (fuzz evidence
+    # fold-back, trace-parser refresh) silently loses this plan record
+    # (save_json's per-file atomicity makes the lost update invisible).
+    with run_artifacts_lock(run_dir):
+        checklist = load_json(run_dir / "binary-checklist.json")
+        if isinstance(checklist, dict):
+            plans = [
+                item for item in checklist.get("harness_plans", [])
+                if isinstance(item, dict) and item.get("id") != spec["id"]
+            ]
+            plans.append({
+                "id": spec["id"],
+                "ingress_id": ingress.get("id"),
+                "family": spec["family"],
+                "status": spec["status"],
+                "artifacts": spec["artifacts"],
+            })
+            checklist["harness_plans"] = plans
+            save_json(run_dir / "binary-checklist.json", checklist)
     graph_path = graph_path_for_run(run_dir)
     if graph_path.exists():
         with BinaryGraphStore(graph_path) as store:
