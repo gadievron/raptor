@@ -73,20 +73,35 @@ class UnsafePostMoveAccess extends VariableAccess {
   }
 }
 
+/**
+ * Holds if location `a` is strictly before location `b` in source
+ * order: by line, then by column.  Ordering by line alone made
+ * same-line sequences invisible (`move(x); use(x);` on one line was
+ * never reported) and refused to credit a same-line reassignment
+ * (`move(x); x = fresh;` before a later use was still flagged).
+ */
+pragma[inline]
+predicate strictlyBefore(Location a, Location b) {
+  a.getStartLine() < b.getStartLine()
+  or
+  a.getStartLine() = b.getStartLine() and
+  a.getStartColumn() < b.getStartColumn()
+}
+
 from MoveCall moveCall, UnsafePostMoveAccess useAccess, Variable v
 where
   v = moveCall.getMovedVariable() and
   v = useAccess.getTarget() and
   // The use is in the same function as the move
   moveCall.getEnclosingFunction() = useAccess.getEnclosingFunction() and
-  // The use is after the move (by source location — conservative)
-  useAccess.getLocation().getStartLine() > moveCall.getLocation().getStartLine() and
+  // The use is after the move (by source position — conservative)
+  strictlyBefore(moveCall.getLocation(), useAccess.getLocation()) and
   // Exclude cases where the variable is reassigned between move and use
   not exists(VariableAccess reassign |
     isReassignmentAccess(reassign) and
     reassign.getTarget() = v and
-    reassign.getLocation().getStartLine() > moveCall.getLocation().getStartLine() and
-    reassign.getLocation().getStartLine() < useAccess.getLocation().getStartLine()
+    strictlyBefore(moveCall.getLocation(), reassign.getLocation()) and
+    strictlyBefore(reassign.getLocation(), useAccess.getLocation())
   ) and
   // The move must execute before the use on every path reaching the
   // use. This replaces a getParentStmt*() equality between the two
