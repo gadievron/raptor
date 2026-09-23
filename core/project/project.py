@@ -1349,9 +1349,9 @@ class ProjectManager:
         # project's journal merges, coverage snapshots, and trust
         # consumption. Best-effort per run — a failure names the dir.
         try:
-            from core.json import load_json as _lj
             from core.json import save_json as _sj
             from core.run.metadata import RUN_METADATA_FILE as _MF
+            from core.run.metadata import _load_meta, _metadata_lock
             _pin_dirs = list(project.get_run_dirs())
             # External pinned runs join the rewrite via the ledgers'
             # surviving WITNESSES (not witnessed records — a witness
@@ -1375,11 +1375,23 @@ class ProjectManager:
             for run_dir in _pin_dirs:
                 marker = run_dir / _MF
                 try:
-                    meta = _lj(marker)
-                    if (isinstance(meta, dict)
-                            and meta.get("project") == old_name):
-                        meta["project"] = new_name
-                        _sj(marker, meta)
+                    # LOCKED read-modify-write, budgeted read, and
+                    # ONLY the project field rewritten. The unlocked
+                    # whole-dict load→save this replaces raced the
+                    # marker's other writers (a concurrent
+                    # complete_run under --force rename, an external
+                    # --out run finishing — the project op lock
+                    # covers only the project dir): the loop's stale
+                    # snapshot wrote back wholesale and resurrected a
+                    # just-completed run to status=running, losing
+                    # its terminal fields — the abandon sweep then
+                    # fail-stamped the genuinely completed run.
+                    with _metadata_lock(marker):
+                        meta = _load_meta(marker)
+                        if (isinstance(meta, dict)
+                                and meta.get("project") == old_name):
+                            meta["project"] = new_name
+                            _sj(marker, meta)
                 except Exception:  # noqa: BLE001 — leave a loud trail
                     logger.warning(
                         "rename: could not re-point the run pin in %s "

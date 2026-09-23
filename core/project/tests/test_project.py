@@ -728,3 +728,104 @@ class TestRegistryMutationLockDiscipline(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.mgr.rename("same", "same")
         self.assertIsNotNone(self.mgr.load("same"))
+
+
+class TestRenamePinRewriteLocked(unittest.TestCase):
+    """The rename marker loop is a read-modify-write on
+    .raptor-run.json — it must serialise on the same per-marker
+    _metadata_lock every other marker writer takes (complete_run,
+    _update_status, write_run_pin). Unlocked, its stale snapshot
+    wrote back wholesale and resurrected a run a racing finaliser had
+    just completed (status back to running, terminal fields lost) —
+    the abandon sweep then fail-stamped the genuinely completed run."""
+
+    def setUp(self):
+        self.tmpdir = TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        base = Path(self.tmpdir.name)
+        self.projects_dir = base / "projects"
+        out_base = base / "out" / "projects"
+        _ob = patch("core.project.project.DEFAULT_OUTPUT_BASE", out_base)
+        _ob.start()
+        self.addCleanup(_ob.stop)
+        self.mgr = ProjectManager(projects_dir=self.projects_dir)
+        self.target = str(base / "code")
+        Path(self.target).mkdir()
+
+    def _project_with_pinned_run(self):
+        from core.json import save_json
+        p = self.mgr.create("old", self.target)
+        run = Path(p.output_dir) / "scan-20260101-000000"
+        run.mkdir(parents=True)
+        save_json(run / ".raptor-run.json", {
+            "version": 2, "command": "scan",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "status": "running", "project": "old",
+        })
+        return run / ".raptor-run.json"
+
+    def test_rewrite_blocks_on_the_marker_lock(self):
+        import fcntl
+        import os
+        import threading
+        import time
+
+        marker = self._project_with_pinned_run()
+        lock_path = marker.with_suffix(marker.suffix + ".lock")
+        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+        done = threading.Event()
+
+        def _rename():
+            # force: a status=running marker reads live and this is
+            # exactly the supported --force-past-live-runs path the
+            # unlocked rewrite raced on. Forced rename keeps the
+            # output dir, so the marker path is stable throughout.
+            self.mgr.rename("old", "new", force=True)
+            done.set()
+
+        moved = marker
+
+        t = threading.Thread(target=_rename, daemon=True)
+        t.start()
+        try:
+            # While a marker writer holds the lock, the rename loop
+            # must not have re-pointed the pin (an unlocked rewrite
+            # lands within milliseconds).
+            deadline = time.monotonic() + 1.0
+            from core.json import load_json
+            while time.monotonic() < deadline:
+                for candidate in (marker, moved):
+                    meta = load_json(candidate)
+                    if meta is not None:
+                        self.assertEqual(
+                            meta.get("project"), "old",
+                            "pin rewritten while another writer held "
+                            "the marker lock — the RMW is not "
+                            "serialised")
+                if done.is_set():
+                    self.fail("rename completed through a held marker lock")
+                time.sleep(0.05)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        t.join(timeout=10)
+        self.assertTrue(done.is_set(), "rename never completed")
+        from core.json import load_json
+        self.assertEqual(load_json(moved).get("project"), "new")
+
+    def test_oversize_marker_left_untouched(self):
+        # The loop's read carries the metadata budget: an oversize
+        # plant is skipped (with the loud per-dir trail), never
+        # parsed wholesale and never rewritten.
+        marker = self._project_with_pinned_run()
+        payload = ('{"project": "old", "status": "running", "pad": "'
+                   + "A" * (2 * 1024 * 1024) + '"}')
+        marker.write_text(payload, encoding="utf-8")
+        self.mgr.rename("old", "new")
+        moved = (Path(str(marker)).parents[2] / "new"
+                 / "scan-20260101-000000" / ".raptor-run.json")
+        self.assertEqual(moved.read_text(encoding="utf-8"), payload,
+                         "oversize marker was parsed and rewritten")
+
