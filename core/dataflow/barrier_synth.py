@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -42,6 +43,22 @@ from core.sarif.parser import SARIF_MAX_BYTES, count_results
 # core.sarif.parser.load_sarif (one constant, aliased for the local
 # call sites).
 _MAX_SARIF_BYTES = SARIF_MAX_BYTES
+
+_SLUG_RE = re.compile(r"[^A-Za-z0-9_-]")
+
+
+def _slug_finding_id(finding_id: str) -> str:
+    """Filesystem/QL-safe projection of a finding id.
+
+    Every in-repo producer emits hash/basename-shaped ids, but the API
+    accepts arbitrary strings: a traversal-shaped id joined onto the
+    work dir writes qlpack scratch outside it, and the id is also
+    embedded into the query's ``@id`` header where a newline would
+    inject QL header lines. Dots are excluded so ``..`` cannot be
+    spelled at all; empty in, ``unnamed`` out."""
+    slug = _SLUG_RE.sub("_", finding_id)
+    return slug or "unnamed"
+
 
 # sink-class -> (customizations module, module name exposing Source/Sink/Sanitizer).
 # Python: each module imports Concepts/RemoteFlowSources/BarrierGuards and
@@ -650,7 +667,10 @@ class _CodeQLAdjudicationOracle:
 
         query_ql = assemble_barrier_query(
             candidate, sink_class=self._proposal.sink_class,
-            query_id=f"raptor/synth/{self._proposal.finding_id}/{n}",
+            query_id=(
+                f"raptor/synth/{_slug_finding_id(self._proposal.finding_id)}"
+                f"/{n}"
+            ),
             language=self._proposal.language,
         )
 
@@ -813,7 +833,8 @@ def synthesize_over_corpus(
     for item in items:
         res = run_synthesis_loop(
             item.proposal, item.after_db, item.before_db,
-            proposer=proposer, work_dir=work_dir / item.proposal.finding_id,
+            proposer=proposer,
+            work_dir=work_dir / _slug_finding_id(item.proposal.finding_id),
             search_path=search_path, codeql_bin=codeql_bin, runner=runner,
             max_attempts=max_attempts,
         )
@@ -1200,7 +1221,12 @@ def _build_prompt(
             ]
         parts += [
             "Prior attempt's QL was:",
-            refine_context.prior_query_ql,
+            # The prior QL is LLM output produced from a prompt that
+            # contained (neutralized) hostile-repo content — an echo
+            # re-enters this round, so it gets the same envelope
+            # treatment as every other untrusted lane above
+            # (idempotent on clean QL).
+            neutralize_tag_forgery(refine_context.prior_query_ql),
         ]
     return "\n".join(parts)
 
