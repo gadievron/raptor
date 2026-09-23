@@ -136,7 +136,9 @@ def test_mark_journals_to_project_index(tmp_path):
     row = rows[0]
     assert (row["file"], row["function"]) == ("a.c", "f1")
     assert row["producer"] == "mark"
-    assert row["model"] == "operator"
+    # Subprocess test runner has no TTY: the invocation-context stamp
+    # records the agent tier, never a hardcoded "operator".
+    assert row["model"] == "agent-mark"
     assert row["verdict"] == "clean"
     assert row["source_hash"]        # target resolvable → hash-aware
 

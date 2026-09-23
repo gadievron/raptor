@@ -192,3 +192,61 @@ class TestMarkUnmarkLocking:
         res = _run(str(run), "--unmark", "src/auth.c:check_pw")
         assert res.returncode == 0, res.stderr
         assert (run / "coverage-llm.json.lock").exists()
+
+
+class TestMarkRowProvenance:
+    """Journal rows stamp who actually minted the assertion.
+
+    model="operator" was hardcoded regardless of caller — an agent's
+    --mark was indistinguishable from an operator's in the durable
+    project index. The stamp now follows the /annotate rule: operator
+    only under an interactive TTY, else "agent-mark".
+    """
+
+    def _load_module(self):
+        import importlib.util
+        from importlib.machinery import SourceFileLoader
+        os.environ.setdefault("_RAPTOR_TRUSTED", "1")
+        loader = SourceFileLoader(
+            "raptor_coverage_summary_prov", str(CLI))
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        return mod
+
+    def test_non_tty_mark_journals_agent_mark(self, tmp_path):
+        proj, run = _project(tmp_path)
+        r = _run(str(run), "--mark", "src/auth.c:check_pw")
+        assert r.returncode == 0, r.stderr
+        rows = [row for row in _index_rows(proj)
+                if row.get("function") == "check_pw"]
+        assert rows and all(
+            row.get("model") == "agent-mark" for row in rows)
+
+    def test_non_tty_unmark_journals_agent_mark(self, tmp_path):
+        proj, run = _project(tmp_path)
+        assert _run(str(run), "--mark",
+                    "src/auth.c:check_pw").returncode == 0
+        assert _run(str(run), "--unmark",
+                    "src/auth.c:check_pw").returncode == 0
+        rows = [row for row in _index_rows(proj)
+                if row.get("function") == "check_pw"]
+        assert rows and all(
+            row.get("model") == "agent-mark" for row in rows)
+        assert all(row.get("verdict") == "error" for row in rows)
+
+    def test_interactive_tty_stamps_operator(self, monkeypatch):
+        import core.annotations.provenance as prov
+        mod = self._load_module()
+        monkeypatch.setattr(
+            prov, "detect_invocation_context",
+            lambda: {"tty": "stdin", "provenance": "interactive-tty"})
+        assert mod._mark_model() == "operator"
+
+    def test_non_tty_stamps_agent_mark(self, monkeypatch):
+        import core.annotations.provenance as prov
+        mod = self._load_module()
+        monkeypatch.setattr(
+            prov, "detect_invocation_context",
+            lambda: {"tty": "none", "provenance": "non-tty"})
+        assert mod._mark_model() == "agent-mark"
