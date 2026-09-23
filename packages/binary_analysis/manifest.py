@@ -8,11 +8,13 @@ reachability or exploitability.
 
 from __future__ import annotations
 
+import logging
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
+from core.binary.addrmap import image_base as _addrmap_image_base
 from core.binary.fingerprint import bucket_imports
 from core.hash import sha256_file
 from packages.fuzzing.target_detector import detect
@@ -26,6 +28,35 @@ if TYPE_CHECKING:
 
 _SCAN_CAP = 64 * 1024 * 1024
 _CHUNK = 1024 * 1024
+
+logger = logging.getLogger(__name__)
+
+
+def _elf_build_id(binary: Path, target_kind: str) -> str:
+    """GNU build-id via the existing extractor, "" when unavailable.
+
+    ELF-only (the note section is an ELF concept — Mach-O/PE probes
+    would spawn a pointless sandboxed readelf per manifest).
+    SandboxSetupError is BaseException by design and is named
+    explicitly: the build-id is enrichment, so a sandbox-refusing
+    host degrades loudly instead of failing the whole intake.
+    """
+    if not target_kind.startswith("elf"):
+        return ""
+    from core.sandbox.errors import SandboxSetupError
+    try:
+        from core.analysis.binary_oracle import read_build_id
+        build_id = read_build_id(binary)
+    except SandboxSetupError as exc:
+        logger.warning(
+            "manifest: sandboxed build-id probe refused (%s) — "
+            "manifest carries no build_id", exc,
+        )
+        return ""
+    except Exception:  # noqa: BLE001 — enrichment only; the manifest stays build_id-free
+        logger.debug("build-id extraction failed", exc_info=True)
+        return ""
+    return build_id or ""
 
 
 @dataclass
@@ -56,6 +87,13 @@ class BinaryManifest:
     bits: int
     binary_format: str
     analysis_depth: str = "full"
+    # Module identity legs for normalized function ids
+    # (core.binary.addrmap): the GNU build-id ("" when the format has
+    # none / extraction failed) and the analysis-time image base
+    # (None = never recorded — fid consumers refuse, they never
+    # substitute 0).
+    build_id: str = ""
+    image_base: int | None = None
     imports: list[str] = field(default_factory=list)
     exports: list[str] = field(default_factory=list)
     # Symbol type per export name (FUNC, OBJ, ...) from the radare2
@@ -80,6 +118,8 @@ class BinaryManifest:
             "bits": self.bits,
             "binary_format": self.binary_format,
             "analysis_depth": self.analysis_depth,
+            "build_id": self.build_id,
+            "image_base": self.image_base,
             "imports": list(self.imports),
             "exports": list(self.exports),
             "export_types": {
@@ -119,6 +159,10 @@ class BinaryManifest:
             bits=int(data.get("bits") or 0),
             binary_format=str(data.get("binary_format") or ""),
             analysis_depth=str(data.get("analysis_depth") or "full"),
+            build_id=str(data.get("build_id") or ""),
+            # Tolerant of every wire shape (int / hex string / absent)
+            # via the single base parser; absent stays None.
+            image_base=_addrmap_image_base(data),
             imports=[str(item) for item in data.get("imports") or []],
             exports=[str(item) for item in data.get("exports") or []],
             export_types={
@@ -404,6 +448,14 @@ def build_manifest(
         bits=int((analysed_slice.bits if analysed_slice else 0) or getattr(context, "bits", 0) or 0),
         binary_format=str(getattr(context, "binary_format", "") or target.kind),
         analysis_depth=str(getattr(context, "analysis_depth", "") or "full"),
+        build_id=_elf_build_id(binary, target.kind),
+        # Only an analysis-RECORDED base is carried; the context's
+        # int default 0 without the recorded flag would mint wrong
+        # identities for non-zero-based binaries.
+        image_base=(
+            int(getattr(context, "image_base", 0))
+            if getattr(context, "image_base_recorded", False) else None
+        ),
         imports=imports,
         exports=exports,
         export_types=export_types,

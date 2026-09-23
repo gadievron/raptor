@@ -152,6 +152,25 @@ def _address(value: Any) -> str:
         return ""
 
 
+def _fid_fragment(manifest: BinaryManifest, address: Any) -> dict[str, str]:
+    """Additive ``{"fid": ...}`` fragment for a function record.
+
+    Empty when the identity cannot be minted honestly — no recorded
+    image base on the manifest, no module anchor, junk address
+    (fail-closed per core.binary.addrmap; consumers fall back to
+    name matching).
+    """
+    if manifest.image_base is None:
+        return {}
+    from core.binary.addrmap import make_fid, module_anchor
+    anchor = module_anchor(
+        build_id=manifest.build_id or None,
+        binary_sha256=manifest.binary_sha256,
+    )
+    fid = make_fid(anchor, address, manifest.image_base)
+    return {"fid": fid} if fid else {}
+
+
 def _fn_id(prefix: str, fn: Any) -> str:
     address = getattr(fn, "address", None)
     if address is not None:
@@ -682,6 +701,7 @@ def _build_entry_points(
             "entry": fn.name,
             "file": manifest.binary_path,
             "address": _address(fn.address),
+            **_fid_fragment(manifest, fn.address),
             "size": fn.size,
             "type": "binary_entry_point_candidate",
             "auth_required": None,
@@ -724,6 +744,7 @@ def _build_surfaces_and_sinks(
             "operation": fn.name,
             "file": manifest.binary_path,
             "address": _address(fn.address),
+            **_fid_fragment(manifest, fn.address),
             "size": fn.size,
             "type": "binary_sink_candidate" if classification.is_sink else "binary_surface_candidate",
             "confidence": "candidate",
@@ -918,6 +939,7 @@ def _build_string_anchors(
             "kind": "string_anchor",
             "name": name,
             "address": _address(addr),
+            **_fid_fragment(manifest, addr),
             "anchor_string_count": count,
             "sample_strings": samples,
             "bound_function_id": _fn_id("BFN", bound) if bound is not None else "",
@@ -1079,6 +1101,12 @@ def _context_map(
         "binary": manifest.binary_path,
         "target_path": manifest.binary_path,
         "image_base": _address(context.image_base),
+        "image_base_recorded": bool(
+            getattr(context, "image_base_recorded", False),
+        ),
+        "content_anchor": str(
+            getattr(context, "content_anchor", "") or "",
+        ),
         "binary_slices": [item.to_dict() for item in manifest.slices],
         "analysis_scope": {
             "selected_arch": manifest.analysed_slice.arch if manifest.analysed_slice else manifest.arch,
@@ -1130,6 +1158,7 @@ def _context_map(
                 "name": fn.name,
                 "file": manifest.binary_path,
                 "address": _address(fn.address),
+                **_fid_fragment(manifest, fn.address),
                 "size": fn.size,
                 "calls_dangerous": list(fn.calls_dangerous),
                 "transitively_reaches_dangerous": list(fn.transitively_reaches_dangerous),
@@ -1150,6 +1179,7 @@ def _context_map(
                 "name": fn.name,
                 "file": manifest.binary_path,
                 "address": _address(fn.address),
+                **_fid_fragment(manifest, fn.address),
                 "size": fn.size,
                 "evidence_tier": EvidenceTier.XREF_BACKED.value,
             }
@@ -2407,6 +2437,10 @@ def _saved_context_for_runtime(manifest: BinaryManifest, context_map: dict[str, 
         bits=manifest.bits,
         binary_format=manifest.binary_format,
         image_base=image_base,
+        # Restored, not re-derived: old maps without the flag stay
+        # unrecorded (fail-closed — no fid minting from a reload).
+        image_base_recorded=bool(context_map.get("image_base_recorded")),
+        content_anchor=str(context_map.get("content_anchor") or ""),
         analysis_depth=str((context_map.get("analysis_scope") or {}).get("analysis_depth") or "full"),
     )
     for item in context_map.get("interesting_functions", []):

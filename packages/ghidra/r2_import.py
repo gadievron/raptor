@@ -23,6 +23,7 @@ from .model import (
     NAME_PROVENANCE_TOOL_SYNTHETIC,
     REDatabase,
     REFunction,
+    _normalise_fid,
     looks_tool_synthetic,
 )
 
@@ -90,6 +91,20 @@ def _classify_r2_name(
     if looks_tool_synthetic(name):
         return name, NAME_PROVENANCE_TOOL_SYNTHETIC, True
     return name, provenance, False
+
+
+def _stamp_fids(db: REDatabase, *, anchor: Optional[str] = None) -> None:
+    """Best-effort normalized-identity minting (core.binary.addrmap).
+
+    r2 records the image base in metadata, so its records earn fids;
+    a missing module anchor (binary unreachable, no serialised
+    anchor) leaves records fid-free rather than mis-keyed.
+    """
+    try:
+        from core.binary.addrmap import stamp_redb_fids
+        stamp_redb_fids(db, anchor=anchor)
+    except Exception:
+        logger.debug("fid stamping failed", exc_info=True)
 
 
 def import_binary_r2(
@@ -191,6 +206,18 @@ def _context_map_to_redb(ctx, binary_path: Path) -> REDatabase:
         for s in ctx.strings_sample
     ]
 
+    # metadata carries image_base only when the analysis RECORDED it
+    # (key absent = no base, matching the objdump importer's shape):
+    # an unconditional copy of the dataclass default 0 would let every
+    # metadata-keyed consumer treat a degraded run's placeholder as a
+    # recorded base.
+    metadata: Dict[str, Any] = {
+        "binary_format": ctx.binary_format,
+        "decompiler": ctx.decompiler,
+        "analysis_depth": ctx.analysis_depth,
+    }
+    if getattr(ctx, "image_base_recorded", False):
+        metadata["image_base"] = ctx.image_base
     db = REDatabase(
         source_tool="r2",
         binary_path=str(binary_path),
@@ -199,12 +226,7 @@ def _context_map_to_redb(ctx, binary_path: Path) -> REDatabase:
         imports=imports,
         exports=exports,
         strings=strings,
-        metadata={
-            "binary_format": ctx.binary_format,
-            "image_base": ctx.image_base,
-            "decompiler": ctx.decompiler,
-            "analysis_depth": ctx.analysis_depth,
-        },
+        metadata=metadata,
     )
 
     logger.info(
@@ -216,6 +238,12 @@ def _context_map_to_redb(ctx, binary_path: Path) -> REDatabase:
         len(exports),
         binary_path.name,
     )
+
+    # Stamp only when the base was RECORDED by a successful metadata
+    # read — a degraded context's int default 0 would mint wrong
+    # identities for a non-zero-based binary.
+    if getattr(ctx, "image_base_recorded", False):
+        _stamp_fids(db, anchor=getattr(ctx, "content_anchor", "") or None)
 
     return db
 
@@ -249,6 +277,9 @@ def _context_map_to_redb_dict(
                 is_external=is_imported,
                 source_tool="r2",
                 name_provenance=provenance,
+                # Serialised context maps carry per-record fids; the
+                # from_dict-grade shape coercion drops junk.
+                fid=_normalise_fid(fn.get("fid")),
             ))
 
     imports = [{"name": name} for name in ctx_dict.get("imports", [])]
@@ -258,7 +289,21 @@ def _context_map_to_redb_dict(
         for s in ctx_dict.get("strings_sample", [])
     ]
 
-    return REDatabase(
+    # Serialised maps carry the recorded flag; only an explicit True
+    # authorises treating the map's image_base as a fact. A degraded
+    # run's flag is False, and a LEGACY map (no flag at all) gives no
+    # authority either: its "0x0" is a serialiser default, and the
+    # stamping anchor is re-derived from the on-disk binary, so an
+    # is-not-False gate minted stable base-0 identities for real
+    # non-PIE binaries.
+    recorded = ctx_dict.get("image_base_recorded") is True
+    metadata: Dict[str, Any] = {
+        "binary_format": ctx_dict.get("binary_format", ""),
+        "decompiler": ctx_dict.get("decompiler", ""),
+    }
+    if recorded:
+        metadata["image_base"] = ctx_dict.get("image_base", 0)
+    db = REDatabase(
         source_tool="r2",
         binary_path=str(binary_path),
         architecture="%s %d-bit" % (
@@ -269,12 +314,15 @@ def _context_map_to_redb_dict(
         imports=imports,
         exports=exports,
         strings=strings,
-        metadata={
-            "binary_format": ctx_dict.get("binary_format", ""),
-            "image_base": ctx_dict.get("image_base", 0),
-            "decompiler": ctx_dict.get("decompiler", ""),
-        },
+        metadata=metadata,
     )
+    if recorded:
+        anchor = ctx_dict.get("content_anchor")
+        _stamp_fids(
+            db,
+            anchor=anchor if isinstance(anchor, str) and anchor else None,
+        )
+    return db
 
 
 def _parse_addr(value) -> int:

@@ -65,6 +65,16 @@ def parse_export(path: Path) -> REDatabase:
     except Exception:
         logger.debug("import-provenance refinement failed", exc_info=True)
 
+    # Mint normalized function identities: the export records the
+    # image base in metadata, so every function gets a base-relative
+    # fid (best-effort — an unreachable binary yields no module
+    # anchor and the records stay fid-free rather than mis-keyed).
+    try:
+        from core.binary.addrmap import stamp_redb_fids
+        stamp_redb_fids(db)
+    except Exception:
+        logger.debug("fid stamping failed", exc_info=True)
+
     return db
 
 
