@@ -760,10 +760,34 @@ class TestMakeDefaultDatabaseCrossCheck:
         # through the recipe context, .LIBPATTERNS only through the
         # -l-search context — and the known echo-raw shape must be
         # EXCLUDED by the discriminator, not counted.
-        assert {"MAKEFLAGS", "GNUMAKEFLAGS", "MAKEOVERRIDES",
-                "VPATH", "GPATH", "MAKEFILES", "IFS",
-                ".EXTRA_PREREQS", ".LIBPATTERNS",
-                ".SHELLFLAGS"} <= expanders, expanders
+        must_fire = {"MAKEFLAGS", "GNUMAKEFLAGS",
+                     "VPATH", "GPATH", "MAKEFILES", "IFS",
+                     ".EXTRA_PREREQS", ".LIBPATTERNS",
+                     ".SHELLFLAGS"}
+        # MAKEOVERRIDES is observation-window-conditional: 4.4
+        # evaluates an env-supplied value at startup (through
+        # MAKEFLAGS' $(MAKEOVERRIDES) reference), inside every probe
+        # context above. 4.3 DOES expand it — but only when a recipe
+        # actually executes (MAKEFLAGS is re-expanded for the child's
+        # environment), and all three probe contexts here are
+        # deliberately non-executing (-f /dev/null startup, -n dry
+        # runs), so on 4.3 the expansion is real yet unobservable to
+        # this oracle's inert-payload window. Corollary: any name
+        # that expands only at real execution is invisible to this
+        # oracle on EVERY version — the oracle never executes
+        # payload-bearing recipes by design. The name stays in the
+        # exec belt either way (the universe non-vacuity above still
+        # requires it), and if the window ever does catch it on a
+        # pre-4.4 make, the uncovered-check below still adjudicates
+        # it.
+        ver = subprocess.run(
+            [make, "--version"], capture_output=True, text=True,
+            timeout=30, env=base_env,
+        ).stdout.splitlines()[:1]
+        m_ver = re.search(r"GNU Make (\d+)\.(\d+)", ver[0]) if ver else None
+        if m_ver and (int(m_ver.group(1)), int(m_ver.group(2))) >= (4, 4):
+            must_fire.add("MAKEOVERRIDES")
+        assert must_fire <= expanders, expanders
         if "MAKE_TMPDIR" in universe:
             assert "MAKE_TMPDIR" not in expanders
         # Negative direction for the dot-name class: env-settable but
