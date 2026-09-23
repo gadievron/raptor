@@ -5,6 +5,14 @@
 // hlist_del). Without the _safe variant, the cursor's ->next is
 // invalid after deletion, corrupting the traversal.
 //
+// The head is an expression metavariable: real call sites
+// overwhelmingly spell it `&obj->list` / `&global_list` (an
+// identifier binding matched none of them and left the rule dark on
+// the dominant shape). The delete arms are anchored to the CURSOR
+// via the iteration member — deleting a different node does not
+// invalidate this traversal, so un-anchored `list_del(...)` arms
+// would flag safe non-cursor deletions at verification grade.
+//
 // Covers CWE-416 / CWE-119: use-after-free via unsafe list deletion.
 // @role: verification
 
@@ -15,7 +23,8 @@
 // silent — the invalidated cursor is only a bug if iteration continues.
 @unsafe_del_fwd exists@
 iterator name list_for_each_entry;
-identifier cursor, head, member, lbl;
+identifier cursor, member, lbl;
+expression head;
 position p_del;
 @@
 
@@ -25,15 +34,9 @@ list_for_each_entry(cursor, head, member)
 (
   list_del@p_del(&cursor->member)
 |
-  list_del@p_del(...)
-|
   list_del_init@p_del(&cursor->member)
 |
-  list_del_init@p_del(...)
-|
   hlist_del@p_del(&cursor->member)
-|
-  hlist_del@p_del(...)
 |
   hlist_del_init@p_del(&cursor->member)
 )
@@ -57,7 +60,8 @@ for _p in p_del:
 
 @unsafe_del_rev exists@
 iterator name list_for_each_entry_reverse;
-identifier cursor, head, member, lbl;
+identifier cursor, member, lbl;
+expression head;
 position p_del;
 @@
 
@@ -67,11 +71,7 @@ list_for_each_entry_reverse(cursor, head, member)
 (
   list_del@p_del(&cursor->member)
 |
-  list_del@p_del(...)
-|
   list_del_init@p_del(&cursor->member)
-|
-  list_del_init@p_del(...)
 )
   ... when != break;
       when != return ...;
@@ -93,7 +93,8 @@ for _p in p_del:
 
 @unsafe_del_hlist exists@
 iterator name hlist_for_each_entry;
-identifier cursor, head, member, lbl;
+identifier cursor, member, lbl;
+expression head;
 position p_del;
 @@
 
@@ -102,8 +103,6 @@ hlist_for_each_entry(cursor, head, member)
   ...
 (
   hlist_del@p_del(&cursor->member)
-|
-  hlist_del@p_del(...)
 |
   hlist_del_init@p_del(&cursor->member)
 )
