@@ -1283,3 +1283,58 @@ def test_relay_scan_default_parents_builds_attribution():
     vs2 = [v for v in audit_source(src)
            if v.kind == "unsanitised_exception_text"]
     assert vs2 and vs2[0].func_name == "outer"
+
+
+import core.security.report_writer_audit as rwa  # noqa: E402
+
+
+class TestWrongSlotSanitiser:
+    """Fence-lane sanitisers (md_fence / sanitise_code) in a heading,
+    table-cell, or bold-label slot pass the flat sanitiser vocabulary
+    while preserving newlines, line-leading '#', and live links —
+    structure forgery through a 'sanitised' interpolation."""
+
+    def test_md_fence_in_heading_slot_flagged(self):
+        src = 'lines.append(f"### {md_fence(f.get(\'title\'))}")'
+        v = rwa.audit_source(src)
+        assert [x.kind for x in v] == ["wrong_slot_sanitiser"]
+        assert "md_fence in heading slot" in v[0].detail
+
+    def test_sanitise_code_in_table_cell_flagged(self):
+        v = rwa.audit_source('row = f"| {sanitise_code(x)} | ok |"')
+        assert any(x.kind == "wrong_slot_sanitiser"
+                   and "table-cell" in x.detail for x in v)
+
+    def test_md_fence_in_bold_label_flagged(self):
+        v = rwa.audit_source('s = f"**{md_fence(x)}**"')
+        assert any(x.kind == "wrong_slot_sanitiser"
+                   and "bold-label" in x.detail for x in v)
+
+    def test_md_fence_inside_fence_not_flagged(self):
+        v = rwa.audit_source('s = f"```\\n{md_fence(x)}\\n```"')
+        assert not any(x.kind == "wrong_slot_sanitiser" for x in v)
+
+    def test_md_inline_in_heading_slot_not_flagged(self):
+        v = rwa.audit_source('s = f"### {md_inline(x)}"')
+        assert not any(x.kind == "wrong_slot_sanitiser" for x in v)
+
+    def test_md_fence_mid_prose_not_flagged(self):
+        v = rwa.audit_source('s = f"see {md_fence(x)} above"')
+        assert not any(x.kind == "wrong_slot_sanitiser" for x in v)
+
+    def test_interpolation_resets_prefix(self):
+        # A prior interpolation makes the line prefix non-constant;
+        # only judge against text the scan can see.
+        v = rwa.audit_source('s = f"{a} {md_fence(x)}"')
+        assert not any(x.kind == "wrong_slot_sanitiser" for x in v)
+
+    def test_allowlistable(self):
+        src = 'lines.append(f"### {md_fence(x)}")'
+        v = rwa.audit_source(src)
+        entry = rwa.AllowlistEntry(
+            file="<snippet>", func_name="<module>",
+            kind="wrong_slot_sanitiser",
+            detail="md_fence in heading slot",
+            audit_note="test entry",
+        )
+        assert rwa.filter_allowlisted(v, (entry,)) == []
