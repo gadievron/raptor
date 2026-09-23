@@ -2829,8 +2829,9 @@ def _print_sca_findings_section(sca_findings, detailed: bool=False) -> None:
 def _finding_label(f) -> str:
     """Location-based label for a finding (terminal-safe: file and
     function names are target-derived)."""
+    from .findings_utils import finding_file
     return sanitise_for_terminal(
-        f"{f.get('file', '?')}:{f.get('function', '?')}:{f.get('line', '?')}",
+        f"{finding_file(f) or '?'}:{f.get('function', '?')}:{f.get('line', '?')}",
         max_len=200,
     )
 

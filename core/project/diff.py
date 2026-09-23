@@ -55,8 +55,14 @@ def _get_status(finding: dict[str, Any]) -> str | None:
 
 
 def _finding_label(finding: dict[str, Any]) -> str:
-    """Human-readable label for a finding: file:function:line."""
-    f = finding.get("file", "?")
+    """Human-readable label for a finding: file:function:line.
+
+    ``finding_file``, not ``finding.get("file")``: orchestrated
+    /agentic results carry ``file_path`` (the helper's docstring names
+    the class) — the bare read labelled every such finding ``?``.
+    """
+    from core.project.findings_utils import finding_file
+    f = finding_file(finding) or "?"
     fn = finding.get("function", "?")
     line = finding.get("line", "?")
     return f"{f}:{fn}:{line}"

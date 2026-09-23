@@ -21,12 +21,18 @@ def _make_project_with_runs(tmpdir, run_specs):
     output_dir = Path(tmpdir) / "project_output"
     output_dir.mkdir()
 
-    for command, name in run_specs:
+    # os.utime, not sleep: explicit strictly-increasing mtimes make
+    # the ordering deterministic on any filesystem timestamp
+    # resolution (the sleep idiom flaked on coarse-resolution mounts
+    # and cost wall time per run spec).
+    import os
+    for i, (command, name) in enumerate(run_specs):
         run_dir = output_dir / name
         start_run(run_dir, command)
         complete_run(run_dir)
         (run_dir / "findings.json").write_text("[]")
-        time.sleep(0.01)  # Ensure different mtimes
+        stamp = time.time() - len(run_specs) + i
+        os.utime(run_dir, (stamp, stamp))
 
     target = str(Path(tmpdir) / "code")
     project = Project(name="test", target=target, output_dir=str(output_dir))

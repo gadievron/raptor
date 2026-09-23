@@ -221,7 +221,8 @@ def _walk_target(target_path: Path) -> list[str]:
         return []
     rels: list[str] = []
     target_path = target_path.resolve()
-    for root, dirs, files in __import__("os").walk(target_path):
+    import os
+    for root, dirs, files in os.walk(target_path):
         # Skip dotted dirs.
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         root_path = Path(root)

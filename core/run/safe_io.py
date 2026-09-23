@@ -51,9 +51,11 @@ def safe_run_mkdir(path: Path | str) -> None:
 
     Behaviour:
       - If *path* does not exist: created via :func:`os.mkdir` with mode
-        ``0o700``. Any umask in effect can only mask away owner bits, which
-        ``0o700`` already lacks beyond the owner triplet — so the resulting
-        mode is always ``0o700`` regardless of the caller's umask.
+        ``0o700``, then ``fchmod``'d to ``0o700`` through an
+        ``O_DIRECTORY|O_NOFOLLOW`` handle — the mkdir mode alone is
+        masked by the caller's umask (a ``0o277`` umask yielded
+        ``0o500``), and a path-based chmod could follow an entry
+        swapped by a parent-writing attacker.
       - If *path* exists as a real directory owned by the current user and
         not world-writable: accepted (no chmod, no chown).
       - Group-writable existing dirs: accepted with a warning logged.
@@ -69,9 +71,21 @@ def safe_run_mkdir(path: Path | str) -> None:
 
     try:
         os.mkdir(path, mode=0o700)
-        return
     except FileExistsError:
         pass
+    else:
+        # The mkdir mode is masked by the process umask (0o277 gave
+        # 0o500) — restore the full owner triplet through a handle on
+        # the directory we just created, so a hostile umask cannot
+        # strip our own write bit and an attacker who can rewrite the
+        # parent cannot redirect a path-based chmod.
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY
+                     | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            os.fchmod(fd, 0o700)
+        finally:
+            os.close(fd)
+        return
 
     st = os.lstat(path)
 
