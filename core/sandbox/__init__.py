@@ -46,11 +46,15 @@ Six independent isolation layers (any combination may be active):
   read-wide. When `restrict_reads=True` is set, reads are also
   restricted (default allowlist: system dirs + target + output).
   Independent of namespaces — works on its own if ns unavailable.
-- Seccomp-bpf (libseccomp): blocklist of escape-vector syscalls.
-  Returns EPERM to the target — graceful failure, actionable
-  diagnostics. Unresolved-architecture syscalls are skipped with a
-  one-shot warning. SCMP_FLTATR_ACT_BADARCH = KILL_PROCESS, set
-  explicitly so 32-bit-compat entry (int 0x80, x32) can't bypass.
+- Seccomp-bpf (libseccomp): blocklist on the SYSCALL axis
+  (escape-vector syscalls; near-zero breakage because tools don't use
+  them), allowlist / deny-by-default on the socket(2)/socketpair(2)
+  FAMILY and TYPE axes (see seccomp.py's module docstring — a family
+  denylist kept failing open one live member at a time). Returns
+  EPERM to the target — graceful failure, actionable diagnostics.
+  Unresolved-architecture syscalls are skipped with a one-shot
+  warning. SCMP_FLTATR_ACT_BADARCH = KILL_PROCESS, set explicitly so
+  32-bit-compat entry (int 0x80, x32) can't bypass.
 
 Integrity guard: `check_landlock_available()` fork-runs a functional
 self-test on first call — installs a ruleset with
@@ -247,12 +251,26 @@ Threat model — what the sandbox DOES protect against:
   AF_INET/AF_INET6 SOCK_DGRAM; proxy resolves target hostnames.
 - Hostname-level egress control — egress proxy enforces allowlist by
   CONNECT host, not just port (unlike Landlock's port-only allowlist).
-- Unix-domain-socket creation (`socket(AF_UNIX, ...)`) — blocked by
-  seccomp, closes the `connect("/var/run/docker.sock")` escape vector.
-  (`socketpair(AF_UNIX)` is NOT blocked — it returns an isolated pair
-  with no external address; blocking broke Rust's std::process spawn
-  without closing any real attack.)
-- AF_PACKET / AF_NETLINK / SOCK_RAW sockets — blocked by seccomp.
+- Unix-domain-socket creation (`socket(AF_UNIX, ...)`) —
+  PROFILE-CONDITIONAL: denied by seccomp on the preexec-only lane
+  (closes the `connect("/var/run/docker.sock")` escape vector on
+  Landlock-only hosts); the mount-ns lane's allow_unix_sockets and
+  the frida profile admit AF_UNIX, with the mount-ns lane's
+  connect(2)s routed through the _unix_scope supervisor
+  (SCMP_ACT_NOTIFY — the supervisor executes the connect on the
+  child's behalf against a per-run scope). (`socketpair(AF_UNIX)`
+  stream/seqpacket is NOT blocked — it returns an isolated pair with
+  no external address; blocking broke Rust's std::process spawn
+  without closing any real attack. The DGRAM shape is conditionally
+  denied — a connected dgram half takes destination-bearing sendto.)
+- Every other socket family, and every socket type outside
+  STREAM/DGRAM/SEQPACKET — denied by construction: socket(2) and
+  socketpair(2) are allowlist-inverted on both the family axis
+  (AF_INET/AF_INET6 + AF_UNIX-per-profile) and the type axis, so
+  AF_PACKET / AF_NETLINK / SOCK_RAW / the SOCK_PACKET remap /
+  kernel-internal transports (SCTP, DCCP, MPTCP, SMC by protocol
+  row) and families no kernel ships yet all get EPERM without
+  enumeration.
 - `ptrace()` of any process — blocked by seccomp in `full`, allowed in
   `debug` profile for gdb/rr use.
 - `process_vm_readv` / `process_vm_writev` cross-process memory access
@@ -495,9 +513,15 @@ What the sandbox does NOT protect against:
   crafted TERM values. Accepted residual — stripping either would
   break legitimate coloured output and shell-invocation paths.
 
-Profiles (downgrade path for tools that need a blocked capability):
+Profiles (the complete profiles.PROFILES table — downgrades for tools
+that need a blocked capability, plus the two ratchets):
 - `full` (default): net-ns + Landlock + seccomp + rlimits.
+- `strict`: full + restrict_reads defaulted True (and fake_home when
+  output= is set) — the fail-closed ratchet.
+- `target_run`: full's layers with the network OPEN.
 - `debug`: full, but seccomp permits ptrace (for gdb/rr).
+- `frida`: network open + Landlock + the frida seccomp profile
+  (AF_UNIX + memfd carve-outs for consented instrumentation).
 - `network-only`: drops Landlock AND seccomp; keeps net-ns.
 - `none`: rlimits only. Last resort.
 Set via `--sandbox <profile>` on the CLI. CLI flag is AUTHORITATIVE
@@ -610,9 +634,11 @@ Module layout:
                    subprocess.Popen(preexec_fn=...). Parent does
                    newuidmap on the child's PID (setuid-root helper,
                    bypasses the /proc/self/uid_map EPERM that direct
-                   unprivileged writes hit). Used when mount-ns is
-                   engaged; bypassed for Landlock-only which stays on
-                   the subprocess+preexec path.
+                   unprivileged writes hit). The ONLY namespace lane:
+                   serves mount-ns AND mountless namespace shapes
+                   (need_unshare routing in context.py). Hosts where
+                   no namespace can engage fall back to the
+                   subprocess+preexec Landlock-only path.
 - observe.py     — result interpretation, blocked-stderr detection,
                    SIGSYS labelling for seccomp kills; ASAN bug_type
                    and attempted_path are sanitised via

@@ -278,11 +278,17 @@ def _scrub_env_image_values(names: Iterable[bytes]) -> None:
     ``/proc/<pid>/environ`` serves exactly that region — so every
     un-exec'd process in the spawn chain re-publishes the invoking
     orchestrator's FULL environment (session credential included) to
-    any reader the kernel's ptrace gate admits. Host processes proper
-    are unreadable from the sandbox user namespace, but the spawn
-    chain's own processes share that namespace, so on any lane where
-    host procfs is visible (skip_pid_ns, operator-accepted degrades)
-    the image is one ``/proc`` read away from the target.
+    any reader the kernel's ptrace gate admits. Host processes
+    proper are unreadable on default-hardened hosts because of YAMA
+    ptrace scope (``ptrace_scope>=1`` refuses the PTRACE_MODE_READ
+    check for same-uid non-descendants — a HOST CONFIGURATION, not a
+    kernel invariant; the user namespace contributes nothing to that
+    verdict, and a ``ptrace_scope=0`` host serves same-kuid environ
+    across the userns mapping). The spawn chain's own processes are
+    our descendants, so the gate passes for them regardless: on any
+    lane where host procfs is visible (skip_pid_ns,
+    operator-accepted degrades) the image is one ``/proc`` read away
+    from the target.
 
     Values are zeroed in place; names survive, so ``getenv()`` of a
     scrubbed name returns the empty string and everything else is
@@ -901,20 +907,23 @@ def _reap_tracer(tracer_pid: int, timeout_s: float = 2.0) -> None:
 
 def _sweep_stale_audit_configs(max_age_s: float = 3600.0) -> None:
     """Remove stale raptor-audit-cfg-* tempfiles in /tmp owned by
-    the current UID, dating from prior crashed runs.
+    the current UID — LEGACY-ORPHAN cleanup only.
 
-    Audit-config tempfiles get unlinked in the normal lifecycle path
-    (BaseException + final finally in run_sandboxed) AND by the tracer
-    itself right after it parses the config. But if both processes get
-    SIGKILL'd mid-audit (OOM, kernel panic, operator's session
-    terminated externally), the tempfile leaks. Accumulation is slow
-    but real on long-lived dev machines.
+    Current spawns never mint these files: the audit config is an
+    anonymous memfd (_evidence_mod.anonymous_fd) passed to the tracer
+    as /proc/self/fd/N, so there is nothing on disk to leak. Files
+    matching the pattern are orphans from runs of older versions
+    (whose mkstemp'd configs leaked when both processes were
+    SIGKILL'd mid-audit). Accumulation was slow but real on
+    long-lived dev machines; the sweep stays until those hosts have
+    cycled their tempdirs.
 
-    Runs on EVERY engaged-audit spawn. That is safe because of the
-    ``max_age_s`` floor: a live config belongs to a concurrent spawn
-    and exists only for the seconds between mkstemp and the tracer
-    parsing (then deleting) it — an hour-old file is unambiguously an
-    orphan. (The floor also fixes a latent race in the previous
+    Runs on EVERY engaged-audit spawn. Safe even against a
+    same-host process still running an OLD version because of the
+    ``max_age_s`` floor: that version's live configs existed only for
+    the seconds between mkstemp and the tracer parsing (then
+    deleting) them — an hour-old file is unambiguously an orphan.
+    (The floor also fixed a latent race in the previous
     once-per-process form, which could delete a concurrent process's
     just-minted config.) Same-UID-only — never touch other operators'
     files. Best-effort: any unlink failure is silently ignored (file
@@ -1649,9 +1658,10 @@ def run_sandboxed(
             # ambiguous "tracer attach failed" minutes later.
             import json as _json
             # sort_keys=True — same rationale as _landlock_audit.py:
-            # the serialised audit config is hashed elsewhere for
-            # cache lookups; stable ordering keeps the identity
-            # contract intact across Python versions.
+            # deterministic serialisation (no consumer hashes or
+            # caches the config; stable ordering keeps the fd
+            # contents byte-comparable across runs for debugging and
+            # any future fingerprint consumer).
             _serialised = _json.dumps(audit_config, sort_keys=True).encode("utf-8")
             try:
                 _audit_config_fd = _evidence_mod.anonymous_fd(_serialised)
@@ -2940,9 +2950,13 @@ def run_sandboxed(
                 # kernel's ptrace gate passes, and its environ image is
                 # the parent's FULL pre-strip environment — session
                 # credential included). Host processes proper stay
-                # unreadable (they are unmapped in our user namespace);
-                # the spawn chain's own processes are the exception the
-                # earlier warn-and-continue rationale missed.
+                # unreadable only where YAMA ptrace scope refuses
+                # same-uid non-descendant reads (ptrace_scope>=1 —
+                # host configuration, not a userns property; a
+                # scope-0 host serves same-kuid environ across the
+                # mapping); the spawn chain's own processes are our
+                # descendants, the exception the earlier
+                # warn-and-continue rationale missed on every host.
                 #
                 # skip_pid_ns runs (gdb) keep the host procfs bind on
                 # purpose: gdb's host-info probe needs the host pid

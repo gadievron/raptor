@@ -1057,8 +1057,10 @@ def _make_landlock_preexec(writable_paths: list, allowed_tcp_ports: list | None 
                         raise LandlockInstallError(msg)
                     os._exit(126)
             finally:
-                # os._exit skips finally, so this only runs on the
-                # success path. Kernel reclaims the fd on _exit.
+                # Runs on the success path AND on the fail_raise arm
+                # (LandlockInstallError propagates through this
+                # finally); os._exit skips it, where the kernel
+                # reclaims the fd anyway.
                 _os_close(fd)
         except Exception:  # noqa: BLE001 — fail-closed by design: ANY exception here means the isolation guarantee is broken
             # Any unexpected exception during Landlock installation

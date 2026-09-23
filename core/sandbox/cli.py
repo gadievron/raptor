@@ -456,8 +456,10 @@ def apply_cli_args(
     if audit:
         state._cli_sandbox_audit = True
         logger.warning(
-            "Sandbox audit mode engaged via --audit "
-            "(workflow runs but enforcement events are logged not blocked)"
+            "Sandbox audit mode engaged via --audit (seccomp denials "
+            "become trace-and-log except the escape-primitive set, "
+            "and the egress proxy logs instead of blocking; Landlock "
+            "filesystem rules stay ENFORCING on Linux)"
         )
     if verbose:
         state._cli_sandbox_audit_verbose = True

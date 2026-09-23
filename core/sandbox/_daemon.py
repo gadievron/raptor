@@ -671,7 +671,7 @@ def _send_capped(
     data: bytes,
     timeout: float,
     drain_cap: int,
-) -> tuple[bytes, bool]:
+) -> tuple[bytes, bool, int]:
     """Bounded, non-blocking send of ``data`` to the target's stdin.
 
     A plain blocking ``proc.stdin.write`` of more than the pipe
