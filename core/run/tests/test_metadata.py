@@ -2062,3 +2062,158 @@ class PromoteChecklistStreamingTest(unittest.TestCase):
             got = set(promoted["files"][0]["items"][0].get(
                 "checked_by", []))
             self.assertEqual(got, {"semgrep", "llm"})
+
+
+class ChecklistInheritanceTargetMatchTest(_ProjectRunCase):
+    """A run only inherits the project-level checklist when the
+    checklist's recorded ``target_path`` matches the run's target —
+    inheriting an inventory built for a different tree silently audits
+    target B against target A's items. Unknowns (target-less starts,
+    legacy checklists without ``target_path``) preserve the historical
+    inheritance: the guard acts only on a positive mismatch."""
+
+    def _project_with_checklist(self, proj, target_path=None):
+        import json as _json
+        proj = Path(proj)
+        proj.mkdir(parents=True, exist_ok=True)
+        cl = {"files": [{"path": "a.c", "lines": 9, "items": [
+            {"name": "f1", "line_start": 1, "line_end": 9}]}]}
+        if target_path is not None:
+            cl["target_path"] = str(target_path)
+        (proj / "checklist.json").write_text(_json.dumps(cl))
+        return proj
+
+    def test_mismatched_target_refuses_symlink_with_warning(self):
+        with TemporaryDirectory() as d:
+            target_a = Path(d) / "target-a"
+            target_b = Path(d) / "target-b"
+            target_a.mkdir()
+            target_b.mkdir()
+            proj = self._project_with_checklist(
+                Path(d) / "proj", target_path=target_a)
+            proj_cl = (proj / "checklist.json").read_bytes()
+            run = proj / "audit-20260923_000000"
+            with self._as_project(proj), \
+                    self.assertLogs("raptor.core.run.metadata",
+                                    level="WARNING") as logs:
+                start_run(run, "audit", target=str(target_b))
+            self.assertFalse((run / "checklist.json").exists(),
+                             "mismatched checklist must not be inherited")
+            joined = "\n".join(logs.output)
+            self.assertIn(str(target_a), joined)
+            self.assertIn(str(target_b), joined)
+            # The project-level original is untouched — it belongs to
+            # target A's runs.
+            self.assertEqual((proj / "checklist.json").read_bytes(),
+                             proj_cl)
+
+    def test_file_target_inside_recorded_tree_is_a_mismatch(self):
+        # The inventory's items describe the TREE, not the file — a
+        # narrower target still gets its own inventory.
+        with TemporaryDirectory() as d:
+            target_a = Path(d) / "target-a"
+            target_a.mkdir()
+            inner = target_a / "a.c"
+            inner.write_text("int f1(void) { return 0; }\n")
+            proj = self._project_with_checklist(
+                Path(d) / "proj", target_path=target_a)
+            run = proj / "audit-20260923_000001"
+            with self._as_project(proj), \
+                    self.assertLogs("raptor.core.run.metadata",
+                                    level="WARNING"):
+                start_run(run, "audit", target=str(inner))
+            self.assertFalse((run / "checklist.json").exists())
+
+    def test_matching_target_inherits_as_before(self):
+        with TemporaryDirectory() as d:
+            target_a = Path(d) / "target-a"
+            target_a.mkdir()
+            proj = self._project_with_checklist(
+                Path(d) / "proj", target_path=target_a)
+            run = proj / "audit-20260923_000002"
+            with self._as_project(proj):
+                start_run(run, "audit", target=str(target_a))
+            self.assertTrue((run / "checklist.json").is_symlink())
+
+    def test_no_recorded_target_inherits_as_before(self):
+        with TemporaryDirectory() as d:
+            target_b = Path(d) / "target-b"
+            target_b.mkdir()
+            proj = self._project_with_checklist(Path(d) / "proj")
+            run = proj / "audit-20260923_000003"
+            with self._as_project(proj):
+                start_run(run, "audit", target=str(target_b))
+            self.assertTrue((run / "checklist.json").is_symlink())
+
+    def test_relative_recorded_target_fails_open(self):
+        # A relative recorded path lost its anchor — it cannot be
+        # compared, so the guard must not fire on it.
+        with TemporaryDirectory() as d:
+            target_b = Path(d) / "target-b"
+            target_b.mkdir()
+            proj = self._project_with_checklist(
+                Path(d) / "proj", target_path="src/tree")
+            run = proj / "audit-20260923_000005"
+            with self._as_project(proj):
+                start_run(run, "audit", target=str(target_b))
+            self.assertTrue((run / "checklist.json").is_symlink())
+
+    def test_symlink_alias_spelling_of_same_target_inherits(self):
+        # resolve() equality is the comparison contract: a checklist
+        # recorded under an ALIAS spelling (symlink) of the run's
+        # target is the SAME tree and must keep inheriting — the
+        # accumulation contract (checked_by carry-forward across
+        # runs) lives on this symlink.
+        import os
+        with TemporaryDirectory() as d:
+            target_a = Path(d) / "target-a"
+            target_a.mkdir()
+            alias = Path(d) / "alias"
+            os.symlink(target_a, alias)
+            proj = self._project_with_checklist(
+                Path(d) / "proj", target_path=alias)
+            run = proj / "audit-20260923_000006"
+            with self._as_project(proj):
+                start_run(run, "audit", target=str(target_a))
+            self.assertTrue((run / "checklist.json").is_symlink())
+
+    def test_trailing_slash_spelling_inherits(self):
+        with TemporaryDirectory() as d:
+            target_a = Path(d) / "target-a"
+            target_a.mkdir()
+            proj = self._project_with_checklist(
+                Path(d) / "proj", target_path=str(target_a) + "/")
+            run = proj / "audit-20260923_000007"
+            with self._as_project(proj):
+                start_run(run, "audit", target=str(target_a))
+            self.assertTrue((run / "checklist.json").is_symlink())
+
+    def test_resolve_runtimeerror_fails_open_no_lifecycle_damage(self):
+        # Python 3.10-3.12 raise RuntimeError from Path.resolve() on
+        # symlink loops (this host resolves loops quietly, so the
+        # error is injected). A planted loop must fail OPEN: the
+        # inheritance is kept, and start_run completes normally — it
+        # must never fail the whole lifecycle start over an
+        # uncomparable path.
+        from unittest import mock
+        sentinel = "/loop-sentinel-recorded"
+        real_resolve = Path.resolve
+
+        def _looping_resolve(self, *a, **k):
+            if str(self) == sentinel:
+                raise RuntimeError(f"Symlink loop from {sentinel!r}")
+            return real_resolve(self, *a, **k)
+
+        with TemporaryDirectory() as d:
+            target_b = Path(d) / "target-b"
+            target_b.mkdir()
+            proj = self._project_with_checklist(
+                Path(d) / "proj", target_path=sentinel)
+            run = proj / "audit-20260923_000008"
+            with self._as_project(proj), \
+                    mock.patch.object(Path, "resolve", _looping_resolve):
+                start_run(run, "audit", target=str(target_b))
+            # Fail-open: inheritance preserved, run metadata intact.
+            self.assertTrue((run / "checklist.json").is_symlink())
+            meta = load_json(run / RUN_METADATA_FILE)
+            self.assertEqual(meta["status"], "running")
