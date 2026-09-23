@@ -39,6 +39,12 @@ from core.run.safe_io import safe_run_mkdir
 from core.sandbox import SANDBOX_ENGAGE_EXIT_CODE, SandboxSetupError, set_pdeathsig
 from core.schema_constants import VULN_TYPE_TO_CWE as _CWE_FROM_VULN_TYPE
 from core.security.cc_trust import check_repo_claude_trust, set_trust_override
+# Module-level on purpose: main()'s error/degrade handlers relay
+# exception text through this helper. A branch-local import makes the
+# name function-local for ALL of main() (the binding only arms on the
+# branch that executed it), so every other handler's relay raises
+# UnboundLocalError exactly when its error path fires.
+from core.security.log_sanitisation import sanitise_for_terminal
 
 logger = get_logger()
 
@@ -2784,7 +2790,6 @@ def main() -> int:
                 print("  Temporary git repo created for scanning")
                 logger.debug("Using temp git repo: %s", temp_repo)
             else:
-                from core.security.log_sanitisation import sanitise_for_terminal
                 print("  ✗ Failed to initialize git repository: "
                       f"{sanitise_for_terminal(str(result.stderr), max_len=300)}",
                       file=sys.stderr)
@@ -3757,7 +3762,6 @@ def main() -> int:
             if oa_result.get("skipped"):
                 # The error text can quote the subprocess's stderr
                 # (target-influenced) — escape before the terminal.
-                from core.security.log_sanitisation import sanitise_for_terminal
                 _oa_err = sanitise_for_terminal(
                     str(oa_result.get("error") or "unknown"), max_len=600)
                 if oa_result.get("hard_error"):
@@ -4843,7 +4847,6 @@ def main() -> int:
         # Free-text output of the aggregate model — the report leg
         # (_build_aggregation_report_section) sanitises the same
         # field; the terminal leg must too (escape + 120-char bound).
-        from core.security.log_sanitisation import sanitise_for_terminal
         summary = sanitise_for_terminal(
             str(aggregation.get("summary") or "").strip(), max_len=120)
         if summary:
