@@ -21,6 +21,7 @@ from pathlib import Path
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
 from core.logging import get_logger
+from core.source import read_text_capped
 from packages.codeql.dataflow_validator import DataflowPath
 
 logger = get_logger()
@@ -168,8 +169,29 @@ class DataflowVisualizer:
                     continue
                 
                 if file_path.exists():
-                    with Path(file_path).open(encoding="utf-8", errors="replace") as f:
-                        lines = f.readlines()
+                    # Capped read (shared 10 MB default), mirroring
+                    # the two siblings that already adopted it
+                    # (autonomous_analyzer.read_vulnerable_code,
+                    # dataflow_validator.read_source_context): this
+                    # runs per node per finding under the analyzer's
+                    # default enable_visualization=True, and a node
+                    # located in a repo's multi-hundred-MB
+                    # generated/blob file was pulled into memory
+                    # each time.
+                    got = read_text_capped(file_path)
+                    if got is None:
+                        node['code_context'] = (
+                            f"Error reading file: {node['file']}"
+                        )
+                        continue
+                    content, truncated = got
+                    lines = content.splitlines(keepends=True)
+                    if truncated and node['line'] > len(lines):
+                        node['code_context'] = (
+                            "Source beyond the capped read "
+                            f"(file truncated at {len(lines)} lines)"
+                        )
+                        continue
 
                     start = max(0, node['line'] - 6)
                     end = min(len(lines), node['line'] + 5)

@@ -163,3 +163,58 @@ class TestAsciiControlScrub:
         assert "\x07" not in text
         assert "‮" not in text
         assert "itize" in text  # content survives, escaped
+
+
+def _flow(repo: Path, rel: str = "a.c", line: int = 2):
+    from packages.codeql.dataflow_validator import DataflowPath, DataflowStep
+    return DataflowPath(
+        source=DataflowStep(file_path=rel, line=line, column=1,
+                            snippet="s", label="source"),
+        sink=DataflowStep(file_path=rel, line=line, column=1,
+                          snippet="x", label="sink"),
+        intermediate_steps=[],
+        sanitizers=[],
+        rule_id="cpp/unbounded-write",
+        message="m",
+    )
+
+
+class TestGenerateHtmlCappedRead:
+    """generate_html adopts the shared capped read like its two
+    siblings — it runs per node per finding under the analyzer's
+    default enable_visualization=True, and pre-fix readlines()
+    pulled a repo's multi-hundred-MB generated/blob file into
+    memory each time."""
+
+    def test_normal_file_context_renders(self, visualizer, tmp_path):
+        (tmp_path / "a.c").write_text(
+            "int a;\nint marker_line_2;\nint c;\n",
+        )
+        out = visualizer.generate_html(_flow(tmp_path), "f1", tmp_path)
+        html = out.read_text(encoding="utf-8")
+        assert "marker_line_2" in html
+
+    def test_truncated_read_annotates_instead_of_loading(
+            self, visualizer, tmp_path, monkeypatch):
+        (tmp_path / "a.c").write_text("int a;\n" * 10)
+        import packages.codeql.dataflow_visualizer as viz_mod
+        monkeypatch.setattr(
+            viz_mod, "read_text_capped",
+            lambda p, *a, **kw: ("int a;\n", True),
+        )
+        out = visualizer.generate_html(
+            _flow(tmp_path, line=5), "f2", tmp_path,
+        )
+        html = out.read_text(encoding="utf-8")
+        assert "capped read" in html
+
+    def test_unreadable_file_degrades(self, visualizer, tmp_path,
+                                      monkeypatch):
+        (tmp_path / "a.c").write_text("int a;\n")
+        import packages.codeql.dataflow_visualizer as viz_mod
+        monkeypatch.setattr(
+            viz_mod, "read_text_capped", lambda p, *a, **kw: None,
+        )
+        out = visualizer.generate_html(_flow(tmp_path), "f3", tmp_path)
+        html = out.read_text(encoding="utf-8")
+        assert "Error reading file" in html
