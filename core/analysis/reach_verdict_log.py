@@ -241,7 +241,14 @@ def summarize(path: Path | None = None) -> dict[str, dict[str, int]]:
 
 def reset(path: Path | None = None) -> None:
     """Clear in-memory counter AND delete the sidecar. Used by tests
-    and the operator-facing ``--reset`` CLI flag."""
+    and the operator-facing ``--reset`` CLI flag.
+
+    The ``.lock`` file is removed too (while held) — reset used to
+    create-and-leave it, littering out/ with lock residue. A
+    concurrent flush that was blocked on the unlinked inode re-creates
+    a fresh lock file and merges into a fresh sidecar — exactly the
+    flush-after-reset outcome the unsynchronised ordering already
+    allowed."""
     with _LOCK:
         _IN_MEMORY.clear()
     p = path or _sidecar_path()
@@ -250,6 +257,7 @@ def reset(path: Path | None = None) -> None:
     with open(lock_path, "a+", encoding="utf-8") as lock_fh:
         fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
         p.unlink(missing_ok=True)
+        lock_path.unlink(missing_ok=True)
 
 
 def _clear_after_fork_in_child() -> None:
