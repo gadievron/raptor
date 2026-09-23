@@ -17323,7 +17323,7 @@ def _hypothesis_to_tool_chain(
         except ImportError:
             pass
         else:
-            if joern_applicable(cwe):
+            if joern_applicable(cwe, file_path):
                 sinks = sinks_for_cwe(cwe)
                 if sinks:
                     chain.append({"type": "joern", "config": {"sinks": sinks}})
@@ -18053,7 +18053,7 @@ def _cwe_fallback_chain(
     if codeql_query:
         chain.append({"type": "codeql", "config": {"query": codeql_query}})
 
-    if joern_applicable(cwe):
+    if joern_applicable(cwe, file_path):
         sinks = sinks_for_cwe(cwe)
         if sinks:
             chain.append({"type": "joern", "config": {"sinks": sinks}})
@@ -18066,7 +18066,7 @@ def _cwe_fallback_chain(
         guard_entry = guard_chain_entry(cwe)
         if guard_entry:
             chain.append(guard_entry)
-        flow_entry = flow_chain_entry(cwe)
+        flow_entry = flow_chain_entry(cwe, file_path)
         if flow_entry:
             chain.append(flow_entry)
 
@@ -20044,6 +20044,7 @@ def _run_tool_chain(
                 from .joern_verify import (
                     extract_flow_endpoints,
                     extract_guard_target,
+                    flow_sanitizer_names,
                     guard_check_kind,
                     run_flow_reachability_check,
                     run_guard_dominance_check,
@@ -20116,6 +20117,15 @@ def _run_tool_chain(
                             sink_call=sink,
                             server=joern_server,
                             timeout=jv_timeout,
+                            # Arms the sanitizer-aware lane only for
+                            # classes whose chain entry carries
+                            # sanitizer_classes (CWE-116); empty for
+                            # every other family.
+                            sanitizer_names=flow_sanitizer_names(
+                                tool_cfg.get("sanitizer_classes") or (),
+                                file_path,
+                                getattr(config, "out_dir", None),
+                            ),
                         )
                     _jv_oc = _classify_sweep_outcome(jv_result)
                     if _jv_oc == "confirmed":
@@ -20995,7 +21005,7 @@ def _proactive_validate(
             if tier_counters:
                 _increment_tier_dict(tier_counters, "smt", "errors")
 
-    if _has_cwe_dispatch and joern_applicable(cwe) and "joern" not in dispatched:
+    if _has_cwe_dispatch and joern_applicable(cwe, outcome.file) and "joern" not in dispatched:
         sinks = sinks_for_cwe(cwe)
         pre_hit = False
         if sinks and evidence_index:
