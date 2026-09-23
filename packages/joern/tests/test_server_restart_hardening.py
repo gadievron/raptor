@@ -448,3 +448,36 @@ class TestCpgLoadEpoch:
              patch.object(srv, "_verify_cpg_binding", return_value=True):
             assert srv.import_code(tmp_path, timeout=5)
         assert srv.cpg_load_epoch == 1
+
+
+class TestNoRestartSeam:
+    """query(no_restart=True) opts a side-channel query out of the
+    timeout-triggered restart: only queries whose timeout evidences a
+    stuck REPL may wield the recovery ladder."""
+
+    @staticmethod
+    def _timeout_post(srv):
+        def fake_post(query_str, *, timeout=30):
+            srv._last_post_error = f"query timed out after {timeout}s"
+            return None
+        return fake_post
+
+    def test_timeout_with_no_restart_skips_restart(self):
+        srv = JoernServer()
+        srv._cpg_loaded = True
+        with patch.object(srv, "_post_sync",
+                          side_effect=self._timeout_post(srv)), \
+             patch.object(srv, "restart") as restart:
+            result = srv.query("cpg.method.name.l", timeout=1,
+                               no_restart=True)
+        assert restart.call_count == 0
+        assert any("timed out" in e for e in result.errors)
+
+    def test_timeout_without_no_restart_still_restarts(self):
+        srv = JoernServer()
+        srv._cpg_loaded = True
+        with patch.object(srv, "_post_sync",
+                          side_effect=self._timeout_post(srv)), \
+             patch.object(srv, "restart") as restart:
+            srv.query("cpg.method.name.l", timeout=1)
+        assert restart.call_count == 1

@@ -379,6 +379,7 @@ def joern_function_in_cpg(
     timeout: int = 10,
     *,
     file_path: str | None = None,
+    errors_out: list | None = None,
 ) -> bool | None:
     """Whether the loaded CPG actually MODELS *function_name*.
 
@@ -399,6 +400,12 @@ def joern_function_in_cpg(
     ``endsWith("/" + path)``) so relative- and absolute-rooted
     imports both bind; a layout that matches neither degrades to
     False — the fail-safe direction (skip, never a refutation).
+
+    ``errors_out``: optional list receiving the probe's transport
+    failure detail when the answer is None — a None is otherwise
+    AMBIGUOUS between "REPL busy, probe timed out" (contention — the
+    caller must not book channel sickness) and "transport broken /
+    echo unparseable" (a genuine channel error).
     """
     try:
         from packages.joern.runner import (
@@ -479,13 +486,30 @@ def joern_function_in_cpg(
             f'"{nonce}:" + raptorCov.nonEmpty\n'
         )
     try:
-        result = query_fn(query, timeout=timeout, check_length=False)
-    except Exception:  # noqa: BLE001 — degrade to "unanswered", never crash
+        try:
+            # no_restart: the probe is a cheap side-channel query and
+            # must not wield query()'s timeout-triggered restart — a
+            # probe queued behind a sibling's minutes-long taint query
+            # times out on a HEALTHY server, and the restart would
+            # SIGKILL the shared multi-GB JVM mid-run and destroy the
+            # sibling's in-flight evidence.
+            result = query_fn(query, timeout=timeout, check_length=False,
+                              no_restart=True)
+        except TypeError:
+            # Duck-typed server without the no_restart seam. The probe
+            # is a read-only query, so the plain re-post is idempotent;
+            # a real JoernServer never lands here.
+            result = query_fn(query, timeout=timeout, check_length=False)
+    except Exception as exc:  # noqa: BLE001 — degrade to "unanswered", never crash
         logger.debug("joern coverage probe failed for %s",
                      function_name, exc_info=True)
+        if errors_out is not None:
+            errors_out.append(f"{type(exc).__name__}: {exc}")
+        probe_timed_out = "timed out" in str(exc).lower()
         answer: bool | None = None
     else:
         raw = str(getattr(result, "raw_output", "") or "")
+        probe_timed_out = False
         if f"{nonce}:true" in raw:
             answer = True
         elif f"{nonce}:false" in raw or f"{nonce}:otherfile" in raw:
@@ -494,11 +518,28 @@ def joern_function_in_cpg(
             answer = False
         else:
             answer = None
-    if cache is not None:
+            result_errors = list(getattr(result, "errors", None) or [])
+            probe_timed_out = any(
+                "timed out" in str(e).lower() for e in result_errors
+            )
+            if errors_out is not None:
+                if result_errors:
+                    errors_out.extend(str(e) for e in result_errors)
+                else:
+                    errors_out.append("unparseable probe echo")
+    if cache is not None and not probe_timed_out:
         # None is memoised too: an unanswerable transport does not
         # heal within one CPG load, and re-probing pays a full REPL
         # round trip per silent hypothesis on the shared
         # single-threaded server. The memo dies with the CPG (re)load.
+        # EXCEPT timeout-classified Nones: with the no_restart seam a
+        # probe timeout no longer bumps the load epoch via a restart,
+        # so memoising it would let ONE contention timeout silence
+        # this function's refutation lane until a reload that may
+        # never come. Contention clears on its own — re-ask next
+        # time. (No restart-thrash risk either way: the probe never
+        # restarts, and re-asking is one bounded round trip per
+        # hypothesis, the pre-memo cost.)
         cache[cache_key] = answer
     return answer
 
