@@ -90,3 +90,30 @@ def test_cc_retry_not_run_restores_heuristic_script(tmp_path):
     # "keeping heuristic" must mean the heuristic script is on disk,
     # not the unmeasured CC-flag one.
     assert writes[-1] == _HEURISTIC_WRITE
+
+
+def test_generated_script_escape_check_is_path_boundary(tmp_path):
+    """An in-repo file NAMED `..weird.c` is not an escape: the
+    generated script's realpath containment check must compare on the
+    path boundary (`..` or `../…`), not a `..` string prefix."""
+    from unittest import mock
+
+    (tmp_path / "main.c").write_text("int main(void){return 0;}\n")
+    (tmp_path / "..weird.c").write_text("int f(void){return 1;}\n")
+    detector = BuildDetector(tmp_path)
+    with mock.patch.object(detector, "_dry_run", return_value=[]):
+        bs = detector.synthesise_build_command("cpp")
+    assert bs is not None
+    # command = "<python> <script-path>"; the script is the last token.
+    script = Path(bs.command.split(" ", 1)[1])
+    try:
+        content = script.read_text()
+        assert "rel == '..' or rel.startswith('..' + os.sep)" in content
+        assert "if rel.startswith('..'):" not in content
+    finally:
+        import shutil
+        for p in bs.cleanup_paths:
+            if Path(p).is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            elif Path(p).exists():
+                Path(p).unlink()

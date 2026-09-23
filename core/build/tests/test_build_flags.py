@@ -673,3 +673,32 @@ class TestModernKconfigSpellings:
             "CONFIG_GCC_PLUGIN_RANDSTRUCT=y\n")
         got = dict(extract_flags(tmp_path).relevant_configs)
         assert got.get("CONFIG_GCC_PLUGIN_RANDSTRUCT") is True
+
+
+class TestMakefileAssignmentGrammar:
+    def test_modern_assignment_operators_recognised(self, tmp_path):
+        # GNU make ::= (POSIX) and 4.4's :::= dropped whole CFLAGS
+        # lines from the scan.
+        (tmp_path / "Makefile").write_text(
+            "CFLAGS ::= -D_FORTIFY_SOURCE=2\n"
+            "CXXFLAGS :::= -fstack-protector-strong\n",
+        )
+        ctx = extract_flags(tmp_path)
+        assert ctx.fortify_source_level == 2
+        assert ctx.stack_protector_level == "strong"
+
+    def test_backslash_continuations_join(self, tmp_path):
+        # make splices continuation lines; the scan used to keep only
+        # the first physical line of a continued assignment.
+        (tmp_path / "Makefile").write_text(
+            "CFLAGS = -O2 \\\n\t-fstack-protector-strong\n",
+        )
+        assert extract_flags(tmp_path).stack_protector_level == "strong"
+
+    def test_lowercase_makefile_name_recognised(self, tmp_path):
+        # make's own lookup order includes `makefile`; the name set
+        # had drifted against the detector's make entry.
+        (tmp_path / "makefile").write_text(
+            "CFLAGS = -fstack-protector\n",
+        )
+        assert extract_flags(tmp_path).stack_protector_level == "weak"

@@ -36,6 +36,12 @@ logger = get_logger()
 # worst-case walk bounded.
 _MAX_WALK_FILES = 100_000
 
+# Companion cap on DIRECTORIES traversed: the file cap alone does not
+# bound the walk — an empty-directory farm collects zero files while
+# stat()ing forever. Same trade-off shape as the file cap (too low
+# drops real deep trees; 200k dirs is far above legitimate targets).
+_MAX_WALK_DIRS = 200_000
+
 
 def _walk_files(
     root: Path,
@@ -56,11 +62,23 @@ def _walk_files(
 
     ``suffixes`` filters by case-sensitive ``str.endswith`` — the same
     matches ``rglob(f"*{{suffix}}")`` produced for regular files. The
-    result is capped at ``max_files`` with a warning, so a hostile
-    file farm can't monopolise detection either.
+    result is capped at ``max_files`` and the traversal itself at
+    ``_MAX_WALK_DIRS`` (the file cap bounds files COLLECTED, not
+    directories visited — an empty-dir farm walks free of it), each
+    with a warning, so a hostile file farm can't monopolise detection
+    either way.
     """
     out: list[Path] = []
+    dirs_seen = 0
     for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
+        dirs_seen += 1
+        if dirs_seen > _MAX_WALK_DIRS:
+            logger.warning(
+                "Directory enumeration under %s hit the %d-dir cap — "
+                "remaining subtrees are not considered for build "
+                "detection", root, _MAX_WALK_DIRS,
+            )
+            return out
         for name in filenames:
             if suffixes is not None and not name.endswith(suffixes):
                 continue
@@ -589,16 +607,31 @@ class BuildDetector:
 
     @staticmethod
     def _has_c_header(path: Path) -> bool:
-        """True if ``path`` contains at least one .h/.hpp file
-        recursively. Quick existence check — does not enumerate.
-        Never follows directory symlinks (a hostile ``include`` tree
-        must not walk the host filesystem)."""
+        """True if ``path`` contains at least one .h/.hpp/.hh file.
+
+        Walks until the FIRST hit (early exit, so a real include tree
+        answers after one directory) but the walk itself is bounded by
+        ``_MAX_WALK_DIRS`` — the early exit is no bound at all on a
+        header-free empty-dir farm. Suffix match is case-sensitive,
+        the same rule ``_walk_files`` applies when the missing-header
+        scan collects existing header NAMES: a case-insensitive match
+        here fed dirs whose headers the case-sensitive collection then
+        missed. Never follows directory symlinks (a hostile
+        ``include`` tree must not walk the host filesystem)."""
+        dirs_seen = 0
         try:
             for _dirpath, _dirnames, filenames in os.walk(
                 path, followlinks=False,
             ):
+                dirs_seen += 1
+                if dirs_seen > _MAX_WALK_DIRS:
+                    logger.warning(
+                        "Header probe under %s hit the %d-dir cap — "
+                        "treating as header-free", path, _MAX_WALK_DIRS,
+                    )
+                    return False
                 for name in filenames:
-                    if name.lower().endswith((".h", ".hpp", ".hh")):
+                    if name.endswith((".h", ".hpp", ".hh")):
                         return True
         except OSError:
             return False
@@ -636,12 +669,18 @@ class BuildDetector:
             except OSError:
                 continue
 
-        # Pattern: #include "something_config.h" OR #include "config.h"
+        # Pattern: #include "something_config.h" OR #include "config.h".
+        # Case-SENSITIVE end to end: the existing-header name set is
+        # collected case-sensitively, so an IGNORECASE grep here
+        # reported "missing" for spellings the collection deliberately
+        # does not track (C itself is case-sensitive; the lowercase
+        # `#include` keyword and `*config.h` convention are the real
+        # shapes).
         pattern = re.compile(
             # Horizontal-only indent — the MULTILINE ^\s* idiom is
             # quadratic on blank-line runs in scanned source.
             r'^[^\S\n]*#\s*include\s*"([^"]*config(?:_[a-z0-9_]+)?\.h)"',
-            re.MULTILINE | re.IGNORECASE,
+            re.MULTILINE,
         )
         seen_missing = set()
         sources: list[Path] = []
@@ -1074,9 +1113,18 @@ class BuildDetector:
                 if self._SAFE_FLAG_TOKEN.match(value):
                     safe.extend([tok, value])
                 else:
+                    # Fail-closed by design: the charset excludes
+                    # shell/Make metacharacters (parens, quotes,
+                    # non-ASCII), which also drops LEGITIMATE values —
+                    # e.g. a repo-root -sourcepath under a checkout
+                    # path containing parentheses. Widening the class
+                    # would let those characters reach generated build
+                    # scripts; the trusted escape hatch is the whole
+                    # point of the hint below.
                     logger.warning(
-                        "Rejected unsafe compiler flag pair: %s %s",
-                        tok, value)
+                        "Rejected unsafe compiler flag pair: %s %s "
+                        "(operators needing it: /project set "
+                        "build-command)", tok, value)
                 i += 2
                 continue
             if not tok.startswith("-"):
@@ -1512,8 +1560,10 @@ for i, src in enumerate(FILES):
 
     # SECURITY: resolve symlinks and reject paths that escape the repo root.
     # Prevents writing object files outside the build directory via symlinks.
+    # Path-boundary compare: an in-repo file NAMED `..weird.c` is not
+    # an escape (rel must be `..` itself or start with `../`).
     rel = os.path.relpath(os.path.realpath(src), REPO_ROOT)
-    if rel.startswith('..'):
+    if rel == '..' or rel.startswith('..' + os.sep):
         fail += 1
         continue
 

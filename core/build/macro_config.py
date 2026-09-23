@@ -133,8 +133,11 @@ class MacroConfig:
 
 # A -D token: ``-DNAME`` | ``-DNAME=value``. Space-separated ``-D NAME`` is
 # handled by the tokenizer (a lone ``-D`` consumes the next token).
-_D_INLINE = re.compile(r"^-D(\w+)(?:=(.*))?$")
-_U_INLINE = re.compile(r"^-U(\w+)$")
+# ASCII identifier class: C preprocessor macro names are ASCII; a
+# Unicode-wide \w accumulated spellings the preprocessor never joins
+# on (fail-safe direction, but noise in the allowlist).
+_D_INLINE = re.compile(r"^-D(\w+)(?:=(.*))?$", re.ASCII)
+_U_INLINE = re.compile(r"^-U(\w+)$", re.ASCII)
 
 
 def _tokens(entry: dict) -> list[str]:
@@ -164,12 +167,12 @@ def _scan_tokens(tokens: list[str], defined: dict[str, str],
         is_undef = False
         if tok == "-D" and i + 1 < n:
             i += 1
-            m = re.match(r"^(\w+)(?:=(.*))?$", tokens[i])
+            m = re.match(r"^(\w+)(?:=(.*))?$", tokens[i], re.ASCII)
             if m:
                 name, val = m.group(1), m.group(2)
         elif tok == "-U" and i + 1 < n:
             i += 1
-            if re.match(r"^\w+$", tokens[i]):
+            if re.match(r"^\w+$", tokens[i], re.ASCII):
                 name, is_undef = tokens[i], True
         else:
             md = _D_INLINE.match(tok)
@@ -186,7 +189,10 @@ def _scan_tokens(tokens: list[str], defined: dict[str, str],
             else:
                 if name in undefined:
                     conflict.add(name)
-                defined[name] = "1" if val is None or val == "" else val
+                # -DNAME → "1" (C semantics); -DNAME= → the EMPTY
+                # string — recording "1" made value_of() misread an
+                # explicitly-empty macro as truthy.
+                defined[name] = "1" if val is None else val
         i += 1
 
 
