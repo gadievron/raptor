@@ -1047,7 +1047,9 @@ def semgrep_rule_for_cwe(cwe: str) -> str | None:
     return entry.get("semgrep")
 
 
-def resolve_semgrep_rule_for_cwe(cwe: str, file_path: str) -> str | None:
+def resolve_semgrep_rule_for_cwe(
+    cwe: str, file_path: str, language: str | None = None,
+) -> str | None:
     """Absolute on-disk semgrep rule path for a CWE's rule, or None.
 
     Language-gated: when the entry declares ``semgrep_langs`` and the
@@ -1059,6 +1061,15 @@ def resolve_semgrep_rule_for_cwe(cwe: str, file_path: str) -> str | None:
     dropped loudly once per name (the resolve_cocci_rules_for_cwe
     precedent: a bare table name resolves against the process CWD at
     scan time, where it never exists).
+
+    ``language`` is the inventory's recorded language for the file:
+    for extensions no table maps, the content probe's verdict (a PHP
+    plugin "module" file, an extensionless script) may satisfy the
+    gate where the extension cannot. The executed sweep honours the
+    same hint with ``--scan-unknown-extensions``, so a leg admitted
+    this way is actually scanned — the gate stays honest in both
+    directions (a probed non-matching language still drops the leg,
+    and mapped extensions never consult the hint).
     """
     entry = lookup(cwe)
     if entry is None:
@@ -1068,10 +1079,15 @@ def resolve_semgrep_rule_for_cwe(cwe: str, file_path: str) -> str | None:
         return None
     langs = entry.get("semgrep_langs") or ()
     if langs:
-        from .hypothesis_mapping import semgrep_language_for
+        from .hypothesis_mapping import (
+            semgrep_language_for,
+            semgrep_probed_language,
+        )
 
         if semgrep_language_for(file_path or "") not in langs:
-            return None
+            probed = semgrep_probed_language(file_path or "", language)
+            if probed is None or probed not in langs:
+                return None
     path = Path(name)
     if not path.is_absolute():
         path = _SEMGREP_RULES_DIR / name

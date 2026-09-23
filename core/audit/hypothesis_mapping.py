@@ -150,6 +150,40 @@ def semgrep_language_for(file_path: str) -> str:
     return _SEMGREP_LANG_BY_EXT.get(ext, "generic")
 
 
+# Every semgrep language key the extension table can emit — the
+# universe a content-probed language hint may resolve into.
+_SEMGREP_PROBEABLE_LANGS = frozenset(_SEMGREP_LANG_BY_EXT.values())
+
+
+def semgrep_probed_language(
+    file_path: str, language: str | None,
+) -> str | None:
+    """Semgrep language key licensed by an inventory content probe for
+    a file whose extension the table cannot map, or None.
+
+    ``language`` is the inventory's recorded language for the file —
+    content-probed when the extension says nothing (PHP plugin
+    "module" files lead with their open tag, extensionless scripts
+    carry a shebang). The probe only speaks for files the extension
+    table does NOT map: for mapped extensions the table stays
+    authoritative, so behaviour on ordinary targets cannot change.
+    Languages outside the table's value set (perl, shell, asm, ...)
+    yield None — there is no semgrep language key to scan them as.
+
+    Consumers pair a non-None answer with semgrep's
+    ``--scan-unknown-extensions`` flag: without it the engine's own
+    extension-based target selection silently SKIPS such a file
+    (``paths.scanned`` stays empty), so a language-keyed rule could
+    never produce a scanned-target witness there in either direction.
+    """
+    if not language:
+        return None
+    if Path(file_path).suffix.lower() in _SEMGREP_LANG_BY_EXT:
+        return None
+    lang = language.lower()
+    return lang if lang in _SEMGREP_PROBEABLE_LANGS else None
+
+
 def hypothesis_to_semgrep_rule(hypothesis: str, file_path: str) -> str | None:
     """Generate a Semgrep YAML rule from a hypothesis string.
 

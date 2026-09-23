@@ -53,7 +53,7 @@ def _patch_confirming_chain(
     """Stub every mechanical channel so the chain confirms *receipts*."""
     monkeypatch.setattr(
         orch_mod, "_hypothesis_to_tool_chain",
-        lambda hyp, f, cwe="": ["fake-rule"],
+        lambda hyp, f, cwe="", language=None: ["fake-rule"],
     )
     monkeypatch.setattr(orch_mod, "_read_raw_source", lambda *a, **kw: "src")
     monkeypatch.setattr(
@@ -177,7 +177,7 @@ class TestIncrementalTick:
         # No static channel binds the hypothesis.
         monkeypatch.setattr(
             orch_mod, "_hypothesis_to_tool_chain",
-            lambda hyp, f, cwe="": [],
+            lambda hyp, f, cwe="", language=None: [],
         )
 
         synth_calls: list = []

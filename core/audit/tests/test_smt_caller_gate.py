@@ -764,7 +764,7 @@ class TestCleanRefutedCallerGate:
         )
         monkeypatch.setattr(
             orch, "_hypothesis_to_tool_chain",
-            lambda m, f, cwe=None: [{"type": "semgrep", "config": {}}],
+            lambda m, f, cwe=None, language=None: [{"type": "semgrep", "config": {}}],
         )
         monkeypatch.setattr(orch, "_is_detection_only", lambda t: False)
         _promote_clean_refuted(result, config, checklist=checklist)

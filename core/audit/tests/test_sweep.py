@@ -262,6 +262,84 @@ class TestScannedWitnessGate:
         assert len(result.matches) == 1
 
 
+class TestFilesFailedGate:
+    """A target the scan FAILED to parse analysed nothing — the sweep
+    must return 'error', never 'refuted', even when the file also
+    appears in the scanned witness (semgrep's PartialParsing warn
+    covers exactly the region a syntax error hides: the file lands in
+    paths.scanned AND errors[], and zero findings over the unparsed
+    region would read as a licensed refutation — planting a syntax
+    error next to a finding suppressed it)."""
+
+    def _sweep(self, tmp_path, monkeypatch, semgrep_result):
+        import packages.semgrep.runner as runner_mod
+        from core.audit.sweep import run_semgrep_sweep
+
+        (tmp_path / "test.c").write_text(
+            "int foo(char *p) { return p[0]; }\n",
+        )
+        monkeypatch.setattr(runner_mod, "is_available", lambda: True)
+        monkeypatch.setattr(
+            runner_mod, "run_rule", lambda *a, **kw: semgrep_result,
+        )
+        return run_semgrep_sweep(
+            target_path=tmp_path,
+            file_path="test.c",
+            function_name="foo",
+            rule_config="rule.yaml",
+        )
+
+    def test_dict_entry_is_error_not_refuted(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # The standard runner emits {"path", "reason"} dicts
+        # (packages.semgrep.models parse_json_output) — a str() of
+        # the dict never matched the path, so the gate never fired.
+        from packages.semgrep.models import SemgrepResult
+
+        result = self._sweep(tmp_path, monkeypatch, SemgrepResult(
+            name="r", config="rule.yaml", target="test.c",
+            findings=[], errors=[], returncode=0,
+            files_examined=[str(tmp_path / "test.c")],
+            files_failed=[{
+                "path": str(tmp_path / "test.c"),
+                "reason": "PartialParsing",
+            }],
+        ))
+        assert result.outcome == "error"
+        assert any("files_failed" in e for e in result.errors)
+
+    def test_string_entry_tolerated(self, tmp_path: Path, monkeypatch):
+        # Injected runners may emit bare path strings.
+        from packages.semgrep.models import SemgrepResult
+
+        result = self._sweep(tmp_path, monkeypatch, SemgrepResult(
+            name="r", config="rule.yaml", target="test.c",
+            findings=[], errors=[], returncode=0,
+            files_examined=[str(tmp_path / "test.c")],
+            files_failed=[str(tmp_path / "test.c")],
+        ))
+        assert result.outcome == "error"
+
+    def test_unrelated_failed_file_keeps_refutation(
+        self, tmp_path: Path, monkeypatch,
+    ):
+        # A parse failure elsewhere in the invocation says nothing
+        # about THIS witnessed target.
+        from packages.semgrep.models import SemgrepResult
+
+        result = self._sweep(tmp_path, monkeypatch, SemgrepResult(
+            name="r", config="rule.yaml", target="test.c",
+            findings=[], errors=[], returncode=0,
+            files_examined=[str(tmp_path / "test.c")],
+            files_failed=[{
+                "path": str(tmp_path / "other.c"),
+                "reason": "PartialParsing",
+            }],
+        ))
+        assert result.outcome == "refuted"
+
+
 class TestJoernErrorSemantics:
     """Joern leg of the same class: an errored taint query (timeout, server
     crash, validation reject) returns no flows — that must classify as

@@ -599,6 +599,17 @@ def _target_in_failed_files(
     """Whether the sweep's single target file is in semgrep's
     ``files_failed`` list (parsed from --json-output).
 
+    Entries are ``{"path", "reason"}`` dicts from the runner's
+    --json-output parse (string entries tolerated for injected
+    runners) — the same shape :func:`_fixture_in_failed_files` reads.
+    A ``str(entry)`` here compared the dict's repr against path
+    strings, so the parse-failure gate never fired for the standard
+    runner: a partially-parsed target (semgrep's PartialParsing warn
+    covers exactly the region a syntax error hides) still appeared in
+    ``paths.scanned`` and a zero-finding scan of it read as a
+    licensed refutation — planting a syntax error next to a finding
+    suppressed it.
+
     Semgrep may report the path as passed on the command line
     (absolute), or relative — compare both shapes.  ``files_examined``
     being empty is deliberately NOT treated as a tool error here: the
@@ -610,7 +621,7 @@ def _target_in_failed_files(
     """
     full_str = str(full_path)
     for entry in files_failed or []:
-        s = str(entry)
+        s = entry.get("path", "") if isinstance(entry, dict) else str(entry)
         if not s:
             continue
         if s in (full_str, file_path) or s.endswith("/" + file_path):
@@ -653,6 +664,7 @@ def run_semgrep_sweep(
     line_end: int = 0,
     hypothesis: str = "",
     rule_keyword: str = "",
+    language: str | None = None,
 ) -> SweepResult:
     """Run a semgrep rule against a single file and classify matches.
 
@@ -672,6 +684,19 @@ def run_semgrep_sweep(
             Enables the negative-control check — a rule that also matches
             the keyword's guarded fixture is a presence detector and is
             capped at "inconclusive".
+        language: The file's canonical language when the caller already
+            knows it (inventory-stamped; content-probed for extensions
+            no table maps). When the probe licenses a semgrep language
+            key for an unmapped extension AND the rule's own
+            ``languages:`` key names that language, the scan runs with
+            ``--scan-unknown-extensions`` — without it semgrep's
+            extension-based target selection silently SKIPS the file
+            (``paths.scanned`` stays empty) and the scanned-witness
+            gate capped every such sweep at inconclusive, so a
+            content-probed file could never earn a tool outcome in
+            either direction. Both language gates stay in force: a rule
+            that does not name the probed language keeps today's
+            behaviour, and mapped extensions never consult the hint.
 
     Returns:
         SweepResult with outcome and matches.
@@ -691,7 +716,12 @@ def run_semgrep_sweep(
         )
 
     try:
-        from packages.semgrep.runner import is_available, run_rule
+        # Aliased import: this module also calls the coccinelle
+        # runner's run_rule (different keyword surface), and the
+        # bare shared name made the kwargs miswiring gate unable to
+        # tell the callees apart.
+        from packages.semgrep.runner import is_available
+        from packages.semgrep.runner import run_rule as run_semgrep_rule
 
         if not is_available():
             return SweepResult(
@@ -701,6 +731,30 @@ def run_semgrep_sweep(
                 outcome="error",
                 errors=["semgrep not installed"],
             )
+
+        # Content-probed unknown extensions (see the ``language``
+        # docstring): the flag is emitted ONLY when the inventory
+        # probe and the rule's own ``languages:`` key agree, so a
+        # probed-c file is never scanned as php and unmapped targets
+        # without a probe keep today's silent skip (which the
+        # scanned-witness gate below converts to inconclusive).
+        # Mapped extensions never reach here — semgrep_probed_language
+        # refuses them, so ordinary targets run the identical command.
+        # NOTE: --scan-unknown-extensions is per-INVOCATION — every
+        # unknown-extension target in the invocation gets scanned as
+        # the rule's language. Safe today because the target set is
+        # [target] or [target, mapped-extension control fixture] and
+        # flag + fixture cannot co-occur (batching needs a rule
+        # keyword, whose fixtures all carry mapped extensions); a
+        # future caller adding unknown-extension extra_targets must
+        # re-audit this.
+        extra_args: list[str] | None = None
+        if language:
+            from .hypothesis_mapping import semgrep_probed_language
+
+            _probed = semgrep_probed_language(file_path, language)
+            if _probed and _rule_languages_include(rule_config, _probed):
+                extra_args = ["--scan-unknown-extensions"]
 
         # When a dynamic rule will need its negative control anyway,
         # fold the control fixture into the SAME invocation as an
@@ -715,9 +769,10 @@ def run_semgrep_sweep(
             rule_keyword, file_path, full_path,
         )
         if batched_fixture is not None:
-            result = run_rule(
+            result = run_semgrep_rule(
                 full_path, rule_config, timeout=120,
                 extra_targets=[batched_fixture],
+                extra_args=extra_args,
             )
             split = None
             if not result.errors and getattr(result, "returncode", 0) in (0, 1):
@@ -732,9 +787,15 @@ def run_semgrep_sweep(
                 # move between the target verdict and the control
                 # verdict — an unbatched target scan has neither
                 # problem. Retry target-only before classifying.
-                result = run_rule(full_path, rule_config, timeout=120)
+                result = run_semgrep_rule(
+                    full_path, rule_config, timeout=120,
+                    extra_args=extra_args,
+                )
         else:
-            result = run_rule(full_path, rule_config, timeout=120)
+            result = run_semgrep_rule(
+                full_path, rule_config, timeout=120,
+                extra_args=extra_args,
+            )
 
         # Tool failure is never a refutation. The runner populates
         # ``errors`` for not-installed / sandbox-refusal / timeout /
@@ -1186,6 +1247,56 @@ def negative_control_fixture(keyword: str, file_path: str) -> Path | None:
         if fixture.is_file():
             return fixture
     return None
+
+
+# Rule files are small YAML; a bounded read keeps a hostile/corrupt
+# path from ballooning the sweep.
+_RULE_LANGS_MAX_BYTES = 256 * 1024
+
+
+def _rule_languages_include(rule_config: str, lang: str) -> bool:
+    """Whether any rule in the file declares *lang* in ``languages:``.
+
+    The second half of the double language gate for content-probed
+    targets: ``--scan-unknown-extensions`` makes semgrep scan an
+    unmapped explicit target with the RULE's languages, so the flag
+    may only be emitted when the rule actually names the probed
+    language. Real YAML parse of the rule structure — a textual scan
+    for ``languages:`` also matched the phrase inside block-scalar
+    bodies (a ``message: |`` quoting it), wrongly licensing the flag.
+    Registry pack identifiers, unreadable files, and YAML that does
+    not parse all yield False — fail closed to today's behaviour (no
+    flag, target skipped, witness gate caps at inconclusive) rather
+    than scanning a file as a language nothing vouched for.
+    """
+    try:
+        path = Path(rule_config)
+        if not path.is_file():
+            return False
+        with path.open(encoding="utf-8", errors="replace") as fh:
+            text = fh.read(_RULE_LANGS_MAX_BYTES)
+    except OSError:
+        return False
+    try:
+        import yaml
+        data = yaml.safe_load(text)
+    except Exception:  # noqa: BLE001 — unparseable rule: fail closed
+        return False
+    if not isinstance(data, dict):
+        return False
+    rules = data.get("rules")
+    if not isinstance(rules, list):
+        return False
+    for rule in rules:
+        if not isinstance(rule, dict):
+            continue
+        langs = rule.get("languages")
+        if isinstance(langs, list) and any(
+            isinstance(entry, str) and entry.strip().lower() == lang
+            for entry in langs
+        ):
+            return True
+    return False
 
 
 def _relanguage_rule_config(

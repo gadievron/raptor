@@ -6384,7 +6384,7 @@ class TestRunCritiqueConcurrency:
 
         monkeypatch.setattr(
             orch_mod, "_hypothesis_to_tool_chain",
-            lambda hyp, f, cwe="": ["fake-rule"],
+            lambda hyp, f, cwe="", language=None: ["fake-rule"],
         )
         monkeypatch.setattr(
             orch_mod, "_read_raw_source", lambda *a, **kw: "src",
