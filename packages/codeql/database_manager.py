@@ -668,7 +668,8 @@ class DatabaseManager:
         self,
         repo_path: Path,
         language: str,
-        max_age_days: int | None = None
+        max_age_days: int | None = None,
+        traced_build: bool | None = None,
     ) -> Path | None:
         """
         Check if valid cached database exists.
@@ -682,6 +683,18 @@ class DatabaseManager:
                 honour the same TTL the auto-cleanup enforces, or a
                 raised knob still serves nothing past the old
                 hardcoded 7 days and a lowered one serves stale DBs)
+            traced_build: The requested extraction mode — build mode
+                is part of the cache contract, not just the build
+                path. ``True`` (an explicit operator trust assertion)
+                REFUSES a cached buildless DB with a visible rebuild
+                note: buildless extraction cannot see build-generated
+                code, and silently serving it would misrepresent
+                extraction fidelity for up to the whole cache TTL.
+                ``False`` serves a cached traced DB with a disclosure
+                line (strictly higher fidelity; its build already ran
+                when it was created — nothing untrusted executes by
+                serving it). ``None`` (mode-agnostic callers, e.g.
+                discovery probes) skips the check.
 
         Returns:
             Path to cached database or None
@@ -699,6 +712,28 @@ class DatabaseManager:
         if not metadata.success:
             logger.debug("Cached database marked as failed: %s", language)
             return None
+
+        # Serve-time build-mode check (see the traced_build arg doc).
+        if self._cached_mode_mismatch(metadata, language, traced_build):
+            logger.warning(
+                "Cached %s database was built buildless but this run "
+                "requested a traced build — treating as a cache miss "
+                "and rebuilding with the traced extractor (use the "
+                "cached DB via a run without --traced-build if that "
+                "was intended)", language,
+            )
+            return None
+        if (
+            traced_build is False
+            and language in BUILDLESS_DEFAULT_LANGUAGES
+            and metadata.build_system != "buildless"
+        ):
+            logger.info(
+                "Serving traced-build cached %s database to a "
+                "buildless request (higher extraction fidelity; its "
+                "build already ran when the cache entry was created)",
+                language,
+            )
 
         # Check age
         try:
@@ -722,6 +757,80 @@ class DatabaseManager:
 
         logger.info("✓ Using cached database for %s: %s", language, db_path)
         return db_path
+
+    @staticmethod
+    def _cached_mode_mismatch(
+        metadata: "DatabaseMetadata",
+        language: str,
+        traced_build: bool | None,
+    ) -> bool:
+        """True when a cached entry cannot satisfy the requested
+        extraction mode: the request is an explicit traced build for
+        a buildless-default language and the cached DB was built
+        buildless. Only exact ``build_system == "buildless"`` counts
+        as buildless — every other recorded value (a detected build
+        type, ``no-build`` from the pre-buildless traced path) came
+        from a traced-grade create."""
+        if traced_build is not True:
+            return False
+        if language not in BUILDLESS_DEFAULT_LANGUAGES:
+            return False
+        return metadata.build_system == "buildless"
+
+    def _sibling_canonical_acceptable(
+        self,
+        repo_hash: str,
+        language: str,
+        traced_build: bool | None,
+    ) -> bool:
+        """Lost-promote-race check: may we use the sibling's canonical
+        instead of our own just-built staging DB?
+
+        For a traced request on a buildless-default language the
+        sibling's entry must POSITIVELY record a non-buildless build —
+        missing metadata (their save may not have landed yet) or a
+        buildless record means we install our own traced staging
+        instead; anything else re-opens the silent
+        buildless-served-to-traced fidelity downgrade through the
+        race window."""
+        if traced_build is not True or language not in BUILDLESS_DEFAULT_LANGUAGES:
+            return True
+        metadata = self.load_metadata(repo_hash, language)
+        if metadata is None:
+            return False
+        return not self._cached_mode_mismatch(metadata, language, traced_build)
+
+    def _evict_mode_mismatched_canonical(
+        self,
+        repo_hash: str,
+        language: str,
+        traced_build: bool | None,
+    ) -> None:
+        """Rename a mode-mismatched canonical out of the cache slot.
+
+        A serve-time miss alone is not enough: the atomic-promote
+        flow treats ANY valid canonical as a lost race and would hand
+        the surviving buildless DB right back to the traced run that
+        just rebuilt (outcome B in the promote comment). Evicting the
+        mismatched entry up front lets the rebuild land."""
+        canonical = self.get_database_dir(repo_hash, language)
+        if not canonical.exists():
+            return
+        metadata = self.load_metadata(repo_hash, language)
+        if metadata is None or not self._cached_mode_mismatch(
+            metadata, language, traced_build,
+        ):
+            return
+        logger.info(
+            "Evicting mode-mismatched cached %s database "
+            "(buildless entry; traced build requested)", language,
+        )
+        try:
+            marker = canonical.with_name(self._stale_marker_name(canonical))
+            os.rename(canonical, marker)
+            os.utime(marker, None)
+        except OSError:
+            pass  # raced with another evictor; harmless
 
     # Concurrent-write safety: build-in-staging + atomic-promote pattern.
     # Two parallel /codeql runs against the same target+language used to
@@ -1090,9 +1199,14 @@ class DatabaseManager:
                 cached=False,
             )
 
-        # Check for cached database
+        # Check for cached database. The requested build mode joins
+        # the lookup: an explicit traced request must not be served a
+        # cached buildless DB (fidelity downgrade against an operator
+        # trust assertion — see get_cached_database).
         if not force:
-            cached_db = self.get_cached_database(repo_path, language)
+            cached_db = self.get_cached_database(
+                repo_path, language, traced_build=traced_build,
+            )
             if cached_db:
                 duration = time.time() - start_time
                 metadata = self.load_metadata(
@@ -1139,7 +1253,9 @@ class DatabaseManager:
         # promoted their staging to canonical between our initial cache
         # miss (line 304) and now. If so, use theirs and skip the build.
         if not force:
-            cached = self.get_cached_database(repo_path, language)
+            cached = self.get_cached_database(
+                repo_path, language, traced_build=traced_build,
+            )
             if cached:
                 duration = time.time() - start_time
                 metadata = self.load_metadata(repo_hash, language)
@@ -1153,6 +1269,11 @@ class DatabaseManager:
         # canonical exists but is older than the TTL.
         self._evict_stale_canonical(
             repo_hash, language, max_age_days=self._cache_ttl_days(),
+        )
+        # Mode-mismatch eviction: a buildless canonical must not win
+        # the promote race against the traced rebuild it just missed.
+        self._evict_mode_mismatched_canonical(
+            repo_hash, language, traced_build,
         )
 
         # Buildless default for C/C++: never execute an untrusted
@@ -1543,8 +1664,15 @@ class DatabaseManager:
                         # Lost the promotion race. Validate the sibling's
                         # canonical before trusting it — without this check,
                         # a sibling who promoted broken content would propagate
-                        # to us as success=True pointing at garbage.
-                        if self.validate_database(canonical_path):
+                        # to us as success=True pointing at garbage. Build
+                        # mode joins the check: a traced request must not
+                        # adopt a sibling's buildless (or metadata-less)
+                        # canonical over its own just-built traced staging.
+                        if self.validate_database(
+                            canonical_path,
+                        ) and self._sibling_canonical_acceptable(
+                            repo_hash, language, traced_build,
+                        ):
                             logger.info(
                                 "✓ Database promoted by sibling; using cached %s", canonical_path
                             )
@@ -1564,7 +1692,9 @@ class DatabaseManager:
                             # gets evicted (this run's lost-race branch on
                             # the next attempt, or _gc_stale_markers).
                             logger.warning(
-                                "Canonical %s exists but failed validation; evicting and retrying promote",
+                                "Canonical %s exists but failed validation "
+                                "or cannot satisfy the requested build mode; "
+                                "evicting and retrying promote",
                                 canonical_path
                             )
                             try:
