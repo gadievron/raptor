@@ -1761,6 +1761,12 @@ def _extract_tokens_from_text(text: str) -> set[str]:
         values.add(token)
         if "/" in token:
             for part in token.split("/"):
+                # Strict accounting: a top-of-token check alone lets
+                # the boundary token's slash-parts finish over the
+                # cap — the constant advertises a bound the lane
+                # itself must honour exactly.
+                if len(values) >= _MAX_KNOWN_VALUES:
+                    break
                 if _MIN_TOKEN_LEN <= len(part) <= _MAX_KNOWN_VALUE_LEN:
                     values.add(part)
     return values
@@ -1793,6 +1799,11 @@ def _extract_values_from_json(text: str) -> set[str]:
             values.add(node)
             if "/" in node:
                 for part in node.split("/"):
+                    # Strict accounting — same boundary rule as the
+                    # token lane: the walk-entry check alone lets a
+                    # boundary leaf's slash-parts finish over the cap.
+                    if len(values) >= _MAX_KNOWN_VALUES:
+                        break
                     if _MIN_TOKEN_LEN <= len(part) <= _MAX_KNOWN_VALUE_LEN:
                         values.add(part)
         elif isinstance(node, (int, float)) and not isinstance(node, bool):
