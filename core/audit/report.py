@@ -1096,19 +1096,19 @@ def _annotate_dark_awaiting(
     the completeness block; a zero-awaiting run sets neither.
     """
     awaiting = dark_total
-    followup = ""
     record = None
     record_path = out_dir / "validate-postpass.json"
     if record_path.is_file():
         record = load_json(record_path, max_bytes=_MAX_RUN_META_BYTES)
     if isinstance(record, dict):
-        raw_followup = record.get("followup_command")
-        # The record lives in a directory the dispatched CC child can
-        # write — accept only a /validate command shape from it and
-        # rebuild locally otherwise.
-        if isinstance(raw_followup, str) \
-                and raw_followup.startswith("/validate "):
-            followup = raw_followup
+        # The record lives in a directory the dispatched CC child and
+        # the target can write mid-run, and the follow-up renders as
+        # an operator-facing EXACT re-run command. The old prefix
+        # gate (accept anything starting "/validate ") let a run-dir
+        # writer splice arbitrary operator instructions into the
+        # remainder — so the recorded value is never consumed at all:
+        # the command is rebuilt locally below from the run's own
+        # metadata, which is exactly what the writer derives it from.
         try:
             recorded = int(record.get("dark_awaiting", dark_total))
             selected = int(record.get("dark_selected", 0))
@@ -1122,15 +1122,14 @@ def _annotate_dark_awaiting(
         awaiting = min(max(recorded, dark_total - selected), dark_total)
     if awaiting <= 0:
         return
-    if not followup:
-        # Exact-command fallback: the run's own metadata carries the
-        # target (the main report path — libexec/raptor-audit's
-        # finalise — does not pass target_path).
-        target = str(target_path) if target_path else _run_meta_target(out_dir)
-        followup = (
-            f"/validate {target or '<target>'} "
-            f"--findings {out_dir / 'findings-graded.json'}"
-        )
+    # Local rebuild in ALL cases: the run's own metadata carries the
+    # target (the main report path — libexec/raptor-audit's finalise —
+    # does not pass target_path), and the findings path is fixed.
+    target = str(target_path) if target_path else _run_meta_target(out_dir)
+    followup = (
+        f"/validate {target or '<target>'} "
+        f"--findings {out_dir / 'findings-graded.json'}"
+    )
     completeness["dark_awaiting"] = awaiting
     completeness["dark_followup"] = followup
 
@@ -1148,8 +1147,9 @@ def _annotate_validate_postpass(
     this the reason lives only in the record file and the summary
     reads as if the findings had been validated. The record lives in
     a directory the dispatched CC child can write, so the reason is
-    sanitised at render time and the follow-up command is accepted
-    only in /validate shape (same policy as the dark followup).
+    sanitised at render time and the follow-up command is always
+    rebuilt locally (same policy as the dark followup) — the record's
+    own ``followup_command`` is never consumed.
     """
     record_path = out_dir / "validate-postpass.json"
     if not record_path.is_file():
@@ -1161,13 +1161,15 @@ def _annotate_validate_postpass(
     if not isinstance(reason, str) or not reason.strip():
         reason = "unknown (no reason recorded)"
     completeness["validate_postpass_skipped"] = reason
-    followup = record.get("followup_command")
-    if not (isinstance(followup, str) and followup.startswith("/validate ")):
-        target = str(target_path) if target_path else _run_meta_target(out_dir)
-        followup = (
-            f"/validate {target or '<target>'} "
-            f"--findings {out_dir / 'findings-graded.json'}"
-        )
+    # Local rebuild in ALL cases — same policy (and rationale) as the
+    # dark follow-up: the recorded command sits in a child/target-
+    # writable file and renders as an operator-facing exact re-run
+    # line, and the local derivation is what the writer used anyway.
+    target = str(target_path) if target_path else _run_meta_target(out_dir)
+    followup = (
+        f"/validate {target or '<target>'} "
+        f"--findings {out_dir / 'findings-graded.json'}"
+    )
     completeness["validate_postpass_followup"] = followup
 
 
