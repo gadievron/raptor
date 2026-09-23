@@ -390,6 +390,26 @@ class TestFilterBuildEnvVars:
             "GNUMAKEFLAGS": "--eval=$(shell touch /tmp/pwned)",
             "gnumakeflags": "CC=./evil-cc",  # case-folded membership
             "MFLAGS": "COMPILE.c=./evil-cc",
+            # Expansion-exec class: make expands these env values when
+            # consuming them, so $(shell …) executes at startup;
+            # MAKEOVERRIDES also carries MAKEFLAGS-style CC= overrides.
+            "MAKEOVERRIDES": "CC=./evil-cc",
+            "VPATH": "$(shell touch /tmp/pwned)",
+            "GPATH": "$(shell touch /tmp/pwned)",
+            # Recipe-context member of the same class: make expands
+            # IFS while constructing each recipe's argv — even under
+            # -n — so $(shell …) executes and $(file >…) writes with
+            # no shell at all.
+            "IFS": "$(file >/tmp/pwned,owned)",
+            # Dot-prefixed make specials: env dicts can carry keys
+            # POSIX shells cannot export, and make imports the whole
+            # environ — these expand env-origin values (per-target /
+            # -l prerequisite search / recipe-argv construction), so
+            # $(shell ...) executes; the gate's admit-by-default tail
+            # admitted the whole dot shape before they were belted.
+            ".EXTRA_PREREQS": "$(shell touch /tmp/pwned)",
+            ".LIBPATTERNS": "$(shell touch /tmp/pwned)",
+            ".SHELLFLAGS": "$(eval .SHELLFLAGS:=-c)$(shell touch /tmp/pwned)",
         })
         assert admitted == {}
 

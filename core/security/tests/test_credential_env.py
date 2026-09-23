@@ -341,6 +341,25 @@ _ECOSYSTEM_MEMBER_TIERS = {
     # env read, honoured by older/other implementations).
     "GNUMAKEFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
     "MFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
+    # Expansion-exec class: make EXPANDS these env values when it
+    # consumes them (functions run — `VPATH=$(shell …)` executes at
+    # startup); MAKEOVERRIDES additionally rides MAKEFLAGS handling
+    # with variable definitions (CC=<prog>).
+    "MAKEOVERRIDES": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
+    "VPATH": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
+    "GPATH": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
+    # Recipe-context member of the expansion-exec class: expanded
+    # while make constructs recipe argv (even under -n), invisible to
+    # a no-makefile startup probe.
+    "IFS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
+    # Dot-prefixed make specials: make imports the whole environ (dot
+    # names included — env dicts can carry keys POSIX shells cannot
+    # export), and these three expand their env-origin values —
+    # per-target, during -l prerequisite search, and at recipe-argv
+    # construction respectively.
+    ".EXTRA_PREREQS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
+    ".LIBPATTERNS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
+    ".SHELLFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
     "ARFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
     "ASFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
     "CFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
@@ -519,6 +538,8 @@ class TestMakeOptionCarrierBelt:
 
     @pytest.mark.parametrize("name", [
         "MAKEFLAGS", "GNUMAKEFLAGS", "MFLAGS",
+        "MAKEOVERRIDES", "VPATH", "GPATH", "IFS",
+        ".EXTRA_PREREQS", ".LIBPATTERNS", ".SHELLFLAGS",
     ])
     def test_option_carriers_are_exec_tier_members(self, name):
         assert name in CREDENTIAL_EXEC_REDIRECT_ENV_VARS, name
@@ -602,29 +623,65 @@ class TestMakeDefaultDatabaseCrossCheck:
 
     # Variable NAMES the default database DEFINES (assignment lines in
     # the `make -p` dump: `NAME = …` / `NAME := …` / `NAME ?= …`).
-    # Same [A-Za-z]-start rule as _REF_RE (dot-prefixed specials like
-    # .VARIABLES are make-internal, not env surface).
-    _DEF_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_.]*)\s*[:+?]{0,3}=",
+    # Dot-prefixed specials (.LIBPATTERNS, .SHELLFLAGS, …) are IN the
+    # universe: make imports the ENTIRE environ — dot names included —
+    # and env dicts (the repo-metadata lanes the belts guard) can
+    # carry keys POSIX shells cannot export. An earlier [A-Za-z]-only
+    # anchor adjudicated them out as "make-internal, not env surface";
+    # the expansion probe refuted that (.EXTRA_PREREQS / .LIBPATTERNS /
+    # .SHELLFLAGS all expand env-origin values).
+    _DEF_RE = re.compile(r"^(\.?[A-Za-z][A-Za-z0-9_.]*)\s*[:+?]{0,3}=",
                          re.MULTILINE)
 
-    def test_every_env_option_injecting_variable_is_covered(self):
+    # Env-name-shaped ASCII tokens in the make BINARY's string table:
+    # every name make can getenv() lives there, including names the
+    # database dump OMITS — GNU make 4.4's dump does not define
+    # MAKEOVERRIDES at all, yet the environment value is live (and
+    # exec-grade). Dot-shaped names admitted for the same reason as
+    # _DEF_RE. Harvested by reading the binary directly, no external
+    # tool.
+    _BIN_TOKEN_RE = re.compile(rb"\.?[A-Z][A-Z0-9_]{2,40}")
+
+    def test_every_env_expanded_variable_is_covered(self, tmp_path):
         """Behavioral arm for the env-read-only class.
 
         The reference arm above is structurally blind to names make
-        CONSUMES from the environment without ever referencing them as
-        ``$(VAR)`` — GNUMAKEFLAGS perturbs every make run yet appears
-        in the database only as a definition, never a reference.
+        CONSUMES from the environment without ever referencing them
+        as ``$(VAR)``. Universe (mechanical): every variable name the
+        default database DEFINES, unioned with every env-name-shaped
+        token in the make binary's own string table — the dump alone
+        is not enough (it omits MAKEOVERRIDES entirely). Predicate
+        (behavioral): set the name — alone, in an otherwise-scrubbed
+        environment — to ``$(info <marker>)`` and observe whether
+        make EXPANDED the value: expansion runs functions, so an
+        expanded env value is ``$(shell …)``-exec-grade regardless of
+        what the variable is "for" (option carriage, include lists,
+        search paths). The payload itself is observable-but-inert by
+        construction — ``$(info)`` only prints — because expansion
+        happens even under ``-n``.
 
-        Universe (mechanical): every variable name the default
-        database DEFINES, extracted from the same ``make -p`` dump the
-        reference arm transcribes. Predicate (behavioral): set the
-        name — alone, in an otherwise-scrubbed environment — to a
-        no-op option word (``--eval=$(info <marker>)``, no whitespace,
-        so word-splitting carriers still deliver it) and observe
-        whether make consumed the value AS OPTIONS: the marker prints
-        only when the value reached make's flag parsing, which is the
-        exact wrapper power the belts must refuse. Every injector must
-        be an exec-tier family member (exact row or pattern).
+        Each name is probed under THREE contexts, and expansion in
+        any counts: a no-makefile startup (``-f /dev/null``), a
+        recipe-bearing dry run (``-n`` on a makefile whose target
+        forces recipe-argv construction), and a library-prerequisite
+        dry run (``-n`` on a makefile whose target names a ``-lfoo``
+        prerequisite, forcing the ``-l`` search). Startup alone is an
+        OBSERVATION WINDOW too narrow for the class: names make
+        expands only while building a recipe's command line — IFS,
+        .SHELLFLAGS — or only during ``-l`` search — .LIBPATTERNS —
+        never expand when the triggering work doesn't exist, so a
+        startup-only oracle certifies completeness it cannot see (and
+        the ``-lfoo`` failure stops make BEFORE recipe-argv
+        construction, so the two makefile contexts cannot merge).
+        Each context runs in its own directory: a sibling file that
+        matches a built-in implicit rule's source pattern (foo.l next
+        to a makefile named foo) makes make attempt a makefile REMAKE
+        through that rule, expanding unrelated rule variables into
+        the observation. Names make merely ECHOES verbatim in an
+        error message are excluded per context by requiring the raw
+        literal to be absent from that context's output (MAKE_TMPDIR
+        is the known echo-raw shape). Every expander must be an
+        exec-tier family member (exact row or pattern).
         """
         import shutil
         import subprocess
@@ -640,37 +697,91 @@ class TestMakeDefaultDatabaseCrossCheck:
         )
         if "# Make data base" not in proc.stdout:
             pytest.skip("unrecognised make -p output shape")
-        defined = sorted(set(self._DEF_RE.findall(proc.stdout)))
-        # Non-vacuity of the UNIVERSE: the database must define the
-        # names this arm exists for, or the extraction regressed.
-        assert "MAKEFLAGS" in defined
-        assert "GNUMAKEFLAGS" in defined
+        universe = set(self._DEF_RE.findall(proc.stdout))
+        try:
+            with open(make, "rb") as f:
+                blob = f.read()
+            universe |= {m.group(0).decode("ascii")
+                         for m in self._BIN_TOKEN_RE.finditer(blob)}
+        except OSError:
+            pytest.skip("make binary unreadable — token universe "
+                        "unavailable")
+        # Non-vacuity of the UNIVERSE: the names this arm exists for
+        # must be present, or the extraction regressed. MAKEOVERRIDES
+        # and IFS come only from the binary-token half; the dot names
+        # only through the dot-admitting anchors.
+        for required in ("MAKEFLAGS", "GNUMAKEFLAGS", "MAKEOVERRIDES",
+                         "VPATH", "IFS", ".EXTRA_PREREQS",
+                         ".LIBPATTERNS", ".SHELLFLAGS"):
+            assert required in universe, required
 
-        injectors = set()
-        for name in defined:
-            marker = f"U_ENV_OPT_INJECT_{name}"
+        # Recipe-bearing makefile for the second context: one phony
+        # target with a recipe line, run under -n (nothing executes;
+        # the recipe is only CONSTRUCTED, which is the expansion
+        # context under test). Library-prerequisite makefile for the
+        # third: a `-lfoo` prerequisite forces the -l search (the
+        # .LIBPATTERNS expansion context; the run then stops on the
+        # unresolvable prerequisite — the marker is the contract, not
+        # the exit code). Own directory per context (see docstring).
+        recipe_dir = tmp_path / "recipe"
+        recipe_dir.mkdir()
+        recipe_mk = recipe_dir / "Makefile"
+        recipe_mk.write_text(".PHONY: probe\nprobe:\n\t: recipe\n")
+        lib_dir = tmp_path / "libsearch"
+        lib_dir.mkdir()
+        lib_mk = lib_dir / "Makefile"
+        lib_mk.write_text(".PHONY: probe\nprobe: -lfoo\n\t: recipe\n")
+        contexts = (
+            ([make, "-f", os.devnull], str(tmp_path)),
+            ([make, "-n", "-f", str(recipe_mk), "probe"],
+             str(recipe_dir)),
+            ([make, "-n", "-f", str(lib_mk), "probe"], str(lib_dir)),
+        )
+        expanders = set()
+        for name in sorted(universe):
+            marker = f"U_ENV_EXPANDED_{name}"
+            probe = f"$(info {marker})"
             env = dict(base_env)
-            env[name] = f"--eval=$(info {marker})"
-            probe = subprocess.run(
-                [make, "-f", os.devnull],
-                capture_output=True, text=True, timeout=30, env=env,
-            )
-            if marker in probe.stdout or marker in probe.stderr:
-                injectors.add(name)
-        # Non-vacuity of the PREDICATE: GNU make documents both option
-        # carriers as environment-consumed; a probe that stops firing
-        # means the mechanic changed and this arm needs re-derivation,
-        # not silence.
-        assert {"MAKEFLAGS", "GNUMAKEFLAGS"} <= injectors, injectors
+            env[name] = probe
+            for argv, cwd in contexts:
+                got = subprocess.run(
+                    argv, capture_output=True, text=True, timeout=30,
+                    env=env, cwd=cwd,
+                )
+                out = got.stdout + got.stderr
+                if marker not in out:
+                    continue
+                if probe in out:
+                    continue          # verbatim echo, not expansion
+                expanders.add(name)
+                break
+        # Non-vacuity of the PREDICATE, both directions: the
+        # documented expanders must fire — IFS and .SHELLFLAGS only
+        # through the recipe context, .LIBPATTERNS only through the
+        # -l-search context — and the known echo-raw shape must be
+        # EXCLUDED by the discriminator, not counted.
+        assert {"MAKEFLAGS", "GNUMAKEFLAGS", "MAKEOVERRIDES",
+                "VPATH", "GPATH", "MAKEFILES", "IFS",
+                ".EXTRA_PREREQS", ".LIBPATTERNS",
+                ".SHELLFLAGS"} <= expanders, expanders
+        if "MAKE_TMPDIR" in universe:
+            assert "MAKE_TMPDIR" not in expanders
+        # Negative direction for the dot-name class: env-settable but
+        # non-expanding specials stay OUT of the observed set — the
+        # widened universe must not overclaim.
+        for inert in (".RECIPEPREFIX", ".DEFAULT_GOAL", ".ONESHELL",
+                      ".INCLUDE_DIRS"):
+            if inert in universe:
+                assert inert not in expanders, inert
         uncovered = {
-            name for name in injectors
+            name for name in expanders
             if name not in CREDENTIAL_EXEC_REDIRECT_ENV_VARS
             and not is_credential_env_pattern_member(name)
             and name not in self._ADJUDICATED_OUT
         }
         assert uncovered == set(), (
-            "environment option-injecting make variables escaped the "
-            f"family — adjudicate them: {sorted(uncovered)}"
+            "environment-expanded make variables escaped the family — "
+            f"adjudicate them: {sorted(uncovered)}"
         )
 
     def test_adjudicated_out_rows_are_live(self):
