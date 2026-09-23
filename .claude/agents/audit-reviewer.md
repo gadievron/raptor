@@ -50,9 +50,9 @@ libexec/raptor-audit sweep --tool coccinelle --rule "COCCI_PATCH_TEXT" --file FI
 ```bash
 libexec/raptor-audit sweep --tool smt --smt-verb check-overflow --smt-args '{"op":"*","operand":["len","size"],"profile":"uint32","kind":"unsigned_wrap","guard":["len < 65536"]}' --file FILE --function FN --out "$OUTPUT_DIR"
 ```
-SMT verbs: `check-overflow`, `check-oob`, `check-null-deref`, `check-overflow-to-oob`, `check-negative-bypass`, `validate-path`
+SMT verbs: `check-overflow`, `check-oob`, `check-null-deref`, `check-overflow-to-oob`, `check-negative-bypass`, `check-encoding-residual`, `validate-path`
 
-Each `--smt-args` key becomes the matching `--key` flag on the verb's shim (list values repeat the flag), so the keys must be the flags the shim actually accepts — e.g. `check-overflow` takes `--op {+,-,*}`, repeatable `--operand`, `--profile`, `--kind`, repeatable `--guard`. When unsure, check with `python3 libexec/raptor-smt-<verb> --help` before dispatching.
+Each `--smt-args` key becomes the matching `--key` flag on the verb's shim (list values repeat the flag, except `forbidden`, which passes as one JSON array), so the keys must be the flags the shim actually accepts — e.g. `check-overflow` takes `--op {+,-,*}`, repeatable `--operand`, `--profile`, `--kind`, repeatable `--guard`. When unsure, check with `python3 libexec/raptor-smt-<verb> --help` before dispatching.
 
 ### Manual sweep logging (when you run a tool outside the auto-run path)
 ```bash

@@ -151,7 +151,7 @@ These tools are available for hypothesis validation. The orchestrator invokes th
 | **Expanded-view Semgrep** | Orchestrator channel: rules re-run over fidelity-3 preprocessor-expanded C/C++ views | Macro-hidden sinks |
 | **Git history** | Orchestrator channel: prior security fixes touching the function (corroboration only, never a verdict) | Bug-class recurrence |
 
-**SMT verbs:** `check-overflow`, `check-oob`, `check-null-deref`, `check-overflow-to-oob`, `check-negative-bypass`, `validate-path`
+**SMT verbs:** `check-overflow`, `check-oob`, `check-null-deref`, `check-overflow-to-oob`, `check-negative-bypass`, `check-encoding-residual`, `validate-path`
 
 **Orchestrator-only channels** (not `sweep --tool` choices): fail-open (`fail_open:*`), consistency (`consistency:*`, peer census + contract witnesses), API-boundary caller contracts (`api_boundary:caller-contract`), SMT invariant preservation (`smt:invariant-preservation`), plus the ptr-lifecycle, lock-region, resource-bounds, release-order, and protocol-state channels. See `docs/audit.md` for semantics.
 
