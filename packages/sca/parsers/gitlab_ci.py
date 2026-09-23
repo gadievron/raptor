@@ -52,6 +52,7 @@ from core.oci.image_ref import split_image_ref as _split_image_ref
 from ..models import Confidence, Dependency
 from ..models import classify_pin_style as _classify_pin_style
 from . import _safe_read, register
+from ._base import PARSE_ESCAPE_ERRORS
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ def parse(path: Path) -> list[Dependency]:
         return []
     try:
         data = safe_load(text)
-    except yaml.YAMLError as e:
+    except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.parsers.gitlab_ci: YAML parse failed for %s: %s",
             path, e,

@@ -45,6 +45,7 @@ from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
 from . import _safe_read, register
+from ._base import PARSE_ESCAPE_ERRORS
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -73,7 +74,7 @@ def parse(path: Path) -> list[Dependency]:
         return []
     try:
         data = safe_load(text)
-    except yaml.YAMLError as e:
+    except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         # Deliberately-broken charts in test/fixture trees (helm's
         # own testdata/testcharts/chart-bad-requirements is the
         # canonical case) are assertions, not operator problems —
@@ -207,7 +208,7 @@ def chart_repository_hosts(target: Path) -> list[str]:
             return []
         try:
             data = safe_load(text)
-        except yaml.YAMLError as e:
+        except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
             logger.debug(
                 "sca.parsers.helm_chart: YAML parse failed for %s "
                 "during host extraction: %s", path, e,

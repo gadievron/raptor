@@ -43,7 +43,7 @@ import re
 from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, PinStyle
-from ._base import build_purl, lockfile_confidence
+from ._base import PARSE_ESCAPE_ERRORS, build_purl, lockfile_confidence
 from . import _safe_read, register
 from ._npm_alias import split_npm_alias
 
@@ -81,7 +81,7 @@ def parse(path: Path) -> list[Dependency]:
         return []
     try:
         data = _safe_load(text)           # type: ignore[misc]
-    except _yaml.YAMLError as e:          # type: ignore[union-attr]
+    except (_yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # type: ignore[union-attr]  # hostile-input escape classes
         logger.warning(
             "sca.parsers.pnpm_lock: YAML parse failed for %s: %s", path, e
         )

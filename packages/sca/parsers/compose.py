@@ -55,6 +55,7 @@ from core.oci.image_ref import split_image_ref as _split_image_ref
 from ..models import Confidence, Dependency, PinStyle
 from ..models import classify_pin_style as _classify_pin_style
 from . import _safe_read, register
+from ._base import PARSE_ESCAPE_ERRORS
 from ..file_shapes import is_compose_file as _is_compose_file
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ def parse(path: Path) -> list[Dependency]:
 
     try:
         data = safe_load(text)
-    except yaml.YAMLError as e:
+    except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         if is_fragment:
             logger.debug(
                 "sca.parsers.compose: skipping fragment %s: %s",

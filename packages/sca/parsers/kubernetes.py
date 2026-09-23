@@ -43,6 +43,7 @@ from core.oci.image_ref import split_image_ref as _split_image_ref
 from ..models import Confidence, Dependency, PinStyle
 from ..models import classify_pin_style as _classify_pin_style
 from . import _safe_read, register
+from ._base import PARSE_ESCAPE_ERRORS
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -88,7 +89,7 @@ def parse(path: Path) -> list[Dependency]:
     try:
         # Multi-document YAML — common for ``manifests/`` bundles.
         documents = list(safe_load_all(text))
-    except yaml.YAMLError as e:
+    except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         # DEBUG, not WARNING: the kubernetes parser is content-sniffing
         # every ``.yml`` / ``.yaml`` in the tree, since file extension
         # alone can't distinguish K8s manifests from arbitrary YAML

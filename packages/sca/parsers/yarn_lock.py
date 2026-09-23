@@ -214,10 +214,13 @@ def _from_classic_block(
 def _parse_berry(text: str, path: Path) -> list[Dependency]:
     try:
         data = _safe_load(text)           # type: ignore[misc]
-    except (_yaml.YAMLError, ValueError) as e:  # type: ignore[union-attr]
-        # ValueError: yaml.safe_load raises it on out-of-range date
-        # scalars — report the parse failure instead of letting it
-        # escape to the dispatch catch-all as a silent zero-dep result.
+    except (_yaml.YAMLError, RecursionError, ValueError) as e:  # type: ignore[union-attr]
+        # Same tuple as the _looks_like_berry sniff. ValueError:
+        # yaml.safe_load raises it on out-of-range date scalars.
+        # RecursionError: deep nesting the flow-depth pre-bound does
+        # not see (block-mapping nesting) blows the loader stack —
+        # report the parse failure instead of letting either escape
+        # to the dispatch catch-all as a silent zero-dep result.
         logger.warning(
             "sca.parsers.yarn_lock: Berry YAML parse failed for %s: %s",
             path, e,
