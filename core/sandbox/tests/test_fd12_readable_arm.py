@@ -174,6 +174,92 @@ class TestFd12ReadableArm(unittest.TestCase):
         self.assertNotIn("stdout", captured)
 
 
+# Extra required kwargs per untrusted entry point, so the sweep below
+# can invoke each one generically. A NEW run_untrusted* entry must be
+# added here (and must call _untrusted_stdio_write_only) before the
+# sweep passes.
+_UNTRUSTED_ENTRY_EXTRA_KWARGS = {
+    "run_untrusted": {},
+    "run_untrusted_networked": {"proxy_hosts": ["localhost"]},
+}
+
+
+@requires_userns
+class TestGuardCoversEveryUntrustedEntry(unittest.TestCase):
+    """Mechanical drift oracle: EVERY module-level ``run_untrusted*``
+    callable must route fd 1/2 through the shared write-only guard.
+
+    The guard first landed inline in run_untrusted only, and the
+    networked sibling shipped without it — an uncaptured
+    run_untrusted_networked child inherited the operator's O_RDWR pty
+    slave on fd 1 and read keystrokes off its own stdout while every
+    other defence (stdin=DEVNULL, setsid, Landlock, netns) held. This
+    sweep enumerates the entry points from the module namespace so a
+    future sibling cannot drift silently: an unknown entry fails the
+    sweep until it is wired to the guard and registered above."""
+
+    def test_every_untrusted_entry_replaces_readable_fd1(self):
+        import core.sandbox.context as ctx
+
+        entries = sorted(
+            name for name in vars(ctx)
+            if name.startswith("run_untrusted")
+            and callable(getattr(ctx, name))
+        )
+        # The two known entries must both be seen (guards the sweep
+        # against a rename emptying it).
+        self.assertIn("run_untrusted", entries)
+        self.assertIn("run_untrusted_networked", entries)
+        unknown = set(entries) - set(_UNTRUSTED_ENTRY_EXTRA_KWARGS)
+        self.assertFalse(
+            unknown,
+            f"new untrusted entry point(s) {sorted(unknown)}: wire "
+            f"them to _untrusted_stdio_write_only and register their "
+            f"call kwargs in _UNTRUSTED_ENTRY_EXTRA_KWARGS",
+        )
+
+        for name in entries:
+            with self.subTest(entry=name):
+                captured = {}
+
+                def fake_run(cmd, **kw):
+                    captured.update(kw)
+                    std = kw.get("stdout")
+                    if isinstance(std, int) and std >= 0:
+                        captured["_stdout_acc"] = (
+                            fcntl.fcntl(std, fcntl.F_GETFL)
+                            & os.O_ACCMODE
+                        )
+                    return subprocess.CompletedProcess(cmd, 0, "", "")
+
+                with tempfile.NamedTemporaryFile(delete=False) as tf:
+                    path = tf.name
+                self.addCleanup(os.unlink, path)
+                fd = os.open(path, os.O_RDWR)
+                self.addCleanup(os.close, fd)
+
+                import core.sandbox.context as _c
+                with _Fd1Swap(fd), \
+                        patch.object(_c, "check_seatbelt_available",
+                                     lambda: True), \
+                        patch.object(_c, "run", fake_run):
+                    getattr(_c, name)(
+                        ["true"], target="/tmp",
+                        **_UNTRUSTED_ENTRY_EXTRA_KWARGS[name],
+                    )
+
+                self.assertIsInstance(
+                    captured.get("stdout"), int,
+                    f"{name} left a readable rw descriptor on the "
+                    f"child's stdout — the write-only guard did not "
+                    f"run",
+                )
+                self.assertEqual(
+                    captured.get("_stdout_acc"), os.O_WRONLY,
+                    f"{name}'s replacement stdout is not write-only",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
 
