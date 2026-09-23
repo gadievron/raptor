@@ -254,7 +254,7 @@ class TestEnrichMetadataBinaryPath:
         db = REDatabase(source_tool="ghidra", binary_path=metadata_path)
         monkeypatch.setattr(
             bridge, "import_project",
-            lambda out, timeout=None: db, raising=True)
+            lambda out, decompile=False, timeout=None: db, raising=True)
         seen = []
 
         def fake_r2(bin_path, out):
@@ -288,3 +288,26 @@ class TestEnrichMetadataBinaryPath:
         seen = self._enrich(gpr_project, str(outside),
                             monkeypatch, tmp_path)
         assert seen == []
+
+
+class TestEnrichDecompilePlumbing:
+    """The enrich path wraps import_project — dropping the decompile
+    flag there silently downgrades an --enrich --decompile-all import
+    to metadata-only."""
+
+    def test_enrich_forwards_decompile_to_import(
+            self, gpr_project, monkeypatch, tmp_path):
+        from packages.ghidra.bridge import GhidraBridge
+        from packages.ghidra.model import REDatabase
+
+        bridge = GhidraBridge(gpr_project)
+        seen: dict = {}
+
+        def fake_import(out, *, decompile=False, timeout=None):
+            seen["decompile"] = decompile
+            return REDatabase(source_tool="ghidra")
+
+        monkeypatch.setattr(
+            bridge, "import_project", fake_import, raising=True)
+        bridge.import_and_enrich(tmp_path / "out", decompile=True)
+        assert seen["decompile"] is True

@@ -1121,6 +1121,40 @@ class TestGhidraCliStatusAndWarnings:
         assert "decompilation for 1 function(s)" in err
         assert "--decompile-all" in err
 
+    def test_enrich_import_forwards_decompile_all(
+        self, gpr_project, monkeypatch, tmp_path,
+    ):
+        """The enrich branch of _do_import routes through
+        import_and_enrich — dropping args.decompile_all there turns an
+        --enrich --decompile-all import into metadata-only."""
+        import argparse as _ap
+
+        mod = _load_ghidra_cli(monkeypatch)
+        seen: dict = {}
+
+        class FakeBridge:
+            def __init__(self, gpr, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                pass
+
+            def import_and_enrich(self, out_dir, *, binary_path=None,
+                                  decompile=False, timeout=None):
+                seen["decompile"] = decompile
+                return _test_db()
+
+        args = _ap.Namespace(gpr=gpr_project, enrich=True,
+                             decompile_all=True, program=None,
+                             binary=None, wait=False, timeout=None)
+        with patch("packages.ghidra.bridge.GhidraBridge", FakeBridge):
+            db = mod._do_import(gpr_project, args, tmp_path / "out")
+        assert seen["decompile"] is True
+        assert db is not None
+
     def test_oversize_cache_warns_at_attach(self, tmp_path,
                                             monkeypatch, capsys):
         """Readers reject caches over the size ceiling; without an

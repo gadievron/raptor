@@ -151,6 +151,7 @@ class GhidraBridge:
         output_dir: Path,
         *,
         binary_path: Optional[Path] = None,
+        decompile: bool = False,
         timeout: Optional[int] = None,
     ) -> REDatabase:
         """Import Ghidra data and enrich with r2 analysis.
@@ -163,13 +164,17 @@ class GhidraBridge:
             binary_path: Path to the raw binary for r2 analysis.
                 If None, attempts to extract the path from the Ghidra
                 project metadata.
+            decompile: If True, decompile every function during the
+                Ghidra import (see ``import_project``).
             timeout: Maximum seconds for the headless subprocess
                 (see ``import_project``).
 
         Returns:
             The merged REDatabase.
         """
-        ghidra_db = self.import_project(output_dir, timeout=timeout)
+        ghidra_db = self.import_project(
+            output_dir, decompile=decompile, timeout=timeout,
+        )
 
         bin_path = binary_path
         if bin_path is None and ghidra_db.binary_path:
