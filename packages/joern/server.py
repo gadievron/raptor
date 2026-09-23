@@ -1247,8 +1247,11 @@ class JoernServer:
                 return True
             # Endpoint dead too. Only revive handles that actually
             # served a CPG — a never-started client has nothing to
-            # relaunch.
-            if self._cpg_path is None:
+            # relaunch. Both import sources count: restart() re-imports
+            # from whichever of _cpg_path / _code_path is set, and
+            # gating on _cpg_path alone left dead import_code sessions
+            # unrevivable (asymmetric with the restart it delegates to).
+            if self._cpg_path is None and self._code_path is None:
                 return False
         now = time.monotonic()
         if (
