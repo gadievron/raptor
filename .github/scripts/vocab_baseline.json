@@ -1368,13 +1368,10 @@
     "count": 13,
     "kind": "literal"
   },
-  "core/llm/tool_use/types.py::reason": {
+  "core/llm/tool_use/types.py::TerminationReason": {
     "count": 14,
-    "kind": "literal"
-  },
-  "core/llm/tool_use/types.py::terminated_by": {
-    "count": 14,
-    "kind": "literal"
+    "kind": "literal",
+    "note": "closed loop-outcome taxonomy: the shared Literal alias both LoopTerminated.reason and ToolLoopResult.terminated_by annotate (previously two hand-synced copies baselined separately) \u2014 termination-state enum values, not a learned name vocabulary"
   },
   "core/logging/__init__.py::_RESERVED_LOGRECORD_NAMES": {
     "count": 22,
@@ -1735,12 +1732,12 @@
   "core/understand_graph/schema.py::EDGE_KINDS": {
     "count": 17,
     "kind": "literal",
-    "note": "graph schema edge-kind enum (CALLS/READS/WRITES/AFFECTS/...) — fixed taxonomy for the understand graph, not target API names"
+    "note": "graph schema edge-kind enum (CALLS/READS/WRITES/AFFECTS/...) \u2014 fixed taxonomy for the understand graph, not target API names"
   },
   "core/understand_graph/schema.py::NODE_KINDS": {
     "count": 19,
     "kind": "literal",
-    "note": "graph schema node-kind enum (entry_point/sink/function/...) — fixed taxonomy for the understand graph, not target API names"
+    "note": "graph schema node-kind enum (entry_point/sink/function/...) \u2014 fixed taxonomy for the understand graph, not target API names"
   },
   "libexec/raptor-audit::_run_config_from_args": {
     "count": 37,
@@ -2390,7 +2387,7 @@
   "packages/openant/translator.py::_translate_finding": {
     "count": 12,
     "kind": "literal",
-    "note": "finding-dict field names of the OpenAnt→RAPTOR schema translator (cwe_id, file, finding_id, etc.), not a name vocabulary"
+    "note": "finding-dict field names of the OpenAnt\u2192RAPTOR schema translator (cwe_id, file, finding_id, etc.), not a name vocabulary"
   },
   "packages/sca/__init__.py::SCA_ALLOWED_HOSTS": {
     "count": 21,
