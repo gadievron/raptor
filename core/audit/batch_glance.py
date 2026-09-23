@@ -230,7 +230,12 @@ def _classify_batch_error(exc: Exception) -> str:
         return "api_error"
     if isinstance(exc, (TimeoutError, ConnectionError, OSError)):
         return "api_error"
-    if "budget exceeded" in msg:
+    # Chokepoint, not a bare substring: exception text can quote
+    # model-chosen content (the schema floor embeds unknown field
+    # names verbatim), and the classifier vetoes shape failures on
+    # the causal chain.
+    from core.llm.client import is_budget_exceeded_error
+    if is_budget_exceeded_error(exc):
         return "budget"
     if isinstance(exc, json.JSONDecodeError):
         return "json_parse"

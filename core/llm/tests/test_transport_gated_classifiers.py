@@ -18,6 +18,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
@@ -203,6 +205,103 @@ class _StubProvider:
             else self.payloads[0]
         )
         return payload, "raw"
+
+
+class TestBudgetClassifierContentGate:
+    """``is_budget_exceeded_error`` is RUN-TERMINAL — the audit
+    executor's budget-stop predicate re-raises budget-classified
+    exceptions out of the review loop. Its message arm must not be
+    reachable with model-echoed content: the strict schema floor
+    quotes model-chosen field names, and the all-models-failed wrapper
+    relays that text into a bare RuntimeError, so one injected key
+    literally named "budget exceeded" would otherwise stop the entire
+    remaining run with zero transport failure and zero real spend."""
+
+    SCHEMA = {
+        "type": "object",
+        "properties": {"verdict": {"type": "string"}},
+        "required": ["verdict"],
+    }
+
+    def test_typed_budget_error_classifies(self) -> None:
+        from core.llm.client import (
+            LLMBudgetExceededError,
+            is_budget_exceeded_error,
+        )
+        e = LLMBudgetExceededError("LLM budget exceeded: $5.00 > $1.00")
+        assert is_budget_exceeded_error(e) is True
+
+    def test_chained_typed_budget_error_classifies(self) -> None:
+        from core.llm.client import (
+            LLMBudgetExceededError,
+            is_budget_exceeded_error,
+        )
+        wrapper = RuntimeError("phase driver failed")
+        wrapper.__cause__ = LLMBudgetExceededError(
+            "LLM budget exceeded: $5.00 > $1.00")
+        assert is_budget_exceeded_error(wrapper) is True
+
+    def test_legacy_message_fallback_still_classifies(self) -> None:
+        # Intermediaries that lose both the type and the chain
+        # (subprocess relays, older code paths) keep working.
+        from core.llm.client import is_budget_exceeded_error
+        e = RuntimeError("worker relay: LLM budget exceeded, stopping")
+        assert is_budget_exceeded_error(e) is True
+
+    def test_shape_failure_chain_vetoes_message_match(self) -> None:
+        from core.llm.client import is_budget_exceeded_error
+        wrapper = RuntimeError(
+            "Structured generation failed for all cloud models "
+            "(tried 2 model(s)). Last error: structured response "
+            "carried fields outside the requested schema: "
+            "['budget exceeded']"
+        )
+        wrapper.__cause__ = SchemaUnknownFieldError(
+            "structured response carried fields outside the requested "
+            "schema: ['budget exceeded']"
+        )
+        assert is_budget_exceeded_error(wrapper) is False
+
+    def test_model_echoed_key_cannot_stop_the_run(self) -> None:
+        """E2E: hostile extra key named "budget exceeded" on every
+        ladder model → the raised all-models-failed RuntimeError must
+        NOT satisfy the executor's budget-terminal predicate."""
+        from core.audit.executor import _is_budget_stop
+        from core.llm.client import is_budget_exceeded_error
+
+        cfg = LLMConfig(
+            primary_model=ModelConfig(
+                provider="openai", model_name="gpt-primary", api_key="k"),
+            enable_caching=False, enable_fallback=False, max_retries=1)
+        client = LLMClient(cfg)
+        hostile = {"verdict": "ok", "budget exceeded": "x"}
+        prov = _StubProvider([hostile])
+        client._get_provider = (  # type: ignore[method-assign]
+            lambda model: prov
+        )
+        with pytest.raises(RuntimeError) as excinfo:
+            client.generate_structured("analyse", self.SCHEMA)
+        exc = excinfo.value
+        assert "budget exceeded" in str(exc).lower()  # echo IS relayed
+        assert is_budget_exceeded_error(exc) is False
+        assert _is_budget_stop(exc) is False
+
+    def test_real_budget_stop_stays_terminal(self) -> None:
+        """Both directions: a genuine cap breach still trips the
+        executor's budget-terminal predicate."""
+        from core.audit.executor import _is_budget_stop
+        from core.llm.client import LLMBudgetExceededError
+
+        cfg = LLMConfig(
+            primary_model=ModelConfig(
+                provider="openai", model_name="gpt-primary", api_key="k"),
+            enable_caching=False, enable_fallback=False,
+            max_cost_per_scan=1.0)
+        client = LLMClient(cfg)
+        client.total_cost = 5.0
+        with pytest.raises(LLMBudgetExceededError) as excinfo:
+            client.generate_structured("analyse", self.SCHEMA)
+        assert _is_budget_stop(excinfo.value) is True
 
 
 class TestDailyQuotaLatchNeedsTransport:

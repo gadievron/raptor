@@ -139,12 +139,34 @@ class LLMBudgetExceededError(RuntimeError):
 def is_budget_exceeded_error(exc: BaseException) -> bool:
     """True when *exc* signals LLM budget exhaustion.
 
-    Prefers the typed check; falls back to the historical message
-    match for exceptions raised by older code paths or re-wrapped by
-    intermediaries that lose the original type.
+    This verdict is RUN-TERMINAL: the audit executor's budget-stop
+    predicate re-raises budget-classified exceptions out of the review
+    loop, so model-echoed content must not be able to impersonate it.
+    Classification therefore prefers STRUCTURAL signals over message
+    text, in causal-chain order — the same discipline as
+    :func:`is_auth_refusal`:
+
+    1. the typed :class:`LLMBudgetExceededError` anywhere on the
+       chain is definitive;
+    2. response-shape failures (schema violations, JSON decode
+       errors) anywhere on the chain are NEVER budget — their
+       messages quote MODEL-CHOSEN content (the strict schema floor
+       embeds unknown field names verbatim), and the all-models-failed
+       wrapper relays that text into a bare ``RuntimeError``: one
+       injected key literally named "budget exceeded" would otherwise
+       stop the entire remaining run with zero transport failure and
+       zero real spend;
+    3. only then does the historical message fallback run, for
+       exceptions raised by older code paths or re-wrapped by
+       intermediaries that lose both the type and the causal chain.
     """
-    if isinstance(exc, LLMBudgetExceededError):
-        return True
+    if not isinstance(exc, Exception):
+        return False
+    for e in _exception_chain(exc):
+        if isinstance(e, LLMBudgetExceededError):
+            return True
+        if isinstance(e, (SchemaUnknownFieldError, json.JSONDecodeError)):
+            return False
     return (
         isinstance(exc, RuntimeError)
         and "budget exceeded" in str(exc).lower()
