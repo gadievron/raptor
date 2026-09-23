@@ -844,3 +844,69 @@ class TestJsExtractorKeywordGuard:
         assert "real" in names and "other" in names
         assert "switch" not in names
         assert "catch" not in names
+
+
+class TestOverlappingBodyBounds:
+    """N unclosed function headers made every body extent run to EOF
+    — each re-scanned by the brace matcher, ~30 sink regexes, and the
+    callee extractor (O(N·L): 27s at 2000 headers / 48KB). Body scans
+    are clamped at the next header's start and a hard per-body cap."""
+
+    def test_unclosed_bodies_clamped_at_next_header(self):
+        from core.analysis.taint_multi_lang import _extract_js_functions
+        content = "".join(
+            f"function f{i}(a, b) {{ g(\n" for i in range(50)
+        )
+        results = _extract_js_functions(content)
+        # Every named-pass body extent ends before the next header
+        # starts — no run-to-EOF overlap survives (the method-pass
+        # emits its own, separately clamped, extents).
+        spans = sorted(
+            (s, e) for n, _p, s, e in results if n.startswith("f")
+        )
+        assert len(spans) == 50
+        for (s1, e1), (s2, _e2) in zip(spans, spans[1:]):
+            assert e1 <= s2
+
+    def test_hostile_header_flood_is_linear_time(self):
+        import time
+
+        from core.analysis.taint_multi_lang import (
+            extract_summaries_for_file,
+        )
+        content = "".join(
+            f"function f{i}(a, b) {{ g(\n" for i in range(2000)
+        )
+        t0 = time.perf_counter()
+        extract_summaries_for_file(content, "x.js")
+        elapsed = time.perf_counter() - t0
+        # 27s pre-fix; generous CI headroom while still failing the
+        # quadratic form by an order of magnitude.
+        assert elapsed < 5.0
+
+    def test_per_body_cap_bounds_single_unclosed_body(self):
+        from core.analysis.taint_multi_lang import (
+            _MAX_BODY_CHARS,
+            _extract_go_functions,
+        )
+        content = "func f(a int) {\n" + "x = y\n" * 20000
+        results = _extract_go_functions(content)
+        assert len(results) == 1
+        _n, _p, body_start, body_end = results[0]
+        assert body_end - body_start <= _MAX_BODY_CHARS
+
+    def test_ordinary_closed_bodies_unchanged(self):
+        from core.analysis.taint_multi_lang import (
+            extract_summaries_for_file,
+        )
+        content = (
+            "function handler(req, res) {\n"
+            "  eval(req.body);\n"
+            "}\n"
+            "function other(x) {\n"
+            "  return x;\n"
+            "}\n"
+        )
+        summaries = extract_summaries_for_file(content, "x.js")
+        rules = summaries["handler"].taint_rules
+        assert any(r.sink_call == "eval" for r in rules)

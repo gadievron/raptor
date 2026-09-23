@@ -363,12 +363,19 @@ def _extract_java_functions(
 ) -> list[tuple[str, list[str], int, int]]:
     """Extract Java function definitions with bodies."""
     results = []
-    for match in _JAVA_FUNC.finditer(content):
+    matches = list(_JAVA_FUNC.finditer(content))
+    for i, match in enumerate(matches):
         name = match.group(1)
         params_str = match.group(2)
         params = _parse_java_params(params_str)
         body_start = match.end()
-        body_end = _find_brace_end(content, body_start - 1)
+        next_start = (
+            matches[i + 1].start() if i + 1 < len(matches) else None
+        )
+        body_end = _find_brace_end(
+            content, body_start - 1,
+            limit=_body_scan_limit(content, body_start - 1, next_start),
+        )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
     return results
@@ -457,11 +464,19 @@ def _extract_js_functions(
     named_re = re.compile(
         r"(?:async\s+)?function\s+(\w+)\s*\(([^)]{0,400})\)\s*(?::\s*\S+\s*)?\{",
     )
-    for match in named_re.finditer(content):
+    named_matches = list(named_re.finditer(content))
+    for i, match in enumerate(named_matches):
         name = match.group(1)
         params = _parse_js_params(match.group(2))
         body_start = match.end()
-        body_end = _find_brace_end(content, match.end() - 1)
+        next_start = (
+            named_matches[i + 1].start()
+            if i + 1 < len(named_matches) else None
+        )
+        body_end = _find_brace_end(
+            content, match.end() - 1,
+            limit=_body_scan_limit(content, match.end() - 1, next_start),
+        )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
 
@@ -479,7 +494,8 @@ def _extract_js_functions(
         r"|\(([^)]{0,400})\)\s*\{)",
     )
     seen = {r[0] for r in results}
-    for match in method_re.finditer(content):
+    method_matches = list(method_re.finditer(content))
+    for i, match in enumerate(method_matches):
         name = match.group(1)
         # Keyword guard: the method regex's bare ``(...) {`` arm also
         # matches control-flow headers — ``switch (x) {`` and
@@ -496,7 +512,14 @@ def _extract_js_functions(
         )
         params = _parse_js_params(params_str)
         body_start = match.end()
-        body_end = _find_brace_end(content, match.end() - 1)
+        next_start = (
+            method_matches[i + 1].start()
+            if i + 1 < len(method_matches) else None
+        )
+        body_end = _find_brace_end(
+            content, match.end() - 1,
+            limit=_body_scan_limit(content, match.end() - 1, next_start),
+        )
         if body_end > body_start and name not in seen:
             seen.add(name)
             results.append((name, params, body_start, body_end))
@@ -563,16 +586,24 @@ def _extract_go_functions(
 ) -> list[tuple[str, list[str], int, int]]:
     """Extract Go function definitions."""
     results = []
-    for match in _GO_FUNC.finditer(content):
+    matches = list(_GO_FUNC.finditer(content))
+    for i, match in enumerate(matches):
         name = match.group(1)
         params = _parse_go_params(match.group(2))
-        # Find opening brace after the signature
-        rest = content[match.end():]
-        brace_offset = rest.find("{")
-        if brace_offset < 0:
+        # Opening brace after the signature — searched in place (the
+        # per-match remainder slice was itself O(L) memory traffic)
+        # and only within the signature-plausible window.
+        open_pos = content.find("{", match.end(), match.end() + 1000)
+        if open_pos < 0:
             continue
-        body_start = match.end() + brace_offset + 1
-        body_end = _find_brace_end(content, match.end() + brace_offset)
+        body_start = open_pos + 1
+        next_start = (
+            matches[i + 1].start() if i + 1 < len(matches) else None
+        )
+        body_end = _find_brace_end(
+            content, open_pos,
+            limit=_body_scan_limit(content, open_pos, next_start),
+        )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
     return results
@@ -641,17 +672,22 @@ def _extract_rust_functions(
 ) -> list[tuple[str, list[str], int, int]]:
     """Extract Rust function definitions."""
     results = []
-    for match in _RUST_FUNC.finditer(content):
+    matches = list(_RUST_FUNC.finditer(content))
+    for i, match in enumerate(matches):
         name = match.group(1)
         params = _parse_rust_params(match.group(2))
-        # Find opening brace
-        rest = content[match.end():]
-        brace_offset = rest.find("{")
-        if brace_offset < 0:
+        # Opening brace after the signature — in-place bounded search
+        # (see the Go extractor's rationale).
+        open_pos = content.find("{", match.end(), match.end() + 1000)
+        if open_pos < 0:
             continue
-        body_start = match.end() + brace_offset + 1
+        body_start = open_pos + 1
+        next_start = (
+            matches[i + 1].start() if i + 1 < len(matches) else None
+        )
         body_end = _find_brace_end(
-            content, match.end() + brace_offset, rust_lifetimes=True,
+            content, open_pos, rust_lifetimes=True,
+            limit=_body_scan_limit(content, open_pos, next_start),
         )
         if body_end > body_start:
             results.append((name, params, body_start, body_end))
@@ -869,6 +905,25 @@ def _extract_php_extra_flows(
 # -- Shared utilities --
 
 
+# Hard per-body extent cap. Heuristic-tier summaries only feed audit
+# prompt context, so truncating an implausibly long body loses hint
+# coverage, never suppression authority; without a cap one unclosed
+# brace makes a "body" out of the rest of the file.
+_MAX_BODY_CHARS = 20000
+
+
+def _body_scan_limit(
+    content: str, open_pos: int, next_start: int | None,
+) -> int:
+    """Scan bound for one body: the next function header's start
+    (overlapping extents are what made N unclosed bodies O(N·L)) or
+    the per-body character cap, whichever is tighter."""
+    limit = min(len(content), open_pos + 1 + _MAX_BODY_CHARS)
+    if next_start is not None:
+        limit = min(limit, max(next_start, open_pos + 1))
+    return limit
+
+
 # A Rust character literal at a given position: 'x', '\n', '\'',
 # '\u{1F600}'. Anything else starting with an apostrophe is a
 # lifetime ('a, 'static) or a loop label ('outer:) — NOT a string
@@ -881,6 +936,7 @@ _RUST_CHAR_LITERAL = re.compile(
 def _find_brace_end(
     content: str, open_pos: int, *, rust_lifetimes: bool = False,
     hash_comments: bool = False,
+    limit: int | None = None,
 ) -> int:
     """Find the matching close brace for an open brace at open_pos.
 
@@ -895,12 +951,22 @@ def _find_brace_end(
     line comment opener, so a brace or quote in a ``#`` comment
     cannot corrupt the extents. PHP's backtick operator is masked by
     the shared string handling.
+
+    ``limit`` bounds the SCAN, not just the result: an unclosed body
+    (hostile or truncated/minified source) otherwise runs to EOF, and
+    N overlapping such bodies re-scan the file N times — O(N·L) at
+    26.9s for 2000 unclosed headers in a 48KB file, ~50 min for one
+    file at the 500KB audit-prep cap. Callers pass the next function
+    header's start (plus a hard per-body character cap); the return
+    value never exceeds it.
     """
     if open_pos >= len(content) or content[open_pos] != "{":
         return open_pos
     depth = 1
     pos = open_pos + 1
     length = len(content)
+    if limit is not None:
+        length = min(length, max(limit, open_pos + 1))
     in_string = False
     string_char = ""
     while pos < length and depth > 0:
@@ -948,7 +1014,8 @@ def _find_brace_end(
         elif ch == "}":
             depth -= 1
         pos += 1
-    return pos
+    # Comment skips can jump past the bound — never report beyond it.
+    return min(pos, length)
 
 
 # -- Dispatch --
