@@ -5322,7 +5322,9 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
         from core.understand_graph import graph_path_for_run, hypothesis_seeds
         _gp = graph_path_for_run(config.out_dir, str(config.target_path or ""))
         if _gp.exists():
-            seeds = hypothesis_seeds(_gp)
+            # Target-scoped: an unscoped call answers with whatever
+            # codebase was ingested most recently.
+            seeds = hypothesis_seeds(_gp, str(config.target_path or "") or None)
             if seeds:
                 _seed_keys = {(s["file"], s["function"]) for s in seeds}
                 _boosted = 0

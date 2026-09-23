@@ -61,7 +61,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--sink", help="Filter paths by sink ID, name, or location")
     p.add_argument("--unchecked-only", action="store_true", help="Only show paths with no mapped effective boundary")
     p.add_argument("--by-cwe", help="Filter paths by CWE/CWE-like token")
-    p.add_argument("--limit", type=int, default=50, help="Maximum paths to return")
+    p.add_argument("--limit", type=int, default=None,
+                   help="Maximum rows to return (per-lane default when omitted)")
     p.add_argument("--diff", action="store_true", help="Diff the latest two graph snapshots")
     p.add_argument("--base-snapshot", help="Base snapshot ID for --diff")
     p.add_argument("--head-snapshot", help="Head snapshot ID for --diff")
@@ -116,12 +117,18 @@ def main() -> int:
         threat_model_graph_context,
     )
 
+    # --target / --limit forward to EVERY lane: a dropped --target
+    # answers a target-A query with whatever codebase was ingested
+    # most recently while claiming target scope, and that text reaches
+    # prompt seeding. When --limit is omitted each lane keeps its own
+    # default.
+    limit_kwargs = {} if args.limit is None else {"limit": args.limit}
     if args.hypothesis_seeds:
-        payload = {"seeds": hypothesis_seeds(db_path)}
+        payload = {"seeds": hypothesis_seeds(db_path, args.target, **limit_kwargs)}
     elif args.fuzz_targets:
-        payload = {"fuzz_targets": fuzz_targets(db_path)}
+        payload = {"fuzz_targets": fuzz_targets(db_path, args.target, **limit_kwargs)}
     elif args.dedup_chains:
-        payload = {"dedup_chains": scan_dedup_chains(db_path)}
+        payload = {"dedup_chains": scan_dedup_chains(db_path, args.target)}
     elif args.coverage_residual:
         payload = {"residual": coverage_residual(db_path, args.target)}
     elif args.dashboard:
@@ -145,7 +152,7 @@ def main() -> int:
                 sink=args.sink,
                 unchecked_only=args.unchecked_only,
                 by_cwe=args.by_cwe,
-                limit=args.limit,
+                limit=args.limit if args.limit is not None else 50,
             )
         }
     elif args.threat_context:
@@ -153,7 +160,7 @@ def main() -> int:
             "graph_context": threat_model_graph_context(
                 db_path,
                 args.target,
-                limit=args.limit,
+                limit=args.limit if args.limit is not None else 50,
             )
         }
     elif args.reachable_sinks:
