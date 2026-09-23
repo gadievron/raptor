@@ -1041,3 +1041,37 @@ class TestCFillLineEndsLinear:
         CExtractor._fill_line_ends(lines, funcs)
         by_name = {f.name: f.line_end for f in funcs}
         assert by_name == {"broken": 5, "ok": 5}
+
+
+def test_c_repair_pass_ignores_commented_out_functions():
+    # tree-sitter correctly sees only a comment; the gap-filling regex
+    # ran over raw text and minted a phantom function item (a
+    # reviewable checklist unit over dead text whose span overlapped
+    # the real function below the comment).
+    src = (
+        "int keep_top(void) { return 1; }\n"
+        "/*\n"
+        "int old_impl(int x) {\n"
+        "    return x + 1;\n"
+        "}\n"
+        "*/\n"
+        "int real_fn(int y) { return y; }\n"
+    )
+    items = extract_items("t.c", "c", src)
+    names = {i.name for i in items if i.kind == "function"}
+    assert "old_impl" not in names
+    assert {"keep_top", "real_fn"} <= names
+
+
+def test_c_repair_pass_still_rescues_macro_fragmented_functions():
+    # The pass exists to fill tree-sitter gaps from unknown macros —
+    # the comment-blanked view must not lose that rescue.
+    src = (
+        "int ZEXPORT frag_fn(z_streamp strm)\n"
+        "{\n"
+        "    return 0;\n"
+        "}\n"
+    )
+    items = extract_items("t.c", "c", src)
+    names = {i.name for i in items if i.kind == "function"}
+    assert "frag_fn" in names
