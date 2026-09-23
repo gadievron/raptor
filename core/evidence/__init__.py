@@ -968,7 +968,15 @@ def _attach_binary_bridge(
     """Enrich evidence records with binary analysis data."""
     func_to_keys: dict[str, list[str]] = {}
     for key in index:
-        func_name = key.split(":")[-1]
+        # Keys are function_key() products — "<rel_path>:<func_name>".
+        # Split on the FIRST colon: qualified native names (Foo::bar,
+        # crate::mod::fn) contain colons themselves, and a last-colon
+        # split truncated them to the trailing segment, silently
+        # dropping ALL binary enrichment for exactly the C++/Rust
+        # symbols the bridge exists for. Checklist relpaths are
+        # target-relative POSIX paths, which do not carry colons.
+        parts = key.split(":", 1)
+        func_name = parts[1] if len(parts) == 2 else key
         func_to_keys.setdefault(func_name, []).append(key)
 
     for edge in bridge.sink_edges:

@@ -506,3 +506,43 @@ class TestNumericFieldCoercion:
         ]
         assert "line 42" in format_evidence_prose(rec)
 
+class TestBinaryBridgeQualifiedNames:
+    """The bridge join must keep qualified function names: keys are
+    'file:function', so splitting on the LAST colon truncated Foo::bar
+    to bar and silently dropped ALL binary enrichment for C++/Rust
+    qualified symbols — exactly the native targets the bridge exists
+    for.
+    """
+
+    class _Bridge:
+        class _Edge:
+            caller = "Foo::bar"
+            sink = "system"
+            evidence_tier = "dwarf"
+            confidence = "high"
+
+        class _Surface:
+            function = "Foo::bar"
+            category = "parser"
+
+        class _Boundary:
+            function = "Foo::bar"
+
+        sink_edges = [_Edge()]
+        ranked_surfaces = [_Surface()]
+        parser_boundaries = [_Boundary()]
+
+    def test_qualified_name_attaches_enrichment(self):
+        from core.evidence import build_evidence_index
+        checklist = {"target_path": "/t", "files": [
+            {"path": "src/a.cpp",
+             "items": [{"name": "Foo::bar", "line_start": 1,
+                        "line_end": 9}]},
+        ]}
+        index = build_evidence_index(
+            checklist=checklist, binary_bridge=self._Bridge(),
+        )
+        rec = index["src/a.cpp:Foo::bar"]
+        assert rec.binary_sink_edges, "sink edges dropped for Foo::bar"
+        assert rec.binary_surface_category == "parser"
+        assert rec.binary_parser_boundary is True
