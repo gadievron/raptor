@@ -1265,17 +1265,13 @@ def format_context_for_prompt(
                 "postcondition_violations", "\n" + pv_text, 1,
             ))
 
-    if ctx.get("fused_evidence"):
-        sections.append(PromptSection(
-            "fused_evidence",
-            "\n### Fused evidence (cross-source corroboration)\n"
-            + wrap_untrusted(
-                str(ctx["fused_evidence"]),
-                kind="fused-evidence",
-                origin="audit-evidence-fusion",
-            ),
-            1,
-        ))
+    # fused_evidence renders ONCE, below, at trusted position: the
+    # block is orchestrator-authored (_store_fused_evidence renders
+    # and defends it through the defend_repo_text chokepoint before
+    # storing), and its shed priority follows the fusion module's own
+    # injection-priority contract.  A second, untrusted-enveloped
+    # rendering here duplicated the same bytes with contradictory
+    # trust framing and shed independently under budget pressure.
 
     if ctx.get("capability_displacement"):
         sections.append(PromptSection(
