@@ -26,6 +26,16 @@ EPERM without anyone having to enumerate it. Unlike the syscall axis,
 this default-deny needs no per-tool profiles: the family population
 in real use is tiny and stable.
 
+SOCKET-TYPE axis: allowlist as well, for the same reason PLUS a
+kernel remap the family axis cannot see: seccomp evaluates the
+caller's registers, but net/socket.c's __sock_create rewrites
+family==AF_INET + type==SOCK_PACKET into AF_PACKET afterwards, so
+the allowlisted AF_INET spelling minted a live packet-capture socket
+past the family rules. Only SOCK_STREAM / SOCK_DGRAM /
+SOCK_SEQPACKET are creatable (_SOCKET_TYPE_ALLOWLIST); SOCK_RAW,
+SOCK_PACKET, SOCK_RDM, SOCK_DCCP and every unassigned type value
+get EPERM in every profile, flag-garnished spellings included.
+
 Default action: ALLOW. Blocked syscalls return EPERM (not SIGSYS / kill)
 so processes fail gracefully — connect() returns -1, caller can handle it,
 and _check_blocked can suggest --sandbox debug / network-only if needed.
@@ -315,9 +325,14 @@ _AUDIT_HARD_DENY_SYSCALLS = frozenset({
 # arch. AF_INET/AF_INET6 are allowlisted — namespace --net removes
 # the interfaces anyway, so allowing AF_INET costs nothing and avoids
 # breakage for tools that create a socket and check if it works.
+# NOTE: an allowlisted family is NOT the whole verdict — the kernel
+# remaps AF_INET + SOCK_PACKET to AF_PACKET after seccomp ran, so
+# the TYPE allowlist below (_SOCKET_TYPE_ALLOWLIST) carries the
+# other half of the socket-creation contract.
 _AF_UNIX = 1
 _AF_INET = 2
 _AF_INET6 = 10
+_SOCK_STREAM = 1
 _SOCK_RAW = 3
 _SOCK_DGRAM = 2
 
@@ -443,6 +458,42 @@ _IPPROTO_MPTCP = 262
 _IPPROTO_SMC = 256
 _SOCK_SEQPACKET = 5
 _SOCK_DCCP = 6
+
+# Socket-TYPE allowlist — socket(2)/socketpair(2) are deny-by-default
+# on the type axis (arg 1, masked to the kernel's SOCK_TYPE_MASK) in
+# every profile, mirroring the family inversion above. The family
+# axis alone is BYPASSABLE: net/socket.c's ``__sock_create`` remaps
+# ``family == PF_INET && type == SOCK_PACKET`` to PF_PACKET *after*
+# seccomp evaluated the registers, so ``socket(AF_INET, SOCK_PACKET,
+# htons(ETH_P_ALL))`` passed the family allowlist on its allowlisted
+# AF_INET spelling and returned a live AF_PACKET socket
+# (live-verified: SO_DOMAIN == 17 under the production ``full``
+# filter) — the packet_create kernel attack surface plus, on
+# shared-netns lanes, host/sibling traffic capture, behind a family
+# value the allowlist deliberately admits. A value-level
+# SOCK_PACKET deny would close that one remap; the inversion closes
+# the AXIS the same way the family inversion did, so a future
+# kernel-side type alias cannot reopen it.
+#
+# Membership is the same empirical adjudication as the family
+# allowlist: the instrumented tool population creates exactly
+# SOCK_STREAM (TCP, unix streams), SOCK_DGRAM (UDP/DNS, unix
+# datagrams where a profile permits them) and SOCK_SEQPACKET (unix
+# IPC — AF_INET* SEQPACKET stays denied by the family-scoped
+# SCTP-default rules above). Everything else is denied:
+# SOCK_RAW (3) is a raw-socket capability (denied pre-inversion
+# too), SOCK_RDM (4) has no INET/UNIX handler, SOCK_DCCP (6) is the
+# kernel-bypass transport, SOCK_PACKET (10) is the remap, and
+# 0/7-9/11-15 are unassigned — denied fail-closed so a future type
+# gets EPERM without enumeration. The MASKED_EQ compare bounds the
+# axis to 0..15 (flag bits SOCK_CLOEXEC/SOCK_NONBLOCK live above
+# the mask), so complement enumeration over range(16) is total —
+# no GE tail is needed, unlike the unbounded family axis.
+_SOCKET_TYPE_ALLOWLIST = (_SOCK_STREAM, _SOCK_DGRAM, _SOCK_SEQPACKET)
+_SOCKET_TYPE_DENIES = tuple(
+    sock_type for sock_type in range(16)
+    if sock_type not in _SOCKET_TYPE_ALLOWLIST
+)
 
 # The UDP block (AF_INET / AF_INET6 + SOCK_DGRAM) is only filtered
 # when the caller requests it (proxy mode); otherwise DNS via UDP/53
@@ -929,7 +980,9 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
             "Sandbox: seccomp could not resolve syscall(s) %s on this architecture — those blocks are NOT installed. Likely harmless on x86_64/aarch64 (this should be empty); investigate on other architectures if any entries appear.", missing
         )
     # Socket-family allowlist (see _SOCKET_FAMILY_ALLOWLIST_BASE):
-    # deny-by-default on arg 0; SOCK_RAW blocked via arg 1. "frida"
+    # deny-by-default on arg 0; type allowlist on arg 1 (see
+    # _SOCKET_TYPE_ALLOWLIST — closes the AF_INET+SOCK_PACKET
+    # kernel remap alongside SOCK_RAW). "frida"
     # profile: AF_UNIX joins the allowlist (frida-helper uses Unix
     # sockets for its internal IPC with the target process), exactly
     # like the mount-ns lane's allow_unix_sockets — no profile widens
@@ -943,7 +996,7 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
         _family_deny_rule_material(socket_allowed_families))
     socketpair_family_denies, socketpair_family_deny_floor = (
         _family_deny_rule_material(_SOCKETPAIR_FAMILY_ALLOWLIST))
-    socket_type_block = _SOCK_RAW
+    socket_type_denies = _SOCKET_TYPE_DENIES
 
     _os_write = os.write
 
@@ -1221,27 +1274,37 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                                      b" -- refusing to exec without filter\n")
                         os._exit(126)
 
-                    # socket() with SOCK_RAW — argument 1 is type (with optional
-                    # SOCK_NONBLOCK/CLOEXEC bits). Use MASKED_EQ with the
-                    # kernel's SOCK_TYPE_MASK (0xf) so the rule matches the
-                    # bare `SOCK_RAW` and also `SOCK_RAW | SOCK_CLOEXEC` /
-                    # `SOCK_RAW | SOCK_NONBLOCK`. Raw sockets also require
-                    # CAP_NET_RAW on the host which the sandbox doesn't grant,
-                    # so this is belt-and-braces. Lives alongside the other
-                    # socket() rules (was previously nested inside the ioctl
-                    # block by accident — it depends on socket_num, not
-                    # ioctl_num).
-                    arg = _ScmpArgCmp(arg=1, op=_SCMP_CMP_MASKED_EQ,
-                                      datum_a=_SOCK_TYPE_MASK,
-                                      datum_b=socket_type_block)
-                    arg_arr = (_ScmpArgCmp * 1)(arg)
-                    ret = lib.seccomp_rule_add_array(
-                        ctx, hard_deny, socket_num, 1, arg_arr,
-                    )
-                    if ret < 0:
-                        _os_write(2, b"sandbox: seccomp SOCK_RAW rule failed -- "
-                                     b"refusing to exec without filter\n")
-                        os._exit(126)
+                    # socket() type allowlist, deny-by-default — one
+                    # MASKED_EQ rule per non-allowlisted type value
+                    # (see _SOCKET_TYPE_ALLOWLIST: only SOCK_STREAM /
+                    # SOCK_DGRAM / SOCK_SEQPACKET survive; SOCK_RAW,
+                    # SOCK_PACKET — which the kernel remaps to a live
+                    # AF_PACKET socket past the family allowlist —
+                    # SOCK_RDM and every unassigned value get EPERM).
+                    # Argument 1 is type with optional SOCK_NONBLOCK/
+                    # SOCK_CLOEXEC bits; MASKED_EQ with the kernel's
+                    # SOCK_TYPE_MASK (0xf) matches bare and
+                    # flag-garnished spellings alike, and bounds the
+                    # axis to 0..15 so the complement enumeration is
+                    # total. Raw sockets also require CAP_NET_RAW on
+                    # the host, but the sandbox's own userns grants
+                    # that over its netns — the type rules are a
+                    # primary control, not belt-and-braces. Lives
+                    # alongside the other socket() rules (depends on
+                    # socket_num, not ioctl_num).
+                    for sock_type in socket_type_denies:
+                        arg = _ScmpArgCmp(arg=1, op=_SCMP_CMP_MASKED_EQ,
+                                          datum_a=_SOCK_TYPE_MASK,
+                                          datum_b=sock_type)
+                        arg_arr = (_ScmpArgCmp * 1)(arg)
+                        ret = lib.seccomp_rule_add_array(
+                            ctx, hard_deny, socket_num, 1, arg_arr,
+                        )
+                        if ret < 0:
+                            _os_write(2, b"sandbox: seccomp socket type rule"
+                                         b" failed -- refusing to exec"
+                                         b" without filter\n")
+                            os._exit(126)
 
                     # Kernel-bypass stream transports — see the
                     # _IPPROTO_SCTP constant block for the full
@@ -1420,6 +1483,29 @@ def _make_seccomp_preexec(profile: str, block_udp: bool = False,
                                      b" family rule failed -- refusing"
                                      b" to exec without filter\n")
                         os._exit(126)
+                    # socketpair() type allowlist — same deny-by-
+                    # default construction as socket() above. The
+                    # family allowlist already refuses AF_INET
+                    # socketpair (so the SOCK_PACKET remap cannot
+                    # fire through this entry today), but the remap
+                    # runs in the SHARED __sock_create path both
+                    # syscalls use — constraining the axis here too
+                    # keeps the pair of entry points symmetric so a
+                    # future family-allowlist widening cannot
+                    # silently reopen a type-level hole.
+                    for sock_type in socket_type_denies:
+                        arg = _ScmpArgCmp(arg=1, op=_SCMP_CMP_MASKED_EQ,
+                                          datum_a=_SOCK_TYPE_MASK,
+                                          datum_b=sock_type)
+                        arg_arr = (_ScmpArgCmp * 1)(arg)
+                        ret = lib.seccomp_rule_add_array(
+                            ctx, hard_deny, socketpair_num, 1, arg_arr,
+                        )
+                        if ret < 0:
+                            _os_write(2, b"sandbox: seccomp socketpair"
+                                         b" type rule failed -- refusing"
+                                         b" to exec without filter\n")
+                            os._exit(126)
 
                 # socketpair(AF_UNIX): only the SOCK_DGRAM shape is
                 # additionally filtered (conditionally — see
