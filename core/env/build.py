@@ -24,6 +24,7 @@ binary IS, not what we asked for).
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -501,20 +502,36 @@ def _flag_prefix(toolchain: ToolchainSpec | None) -> str:
 
 
 def _elf_executables(root: Path) -> dict[str, Path]:
-    """ELF executables under *root*, keyed by repo-relative path."""
+    """ELF executables under *root*, keyed by repo-relative path.
+
+    Walks with ``os.walk(followlinks=False)``: the rootfs comes out
+    of an attacker-influenced containerized build, and ``pathlib``'s
+    ``**`` follows DIRECTORY symlinks on every Python before 3.13 —
+    two planted in-tree self-links (``loop -> .`` + ``up -> ..``,
+    both of which survive tar extraction under ``filter="data"``)
+    give combinatorial path expansion that the old eager ``sorted()``
+    materialised in the TRUSTED parent, and a link into the toolchain
+    rootfs misattributed image binaries as repo build artifacts. The
+    per-entry file checks below already skipped symlinked FILES;
+    never ENTERING symlinked directories closes the traversal too
+    (same idiom as the codeql_trust pack walk).
+    """
     found: dict[str, Path] = {}
     if not root.is_dir():
         return found
-    for path in sorted(root.rglob("*")):
-        try:
-            if not path.is_file() or path.is_symlink():
-                continue
-            if not path.stat().st_mode & 0o111:
-                continue
-            with path.open("rb") as fh:
-                if fh.read(4) != _ELF_MAGIC:
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames.sort()
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            try:
+                if not path.is_file() or path.is_symlink():
                     continue
-        except OSError:
-            continue
-        found[str(path.relative_to(root))] = path
+                if not path.stat().st_mode & 0o111:
+                    continue
+                with path.open("rb") as fh:
+                    if fh.read(4) != _ELF_MAGIC:
+                        continue
+            except OSError:
+                continue
+            found[str(path.relative_to(root))] = path
     return found

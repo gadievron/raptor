@@ -41,6 +41,30 @@ class TestElfScan:
     def test_missing_root_is_empty(self, tmp_path):
         assert _elf_executables(tmp_path / "nope") == {}
 
+    def test_directory_symlink_cycle_bounded(self, tmp_path):
+        """Attacker-built rootfs shape: two in-tree self-links
+        (loop -> . and up -> ..) — both survive tar extraction under
+        filter="data" — must neither expand combinatorially nor
+        surface out-of-tree entries. pathlib's ** follows directory
+        symlinks on 3.10-3.12; the walk must never enter them on ANY
+        supported interpreter."""
+        _plant_elf(tmp_path / "src" / "app")
+        (tmp_path / "src" / "loop").symlink_to(".")
+        (tmp_path / "src" / "up").symlink_to("..")
+        found = _elf_executables(tmp_path)
+        assert set(found) == {"src/app"}
+
+    def test_directory_symlink_out_of_tree_not_followed(self, tmp_path):
+        outside = tmp_path / "outside"
+        _plant_elf(outside / "toolchain-bin")
+        root = tmp_path / "root"
+        _plant_elf(root / "app")
+        (root / "vendor").symlink_to(outside)
+        found = _elf_executables(root)
+        # The toolchain binary behind the symlinked dir must NOT be
+        # misattributed as a repo build artifact.
+        assert set(found) == {"app"}
+
 
 class TestFlagPrefix:
     def test_none_is_empty(self):
