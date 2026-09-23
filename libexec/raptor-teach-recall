@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""Recall prior study concepts from SAGE for a teach session (TEACH-0).
+
+Usage: raptor-teach-recall <target> <subject>...
+
+The target path and teach subject arrive as argv DATA, never
+interpolated into python source — the previous instruction-file
+``python3 -c "..."`` block spliced both values into a double-quoted
+program, so the shell expanded ``$(...)`` inside a pasted value before
+python ever ran. Extra arguments join the subject, so multi-word
+subjects need no shell quoting.
+
+Prints VERIFIED / UNVERIFIED concept blocks and a one-line JSON count
+summary, exactly as the teach skill documents.
+"""
+import json
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+
+def main() -> int:
+    if len(sys.argv) < 3:
+        print("Usage: raptor-teach-recall <target> <subject>...",
+              file=sys.stderr)
+        return 1
+
+    target = sys.argv[1]
+    subject = " ".join(sys.argv[2:])
+
+    from core.concepts.study import (
+        _extract_evidence_hashes,
+        _verify_evidence_hashes,
+    )
+    from core.sage.hooks import recall_concepts_for_teach
+
+    rows = recall_concepts_for_teach(repo_path=target, subject=subject)
+    source_root = Path(target)
+    verified: list[str] = []
+    unverified: list[str] = []
+    for row in rows:
+        content = row.get("content", "")
+        if (_extract_evidence_hashes(content)
+                and _verify_evidence_hashes(content, source_root)):
+            verified.append(content)
+        elif content:
+            unverified.append(content)
+
+    print(json.dumps({"verified": len(verified),
+                      "unverified": len(unverified)}))
+    for item in verified:
+        print("--- VERIFIED ---")
+        print(item)
+    for item in unverified:
+        print("--- UNVERIFIED ---")
+        print(item[:500])
+    if not verified and not unverified:
+        print("No prior concepts found.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

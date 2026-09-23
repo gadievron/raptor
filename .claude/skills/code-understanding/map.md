@@ -472,38 +472,17 @@ prompt — appropriate, since the probe executes the target binary):
 libexec/raptor-sandbox-observe --json --out "$WORKDIR/probe" -- \
     /path/to/binary [args...] > "$WORKDIR/probe.json"
 
-python3 -c "
-import json
-from pathlib import Path
-from core.artifacts.context_map_budget import save_context_map
-from core.sandbox.observe_profile import (
-    ConnectTarget, ObserveProfile,
-)
-from core.sandbox.observe_context_merge import (
-    merge_observation_into_context_map,
-)
-
-w = Path('$WORKDIR')
-ctx = json.loads((w / 'context-map.json').read_text())
-probe = json.loads((w / 'probe.json').read_text())
-profile = ObserveProfile(
-    paths_read=probe['paths_read'],
-    paths_written=probe['paths_written'],
-    paths_stat=probe['paths_stat'],
-    connect_targets=[
-        ConnectTarget(**t) for t in probe['connect_targets']
-    ],
-)
-merged = merge_observation_into_context_map(
-    ctx, profile,
-    binary='/path/to/binary',
-    command=['/path/to/binary'] + ['<args>'],
-)
-# Producer chokepoint: compact encoding + size budget (bounded
-# readers cap on file bytes — never pretty-print this artifact).
-save_context_map(w / 'context-map.json', merged)
-"
+libexec/raptor-enrich-context-map-observe "$WORKDIR" \
+    --binary /path/to/binary -- [args...]
 ```
+
+The workdir, binary path and probe arguments ride as argv data —
+never paste them into a `python3 -c` program (the shell expands
+`$(...)` inside a double-quoted block before python runs). The
+enricher reads `$WORKDIR/probe.json`, merges it into
+`$WORKDIR/context-map.json`, and writes the map back in place
+through the `save_context_map` producer chokepoint (compact
+encoding, budget-enforced — never pretty-printed).
 
 After merge, `context-map.json` has a new `runtime_observation`
 section with:

@@ -172,15 +172,10 @@ libexec/raptor-build-checklist <resolved_target> "$OUTPUT_DIR"
 **Step 1.5: Load threat model context** (if a project threat model exists):
 
 ```bash
-python3 -c "
-import sys, os; sys.path.insert(0, os.environ['RAPTOR_DIR'])
-from pathlib import Path
-from core.threat_model import threat_model_prompt_block
-block = threat_model_prompt_block(Path('<resolved_target>'))
-if block: print(block)
-else: print('No project threat model found.')
-"
+libexec/raptor-threat-model prompt-block <resolved_target>
 ```
+
+The target path rides as argv data — never paste it into a `python3 -c` program (the shell expands `$(...)` inside a double-quoted block before python runs). It prints the prompt block, or `No project threat model found.`
 
 When present, use it as operator-owned context during analysis:
 - For `--hunt`: use `known_bug_shapes` to seed variant patterns and `focus_areas` to prioritise search locations

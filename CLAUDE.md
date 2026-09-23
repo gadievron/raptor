@@ -20,6 +20,8 @@ VERY IMPORTANT: follow these steps in order.
 When a skill, command file, or user message specifies a literal command (`Execute: foo`, a fenced shell block as the action, or "run X"), execute it verbatim. Do not add pipes (`| tail`, `| head`, `| grep`), redirects (`2>&1`, `>/dev/null`), flags (`--verbose`, `-q`), wrappers (`timeout`, `nice`), `cd` prefixes, or env-var prefixes (`VAR=x cmd`). Environment variables like `CLAUDECODE` are already set by the launcher; prepending them changes the command string and breaks permission grants.
 RAPTOR pipelines emit progress lines, real-time cost tracking, and the `OUTPUT_DIR=<path>` sentinel that downstream lifecycle steps parse. Truncating or filtering that stream breaks both operator visibility and orchestration.
 
+Never paste operator-, repo-, or target-derived values inside a double-quoted `python3 -c` block (or any double-quoted program text on a shell command line): the shell expands `$(…)` and backticks carried in the pasted value before the interpreter runs. Dynamic values ride as argv data — a `libexec/raptor-*` shim taking them as arguments, or a script file written with the Write tool and run with `sys.argv` arguments (CI enforces this for instruction-file shell blocks: `.github/tests/test_instruction_python_c_census.py`).
+
 Exception: when the skill itself shows the modification (e.g. a documented `| tee logfile` pattern), follow what the skill prints.
 
 ---
