@@ -35,7 +35,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -82,18 +81,25 @@ class BuildFlagsContext:
     #: (Makefile / Kconfig regex), or "absent".
     extraction_confidence: str = "absent"
 
-    #: True iff ``-Werror=unused-result`` (or bare ``-Werror`` without
-    #: a ``-Wno-error=unused-result`` exception) was observed. When
-    #: True and source_intel detects ``__must_check`` on a function,
-    #: the contract is compile-enforced; otherwise it's advisory.
+    #: True iff the effective per-command setting makes unused-result
+    #: warnings errors (``-Werror=unused-result``, or bare ``-Werror``
+    #: without a ``-Wno-error=unused-result`` exception — specificity
+    #: beats position, per gcc). When True and source_intel detects
+    #: ``__must_check`` on a function, the contract is
+    #: compile-enforced; otherwise it's advisory. Across translation
+    #: units this reports the most-hardened observed setting.
     werror_unused_result: bool | None = None
 
     #: Bare ``-Werror`` (no ``=spec``). When True, every warning is an
     #: error unless explicitly excepted.
     werror_all: bool | None = None
 
-    #: Integer level from ``-D_FORTIFY_SOURCE=N``. glibc accepts 1,2,3;
-    #: kernel uses 1. ``None`` means not set.
+    #: Effective ``_FORTIFY_SOURCE`` level: the LAST of conflicting
+    #: ``-D_FORTIFY_SOURCE[=N]`` / ``-U_FORTIFY_SOURCE`` per command
+    #: line wins, matching the preprocessor (``-U`` and ``=0`` are
+    #: level 0 — explicitly disabled, distinct from ``None`` = no
+    #: signal). glibc accepts 1,2,3; kernel uses 1. Across translation
+    #: units the most-hardened observed level is reported.
     fortify_source_level: int | None = None
 
     #: One of: "none" (``-fno-stack-protector``) | "weak"
@@ -190,9 +196,19 @@ def _from_compile_commands(path: Path) -> BuildFlagsContext:
     """Parse clang-style ``compile_commands.json``.
 
     Each entry has either a ``command`` string or an ``arguments`` array.
-    We union flags across all entries — different translation units may
-    have different flags (e.g. some compiled with ``-DCONFIG_KASAN``),
-    and we want the most-hardened observed setting per flag.
+    Every field follows the same two-level rule the stack-protector
+    field established:
+
+      * WITHIN one command line, the compiler's own semantics decide
+        (last of conflicting flags wins; ``-W(no-)error=<spec>``
+        specificity beats bare ``-W(no-)error`` position, per gcc).
+      * ACROSS translation units, the documented union is the
+        most-hardened observed setting per field (max fortify level,
+        werror-enforced over excepted, null-checks-preserved over
+        deleted, strongest stack protector). Per-TU gaps are
+        per-finding questions, not project posture; a concatenated
+        parse instead let ONE TU's flags void or overstate the whole
+        project's evidence in both directions.
     """
     raw = _read_bounded(path, _MAX_COMPILE_COMMANDS_BYTES)
     if _nests_like_a_bomb(raw):
@@ -226,30 +242,66 @@ def _from_compile_commands(path: Path) -> BuildFlagsContext:
             pieces.append(entry["command"])
         elif isinstance(entry.get("arguments"), list):
             pieces.append(" ".join(str(a) for a in entry["arguments"]))
-    combined = " ".join(pieces)
-    ctx = _parse_flag_string(
-        combined,
-        source="compile_commands.json",
-        confidence="high",
+
+    per_tu = [
+        _parse_flag_string(piece, source="compile_commands.json",
+                           confidence="high")
+        for piece in pieces
+    ]
+
+    # Most-hardened union per field (see docstring). True is the
+    # hardened direction for the werror fields; for
+    # delete_null_pointer_checks it is False (null checks PRESERVED —
+    # the kernel-hardening setting).
+    fortify_levels = [c.fortify_source_level for c in per_tu
+                      if c.fortify_source_level is not None]
+    fortify = max(fortify_levels) if fortify_levels else None
+    werror_unused = _bool_union(
+        (c.werror_unused_result for c in per_tu), hardened=True)
+    werror_all = _bool_union(
+        (c.werror_all for c in per_tu), hardened=True)
+    dnpc = _bool_union(
+        (c.delete_null_pointer_checks for c in per_tu), hardened=False)
+    stack_levels = {c.stack_protector_level for c in per_tu}
+    stack_levels.discard(None)
+    stack = next(
+        (lvl for lvl in _STACK_PROTO_ORDER if lvl in stack_levels), None)
+    sanitizers: list[str] = []
+    for c in per_tu:
+        for tok in c.sanitizers_enabled:
+            if tok not in sanitizers:
+                sanitizers.append(tok)
+
+    no_signal = (
+        werror_unused is None and werror_all is None
+        and fortify is None and stack is None and dnpc is None
+        and not sanitizers
     )
-    # Strongest OBSERVED stack protector across TUs — the docstring's
-    # most-hardened union rule. The concatenated-text parse is
-    # order-dependent: one TU built with -fno-stack-protector flipped
-    # the whole project to "none" even when every other TU is
-    # -fstack-protector-strong, and Stage-D consumers weighting
-    # mitigation evidence then overstated exploitability on
-    # mostly-hardened builds. (The other direction — reporting
-    # "strong" for a project with an unprotected TU — understates
-    # the WEAKEST link instead; per the documented union rule this
-    # field carries the most-hardened observed setting, and per-TU
-    # gaps are per-finding questions, not project posture.)
-    levels = {_stack_protector_from_text(piece) for piece in pieces}
-    levels.discard(None)
-    if levels:
-        strongest = next(
-            lvl for lvl in _STACK_PROTO_ORDER if lvl in levels)
-        ctx = dataclasses.replace(ctx, stack_protector_level=strongest)
-    return ctx
+    if no_signal:
+        return BuildFlagsContext(
+            source="compile_commands.json",
+            extraction_confidence="absent",
+        )
+    return BuildFlagsContext(
+        source="compile_commands.json",
+        extraction_confidence="high",
+        werror_unused_result=werror_unused,
+        werror_all=werror_all,
+        fortify_source_level=fortify,
+        stack_protector_level=stack,
+        delete_null_pointer_checks=dnpc,
+        sanitizers_enabled=tuple(sanitizers),
+    )
+
+
+def _bool_union(values, *, hardened: bool) -> bool | None:
+    """Most-hardened union of per-command tri-state observations:
+    the *hardened* value wins when any command observed it, else the
+    other explicit value, else no signal."""
+    seen = {v for v in values if v is not None}
+    if not seen:
+        return None
+    return hardened if hardened in seen else (not hardened)
 
 
 _HARDENING_CONFIGS: tuple[str, ...] = (
@@ -384,6 +436,76 @@ def _from_makefile(path: Path) -> BuildFlagsContext:
 _FORTIFY_LEVEL_RE = re.compile(r"-D_FORTIFY_SOURCE=(\d+)")
 _FORTIFY_BARE_RE = re.compile(r"-D_FORTIFY_SOURCE(?:\s|$)")
 _FORTIFY_UNDEF_RE = re.compile(r"-U_FORTIFY_SOURCE(?:\s|$)")
+
+
+def _fortify_from_text(text: str) -> int | None:
+    """Effective ``_FORTIFY_SOURCE`` of ONE command line, last-wins.
+
+    The preprocessor honours the LAST of conflicting ``-D``/``-U``
+    for a macro. First-match / any-``-U``-voids misread both real
+    idioms: the distro reset-then-set
+    (``-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3`` → 3) lost its signal,
+    and set-then-disable (``-D_FORTIFY_SOURCE=3 -D_FORTIFY_SOURCE=0``
+    → gcc-effective 0) OVERSTATED hardening on an unhardened build.
+    ``-U`` at the end is level 0 (explicitly off); ``None`` = no
+    mention at all.
+    """
+    last: tuple[int, int] | None = None
+    for m in _FORTIFY_UNDEF_RE.finditer(text):
+        if last is None or m.start() > last[0]:
+            last = (m.start(), 0)
+    for m in _FORTIFY_LEVEL_RE.finditer(text):
+        if last is None or m.start() > last[0]:
+            last = (m.start(), int(m.group(1)))
+    for m in _FORTIFY_BARE_RE.finditer(text):
+        if last is None or m.start() > last[0]:
+            last = (m.start(), 1)
+    return last[1] if last else None
+
+
+_WERROR_BARE_ON_RE = re.compile(r"(?:^|\s)-Werror(?=\s|$)")
+_WERROR_BARE_OFF_RE = re.compile(r"(?:^|\s)-Wno-error(?=\s|$)")
+_WERROR_UR_ON_RE = re.compile(r"(?:^|\s)-Werror=unused-result(?=\s|$)")
+_WERROR_UR_OFF_RE = re.compile(r"(?:^|\s)-Wno-error=unused-result(?=\s|$)")
+
+
+def _last_flag_polarity(
+    text: str,
+    on_re: re.Pattern,
+    off_re: re.Pattern,
+    *,
+    on_value: bool = True,
+) -> bool | None:
+    """Polarity of the LAST of two conflicting flags in ONE command
+    (gcc applies the later of an on/off pair), ``None`` when neither
+    appears."""
+    last: tuple[int, bool] | None = None
+    for m in on_re.finditer(text):
+        if last is None or m.start() > last[0]:
+            last = (m.start(), on_value)
+    for m in off_re.finditer(text):
+        if last is None or m.start() > last[0]:
+            last = (m.start(), not on_value)
+    return last[1] if last else None
+
+
+def _werror_unused_result_from_text(text: str) -> bool | None:
+    """unused-result enforcement of ONE command line.
+
+    gcc resolves ``-W(no-)error=<spec>`` against bare
+    ``-W(no-)error`` by SPECIFICITY, independently of position; among
+    equally-specific spellings the later wins.
+    """
+    specific = _last_flag_polarity(
+        text, _WERROR_UR_ON_RE, _WERROR_UR_OFF_RE)
+    if specific is not None:
+        return specific
+    return _last_flag_polarity(
+        text, _WERROR_BARE_ON_RE, _WERROR_BARE_OFF_RE)
+
+
+_DNPC_ON_RE = re.compile(r"-fdelete-null-pointer-checks(?:\s|$)")
+_DNPC_OFF_RE = re.compile(r"-fno-delete-null-pointer-checks(?:\s|$)")
 _STACK_PROTO_RE = re.compile(
     r"-fstack-protector(?:-(strong|all|explicit))?(?:\s|$)"
 )
@@ -422,47 +544,32 @@ def _parse_flag_string(
     source: str,
     confidence: str,
 ) -> BuildFlagsContext:
-    """Scan a command-line / CFLAGS string for known hardening tokens."""
+    """Scan ONE command line (or one accumulated CFLAGS stream — make
+    concatenates, so the compiler sees the flags in this order) for
+    known hardening tokens. Conflicting flags resolve like the
+    compiler resolves them: last wins, except gcc's
+    specificity-beats-position rule for ``-W(no-)error=<spec>``.
+    Cross-command union is the CALLER's job (see
+    ``_from_compile_commands``)."""
 
     # -- Werror handling -------------------------------------------------
-    # `-Werror=unused-result` enables; `-Wno-error=unused-result` excepts.
-    # Bare `-Werror` enables everything. Order: later wins per gcc, but
-    # for v1 we treat any presence as the signal — if both are present
-    # for unused-result, exception wins (False).
-    has_bare_werror = bool(
-        re.search(r"(?:^|\s)-Werror(?=\s|$)", text)
-    )
-    has_specific_werror = "-Werror=unused-result" in text
-    has_excepted = "-Wno-error=unused-result" in text
-
-    werror_unused_result: bool | None = None
-    if has_excepted:
-        werror_unused_result = False
-    elif has_specific_werror or has_bare_werror:
-        werror_unused_result = True
-
-    werror_all: bool | None = True if has_bare_werror else None
+    werror_unused_result = _werror_unused_result_from_text(text)
+    werror_all = _last_flag_polarity(
+        text, _WERROR_BARE_ON_RE, _WERROR_BARE_OFF_RE)
+    if werror_all is False:
+        # Bare -Wno-error only demotes; "everything is an error" was
+        # never observed enabled — no signal rather than False.
+        werror_all = None
 
     # -- _FORTIFY_SOURCE -------------------------------------------------
-    fortify_source_level: int | None = None
-    if _FORTIFY_UNDEF_RE.search(text):
-        fortify_source_level = None
-    else:
-        m = _FORTIFY_LEVEL_RE.search(text)
-        if m:
-            fortify_source_level = int(m.group(1))
-        elif _FORTIFY_BARE_RE.search(text):
-            fortify_source_level = 1
+    fortify_source_level = _fortify_from_text(text)
 
     # -- Stack protector -------------------------------------------------
     stack_protector_level = _stack_protector_from_text(text)
 
     # -- delete-null-pointer-checks --------------------------------------
-    delete_null_pointer_checks: bool | None = None
-    if "-fno-delete-null-pointer-checks" in text:
-        delete_null_pointer_checks = False
-    elif "-fdelete-null-pointer-checks" in text:
-        delete_null_pointer_checks = True
+    delete_null_pointer_checks = _last_flag_polarity(
+        text, _DNPC_ON_RE, _DNPC_OFF_RE)
 
     # -- Sanitizers ------------------------------------------------------
     sanitizers: list[str] = []

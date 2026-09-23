@@ -103,11 +103,15 @@ def test_cc_fortify_level(tmp_path):
 
 
 def test_cc_fortify_undef(tmp_path):
+    # Explicitly disabled (0) — a real observation, distinct from
+    # None = no mention. Consumers gate on level >= 2, so 0 can never
+    # feed suppression; reporting None here hid the only TU's explicit
+    # signal.
     target = _write_cc(tmp_path, [{
         "command": "gcc -U_FORTIFY_SOURCE foo.c",
     }])
     ctx = extract_flags(target)
-    assert ctx.fortify_source_level is None
+    assert ctx.fortify_source_level == 0
 
 
 def test_cc_stack_protector_strong(tmp_path):
@@ -518,3 +522,104 @@ def test_normal_sized_artifacts_still_parse(tmp_path):
     ctx = extract_flags(tmp_path)
     assert ctx.source == "makefile"
     assert ctx.stack_protector_level == "strong"
+
+
+class TestPerCommandLastWinsUnion:
+    """Per-command effective parse + documented most-hardened union,
+    for every field (the rule the stack-protector field established;
+    the sibling fields used first-match / any-position parses that
+    misreported in BOTH directions)."""
+
+    # -- cross-TU union: most-hardened observed setting per field ----
+
+    def test_undef_tu_plus_level2_tu_unions_to_2(self, tmp_path):
+        target = _write_cc(tmp_path, [
+            {"command": "gcc -U_FORTIFY_SOURCE a.c"},
+            {"command": "gcc -O2 -D_FORTIFY_SOURCE=2 b.c"},
+        ])
+        assert extract_flags(target).fortify_source_level == 2
+
+    def test_fortify_levels_union_to_max_not_first(self, tmp_path):
+        target = _write_cc(tmp_path, [
+            {"command": "gcc -D_FORTIFY_SOURCE=1 a.c"},
+            {"command": "gcc -D_FORTIFY_SOURCE=3 b.c"},
+        ])
+        assert extract_flags(target).fortify_source_level == 3
+
+    def test_werror_unused_result_union_enforced_wins(self, tmp_path):
+        target = _write_cc(tmp_path, [
+            {"command": "gcc -Werror=unused-result a.c"},
+            {"command": "gcc -Wno-error=unused-result b.c"},
+        ])
+        assert extract_flags(target).werror_unused_result is True
+
+    def test_dnpc_union_checks_preserved_wins(self, tmp_path):
+        # False (null checks preserved) is the hardened direction.
+        target = _write_cc(tmp_path, [
+            {"command": "gcc -fdelete-null-pointer-checks a.c"},
+            {"command": "gcc -fno-delete-null-pointer-checks b.c"},
+        ])
+        assert extract_flags(target).delete_null_pointer_checks is False
+
+    def test_dnpc_all_tus_delete_reports_true(self, tmp_path):
+        # Union direction pin: with no hardened observation the
+        # explicit weaker setting still surfaces.
+        target = _write_cc(tmp_path, [
+            {"command": "gcc -fdelete-null-pointer-checks a.c"},
+        ])
+        assert extract_flags(target).delete_null_pointer_checks is True
+
+    def test_stack_protector_union_still_strongest(self, tmp_path):
+        # Control: the landed strongest-across-TUs behavior holds
+        # through the refactor.
+        target = _write_cc(tmp_path, [
+            {"command": "gcc -fno-stack-protector a.c"},
+            {"command": "gcc -fstack-protector-strong b.c"},
+        ])
+        assert extract_flags(target).stack_protector_level == "strong"
+
+    # -- within one command: the compiler's own resolution ------------
+
+    def test_set_then_zero_is_effective_zero(self, tmp_path):
+        # gcc-effective 0: reporting 3 here OVERSTATED hardening on an
+        # unhardened build (exploitability down-weighting steered by a
+        # flag the compile never honoured).
+        target = _write_cc(tmp_path, [{
+            "command": "gcc -D_FORTIFY_SOURCE=3 -D_FORTIFY_SOURCE=0 a.c",
+        }])
+        assert extract_flags(target).fortify_source_level == 0
+
+    def test_distro_reset_then_set_idiom_keeps_signal(self, tmp_path):
+        # The Fedora/Debian spec idiom: -U resets, -D re-arms. An
+        # any-position -U voided the real level (signal loss on
+        # exactly the distros that harden hardest).
+        target = _write_cc(tmp_path, [{
+            "command": "gcc -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3 a.c",
+        }])
+        assert extract_flags(target).fortify_source_level == 3
+
+    def test_werror_specificity_beats_position(self, tmp_path):
+        # gcc: -Wno-error=unused-result excepts unused-result even
+        # when a bare -Werror comes later.
+        target = _write_cc(tmp_path, [{
+            "command": "gcc -Wno-error=unused-result -Werror a.c",
+        }])
+        ctx = extract_flags(target)
+        assert ctx.werror_unused_result is False
+        assert ctx.werror_all is True
+
+    def test_werror_specific_last_wins(self, tmp_path):
+        target = _write_cc(tmp_path, [{
+            "command": ("gcc -Werror=unused-result "
+                        "-Wno-error=unused-result a.c"),
+        }])
+        assert extract_flags(target).werror_unused_result is False
+
+    def test_dnpc_disable_then_reenable_is_true(self, tmp_path):
+        # Last-wins within a command: the old any-position "-fno-"
+        # check misread a command that disables then re-enables.
+        target = _write_cc(tmp_path, [{
+            "command": ("gcc -fno-delete-null-pointer-checks "
+                        "-fdelete-null-pointer-checks a.c"),
+        }])
+        assert extract_flags(target).delete_null_pointer_checks is True
