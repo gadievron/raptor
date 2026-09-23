@@ -83,6 +83,25 @@ class TestQuotaClassifierTransportGate:
         )
         assert _is_quota_error(e) is True
 
+    def test_non_429_status_with_echoed_quota_text_is_inert(self) -> None:
+        # 400 error bodies can echo request content — hostile prompt
+        # text carrying quota vocabulary must not classify a plain
+        # bad-request as quota, let alone arm the daily latch. Quota
+        # boundaries ride 429; the status corroborates.
+        e = _FakeHTTPError(
+            400, "invalid request: unexpected input "
+            "'quota exceeded, per_day limit reached'")
+        assert _is_quota_error(e) is False
+        assert _is_daily_quota_error(e) is False
+
+    def test_statusless_transport_relay_stays_eligible(self) -> None:
+        # CC/stream relays carry no numeric status — their envelopes
+        # remain classifiable by vocabulary.
+        from core.llm.cc_adapter import CCTransportError
+        e = CCTransportError("claude -p exited 1: quota exceeded, per_day")
+        assert _is_quota_error(e) is True
+        assert _is_daily_quota_error(e) is True
+
 
 class TestCreditClassifierTransportGate:
     """Message/body arms of ``is_credit_exhausted`` need transport

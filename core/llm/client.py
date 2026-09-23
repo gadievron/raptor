@@ -767,6 +767,22 @@ def _is_quota_error(error: Exception) -> bool:
             type(error).__name__,
         )
         return False
+    # A status-CARRYING exception that is not a 429 cannot be a quota
+    # boundary: provider quota/rate-limit errors ride 429 (typed SDK
+    # arms above cover them), while 400 error bodies can ECHO request
+    # content — hostile prompt text containing quota vocabulary would
+    # otherwise classify a plain bad-request as quota and, via the
+    # daily markers, latch the model out of the session. Statusless
+    # transport relays (CCTransportError, stream relays) stay eligible:
+    # their envelopes carry no numeric status to corroborate against.
+    status = getattr(error, "status_code", None)
+    if status is not None and status != 429:
+        logger.debug(
+            "Quota vocabulary in %s with status %s ignored "
+            "(quota boundaries ride 429)",
+            type(error).__name__, status,
+        )
+        return False
     return True
 
 
