@@ -677,3 +677,106 @@ def test_matrix_os_list_items_with_padding_still_parse(tmp_path: Path) -> None:
     # ubuntu-22.04 → glibc 2.35; the 24.04 item must resolve too.
     assert ("x86_64", LibcVersion("glibc", (2, 35))) in pairs
     assert ("x86_64", LibcVersion("glibc", (2, 39))) in pairs
+
+def test_repeated_unclosed_matrix_os_anchors_are_fast(tmp_path: Path) -> None:
+    """MANY unclosed ``os: [`` anchors: each anchor's bracket body
+    scanned to EOF looking for a ``]`` that never comes — quadratic
+    in the anchor count (the single-anchor whitespace fix didn't
+    bound the per-anchor tail scan). The monotonic body walk stops
+    at the first failed close-bracket search. Wall bound is the
+    suite's <5s convention; the hostile size sat at ~40s before."""
+    import time
+
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "ci.yml").write_text(
+        "runs-on: ${{ matrix.os }}\n" + ("os: [x\n" * 32000) + "# end\n")
+    start = time.monotonic()
+    discover_platform_matrix(tmp_path)
+    assert time.monotonic() - start < 5.0
+
+
+def test_stacked_variable_runs_on_lines_are_fast(tmp_path: Path) -> None:
+    """The matrix os/platform list is scanned once per FILE, not once
+    per ``${{``-bearing ``runs-on:`` line — stacking such lines
+    multiplied the whole-file scan cost linearly on top of the
+    unclosed-anchor cost."""
+    import time
+
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "ci.yml").write_text(
+        ("runs-on: ${{ matrix.os }}\n" * 64) + ("os: [x\n" * 16000))
+    start = time.monotonic()
+    discover_platform_matrix(tmp_path)
+    assert time.monotonic() - start < 5.0
+
+
+def test_stacked_boundaryless_build_push_steps_are_fast(tmp_path: Path) -> None:
+    """N dash-less ``uses: docker/build-push-action`` lines with no
+    step boundary anywhere: every step's block search ran to EOF plus
+    a tail slice — quadratic. The windowed pass bounds each block at
+    the next uses line."""
+    import time
+
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "ci.yml").write_text(
+        "uses: docker/build-push-action@v5\n" * 16000)
+    start = time.monotonic()
+    discover_platform_matrix(tmp_path)
+    assert time.monotonic() - start < 5.0
+
+
+def test_repeated_unclosed_bake_platform_anchors_are_fast(tmp_path: Path) -> None:
+    """docker-bake.hcl sibling of the unclosed ``os: [`` shape: each
+    unclosed ``platforms = [`` anchor's DOTALL body scanned to EOF.
+    Same monotonic body walk, same wall bound."""
+    import time
+
+    (tmp_path / "docker-bake.hcl").write_text(
+        ("platforms = [x\n" * 16000) + "# end\n")
+    start = time.monotonic()
+    discover_platform_matrix(tmp_path)
+    assert time.monotonic() - start < 5.0
+
+
+def test_multiline_matrix_os_flow_list_still_parses(tmp_path: Path) -> None:
+    """Match-equivalence guard for the monotonic body walk: a YAML
+    flow list that WRAPS lines (the shape the old newline-capable
+    bracket body matched) must keep resolving its runners."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "ci.yml").write_text(
+        "jobs:\n  build:\n"
+        "    runs-on: ${{ matrix.os }}\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        "        os: [ubuntu-22.04,\n"
+        "             ubuntu-24.04]\n")
+    matrix = discover_platform_matrix(tmp_path)
+    pairs = _arch_libc(matrix)
+    assert ("x86_64", LibcVersion("glibc", (2, 35))) in pairs
+    assert ("x86_64", LibcVersion("glibc", (2, 39))) in pairs
+
+
+def test_second_build_push_step_platforms_still_found(tmp_path: Path) -> None:
+    """Match-equivalence guard for the windowed build-push pass: two
+    steps in one job each contribute their own ``platforms:``, and a
+    consumed list body doesn't hide a later step."""
+    wf_dir = tmp_path / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    (wf_dir / "ci.yml").write_text(
+        "jobs:\n  release:\n"
+        "    runs-on: ubuntu-22.04\n"
+        "    steps:\n"
+        "      - uses: docker/build-push-action@v6\n"
+        "        with:\n"
+        "          platforms: linux/amd64\n"
+        "      - uses: docker/build-push-action@v5\n"
+        "        with:\n"
+        "          platforms: linux/ppc64le\n")
+    matrix = discover_platform_matrix(tmp_path)
+    archs = {p.arch for p in matrix}
+    assert "x86_64" in archs
+    assert "ppc64le" in archs
