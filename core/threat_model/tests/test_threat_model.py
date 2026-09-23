@@ -1435,3 +1435,60 @@ def test_save_report_writes_through_the_atomic_chokepoint(
     assert report_path in calls
     assert "# Threat Model Report" in report_path.read_text(
         encoding="utf-8")
+
+
+def test_clip_str_caps_true_utf8_bytes():
+    # _MAX_STRING_BYTES and the byte_cap parameter say BYTES; capping
+    # len(str) characters let astral-plane text reach ~4x the stated
+    # budget in UTF-8.
+    from core.threat_model import (
+        _MAX_STRING_BYTES,
+        _clip_str,
+        _safe_for_render,
+    )
+    hostile = "\U0001f700" * _MAX_STRING_BYTES  # 4 UTF-8 bytes/char
+    assert len(_clip_str(hostile).encode("utf-8")) <= _MAX_STRING_BYTES
+    assert len(
+        _safe_for_render(hostile).encode("utf-8")) <= _MAX_STRING_BYTES
+    # Plain ASCII behaviour unchanged.
+    assert _clip_str("abc") == "abc"
+
+
+def test_flow_summary_id_join_survives_clipped_ids():
+    # entries/sinks were keyed on RAW ids but looked up with the
+    # _clip_str-escaped spelling — a control-char (or over-cap) id
+    # never matched its own record and the summary silently lost the
+    # entry/sink detail.
+    from core.threat_model import _summaries_from_unchecked_flows
+    hostile_id = "e\x01"
+    out = _summaries_from_unchecked_flows(
+        [{"entry_point": hostile_id, "sink": "s1"}],
+        [{"id": hostile_id, "method": "GET", "path": "/admin"}],
+        [{"id": "s1", "file": "w.py", "type": "exec"}],
+    )
+    assert out
+    assert "GET" in out[0]
+    assert "/admin" in out[0]
+
+
+def test_data_flow_records_join_survives_clipped_ids(tmp_path):
+    from core.threat_model import _data_flows_from_context_map
+    hostile_id = "e\x01"
+    flows = _data_flows_from_context_map({
+        "entry_points": [
+            {"id": hostile_id, "name": "handler", "file": "a.py"}],
+        "sink_details": [{"id": "s1", "type": "exec", "file": "w.py"}],
+        "unchecked_flows": [{"entry_point": hostile_id, "sink": "s1"}],
+    })
+    assert flows
+    assert flows[0]["source"] == "handler"
+
+
+def test_module_has_no_dunder_import_spelling():
+    # Behaviour pin for the regex itself lives in
+    # test_extract_cwe_number_parses_standard_formats; this pins the
+    # top-level-import spelling so the double __import__("re") does
+    # not creep back.
+    import core.threat_model as tm
+    src = Path(tm.__file__).read_text(encoding="utf-8")
+    assert "__import__" not in src
