@@ -310,10 +310,42 @@ _GUARD_LOOKBACK_LINES = 3
 _GUARD_KW_RE = re.compile(r"\b(if|while|for)\s*\(")
 
 
-def _balanced_paren_group(text: str, open_idx: int) -> str | None:
-    """Content of the paren group opening at ``open_idx`` (single line)."""
+def _guard_condition_on_line(text: str) -> str | None:
+    """Branch condition on a source line, or None.
+
+    ``if (...)`` / ``while (...)`` take the whole (balanced) group;
+    ``for (init; cond; step)`` takes the middle clause. Purely
+    textual and single-line — multi-line conditions are skipped
+    rather than guessed.
+    """
+    _kind, group, _tail = _guard_on_line(text)
+    return group
+
+
+def _guard_on_line(text: str) -> tuple[str, str | None, str]:
+    """``(keyword, condition, tail-after-close-paren)`` for a guard
+    on one source line, or ``("", None, "")``.
+
+    Same extraction as :func:`_guard_condition_on_line` plus the
+    facts polarity analysis needs: which guard keyword matched, what
+    (if anything) follows the closing paren on the line, and whether
+    the guard is chained (``else if``) or a preprocessor directive —
+    both return no condition, since their truth cannot be tied to
+    the fall-through path textually.
+    """
+    m = _GUARD_KW_RE.search(text)
+    if not m:
+        return "", None, ""
+    prefix = text[:m.start()]
+    if prefix.lstrip().startswith("#") or re.search(r"\belse\s*$", prefix):
+        # `#if` conditions are compile-time, not path conditions;
+        # an `else if` arm's fall-through can come from an EARLIER
+        # taken arm, so neither polarity is assertable.
+        return "", None, ""
+    open_idx = m.end() - 1
     depth = 0
-    start = None
+    start: int | None = None
+    end: int | None = None
     for i in range(open_idx, len(text)):
         ch = text[i]
         if ch == "(":
@@ -323,29 +355,76 @@ def _balanced_paren_group(text: str, open_idx: int) -> str | None:
         elif ch == ")":
             depth -= 1
             if depth == 0 and start is not None:
-                return text[start:i]
-    return None
-
-
-def _guard_condition_on_line(text: str) -> str | None:
-    """Branch condition on a source line, or None.
-
-    ``if (...)`` / ``while (...)`` take the whole (balanced) group;
-    ``for (init; cond; step)`` takes the middle clause. Purely
-    textual and single-line — multi-line conditions are skipped
-    rather than guessed.
-    """
-    m = _GUARD_KW_RE.search(text)
-    if not m:
-        return None
-    group = _balanced_paren_group(text, m.end() - 1)
-    if group is None:
-        return None
+                end = i
+                break
+    if end is None or start is None:
+        return "", None, ""
+    group = text[start:end]
     if m.group(1) == "for":
         parts = group.split(";")
         group = parts[1] if len(parts) == 3 else ""
     group = group.strip()
-    return group or None
+    return m.group(1), (group or None), text[end + 1:]
+
+
+#: Statement shapes that leave the enclosing flow — a guard whose arm
+#: ENDS in one of these makes the fall-through path require the guard
+#: condition to be FALSE (the ubiquitous C early-exit idiom).
+_EXIT_STMT_RE = re.compile(
+    r"^(?:return\b|goto\s+\w|break$|continue$"
+    r"|(?:exit|_exit|_Exit|abort|longjmp|siglongjmp|panic)\s*\()"
+)
+
+
+def _exit_only_body(body: str) -> bool:
+    """True when the guarded body's last statement leaves the flow."""
+    stmts = [s.strip() for s in body.split(";") if s.strip()]
+    if not stmts:
+        return False
+    return _EXIT_STMT_RE.match(stmts[-1]) is not None
+
+
+def _step_guard_polarity(
+    kind: str,
+    tail: str,
+    between: list[str],
+) -> str | None:
+    """Polarity with which a guard binds the step that follows it.
+
+    ``"positive"`` — the step is provably inside the guarded arm;
+    ``"negated"`` — the arm is an exit-only ``if`` body, so the
+    fall-through step requires the condition FALSE (early-exit
+    guard); ``None`` — the arm/step relation is textually
+    undecidable, so the condition must not be asserted in either
+    direction (an unprovable polarity weakens the prune toward
+    keep — it never manufactures an infeasibility receipt).
+    """
+    region = " ".join(
+        p.strip() for p in [tail, *between] if p.strip()
+    ).strip()
+    if re.search(r"\belse\b", region):
+        return None
+    if region.startswith("{"):
+        if "}" not in region:
+            # Brace opened and never closed before the step — the
+            # step is inside the guarded arm.
+            return "positive"
+        body, _, after = region[1:].partition("}")
+        if after.strip():
+            return None
+        if kind == "if" and _exit_only_body(body):
+            return "negated"
+        return None
+    if not region:
+        # Nothing between the guard and the step line: the step IS
+        # the (braceless) arm.
+        return "positive"
+    if kind == "if" and _exit_only_body(region):
+        # `if (err) return; …step` / `if (err)\n\treturn;\n…step` —
+        # only `if` earns the negation: falling out of a loop body
+        # via break does NOT falsify the loop condition.
+        return "negated"
+    return None
 
 
 def _sarif_result_paths(
@@ -421,24 +500,43 @@ def _path_conditions(
     target_path: Path,
     cache: dict[str, list[str] | None],
 ) -> list[dict[str, Any]]:
-    """Harvest enclosing-guard conditions along one thread-flow path."""
+    """Harvest enclosing-guard conditions along one thread-flow path.
+
+    Polarity discipline: a condition is asserted positively only when
+    the step is provably inside the guarded arm; the early-exit guard
+    idiom (``if (err) return; …step``) asserts the NEGATION — the
+    real path condition of the fall-through; every other arm/step
+    relation drops the condition. A guard on the step line itself is
+    never harvested (the step may be the condition expression, not
+    the arm). Wrong-polarity assertion was the one shape that let a
+    trivially-live path prove "mutually exclusive" and mint a
+    refutation-grade receipt.
+    """
     conditions: list[dict[str, Any]] = []
-    seen: set = set()
+    seen: set[tuple[str, bool]] = set()
     for step_index, (uri, line) in enumerate(steps):
         lines = _load_source_lines(uri, target_path, cache)
         if not lines or line > len(lines):
             continue
-        for j in range(line, max(line - 1 - _GUARD_LOOKBACK_LINES, 0), -1):
-            cond = _guard_condition_on_line(lines[j - 1])
-            if cond:
-                if cond not in seen:
-                    seen.add(cond)
+        for j in range(line - 1, max(line - 1 - _GUARD_LOOKBACK_LINES, 0), -1):
+            kind, cond, tail = _guard_on_line(lines[j - 1])
+            if cond is None:
+                continue
+            between = lines[j:line - 1]
+            polarity = _step_guard_polarity(kind, tail, between)
+            if polarity is not None:
+                negated = polarity == "negated"
+                if (cond, negated) not in seen:
+                    seen.add((cond, negated))
                     conditions.append({
                         "text": cond,
                         "step_index": step_index,
-                        "negated": False,
+                        "negated": negated,
                     })
-                break
+            # Nearest guard decides for this step — an undecidable
+            # one contributes nothing rather than letting a farther
+            # guard mis-bind.
+            break
         if len(conditions) >= _MAX_SMT_CONDITIONS:
             break
     return conditions

@@ -291,6 +291,122 @@ class TestSarifPathExtraction:
         assert conds == []
 
 
+def _write_early_exit_source(tmp_path: Path) -> Path:
+    """The guard-clause-reject-then-positive-check idiom: trivially
+    live for any ``len >= 0``."""
+    target = tmp_path / "target"
+    (target / "src").mkdir(parents=True)
+    (target / "src" / "vuln.c").write_text(
+        "void f(char *d, char *s, int len) {\n"  # 1
+        "    if (len < 0)\n"                     # 2
+        "        return;\n"                      # 3
+        "    memcpy(d, s, len);\n"               # 4  <- step
+        "    if (len >= 0) {\n"                  # 5
+        "        memcpy(d, s, len);\n"           # 6  <- step
+        "    }\n"
+        "}\n",
+    )
+    return target
+
+
+class TestGuardPolarity:
+    """A refutation-grade receipt must never be mintable by asserting
+    a guard with the wrong polarity: positive only when the step is
+    provably inside the arm, negated for the exit-only ``if`` arm,
+    dropped everywhere else."""
+
+    def test_early_exit_guard_harvests_negated(self, tmp_path: Path):
+        target = _write_early_exit_source(tmp_path)
+        conds = _path_conditions(
+            [("src/vuln.c", 4), ("src/vuln.c", 6)], target, {},
+        )
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+            ("len >= 0", False),
+        ]
+
+    def test_braced_exit_only_arm_harvests_negated(self, tmp_path: Path):
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                # 1
+            "    if (len < 0) { return; }\n"     # 2
+            "    sink(len);\n"                   # 3  <- step
+            "}\n",
+        )
+        conds = _path_conditions([("src/vuln.c", 3)], target, {})
+        assert [(c["text"], c["negated"]) for c in conds] == [
+            ("len < 0", True),
+        ]
+
+    def test_step_after_non_exit_arm_drops_condition(self, tmp_path: Path):
+        # `if (c) x = 1; step` — the step is NOT bound by c in either
+        # direction; asserting it would be a polarity guess.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                # 1
+            "    if (len < 0)\n"                 # 2
+            "        len = 0;\n"                 # 3
+            "    sink(len);\n"                   # 4  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 4)], target, {}) == []
+
+    def test_guard_on_step_line_not_harvested(self, tmp_path: Path):
+        # The step may be the condition expression itself, not the
+        # arm — same-line guards are undecidable, never asserted.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                # 1
+            "    if (len < 0) sink(len);\n"      # 2  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 2)], target, {}) == []
+
+    def test_loop_break_body_is_not_negated(self, tmp_path: Path):
+        # Falling out of `while (c) { break; }` does not falsify c.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int len) {\n"                # 1
+            "    while (len > 0) { break; }\n"   # 2
+            "    sink(len);\n"                   # 3  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 3)], target, {}) == []
+
+    def test_else_if_guard_never_asserted(self, tmp_path: Path):
+        # Fall-through past an `else if` can come from an EARLIER
+        # taken arm — neither polarity is assertable.
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src" / "vuln.c").write_text(
+            "void f(int a, int len) {\n"         # 1
+            "    if (a) { log(); }\n"            # 2
+            "    else if (len < 0)\n"            # 3
+            "        return;\n"                  # 4
+            "    sink(len);\n"                   # 5  <- step
+            "}\n",
+        )
+        assert _path_conditions([("src/vuln.c", 5)], target, {}) == []
+
+    def test_live_early_exit_flow_survives_real_smt_prune(
+        self, tmp_path: Path,
+    ):
+        # Regression pin with the real solver: the two-step flow over
+        # the early-exit idiom is live for any len >= 0 and must be
+        # KEPT — the wrong-polarity harvest proved it "mutually
+        # exclusive" and minted an smt_path_infeasible receipt.
+        pytest.importorskip("z3")
+        target = _write_early_exit_source(tmp_path)
+        sarif = _sarif_with_flow([("src/vuln.c", 4), ("src/vuln.c", 6)])
+        kept, pruned, receipts = _smt_prune_sarif_matches(sarif, target)
+        assert (kept, pruned) == (1, 0)
+        assert receipts == []
+
+
 def _stub_validate_path(feasible, *, calls=None):
     def stub(conditions, profile="uint64", timeout_ms=None, **kw):
         if calls is not None:
