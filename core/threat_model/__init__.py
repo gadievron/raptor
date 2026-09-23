@@ -1704,7 +1704,10 @@ def _summaries_from_entries(entries: Any, *, default_label: str) -> list[str]:
         if location:
             loc_str = _clip_str(location)
             if line is not None and ":" not in str(location):
-                parts.append(f" ({loc_str}:{line})")
+                # `line` is adversarial context-map input like every
+                # other field here — clip it too, or it is the one
+                # unescaped carrier in the summary string.
+                parts.append(f" ({loc_str}:{_clip_str(line)})")
             else:
                 parts.append(f" ({loc_str})")
         if trust:

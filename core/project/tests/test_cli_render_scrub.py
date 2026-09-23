@@ -286,6 +286,180 @@ def test_annotations_diff_render_escapes_agent_fields(capsys):
     assert "status=" in text and "source=" in text
 
 
+def test_sca_findings_table_cells_escaped(capsys):
+    """Package/kind/severity table cells derive from scanned-tree
+    manifests and OSV data (import-restored verbatim) — the summary
+    table must escape them like the detailed section already does."""
+    from core.project.cli import _print_sca_findings_section
+    _print_sca_findings_section([{
+        "severity": f"high{HOSTILE}",
+        "vuln_type": f"sca:dependency_cve:known{HOSTILE}",
+        "sca": {"name": f"lodash{HOSTILE}", "ecosystem": f"npm{HOSTILE}"},
+    }], detailed=False)
+    out = capsys.readouterr().out
+    assert "lodash" in out
+    for raw in RAW:
+        assert raw not in out
+
+
+def test_sca_findings_table_survives_junk_cells(capsys):
+    """Non-string package name / severity must not TypeError the
+    escape or the format spec."""
+    from core.project.cli import _print_sca_findings_section
+    _print_sca_findings_section([{
+        "severity": "",
+        "vuln_type": "sca:x",
+        "sca": {"name": {"not": "a-string"}},
+    }], detailed=False)
+    out = capsys.readouterr().out
+    assert "1 findings" in out
+
+
+def test_provenance_rollup_escapes_manifest_values(capsys):
+    """SHAs, engine names/versions, and model keys come from
+    child-writable run manifests — the rollup must escape them like
+    the sibling format_manifest_block."""
+    from core.run.provenance import (
+        aggregate_provenance,
+        format_provenance_rollup,
+    )
+    roll = format_provenance_rollup(aggregate_provenance([{
+        "manifest": {
+            "source_control": {"base_sha": f"{HOSTILE}EVILSHA1234"},
+            "engines": {f"{HOSTILE}semgrep": f"1.0{HOSTILE}"},
+            "models": [{"resolved": f"{HOSTILE}BLINK"}],
+        },
+    }]))
+    assert "Provenance across 1 run(s)" in roll
+    for raw in RAW:
+        assert raw not in roll
+
+
+def test_annotations_listing_escapes_all_columns(tmp_path, capsys):
+    """A hand-crafted annotation .md (agent-written bytes bypass the
+    storage writer's validation) carries hostile file/function/status/
+    source values — every column escapes at print."""
+    ann = tmp_path / "annotations" / "src"
+    ann.mkdir(parents=True)
+    (ann / "auth.py.md").write_text(
+        "<!-- annotations-version: 1 -->\n# src/auth.py\n\n"
+        f"## check_pw{HOSTILE}\n"
+        f'<!-- meta: status="clean{HOSTILE}" source="human{HOSTILE}" -->\n\n'
+        "body text\n",
+        encoding="utf-8",
+    )
+    from core.project.cli import _print_annotations
+    _print_annotations(_FakeProject(tmp_path))
+    out = capsys.readouterr().out
+    assert "annotation(s):" in out
+    for raw in RAW:
+        assert raw not in out
+
+
+def test_diff_changed_rows_escape_label_and_statuses(capsys):
+    """New/removed rows go through the escaped _finding_label; the
+    changed rows relayed diff.py's raw label + status strings."""
+    from core.project.cli import _print_diff
+    _print_diff({
+        "new": [], "removed": [],
+        "changed": [{
+            "label": f"x{HOSTILE}",
+            "status_before": f"open{HOSTILE}",
+            "status_after": "fixed",
+        }],
+        "unchanged": 0,
+    })
+    out = capsys.readouterr().out
+    assert "Changed (1):" in out
+    for raw in RAW:
+        assert raw not in out
+
+
+def test_volatile_banner_escapes_project_fields(monkeypatch, capsys):
+    """The volatile-target refusal banner interpolates the active
+    project's name/target (adopt-inferred / import-restored) into a
+    bare stderr print — escape at construction."""
+    from core.run import output as run_output
+    monkeypatch.setattr(
+        run_output, "_resolve_active_project",
+        lambda: ("/tmp/x", f"corpus-{HOSTILE}", f"/tmp/evil{HOSTILE}"))
+    assert run_output.resolve_default_target() is None
+    err = capsys.readouterr().err
+    assert "REFUSING default target" in err
+    for raw in RAW:
+        assert raw not in err
+
+
+def test_volatile_banner_escapes_caller_dir(monkeypatch, capsys):
+    from core.run import output as run_output
+    monkeypatch.setattr(
+        run_output, "_resolve_active_project", lambda: None)
+    monkeypatch.setenv("RAPTOR_CALLER_DIR", f"/tmp/evil{HOSTILE}")
+    monkeypatch.setattr(
+        run_output, "volatile_target_reason", lambda t: "does not exist")
+    assert run_output.resolve_default_target() is None
+    err = capsys.readouterr().err
+    assert "REFUSING default target" in err
+    for raw in RAW:
+        assert raw not in err
+
+
+def test_report_provenance_md_heading_and_timestamp_sanitised(tmp_path):
+    """provenance.md interpolates the run-dir NAME as a markdown
+    heading and the child-writable timestamp raw — a crafted run dir
+    injected extra heading lines LLM passes later read."""
+    import json as _json
+
+    from core.project.report import generate_project_report
+    run = tmp_path / "scan-x\n# INJECTED"
+    run.mkdir()
+    (run / ".raptor-run.json").write_text(_json.dumps({
+        "version": 2, "command": "scan", "status": "completed",
+        "timestamp": f"{HOSTILE}2026-01-01T00", "manifest": {},
+    }), encoding="utf-8")
+    generate_project_report(_FakeProject(tmp_path, runs=[run]))
+    text = next(tmp_path.rglob("provenance.md")).read_text(encoding="utf-8")
+    assert "\n# INJECTED" not in text
+    for raw in RAW:
+        assert raw not in text
+
+
+def test_report_provenance_md_survives_non_string_timestamp(tmp_path):
+    import json as _json
+
+    from core.project.report import generate_project_report
+    run = tmp_path / "scan-a"
+    run.mkdir()
+    (run / ".raptor-run.json").write_text(_json.dumps({
+        "version": 2, "command": "scan", "status": "completed",
+        "timestamp": 123456789, "manifest": {},
+    }), encoding="utf-8")
+    generate_project_report(_FakeProject(tmp_path, runs=[run]))
+    text = next(tmp_path.rglob("provenance.md")).read_text(encoding="utf-8")
+    assert "scan-a" in text
+
+
+def test_threat_model_diff_values_escaped(capsys):
+    """tm-diff summaries interpolate context-map fields; the `line`
+    slot was the unclipped carrier, and the CLI printed the summary
+    raw (the adjacent lint action escapes at print)."""
+    from core.threat_model import ThreatModel, diff_context_map
+    tm = ThreatModel.from_dict({
+        "version": 1, "entry_points": [], "trust_boundaries": [],
+        "unchecked_flows": [],
+    })
+    drift = diff_context_map(tm, {
+        "entry_points": [
+            {"name": "h", "file": "f.py", "line": f"7{HOSTILE}"}],
+        "trust_boundaries": [], "sinks": [],
+    })
+    values = drift.get("new_entry_points") or []
+    assert values, "expected a new-entry-point summary"
+    for v in values:
+        for raw in RAW:
+            assert raw not in str(v)
+
+
 def test_report_annotation_headings_escaped():
     """The per-entry heading wraps file/function/status/source in
     backtick spans — spans stop neither ANSI bytes nor a backtick

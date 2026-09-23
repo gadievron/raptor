@@ -2270,7 +2270,10 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
             values = drift.get(key) or []
             print(f"  {key}: {len(values)}")
             for value in values[:8]:
-                print(f"    - {value}")
+                # Drift summaries interpolate context-map fields
+                # (LLM-refreshed) — terminal lane, escape at print
+                # like the adjacent lint action.
+                print(f"    - {sanitise_for_terminal(str(value), max_len=300)}")
         return
 
     if args.action == "report":
@@ -2766,10 +2769,14 @@ def _print_sca_findings_section(sca_findings, detailed: bool=False) -> None:
     rows = []
     for f in ordered:
         sev = (f.get("severity") or "").strip()
+        # Package/kind/severity cells derive from the scanned tree's
+        # manifests and external OSV data (and survive /project import
+        # verbatim) — escape at construction so the column widths are
+        # computed from the escaped strings, like _print_status does.
         rows.append((
-            _sca_finding_package(f),
-            _sca_finding_kind(f),
-            sev.title() if sev else "—",
+            sanitise_for_terminal(str(_sca_finding_package(f)), max_len=120),
+            sanitise_for_terminal(str(_sca_finding_kind(f)), max_len=120),
+            sanitise_for_terminal(sev.title(), max_len=40) if sev else "—",
         ))
 
     headers = ("Package", "Kind", "Severity")
@@ -2789,7 +2796,6 @@ def _print_sca_findings_section(sca_findings, detailed: bool=False) -> None:
     print()
     pad = len(str(len(ordered)))
     indent = " " * (pad + 5)
-    from core.security.log_sanitisation import sanitise_for_terminal
 
     for i, f in enumerate(ordered, 1):
         # Advisory titles/descriptions come from external OSV/registry
@@ -2935,17 +2941,29 @@ def _print_annotations(
         return
 
     print(f"{len(anns)} annotation(s):")
-    file_w = max(len(a.file) for a in anns)
-    fn_w = max(len(a.function) for a in anns)
-    from core.security.log_sanitisation import sanitise_for_terminal
-
+    # File/function/status/source come from annotation .md files that
+    # agents (and /project import) write — a hand-crafted file bypasses
+    # the storage writer's validation, so every column is escaped at
+    # construction and the widths are computed from the escaped
+    # strings (the _print_status discipline).
+    rows = []
     for a in anns:
-        status = a.metadata.get("status", "-")
-        source = a.metadata.get("source", "-")
+        status = str(a.metadata.get("status", "-"))
+        source = str(a.metadata.get("source", "-"))
         # Annotation bodies are free prose (agent-written ones are
         # hint-tier, untrusted) — escape the excerpt.
         snippet = sanitise_for_terminal(" ".join(a.body.split())[:60], max_len=80)
-        print(f"  {a.file:<{file_w}}  {a.function:<{fn_w}}  "
+        rows.append((
+            sanitise_for_terminal(a.file, max_len=200),
+            sanitise_for_terminal(a.function, max_len=120),
+            sanitise_for_terminal(status, max_len=40),
+            sanitise_for_terminal(source, max_len=40),
+            snippet,
+        ))
+    file_w = max(len(r[0]) for r in rows)
+    fn_w = max(len(r[1]) for r in rows)
+    for file_c, fn_c, status, source, snippet in rows:
+        print(f"  {file_c:<{file_w}}  {fn_c:<{fn_w}}  "
               f"{status:<14}  {source:<5}  {snippet}")
 
 
@@ -2962,7 +2980,15 @@ def _print_diff(result) -> None:
     if result["changed"]:
         print(f"Changed ({len(result['changed'])}):")
         for c in result["changed"]:
-            print(_yellow(f"  ~ {c['label']} ({c.get('status_before', '?')} → {c.get('status_after', '?')})"))
+            # label and both statuses are finding-derived (diff.py
+            # builds them raw for the JSON payload) — escape at the
+            # print site like the new/removed rows' _finding_label.
+            label = sanitise_for_terminal(str(c["label"]), max_len=200)
+            before = sanitise_for_terminal(
+                str(c.get("status_before", "?")), max_len=60)
+            after = sanitise_for_terminal(
+                str(c.get("status_after", "?")), max_len=60)
+            print(_yellow(f"  ~ {label} ({before} → {after})"))
     print(f"Unchanged: {result['unchanged']}")
 
 

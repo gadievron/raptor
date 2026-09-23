@@ -674,7 +674,18 @@ def aggregate_provenance(
 
 
 def format_provenance_rollup(summary: dict[str, Any]) -> str:
-    """Human-readable project-level provenance rollup from aggregate_provenance."""
+    """Human-readable project-level provenance rollup from aggregate_provenance.
+
+    SHAs, engine names/versions, and model keys come from per-run
+    ``.raptor-run.json`` manifests — child-writable mid-run and restored
+    verbatim by /project import — so every value is escaped at
+    construction, like the sibling ``format_manifest_block``.
+    """
+    from core.security.log_sanitisation import sanitise_for_terminal
+
+    def _f(value: object, cap: int = 64) -> str:
+        return sanitise_for_terminal(str(value), max_len=cap)
+
     runs = summary.get("runs", 0)
     if not runs:
         return "No runs with provenance."
@@ -684,7 +695,7 @@ def format_provenance_rollup(summary: dict[str, Any]) -> str:
     if shas:
         ordered = sorted(shas.items(), key=lambda kv: (-kv[1], kv[0]))
         lines.append("  Framework SHAs: "
-                     + ", ".join(f"{s[:12]} ({n})" for s, n in ordered))
+                     + ", ".join(f"{_f(str(s)[:12])} ({n})" for s, n in ordered))
         if len(shas) > 1:
             lines.append(f"    ⚠ {len(shas)} distinct RAPTOR versions across runs")
 
@@ -695,12 +706,14 @@ def format_provenance_rollup(summary: dict[str, Any]) -> str:
     engines = summary.get("engines") or {}
     if engines:
         lines.append("  Engines: "
-                     + "; ".join(f"{k} {'/'.join(v)}" for k, v in engines.items()))
+                     + "; ".join(f"{_f(k)} {_f('/'.join(str(x) for x in v))}"
+                                 for k, v in engines.items()))
 
     models = summary.get("models") or {}
     if models:
         ordered_m = sorted(models.items(), key=lambda kv: (-kv[1], kv[0]))
-        lines.append("  Models: " + ", ".join(f"{k} ({n})" for k, n in ordered_m))
+        lines.append("  Models: "
+                     + ", ".join(f"{_f(k)} ({n})" for k, n in ordered_m))
 
     r = summary.get("reproducible") or {}
     lines.append(
