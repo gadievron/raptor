@@ -163,9 +163,12 @@ def main() -> int:
 
     # ------------------------------------------------------------------
     # --openant-core consent gate (flag surface only): refuse a
-    # non-pinned core named on argv unless consented. Runs BEFORE the
-    # output dir / lifecycle exist — a refused run leaves nothing
-    # behind. The env / auto-detect default keeps warn-not-refuse.
+    # non-pinned core named on argv unless consented. Runs BEFORE this
+    # process creates any output dir / lifecycle state — a refused
+    # STANDALONE run leaves nothing behind (via `raptor.py openant`
+    # the wrapper's outer lifecycle dir already exists and is stamped
+    # failed by its rc!=0 handling). The env / auto-detect default
+    # keeps warn-not-refuse.
     # ------------------------------------------------------------------
     openant_core_explicit = args.openant_core is not None
     if args.openant_core is None:
@@ -448,7 +451,17 @@ def _write_markdown_report(
             lvl = f.get("level", "note")
             by_level.setdefault(lvl, []).append(f)
 
-        for lvl, label in [("error", "High"), ("warning", "Medium"), ("note", "Low/Informational")]:
+        # Unknown level spellings render under their own section —
+        # the loop below used to iterate only the three known levels,
+        # so such findings vanished from the body while the header
+        # counted them (unreachable today, live the day the level
+        # universe grows).
+        sections = [("error", "High"), ("warning", "Medium"),
+                    ("note", "Low/Informational")]
+        sections += [(lvl, f"Other ({md_inline(lvl)})")
+                     for lvl in by_level
+                     if lvl not in ("error", "warning", "note")]
+        for lvl, label in sections:
             group = by_level.get(lvl, [])
             if not group:
                 continue

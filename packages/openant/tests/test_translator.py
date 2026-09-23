@@ -513,5 +513,29 @@ class TestMetadataCaps(unittest.TestCase):
         self.assertEqual(meta["function"], "handler")
 
 
+class TestUnknownVerdictWarningBounded(unittest.TestCase):
+    """The drift warning interpolates hostile-influenced verdict
+    spellings — it must name a bounded sample, never every distinct
+    spelling."""
+
+    def test_sample_capped_at_five(self):
+        findings = [{
+            "id": f"VULN-{n:03d}",
+            "stage1_verdict": f"weird-verdict-{n}",
+            "location": {"file": "a.py", "function": "f"},
+            "cwe_id": 78,
+            "description": "d",
+        } for n in range(10)]
+        with self.assertLogs("raptor", level="WARNING") as cm:
+            out = translate_pipeline_output({"findings": findings})
+        self.assertEqual(len(out), 10)
+        drift = [m for m in cm.output if "schema drift" in m]
+        self.assertTrue(drift)
+        msg = drift[0]
+        named = sum(f"weird-verdict-{n}" in msg for n in range(10))
+        self.assertLessEqual(named, 5)
+        self.assertIn("more distinct spelling", msg)
+
+
 if __name__ == "__main__":
     unittest.main()

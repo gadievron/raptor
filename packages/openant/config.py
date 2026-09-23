@@ -70,7 +70,6 @@ def env_choice(env_var: str, choices: tuple[str, ...], fallback: str) -> str:
     )
     return fallback
 
-_SENTINEL = Path("/does/not/exist")
 _CORE_MARKER = "core/scanner.py"
 
 

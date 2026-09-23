@@ -164,5 +164,27 @@ class TestReportWriteSurvivesCLocale(unittest.TestCase):
         self.assertIn('encoding="utf-8"', block)
 
 
+class TestUnknownLevelRendered(unittest.TestCase):
+    """A finding with a level outside the known universe must render
+    in the report body (its own section), not vanish while the header
+    counts it."""
+
+    def test_unknown_level_gets_a_section(self):
+        f = {"finding_id": "openant:V1", "cwe_id": "CWE-78",
+             "file": "a.py", "level": "critical", "message": "m",
+             "snippet": "", "metadata": {"function": "f",
+                                         "vuln_name": "n",
+                                         "stage1_verdict": "vulnerable",
+                                         "stage2_verdict": ""}}
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td)
+            raptor_openant._write_markdown_report(
+                out_dir, [f], Path("/repo"), 1.0)
+            out = (out_dir / "openant-report.md").read_text()
+        self.assertIn("**Findings:** 1", out)
+        self.assertIn("Other (critical)", out)
+        self.assertIn("openant:V1", out)
+
+
 if __name__ == "__main__":
     unittest.main()

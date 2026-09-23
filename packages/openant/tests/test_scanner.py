@@ -84,10 +84,14 @@ class TestBugR015StderrPersistence(unittest.TestCase):
     """
 
     def test_stderr_log_path_referenced_in_error_message(self):
-        """The error message must point users at the log file path."""
-        # Emulate the fix's error formatting
-        msg = "OpenAnt exited 2: some error (full stderr in /tmp/x/openant.stderr.log)"
-        self.assertIn("openant.stderr.log", msg)
+        """The error message must point users at the log file path —
+        asserted against the scanner's actual error construction (the
+        old test asserted on a string literal it built itself)."""
+        scanner_src = (Path(__file__).parents[1] / "scanner.py").read_text()
+        exit_block = scanner_src.split("proc.returncode not in (0, 1)")[1]
+        exit_block = exit_block.split("hard_error=True")[0]
+        self.assertIn("full stderr in", exit_block)
+        self.assertIn("openant.stderr.log", exit_block)
 
     def test_stderr_persistence_block_present(self):
         """Static check: scanner.py contains the stderr-persist block."""
@@ -444,6 +448,51 @@ class TestBoundedCaptureAndByteTrueStderrCap(unittest.TestCase):
         call = scanner_src.split("proc = sandbox_run(")[1]
         call = call.split("except subprocess.TimeoutExpired")[0]
         self.assertIn("max_capture_bytes=_CAPTURE_MAX_BYTES", call)
+
+
+class TestSurveyNitCorrections(unittest.TestCase):
+    """P4 aggregate members on the survey and report surfaces."""
+
+    def test_worktree_style_checkout_git_file_not_untracked(self):
+        """A `git worktree` checkout carries a `.git` FILE at its
+        toplevel; counting it untracked made genuinely clean
+        worktree-checkouts refuse-unless-consented."""
+        import subprocess
+        from unittest import mock
+        from packages.openant import scanner
+        from packages.openant.tests.test_phase1b_integration import (
+            TestOpenantCoreConsentGate,
+        )
+        pinned_repo = TestOpenantCoreConsentGate.__dict__[
+            "_pinned_repo"].__func__
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = pinned_repo(Path(td))
+            wt = Path(td) / "wt"
+            subprocess.run(
+                ["git", "-C", str(repo), "worktree", "add", "-q",
+                 str(wt), "HEAD"],
+                check=True, capture_output=True)
+            wt_core = wt / "libs" / "openant-core"
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                dev = scanner._pinned_tree_deviations(wt_core)
+        self.assertEqual(dev, {"modified": 0, "untracked": 0})
+
+    def test_survey_name_folds_nfc_on_darwin_only(self):
+        """[attempt/record for the darwin-blocked PLAUSIBLE member]
+        macOS filesystems hand back NFD spellings of NFC tree names —
+        the membership fold is darwin-scoped and testable
+        platform-independently through the helper."""
+        import unicodedata
+        from packages.openant.scanner import _survey_name
+        nfd = unicodedata.normalize("NFD", "caf\u00e9.py")
+        nfc = unicodedata.normalize("NFC", "caf\u00e9.py")
+        self.assertNotEqual(nfd, nfc)
+        self.assertEqual(_survey_name(nfd, platform="darwin"), nfc)
+        self.assertEqual(_survey_name(nfd, platform="linux"), nfd)
+
+    def test_dead_sentinel_removed(self):
+        config_src = (Path(__file__).parents[1] / "config.py").read_text()
+        self.assertNotIn("_SENTINEL", config_src)
 
 
 if __name__ == "__main__":
