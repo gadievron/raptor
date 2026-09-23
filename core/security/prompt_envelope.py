@@ -170,6 +170,15 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     # `//host/path` (scheme-relative) inherits the page scheme — at-risk
     # in any context where the rendered output flows back to a browser.
     r'|\[[^\]]{0,8192}\]\((?:https?|ht%74ps?|data|javascript|vbscript|file|ftp)?:[^)]{1,8192}\)'
+    # Encoded-spelling scheme belt (kin of the ht%74ps arm above,
+    # which is one spelling deep): any destination whose scheme-
+    # position head carries a percent-escape or an HTML entity before
+    # the first `:` is an encoded scheme respelling — `%68ttps:`,
+    # `j&#97;vascript:`, `&#104;ttps:` — that renderers decode before
+    # dispatch. Plain relative paths (no colon) and ordinary URLs
+    # (colon before any %/&) never match; the head is bounded so the
+    # arm stays linear.
+    r'|\[[^\]]{0,8192}\]\([^):\s]{0,128}[%&][^):\s]{0,128}:[^)]{1,8192}\)'
     r'|\[[^\]]{0,8192}\]\(//[^)]{1,8192}\)'
     # Inline link/image with an angle-bracket destination —
     # `[click](<javascript:...>)` / `![x](<//evil>)`. The `\(scheme:`
@@ -192,7 +201,10 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     # tag (only the `<style>` element and `@import url()` were
     # covered). Redacting through `url(` breaks the fetch; the tail
     # stays behind as inert text.
-    r'|style\s*=\s*[^>]{0,8192}?url\s*\('
+    # `image-set('//e' 1x)` (and its -webkit- spelling, matched
+    # unanchored) fetches exactly like `url(` — the arm must not
+    # require the one function name.
+    r'|style\s*=\s*[^>]{0,8192}?(?:url|image-set)\s*\('
     # `<style>` open tag, bounded like every other tag arm. The old
     # body+close alternative (`<style\b[^>]*>.*?</style>` under
     # DOTALL) was quadratic on repeated unclosed opens: at each
@@ -267,6 +279,14 @@ _AUTOFETCH_MARKUP_RE = re.compile(
 )
 
 _ENVELOPE_TAG_RE = re.compile(
+    # Spelling note: this pattern neutralises ASCII spellings only. A
+    # fullwidth/homoglyph respelling of a closing tag (`＜/untrusted＞`)
+    # is not defanged HERE — that class is owned by the character
+    # layer (`_BYPASS_CHAR_RE` strips the format/bidi machinery, and
+    # any future confusable fold belongs there, one home for all tag
+    # arms), and current model-side parsers do not treat fullwidth
+    # brackets as tag delimiters. Recorded so a confusable-folding
+    # change lands in the character layer, not per-arm.
     # XML-style tags used by the structured-XML envelope.  No suffix
     # requirement after `untrusted`: callers emit bare `<untrusted
     # kind=...>` / `</untrusted>` (core/audit/context.py,

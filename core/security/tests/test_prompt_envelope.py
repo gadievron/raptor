@@ -1401,3 +1401,35 @@ class TestStyleArmBounded:
         # Generous headroom for loaded CI runners.
         assert elapsed < 5.0
         assert "<style>" not in out
+
+
+class TestEncodedSchemeSpellings:
+    """Kin of the ht%74ps class: renderers decode percent-escapes and
+    HTML entities in link destinations before dispatch, so any
+    encoded byte in the scheme position is a live respelling."""
+
+    def test_percent_encoded_scheme_variants_stripped(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for p in ("[c](%68ttps://evil/x)", "[c](ht%74ps://evil)",
+                  "[c](java%73cript:alert(1))"):
+            assert "evil" not in _strip_autofetch_markup(p) \
+                and "alert" not in _strip_autofetch_markup(p), p
+
+    def test_entity_encoded_scheme_variants_stripped(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for p in ("[c](j&#97;vascript:alert(1))", "[c](&#104;ttps://evil)"):
+            out = _strip_autofetch_markup(p)
+            assert "evil" not in out and "alert" not in out, p
+
+    def test_image_set_style_fetch_stripped(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for p in ('<div style="background:image-set(\'//e\' 1x)">',
+                  '<div style="background:-webkit-image-set(url(//e) 1x)">'):
+            assert "image-set(" not in _strip_autofetch_markup(p), p
+
+    def test_benign_percent_and_ampersand_prose_untouched(self):
+        from core.security.prompt_envelope import _strip_autofetch_markup
+        for p in ("[docs](relative/path%20with%20space)",
+                  "prose with 50% & ampersand",
+                  "code: a %= b; c &= d"):
+            assert _strip_autofetch_markup(p) == p, p
