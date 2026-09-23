@@ -936,6 +936,7 @@ def _mount_minimal_dev(root: str) -> None:
 
 def setup_mount_ns(target: str | None, output: str | None,
                    extra_ro_paths: Iterable[str] | None = None,
+                   extra_rw_paths: Iterable[str] | None = None,
                    root_path: str | None = None,
                    persona: Optional["Persona"] = None,
                    etc_overlay: dict | None = None,
@@ -951,6 +952,20 @@ def setup_mount_ns(target: str | None, output: str | None,
     this child. Enables the fresh per-namespace sysfs at /sys (only
     mountable when the userns owns the netns), which hides host NIC
     names/MACs; False keeps the host /sys rbind.
+
+    `extra_rw_paths`: caller-granted WRITABLE roots that live outside
+    every tree this view otherwise carries, bound READ-WRITE at their
+    original paths (the deliberate view extension for legitimate
+    cross-lane write grants — e.g. a shared log directory that is
+    live policy on the host-view lanes). Same normalisation, shadow /
+    masked-path and pinning rules as `extra_ro_paths`; the only
+    difference is that no read-only remount follows the bind. When
+    pinning is engaged (`src_fds`), every entry here MUST carry a pin
+    — the parent takes them as REQUIRED pins
+    (`_spawn._pin_bind_sources`), so an unpinned entry means a direct
+    caller skipped that step and the entry is skipped fail-closed
+    like an unpinned read-only extra (the write grant stays dead
+    rather than re-opening the mount-time-resolution window).
 
     Must be called AFTER the child has entered the new user-ns and acquired
     CAP_SYS_ADMIN (via the parent's newuidmap setup), and BEFORE
@@ -1289,9 +1304,16 @@ def setup_mount_ns(target: str | None, output: str | None,
         | ({f"{output}/.raptor-run.json"} if output else set())
     )
 
-    _extra_entries: list[tuple[str, int | None, bool, bool]] = []
+    _extra_entries: list[tuple[str, int | None, bool, bool, bool]] = []
     _seen_extra_ro: set = set()
-    for path in (extra_ro_paths or ()):
+    # Read-write extras first: a path arriving through BOTH lists gets
+    # ONE bind and it must be the read-write one (the rw grant is the
+    # caller's stronger declared intent; an ro bind stacked instead
+    # would kill every child write with EROFS).
+    for path, _extra_rw in (
+            *((p, True) for p in (extra_rw_paths or ())),
+            *((p, False) for p in (extra_ro_paths or ())),
+    ):
         if not path:
             continue
         # Canonicalise like target/output above — a relative or
@@ -1378,7 +1400,8 @@ def setup_mount_ns(target: str | None, output: str | None,
         if not _extra_is_dir and not _extra_is_file:
             continue
         _extra_entries.append(
-            (path, _extra_fd, _extra_is_dir, _extra_is_file))
+            (path, _extra_fd, _extra_is_dir, _extra_is_file,
+             _extra_rw))
     # Ancestors before descendants: component count orders any
     # ancestor strictly before its descendants; the sort is stable,
     # so unrelated entries keep caller order.
@@ -1386,10 +1409,15 @@ def setup_mount_ns(target: str | None, output: str | None,
 
     def _bind_one_extra_ro(path: str, _extra_fd: int | None,
                            _extra_is_dir: bool,
-                           _extra_is_file: bool) -> None:
-        """Bind one extra read-only path (step 8b unit). Same two-step
-        bind+remount-ro as target, and the same shadow-skip rules —
-        already applied by the mount-plan normalisation above."""
+                           _extra_is_file: bool,
+                           _extra_rw: bool = False) -> None:
+        """Bind one extra path (step 8b unit). Read-only entries get
+        the same two-step bind+remount-ro as target; read-write
+        entries (`extra_rw_paths` — the deliberate out-of-view grant
+        carry) keep the bind writable, exactly like the output bind.
+        Shadow-skip rules already applied by the mount-plan
+        normalisation above."""
+        _label = b"extra_rw_paths" if _extra_rw else b"extra_ro_paths"
         inside = f"{root}{path}"
         # _step names which sub-operation is running so the outer
         # OSError handler can report the actual failing step
@@ -1470,7 +1498,12 @@ def setup_mount_ns(target: str | None, output: str | None,
                 # original fail-closed behaviour — a degraded
                 # sandbox masquerading as the requested one is
                 # worse than a loud setup failure.
-                if bind_exc.errno != _EINVAL or not rw_submounts_ok:
+                # Read-write entries may recurse unconditionally: the
+                # whole bind is writable by declaration, so carried
+                # submounts staying rw claims nothing the top mount
+                # doesn't already.
+                if bind_exc.errno != _EINVAL or not (rw_submounts_ok
+                                                     or _extra_rw):
                     raise
                 _bind_pinned_source(path, inside, MS_BIND | MS_REC,
                                     pinned_fd=_extra_fd)
@@ -1479,11 +1512,17 @@ def setup_mount_ns(target: str | None, output: str | None,
                 except Exception:  # noqa: BLE001
                     _path_b = b"<unencodable>"
                 warn_post_fork(
-                    b"mount_ns: extra_ro_paths recursive bind for "
+                    b"mount_ns: " + _label + b" recursive bind for "
                     + _path_b
-                    + b" (locked submounts); submount ro relies on"
-                    b" Landlock\n"
+                    + (b" (locked submounts)\n" if _extra_rw else
+                       b" (locked submounts); submount ro relies on"
+                       b" Landlock\n")
                 )
+            if _extra_rw:
+                # Read-write carry: no ro remount — the bind stays
+                # writable like the output bind; Landlock's write
+                # rule (view-anchored to this path) scopes it.
+                return
             try:
                 _mount(path, inside, None, _ro_remount_flags(inside))
             except OSError as exc:
@@ -1525,7 +1564,7 @@ def setup_mount_ns(target: str | None, output: str | None,
             try:
                 os.write(
                     2,
-                    b"sandbox: mount_ns: extra_ro_paths "
+                    b"sandbox: mount_ns: " + _label + b" "
                     + _step
                     + b" failed for "
                     + _path_b
@@ -1534,9 +1573,10 @@ def setup_mount_ns(target: str | None, output: str | None,
             except OSError:
                 pass
             _step_s = _step.decode("ascii", "replace")
+            _label_s = _label.decode("ascii", "replace")
             raise ExtraRoBindError(
                 exc.errno or 0,
-                f"extra_ro_paths {_step_s} failed for {path!r}",
+                f"{_label_s} {_step_s} failed for {path!r}",
             ) from exc
 
     # Split the plan: DIRECTORY entries that are proper ancestors of

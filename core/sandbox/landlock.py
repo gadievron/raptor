@@ -30,7 +30,7 @@ import stat
 from collections.abc import Callable
 
 from . import state
-from ._pathpin import is_per_process_procfs, open_pinned
+from ._pathpin import ViewAnchoredPath, is_per_process_procfs, open_pinned
 from .exit_codes import SANDBOX_EXIT_LANDLOCK_DOWNGRADE
 
 logger = logging.getLogger(__name__)
@@ -495,6 +495,18 @@ def _resolve_grant_paths(paths: list, kind: str) -> list:
                     "served by the /proc read grant where present).",
                     kind, requested,
                 )
+            continue
+        if isinstance(path, ViewAnchoredPath):
+            # Mount-view-anchored rule (spawn assembly verified this
+            # entry against the bind set): the child opens it
+            # POST-pivot, where the bind serves the validated inode at
+            # exactly this path — a host-view realpath here would
+            # re-resolve any symlink SPELLING of the bind target to a
+            # destination the view does not carry, failing the rule
+            # open and dropping the caller's write grant under the
+            # global deny. No redirect announcement either: the bind
+            # source pin already validated the inode identity.
+            resolved_paths.append(requested)
             continue
         resolved = os.path.realpath(path)
         if resolved != requested:

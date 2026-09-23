@@ -1006,6 +1006,7 @@ def _pin_bind_sources(
     output: str | None,
     rootfs: str | None,
     readable_paths: Iterable[str] | None,
+    writable_extra_paths: Iterable[str] | None = None,
 ) -> dict[str, int]:
     """Validation-time O_PATH pins for every mount-ns bind SOURCE.
 
@@ -1056,7 +1057,12 @@ def _pin_bind_sources(
 
     fds: dict[str, int] = {}
     try:
-        for req in (target, output, rootfs):
+        # writable_extra_paths (out-of-view writable grants carried
+        # into the view as read-write binds) join the REQUIRED class:
+        # a write-bind whose source cannot be pinned is exactly the
+        # steering surface the required posture exists for.
+        for req in (target, output, rootfs,
+                    *(writable_extra_paths or ())):
             if not req:
                 continue
             key = _canonical_bind_path(req)
@@ -1165,6 +1171,137 @@ def _drop_host_tmpdir_grants(
         return os.path.realpath(path) != host_tmp
 
     return [p for p in writable if _keep(p)]
+
+
+def _anchor_grants_to_bind_view(
+    grant_paths: list,
+    target: str | None,
+    output: str | None,
+    rootfs: str | None,
+    readable_paths: Iterable[str] | None,
+    *,
+    kind: str,
+) -> tuple[list, list[str]]:
+    """Re-anchor Landlock rule paths for a MOUNT-TREE spawn — whose
+    rule opens happen POST-pivot inside the bind view — and plan the
+    deliberate view extension for legitimate out-of-view grants.
+
+    Returns ``(rule_paths, carry_rw_paths)``: the rule list to hand
+    Landlock, and the out-of-view WRITABLE grant roots the spawn must
+    bind read-write into the view (pinned like every other bind
+    source) so the grant is honoured on the mount lane instead of
+    dying at the rule open.
+
+    Three shapes where the parent-side host-view ``realpath`` names a
+    tree the mount view does not carry, all previously surfacing as a
+    buried "Landlock ... path could not be opened" child warning
+    followed by EACCES at first use:
+
+    * a grant naming a bind target through a symlink spelling (an
+      ``output=`` that is a symlink): the view serves the pinned
+      inode AT THE BIND PATH, while the host realpath resolves to the
+      symlink's destination — absent from the view. Grants matching a
+      bind target (by canonical bind path, or by realpath — the
+      resolved spelling of the same source) become
+      :class:`~._pathpin.ViewAnchoredPath` entries: the child opens
+      the bind path post-pivot, symlink-free by construction (the
+      bind machinery refuses symlink components), and the rule lands
+      on the validated inode.
+    * a WRITABLE grant naming an existing host directory or regular
+      file outside every view tree. This is a LEGITIMATE cross-lane
+      shape — callers build one writable list for every lane, and
+      entries like a shared log directory are live policy on the
+      host-view (mountless / Landlock-only) lanes — so the view is
+      extended DELIBERATELY: the root joins ``carry_rw_paths`` (bound
+      read-write at its own path, source-pinned) and its rule anchors
+      to the bind. Refusing these at assembly aborted runs whose
+      grants were honoured after a benign lane demotion, and at BASE
+      the grant was silently dead on the mount lane.
+    * a grant the view can never carry — out-of-view AND nothing to
+      bind (the path does not exist, or is neither a directory nor a
+      regular file): no lane could ever honour it, so refuse at spawn
+      assembly with a named error instead of a bare use-time EACCES.
+
+    Readable grants never populate ``carry_rw_paths``: every readable
+    entry is already its own read-only bind target and anchors to
+    itself. Rootfs mode skips the carry/refusal arms: the image tree
+    is the root and its top-level entries are all legitimately
+    grantable — only the bind-target anchoring applies there.
+    Deliberate residual, kept: a grant naming a path UNDER a
+    symlink-spelled bind target keeps its host-view realpath rule
+    (in-view only when the spellings agree); anchoring subpaths would
+    need per-component translation the bind set does not describe.
+    """
+    anchor_map: dict[str, str] = {}
+    for bind_path in (target, output, rootfs,
+                      *(readable_paths or ())):
+        if not bind_path:
+            continue
+        canonical = _canonical_bind_path(bind_path)
+        anchor_map.setdefault(canonical, canonical)
+        anchor_map.setdefault(os.path.realpath(canonical), canonical)
+    from .mount_ns import _SYSTEM_RO_DIRS
+    view_trees = [
+        "/tmp", "/run", "/dev", "/sys", "/proc",
+        *(f"/{d}" for d in _SYSTEM_RO_DIRS),
+        *anchor_map,
+    ]
+
+    def _under(path: str, root: str) -> bool:
+        return path == root or path.startswith(root.rstrip("/") + "/")
+
+    anchored: list = []
+    carry_rw: list[str] = []
+    for entry in grant_paths:
+        if isinstance(entry, _pathpin.ViewAnchoredPath):
+            anchored.append(entry)
+            continue
+        canonical = _canonical_bind_path(str(entry))
+        bind_target = anchor_map.get(canonical)
+        if bind_target is None:
+            bind_target = anchor_map.get(os.path.realpath(canonical))
+        if bind_target is not None:
+            anchored.append(_pathpin.ViewAnchoredPath(bind_target))
+            continue
+        if rootfs is not None:
+            anchored.append(entry)
+            continue
+        realpath = os.path.realpath(canonical)
+        if any(_under(canonical, tree) or _under(realpath, tree)
+               for tree in view_trees):
+            anchored.append(entry)
+            continue
+        if kind == "writable":
+            import stat as _stat
+            try:
+                grant_mode = os.stat(realpath).st_mode
+            except OSError:
+                grant_mode = None
+            if grant_mode is not None and (
+                    _stat.S_ISDIR(grant_mode) or _stat.S_ISREG(grant_mode)):
+                # Legitimate out-of-view writable root: carry it into
+                # the view as a pinned read-write bind (dedup — the
+                # same root can arrive via several spellings) and
+                # anchor its rule to the bind.
+                if canonical not in carry_rw:
+                    carry_rw.append(canonical)
+                anchored.append(_pathpin.ViewAnchoredPath(canonical))
+                continue
+        from .errors import SandboxSetupError
+        raise SandboxSetupError(
+            f"sandbox {kind} grant {str(entry)!r} resolves outside "
+            f"the mount view and cannot be carried into it (the path "
+            f"is missing, or is neither a directory nor a regular "
+            f"file) — no lane could ever honour this grant (the "
+            f"child would fail its rule open and every access would "
+            f"EACCES at use time).",
+            "create the directory before the call, pass the path as "
+            "output= or readable_paths= (bind-mounted into the "
+            "view), relocate it under the run's output directory or "
+            "/tmp, or pass skip_mount_ns=True if host-view grants "
+            "are intended for this call.",
+        )
+    return anchored, carry_rw
 
 
 def _pid1_split_for_waiter(wstat_w: int | None = None) -> None:
@@ -1905,22 +2042,42 @@ def run_sandboxed(
         # instead of failing the spawn on the ENOSYS the pin walk
         # raises. On Linux O_PATH always exists, so the required-pin
         # posture below is unchanged where the threat is real.
+        # Mount-lane grant plan: drop the host-custom TMPDIR grant,
+        # anchor bind-target grants onto their in-view bind paths,
+        # carry legitimate out-of-view WRITABLE roots into the view as
+        # read-write binds (pinned below like every other bind
+        # source), and refuse — named, pre-fork — grants no lane could
+        # ever honour. Computed BEFORE the pin block so the carries
+        # join the required pin set; the Landlock arm below reuses the
+        # anchored rule list. See _anchor_grants_to_bind_view.
+        _carry_rw_paths: list[str] = []
+        _mount_writable_rules: list | None = None
+        if (target or output or rootfs) and not skip_mount_ns:
+            _mount_writable_rules = _drop_host_tmpdir_grants(
+                [p for p in (writable_paths or ()) if p],
+                target, output, rootfs)
+            _mount_writable_rules, _carry_rw_paths = (
+                _anchor_grants_to_bind_view(
+                    _mount_writable_rules, target, output, rootfs,
+                    readable_paths, kind="writable"))
         _bind_src_fds: dict[str, int] | None = None
         if ((target or output or rootfs) and not skip_mount_ns
                 and _pathpin._HAVE_O_PATH):
             try:
                 _bind_src_fds = _pin_bind_sources(
-                    target, output, rootfs, readable_paths)
+                    target, output, rootfs, readable_paths,
+                    writable_extra_paths=_carry_rw_paths)
             except OSError as _pin_exc:
                 from .errors import SandboxSetupError
                 msg = (
                     f"sandbox bind-source validation pin failed for a "
                     f"required source ({_pin_exc}) — refusing every "
-                    f"fallback tier: a target/output/rootfs path that "
-                    f"cannot be pinned at validation time would let a "
-                    f"concurrently planted symlink steer the "
-                    f"Landlock-only fallback's write grants on the "
-                    f"host filesystem."
+                    f"fallback tier: a target/output/rootfs path (or "
+                    f"an out-of-view writable grant carried into the "
+                    f"mount view) that cannot be pinned at validation "
+                    f"time would let a concurrently planted symlink "
+                    f"steer the bind or the Landlock-only fallback's "
+                    f"write grants on the host filesystem."
                 )
                 raise SandboxSetupError(
                     msg,
@@ -1980,15 +2137,15 @@ def run_sandboxed(
         if (not _landlock_absent_tolerated
                 and (writable_paths or allowed_tcp_ports
                      or (readable_paths and restrict_reads))):
-            effective_paths = list(writable_paths) if writable_paths else []
+            # Mount-tree spawns use the precomputed grant plan
+            # (host-custom TMPDIR dropped, bind-target grants
+            # anchored, out-of-view roots carried as rw binds);
+            # host-view lanes keep the caller's list verbatim.
+            effective_paths = (
+                list(_mount_writable_rules)
+                if _mount_writable_rules is not None
+                else (list(writable_paths) if writable_paths else []))
             if (target or output or rootfs) and not skip_mount_ns:
-                # Mount-tree spawns get a fresh tmpfs at /tmp, so the
-                # baseline grant for a host-custom TMPDIR names a path
-                # that cannot exist post-pivot — drop it here rather
-                # than let the child's Landlock grant-open fail into
-                # the payload's stderr stream.
-                effective_paths = _drop_host_tmpdir_grants(
-                    effective_paths, target, output, rootfs)
                 # This spawn builds the mount tree (same predicate as
                 # the step-9 setup_mount_ns call), so /dev/pts is the
                 # FRESH per-sandbox devpts instance
@@ -2056,12 +2213,23 @@ def run_sandboxed(
             # The setup-report at the bottom of this function already
             # reported read_allowlist only when restrict_reads — the
             # enforcement now matches it.
+            _ll_readable = (list(readable_paths)
+                            if (readable_paths and restrict_reads)
+                            else None)
+            if (_ll_readable
+                    and (target or output or rootfs)
+                    and not skip_mount_ns):
+                # Mount-tree spawn: read-rule opens happen POST-pivot
+                # too, so anchor readable grants onto their own bind
+                # paths (every readable entry is its own read-only
+                # bind target — the carry list is always empty here).
+                _ll_readable, _ = _anchor_grants_to_bind_view(
+                    _ll_readable, target, output, rootfs,
+                    readable_paths, kind="readable")
             landlock_fn = _make_landlock_preexec(
                 effective_paths,
                 list(allowed_tcp_ports) if allowed_tcp_ports else None,
-                readable_paths=(list(readable_paths)
-                                if (readable_paths and restrict_reads)
-                                else None),
+                readable_paths=_ll_readable,
                 # Spawn lane: fail-closed aborts RAISE so the grandchild
                 # catch-all reports them on the setup-status pipe ('L' +
                 # reason) and the parent fails loud with a typed
@@ -2767,6 +2935,7 @@ def run_sandboxed(
                 try:
                     setup_mount_ns(target, output,
                                    extra_ro_paths=readable_paths,
+                                   extra_rw_paths=_carry_rw_paths or None,
                                    root_path=_root_dir,
                                    persona=persona,
                                    etc_overlay=etc_overlay,

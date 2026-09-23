@@ -90,7 +90,30 @@ import errno
 import os
 import stat as _stat
 
-__all__ = ["canonical_bind_path", "is_per_process_procfs", "open_pinned"]
+__all__ = ["ViewAnchoredPath", "canonical_bind_path",
+           "is_per_process_procfs", "open_pinned"]
+
+
+class ViewAnchoredPath(str):
+    """A Landlock rule path anchored to the MOUNT VIEW, not the host.
+
+    Rule opens for a mount-tree spawn happen POST-pivot in the child,
+    where a bind target serves the validated (pinned) inode AT THE
+    BIND PATH — while the parent-side ``realpath`` of the same grant
+    resolves in the HOST view, which can name a tree the mount view
+    does not carry (an ``output=`` given as a symlink spelling
+    resolves to the symlink's destination; the view carries only the
+    bind path). Entries of this type are already canonical bind
+    paths; ``landlock._resolve_grant_paths`` passes them through
+    without the host-view ``realpath`` step, and the child's pinned
+    walk still refuses any symlink met inside the view (there are
+    none by construction — the bind machinery refuses symlink
+    components — so a hit is tamper). Produced only by the spawn
+    assembly for grants it verified against the bind set
+    (``_spawn._anchor_grants_to_bind_view``).
+    """
+
+    __slots__ = ()
 
 
 def canonical_bind_path(path: str) -> str:
