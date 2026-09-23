@@ -994,25 +994,40 @@ def _select_diff_snapshots(conn, target_path: Optional[str], *, base_snapshot: O
     else:
         head = None
     if base and head:
+        # Both endpoints explicit: the operator asked for exactly this
+        # pair, cross-producer or not.
         return base, head
-    params: tuple[Any, ...]
+    # Defaulted endpoints are PRODUCER-scoped. Snapshots are
+    # per-producer projections of the target (an understand snapshot
+    # carries entry-point/sink/flow nodes; a scan/codeql/validate/
+    # audit snapshot carries none of them), so a cross-producer
+    # default pair reads as the entire attack surface appearing or
+    # vanishing — every standalone /scan and /codeql auto-ingest made
+    # that the default outcome. With one explicit endpoint the other
+    # defaults within ITS producer; with none, the diff compares
+    # understand snapshots (the attack-surface projection this diff
+    # reports on).
+    explicit = base or head
+    producer = "understand"
+    if explicit is not None and "producer" in explicit.keys():
+        producer = explicit["producer"] or "understand"
+    clauses = ["producer=?"]
+    params: list[str] = [producer]
     if target_path:
-        rows = conn.execute(
-            """
-            SELECT * FROM snapshots
-            WHERE target_path=? OR target_path=?
-            ORDER BY created_at DESC LIMIT 2
-            """,
-            (str(target_path), str(Path(target_path).resolve())),
-        ).fetchall()
-    else:
-        rows = conn.execute(
-            "SELECT * FROM snapshots ORDER BY created_at DESC LIMIT 2"
-        ).fetchall()
+        clauses.append("(target_path=? OR target_path=?)")
+        params += [str(target_path), str(Path(target_path).resolve())]
+    rows = conn.execute(
+        f"SELECT * FROM snapshots WHERE {' AND '.join(clauses)} "
+        "ORDER BY created_at DESC LIMIT 2",  # noqa: S608 — clauses are literals, values bound
+        tuple(params),
+    ).fetchall()
     if not head and rows:
         head = rows[0]
-    if not base and len(rows) > 1:
-        base = rows[1]
+    if not base:
+        # Never default the base to the row that IS the head.
+        candidates = [r for r in rows if not (head and r["id"] == head["id"])]
+        if candidates:
+            base = candidates[0]
     return base, head
 
 
