@@ -72,7 +72,10 @@ def preferred_from_recall(rows: list[dict]) -> str | None:
 
     best_name: str | None = None
     best_hits = 0
-    pair_re = re.compile(r"([\w.\-]+\.txt):\s*(\d+)\s*hit")
+    # The lookbehind pins each attempt to the start of a name run: a
+    # bare [\w.\-]+ head re-scans a hostile run from every offset —
+    # quadratic. Dropped starts are mid-name false tokens only.
+    pair_re = re.compile(r"(?<![\w.\-])([\w.\-]+\.txt):\s*(\d+)\s*hit")
     for row in rows or []:
         content = str(row.get("content") or "")
         if "Wordlist effectiveness" not in content:

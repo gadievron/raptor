@@ -153,7 +153,13 @@ class ApiVerboseErrorCheck(Check):
                         re.compile(r"Traceback", re.I),
                         re.compile(r"at com\.|at org\.|at sun\."),
                         re.compile(r"NullPointerException|IndexOutOfBoundsException"),
-                        re.compile(r"stack.*:.*\[", re.I),
+                        # Bounded gaps: with unbounded `.*` chains a
+                        # crafted body re-scans from every "stack"
+                        # occurrence — far worse than linear. Real
+                        # trace markers ("stack": [ / stacktrace: [)
+                        # sit well inside the bound; the two gaps
+                        # multiply per attempt, so they stay small.
+                        re.compile(r"stack.{0,100}:.{0,100}\[", re.I),
                     ]
                 )
                 if has_trace:

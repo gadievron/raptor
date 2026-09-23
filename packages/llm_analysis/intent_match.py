@@ -202,7 +202,15 @@ def _cwe_command_injection_shape(exploit_code: str) -> bool:
         # the pattern is already narrow enough.
         return True
     # `$()` subshell or backticks inside string literals.
-    return bool(re.search(r"""['"][^'"]*(?:\$\([^)]+\)|`[^`]+`)[^'"]*['"]""", exploit_code))
+    # Subshell/backtick interiors are bounded: unbounded, a crafted
+    # payload that repeats `"$(` re-scans the rest of the code from
+    # every occurrence — quadratic. Real subshell bodies sit well
+    # inside the bound (the caller only tests
+    # whether a match exists at all).
+    return bool(re.search(
+        r"""['"][^'"]*(?:\$\([^)]{1,2000}\)|`[^`]{1,2000}`)[^'"]*['"]""",
+        exploit_code,
+    ))
 
 
 def _cwe_sql_injection_shape(exploit_code: str) -> bool:

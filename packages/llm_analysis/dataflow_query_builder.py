@@ -670,6 +670,10 @@ TEMPLATE_PREDICATE_SCHEMA = {
 # lose the CWE → prebuilt query mapping for these findings.
 #
 # Order matters: more specific patterns first. The first match wins.
+# Co-occurrence gaps are bounded ({0,200}): with an unbounded `.*`
+# gap a crafted rule id that repeats the head token re-scans the
+# rest of the id from every occurrence — quadratic. Real rule ids
+# are far shorter than the bound.
 _RULE_ID_TO_CWE: list = [
     # Command injection — variants seen in real rule sets:
     # "command-injection", "os-command-injection", "command_injection",
@@ -678,7 +682,7 @@ _RULE_ID_TO_CWE: list = [
     (re.compile(
         r"command[-_]?injection"
         r"|os[-_]?command"
-        r"|subprocess[-_.].*shell"
+        r"|subprocess[-_.].{0,200}shell"
         r"|shell[-_]?true"
         r"|command[-_]shell"
         r"|exec[-_]?shell",
@@ -689,7 +693,7 @@ _RULE_ID_TO_CWE: list = [
     # first-match-wins loop would misroute NoSQL rule ids to CWE-89
     # (and Tier 1 would then run the SQL-injection prebuilt query
     # against a MongoDB-injection claim).
-    (re.compile(r"nosql[-_]?injection|\bnosqli\b|mongo[-_].*injection",
+    (re.compile(r"nosql[-_]?injection|\bnosqli\b|mongo[-_].{0,200}injection",
                 re.IGNORECASE), "CWE-943"),
     # SQL injection
     (re.compile(r"sql[-_]?injection|sqli\b", re.IGNORECASE), "CWE-89"),
@@ -699,7 +703,7 @@ _RULE_ID_TO_CWE: list = [
     # XSS — DOM-based and reflected both map to CWE-79
     (re.compile(r"\bxss\b|cross[-_]?site[-_]?scripting", re.IGNORECASE), "CWE-79"),
     # Code injection / eval
-    (re.compile(r"code[-_]?injection|\beval\b.*injection", re.IGNORECASE), "CWE-94"),
+    (re.compile(r"code[-_]?injection|\beval\b.{0,200}injection", re.IGNORECASE), "CWE-94"),
     # XXE / XML external entity
     (re.compile(r"\bxxe\b|xml[-_]?external[-_]?entit", re.IGNORECASE), "CWE-611"),
     # SSRF

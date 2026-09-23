@@ -36,7 +36,12 @@ _HEADER_SIGNALS: Dict[str, Dict[str, str]] = {
 }
 
 _HTML_SIGNALS = [
-    (re.compile(r'<meta[^>]+name=["\']generator["\'][^>]+content=["\']([^"\']+)["\']', re.I), "generator"),
+    # The tag-interior spans are bounded: unbounded, a crafted page
+    # that repeats "<meta" makes every occurrence re-scan the rest
+    # of the page — far worse than linear. The two spans multiply
+    # per attempt, so they stay small; a real generator tag puts
+    # name= and content= within a few dozen chars of the tag open.
+    (re.compile(r'<meta[^>]{1,150}name=["\']generator["\'][^>]{1,150}content=["\']([^"\']+)["\']', re.I), "generator"),
     (re.compile(r'wp-content/(?:plugins|themes)/', re.I), "WordPress"),
     (re.compile(r'/drupal\.js|drupal\.settings', re.I), "PHP/Drupal"),
     (re.compile(r'django-csrftoken|__django', re.I), "Python/Django"),

@@ -77,7 +77,11 @@ class LibFuzzerRunner:
     # and the lazy filler overlapped on digits (quadratic on a
     # crafted stats line). Earliest-match captures unchanged.
     _STATS_RE = re.compile(
-        r"#(\d+)\s+(?:DONE|REDUCE|RELOAD|NEW|pulse)\s+cov:\s*(\d+)\s+ft:\s*(\d+)\s+corp:\s*(\d+)\b.*?exec/s:\s*(\d+)"
+        # the mid-line gap is bounded too: unbounded, a crafted
+        # stats stream that repeats the "#N ... corp:" head re-scans
+        # the rest from every occurrence — quadratic. Real stat
+        # lines keep exec/s within a few dozen chars of corp.
+        r"#(\d+)\s+(?:DONE|REDUCE|RELOAD|NEW|pulse)\s+cov:\s*(\d+)\s+ft:\s*(\d+)\s+corp:\s*(\d+)\b.{0,200}?exec/s:\s*(\d+)"
     )
 
     def __init__(

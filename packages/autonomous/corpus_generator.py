@@ -196,7 +196,10 @@ class CorpusGenerator:
             except OSError:
                 continue
 
-            for match in re.finditer(r'\bstrcmp\s*\([^,]+,\s*"([A-Z][A-Z0-9_-]{1,20})"\s*\)', text):
+            # First-argument span bounded: unbounded, source that
+            # repeats "strcmp(" re-scans the rest of the file from
+            # every occurrence — quadratic on hostile input.
+            for match in re.finditer(r'\bstrcmp\s*\([^,]{1,500},\s*"([A-Z][A-Z0-9_-]{1,20})"\s*\)', text):
                 commands.add(match.group(1))
             for match in re.finditer(r'\b([A-Z][A-Z0-9_-]{1,20}):(?:data|[A-Za-z0-9_{"<%])', text):
                 commands.add(match.group(1))
