@@ -186,6 +186,22 @@ def _safe_text(text: str, max_len: int = 120) -> str:
     return sanitized[:max_len]
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    """Integer-coerce a numeric-typed field for prompt interpolation.
+
+    ``codeql_alerts`` / ``semgrep_hits`` / Joern records are populated
+    from prior-run artifacts on disk — the same pre-stageable class the
+    provenance gates defend against. String fields route through
+    ``_safe_name`` / ``_safe_text``; a STRING smuggled into a numeric
+    slot (``line``, ``arg_index``) was the one raw interpolation lane,
+    injecting forged prompt structure past both sanitisers.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Per-function evidence record (used by /audit pre-sweep)
 # ---------------------------------------------------------------------------
@@ -315,9 +331,12 @@ def format_evidence_prose(
 ) -> str:
     """Format an EvidenceRecord as prose for the LLM prompt.
 
-    Uses only structural fields (function, param, sink, line) — never
-    FlowStep.code snippets. See design §"Prompt injection defense for
-    pre-evidence".
+    Prompt-injection defense: every interpolated field is sanitised —
+    identifiers through ``_safe_name``, text excerpts (Joern code
+    snippets, CodeQL messages, context-map notes) through ``_safe_text``
+    with tight caps, numeric-typed fields (``line``, ``arg_index``)
+    integer-coerced via ``_safe_int``. Nothing from a disk-sourced
+    record reaches the prompt raw.
     """
     lines: list[str] = []
 
@@ -421,7 +440,7 @@ def format_evidence_prose(
 
     for ug in record.joern_unguarded_sinks:
         ug_sink = _safe_name(ug.get("sink", ""))
-        ug_line = ug.get("line", 0)
+        ug_line = _safe_int(ug.get("line", 0))
         ug_code = _safe_text(ug.get("code", ""), 120)
         lines.append(
             f"- UNGUARDED sink: `{ug_sink}` at line {ug_line} has no "
@@ -430,7 +449,7 @@ def format_evidence_prose(
 
     for sa in record.joern_sink_args:
         sa_sink = _safe_name(sa.get("sink", ""))
-        arg_idx = sa.get("arg_index", -1)
+        arg_idx = _safe_int(sa.get("arg_index", -1), -1)
         src_param = _safe_name(sa.get("source_param", ""))
         lines.append(
             f"- tainted arg: param `{src_param}` reaches `{sa_sink}` "
@@ -440,7 +459,7 @@ def format_evidence_prose(
     for alert in record.codeql_alerts:
         rule_id = _safe_name(alert.get("rule_id", "unknown"))
         message = _safe_text(alert.get("message", ""), 200)
-        line = alert.get("line", 0)
+        line = _safe_int(alert.get("line", 0))
         provenance = " (prior scan run)" if alert.get("_sarif_sibling") else ""
         cwe = _safe_cwe(alert.get("_sarif_cwe", ""))
         cwe_note = f" [{cwe}]" if cwe else ""
@@ -451,7 +470,7 @@ def format_evidence_prose(
 
     for hit in record.semgrep_hits:
         rule_id = _safe_name(hit.get("rule_id", "unknown"))
-        line = hit.get("line", 0)
+        line = _safe_int(hit.get("line", 0))
         provenance = " (prior scan run)" if hit.get("_sarif_sibling") else ""
         cwe = _safe_cwe(hit.get("_sarif_cwe", ""))
         cwe_note = f" [{cwe}]" if cwe else ""
@@ -513,7 +532,10 @@ def format_evidence_prose(
     if not lines:
         return ""
 
-    header = "## Mechanical pre-sweep results\n\n"
+    # "Mechanical unless noted": the context_map_sink line is
+    # LLM-derived and says so inline — the header must not launder it
+    # into tool-evidence tier.
+    header = "## Pre-sweep results (mechanical unless noted)\n\n"
     return header + "\n".join(lines)
 
 
