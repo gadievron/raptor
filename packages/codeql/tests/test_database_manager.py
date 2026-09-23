@@ -781,6 +781,84 @@ class TestEvictStaleCanonicalGracePeriod:
             "exactly one stale marker should be created from eviction"
 
 
+class TestEvictedMarkerMtimeGrace:
+    """The GC's documented 1-hour reader grace must actually hold for
+    stale-evicted canonicals: os.rename preserves the evicted DB's
+    own (stale-by-definition) mtime, so pre-fix the marker was
+    GC-eligible the moment it was created — the very next sibling
+    run's cache-miss GC could rmtree it out from under an active
+    reader."""
+
+    def _aged_canonical(self, tmp_path, age_seconds):
+        canonical = tmp_path / "cache" / "abc" / "cpp-db"
+        canonical.parent.mkdir(parents=True)
+        canonical.mkdir()
+        (canonical / "codeql-database.yml").write_text("language: cpp\n")
+        old = time.time() - age_seconds
+        os.utime(canonical, (old, old))
+        return canonical
+
+    def test_stale_eviction_marker_gets_fresh_mtime(
+            self, db_manager, tmp_path):
+        # Aged 8 days — evicted because stale (missing-metadata leg,
+        # same rename site as the stale-by-age leg).
+        canonical = self._aged_canonical(tmp_path, 8 * 24 * 3600)
+        with patch.object(db_manager, 'get_database_dir',
+                          return_value=canonical):
+            db_manager._evict_stale_canonical("abc", "cpp", max_age_days=7)
+        markers = list(canonical.parent.glob("*.stale.*"))
+        assert len(markers) == 1
+        age = time.time() - markers[0].stat().st_mtime
+        assert age < 60, (
+            f"marker inherited the evicted DB's mtime "
+            f"(age {age / 3600:.1f}h) — the 1h reader grace is vacuous"
+        )
+
+    def test_freshly_evicted_marker_survives_immediate_gc(
+            self, db_manager, tmp_path):
+        canonical = self._aged_canonical(tmp_path, 8 * 24 * 3600)
+        with patch.object(db_manager, 'get_database_dir',
+                          return_value=canonical):
+            db_manager._evict_stale_canonical("abc", "cpp", max_age_days=7)
+        db_manager._gc_stale_markers(canonical.parent)
+        assert list(canonical.parent.glob("*.stale.*")), (
+            "freshly-evicted marker reaped by an immediate GC pass — "
+            "an active reader's DB was deleted inside the grace window"
+        )
+
+    def test_force_eviction_marker_gets_fresh_mtime(
+            self, db_manager, tmp_path):
+        """The force=True eviction path shares the fix."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "a.py").write_text("x = 1\n")
+        canonical = self._aged_canonical(tmp_path, 8 * 24 * 3600)
+
+        def fake_run(cmd, **kwargs):
+            staging = Path(cmd[3])
+            staging.mkdir(parents=True, exist_ok=True)
+            (staging / "db-info.json").write_text("{}")
+            r = MagicMock()
+            r.returncode = 0
+            r.stdout = ""
+            r.stderr = ""
+            return r
+
+        with patch('core.sandbox.run', side_effect=fake_run), \
+             patch.object(db_manager, '_count_database_files',
+                          return_value=1), \
+             patch.object(db_manager, 'save_metadata'), \
+             patch.object(db_manager, 'compute_repo_hash',
+                          return_value='abc'), \
+             patch.object(db_manager, 'get_database_dir',
+                          return_value=canonical):
+            db_manager.create_database(repo, "python", None, force=True)
+        markers = list(canonical.parent.glob("*.stale.*"))
+        assert markers, "force eviction should leave a stale marker"
+        age = time.time() - markers[0].stat().st_mtime
+        assert age < 60
+
+
 class TestAutoCleanupWiring:
     """CODEQL_DB_AUTO_CLEANUP was dead config: nothing ever invoked
     cleanup_old_databases outside the manual --cleanup CLI flag, so the
