@@ -24603,8 +24603,17 @@ def _is_detection_only(tool_id: str) -> bool:
     """
     if tool_id.startswith("coccinelle:"):
         rule_name = tool_id.split("coccinelle:", 1)[1]
+        try:
+            raptor_dir = os.environ["RAPTOR_DIR"]
+        except KeyError:
+            # No repo root — a stock rule cannot be told apart from a
+            # dynamic per-hypothesis one, so fail CLOSED (detection
+            # role, no promotion). The old "." fallback resolved
+            # against CWD, missed the isfile check, and read stock
+            # detection rules as promotion-grade.
+            return True
         rule_path = os.path.join(
-            os.environ.get("RAPTOR_DIR", "."),
+            raptor_dir,
             "engine", "coccinelle", "rules", f"{rule_name}.cocci",
         )
         if not os.path.isfile(rule_path):
