@@ -148,6 +148,7 @@ import sys
 import unicodedata
 import unittest
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -493,6 +494,55 @@ def _compiled_is_member(pattern: re.Pattern[str]) -> bool:
     return _seq_has_idiom(parsed, parsed.state.flags)
 
 
+def _data_file_loaders() -> tuple[Any, Any]:
+    """Import the two data-file loader surfaces the census consumes.
+
+    Returns ``(prompt-preflight _load_patterns, exfil_destinations
+    module)``. The lint-tier CI env installs no runtime deps, but the
+    loaders' import chain (``packages.sca`` __init__ →
+    core.http.egress_backend → urllib_backend) imports urllib3 at
+    module top even though the DATA loaders never touch it. When
+    urllib3 is absent, stub exactly the names that import chain binds
+    at import time, scoped to this import (removed again below), so
+    the census arm stays live in the env it was built for instead of
+    erroring — and a later test that genuinely needs urllib3 still
+    sees the honest ModuleNotFoundError. Known residue: the
+    transitively imported runtime modules stay cached in sys.modules
+    with the stub exception classes bound into their namespaces after
+    the helper returns — inert here because the stubs only install
+    where urllib3 is genuinely absent, and no other test in this
+    suite exercises that import chain at runtime.
+    """
+    sys.path.insert(0, str(_REPO))
+    stubbed: list[str] = []
+    if "urllib3" not in sys.modules:
+        try:
+            import urllib3  # noqa: F401
+        except ModuleNotFoundError:
+            import types
+
+            _u3 = types.ModuleType("urllib3")
+            _u3_exc = types.ModuleType("urllib3.exceptions")
+            for _name in ("HTTPError", "LocationValueError",
+                          "MaxRetryError", "ReadTimeoutError",
+                          "SSLError", "ProxyError"):
+                setattr(_u3_exc, _name, type(_name, (Exception,), {}))
+            _u3.exceptions = _u3_exc
+            sys.modules["urllib3"] = _u3
+            sys.modules["urllib3.exceptions"] = _u3_exc
+            stubbed = ["urllib3", "urllib3.exceptions"]
+    try:
+        from core.security.prompt_input_preflight import _load_patterns
+        from packages.sca.supply_chain import (
+            exfil_destinations as _exfil,
+        )
+    finally:
+        sys.path.remove(str(_REPO))
+        for _mod in stubbed:
+            sys.modules.pop(_mod, None)
+    return _load_patterns, _exfil
+
+
 def _data_file_members() -> list[tuple[str, str]]:
     """Census over pattern DATA FILES: every pattern the repo compiles
     from a data file with MULTILINE-class flags, taken from each loader
@@ -511,16 +561,7 @@ def _data_file_members() -> list[tuple[str, str]]:
         group makes one a member — which is precisely the spelling an
         operator extension would smuggle past the source census).
     """
-    import sys
-
-    sys.path.insert(0, str(_REPO))
-    try:
-        from core.security.prompt_input_preflight import _load_patterns
-        from packages.sca.supply_chain import (
-            exfil_destinations as _exfil,
-        )
-    finally:
-        sys.path.remove(str(_REPO))
+    _load_patterns, _exfil = _data_file_loaders()
     members = [
         (stem, compiled.pattern)
         for stem, patterns in sorted(_load_patterns().items())
@@ -2270,16 +2311,9 @@ class RedosIdiomCensus(unittest.TestCase):
         entry with an inline ``(?m)`` was invisible to BOTH census
         arms before this arm existed."""
         import json as _json
-        import sys
         import tempfile
 
-        sys.path.insert(0, str(_REPO))
-        try:
-            from packages.sca.supply_chain import (
-                exfil_destinations as _exfil,
-            )
-        finally:
-            sys.path.remove(str(_REPO))
+        _, _exfil = _data_file_loaders()
 
         planted = r"(?m)^\s*evil\.example\b"
         with tempfile.TemporaryDirectory() as td:
