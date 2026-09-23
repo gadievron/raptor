@@ -109,10 +109,18 @@ class FetchResult:
 
 def _ip_is_unsafe(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """True if ``ip`` is an SSRF-class destination (loopback / private /
-    link-local / multicast / reserved / unspecified). Shared between
-    ``_is_loopback_or_private`` and ``_resolve_hostname_safe`` so the two
-    SSRF guards can never drift apart — adding a new disallowed class
-    here updates both call sites.
+    link-local / multicast / reserved / unspecified — anything that is
+    not global unicast). Shared between ``_is_loopback_or_private`` and
+    ``_resolve_hostname_safe`` so the two SSRF guards can never drift
+    apart — adding a new disallowed class here updates both call sites.
+
+    ``not ip.is_global`` closes the gap the named-class list left open:
+    RFC 6598 shared address space (100.64.0.0/10 — CGNAT and
+    cloud-provider VPC-internal services) is deliberately excluded from
+    ``is_private`` yet is never a legitimate public fetch target. The
+    other special registries (192.0.0.0/24, 198.18.0.0/15, ...) are
+    already ``is_private`` on supported Pythons; the named classes stay
+    as belt-and-braces.
     """
     return bool(
         ip.is_loopback
@@ -121,6 +129,7 @@ def _ip_is_unsafe(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
         or ip.is_multicast
         or ip.is_reserved
         or ip.is_unspecified
+        or not ip.is_global
     )
 
 
@@ -180,7 +189,15 @@ def _vet_hostname(
         try:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
-            continue
+            # Fail closed: an address string the parser cannot classify
+            # cannot be vetted, so it must not be connectable —
+            # `continue` here silently admitted whatever the transport
+            # made of it.
+            return (
+                f"hostname {hostname!r} resolved to unparseable address "
+                f"{ip_str!r} (SSRF guard: fail closed on unvettable "
+                "resolution)"
+            ), []
         if _ip_is_unsafe(ip):
             return (
                 f"hostname {hostname!r} resolves to {ip_str} "
