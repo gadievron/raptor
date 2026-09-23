@@ -49,4 +49,9 @@ val unguarded = results.size
 
 results.foreach(println)
 println(s"JOERN_GUARD_SUMMARY:$unguarded/$total")
-s"JOERN_GUARD_SUMMARY:$unguarded/$total\n" + results.mkString("\n")
+// Summary LAST on the final-expression echo too (records may embed a
+// jsonEsc-preserved copy of the marker text inside target code; the
+// scalar parser keeps the last mid-line occurrence, so the genuine
+// line must come after every record on BOTH transports — println
+// order above already does).
+results.mkString("\n") + s"\nJOERN_GUARD_SUMMARY:$unguarded/$total"
