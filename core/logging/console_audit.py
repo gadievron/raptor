@@ -62,8 +62,13 @@ def bare_console_config_offences(text: str) -> list[int]:
     # ^\s* re-scans whole blank-line runs from every line start —
     # quadratic on planted whitespace; leading indent never spans
     # lines, so the match set is unchanged.
+    # (?=\S) pins each whitespace run to end where the import body
+    # begins (same language — the line class absorbed any remainder):
+    # unpinned, the runs split against the line class from every
+    # anchor — quadratic on import-shaped lines followed by
+    # whitespace runs.
     for m in re.finditer(
-            r"^[^\S\n]*from\s+logging\s+import\s+[^\n]*\bbasicConfig\b",
+            r"^[^\S\n]*from\s+logging\s+import\s+(?=\S)[^\n]*\bbasicConfig\b",
             text, re.M):
         offences.append(text.count("\n", 0, m.start()) + 1)
     for m in re.finditer(
@@ -74,7 +79,7 @@ def bare_console_config_offences(text: str) -> list[int]:
             r"^[^\n#]*?\b(?:dictConfig|fileConfig)\(", text, re.M):
         offences.append(text.count("\n", 0, m.start()) + 1)
     for m in re.finditer(
-            r"^[^\S\n]*from\s+logging\.config\s+import\s+[^\n]*"
+            r"^[^\S\n]*from\s+logging\.config\s+import\s+(?=\S)[^\n]*"
             r"\b(?:dictConfig|fileConfig)\b",
             text, re.M):
         offences.append(text.count("\n", 0, m.start()) + 1)

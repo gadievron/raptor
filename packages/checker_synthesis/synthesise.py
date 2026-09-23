@@ -99,8 +99,13 @@ def _validate_rule_body(body: str) -> str | None:
 # same-line ``... when != if (E)`` form. The optional dots group is
 # preserved on substitution so the ellipsis (valid SmPL on its own)
 # survives the strip.
+# The dots group's leading whitespace is horizontal ([^\S\n]*):
+# newline-capable, every line anchor re-scanned a shared blank run
+# hunting the ellipsis — quadratic. A cross-line ellipsis re-anchors
+# at its own line start, and the substitution keeps the same output
+# either way (the clause line is what gets stripped).
 _INVALID_WHEN_RE = re.compile(
-    r"^(?P<dots>\s*\.\.\.)?[ \t]*when\s*!=\s*(?:if|assert|while|for|switch)"
+    r"^(?P<dots>[^\S\n]*\.\.\.)?[ \t]*when\s*!=\s*(?:if|assert|while|for|switch)"
     r"\s*\(.*$",
     re.MULTILINE,
 )
