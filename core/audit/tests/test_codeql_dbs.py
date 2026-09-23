@@ -3,6 +3,7 @@
 import zipfile
 
 from core.audit.codeql_dbs import (
+    CODEQL_EXT_LANGUAGE,
     CodeqlDbRouter,
     database_language,
     db_contains_source,
@@ -259,3 +260,72 @@ class TestOrchestratorDbForHint:
             {"files": [{"path": "src/a.py", "language": "cpp"}]},
         )
         assert _codeql_db_for(config, "src/a.py") == str(py)
+
+
+class TestRustRouting:
+    """rust is a first-class extractor language across packages/codeql
+    (provisioning, suites, extractor probe) — the router must know it
+    too, in both dispatch modes."""
+
+    def test_sole_rust_database_does_not_wildcard(self, tmp_path):
+        # Genuine primaryLanguage: rust — pre-fix the sole-DB gate's
+        # derived set lacked "rust", so the gate was inert and every
+        # foreign file dispatched at the rust DB (zero rows reading
+        # as refutation-grade silence downstream).
+        db = _make_db(tmp_path, "rust-db", "rust")
+        router = CodeqlDbRouter([str(db)])
+        assert router.for_file("x.php") is None
+        assert router.for_file("src/a.py") is None
+        assert router.for_file("src/main.rs") == str(db)
+        assert router.for_file(None) == str(db)
+
+    def test_multi_database_routes_rs(self, tmp_path):
+        rust = _make_db(tmp_path, "rust-db", "rust")
+        py = _make_db(tmp_path, "python-db", "python")
+        router = CodeqlDbRouter([str(py), str(rust)])
+        assert router.for_file("src/main.rs") == str(rust)
+        assert router.for_file("a.py") == str(py)
+
+
+class TestYmlSourcedGateIsDerived:
+    def test_yml_language_outside_table_fails_closed(self, tmp_path):
+        """The sole-DB gate keys on label PROVENANCE, not on
+        membership in the hand-picked extension table: a yml-sourced
+        language the table doesn't know yet must yield honest skips,
+        never wildcard dispatch (the exact pre-fix rust failure
+        mode, pinned for the NEXT extractor language)."""
+        db = _make_db(tmp_path, "newlang-db", "futurelang")
+        router = CodeqlDbRouter([str(db)])
+        assert router.for_file("x.php") is None
+        assert router.for_file("src/a.c") is None
+        # No-file callers still get the sole database.
+        assert router.for_file(None) == str(db)
+
+    def test_dirname_standin_wildcard_is_preserved(self, tmp_path):
+        # Manufactured labels (no yml) keep the lenient dispatch —
+        # a match is undecidable there.
+        db = _make_db(tmp_path, "mystery", None)
+        router = CodeqlDbRouter([str(db)])
+        assert router.for_file("x.php") == str(db)
+
+
+def test_ext_table_covers_every_provisionable_language():
+    """Closure pin: every language packages/codeql can provision a
+    database for must be reachable from the extension table (after
+    alias normalisation), so a sole DB of that language can never
+    fall into the label-guess wildcard and multi-DB dispatch can
+    route its files. rust was the miss this pins against."""
+    from packages.codeql.language_detector import LanguageDetector
+
+    provisionable = {
+        normalise_language(lang)
+        for lang in LanguageDetector.CODEQL_SUPPORTED
+    }
+    routable = set(CODEQL_EXT_LANGUAGE.values())
+    missing = provisionable - routable
+    assert not missing, (
+        f"CODEQL_EXT_LANGUAGE has no extension row for provisionable "
+        f"language(s) {sorted(missing)} — add the row(s); a sole "
+        f"database of that language would serve nothing (yml gate "
+        f"fails closed) and multi-DB dispatch cannot route its files"
+    )
