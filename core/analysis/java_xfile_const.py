@@ -52,7 +52,8 @@ def _parser():
         lang = _ts_language("java")
         if lang is None:
             return None
-        return tree_sitter.Parser(lang)
+        from core.inventory._ts_cache import bounded
+        return bounded(tree_sitter.Parser(lang), label="java")
     except Exception:  # noqa: BLE001 — optional dependency
         return None
 

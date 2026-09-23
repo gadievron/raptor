@@ -456,7 +456,11 @@ def _parse_file(file_path: str, source: str):
             _PARSE_CACHE.move_to_end(key)
             return cached
     try:
-        tree = parser.parse(src)
+        # parse_origin: a budget-abandoned parse must name this
+        # file on the run's analysis-gap trail.
+        from core.run.gaps import parse_origin
+        with parse_origin(file_path):
+            tree = parser.parse(src)
     except Exception:  # noqa: BLE001 — unparseable source: no extraction
         return None
     result = (tree, lang, src)

@@ -66,7 +66,9 @@ def _parser():
     except Exception:  # noqa: BLE001 — optional dependency
         return None
     try:
-        return Parser(Language(tree_sitter_java.language()))
+        from core.inventory._ts_cache import bounded
+        return bounded(Parser(Language(tree_sitter_java.language())),
+                       label="java")
     except Exception:  # noqa: BLE001
         return None
 

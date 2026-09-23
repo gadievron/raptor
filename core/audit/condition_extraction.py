@@ -162,7 +162,8 @@ def _get_parser(lang: str) -> Any | None:
         ts_lang = _ts_language(lang)
         if ts_lang is None:
             return None
-        return TSParser(ts_lang)
+        from core.inventory._ts_cache import bounded
+        return bounded(TSParser(ts_lang), label=lang)
     except Exception:
         logger.debug("condition_extraction: parser setup failed for "
                      "%s", lang, exc_info=True)
@@ -812,7 +813,11 @@ def extract_sink_guards(
         return []
 
     source_bytes = source.encode("utf-8")
-    tree = parser.parse(source_bytes)
+    # parse_origin: a budget-abandoned parse must name this file on
+    # the run's analysis-gap trail.
+    from core.run.gaps import parse_origin
+    with parse_origin(filepath):
+        tree = parser.parse(source_bytes)
     root = tree.root_node
 
     # Determine sink call sites
