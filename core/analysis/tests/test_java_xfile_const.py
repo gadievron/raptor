@@ -78,11 +78,15 @@ class TestTaintFreeBoundary:
 
 
 class TestTaintFreeAlgebra:
-    def test_concat_tf_with_constant_is_tf(self):
+    def test_concat_tf_with_constant_refuses_without_danger_authority(self):
         # b45: algebra coverage moved to a JVM-constant TF producer;
         # environment reads are sources (authority) and refuse below.
+        # The concrete "x" is a MEMBER of the concat result: with no
+        # danger predicate at this entry the mint refuses (b40 —
+        # authority-carrying consumers pass union_member_check via
+        # fold_expr_at / all_definers_constant and keep minting).
         assert _fold('File.separator + "x"',
-                     allow_tf=True) is TAINT_FREE
+                     allow_tf=True) is REFUSE
         assert _fold('System.getenv("HOME") + "x"',
                      allow_tf=True) is REFUSE
 
@@ -94,8 +98,10 @@ class TestTaintFreeAlgebra:
         assert _fold('System.getenv("OS") == "Linux"',
                      allow_tf=True) is REFUSE
 
-    def test_ternary_join_both_branches_const_is_tf(self):
-        assert _fold('x != null ? "a" : "b"', allow_tf=True) is TAINT_FREE
+    def test_ternary_join_both_branches_const_refuses_without_authority(self):
+        # Concrete branch strings are members of the result — no
+        # danger predicate at this entry, no mint (b40).
+        assert _fold('x != null ? "a" : "b"', allow_tf=True) is REFUSE
 
     def test_ternary_join_refuses_without_opt_in(self):
         assert _fold('x != null ? "a" : "b"') is REFUSE
