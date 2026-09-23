@@ -103,15 +103,20 @@ def format_witness(
         val = model[decl]
         if not z3.is_bv_value(val):
             continue
-        name = str(decl)
+        base_name = str(decl)
+        name = base_name
         # Disambiguate same-named decls.
         if name in out:
             suffix = 1
             while f"{name}__{suffix}" in out:
                 suffix += 1
             name = f"{name}__{suffix}"
+        # Signedness resolves on the BASE name: the caller's
+        # signedness map is keyed by declaration names, so looking up
+        # the disambiguation-suffixed "x__1" missed the entry for "x"
+        # and silently rendered the second same-named decl unsigned.
         out[name] = bv_to_int(
-            val.as_long(), val.size(), _resolve_signedness(name, signed),
+            val.as_long(), val.size(), _resolve_signedness(base_name, signed),
         )
     return out
 
