@@ -315,6 +315,20 @@ def _get_bo_item_index(
     return idx
 
 
+# Dotted-prefix fan-out cap for one import bound. Materialising every
+# prefix of a bound with L segments allocates O(L²) characters — one
+# planted 80KB import line (20k single-letter segments) cost 1.6GB of
+# peak allocation at index build, and the growth is quadratic in the
+# line length (hostile-repo OOM of the analysis process). Real module
+# paths sit far below 32 segments; a bound past the cap indexes its
+# first 32 prefixes + the full bound + the tail AND joins the
+# always-considered masking bucket so index narrowing can never hide
+# the file from a deeper-prefix lookup (over-inclusive — the per-file
+# branch re-derives everything from the file's actual imports/flags,
+# so membership only costs cycles, never correctness).
+_MAX_IMPORT_BOUND_SEGMENTS = 32
+
+
 def _build_function_called_index(
     inventory: dict[str, Any],
 ) -> _FunctionCalledIndex:
@@ -338,13 +352,22 @@ def _build_function_called_index(
         # Imports: target_module matches `bound == target_module`,
         # `bound == target_dot_func`, or `bound.startswith(
         # target_module + ".")`. Indexing every dotted prefix of
-        # ``bound`` covers all three.
+        # ``bound`` covers all three (fan-out capped — see
+        # _MAX_IMPORT_BOUND_SEGMENTS).
         for bound in (cg.get("imports") or {}).values():
             if not isinstance(bound, str) or not bound:
                 continue
             parts = bound.split(".")
-            for k in range(1, len(parts) + 1):
+            capped = len(parts) > _MAX_IMPORT_BOUND_SEGMENTS
+            n_prefixes = min(len(parts), _MAX_IMPORT_BOUND_SEGMENTS)
+            for k in range(1, n_prefixes + 1):
                 _add(".".join(parts[:k]), i)
+            if capped:
+                _add(bound, i)
+                # Deeper-prefix lookups would miss the token buckets —
+                # keep the file always-considered instead of ever
+                # letting narrowing read it as "no possible role".
+                non_wildcard.add(i)
             # Tail of the import name is what
             # ``file_mentions_tail`` checks against — index the
             # final segment too so target_func lookups hit it.
@@ -1389,6 +1412,17 @@ def _get_or_build_index(
 
     qualified_to_internal = idx.qualified_to_internal
 
+    # Call-line staging: per-(caller, callee) line SETS during the
+    # build, frozen to sorted tuples once at the end. Recording
+    # straight into the tuple-valued ``idx.call_lines`` rebuilt and
+    # re-sorted the whole tuple per insert — O(n²) per edge pair, and
+    # a hostile file with one caller/callee pair and tens of
+    # thousands of call lines wedged the build (measured 8.6s at 40k
+    # inserts, 4x per doubling).
+    call_lines_acc: dict[
+        tuple[InternalFunction, FunctionId], set[int],
+    ] = {}
+
     # Pass 2: walk every call site, resolve to a callee FunctionId
     # (Internal or External), record forward + reverse edges.
     for file_record in inventory.get("files", []):
@@ -1433,7 +1467,7 @@ def _get_or_build_index(
                     callee = aliased
                 idx.forward.setdefault(caller_node, set()).add(callee)
                 idx.reverse.setdefault(callee, set()).add(caller_node)
-                _record_call_line(idx, caller_node, callee, line)
+                _record_call_line(call_lines_acc, caller_node, callee, line)
                 continue
 
             # Fully-qualified-call index path: when the chain itself
@@ -1453,7 +1487,7 @@ def _get_or_build_index(
                 if aliased is not None:
                     idx.forward.setdefault(caller_node, set()).add(aliased)
                     idx.reverse.setdefault(aliased, set()).add(caller_node)
-                    _record_call_line(idx, caller_node, aliased, line)
+                    _record_call_line(call_lines_acc, caller_node, aliased, line)
                     continue
 
             # Couldn't resolve via import map. Two sub-cases:
@@ -1472,7 +1506,7 @@ def _get_or_build_index(
                     for d in local_defs:
                         idx.forward.setdefault(caller_node, set()).add(d)
                         idx.reverse.setdefault(d, set()).add(caller_node)
-                        _record_call_line(idx, caller_node, d, line)
+                        _record_call_line(call_lines_acc, caller_node, d, line)
                     continue
                 # Local name not defined in this file — likely a
                 # builtin (open, len, ...) or a wildcard-imported
@@ -1536,6 +1570,13 @@ def _get_or_build_index(
                     idx.uncertain_callers_by_tail.setdefault(
                         tail, set(),
                     ).add((fn, flag_label))
+
+    # Freeze the staged call-line sets into the index's documented
+    # sorted-tuple form (one pass; consumers never see the sets).
+    idx.call_lines = {
+        key: tuple(sorted(lines))
+        for key, lines in call_lines_acc.items()
+    }
 
     with _INDEX_CACHE_LOCK:
         _INDEX_CACHE[inv_id] = (inventory, idx)
@@ -1862,23 +1903,20 @@ def _resolve_caller(
 
 
 def _record_call_line(
-    idx: _AdjacencyIndex,
+    call_lines_acc: dict[tuple[InternalFunction, FunctionId], set[int]],
     caller: InternalFunction,
     callee: FunctionId,
     line: int,
 ) -> None:
-    """Append ``line`` to ``idx.call_lines[(caller, callee)]``,
-    keeping the tuple sorted with no duplicates.
+    """Add ``line`` to the build-time staging set for ``(caller,
+    callee)``.
 
     Forward / reverse edges are deduplicated; this side-index keeps
     multiplicity for evidence rendering ("X calls Y at lines …").
-    """
-    key = (caller, callee)
-    existing = idx.call_lines.get(key, ())
-    if line in existing:
-        return
-    merged = existing + (line,)
-    idx.call_lines[key] = tuple(sorted(merged))
+    Staged as sets and frozen to sorted tuples ONCE at the end of the
+    index build — rebuilding a sorted tuple per insert was O(n²) per
+    edge pair on hostile many-calls-one-pair files."""
+    call_lines_acc.setdefault((caller, callee), set()).add(line)
 
 
 def _apply_reexport_aliases(idx: _AdjacencyIndex) -> int:
