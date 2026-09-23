@@ -58,6 +58,33 @@ _MAX_GCOV_STDOUT = 64 * 1024 * 1024
 # tables would silently misattribute coverage).
 _MAX_BINARY_COV_BYTES = 64 * 1024 * 1024
 
+# Cap on the DERIVED address count one collect_addr2line call may
+# resolve. Byte budgets bound the artifact FILE, not the sandboxed
+# work derived from it: an in-budget drcov packs ~8M records → ~16M
+# addresses after the PIE/non-PIE doubling → ~16k full sandbox spawns
+# per file, and the drcov import sits on the backfill path (every
+# coverage render). Refuse-over-truncate, matching the PC-table
+# posture above: a hostile artifact is refused whole with a warning.
+# Trade-off, both directions: LOWER starves genuinely huge legitimate
+# traces (a long fuzz run over a big binary can touch millions of
+# BBs — rare, and the drcov doubling halves the effective ceiling);
+# HIGHER re-admits the spawn storm (each 1000-address chunk is one
+# full sandbox setup). 100k ≈ ≤100 spawns per call.
+_MAX_ADDR2LINE_ADDRS = 100_000
+
+# Cap on how many .gcda files one collect_gcov call processes (one
+# sandboxed gcov + private tempdir per file; the rglob count is
+# build-tree-writable). Truncate-with-warning, NOT refuse: each
+# .gcda contributes independently, so a deterministic (sorted)
+# prefix claims LESS coverage, never wrong coverage — same safe
+# direction as the module's out-of-tree-source residual. Trade-off:
+# LOWER silently under-reports very large builds (one .gcda per
+# object file — thousands are legitimate); HIGHER re-admits the
+# spawn storm on the operator-invoked lane. 2048 covers typical
+# builds; a monorepo-scale build sees the warning and can import
+# per-subtree.
+_MAX_GCDA_FILES = 2048
+
 
 def _sandboxed_run(argv: list[str], *, target: str | None,
                    env: dict[str, str],
@@ -140,6 +167,12 @@ def collect_gcov(build_dir, env: dict[str, str] | None = None) -> dict[str, set[
     gcda = list(build.rglob("*.gcda"))
     if not gcda:
         return {}
+    if len(gcda) > _MAX_GCDA_FILES:
+        logger.warning(
+            "coverage collect: %d .gcda files under %s — processing "
+            "the first %d (sorted); runtime coverage will "
+            "under-report the rest", len(gcda), build, _MAX_GCDA_FILES)
+        gcda = sorted(gcda)[:_MAX_GCDA_FILES]
     env = dict(env) if env else safe_subprocess_env()
     out: dict[str, set[int]] = {}
     for f in gcda:
@@ -230,6 +263,19 @@ def collect_addr2line(binary, addresses, env: dict[str, str] | None = None) -> d
     function-level / r2 case — a separate binary-inventory extension)."""
     addrs = [a for a in addresses if a is not None]
     if not addrs:
+        return {}
+    if len(addrs) > _MAX_ADDR2LINE_ADDRS:
+        # The chokepoint for every address-set producer (drcov,
+        # sancov, frida bridge, direct import): the caller's byte
+        # budget bounds the artifact, not the derived spawn count —
+        # one sandboxed addr2line per 1000-address chunk. Refuse the
+        # whole set with a warning (truncating would silently claim
+        # partial runtime coverage for a hostile artifact).
+        logger.warning(
+            "coverage collect: %d addresses for %s exceeds the %d "
+            "address budget — refusing to resolve (hostile or "
+            "malformed coverage artifact?)", len(addrs), binary,
+            _MAX_ADDR2LINE_ADDRS)
         return {}
     env = dict(env) if env else safe_subprocess_env()
     try:
