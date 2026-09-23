@@ -292,7 +292,8 @@ int check(struct big *b) {
         fields = discover_state_fields(checklist, tmp_path, top_n=3, min_score=0.1)
         assert len(fields) <= 3
 
-    def test_deduplicates_across_files(self, tmp_path):
+    def test_same_named_structs_in_different_files_stay_distinct(
+            self, tmp_path):
         src = """\
 struct ctx {
     int refcount;
@@ -311,7 +312,12 @@ int ctx_get(struct ctx *c) {
         checklist = {"files": [{"path": "a.c"}, {"path": "b.c"}]}
         fields = discover_state_fields(checklist, tmp_path, min_score=0.1)
         refcount_fields = [f for f in fields if f.name == "refcount"]
-        assert len(refcount_fields) == 1
+        # Same-named structs in different files are DIFFERENT types;
+        # collapsing them dropped one file's read/write sites. Within
+        # one file the (file, struct, name) key still deduplicates.
+        assert len(refcount_fields) == 2
+        assert {f.read_sites[0].file for f in refcount_fields} \
+            == {"a.c", "b.c"}
 
     def test_write_sites_populated(self, tmp_path):
         src = """\

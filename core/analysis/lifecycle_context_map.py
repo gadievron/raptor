@@ -1,9 +1,16 @@
 """Context-map integration for lifecycle-precondition analysis.
 
 Adds a ``state_fields`` section to context-map.json carrying
-lifecycle-sensitive fields, their write-site preconditions, and
-read sites.  Consumed by /audit orchestrator, /understand --hunt,
-and /validate Stage B.
+lifecycle-sensitive fields, their write-site preconditions, and read
+sites.
+
+WIRING STATUS: nothing in the pipeline currently WRITES this section
+(``save_state_fields``/``discover_state_fields`` have no production
+call sites), so ``load_state_fields`` returns ``[]`` on every run and
+the one wired reader — the /audit orchestrator's
+``check_lifecycle_at_function`` — is a no-op. /understand --hunt and
+/validate Stage B do not read it. A repository test pins this status
+in both directions: wiring a producer must update these docstrings.
 """
 
 from __future__ import annotations
@@ -74,20 +81,25 @@ def merge_state_fields(
     existing: list[StateField],
     new_fields: list[StateField],
 ) -> list[StateField]:
-    """Merge new state fields with existing, deduplicating by name+struct_type."""
+    """Merge new state fields with existing, deduplicating by
+    name+struct_type. Pure: callers' ``existing`` fields (and their
+    site lists) are never mutated — merged entries are fresh
+    dataclass copies."""
+    from dataclasses import replace
     by_key = {(f.name, f.struct_type): f for f in existing}
     for f in new_fields:
         key = (f.name, f.struct_type)
         if key in by_key:
             prev = by_key[key]
-            ws_set = {(w.line, w.file) for w in prev.write_sites}
-            for w in f.write_sites:
-                if (w.line, w.file) not in ws_set:
-                    prev.write_sites.append(w)
-            rs_set = {(r.line, r.file) for r in prev.read_sites}
-            for r in f.read_sites:
-                if (r.line, r.file) not in rs_set:
-                    prev.read_sites.append(r)
+            ws = list(prev.write_sites)
+            ws_set = {(w.line, w.file) for w in ws}
+            ws.extend(w for w in f.write_sites
+                      if (w.line, w.file) not in ws_set)
+            rs = list(prev.read_sites)
+            rs_set = {(r.line, r.file) for r in rs}
+            rs.extend(r for r in f.read_sites
+                      if (r.line, r.file) not in rs_set)
+            by_key[key] = replace(prev, write_sites=ws, read_sites=rs)
         else:
             by_key[key] = f
     return list(by_key.values())
