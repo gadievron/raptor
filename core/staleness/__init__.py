@@ -34,6 +34,7 @@ from core.source.contained import (
     read_text_capped,
 )
 from core.source.lines import slice_lines as _slice_lines
+from core.source.lines import split_lines as _split_source_lines
 from core.source.strip import strip_comments as _strip_comments
 from typing import TYPE_CHECKING
 
@@ -155,15 +156,15 @@ def _split_lines(text: str) -> list[str]:
     ``\n``. A file rewritten with a ``\f`` where a ``\n`` used to be
     changed line content invisibly: splitlines still saw the same
     line list shape, the modified span hashed "current", and every
-    downstream line number silently desynced. ``\r\n`` is already
-    normalised to ``\n`` by ``read_text``'s universal newlines; a
-    single trailing empty element (text ending in ``\n``) is dropped
-    so line counts match editor numbering.
+    downstream line number silently desynced. Delegates to the
+    ``core.source.lines.split_lines`` chokepoint, which carries the
+    full contract; its ``\r``/``\r\n`` normalisation is a no-op here
+    because ``read_text``'s universal newlines already delivered
+    ``\n``, so hashes of previously-stamped spans are unchanged. A
+    single trailing empty element is still dropped, so line counts
+    match editor numbering.
     """
-    lines = text.split("\n")
-    if lines and lines[-1] == "":
-        lines.pop()
-    return lines
+    return _split_source_lines(text)
 
 
 def _reliable_line_count(text: str, truncated: bool, lines: list[str]) -> int:

@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from core.source.lines import (
+    _SPLITLINES_ONLY_TERMINATORS,
     number_lines,
     read_context,
     read_lines,
     slice_lines,
     slice_text,
+    split_lines,
 )
 
 
@@ -131,3 +133,87 @@ class TestReadContext:
         f = tmp_path / "a.c"
         f.write_text("a\nb\nc\n")
         assert read_context(f, 2, 0) == "b"
+
+
+class TestSplitLines:
+    """The \n-only line model (external line-number producers)."""
+
+    def test_basic(self):
+        assert split_lines("a\nb\nc") == ["a", "b", "c"]
+
+    def test_trailing_newline_dropped(self):
+        assert split_lines("a\nb\n") == ["a", "b"]
+
+    def test_empty(self):
+        assert split_lines("") == []
+
+    def test_exotic_terminators_stay_in_line(self):
+        # One form feed is legal code whitespace in C and Python and
+        # legal in string literals/comments everywhere — it must NOT
+        # open a new line, or every subsequent index desyncs from
+        # semgrep/CodeQL/ast/tree-sitter line numbers.
+        for term in _SPLITLINES_ONLY_TERMINATORS:
+            assert split_lines(f"a{term}b\nc") == [f"a{term}b", "c"], repr(term)
+
+    def test_crlf_trimmed_bare_cr_stays_in_line(self):
+        # \r\n: byte-decoded callers get content parity with
+        # universal-newline read_text (one trailing \r trimmed).
+        # Bare \r: NOT a break — semgrep/tree-sitter/raw-byte
+        # scanners keep it in-line, so one plantable 0x0D must not
+        # shift the count (the \f attack with a different byte).
+        assert split_lines("a\r\nb\rc\r\n") == ["a", "b\rc"]
+        assert split_lines("x\ry\nz") == ["x\ry", "z"]
+        # only ONE trailing \r is trimmed — a genuine \r\r\n keeps one
+        assert split_lines("a\r\r\nb") == ["a\r", "b"]
+
+    def test_terminator_table_closure(self):
+        # Two-direction closure derived from the splitting authority
+        # itself (house pattern: prefilter's normalisation-set test):
+        # (1) every char str.splitlines splits on is \n or a member
+        # of _NON_NL_BREAKERS (= bare \r + the exotics); (2) every
+        # exotic member really splits.  A future Python widening the
+        # terminator set fails here loudly instead of silently
+        # reopening the desync.
+        derived: set[str] = set()
+        cps = [chr(cp) for cp in range(0x110000)
+               if not 0xD800 <= cp <= 0xDFFF]
+        for i in range(0, len(cps), 4096):
+            chunk = cps[i:i + 4096]
+            probe = "a".join(chunk)
+            if len(probe.splitlines()) == 1:
+                continue
+            derived.update(c for c in chunk
+                           if len(f"a{c}b".splitlines()) > 1)
+        assert derived - {"\n", "\r"} == set(_SPLITLINES_ONLY_TERMINATORS)
+
+
+class TestSliceTextLineModel:
+    """slice_text must speak the \n model its callers' line numbers use."""
+
+    def test_form_feed_does_not_shift_the_slice(self):
+        # \n model: line 1 is 'a\x0cb', line 2 is 'sink()'.  The old
+        # splitlines() view put 'b' on its own line and handed back
+        # the wrong text for every subsequent line number.
+        text = "a\x0cb\nsink()\n"
+        assert slice_text(text, 1, 1) == "a\x0cb"
+        assert slice_text(text, 2, 2) == "sink()"
+
+    def test_read_lines_inherits_the_model(self, tmp_path):
+        f = tmp_path / "a.c"
+        f.write_bytes(b"x = '\x0c'\nstrcpy(d, s);\n")
+        assert read_lines(f, 2, 2) == "strcpy(d, s);"
+
+
+class TestReadTextCappedNewlinePassthrough:
+    def test_newline_empty_preserves_bare_cr(self, tmp_path):
+        from core.source import read_text_capped
+
+        f = tmp_path / "a.py"
+        f.write_bytes(b's = "a\rb"\nx = 1\n')
+        # default: universal newlines translate the bare \r
+        assert read_text_capped(f)[0] == 's = "a\nb"\nx = 1\n'
+        # newline="": the plantable 0x0D survives to split_lines,
+        # which keeps it in-line — matching the raw-byte scanners
+        raw = read_text_capped(f, newline="")[0]
+        assert raw == 's = "a\rb"\nx = 1\n'
+        assert split_lines(raw) == ['s = "a\rb"', "x = 1"]

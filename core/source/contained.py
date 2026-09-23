@@ -117,6 +117,7 @@ def read_text_capped(
     max_chars: int = DEFAULT_MAX_SOURCE_CHARS,
     *,
     errors: str = "replace",
+    newline: str | None = None,
 ) -> tuple[str, bool] | None:
     """Read at most *max_chars* characters of UTF-8 text from *path*.
 
@@ -128,8 +129,17 @@ def read_text_capped(
     when the capped read contains no newline at all the raw capped
     text is kept — returning ``""`` would turn a pathological
     single-line file into a silent empty read.
+
+    *newline* is passed through to :func:`open` — the default
+    ``None`` keeps universal-newline translation.  Callers that pair
+    the text with raw-byte scanner line numbers (semgrep, CodeQL,
+    tree-sitter count ``\n`` only and keep a bare ``\r`` in-line)
+    must pass ``newline=""`` so a plantable 0x0D is not translated
+    into a line break before ``core.source.lines.split_lines`` sees
+    it.
     """
-    f = open_regular(path, "r", encoding="utf-8", errors=errors)
+    f = open_regular(path, "r", encoding="utf-8", errors=errors,
+                     newline=newline)
     if f is None:
         return None
     return _text_capped_from(f, max_chars)
