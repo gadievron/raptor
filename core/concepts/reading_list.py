@@ -23,6 +23,22 @@ from pathlib import Path
 
 from core.json import save_json
 
+
+def question_scoped_id(prefix: str, question: str) -> str:
+    """Collision-free reading-list item id.
+
+    Ids built from a name or a question PREFIX alone are lossy: two
+    DIFFERENT questions about one function shared an id, and the
+    id-keyed persistence fold silently destroyed one — the assumption
+    it encoded stayed unverified with no record. Suffix a hash of the
+    full question so distinct questions never share an id; *prefix*
+    keeps ids operator-readable.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(question.encode("utf-8")).hexdigest()[:12]
+    return f"{prefix}.{digest}"
+
 # In-process writer lock for the reading list's load-modify-save
 # cycle. The file has MANY concurrent in-process writers (premise
 # study questions from parallel review/post-loop passes,
@@ -190,9 +206,13 @@ class ReadingList:
         For long-lived instances (the study consumer holds one across
         a whole study pass) a plain :meth:`save` would overwrite items
         queued concurrently by other writers. Under the lock, re-load
-        the disk state and append any item whose id this instance has
-        not seen; this instance's own mutations (resolutions,
-        unresolvable marks) win for ids it knows.
+        the disk state and append any item whose (id, question) this
+        instance has not seen; this instance's own mutations
+        (resolutions, unresolvable marks) win for identities it knows.
+        The fold key carries the question because ids from legacy
+        constructors are lossy (name-only / question-prefix): folding
+        by id alone silently destroyed a concurrent writer's DISTINCT
+        question that happened to share an id.
         """
         with READING_LIST_WRITE_LOCK:
             p = path or self._path
@@ -201,9 +221,10 @@ class ReadingList:
                 raise ValueError(msg)
             disk = ReadingList.load(p)
             with self._lock:
-                known = {i.id for i in self.items}
+                known = {(i.id, i.question) for i in self.items}
                 self.items.extend(
-                    i for i in disk.items if i.id not in known
+                    i for i in disk.items
+                    if (i.id, i.question) not in known
                 )
             self.save(p)
 

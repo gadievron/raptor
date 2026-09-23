@@ -2312,7 +2312,12 @@ def _queue_unresolved(
 
     Returns the number of items queued.
     """
-    from .reading_list import Priority, ReadingList, ReadingListItem
+    from .reading_list import (
+        Priority,
+        ReadingList,
+        ReadingListItem,
+        question_scoped_id,
+    )
 
     if not isinstance(reading_list, ReadingList):
         return 0
@@ -2327,7 +2332,12 @@ def _queue_unresolved(
         kind = ref.get("kind", "type")
         file_hint = ref.get("file_hint", "")
         reading_list.queue(ReadingListItem(
-            id=f"study_unresolved_{_normalise_id(name)}",
+            # Name alone is lossy — two different questions about one
+            # unresolved name must not share an id (the persistence
+            # fold keeps one per identity).
+            id=question_scoped_id(
+                f"study_unresolved_{_normalise_id(name)}", question,
+            ),
             question=question,
             source_command="/understand --study",
             source_file=file_hint,
