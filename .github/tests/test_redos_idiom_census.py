@@ -1585,6 +1585,31 @@ _SCAN_ADJUDICATED: dict[str, str] = {
         "generated-file marker consumed via substring containment "
         "(`marker in lowered`), never compiled as a pattern"
     ),
+    # The rest of core/iris/specs.py's QL header block (each line is
+    # emitted query text; the ` * ` prefix reads as a quantified
+    # space to the worst-case table lens).
+    "5f33a892b9ad": "core/iris/specs.py lines[1]: QL @name line",
+    "74f670123f14": "core/iris/specs.py lines[2]: QL @description line",
+    "0fb08c380bf3": "core/iris/specs.py lines[3]: QL @kind line",
+    "70e776e25c31": (
+        "core/iris/specs.py lines[4]: QL @problem.severity line"
+    ),
+    "88e933d23e53": "core/iris/specs.py lines[5]: QL @id line",
+    "29eb48db7b62": "core/iris/specs.py lines[6]: QL @tags line",
+    "db21eb0cc688": (
+        "packages/ghidra/decomp_tree.py lines[1]: the decompilation "
+        "report's function header line — emitted report text, never "
+        "compiled as a pattern"
+    ),
+    "c7576fa032bf": (
+        "core/audit/dark_verify/_resolve.py _PY_EXT_SUFFIX_GLOBS[1] "
+        "('.*.so'): a FILENAME GLOB consumed by suffix probing, "
+        "never compiled as a regex"
+    ),
+    "9337696cf86c": (
+        "core/audit/dark_verify/_resolve.py _PY_EXT_SUFFIX_GLOBS[3] "
+        "('.*.pyd'): a filename glob, never compiled as a regex"
+    ),
 }
 
 
@@ -1646,19 +1671,50 @@ def _find_scan_restart_lanes(parsed, flags: int) -> list[dict]:
                     first = set(tail["first_consumable"])
                     fills = [c for c in sorted(charset - first)
                              if c not in (10, 13)]
+                    poison = next(
+                        (chr(c) for c in (1, 46, 59, 88, 10, 33, 2)
+                         if c not in charset and c not in first),
+                        None,
+                    )
                     if tail["consuming"] and fills \
                             and all(ord(ch) in charset for ch in entry):
                         fill = chr(32 if 32 in fills else next(
                             (c for c in fills if chr(c).isalnum()),
                             fills[0]))
-                        poison = next(
-                            (chr(c) for c in (1, 46, 59, 88, 10, 33, 2)
-                             if c not in charset and c not in first),
-                            None,
-                        )
                         lanes.append({
                             "entry": entry, "fill": fill,
                             "poison": poison or "",
+                        })
+                        # Body-unit lane: a repeat whose BODY spans
+                        # several chars (member-access links, dotted
+                        # segments) only exposes its per-position
+                        # re-walk to a pump built from whole body
+                        # units — a single-char fill never iterates
+                        # it.
+                        try:
+                            body = _gen_min_seq(arg[2], flags)
+                        except _Unsupported:
+                            body = ""
+                        if len(body) > 1 and body != fill:
+                            lanes.append({
+                                "entry": entry, "fill": body,
+                                "poison": poison or "",
+                            })
+                    if tail["consuming"] and (charset & first):
+                        # Overlap lane: when the continuation's first
+                        # char is ALSO in charset(R), the split of a
+                        # hostile run between R and its continuation
+                        # is the attack — one attempt at a single
+                        # entry, quadratic in the run.  Neither the
+                        # pure fill nor the body unit measures it
+                        # (both avoid the tail's first-set).
+                        overlap = sorted(charset & first)
+                        ofill = chr(next(
+                            (c for c in overlap if chr(c).isprintable()),
+                            overlap[0]))
+                        lanes.append({
+                            "entry": entry, "fill": ofill,
+                            "poison": poison or "", "once": True,
                         })
                 walk(arg[2], entry, rest)
             try:
@@ -1678,6 +1734,11 @@ def _build_scan_restart_attack(lane: dict, n: int) -> str | None:
     full re-scan.  The trailing-span pair pump does NOT fire on
     these shapes (no adjacent overlapping pair) — this family needs
     its own synthesis."""
+    if lane.get("once"):
+        # Single-attempt ambiguity pump: one entry, then a run the
+        # repeat and its continuation must SPLIT.
+        run = lane["fill"] * max(2, n // max(1, len(lane["fill"])))
+        return lane["entry"] + run + lane["poison"]
     unit = lane["entry"] + lane["fill"]
     if not unit:
         return None
@@ -1771,7 +1832,7 @@ def _scan_oracle_classify(pattern: str,
     lanes = _find_scan_restart_lanes(parsed, parsed.state.flags)
     worst: float | None = None
     synthesized = False
-    for index in range(min(len(lanes), 4)):
+    for index in range(min(len(lanes), 9)):
         exponent, status = _oracle_lane(
             pattern, flags, "search", "scan", index, "",
         )
@@ -2659,10 +2720,13 @@ class ScanRestartCensus(unittest.TestCase):
         # repeat's own class, so occurrences can be planted in its
         # span.
         self.assertTrue(rule_s(r"a\s+(?:[\w\-][\w\- ]*?)?flag\b"))
-        # ... but when the entry carries a char OUTSIDE the repeat's
-        # class ('='), planted entries break the span and the
-        # position skip prunes attempts — correctly not a member.
-        self.assertFalse(rule_s(r"=\s+(?:[\w\-][\w\- ]*?)?flag\b"))
+        # When the entry carries a char outside the repeat's class
+        # ('='), the planted-entry lanes go away and only the
+        # overlap lane (continuation first-set inside the class)
+        # still proposes — being PROPOSED is not flooding, being
+        # unpinnable is: the oracle disposes this shape as linear
+        # (the lazy group expands one forced step per offset).
+        self.assertTrue(rule_s(r"=\s+(?:[\w\-][\w\- ]*?)?flag\b"))
         # Non-members: a literal head whose chars fall outside the
         # repeat's set (position skip prunes attempts), a bounded
         # window, an anchored pattern, an anchored CALL MODE, and a
@@ -2696,6 +2760,16 @@ class ScanRestartCensus(unittest.TestCase):
         self.assertTrue(synthesized)
         assert exponent is not None
         self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        # The body-unit exemplar: a multi-char repeat body only
+        # iterates under a whole-unit pump (a single-char fill
+        # measured this shape "linear"), and the bounded fix passes.
+        exponent, synthesized = _scan_oracle_classify(r"(?:ab)*c!", 0)
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        exponent, _ = _scan_oracle_classify(r"(?:ab){0,32}c!", 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
 
     def test_members_match_the_pinned_verdicts(self) -> None:
         """Default-tier closure: the live Rule S proposal set equals
