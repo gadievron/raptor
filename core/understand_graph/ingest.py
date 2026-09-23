@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -36,16 +37,33 @@ from .schema import (
     stable_key,
     stable_node_id,
 )
-from .store import graph_connection, graph_path_for_run, open_graph, remove_graph_db
+from .store import (
+    INGEST_SKIP_EXCEPTIONS,
+    graph_path_for_run,
+    graph_sidecar_paths,
+    graph_write_txn,
+    open_graph,
+    remove_graph_db,
+)
 
 
-def ingest_run(run_dir: Path, target_path: Optional[str] = None) -> Optional[Path]:
+def ingest_run(run_dir: Path, target_path: Optional[str] = None,
+               *, graph_path: Optional[Path] = None) -> Optional[Path]:
     """Best-effort ingest of a run directory.
 
-    Returns the graph path when something was ingested, otherwise ``None``.
+    Returns the graph path when something was ingested, otherwise
+    ``None``. Sibling envelope like every newer producer: shape
+    guards, one immediate transaction, junk artifacts cost a skipped
+    ingest — never a crash into the caller. ``graph_path`` pins the
+    destination store (rebuild uses it); default resolution rides
+    :func:`graph_path_for_run`.
     """
     run_dir = Path(run_dir)
-    checklist = load_json(run_dir / "checklist.json") or {}
+    checklist = load_json(run_dir / "checklist.json")
+    if not isinstance(checklist, dict):
+        # A junk-shaped checklist is not a reason to drop the other
+        # artifacts — but it must never reach .get() calls.
+        checklist = {}
     context_map = load_json(run_dir / "context-map.json")
     variants = load_json(run_dir / "variants.json")
     trace_paths = sorted(run_dir.glob("flow-trace-*.json"))
@@ -60,7 +78,8 @@ def ingest_run(run_dir: Path, target_path: Optional[str] = None) -> Optional[Pat
         or (context_map or {}).get("meta", {}).get("target", "")
         or ""
     )
-    graph_path = graph_path_for_run(run_dir, target or None)
+    if graph_path is None:
+        graph_path = graph_path_for_run(run_dir, target or None)
     checklist_hash = _hash_json(checklist)
     snap_id = make_snapshot_id(target, checklist_hash, str(run_dir.resolve()))
 
@@ -81,45 +100,49 @@ def ingest_run(run_dir: Path, target_path: Optional[str] = None) -> Optional[Pat
         if path.exists()
     }
 
-    with graph_connection(graph_path) as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO snapshots
-            (id, target_path, target_hash, git_sha, checklist_hash, created_at, producer_run, props_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                snap_id,
-                target,
-                _target_hash(checklist),
-                str(checklist.get("git_sha") or checklist.get("commit") or ""),
-                checklist_hash,
-                datetime.now(timezone.utc).isoformat(),
-                str(run_dir.resolve()),
-                json_dumps({"total_files": checklist.get("total_files"), "total_items": checklist.get("total_items")}),
-            ),
-        )
-        _ingest_checklist(conn, snap_id, checklist)
-        if isinstance(context_map, dict):
-            _ingest_context_map(conn, snap_id, context_map)
-            cm_path = run_dir / "context-map.json"
-            _artifact(conn, snap_id, "context_map", cm_path, run_dir,
-                      digest=digests.get(cm_path, ""))
-        for trace_path, trace in traces:
-            if isinstance(trace, dict):
-                _ingest_flow_trace(conn, snap_id, trace)
-                _artifact(conn, snap_id, "flow_trace", trace_path, run_dir,
-                          digest=digests.get(trace_path, ""))
-        if variants is not None:
-            _ingest_variants(conn, snap_id, variants)
-            v_path = run_dir / "variants.json"
-            _artifact(conn, snap_id, "variants", v_path, run_dir,
-                      digest=digests.get(v_path, ""))
-        for path, result in results:
-            if isinstance(result, dict):
-                _ingest_multimodel_result(conn, snap_id, result)
-                _artifact(conn, snap_id, result.get("mode") or path.stem, path, run_dir,
-                          digest=digests.get(path, ""))
+    try:
+        with graph_write_txn(graph_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO snapshots
+                (id, target_path, target_hash, git_sha, checklist_hash, created_at, producer_run, props_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snap_id,
+                    target,
+                    _target_hash(checklist),
+                    str(checklist.get("git_sha") or checklist.get("commit") or ""),
+                    checklist_hash,
+                    datetime.now(timezone.utc).isoformat(),
+                    str(run_dir.resolve()),
+                    json_dumps({"total_files": checklist.get("total_files"), "total_items": checklist.get("total_items")}),
+                ),
+            )
+            _ingest_checklist(conn, snap_id, checklist)
+            if isinstance(context_map, dict):
+                _ingest_context_map(conn, snap_id, context_map)
+                cm_path = run_dir / "context-map.json"
+                _artifact(conn, snap_id, "context_map", cm_path, run_dir,
+                          digest=digests.get(cm_path, ""))
+            for trace_path, trace in traces:
+                if isinstance(trace, dict):
+                    _ingest_flow_trace(conn, snap_id, trace)
+                    _artifact(conn, snap_id, "flow_trace", trace_path, run_dir,
+                              digest=digests.get(trace_path, ""))
+            if variants is not None:
+                _ingest_variants(conn, snap_id, variants)
+                v_path = run_dir / "variants.json"
+                _artifact(conn, snap_id, "variants", v_path, run_dir,
+                          digest=digests.get(v_path, ""))
+            for path, result in results:
+                if isinstance(result, dict):
+                    _ingest_multimodel_result(conn, snap_id, result)
+                    _artifact(conn, snap_id, result.get("mode") or path.stem, path, run_dir,
+                              digest=digests.get(path, ""))
+    except INGEST_SKIP_EXCEPTIONS as exc:
+        print(f"graph: understand ingest skipped ({exc})", file=sys.stderr)
+        return None
     return graph_path
 
 
@@ -354,7 +377,8 @@ def _artifact(conn, snapshot_id: str, kind: str, path: Path, run_dir: Path,
     )
 
 
-def ingest_scan_findings(run_dir: Path, target_path: Optional[str] = None) -> Optional[Path]:
+def ingest_scan_findings(run_dir: Path, target_path: Optional[str] = None,
+                         *, graph_path: Optional[Path] = None) -> Optional[Path]:
     """Ingest /scan or /agentic findings into the graph.
 
     Creates scan_finding nodes linked to function nodes via AFFECTS edges.
@@ -368,41 +392,34 @@ def ingest_scan_findings(run_dir: Path, target_path: Optional[str] = None) -> Op
     target = str(target_path or _infer_run_target(run_dir))
     if not target:
         return None
-    graph_path = graph_path_for_run(run_dir, target or None)
+    if graph_path is None:
+        graph_path = graph_path_for_run(run_dir, target or None)
     checklist_hash = _hash_json(findings)
     snap_id = make_snapshot_id(target, checklist_hash, str(run_dir.resolve()))
 
-    conn = open_graph(graph_path)
-    conn.isolation_level = None
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        _upsert_snapshot(conn, snap_id, target, run_dir, producer="scan")
-        for f in _list(findings):
-            fn_name = str(f.get("function") or f.get("name") or "?")
-            file_path = str(f.get("file") or f.get("path") or "?")
-            key = f"{f.get('rule_id', '?')}::{file_path}::{fn_name}::{content_hash(f)}"
-            node_id = _upsert_node(conn, snap_id, "scan_finding", key, f)
-            fn_key = stable_key("function", function_ref(file_path, fn_name))
-            fn_row = conn.execute(
-                "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
-                (fn_key,),
-            ).fetchone()
-            if fn_row:
-                _upsert_edge(conn, snap_id, "AFFECTS", node_id, fn_row["id"])
-        conn.execute("COMMIT")
-    except (sqlite3.Error, KeyError, TypeError, ValueError) as exc:
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass
+        with graph_write_txn(graph_path) as conn:
+            _upsert_snapshot(conn, snap_id, target, run_dir, producer="scan")
+            for f in _list(findings):
+                fn_name = str(f.get("function") or f.get("name") or "?")
+                file_path = str(f.get("file") or f.get("path") or "?")
+                key = f"{f.get('rule_id', '?')}::{file_path}::{fn_name}::{content_hash(f)}"
+                node_id = _upsert_node(conn, snap_id, "scan_finding", key, f)
+                fn_key = stable_key("function", function_ref(file_path, fn_name))
+                fn_row = conn.execute(
+                    "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
+                    (fn_key,),
+                ).fetchone()
+                if fn_row:
+                    _upsert_edge(conn, snap_id, "AFFECTS", node_id, fn_row["id"])
+    except INGEST_SKIP_EXCEPTIONS as exc:
         print(f"graph: scan ingest skipped ({exc})", file=sys.stderr)
         return None
-    finally:
-        conn.close()
     return graph_path
 
 
-def ingest_codeql_sarif(run_dir: Path, target_path: Optional[str] = None) -> Optional[Path]:
+def ingest_codeql_sarif(run_dir: Path, target_path: Optional[str] = None,
+                        *, graph_path: Optional[Path] = None) -> Optional[Path]:
     """Ingest CodeQL SARIF results into the graph.
 
     Creates codeql_result nodes. SARIF codeFlows are mapped to TAINTS edges.
@@ -413,7 +430,8 @@ def ingest_codeql_sarif(run_dir: Path, target_path: Optional[str] = None) -> Opt
         return None
 
     target = str(target_path or _infer_run_target(run_dir))
-    graph_path = graph_path_for_run(run_dir, target or None)
+    if graph_path is None:
+        graph_path = graph_path_for_run(run_dir, target or None)
     ingested = False
 
     for sarif_path in sarif_paths:
@@ -427,30 +445,22 @@ def ingest_codeql_sarif(run_dir: Path, target_path: Optional[str] = None) -> Opt
             if not results:
                 continue
             snap_id = make_snapshot_id(target, _hash_json(results), str(sarif_path.resolve()))
-            conn = open_graph(graph_path)
-            conn.isolation_level = None
             try:
-                conn.execute("BEGIN IMMEDIATE")
-                _upsert_snapshot(conn, snap_id, target, run_dir, producer="codeql")
-                for result in results:
-                    if not isinstance(result, dict):
-                        continue
-                    _ingest_sarif_result(conn, snap_id, result)
-                conn.execute("COMMIT")
+                with graph_write_txn(graph_path) as conn:
+                    _upsert_snapshot(conn, snap_id, target, run_dir, producer="codeql")
+                    for result in results:
+                        if not isinstance(result, dict):
+                            continue
+                        _ingest_sarif_result(conn, snap_id, result)
                 ingested = True
-            except (sqlite3.Error, KeyError, TypeError, ValueError) as exc:
-                try:
-                    conn.execute("ROLLBACK")
-                except sqlite3.Error:
-                    pass
+            except INGEST_SKIP_EXCEPTIONS as exc:
                 print(f"graph: codeql ingest skipped ({exc})", file=sys.stderr)
                 continue
-            finally:
-                conn.close()
     return graph_path if ingested else None
 
 
-def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None) -> Optional[Path]:
+def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None,
+                               *, graph_path: Optional[Path] = None) -> Optional[Path]:
     """Ingest /validate outcomes into the graph.
 
     Creates verified_outcome nodes linked to findings via VALIDATES edges.
@@ -461,60 +471,53 @@ def ingest_validation_outcomes(run_dir: Path, target_path: Optional[str] = None)
         return None
 
     target = str(target_path or _infer_run_target(run_dir))
-    graph_path = graph_path_for_run(run_dir, target or None)
+    if graph_path is None:
+        graph_path = graph_path_for_run(run_dir, target or None)
     snap_id = make_snapshot_id(target, _hash_json(outcomes), str(run_dir.resolve()))
 
-    conn = open_graph(graph_path)
-    conn.isolation_level = None
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        _upsert_snapshot(conn, snap_id, target, run_dir, producer="validate")
-        for outcome in _list(outcomes):
-            status = str(outcome.get("status") or outcome.get("verdict") or "inconclusive")
-            finding_ref = outcome.get("finding_id") or outcome.get("finding") or ""
-            key = f"{status}::{finding_ref}::{content_hash(outcome)}"
-            props = dict(outcome)
-            props["status"] = status
-            vo_id = _upsert_node(conn, snap_id, "verified_outcome", key, props)
-            if finding_ref:
-                # Exact-identity join, never substring LIKE: a short
-                # or numeric finding id used to substring-match an
-                # unrelated unchecked_flow, minting a VALIDATES edge
-                # that falsely suppressed a never-validated path from
-                # coverage_residual (the query-side comment there
-                # names this exact idiom). Identity = the composed
-                # stable_key or a props-extracted id; a rule id shared
-                # across findings is NOT an identity, so no exact
-                # match mints no edge.
-                ref = str(finding_ref)
-                for kind in ("scan_finding", "codeql_result", "unchecked_flow"):
-                    row = conn.execute(
-                        """
-                        SELECT id FROM nodes
-                        WHERE kind=? AND stale=0
-                          AND (stable_key=?
-                               OR json_extract(props_json, '$.id')=?
-                               OR json_extract(props_json, '$.finding_id')=?)
-                        LIMIT 1
-                        """,
-                        (kind, stable_key(kind, ref), ref, ref),
-                    ).fetchone()
-                    if row:
-                        _upsert_edge(conn, snap_id, "VALIDATES", vo_id, row["id"])
-        conn.execute("COMMIT")
-    except (sqlite3.Error, KeyError, TypeError, ValueError) as exc:
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass
+        with graph_write_txn(graph_path) as conn:
+            _upsert_snapshot(conn, snap_id, target, run_dir, producer="validate")
+            for outcome in _list(outcomes):
+                status = str(outcome.get("status") or outcome.get("verdict") or "inconclusive")
+                finding_ref = outcome.get("finding_id") or outcome.get("finding") or ""
+                key = f"{status}::{finding_ref}::{content_hash(outcome)}"
+                props = dict(outcome)
+                props["status"] = status
+                vo_id = _upsert_node(conn, snap_id, "verified_outcome", key, props)
+                if finding_ref:
+                    # Exact-identity join, never substring LIKE: a short
+                    # or numeric finding id used to substring-match an
+                    # unrelated unchecked_flow, minting a VALIDATES edge
+                    # that falsely suppressed a never-validated path from
+                    # coverage_residual (the query-side comment there
+                    # names this exact idiom). Identity = the composed
+                    # stable_key or a props-extracted id; a rule id shared
+                    # across findings is NOT an identity, so no exact
+                    # match mints no edge.
+                    ref = str(finding_ref)
+                    for kind in ("scan_finding", "codeql_result", "unchecked_flow"):
+                        row = conn.execute(
+                            """
+                            SELECT id FROM nodes
+                            WHERE kind=? AND stale=0
+                              AND (stable_key=?
+                                   OR json_extract(props_json, '$.id')=?
+                                   OR json_extract(props_json, '$.finding_id')=?)
+                            LIMIT 1
+                            """,
+                            (kind, stable_key(kind, ref), ref, ref),
+                        ).fetchone()
+                        if row:
+                            _upsert_edge(conn, snap_id, "VALIDATES", vo_id, row["id"])
+    except INGEST_SKIP_EXCEPTIONS as exc:
         print(f"graph: validation ingest skipped ({exc})", file=sys.stderr)
         return None
-    finally:
-        conn.close()
     return graph_path
 
 
-def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None) -> Optional[Path]:
+def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None,
+                            *, graph_path: Optional[Path] = None) -> Optional[Path]:
     """Ingest /audit review-journal rows into the graph.
 
     The vocabulary is derived from the journal's REAL producer
@@ -543,7 +546,8 @@ def ingest_audit_hypotheses(run_dir: Path, target_path: Optional[str] = None) ->
         return None
 
     target = str(target_path or _infer_run_target(run_dir))
-    graph_path = graph_path_for_run(run_dir, target or None)
+    if graph_path is None:
+        graph_path = graph_path_for_run(run_dir, target or None)
 
     entries = load_entries(run_dir)
     if not entries:
@@ -778,6 +782,7 @@ def _int_or_none(value: Any) -> Optional[int]:
 
 def ingest_annotations(
     run_dir: Path, target: str,
+    *, graph_path: Optional[Path] = None,
 ) -> Optional[Path]:
     """Ingest annotation markdown into the graph as annotation nodes.
 
@@ -804,67 +809,82 @@ def ingest_annotations(
     if not annotations:
         return None
 
-    graph_path = graph_path_for_run(run_dir, target or None)
+    if graph_path is None:
+        graph_path = graph_path_for_run(run_dir, target or None)
     snap_id = make_snapshot_id(
         target, _hash_json([a.function for a in annotations]),
         str(run_dir.resolve()),
     )
-    conn = open_graph(graph_path)
-    conn.isolation_level = None
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        _upsert_snapshot(conn, snap_id, target, run_dir, producer="annotate")
-        for ann in annotations:
-            key = function_ref(ann.file, ann.function)
-            props: dict[str, Any] = {
-                "file": ann.file,
-                "name": ann.function,
-                "status": ann.metadata.get("status", ""),
-                "source": ann.metadata.get("source", ""),
-                "cwe": ann.metadata.get("cwe", ""),
-                "body": ann.body[:500] if ann.body else "",
-            }
-            ann_id = _upsert_node(conn, snap_id, "annotation", key, props)
-            fn_key = stable_key("function", key)
-            fn_row = conn.execute(
-                "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
-                (fn_key,),
-            ).fetchone()
-            if fn_row:
-                _upsert_edge(
-                    conn, snap_id, "ANNOTATED", fn_row["id"], ann_id,
-                    evidence={"source": "annotations", "status": props["status"]},
-                )
-        conn.execute("COMMIT")
-    except (sqlite3.Error, KeyError, TypeError, ValueError):
-        try:
-            conn.execute("ROLLBACK")
-        except sqlite3.Error:
-            pass
-        print("graph: annotation ingest failed", file=sys.stderr)
+        with graph_write_txn(graph_path) as conn:
+            _upsert_snapshot(conn, snap_id, target, run_dir, producer="annotate")
+            for ann in annotations:
+                key = function_ref(ann.file, ann.function)
+                props: dict[str, Any] = {
+                    "file": ann.file,
+                    "name": ann.function,
+                    "status": ann.metadata.get("status", ""),
+                    "source": ann.metadata.get("source", ""),
+                    "cwe": ann.metadata.get("cwe", ""),
+                    "body": ann.body[:500] if ann.body else "",
+                }
+                ann_id = _upsert_node(conn, snap_id, "annotation", key, props)
+                fn_key = stable_key("function", key)
+                fn_row = conn.execute(
+                    "SELECT id FROM nodes WHERE stable_key=? AND stale=0 LIMIT 1",
+                    (fn_key,),
+                ).fetchone()
+                if fn_row:
+                    _upsert_edge(
+                        conn, snap_id, "ANNOTATED", fn_row["id"], ann_id,
+                        evidence={"source": "annotations", "status": props["status"]},
+                    )
+    except INGEST_SKIP_EXCEPTIONS as exc:
+        print(f"graph: annotation ingest skipped ({exc})", file=sys.stderr)
         return None
-    finally:
-        conn.close()
     return graph_path
 
 
 def rebuild_graph(project_dir: Path) -> Optional[Path]:
-    """Delete and rebuild the graph from artefacts in *project_dir*.
+    """Rebuild the graph from the artefacts in *project_dir*.
 
     Walks every run directory, sorted by the start timestamp recorded
     in each run's ``.raptor-run.json`` (the metadata file the run
     lifecycle actually writes), calling the appropriate ``ingest_*``
     for each artefact type found. Returns the graph path on success.
+
+    Durability contract:
+
+    * **Containment** — the resolved store must live under
+      *project_dir*. graph_path_for_run's active-project adoption
+      used to resolve a non-project directory to the ACTIVE project's
+      graph, which the old delete-first flow then destroyed and
+      rebuilt from nothing.
+    * **Temp store, swapped on success** — the rebuild ingests into a
+      sibling temp DB and replaces the live store only at the end, so
+      an interrupt (or a rebuild that yields nothing) never strands
+      the project without its accumulated memory.
+    * **Per-run best-effort** — one malformed run directory costs its
+      own artefacts, never the runs after it in timestamp order.
     """
     from core.run.metadata import RUN_METADATA_FILE
 
-    project_dir = Path(project_dir)
+    project_dir = Path(project_dir).resolve()
     graph_path = graph_path_for_run(project_dir)
+    try:
+        graph_path.resolve().relative_to(project_dir)
+    except ValueError:
+        print(
+            f"graph: rebuild refused — resolved store {graph_path} is "
+            f"outside {project_dir} (not a project or run directory)",
+            file=sys.stderr,
+        )
+        return None
 
-    if graph_path.exists():
-        # Sidecar-aware: a stale -wal next to the recreated DB would
-        # replay old frames into the rebuilt store.
-        remove_graph_db(graph_path)
+    # Fresh temp store beside the live one; clear any leftover from a
+    # previously interrupted rebuild first.
+    temp_path = graph_path.with_name(f".rebuild-{os.getpid()}-{graph_path.name}")
+    remove_graph_db(temp_path)
 
     run_dirs: list[tuple[str, Path]] = []
     for child in sorted(project_dir.iterdir()):
@@ -880,29 +900,65 @@ def rebuild_graph(project_dir: Path) -> Optional[Path]:
     run_dirs.sort(key=lambda x: x[0])
 
     target = ""
-    for ts, d in run_dirs:
+    skipped = 0
+    for _ts, d in run_dirs:
         run_meta = load_json(d / RUN_METADATA_FILE)
         if isinstance(run_meta, dict):
             target = target or str(run_meta.get("target_path") or "")
 
+        lanes = []
         if (d / "checklist.json").exists() or (d / "context-map.json").exists():
-            ingest_run(d, target)
-
+            lanes.append(ingest_run)
         if (d / "findings.json").exists():
-            ingest_scan_findings(d, target)
-
-        sarif_files = list(d.glob("*.sarif")) + list(d.glob("*.sarif.json"))
-        if sarif_files:
-            ingest_codeql_sarif(d, target)
-
+            lanes.append(ingest_scan_findings)
+        if list(d.glob("*.sarif")) or list(d.glob("*.sarif.json")):
+            lanes.append(ingest_codeql_sarif)
         if (d / "review-journal.jsonl").exists():
-            ingest_audit_hypotheses(d, target)
-
+            lanes.append(ingest_audit_hypotheses)
         if (d / "validation-outcomes.json").exists():
-            ingest_validation_outcomes(d, target)
+            lanes.append(ingest_validation_outcomes)
+        for lane in lanes:
+            try:
+                lane(d, target, graph_path=temp_path)
+            except Exception as exc:  # noqa: BLE001 — per-run containment: one bad artefact never costs the rest
+                skipped += 1
+                print(
+                    f"graph: rebuild skipped {lane.__name__} for "
+                    f"{d.name} ({exc})",
+                    file=sys.stderr,
+                )
 
     ann_dir = project_dir / "annotations"
     if ann_dir.is_dir():
-        ingest_annotations(project_dir, target)
+        try:
+            ingest_annotations(project_dir, target, graph_path=temp_path)
+        except Exception as exc:  # noqa: BLE001 — same per-run containment
+            skipped += 1
+            print(f"graph: rebuild skipped annotations ({exc})", file=sys.stderr)
+    if skipped:
+        print(f"graph: rebuild skipped {skipped} artefact set(s)", file=sys.stderr)
 
+    if not temp_path.exists():
+        # Nothing ingested: keep whatever store already exists rather
+        # than deleting memory in exchange for nothing (an operator
+        # who wants an empty store has /project graph clear).
+        print("graph: rebuild found no ingestable artefacts; existing "
+              "store left in place", file=sys.stderr)
+        return None
+
+    # Swap: clear the live store WITH its WAL sidecars (a stale -wal
+    # next to the renamed DB would replay old frames), then move the
+    # temp store into place.
+    if graph_path.exists() and not remove_graph_db(graph_path):
+        print(
+            f"graph: rebuild could not replace {graph_path.name}; "
+            "previous store kept, rebuilt copy discarded",
+            file=sys.stderr,
+        )
+        remove_graph_db(temp_path)
+        return None
+    for source in [temp_path, *graph_sidecar_paths(temp_path)]:
+        if source.exists():
+            os.replace(source, graph_path.parent / source.name.replace(
+                temp_path.name, graph_path.name, 1))
     return graph_path if graph_path.exists() else None

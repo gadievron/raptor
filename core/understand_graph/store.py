@@ -197,6 +197,43 @@ def graph_connection(path: Path) -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+#: What an ingest producer contains to a "skipped" ingest — run-dir
+#: artifacts are producer-written but live beside scanned-tree output,
+#: so a junk shape must cost the ingest, never the caller.
+#: AttributeError is in the tuple because unvalidated shapes reach
+#: ``.get()`` calls (a list-shaped checklist.json crashed the primary
+#: understand ingest through exactly that hole).
+INGEST_SKIP_EXCEPTIONS = (
+    sqlite3.Error, AttributeError, KeyError, TypeError, ValueError,
+)
+
+
+@contextmanager
+def graph_write_txn(path: Path) -> Iterator[sqlite3.Connection]:
+    """One immediate write transaction for an ingest producer.
+
+    BEGIN IMMEDIATE .. COMMIT, rollback-and-re-raise on any failure,
+    connection always closed. The producers used to hand-roll this
+    envelope per function — and the one that predated the pattern
+    (ingest_run) drifted without any of it.
+    """
+    conn = open_graph(path)
+    conn.isolation_level = None
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+            conn.execute("COMMIT")
+        except BaseException:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+    finally:
+        conn.close()
+
+
 def query_graph(path: Path, fn, *args, **kwargs):
     """Run a read query with a narrow corruption guard.
 
