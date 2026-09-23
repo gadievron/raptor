@@ -7,7 +7,7 @@ sink), but ``safe_other`` never reaches the sink — the sink reads
 ``user`` instead. The shipped pre-Phase-4 vertex-cut would falsely
 suppress; the value-bound gate refuses.
 """
-
+import html
 
 def handle(user, other):
     safe_other = html.escape(other)  # noqa: F821, F841 — fixture, not run

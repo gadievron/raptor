@@ -110,33 +110,39 @@ _FIXTURES: list[_Fixture] = [
         label=LABEL_SHOULD_NOT_SUPPRESS, var_name="x",
     ),
     # --- sanitizer-cut shape — value-bound fires, lexical doesn't ---
+    # (Sources import their sanitizer: an UNBOUND root refuses by
+    # doctrine — builtins are repo-writable — so the shapes must bind
+    # the identity the way legitimate code does.)
     _Fixture(
         name="sanitizer_cut_safe",
         kind="sanitizer_cut",
         source=(
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
         ),
-        source_line=1, sink_line=3, cwe="CWE-79",
+        source_line=2, sink_line=4, cwe="CWE-79",
         label=LABEL_SHOULD_SUPPRESS,
     ),
     _Fixture(
         name="sanitizer_cut_wrong_variable",
         kind="sanitizer_cut",
         source=(
+            "import html\n"
             "def handle(user, other):\n"
             "    safe = html.escape(other)\n"
             "    render(user)\n"
         ),
         # Sanitizer cleans the wrong symbol; sink reads user. Real bug.
-        source_line=1, sink_line=3, cwe="CWE-79",
+        source_line=2, sink_line=4, cwe="CWE-79",
         label=LABEL_SHOULD_NOT_SUPPRESS,
     ),
     _Fixture(
         name="sanitizer_cut_helper",
         kind="sanitizer_cut",
         source=(
+            "import html\n"
             "def _sanitize(s):\n"
             "    return html.escape(s)\n"
             "def handle(x):\n"
@@ -144,7 +150,7 @@ _FIXTURES: list[_Fixture] = [
             "    render(y)\n"
         ),
         # Sanitization in a callee — Phase 14 inter-proc suppresses.
-        source_line=3, sink_line=5, cwe="CWE-79",
+        source_line=4, sink_line=6, cwe="CWE-79",
         label=LABEL_SHOULD_SUPPRESS,
     ),
 ]

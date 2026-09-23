@@ -12,7 +12,7 @@ Phase 14 (Sub-arc C) will use call-graph + taint summaries to
 suppress this correctly. Until then, the conservative no_suppress
 is the right answer.
 """
-
+import html
 
 def _sanitize(s):
     return html.escape(s)              # noqa: F821 — fixture

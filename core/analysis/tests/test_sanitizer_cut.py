@@ -112,6 +112,7 @@ class TestCanonicalSiblingBranch:
 
     def test_both_branches_sanitize_suppresses(self):
         src = (
+            "import html\n"
             "def handle(user):\n"
             "    if user.is_admin:\n"
             "        x = html.escape(user.name)\n"
@@ -132,6 +133,7 @@ class TestCanonicalSiblingBranch:
 
     def test_only_one_branch_sanitizes_does_not_suppress(self):
         src = (
+            "import html\n"
             "def handle(user):\n"
             "    if user.is_admin:\n"
             "        x = html.escape(user.name)\n"
@@ -158,6 +160,7 @@ class TestStraightLineSanitize:
 
     def test_linear_sanitize_then_sink_suppresses(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -174,6 +177,7 @@ class TestStraightLineSanitize:
         """Sanitizer AFTER the sink — bypass; current model treats
         this as 'not on every path to sink' which is correct."""
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    render(x)\n"
             "    y = html.escape(x)\n"
@@ -194,6 +198,7 @@ class TestMatch:
         fall-through: at runtime no case may match and the post-match
         sink is reached without crossing the case-body sanitizer."""
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    match x:\n"
             "        case 'a':\n"
@@ -212,6 +217,7 @@ class TestMatch:
         """With ``case _:`` some case always runs — when every case
         body sanitizes, the cut is genuinely complete."""
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    match x:\n"
             "        case 'a':\n"
@@ -235,6 +241,7 @@ class TestLoops:
         may execute zero iterations, leaving the post-loop sink
         reachable without crossing the sanitizer."""
         src = (
+            "import html\n"
             "def handle(items):\n"
             "    for x in items:\n"
             "        y = html.escape(x)\n"
@@ -257,6 +264,7 @@ class TestLoops:
 class TestNoSuppression:
     def test_wrong_cwe_does_not_suppress(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -274,6 +282,7 @@ class TestNoSuppression:
 
     def test_wrong_language_does_not_suppress(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -290,6 +299,7 @@ class TestNoSuppression:
 
     def test_unknown_cwe_does_not_suppress(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -318,6 +328,7 @@ class TestNoSuppression:
 
     def test_no_sources_does_not_suppress(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -332,6 +343,7 @@ class TestNoSuppression:
 
     def test_no_sink_does_not_suppress(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    return y\n"
@@ -353,6 +365,7 @@ class TestNoSuppression:
 class TestSuppressionRecord:
     def test_writes_jsonl_on_suppression(self, tmp_path: Path):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -402,6 +415,7 @@ class TestSuppressionRecord:
             encoding="utf-8",
         )
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -429,6 +443,7 @@ class TestSuppressionRecord:
 
 def test_cut_set_contains_actual_cfg_nodes():
     src = (
+        "import html\n"
         "def handle(x):\n"
         "    y = html.escape(x)\n"
         "    render(y)\n"
@@ -471,6 +486,7 @@ class TestLegacySinkInCutNotTrivial:
             evaluate_finding,
         )
         src = (
+            "import html\n"
             "def handle(tainted, other):\n"
             "    render(html.escape(other), tainted)\n"
         )
@@ -487,6 +503,7 @@ class TestLegacySinkInCutNotTrivial:
             evaluate_finding,
         )
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -506,6 +523,7 @@ class TestLegacySinkInCutNotTrivial:
             evaluate_finding,
         )
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"

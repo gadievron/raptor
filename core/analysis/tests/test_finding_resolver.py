@@ -33,12 +33,14 @@ from core.testing.treesitter import requires_ts
 
 
 WRONG_VARIABLE_SRC = (
+    "import html\n"
     "def handle(user, other):\n"
     "    safe_other = html.escape(other)\n"
     "    render(user.name)\n"
 )
 
 STRAIGHT_LINE_SAFE_SRC = (
+    "import html\n"
     "def handle(x):\n"
     "    y = html.escape(x)\n"
     "    render(y)\n"
@@ -133,7 +135,7 @@ def _raptor_native(file_path: str, source_line: int, sink_line: int, **extra):
 class TestSARIFHappyPath:
     def test_sarif_wrong_variable_resolves_to_full_finding(self, tmp_path):
         src_file = _write(tmp_path, "app.py", WRONG_VARIABLE_SRC)
-        finding = _sarif_result(str(src_file), source_line=1, sink_line=3)
+        finding = _sarif_result(str(src_file), source_line=2, sink_line=4)
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)
         assert result.cwe == "CWE-79"
@@ -151,7 +153,7 @@ class TestSARIFHappyPath:
 class TestSemgrepHappyPath:
     def test_semgrep_wrong_variable_resolves(self, tmp_path):
         src_file = _write(tmp_path, "app.py", WRONG_VARIABLE_SRC)
-        finding = _semgrep_finding(str(src_file), source_line=1, sink_line=3)
+        finding = _semgrep_finding(str(src_file), source_line=2, sink_line=4)
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)
         assert result.cwe == "CWE-79"
@@ -162,7 +164,7 @@ class TestSemgrepHappyPath:
 class TestRaptorNativeHappyPath:
     def test_raptor_native_wrong_variable_resolves(self, tmp_path):
         src_file = _write(tmp_path, "app.py", WRONG_VARIABLE_SRC)
-        finding = _raptor_native(str(src_file), source_line=1, sink_line=3)
+        finding = _raptor_native(str(src_file), source_line=2, sink_line=4)
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)
         assert result.cwe == "CWE-79"
@@ -196,7 +198,7 @@ class TestSourceResolution:
         """source_line == FunctionDef.lineno → cfg.entry as the
         source node and cfg.params as the source symbols."""
         src_file = _write(tmp_path, "app.py", WRONG_VARIABLE_SRC)
-        finding = _raptor_native(str(src_file), source_line=1, sink_line=3)
+        finding = _raptor_native(str(src_file), source_line=2, sink_line=4)
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)
         assert result.source_node is result.cfg.entry_node
@@ -206,13 +208,14 @@ class TestSourceResolution:
         """source_line is a body assignment → source_symbols are the
         LHS names of that assignment."""
         src = (
+            "import html\n"
             "def handle(request):\n"
             "    user_input = request.body\n"
             "    y = html.escape(user_input)\n"
             "    render(y)\n"
         )
         src_file = _write(tmp_path, "app.py", src)
-        finding = _raptor_native(str(src_file), source_line=2, sink_line=4)
+        finding = _raptor_native(str(src_file), source_line=3, sink_line=5)
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)
         assert result.source_symbols == frozenset({"user_input"})
@@ -247,7 +250,7 @@ class TestEndToEnd:
 
     def test_wrong_variable_resolves_then_gate_emits_candidate_only(self, tmp_path):
         src_file = _write(tmp_path, "app.py", WRONG_VARIABLE_SRC)
-        finding = _raptor_native(str(src_file), source_line=1, sink_line=3)
+        finding = _raptor_native(str(src_file), source_line=2, sink_line=4)
         resolved = resolve_finding(finding)
         assert isinstance(resolved, ResolvedFinding)
         # The whole arc's payoff: feed the resolved finding straight
@@ -263,7 +266,7 @@ class TestEndToEnd:
 
     def test_safe_straight_line_gate_emits_suppress(self, tmp_path):
         src_file = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
-        finding = _raptor_native(str(src_file), source_line=1, sink_line=3)
+        finding = _raptor_native(str(src_file), source_line=2, sink_line=4)
         resolved = resolve_finding(finding)
         assert isinstance(resolved, ResolvedFinding)
         result = evaluate_finding(
@@ -413,7 +416,7 @@ class TestTraversalGuard:
 
     def test_absolute_path_still_allowed(self, tmp_path):
         src = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
-        result = resolve_finding(_raptor_native(str(src), 1, 3))
+        result = resolve_finding(_raptor_native(str(src), 2, 4))
         assert isinstance(result, ResolvedFinding)
         assert result.enclosing_function == "handle"
 
@@ -437,7 +440,7 @@ class TestTargetRootConfinement:
     def test_absolute_path_inside_root_resolves(self, tmp_path):
         src = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
         result = resolve_finding(
-            _raptor_native(str(src), 1, 3), target_root=tmp_path,
+            _raptor_native(str(src), 2, 4), target_root=tmp_path,
         )
         assert isinstance(result, ResolvedFinding)
         assert result.enclosing_function == "handle"
@@ -445,7 +448,7 @@ class TestTargetRootConfinement:
     def test_relative_path_joins_root(self, tmp_path):
         _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
         result = resolve_finding(
-            _raptor_native("app.py", 1, 3), target_root=tmp_path,
+            _raptor_native("app.py", 2, 4), target_root=tmp_path,
         )
         assert isinstance(result, ResolvedFinding)
 
@@ -478,7 +481,7 @@ class TestTargetRootConfinement:
         # the scanned tree, so an absolute path is still read (legacy
         # contract for callers that predate the parameter).
         src = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
-        result = resolve_finding(_raptor_native(str(src), 1, 3))
+        result = resolve_finding(_raptor_native(str(src), 2, 4))
         assert isinstance(result, ResolvedFinding)
 
 
@@ -494,6 +497,7 @@ class TestNestedFunctions:
         innermost — that's where the value-binding logic should
         run."""
         src = (
+            "import html\n"
             "def outer(req):\n"
             "    def inner(x):\n"
             "        y = html.escape(x)\n"
@@ -517,14 +521,14 @@ class TestNestedFunctions:
 class TestFormatDetection:
     def test_sarif_shape_dispatched(self, tmp_path):
         src_file = _write(tmp_path, "app.py", WRONG_VARIABLE_SRC)
-        finding = _sarif_result(str(src_file), 1, 3)
+        finding = _sarif_result(str(src_file), 2, 4)
         # SARIF has ruleId + codeFlows — distinct from other shapes.
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)
 
     def test_semgrep_shape_dispatched(self, tmp_path):
         src_file = _write(tmp_path, "app.py", WRONG_VARIABLE_SRC)
-        finding = _semgrep_finding(str(src_file), 1, 3)
+        finding = _semgrep_finding(str(src_file), 2, 4)
         # Semgrep has check_id + extra.
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)
@@ -543,7 +547,7 @@ class TestDeadColumnPlumbingRemoved:
 
     def test_native_finding_with_legacy_col_keys_still_resolves(self, tmp_path):
         src = _write(tmp_path, "app.py", STRAIGHT_LINE_SAFE_SRC)
-        finding = _raptor_native(str(src), 1, 3, source_col=5, sink_col=11)
+        finding = _raptor_native(str(src), 2, 4, source_col=5, sink_col=11)
         result = resolve_finding(finding)
         assert isinstance(result, ResolvedFinding)
 
@@ -733,6 +737,7 @@ class TestInterProcBindingsBestEffort:
         )
 
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"

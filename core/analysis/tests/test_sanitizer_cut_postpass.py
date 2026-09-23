@@ -382,6 +382,7 @@ class TestGrammarAbsentDegradation:
         repo.mkdir()
         src = repo / "app.py"
         src.write_text(
+            "import html\n"
             "def handle():\n"
             "    x = request.args.get('q')\n"
             "    y = html.escape(x)\n"
@@ -389,7 +390,7 @@ class TestGrammarAbsentDegradation:
             encoding="utf-8",
         )
         sarif_path = tmp_path / "scan.sarif"
-        sarif_path.write_text(json.dumps(_sarif(src, sink_line=4)))
+        sarif_path.write_text(json.dumps(_sarif(src, sink_line=5)))
         out = tmp_path / "out"
         out.mkdir()
         stats = run_postpass([sarif_path], repo, out)

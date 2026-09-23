@@ -147,6 +147,7 @@ class TestWrongVariableCase:
 
     def test_phase_4_refuses_to_suppress_wrong_variable_case(self):
         src = (
+            "import html\n"
             "def handle(user, other):\n"
             "    safe_other = html.escape(other)\n"
             "    render(user.name)\n"
@@ -173,6 +174,7 @@ class TestWrongVariableCase:
         the value-binding arc (smt_barrier wire-up behind flag)
         will switch the default to the value-bound path."""
         src = (
+            "import html\n"
             "def handle(user, other):\n"
             "    safe_other = html.escape(other)\n"
             "    render(user.name)\n"
@@ -201,6 +203,7 @@ class TestTruePositives:
         """``y = html.escape(x); render(y)`` — x flows in, y flows
         out, sink reads y. All four conditions hold."""
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -223,6 +226,7 @@ class TestTruePositives:
         whole arc was designed for — control-flow + value-flow
         both hold."""
         src = (
+            "import html\n"
             "def handle(user):\n"
             "    if user.is_admin:\n"
             "        safe = html.escape(user.name)\n"
@@ -256,6 +260,7 @@ class TestBypass:
 
     def test_only_one_branch_sanitizes_no_suppress(self):
         src = (
+            "import html\n"
             "def handle(user):\n"
             "    if user.is_admin:\n"
             "        safe = html.escape(user.name)\n"
@@ -290,6 +295,7 @@ class TestChainedSanitizer:
 
     def test_chained_call_yields_candidate_only(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = wrap(html.escape(x))\n"
             "    render(y)\n"
@@ -329,6 +335,7 @@ class TestSanitizationOverwritten:
 
     def test_rebound_after_sanitize_yields_candidate_only(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    y = x\n"
@@ -354,6 +361,7 @@ class TestSanitizationOverwritten:
 class TestGatePreconditions:
     def test_wrong_cwe_still_no_suppress(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -374,6 +382,7 @@ class TestGatePreconditions:
         2 fails because input_symbols ∩ ∅ = ∅. With control-flow cut
         holding → candidate_only."""
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -467,6 +476,7 @@ class TestNonEntrySource:
 
     def test_body_source_propagates_taint_to_sink(self):
         src = (
+            "import html\n"
             "def handle(request):\n"
             "    user_input = request.body\n"
             "    y = html.escape(user_input)\n"
@@ -560,6 +570,7 @@ class TestMatchCaptureRebindNotSuppressed:
 
     def test_capture_rebind_of_sanitized_name_downgrades(self):
         src = (
+            "import html\n"
             "def handle(x, render):\n"
             "    s = str(x)\n"
             "    y = html.escape(s)\n"
@@ -580,6 +591,7 @@ class TestMatchCaptureRebindNotSuppressed:
         # Direction check: a capture of a DIFFERENT name must not cost
         # the legitimate suppression.
         src = (
+            "import html\n"
             "def handle(x, render):\n"
             "    s = str(x)\n"
             "    y = html.escape(s)\n"
@@ -606,6 +618,7 @@ class TestCatalogModuleShadowDegraded:
 
     def test_local_root_rebind_degrades_binding(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    html = fake_ns()\n"
             "    y = html.escape(x)\n"
@@ -623,6 +636,7 @@ class TestCatalogModuleShadowDegraded:
 
     def test_param_named_like_catalog_root_degrades(self):
         src = (
+            "import html\n"
             "def handle(x, html):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -642,6 +656,7 @@ class TestCatalogModuleShadowDegraded:
         # its suppression — the guard keys on the FUNCTION's own
         # bindings only.
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -674,6 +689,7 @@ class TestModuleLevelCatalogRootDistrust:
 
     def test_module_import_alias_degrades(self):
         src = (
+            "import html\n"
             "import fakelib as html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
@@ -683,6 +699,7 @@ class TestModuleLevelCatalogRootDistrust:
 
     def test_local_import_alias_degrades(self):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    import fakelib as html\n"
             "    y = html.escape(x)\n"
@@ -692,6 +709,7 @@ class TestModuleLevelCatalogRootDistrust:
 
     def test_module_assign_root_degrades(self):
         src = (
+            "import html\n"
             "html = object()\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
@@ -787,6 +805,7 @@ class TestDynamicNamespaceCatalogRefusal:
 
     def test_constant_globals_write_on_catalog_root_refuses(self):
         src = (
+            "import html\n"
             "globals()['html'] = object()\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
@@ -814,3 +833,47 @@ class TestDynamicNamespaceCatalogRefusal:
             "    render(y)\n"
         )
         assert self._evaluate2(src).verdict == VERDICT_SUPPRESS
+
+
+class TestUnboundCatalogRootRefused:
+    """The final name-binding route: NO binding at all. An unbound
+    root resolves through builtins, and builtins are writable by any
+    module in the repo — the identity is only trusted through a
+    module-scope self-import."""
+
+    def test_unbound_root_refuses(self):
+        src = (
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        sink = _node_with_call(cfg, "render")
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"}, sink_arg="y",
+        )
+        assert result.verdict == VERDICT_NO_SUPPRESS
+
+    def test_hand_built_cfg_skips_the_check(self):
+        # ``trusted_import_roots is None`` (hand-built CFGs, other
+        # languages) keeps the historical behaviour — the refusal is
+        # python-resolver-scoped.
+        import dataclasses
+
+        src = (
+            "import html\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        cfg = build_python_cfg(src, "handle")
+        cfg = dataclasses.replace(cfg, trusted_import_roots=None)
+        sink = _node_with_call(cfg, "render")
+        result = evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"}, sink_arg="y",
+        )
+        assert result.verdict == VERDICT_SUPPRESS

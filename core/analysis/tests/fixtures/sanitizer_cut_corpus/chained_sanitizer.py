@@ -12,7 +12,7 @@ The lexical check would falsely suppress this (validator line <
 sink line, same function, exit-on-fail check passes for the
 trivial flow). Value-bound correctly refuses.
 """
-
+import html
 
 def handle(x):
     y = wrap(html.escape(x))           # noqa: F821 — fixture

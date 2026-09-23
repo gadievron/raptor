@@ -7,7 +7,7 @@ The control-flow cut fails entirely (removing html.escape leaves
 the else-branch path intact: entry → cond → else_assign → sink).
 This is a real bug that survives to the LLM.
 """
-
+import html
 
 def handle(user):
     if user.is_admin:

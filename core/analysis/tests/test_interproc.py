@@ -68,6 +68,7 @@ def _evaluate(src, fn_name, source_symbols, sink_arg, sink_line, cwe="CWE-79"):
 class TestBindingGeneration:
     def test_helper_sanitizer_produces_binding(self):
         src = (
+            "import html\n"
             "def _sanitize(s):\n"
             "    return html.escape(s)\n"
             "def handle(x):\n"
@@ -97,6 +98,7 @@ class TestBindingGeneration:
         # Helper sanitizes only on one branch — the direct-return
         # path means the param can reach return unsanitized.
         src = (
+            "import html\n"
             "def _maybe(s, cond):\n"
             "    if cond:\n"
             "        return html.escape(s)\n"
@@ -115,6 +117,7 @@ class TestBindingGeneration:
         # minted a clean-sanitizer binding and the enforced
         # sanitizer-cut suppressed findings routed through it.
         src = (
+            "import html\n"
             "def _mix(s):\n"
             "    return html.escape(s) + s\n"
             "def handle(x):\n"
@@ -128,6 +131,7 @@ class TestBindingGeneration:
         # Same collapse at the reaching-defs join: sanitize on one
         # branch, single return of the joined variable.
         src = (
+            "import html\n"
             "def _maybe(s):\n"
             "    if len(s) > 3:\n"
             "        s = html.escape(s)\n"
@@ -143,6 +147,7 @@ class TestBindingGeneration:
         # Helper wraps the escaped value in an unknown callable —
         # can't prove the wrapper preserves sanitization.
         src = (
+            "import html\n"
             "def _wrap(s):\n"
             "    return wrap(html.escape(s))\n"
             "def handle(x):\n"
@@ -155,6 +160,7 @@ class TestBindingGeneration:
     def test_wrong_cwe_no_binding(self):
         # html.escape sanitizes xss (CWE-79), not sqli (CWE-89).
         src = (
+            "import html\n"
             "def _sanitize(s):\n"
             "    return html.escape(s)\n"
             "def handle(x):\n"
@@ -168,6 +174,7 @@ class TestBindingGeneration:
         # Helper sanitizes param 1 (b). The binding's input_symbols
         # must be the arg passed at position 1, not 0.
         src = (
+            "import html\n"
             "def _san(a, b):\n"
             "    return html.escape(b)\n"
             "def handle(p, q):\n"
@@ -184,6 +191,7 @@ class TestBindingGeneration:
         # outer returns inner's result; inner sanitizes. The chain
         # is transitive via Phase 13 summaries.
         src = (
+            "import html\n"
             "def inner(s):\n"
             "    return html.escape(s)\n"
             "def outer(s):\n"
@@ -215,6 +223,7 @@ class TestBindingGeneration:
         # binding may be synthesised (would be a false suppression one
         # inter-proc level deeper than the wrong-variable case).
         src = (
+            "import html\n"
             "def helper(a, b):\n"
             "    return html.escape(a) + b\n"
             "def handle(x):\n"
@@ -229,6 +238,7 @@ class TestBindingGeneration:
         # position's symbol is bound (the unsanitized b-symbol does not
         # poison the binding for a's symbol).
         src = (
+            "import html\n"
             "def helper(a, b):\n"
             "    return html.escape(a)\n"  # b never reaches return
             "def handle(p, q):\n"
@@ -245,6 +255,7 @@ class TestBindingGeneration:
         # (only node.args were inspected), so the binding claimed x
         # sanitized and the gate suppressed a real finding.
         src = (
+            "import html\n"
             "def _mix(a, b):\n"
             "    return html.escape(a) + b\n"
             "def handle(x):\n"
@@ -258,6 +269,7 @@ class TestBindingGeneration:
         # A DIFFERENT symbol through the dirty keyword must not poison
         # the sanitized one — x stays bound, z never appears.
         src = (
+            "import html\n"
             "def _mix(a, b):\n"
             "    return html.escape(a) + b\n"
             "def handle(x, z):\n"
@@ -273,6 +285,7 @@ class TestBindingGeneration:
         # A keyword that matches no known parameter of the helper is
         # uncertainty about where the symbol flows — decline to bind.
         src = (
+            "import html\n"
             "def _sanitize(s):\n"
             "    return html.escape(s)\n"
             "def handle(x):\n"
@@ -288,6 +301,7 @@ class TestBindingGeneration:
         # resolved by (lineno, col_offset), not ast.walk order, which
         # would map both to the first call.
         src = (
+            "import html\n"
             "def san(s):\n"
             "    return html.escape(s)\n"
             "def handle(p, q):\n"
@@ -308,13 +322,14 @@ class TestBindingGeneration:
 class TestVerdicts:
     def test_sanitizer_in_helper_suppresses(self):
         src = (
+            "import html\n"
             "def _sanitize(s):\n"
             "    return html.escape(s)\n"
             "def handle(x):\n"
             "    y = _sanitize(x)\n"
             "    render(y)\n"
         )
-        result = _evaluate(src, "handle", ["x"], "y", 5)
+        result = _evaluate(src, "handle", ["x"], "y", 6)
         assert result.verdict == VERDICT_SUPPRESS, result.reason
 
     def test_bypass_via_passthrough_no_suppress(self):
@@ -330,6 +345,7 @@ class TestVerdicts:
 
     def test_some_branches_helper_no_suppress(self):
         src = (
+            "import html\n"
             "def _maybe(s, cond):\n"
             "    if cond:\n"
             "        return html.escape(s)\n"
@@ -338,11 +354,12 @@ class TestVerdicts:
             "    y = _maybe(x, c)\n"
             "    render(y)\n"
         )
-        result = _evaluate(src, "handle", ["x"], "y", 7)
+        result = _evaluate(src, "handle", ["x"], "y", 8)
         assert result.verdict == VERDICT_NO_SUPPRESS, result.reason
 
     def test_transitive_sanitization_suppresses(self):
         src = (
+            "import html\n"
             "def inner(s):\n"
             "    return html.escape(s)\n"
             "def outer(s):\n"
@@ -351,20 +368,21 @@ class TestVerdicts:
             "    y = outer(x)\n"
             "    render(y)\n"
         )
-        result = _evaluate(src, "handle", ["x"], "y", 7)
+        result = _evaluate(src, "handle", ["x"], "y", 8)
         assert result.verdict == VERDICT_SUPPRESS, result.reason
 
     def test_same_symbol_dual_position_not_suppressed(self):
         # End-to-end of the review #1 repro: taint reaches the sink via
         # the unsanitized param, so the finding must survive.
         src = (
+            "import html\n"
             "def helper(a, b):\n"
             "    return html.escape(a) + b\n"
             "def handle(x):\n"
             "    y = helper(x, x)\n"
             "    render(y)\n"
         )
-        result = _evaluate(src, "handle", ["x"], "y", 5)
+        result = _evaluate(src, "handle", ["x"], "y", 6)
         assert result.verdict == VERDICT_NO_SUPPRESS, result.reason
 
     def test_wrong_variable_via_helper_not_suppressed(self):
@@ -372,13 +390,14 @@ class TestVerdicts:
         # synthetic binding's output (z) doesn't match the sink_arg
         # (user) → condition 3 fails → no suppression.
         src = (
+            "import html\n"
             "def _sanitize(s):\n"
             "    return html.escape(s)\n"
             "def handle(user, other):\n"
             "    z = _sanitize(other)\n"
             "    render(user)\n"
         )
-        result = _evaluate(src, "handle", ["user", "other"], "user", 5)
+        result = _evaluate(src, "handle", ["user", "other"], "user", 6)
         assert result.verdict != VERDICT_SUPPRESS, result.reason
 
 
@@ -390,6 +409,7 @@ class TestVerdicts:
 class TestResolverIntegration:
     def test_resolver_populates_inter_proc_bindings(self, tmp_path):
         src = (
+            "import html\n"
             "def _sanitize(s):\n"
             "    return html.escape(s)\n"
             "def handle(x):\n"
@@ -400,7 +420,7 @@ class TestResolverIntegration:
         f.write_text(src, encoding="utf-8")
         finding = {
             "cwe": "CWE-79", "file_path": str(f),
-            "source_line": 3, "sink_line": 5, "language": "python",
+            "source_line": 4, "sink_line": 6, "language": "python",
         }
         resolved = resolve_finding(finding)
         assert isinstance(resolved, ResolvedFinding)
@@ -417,6 +437,7 @@ class TestResolverIntegration:
 
     def test_resolver_no_helper_empty_bindings(self, tmp_path):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -425,7 +446,7 @@ class TestResolverIntegration:
         f.write_text(src, encoding="utf-8")
         finding = {
             "cwe": "CWE-79", "file_path": str(f),
-            "source_line": 1, "sink_line": 3, "language": "python",
+            "source_line": 2, "sink_line": 4, "language": "python",
         }
         resolved = resolve_finding(finding)
         assert isinstance(resolved, ResolvedFinding)
@@ -463,6 +484,7 @@ class TestStarredArgsDeclineBinding:
         # the one x's AST index hits, or the pre-fix code never minted
         # a binding and the test was vacuous.
         src = (
+            "import html\n"
             "def _clean(raw, s):\n"
             "    return str(len(raw)) + html.escape(s)\n"
             "def handle(x, rest):\n"
@@ -474,6 +496,7 @@ class TestStarredArgsDeclineBinding:
 
     def test_no_star_still_binds(self):
         src = (
+            "import html\n"
             "def _clean(s):\n"
             "    return html.escape(s)\n"
             "def handle(x):\n"
@@ -497,6 +520,7 @@ class TestOpaqueArgsDeclineBinding:
     """
 
     _MIX = (
+        "import html\n"
         "def _mix(a, b):\n"
         "    return html.escape(a) + b\n"
     )
@@ -564,6 +588,7 @@ class TestOpaqueArgsDeclineBinding:
         # Position b never reaches the return — an opaque value there
         # is irrelevant to the return's cleanliness.
         src = (
+            "import html\n"
             "def _log_and_clean(s, note):\n"
             "    log(note)\n"
             "    return html.escape(s)\n"
@@ -579,6 +604,7 @@ class TestOpaqueArgsDeclineBinding:
         # extras have no parameter mapping (vararg helpers) —
         # uncertainty declines.
         src = (
+            "import html\n"
             "def _clean(s, *rest):\n"
             "    return html.escape(s)\n"
             "def handle(x, w):\n"
@@ -596,7 +622,7 @@ class TestOpaqueArgsDeclineBinding:
             "    y = _mix(x, g(x))\n"
             "    render(y)\n"
         )
-        result = _evaluate(src, "handle", ["x"], "y", 4)
+        result = _evaluate(src, "handle", ["x"], "y", 5)
         assert not result.suppress
 
 
@@ -616,6 +642,7 @@ class TestVarargBoundary:
 
     def test_exact_length_call_to_vararg_helper_declines(self):
         src = (
+            "import html\n"
             "def helper(a, *rest, key=''):\n"
             "    return html.escape(a) + html.escape(key) + str(rest)\n"
             "def handler(x, y, z):\n"
@@ -629,6 +656,7 @@ class TestVarargBoundary:
 
     def test_call_below_vararg_boundary_still_binds(self):
         src = (
+            "import html\n"
             "def helper(a, *rest, key=''):\n"
             "    return html.escape(a) + html.escape(key) + str(rest)\n"
             "def handler(x):\n"
@@ -646,6 +674,7 @@ class TestVarargBoundary:
         # and the gate suppressed on it while ``w`` reaches the sink
         # through the vararg tuple unsanitized.
         src = (
+            "import html\n"
             "def _mix(a, *rest):\n"
             "    return html.escape(a) + rest[0]\n"
             "def handler(x, w):\n"
@@ -655,7 +684,7 @@ class TestVarargBoundary:
         _, bindings = _bindings_for(src, "handler")
         assert bindings == frozenset()
         for source in ({"x"}, {"w"}, {"x", "w"}):
-            result = _evaluate(src, "handler", source, "y", 5)
+            result = _evaluate(src, "handler", source, "y", 6)
             assert result.suppress is False, source
 
     def test_keyword_naming_the_vararg_slot_declines(self):
@@ -665,6 +694,7 @@ class TestVarargBoundary:
         # so the whole binding declines (pre-fix it mapped ``rest`` to
         # its params index and kept the binding).
         src = (
+            "import html\n"
             "def helper(a='', *rest):\n"
             "    return html.escape(a) + str(rest)\n"
             "def handler(x, y):\n"
