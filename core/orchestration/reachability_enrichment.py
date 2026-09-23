@@ -202,6 +202,116 @@ _path_to_module = path_to_module
 # ---------------------------------------------------------------------------
 
 
+def _iter_enrichable_functions(files: list):
+    """Yield ``(rel_path, func_dict)`` for caller-context candidates.
+
+    Shared by the compute and apply walks so both sides use identical
+    filters (function kind, non-low priority, named, positive line).
+    """
+    for file_info in files:
+        if not isinstance(file_info, dict):
+            continue
+        rel_path = file_info.get("path")
+        if not isinstance(rel_path, str) or not rel_path:
+            continue
+        funcs = file_info.get("items")
+        if not isinstance(funcs, list):
+            funcs = file_info.get("functions")
+        if not isinstance(funcs, list):
+            continue
+        for func in funcs:
+            if not isinstance(func, dict):
+                continue
+            kind = func.get("kind")
+            if kind and kind != "function":
+                continue
+            # Already-dead functions don't need caller context —
+            # the LLM is going to deprioritise them anyway.
+            if func.get("priority") == "low":
+                continue
+            name = func.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            line_start = func.get("line_start")
+            if not isinstance(line_start, int) or line_start <= 0:
+                continue
+            yield rel_path, func
+
+
+def compute_caller_context(
+    checklist: dict[str, Any],
+    target_path: Path,
+    *,
+    inventory: dict[str, Any] | None = None,
+    max_direct_caller_names: int = 5,
+    max_depth: int = 20,
+) -> dict[tuple[str, str, int], dict[str, Any]]:
+    """Compute the caller-context fields WITHOUT mutating the checklist.
+
+    Returns ``{(file_path, name, line_start): fields}`` where
+    ``fields`` are the entries :func:`enrich_with_caller_context`
+    writes. Split out so the expensive per-function reverse-closure
+    walk can run against a lock-free snapshot; the cheap field
+    application then happens under the checklist flock (a concurrent
+    ``save_checklist`` writer must never block for the whole
+    O(functions x closure) computation).
+    """
+    if not isinstance(checklist, dict):
+        return {}
+    files = checklist.get("files")
+    if not isinstance(files, list):
+        return {}
+
+    if inventory is None:
+        try:
+            import tempfile
+
+            from core.inventory.builder import build_inventory
+            with tempfile.TemporaryDirectory() as td:
+                inventory = build_inventory(str(target_path), td)
+        except Exception as e:                          # noqa: BLE001
+            logger.debug(
+                "reachability_enrichment: inventory build failed (%s); "
+                "skipping caller-context pass", e,
+            )
+            return {}
+
+    try:
+        from core.analysis.reachability import (
+            InternalFunction,
+            callers_of,
+            reverse_closure,
+        )
+    except ImportError:
+        return {}
+
+    computed: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for rel_path, func in _iter_enrichable_functions(files):
+        name = func["name"]
+        line_start = func["line_start"]
+        target = InternalFunction(
+            file_path=rel_path, name=name, line=line_start,
+        )
+        try:
+            one_hop = callers_of(inventory, target)
+            closure = reverse_closure(
+                inventory, target, max_depth=max_depth,
+            )
+        except Exception:
+            logger.debug("reachability enrichment failed for %s", target, exc_info=True)
+            continue
+
+        direct_callers = one_hop.all_callers
+        sorted_names = sorted(str(c) for c in direct_callers)
+        computed[(rel_path, name, line_start)] = {
+            "caller_count_direct": len(direct_callers),
+            "caller_count_transitive": len(closure.nodes),
+            "caller_count_uncertain": len(one_hop.uncertain),
+            "direct_caller_names": sorted_names[:max_direct_caller_names],
+        }
+    return computed
+
+
 def enrich_with_caller_context(
     checklist: dict[str, Any],
     target_path: Path,
@@ -209,6 +319,7 @@ def enrich_with_caller_context(
     inventory: dict[str, Any] | None = None,
     max_direct_caller_names: int = 5,
     max_depth: int = 20,
+    precomputed: dict[tuple[str, str, int], dict[str, Any]] | None = None,
 ) -> int:
     """Walk ``checklist["files"][*]["items"]`` and attach
     substrate-derived caller context to each function.
@@ -233,6 +344,12 @@ def enrich_with_caller_context(
     ``mark_unreachable_low_priority`` — those are dead and the
     LLM will deprioritise them regardless.
 
+    ``precomputed`` (from :func:`compute_caller_context` against a
+    snapshot) skips the expensive closure walk here — used to keep
+    that walk outside the checklist flock. Functions absent from the
+    map (added or renamed after the snapshot) are simply not
+    enriched, matching any pre-existing writer race.
+
     Returns the count of functions enriched.
     """
     if not isinstance(checklist, dict):
@@ -241,81 +358,26 @@ def enrich_with_caller_context(
     if not isinstance(files, list):
         return 0
 
-    if inventory is None:
-        try:
-            import tempfile
-
-            from core.inventory.builder import build_inventory
-            with tempfile.TemporaryDirectory() as td:
-                inventory = build_inventory(str(target_path), td)
-        except Exception as e:                          # noqa: BLE001
-            logger.debug(
-                "reachability_enrichment: inventory build failed (%s); "
-                "skipping caller-context pass", e,
-            )
-            return 0
-
-    try:
-        from core.analysis.reachability import (
-            InternalFunction,
-            callers_of,
-            reverse_closure,
+    if precomputed is None:
+        precomputed = compute_caller_context(
+            checklist, target_path, inventory=inventory,
+            max_direct_caller_names=max_direct_caller_names,
+            max_depth=max_depth,
         )
-    except ImportError:
+    if not precomputed:
         return 0
 
     enriched = 0
-    for file_info in files:
-        if not isinstance(file_info, dict):
+    for rel_path, func in _iter_enrichable_functions(files):
+        fields = precomputed.get(
+            (rel_path, func["name"], func["line_start"]))
+        if fields is None:
             continue
-        rel_path = file_info.get("path")
-        if not isinstance(rel_path, str) or not rel_path:
-            continue
-
-        funcs = file_info.get("items")
-        if not isinstance(funcs, list):
-            funcs = file_info.get("functions")
-        if not isinstance(funcs, list):
-            continue
-
-        for func in funcs:
-            if not isinstance(func, dict):
-                continue
-            kind = func.get("kind")
-            if kind and kind != "function":
-                continue
-            # Already-dead functions don't need caller context —
-            # the LLM is going to deprioritise them anyway.
-            if func.get("priority") == "low":
-                continue
-            name = func.get("name")
-            if not isinstance(name, str) or not name:
-                continue
-            line_start = func.get("line_start")
-            if not isinstance(line_start, int) or line_start <= 0:
-                continue
-
-            target = InternalFunction(
-                file_path=rel_path, name=name, line=line_start,
-            )
-            try:
-                one_hop = callers_of(inventory, target)
-                closure = reverse_closure(
-                    inventory, target, max_depth=max_depth,
-                )
-            except Exception:
-                logger.debug("reachability enrichment failed for %s", target, exc_info=True)
-                continue
-
-            direct_callers = one_hop.all_callers
-            func["caller_count_direct"] = len(direct_callers)
-            func["caller_count_transitive"] = len(closure.nodes)
-            func["caller_count_uncertain"] = len(one_hop.uncertain)
-            sorted_names = sorted(str(c) for c in direct_callers)
-            func["direct_caller_names"] = (
-                sorted_names[:max_direct_caller_names]
-            )
-            enriched += 1
+        for key, value in fields.items():
+            # Fresh list per item: the map may be applied more than
+            # once and persisted items must not alias each other.
+            func[key] = list(value) if isinstance(value, list) else value
+        enriched += 1
 
     if enriched:
         logger.debug(
@@ -331,6 +393,7 @@ def enrich_with_frida_traces(
     *,
     search_dirs: list | None = None,
     inventory: dict[str, Any] | None = None,
+    evidence_map: dict | None = None,
 ) -> int:
     """Annotate checklist items with frida runtime-trace evidence.
 
@@ -339,20 +402,25 @@ def enrich_with_frida_traces(
     the inventory item, if provided). Returns the count of items
     annotated.
 
+    ``evidence_map`` (from ``collect_runtime_evidence``) skips the
+    discovery walk here — used to keep the events.jsonl parses and
+    sandboxed addr2line resolution outside the checklist flock.
+
     Best-effort: any failure returns 0 and the checklist is unchanged.
     """
-    try:
-        from core.orchestration.frida_validation_bridge import (
-            collect_runtime_evidence,
-        )
-    except ImportError:
-        return 0
+    if evidence_map is None:
+        try:
+            from core.orchestration.frida_validation_bridge import (
+                collect_runtime_evidence,
+            )
+        except ImportError:
+            return 0
 
-    if search_dirs is None:
-        search_dirs = []
+        if search_dirs is None:
+            search_dirs = []
 
-    evidence_map = collect_runtime_evidence(
-        [Path(d) for d in search_dirs], target_path=str(target_path))
+        evidence_map = collect_runtime_evidence(
+            [Path(d) for d in search_dirs], target_path=str(target_path))
     if not evidence_map:
         return 0
 
@@ -484,12 +552,26 @@ def _collect_frida_call_edges(
     return edges
 
 
+def collect_frida_call_edges(
+    search_dirs: list,
+    target_path: str,
+) -> dict[str, dict]:
+    """Public seam for pre-collecting call-edge evidence.
+
+    Lets callers run the run-dir discovery walk outside any lock and
+    hand the result to :func:`enrich_with_frida_call_edges` via
+    ``edge_map``.
+    """
+    return _collect_frida_call_edges(search_dirs, target_path)
+
+
 def enrich_with_frida_call_edges(
     checklist: dict[str, Any],
     target_path: Path,
     *,
     search_dirs: list | None = None,
     inventory: dict[str, Any] | None = None,
+    edge_map: dict | None = None,
 ) -> int:
     """Annotate functions observed as call-edge CALLEES at runtime.
 
@@ -499,14 +581,20 @@ def enrich_with_frida_call_edges(
     an indirect call or vtable dispatch the static graph cannot
     resolve is ground truth here, because the call executed. Returns
     the count of annotated items. Best-effort: any failure returns 0.
+
+    ``edge_map`` (from ``collect_frida_call_edges``) skips the
+    discovery walk here — used to keep the run-dir scans outside the
+    checklist flock.
     """
-    if search_dirs is None:
-        search_dirs = []
-    try:
-        edge_map = _collect_frida_call_edges(search_dirs, str(target_path))
-    except Exception:  # noqa: BLE001 — enrichment is additive
-        logger.debug("frida call-edge collection failed", exc_info=True)
-        return 0
+    if edge_map is None:
+        if search_dirs is None:
+            search_dirs = []
+        try:
+            edge_map = _collect_frida_call_edges(
+                search_dirs, str(target_path))
+        except Exception:  # noqa: BLE001 — enrichment is additive
+            logger.debug("frida call-edge collection failed", exc_info=True)
+            return 0
     if not edge_map:
         return 0
 
