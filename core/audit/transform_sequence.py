@@ -132,18 +132,24 @@ def _pat(*patterns: str) -> list[re.Pattern[str]]:
     return [re.compile(p, re.IGNORECASE) for p in patterns]
 
 
+# Keyword-pair gaps in the ordering rules are bounded ({0,200}), same
+# convention as the double-encoding table below: an unbounded `.*` gap
+# makes every occurrence of the first keyword re-scan the rest of the
+# scanned name for the second — quadratic on hostile-shaped call names.
+# Real call names sit far inside the bound; a longer name stops
+# matching the rule instead of scanning without bound.
 ORDERING_RULES: list[_OrderingRule] = [
     _OrderingRule(
         name="unicode_before_regex",
         must_precede_patterns=_pat(
-            r"unicode.*norm", r"nfkc|nfkd|nfc|nfd",
-            r"strip.*(?:invisible|zero.?width|control)",
-            r"remove.*(?:invisible|zero.?width|bidi|control)",
+            r"unicode.{0,200}norm", r"nfkc|nfkd|nfc|nfd",
+            r"strip.{0,200}(?:invisible|zero.?width|control)",
+            r"remove.{0,200}(?:invisible|zero.?width|bidi|control)",
         ),
         must_follow_patterns=_pat(
             r"re\.sub", r"re\.match", r"re\.search", r"re\.findall",
             r"defang", r"neutrali[sz]e",
-            r"regex.*(?:replace|match|filter)",
+            r"regex.{0,200}(?:replace|match|filter)",
         ),
         reason="Unicode normalization/stripping must precede regex matching — "
                "invisible chars can defeat regex anchors and patterns",
@@ -152,12 +158,12 @@ ORDERING_RULES: list[_OrderingRule] = [
     _OrderingRule(
         name="decode_before_path_check",
         must_precede_patterns=_pat(
-            r"url.*decode", r"unquote", r"percent.*decode",
-            r"urllib.*unquote",
+            r"url.{0,200}decode", r"unquote", r"percent.{0,200}decode",
+            r"urllib.{0,200}unquote",
         ),
         must_follow_patterns=_pat(
-            r"path.*(?:check|valid|travers|saniti)",
-            r"(?:check|valid|saniti).*path",
+            r"path.{0,200}(?:check|valid|travers|saniti)",
+            r"(?:check|valid|saniti).{0,200}path",
             r"os\.path\.(?:basename|normpath|realpath)",
             r"is_safe_path", r"check_path",
         ),
@@ -168,13 +174,13 @@ ORDERING_RULES: list[_OrderingRule] = [
     _OrderingRule(
         name="entity_decode_before_xss_filter",
         must_precede_patterns=_pat(
-            r"html.*(?:unescape|decode|entity)",
-            r"unescape.*html",
-            r"(?:decode|parse).*entit",
+            r"html.{0,200}(?:unescape|decode|entity)",
+            r"unescape.{0,200}html",
+            r"(?:decode|parse).{0,200}entit",
         ),
         must_follow_patterns=_pat(
-            r"(?:xss|html).*(?:filter|sanitiz|clean|strip|escape)",
-            r"(?:filter|sanitiz|clean|strip).*(?:xss|html|tag)",
+            r"(?:xss|html).{0,200}(?:filter|sanitiz|clean|strip|escape)",
+            r"(?:filter|sanitiz|clean|strip).{0,200}(?:xss|html|tag)",
             r"bleach", r"html\.escape", r"markupsafe",
         ),
         reason="HTML-entity-encoded characters (&#60;) bypass XSS filters "
@@ -185,11 +191,11 @@ ORDERING_RULES: list[_OrderingRule] = [
         name="case_normalize_before_blocklist",
         must_precede_patterns=_pat(
             r"\.lower\b", r"\.upper\b", r"\.casefold\b",
-            r"case.*norm", r"to_?lower", r"to_?upper",
+            r"case.{0,200}norm", r"to_?lower", r"to_?upper",
         ),
         must_follow_patterns=_pat(
             r"block.?list", r"deny.?list", r"banned", r"forbidden",
-            r"disallow", r"reject.*(?:name|word|term)",
+            r"disallow", r"reject.{0,200}(?:name|word|term)",
         ),
         reason="Mixed-case input bypasses case-sensitive blocklist checks",
         fix_template="move {precede} before {follow}",
@@ -197,12 +203,12 @@ ORDERING_RULES: list[_OrderingRule] = [
     _OrderingRule(
         name="null_strip_before_extension_check",
         must_precede_patterns=_pat(
-            r"(?:strip|remove|replace).*(?:null|\\x00|\x00|\\0)",
-            r"\.replace\(.*(?:null|\\x00|\\0)",
+            r"(?:strip|remove|replace).{0,200}(?:null|\\x00|\x00|\\0)",
+            r"\.replace\(.{0,200}(?:null|\\x00|\\0)",
         ),
         must_follow_patterns=_pat(
-            r"(?:check|valid|allow).*(?:ext|suffix|file.?type)",
-            r"\.endswith\b", r"splitext\b", r"file.*extension",
+            r"(?:check|valid|allow).{0,200}(?:ext|suffix|file.?type)",
+            r"\.endswith\b", r"splitext\b", r"file.{0,200}extension",
         ),
         reason="Null bytes truncate filenames in some APIs, bypassing "
                "extension checks",
@@ -211,12 +217,12 @@ ORDERING_RULES: list[_OrderingRule] = [
     _OrderingRule(
         name="backslash_normalize_before_path_check",
         must_precede_patterns=_pat(
-            r"\.replace\(.*(?:\\\\|backslash).*(?:/|slash)",
-            r"backslash.*norm", r"normalize.*(?:sep|slash|path)",
+            r"\.replace\(.{0,200}(?:\\\\|backslash).{0,200}(?:/|slash)",
+            r"backslash.{0,200}norm", r"normalize.{0,200}(?:sep|slash|path)",
         ),
         must_follow_patterns=_pat(
-            r"path.*(?:check|valid|travers|saniti)",
-            r"\.startswith\(.*(?:/|\\\\)",
+            r"path.{0,200}(?:check|valid|travers|saniti)",
+            r"\.startswith\(.{0,200}(?:/|\\\\)",
         ),
         reason="Backslash path separators bypass forward-slash-only "
                "traversal checks",
@@ -226,12 +232,12 @@ ORDERING_RULES: list[_OrderingRule] = [
         name="whitespace_strip_before_header_parse",
         must_precede_patterns=_pat(
             r"\.strip\b", r"\.lstrip\b",
-            r"strip.*(?:whitespace|space|ws)",
+            r"strip.{0,200}(?:whitespace|space|ws)",
         ),
         must_follow_patterns=_pat(
-            r"(?:parse|split).*header",
-            r"header.*(?:parse|split|extract)",
-            r"content.?type.*parse",
+            r"(?:parse|split).{0,200}header",
+            r"header.{0,200}(?:parse|split|extract)",
+            r"content.?type.{0,200}parse",
         ),
         reason="Leading whitespace confuses header parsers and can cause "
                "request smuggling",
@@ -240,12 +246,12 @@ ORDERING_RULES: list[_OrderingRule] = [
     _OrderingRule(
         name="crlf_strip_before_header_inject",
         must_precede_patterns=_pat(
-            r"(?:strip|remove|replace).*(?:crlf|\\r\\n|\\n|newline|cr|lf)",
-            r"\.replace\(.*(?:\\r|\\n)",
+            r"(?:strip|remove|replace).{0,200}(?:crlf|\\r\\n|\\n|newline|cr|lf)",
+            r"\.replace\(.{0,200}(?:\\r|\\n)",
         ),
         must_follow_patterns=_pat(
-            r"(?:set|add|write).*header",
-            r"header.*(?:set|add|inject|write)",
+            r"(?:set|add|write).{0,200}header",
+            r"header.{0,200}(?:set|add|inject|write)",
             r"response\.header",
         ),
         reason="CRLF characters in header values enable header injection",
@@ -254,12 +260,12 @@ ORDERING_RULES: list[_OrderingRule] = [
     _OrderingRule(
         name="percent_decode_before_sql_filter",
         must_precede_patterns=_pat(
-            r"url.*decode", r"unquote", r"percent.*decode",
+            r"url.{0,200}decode", r"unquote", r"percent.{0,200}decode",
         ),
         must_follow_patterns=_pat(
-            r"sql.*(?:filter|sanitiz|escape|param)",
-            r"(?:filter|sanitiz|escape).*sql",
-            r"quote.*(?:literal|string|ident)",
+            r"sql.{0,200}(?:filter|sanitiz|escape|param)",
+            r"(?:filter|sanitiz|escape).{0,200}sql",
+            r"quote.{0,200}(?:literal|string|ident)",
         ),
         reason="Percent-encoded quotes (%27) bypass SQL sanitization",
         fix_template="move {precede} before {follow}",

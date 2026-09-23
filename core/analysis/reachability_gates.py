@@ -86,12 +86,16 @@ def guard_tested_sinks() -> tuple[str, ...]:
     """
     return _CORE_QUERY_SINKS
 
+# Prose gaps are bounded: an unbounded gap re-scans the rest of the
+# body from every planted verb occurrence — quadratic on
+# hostile-influenced text.  A real conduit phrase keeps its halves
+# within a clause (far under 200 chars); longer gaps stop matching.
 _CONDUIT_PHRASES: tuple[str, ...] = (
-    r"passes\b.*\bto\b",
-    r"forwards\b.*\bto\b",
+    r"passes\b.{0,200}\bto\b",
+    r"forwards\b.{0,200}\bto\b",
     r"\bdelegates\s+to\b",
-    r"\bcalls\b.*\bwithout\b",
-    r"\binvokes\b.*\bwithout\b",
+    r"\bcalls\b.{0,200}\bwithout\b",
+    r"\binvokes\b.{0,200}\bwithout\b",
 )
 
 # Dual-emit doctrine (same as unguarded_sinks.sc): the summary is

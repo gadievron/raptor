@@ -296,13 +296,19 @@ class JavaScriptExtractor:
     PATTERNS: ClassVar[list[str]] = [
         r'(?:async\s+)?function\s+(\w+)\s*\(',
         r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?function\s*\(',
-        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>',
+        r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\([^)]{0,1000}\)\s*=>',
         r'^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*\{',
         # ``(?:=>\s*)?`` gates the arrow with its trailing whitespace
         # (same language as ``\s*(?:=>)?\s*``): two bare ``\s*`` runs
         # around the optional arrow backtracked every split of a
         # whitespace run after ``)`` when no ``{`` follows.
-        r'(\w+)\s*:\s*(?:async\s+)?(?:function\s*)?\([^)]*\)\s*(?:=>\s*)?\{',
+        # The name is \b-pinned and the param span bounded: planted
+        # heads inside an unbounded [^)] span re-scan the rest of the
+        # line per head, and an unpinned \w+ re-reads the same word
+        # from every offset.  Real (even minified) param lists sit
+        # far inside 1000 chars; a mid-word start only fabricated a
+        # name.
+        r'\b(\w+)\s*:\s*(?:async\s+)?(?:function\s*)?\([^)]{0,1000}\)\s*(?:=>\s*)?\{',
     ]
     # Several patterns repeat `\s*` between optional tokens. On a long
     # whitespace-only run that fails the structural part, the engine
@@ -1059,7 +1065,7 @@ class JavaExtractor:
     # method headers are well under 8 KB; 16 KB leaves headroom for
     # generated annotations / generics-heavy signatures while
     # refusing pathological input.
-    PATTERN = r'((?:public|private|protected|static|\s)+)([\w<>\[\]]+)\s+(\w+)\s*\(([^)]*)\)\s*(?:throws\s+[\w,\s]+)?\s*\{'
+    PATTERN = r'(?<!\s)((?:public|private|protected|static|\s){1,64})([\w<>\[\]]{1,256})\s+(\w+)\s*\(([^)]{0,1000})\)\s*(?:throws\s[\w,\s]{1,500})?\{'
     _MAX_JAVA_LINE = 16 * 1024
 
     @staticmethod
@@ -1765,7 +1771,9 @@ class GenericExtractor:
         # the plain ``\w+`` type token absorbs it — and the captured
         # name group is unchanged for every input.
         r'(?:(?:public|private|protected)\s+)?(?:static\s+)?'
-        r'\w+\s+(\w+)\s*\([^)]*\)\s*\{',
+        # \b-pinned type token and bounded params: same rationale
+        # as the JS table above (planted heads / mid-word starts).
+        r'\b\w+\s+(\w+)\s*\([^)]{0,1000}\)\s*\{',
     ]
 
     # Same per-line bound as the JS extractor (which shares the

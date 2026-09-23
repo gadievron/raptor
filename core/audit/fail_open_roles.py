@@ -249,10 +249,14 @@ TIER_B_FRAMEWORK_HOOKS: tuple[FrameworkHook, ...] = (
     # every split of a whitespace run when the paren tail failed
     # (quadratic over hostile function source).  Language unchanged:
     # with a name present the run splits deterministically, without
-    # one a single ``\s*`` remains.
+    # one a single ``\s*`` remains.  The keyword is \b-pinned and
+    # the name/receiver tokens bounded: planted keywords inside an
+    # unbounded \w+ span re-scan the rest of the line per keyword,
+    # and a mid-word start only fabricated a token (real Go/JS
+    # identifiers sit far inside 256 chars).
     FrameworkHook(
         "go-net/http", "middleware",
-        r"func(?:\s*\w+)?\s*\(\s*\w+\s+http\.Handler\s*\)\s*http\.Handler",
+        r"\bfunc(?:\s*\w{1,256})?\s*\(\s*\w{1,256}\s+http\.Handler\s*\)\s*http\.Handler",
     ),
     FrameworkHook(
         "gin", "middleware",
@@ -270,7 +274,7 @@ TIER_B_FRAMEWORK_HOOKS: tuple[FrameworkHook, ...] = (
         # Same gated-optional-name shape as the Go hook above.
         r"\(\s*(?:req|request)\s*,\s*(?:res|response)\s*,\s*next\s*\)"
         r"\s*(?:=>|\{)"
-        r"|function(?:\s*\w+)?\s*\(\s*(?:req|request)\s*,\s*(?:res|response)"
+        r"|\bfunction(?:\s*\w{1,256})?\s*\(\s*(?:req|request)\s*,\s*(?:res|response)"
         r"\s*,\s*next\s*\)",
     ),
 )

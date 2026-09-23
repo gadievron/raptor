@@ -236,7 +236,10 @@ def _cwe_xss_shape(exploit_code: str) -> bool:
         r"<\s*script\b",
         r"\bon\w+\s*=\s*['\"]",  # onerror=, onclick=, etc.
         r"\bjavascript\s*:",
-        r"<\s*img\b[^>]*\bonerror\b",
+        # Attribute span bounded: planted "<img" openers inside an
+        # unbounded [^>] span re-scan the rest of the payload per
+        # opener; real attribute lists sit far inside 500 chars.
+        r"<\s*img\b[^>]{0,500}\bonerror\b",
     ]
     return any(
         re.search(p, exploit_code, re.IGNORECASE) for p in patterns

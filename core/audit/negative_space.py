@@ -197,7 +197,10 @@ _GENERIC_PATTERNS: dict[str, list[str]] = {
     ],
     CONCERN_BOUNDS: [
         r"if\s*\(\s*\w+\s*[<>]=?\s*\w+\s*\)",
-        r"assert.*len",
+        # Bounded gap: same trade-off as the walk-based members above —
+        # real assert/len co-occurrence is one expression, and an
+        # unbounded gap re-scans hostile source per planted keyword.
+        r"assert.{0,1000}len",
         r"check_bounds",
     ],
     CONCERN_NULL_CHECK: [
@@ -1201,7 +1204,9 @@ def check_missing_app_features(
     return findings
 
 
-_UB_PATTERNS = [
+# Rows mix compiled patterns and ordered-token adapters — both
+# expose the boolean ``search()`` the consumer branches on.
+_UB_PATTERNS: list[tuple[re.Pattern[str] | _OrderedTokenCheck, str, str]] = [
     (
         re.compile(r"if\s*\(\s*\w+\s*\+\s*\w+\s*<\s*\w+\s*\)"),
         "Signed overflow check may be optimized away",
