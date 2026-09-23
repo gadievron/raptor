@@ -66,7 +66,13 @@ class ProjectSample:
     name: str
     ecosystem: str          # canonical SCA ecosystem string
     repo_url: str           # https git URL
-    git_ref: str            # branch / tag / commit; pinned for reproducibility
+    # Branch / tag / commit. NOTE the reproducibility bound: the
+    # curated entries pin tags/branch names, which are MUTABLE
+    # upstream — a force-moved tag silently changes what the corpus
+    # collects. Commit SHAs are the immutable form; tags are kept
+    # for readability and because the sampled projects are
+    # high-profile upstreams where tag moves are rare and public.
+    git_ref: str
     license_spdx: str       # operator-asserted; sanity-check only
 
 
