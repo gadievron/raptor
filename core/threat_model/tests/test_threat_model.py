@@ -1360,3 +1360,55 @@ def test_enrich_demotes_manual_source_like_operator(tmp_path):
                            source="operator")
     enrich_from_context_map(operator, cm)
     assert operator.source == "enriched"
+
+
+def test_prompt_block_epilogue_matches_block_provenance(monkeypatch, tmp_path):
+    # A graph-only (or otherwise fully derived) prompt block must not
+    # carry the operator-owned instruction trailer: when the only
+    # content is derived from target-repo symbols, "Use this as
+    # operator-owned context ... respect explicit out-of-scope classes"
+    # upgrades hostile-derived steering to operator authority.
+    import core.threat_model as tm
+
+    monkeypatch.setattr(tm, "load_for_target", lambda target: None)
+    monkeypatch.setattr(
+        tm, "graph_risk_context_for_target",
+        lambda target, limit=8: "hostile graph risk lines")
+
+    block = tm.threat_model_prompt_block(tmp_path)
+    assert "source=understand_graph" in block
+    assert "operator-owned" not in block
+    assert "out-of-scope" not in block
+    # The derived-only trailer still demands proof and denies
+    # scope-suppression authority.
+    assert "derived" in block
+
+
+def test_prompt_block_epilogue_keeps_operator_framing_for_operator_model(
+        monkeypatch, tmp_path):
+    import core.threat_model as tm
+
+    model = tm.ThreatModel(project_name="p", target=str(tmp_path),
+                           source="operator", summary="ops words")
+    monkeypatch.setattr(tm, "load_for_target", lambda target: model)
+    monkeypatch.setattr(
+        tm, "graph_risk_context_for_target", lambda target, limit=8: "")
+
+    block = tm.threat_model_prompt_block(tmp_path)
+    assert "source=operator" in block
+    assert "operator-owned" in block
+
+
+def test_prompt_block_epilogue_derived_model_gets_derived_trailer(
+        monkeypatch, tmp_path):
+    import core.threat_model as tm
+
+    model = tm.ThreatModel(project_name="p", target=str(tmp_path),
+                           source="context-map", summary="derived words")
+    monkeypatch.setattr(tm, "load_for_target", lambda target: model)
+    monkeypatch.setattr(
+        tm, "graph_risk_context_for_target", lambda target, limit=8: "")
+
+    block = tm.threat_model_prompt_block(tmp_path)
+    assert "source=context-map" in block
+    assert "operator-owned" not in block
