@@ -6,7 +6,17 @@ dependency. Used by :mod:`core.binary.fingerprint` as the
 preferred path for Linux ELF binaries; falls back to the tier-1
 radare2 path for PE / Mach-O / cross-reference analysis.
 
-Scope
+Two entry points share the parsing substrate:
+
+- :func:`parse_elf` — the CAPABILITY parse: minimal metadata plus the
+  dynamic-import set that feeds :mod:`core.binary.fingerprint`.
+- :func:`extract_elf_facts` — the shallow-FACTS parse for
+  inventory / triage consumers: linkage (``DT_NEEDED`` /
+  ``DT_SONAME``), identity (build-id, ``.gnu_debuglink``),
+  dynamic-symbol exports, per-section entropy numbers, and
+  ``PT_INTERP`` presence.
+
+Scope (parse_elf)
 - ELF32 + ELF64
 - Little- and big-endian
 - Linux + BSD + bare-metal ABIs (we don't filter by OSABI)
@@ -16,8 +26,13 @@ Scope
 
 Out of scope
 - ``.symtab`` static symbols (not relevant for capability surface)
-- ``DT_NEEDED`` library names (separate question — what does this
-  link against, not what symbols does it call)
+- ``DT_NEEDED`` library names for the CAPABILITY parse: linkage names
+  answer "what does this link against", not "what symbols can it
+  call" — folding them into :class:`ElfMetadata` would churn
+  capability fingerprints on library renames that change no symbol.
+  The linkage question is answered by the separate
+  :func:`extract_elf_facts` record instead, so each consumer pays
+  only for the parse it needs.
 - Cross-references / call graph (radare2's territory)
 - Mach-O / PE (different format; fall back to radare2)
 
@@ -26,12 +41,17 @@ Every parse failure returns ``None``. The parser is intentionally
 defensive — corrupt / truncated / non-ELF inputs return cleanly
 because we run against operator-supplied bytes which may come
 from misconfigured registries, mislabelled files, etc.
+:func:`extract_elf_facts` shares that outer contract and adds
+per-field degradation: a malformed SUB-structure empties only the
+affected field and records a marker in ``ElfFacts.caps_hit``.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import struct
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -50,12 +70,49 @@ _ELFDATA2LSB = 1
 _ELFDATA2MSB = 2
 
 # Section types
+_SHT_PROGBITS = 1
 _SHT_SYMTAB = 2
 _SHT_STRTAB = 3
+_SHT_DYNAMIC = 6
+_SHT_NOBITS = 8
 _SHT_DYNSYM = 11
 
 # Program header types
 _PT_DYNAMIC = 2
+_PT_INTERP = 3
+
+# Dynamic-section entry tags (facts extractor)
+_DT_NULL = 0
+_DT_NEEDED = 1
+_DT_SONAME = 14
+
+# Symbol bindings (st_info >> 4). STB_GNU_UNIQUE is the GNU
+# vague-linkage binding every g++-built library uses for inline-static
+# and template-static definitions (nm's ``u`` set) — real, externally
+# visible exports that a GLOBAL/WEAK-only filter silently drops.
+_STB_GLOBAL = 1
+_STB_WEAK = 2
+_STB_GNU_UNIQUE = 10
+_EXPORT_BINDINGS = (_STB_GLOBAL, _STB_WEAK, _STB_GNU_UNIQUE)
+
+# Symbol type (st_info & 0xF) → ``export_types`` value. Upper-cased
+# short names match the radare2 ``iEj`` vocabulary the manifest layer
+# already carries (``export_types`` on the binary manifest / context
+# map in ``packages.binary_analysis``), so facts records join without
+# translation. Values outside the map are ABSENT from the dict —
+# consumers fail open (unknown = callable), mirroring the ingress
+# demotion policy: the type byte is attacker-controlled, so an
+# unmappable type must never hide an export.
+_STT_EXPORT_TYPE = {
+    0: "NOTYPE",
+    1: "OBJ",
+    2: "FUNC",
+    3: "SECTION",
+    4: "FILE",
+    5: "COMMON",
+    6: "TLS",
+    10: "IFUNC",   # STT_GNU_IFUNC — callable through its resolver
+}
 
 # Symbol section index — SHN_UNDEF means "imported"
 _SHN_UNDEF = 0
@@ -112,6 +169,68 @@ _MAX_STRTAB_NAME_BYTES = 4096
 # fingerprint for such a binary would be junk either way, so the
 # analysis gap is surfaced, never silent.
 _MAX_TOTAL_NAME_BYTES = 8 * 1024 * 1024
+# ---- Facts-extractor caps. Every breach is surfaced in
+# ``ElfFacts.caps_hit`` — bounded AND honest, never silently partial.
+#
+# Dynamic-section walk bound. Real ``.dynamic`` tables hold tens of
+# entries, but sh_size is attacker-chosen: without a bound a crafted
+# header buys a ~sh_size/entsize entry walk. Lower would truncate no
+# real binary yet leaves headroom pointless; higher just sells CPU to
+# hostile files — 100k is ~3 orders above anything real while keeping
+# the worst walk sub-second.
+_MAX_DYN_ENTRIES = 100_000
+# Retained DT_NEEDED names. Plugin-heavy real binaries reach ~100+
+# NEEDED entries, so a low cap would drop genuine linkage facts; a
+# high cap lets a crafted table fan the record (4096 names x the 4 KB
+# per-name cap already bounds worst-case retention at ~16 MB).
+_MAX_NEEDED_ENTRIES = 4_096
+# Per-section entropy sample window. Entropy is measured over the
+# section's LEADING bytes: representative for the compressed /
+# encrypted / code question consumers ask, while an attacker padding
+# one section to gigabytes cannot turn a shallow facts pass into a
+# whole-file read. Larger sharpens the figure on huge sections but
+# re-opens the IO amplification; smaller invites a crafted
+# low-entropy prefix masking a high-entropy body — at 4 MiB that
+# decoy prefix costs the attacker real file size, and ``sampled`` on
+# the record tells the consumer exactly what was measured.
+_MAX_ENTROPY_SECTION_BYTES = 4 * 1024 * 1024
+# Whole-walk entropy IO budget. Bounds total read volume when a
+# hostile file carries MANY large sections (each individually under
+# the window above). Lower loses tail-section facts on legitimately
+# huge binaries; higher re-opens the aggregate-IO amplification the
+# per-section window closed.
+_MAX_ENTROPY_TOTAL_BYTES = 64 * 1024 * 1024
+# Per-section entropy records retained. Real binaries have <40
+# sections; e_shnum is attacker-chosen up to _MAX_SHNUM, and a record
+# per header would hand a crafted file a 100k-row artifact. Low
+# enough to bound the record, high enough that no real binary is
+# ever truncated.
+_MAX_ENTROPY_SECTIONS = 2_048
+# Section-name BYTES retained per entropy record (counted on the
+# UTF-8 encoding — what is actually retained — so a multibyte name
+# can't dodge the bound). Real names are <32 bytes; the general
+# strtab lookup tolerates up to 4 KB (needed for C++ mangled
+# SYMBOLS), and letting each of the 2048 records retain 4 KB of
+# attacker text would make the record itself the amplifier. Names
+# are hostile text either way — consumers escape at render.
+_MAX_SECTION_RECORD_NAME = 256
+# ``.gnu_debuglink`` payload read bound (NUL-terminated filename +
+# alignment padding + CRC32 — real payloads are tens of bytes;
+# anything past this is malformed).
+_MAX_DEBUGLINK_BYTES = 4_096
+# f.seek() rejects offsets past off_t range with ValueError /
+# OverflowError, and Linux read() at offsets in roughly the last page
+# BELOW 2**63 fails with OSError EINVAL even though the seek itself
+# succeeded — so a screen at exactly the off_t ceiling still lets a
+# crafted sh_offset (e.g. 2**63 - 1) raise out of a screened read.
+# parse_elf treats all of that as whole-parse malformation; the facts
+# extractor degrades PER FIELD, so hostile offsets are screened
+# before any seek at a bound safely distant from BOTH the off_t
+# ceiling and any real file size (2**62 = 4 EiB; largest real
+# filesystems top out well under it), and the screened reads are
+# additionally OSError-wrapped as belt-and-braces — a surviving
+# kernel refusal degrades that one field, never the whole record.
+_MAX_SEEK_OFFSET = 2**62
 
 
 @dataclass
@@ -181,7 +300,25 @@ def parse_elf(path: Path) -> ElfMetadata | None:
         return None
 
 
-def _parse_elf_stream(f) -> ElfMetadata | None:
+@dataclass(frozen=True)
+class _ElfHeader:
+    """Decoded fixed ELF header fields — one header decoder shared by
+    the capability parse and the facts extractor."""
+
+    bits: int
+    endian: str        # struct byte-order prefix: "<" | ">"
+    endianness: str    # "little" | "big"
+    e_machine: int
+    e_phoff: int
+    e_phentsize: int
+    e_phnum: int
+    e_shoff: int
+    e_shentsize: int
+    e_shnum: int
+    e_shstrndx: int
+
+
+def _read_elf_header(f) -> _ElfHeader | None:
     # --- e_ident (first 16 bytes) -----------------------------
     e_ident = f.read(16)
     if len(e_ident) < 16 or e_ident[:4] != _ELF_MAGIC:
@@ -215,6 +352,24 @@ def _parse_elf_stream(f) -> ElfMetadata | None:
      e_shentsize, e_shnum, e_shstrndx) = struct.unpack(
         rest_fmt, rest,
     )
+    return _ElfHeader(
+        bits=bits, endian=endian, endianness=endianness,
+        e_machine=e_machine, e_phoff=e_phoff,
+        e_phentsize=e_phentsize, e_phnum=e_phnum,
+        e_shoff=e_shoff, e_shentsize=e_shentsize,
+        e_shnum=e_shnum, e_shstrndx=e_shstrndx,
+    )
+
+
+def _parse_elf_stream(f) -> ElfMetadata | None:
+    hdr = _read_elf_header(f)
+    if hdr is None:
+        return None
+    bits, endian, endianness = hdr.bits, hdr.endian, hdr.endianness
+    e_machine, e_phoff = hdr.e_machine, hdr.e_phoff
+    e_phentsize, e_phnum = hdr.e_phentsize, hdr.e_phnum
+    e_shoff, e_shentsize = hdr.e_shoff, hdr.e_shentsize
+    e_shnum, e_shstrndx = hdr.e_shnum, hdr.e_shstrndx
 
     def _bail() -> ElfMetadata | None:
         """We can't enumerate imports from the section headers.
@@ -480,23 +635,46 @@ def _has_pt_dynamic(
 ) -> bool:
     """True when the program header table contains a PT_DYNAMIC
     segment — i.e. the binary imports symbols at load time even
-    if its section headers are absent or unusable."""
+    if its section headers are absent or unusable. Malformed tables
+    collapse to False here (parse_elf's pre-existing behavior: no
+    evidence of PT_DYNAMIC → header-only metadata); the facts
+    extractor consumes the tri-state scanner directly so a malformed
+    table is a recorded gap instead."""
+    return _scan_phdr_for_type(
+        f, e_phoff, e_phentsize, e_phnum,
+        bits=bits, endian=endian, wanted=_PT_DYNAMIC,
+    ) is True
+
+
+def _scan_phdr_for_type(
+    f, e_phoff: int, e_phentsize: int, e_phnum: int,
+    *, bits: int, endian: str, wanted: int,
+) -> bool | None:
+    """Tri-state program-header scan for a segment of type ``wanted``
+    (e.g. PT_DYNAMIC for the fallback signal, PT_INTERP for the
+    exec-vs-library fact). True/False are EVIDENCE-backed presence /
+    absence; ``None`` means the table exists but is malformed or
+    truncated — no absence claim is possible, and callers that report
+    facts must record the gap rather than read None as "absent".
+    A pathological ``e_phoff`` still raises through ``f.seek`` here:
+    parse_elf's contract maps that to a whole-parse ``None`` (facts
+    callers screen offsets before calling)."""
     if e_phoff == 0 or e_phnum == 0:
-        return False
+        return False              # genuinely no table → no segment
     # ELF64 phdr: p_type(I) p_flags(I) then six Qs → 56 bytes.
     # ELF32 phdr: p_type(I) then seven Is → 32 bytes.
     # Only p_type is needed; it is the first field in both layouts.
     record_size = 56 if bits == 64 else 32
     if e_phentsize < record_size:
-        return False
+        return None
     type_fmt = endian + "I"
     f.seek(e_phoff)
     for _ in range(e_phnum):
         buf = f.read(e_phentsize)
         if len(buf) < record_size:
-            return False
+            return None
         (p_type,) = struct.unpack_from(type_fmt, buf)
-        if p_type == _PT_DYNAMIC:
+        if p_type == wanted:
             return True
     return False
 
@@ -555,6 +733,13 @@ def is_packed(path: Path) -> str | None:
     documented as a limitation.  The signature list grows as new
     packers surface in real packages.  Not in scope: detecting
     arbitrary high-entropy sections (high FP, not deterministic).
+    The per-section entropy NUMBERS on :class:`ElfFacts` are raw
+    inventory facts for downstream consumers to interpret — they
+    deliberately do NOT feed this verdict: wiring them in would
+    reinstate the refused heuristic one hop later.  Any future change
+    that wants entropy as a packedness signal must amend this
+    rationale in both directions, here and at
+    :func:`_shannon_entropy`.
     """
     try:
         with Path(path).open("rb") as f:
@@ -567,8 +752,503 @@ def is_packed(path: Path) -> str | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Shallow facts extraction (linkage / identity / layout)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SectionEntropy:
+    """Shannon entropy of one section's leading bytes — a raw,
+    deterministic FACT (bits per byte, rounded to 4 decimals).
+
+    Interpretation belongs to the consumer; in particular this number
+    never feeds :func:`is_packed` (see the recorded refusal of
+    entropy-based packedness detection in its docstring).
+    ``sampled < size`` means the figure covers the bounded leading
+    window only, not the whole section.  ``name`` originates in the
+    hostile file — length-capped at capture, escape at render.
+    """
+
+    name: str
+    size: int      # sh_size as claimed by the section header
+    sampled: int   # bytes actually read and measured
+    entropy: float
+
+
+@dataclass
+class ElfFacts:
+    """Shallow linkage / identity / layout facts for one ELF.
+
+    Complements :class:`ElfMetadata` (the capability parse) without
+    changing it — inventory / triage consumers read this record while
+    the fingerprint path keeps paying only for the import walk.
+
+    Hostile-input contract: every string field (``needed``,
+    ``soname``, ``debuglink``, export names, section names) is
+    attacker-controlled text from the parsed file — length-capped at
+    capture, NOT escaped here (matching how ``ElfMetadata.imports``
+    ships raw decoded names); consumers escape at render before any
+    terminal / report / prompt use.  ``caps_hit`` is a sorted list of
+    machine-readable markers naming every cap or parse gap that fired
+    (empty = complete extraction): truncation is record-visible,
+    never silent.
+    """
+
+    needed: list[str] = field(default_factory=list)   # DT_NEEDED, link order
+    soname: str | None = None                          # DT_SONAME
+    build_id: str | None = None                        # lower-case hex
+    debuglink: str | None = None                       # .gnu_debuglink name
+    exports: list[str] = field(default_factory=list)   # sorted
+    # Symbol type per export name (FUNC, OBJ, ...) — same shape and
+    # vocabulary as the manifest layer's ``export_types``; names whose
+    # st_info type has no mapping are absent (consumers fail open).
+    export_types: dict[str, str] = field(default_factory=dict)
+    section_entropy: list[SectionEntropy] = field(default_factory=list)
+    has_interpreter: bool = False    # PT_INTERP present (exec-vs-lib)
+    caps_hit: list[str] = field(default_factory=list)
+
+
+def extract_elf_facts(path: Path) -> ElfFacts | None:
+    """Extract shallow facts from ``path``, or ``None`` when the file
+    is not ELF / unreadable — the same malformed-input contract as
+    :func:`parse_elf` (never raises past it).  Malformed
+    SUB-structures degrade per field: the affected field stays empty
+    and a marker lands in ``caps_hit``.
+
+    Reads only the bytes it needs; per-section entropy reads are
+    sample-window- and total-budget-bounded.  The build-id comes from
+    the shared sandboxed helper (see :func:`_read_build_id`), not a
+    second notes parser — ``None`` when that toolchain is
+    unavailable.
+    """
+    try:
+        with Path(path).open("rb") as f:
+            facts = _extract_facts_stream(f)
+    except OSError as e:
+        logger.debug("core.binary.elf: facts read failed for %s: %s",
+                     path, e)
+        return None
+    except struct.error as e:
+        logger.debug("core.binary.elf: truncated / malformed %s: %s",
+                     path, e)
+        return None
+    except (ValueError, OverflowError) as e:
+        logger.debug("core.binary.elf: pathological offsets in %s: %s",
+                     path, e)
+        return None
+    if facts is None:
+        return None
+    facts.build_id, build_id_gap = _read_build_id(path)
+    if build_id_gap is not None:
+        facts.caps_hit = sorted({*facts.caps_hit, build_id_gap})
+    return facts
+
+
+def _read_build_id(path: Path) -> tuple[str | None, str | None]:
+    """Build-id via ``core.analysis.binary_oracle.read_build_id`` —
+    the sandboxed ``readelf -n`` helper the reachability oracle
+    already relies on.  One notes parser repo-wide: re-implementing
+    ``.note.gnu.build-id`` extraction here would be a second copy of
+    an existing judgment.  The import is lazy so this module's import
+    surface stays stdlib-only for hot consumers (the sca supply-chain
+    scan feeds every ELF in a scanned package through
+    :func:`parse_elf` and must never pay for the oracle stack).
+
+    Returns ``(build_id, caps_hit_marker)``.  The value is ``None``
+    when the helper or its toolchain is unavailable — the helper
+    itself degrades to ``None`` on tool failure or timeout.  On a
+    sandbox-refusing host the helper raises ``SandboxSetupError``
+    (``BaseException`` by design, catchable only by name): the
+    refusal means readelf NEVER EXECUTED over the hostile bytes, so
+    degrading to no-build-id here weakens no containment — but the
+    gap is a recorded marker, never a silent ``None``.
+    """
+    try:
+        from core.analysis.binary_oracle import read_build_id
+        from core.sandbox import SandboxSetupError
+    except ImportError:
+        return None, None
+    try:
+        return read_build_id(Path(path)), None
+    except SandboxSetupError:
+        return None, "build_id_sandbox_refused"
+
+
+def _read_section_bytes_screened(f, sh: _SectionHeader) -> bytes | None:
+    """:func:`_read_section_bytes` behind an offset screen plus an
+    OSError net. The unscreened reader lets a pathological
+    ``sh_offset`` raise through ``f.seek``/``f.read`` — correct for
+    parse_elf (whole-parse ``None``), wrong for the facts extractor,
+    whose contract degrades PER FIELD. The except clause is
+    belt-and-braces behind the screen: kernels refuse reads at
+    offsets the seek accepted (EINVAL near the off_t ceiling), and
+    that refusal must cost one field, not the record."""
+    if sh.sh_offset > _MAX_SEEK_OFFSET:
+        return None
+    try:
+        return _read_section_bytes(f, sh)
+    except OSError:
+        return None
+
+
+def _shannon_entropy(data: bytes) -> float:
+    """Shannon entropy in bits per byte (0.0–8.0), rounded to 4
+    decimals.  Pure byte-histogram arithmetic — deterministic for a
+    given byte sequence.  This is a measurement primitive only: it
+    renders no packed / encrypted verdict, and must not grow one (the
+    packedness question is :func:`is_packed`'s, which records a
+    deliberate refusal of entropy heuristics — amend both rationales
+    together or not at all)."""
+    n = len(data)
+    if n == 0:
+        return 0.0
+    entropy = 0.0
+    for count in Counter(data).values():
+        p = count / n
+        entropy -= p * math.log2(p)
+    return round(entropy, 4)
+
+
+def _extract_facts_stream(f) -> ElfFacts | None:
+    hdr = _read_elf_header(f)
+    if hdr is None:
+        return None
+    facts = ElfFacts()
+    caps: set[str] = set()
+
+    def _finish() -> ElfFacts:
+        facts.caps_hit = sorted(caps)
+        return facts
+
+    interp_scan: bool | None
+    dyn_scan: bool | None
+    if hdr.e_phoff > _MAX_SEEK_OFFSET:
+        interp_scan = dyn_scan = None
+    else:
+        try:
+            interp_scan = _scan_phdr_for_type(
+                f, hdr.e_phoff, hdr.e_phentsize, hdr.e_phnum,
+                bits=hdr.bits, endian=hdr.endian, wanted=_PT_INTERP,
+            )
+            dyn_scan = _scan_phdr_for_type(
+                f, hdr.e_phoff, hdr.e_phentsize, hdr.e_phnum,
+                bits=hdr.bits, endian=hdr.endian, wanted=_PT_DYNAMIC,
+            )
+        except OSError:
+            interp_scan = dyn_scan = None
+    if interp_scan is None or dyn_scan is None:
+        # An existing-but-malformed table yields NO absence evidence:
+        # both flags stay conservatively False, and the gap is
+        # recorded — silently-False flags would also suppress the
+        # stripped-dynamic-sections witness below.
+        caps.add("phdr_table_unreadable")
+    facts.has_interpreter = interp_scan is True
+    has_pt_dynamic = dyn_scan is True
+
+    # --- Section header table + name table ---------------------
+    sections = None
+    if (hdr.e_shoff != 0 and 0 < hdr.e_shnum <= _MAX_SHNUM
+            and hdr.e_shstrndx < _MAX_SHSTRNDX_BOUND
+            and hdr.e_shoff <= _MAX_SEEK_OFFSET):
+        sections = _read_section_headers(
+            f, hdr.e_shoff, hdr.e_shentsize, hdr.e_shnum,
+            bits=hdr.bits, endian=hdr.endian,
+        )
+    if sections is None or hdr.e_shstrndx >= len(sections):
+        # Header-only facts (interpreter bit) are still truthful;
+        # everything section-derived is a recorded gap.
+        caps.add("section_headers_unusable")
+        return _finish()
+    shstrtab = _read_section_bytes_screened(f, sections[hdr.e_shstrndx])
+    if shstrtab is None:
+        caps.add("shstrtab_unreadable")
+        return _finish()
+
+    # --- One section walk: locate + measure --------------------
+    # Names resolve inline and are retained only inside bounded
+    # records — the many-section no-NUL-shstrtab amplification
+    # defense from the import path applies here too.
+    dynamic = dynsym = dynstr = debuglink_sh = None
+    entropy_records: list[SectionEntropy] = []
+    entropy_budget = _MAX_ENTROPY_TOTAL_BYTES
+    for sh in sections:
+        name = _read_strtab_string(shstrtab, sh.sh_name)
+        if dynamic is None and sh.sh_type == _SHT_DYNAMIC:
+            # By spec at most one .dynamic per object; matched by
+            # type so a doctored name can't hide the linkage facts.
+            dynamic = sh
+        elif (dynsym is None and sh.sh_type == _SHT_DYNSYM
+                and name == ".dynsym"):
+            dynsym = sh
+        elif (dynstr is None and sh.sh_type == _SHT_STRTAB
+                and name == ".dynstr"):
+            dynstr = sh
+        elif (debuglink_sh is None and sh.sh_type == _SHT_PROGBITS
+                and name == ".gnu_debuglink"):
+            # Type-filtered on top of the name: a NOBITS decoy named
+            # .gnu_debuglink would otherwise get arbitrary aliased
+            # file bytes read back as the debug-file name.
+            debuglink_sh = sh
+
+        # Entropy fact — every byte-carrying section, bounded.
+        if sh.sh_type == _SHT_NOBITS or sh.sh_size == 0:
+            continue          # occupies no file bytes
+        if len(entropy_records) >= _MAX_ENTROPY_SECTIONS:
+            caps.add("entropy_sections_capped")
+            continue
+        if entropy_budget <= 0:
+            caps.add("entropy_budget_exhausted")
+            continue
+        if sh.sh_offset > _MAX_SEEK_OFFSET:
+            caps.add("section_data_unreadable")
+            continue
+        try:
+            f.seek(sh.sh_offset)
+            data = f.read(min(sh.sh_size, _MAX_ENTROPY_SECTION_BYTES,
+                              entropy_budget))
+        except OSError:
+            # Belt-and-braces behind the offset screen (see
+            # _MAX_SEEK_OFFSET): a kernel read refusal costs this
+            # section's record, not the walk.
+            caps.add("section_data_unreadable")
+            continue
+        if not data:
+            caps.add("section_data_unreadable")   # offset past EOF
+            continue
+        entropy_budget -= len(data)
+        if not name and 0 < sh.sh_name < len(shstrtab):
+            # In-bounds sh_name that resolved to nothing: the name
+            # was unterminated or over-cap — the record keeps the
+            # empty string but the gap is marked, not silent.
+            caps.add("section_name_malformed")
+        # The cap counts BYTES (matching what it bounds — retained
+        # attacker text), so a multibyte name can't dodge it.
+        name_bytes = name.encode("utf-8")
+        if len(name_bytes) > _MAX_SECTION_RECORD_NAME:
+            name = name_bytes[:_MAX_SECTION_RECORD_NAME].decode(
+                "utf-8", errors="replace")
+            caps.add("section_name_truncated")
+        entropy_records.append(SectionEntropy(
+            name=name, size=sh.sh_size, sampled=len(data),
+            entropy=_shannon_entropy(data),
+        ))
+    facts.section_entropy = entropy_records
+
+    # --- Linkage: DT_NEEDED / DT_SONAME ------------------------
+    if dynamic is not None:
+        # The dynamic table's string table is named by sh_link (the
+        # authoritative join); fall back to the .dynstr found by name
+        # when sh_link is malformed.
+        dyn_strtab_sh = None
+        if (0 < dynamic.sh_link < len(sections)
+                and sections[dynamic.sh_link].sh_type == _SHT_STRTAB):
+            dyn_strtab_sh = sections[dynamic.sh_link]
+        elif dynstr is not None:
+            dyn_strtab_sh = dynstr
+        dyn_strtab = (_read_section_bytes_screened(f, dyn_strtab_sh)
+                      if dyn_strtab_sh is not None else None)
+        if dyn_strtab is None:
+            caps.add("dynamic_strtab_missing")
+        else:
+            _read_dynamic_linkage(
+                f, dynamic, dyn_strtab, facts, caps,
+                bits=hdr.bits, endian=hdr.endian,
+            )
+    elif has_pt_dynamic:
+        # PT_DYNAMIC proves this binary links dynamically, yet no
+        # .dynamic SECTION header survived — empty needed/soname
+        # would otherwise read as a truthful "links nothing". Same
+        # witness as the exports branch below.
+        caps.add("dynamic_sections_stripped")
+
+    # --- Exports ------------------------------------------------
+    if dynsym is not None:
+        dynstr_bytes = (_read_section_bytes_screened(f, dynstr)
+                        if dynstr is not None else None)
+        if dynstr_bytes is None:
+            # .dynsym is itself evidence of dynamic linkage: names
+            # unrecoverable (absent OR unreadable .dynstr) is a gap
+            # whether or not the program headers survived.
+            caps.add("dynstr_unreadable")
+        else:
+            names, types = _read_dynsym_exports(
+                f, dynsym, dynstr_bytes, caps,
+                bits=hdr.bits, endian=hdr.endian,
+            )
+            facts.exports = sorted(names)
+            facts.export_types = types
+    elif has_pt_dynamic:
+        # A dynamic binary whose .dynsym/.dynstr sections were
+        # doctored away (sstrip shape) DOES export/link — absent
+        # sections are a gap here, not a truthful "no dynamic facts"
+        # (which is what a static binary's absence means).
+        caps.add("dynamic_sections_stripped")
+
+    # --- .gnu_debuglink -----------------------------------------
+    if debuglink_sh is not None:
+        data = b""
+        if (debuglink_sh.sh_size
+                and debuglink_sh.sh_offset <= _MAX_SEEK_OFFSET):
+            try:
+                f.seek(debuglink_sh.sh_offset)
+                data = f.read(min(debuglink_sh.sh_size,
+                                  _MAX_DEBUGLINK_BYTES))
+            except OSError:
+                data = b""    # screened-read net: field-local gap
+        # Payload: NUL-terminated filename + padding + CRC32. The
+        # bounded strtab lookup gives the NUL-scan + name cap for
+        # free (empty on unterminated / over-cap payloads).
+        name = _read_strtab_string(data, 0)
+        if name:
+            facts.debuglink = name
+        else:
+            caps.add("debuglink_malformed")
+
+    return _finish()
+
+
+def _read_dynamic_linkage(
+    f, dynamic: _SectionHeader, strtab: bytes,
+    facts: ElfFacts, caps: set[str],
+    *, bits: int, endian: str,
+) -> None:
+    """Walk the ``.dynamic`` entry table into ``facts.needed`` /
+    ``facts.soname``.  DT_NEEDED order is preserved (link order is
+    itself a fact); duplicate names are kept as the file states them.
+    """
+    if dynamic.sh_offset > _MAX_SEEK_OFFSET:
+        caps.add("dynamic_unreadable")
+        return
+    # d_tag is signed (Sxword/Sword), d_un unsigned — per spec.
+    fmt = endian + ("qQ" if bits == 64 else "iI")
+    record_size = struct.calcsize(fmt)
+    total = dynamic.sh_size // record_size
+    if total > _MAX_DYN_ENTRIES:
+        total = _MAX_DYN_ENTRIES
+        caps.add("dynamic_entries_capped")
+    needed: list[str] = []
+    try:
+        f.seek(dynamic.sh_offset)
+        for _ in range(total):
+            buf = f.read(record_size)
+            if len(buf) < record_size:
+                break
+            d_tag, d_val = struct.unpack(fmt, buf)
+            if d_tag == _DT_NULL:
+                break
+            if d_tag == _DT_NEEDED:
+                if len(needed) >= _MAX_NEEDED_ENTRIES:
+                    caps.add("needed_truncated")
+                    continue
+                name = _read_strtab_string(strtab, d_val)
+                if name:
+                    needed.append(name)
+                else:
+                    caps.add("needed_name_malformed")
+            elif d_tag == _DT_SONAME and facts.soname is None:
+                # At most one by spec; first wins on a crafted repeat.
+                soname = _read_strtab_string(strtab, d_val)
+                if soname:
+                    facts.soname = soname
+                else:
+                    caps.add("soname_malformed")
+    except OSError:
+        # Screened-read net (see _MAX_SEEK_OFFSET): a kernel refusal
+        # keeps whatever was walked and records the gap.
+        caps.add("dynamic_unreadable")
+    facts.needed = needed
+
+
+def _read_dynsym_exports(
+    f, dynsym: _SectionHeader, dynstr_bytes: bytes, caps: set[str],
+    *, bits: int, endian: str,
+) -> tuple[set[str], dict[str, str]]:
+    """Walk ``.dynsym`` and collect DEFINED global/weak symbol names
+    (the exports) plus their symbol type.  Deliberate mirror of
+    :func:`_read_dynsym_imports` with the section-index filter
+    inverted — same entry bounds, same per-name and total-volume
+    caps, because it walks the identical hostile table; breaches land
+    in ``caps`` instead of only the log."""
+    exports: set[str] = set()
+    export_types: dict[str, str] = {}
+    if dynsym.sh_entsize == 0 or dynsym.sh_size == 0:
+        return exports, export_types
+    if (dynsym.sh_entsize > _MAX_SYM_ENTSIZE
+            or dynsym.sh_offset > _MAX_SEEK_OFFSET):
+        caps.add("dynsym_malformed")
+        return exports, export_types
+    entries = dynsym.sh_size // dynsym.sh_entsize
+    if entries > _MAX_DYNSYM_ENTRIES:
+        caps.add("dynsym_malformed")
+        return exports, export_types
+
+    sym_fmt = endian + "IBBHQQ" if bits == 64 else endian + "IIIBBH"
+    record_size = struct.calcsize(sym_fmt)
+    if dynsym.sh_entsize < record_size:
+        caps.add("dynsym_malformed")
+        return exports, export_types
+
+    total_name_bytes = 0
+    try:
+        f.seek(dynsym.sh_offset)
+        for _ in range(entries):
+            buf = f.read(record_size)
+            if len(buf) < record_size:
+                break
+            if bits == 64:
+                (st_name, st_info, _st_other, st_shndx,
+                 _st_value, _st_size) = struct.unpack(sym_fmt, buf)
+            else:
+                (st_name, _st_value, _st_size, st_info, _st_other,
+                 st_shndx) = struct.unpack(sym_fmt, buf)
+            if dynsym.sh_entsize > record_size:
+                f.read(dynsym.sh_entsize - record_size)
+            # Export = defined somewhere in THIS binary (not
+            # SHN_UNDEF) with external linkage — GLOBAL, WEAK, or
+            # STB_GNU_UNIQUE (g++ vague linkage; dropping it loses
+            # real exports on every C++ library). Local symbols are
+            # not callable from outside; undefined ones are the
+            # import walk's business.
+            if st_shndx == _SHN_UNDEF or st_name == 0:
+                continue
+            if (st_info >> 4) not in _EXPORT_BINDINGS:
+                continue
+            name = _read_strtab_string(dynstr_bytes, st_name)
+            if not name:
+                if 0 < st_name < len(dynstr_bytes):
+                    caps.add("export_name_malformed")
+                continue
+            if name not in exports:
+                total_name_bytes += len(name)
+                if total_name_bytes > _MAX_TOTAL_NAME_BYTES:
+                    caps.add("export_names_truncated")
+                    logger.warning(
+                        "core.binary.elf: export-name volume exceeded "
+                        "%d bytes — malformed/hostile .dynstr; export "
+                        "list truncated at %d names (facts record for "
+                        "this binary is incomplete)",
+                        _MAX_TOTAL_NAME_BYTES, len(exports))
+                    break
+                exports.add(name)
+            stt = _STT_EXPORT_TYPE.get(st_info & 0xF)
+            if stt is not None:
+                # Versioned symbols repeat a name; the first MAPPED
+                # type wins (deterministic: .dynsym file order; an
+                # earlier unmapped type claims nothing).
+                export_types.setdefault(name, stt)
+    except OSError:
+        # Screened-read net (see _MAX_SEEK_OFFSET): keep the walked
+        # prefix, record the gap.
+        caps.add("dynsym_malformed")
+    return exports, export_types
+
+
 __all__ = [
+    "ElfFacts",
     "ElfMetadata",
+    "SectionEntropy",
+    "extract_elf_facts",
     "is_packed",
     "parse_elf",
 ]
