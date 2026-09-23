@@ -492,12 +492,17 @@ def _container_ids_match(rid: str, short_id: str) -> bool:
     return len(shorter) >= 12 and longer.startswith(shorter)
 
 
-def _endpoint_run_ports(probed_container_id: str) -> frozenset[int]:
+def _endpoint_run_ports(probed_container_id: str) -> frozenset[int] | None:
     """ALL host ports published by this run's containers, regardless of
     bind address. Compose stacks commonly publish on 0.0.0.0 (still
     reachable via loopback), so the verify-level ENDPOINT gate must
     accept those — while the per-step tcp allowlist
-    (:func:`_published_run_ports`) stays loopback-only."""
+    (:func:`_published_run_ports`) stays loopback-only.
+
+    ``None`` = enumeration FAILED (docker ps timeout/error), which the
+    endpoint gate must refuse — for this consumer the empty set means
+    "allow any loopback port", so mapping failure to it was fail-open
+    at any loopback port under a docker-CLI hiccup."""
     return _enumerate_run_ports(probed_container_id, loopback_only=False)
 
 
@@ -515,15 +520,23 @@ def _published_run_ports(probed_container_id: str) -> frozenset[int]:
     label is product-global and label values are prompt-threaded, so a
     sibling run's published sidecar ports must never enter this run's
     allowlist. Fails closed: any enumeration failure returns the empty
-    set (the primary endpoint port stays allowed engine-side).
+    set — for THIS consumer the empty allowlist is the restrictive
+    direction (only the primary endpoint port stays allowed
+    engine-side), unlike the endpoint gate where None must refuse.
     """
-    return _enumerate_run_ports(probed_container_id, loopback_only=True)
+    ports = _enumerate_run_ports(probed_container_id, loopback_only=True)
+    return frozenset() if ports is None else ports
 
 
 def _enumerate_run_ports(
     probed_container_id: str, *, loopback_only: bool
-) -> frozenset[int]:
-    """Shared enumeration for the two run-port views above."""
+) -> frozenset[int] | None:
+    """Shared enumeration for the two run-port views above.
+
+    Returns ``None`` when enumeration itself failed (docker ps timeout
+    or non-zero exit) so callers can tell "docker answered: nothing
+    published" (empty set) apart from "docker did not answer".
+    """
     from cve_env.tools.docker_run import OWNER_LABEL, session_container_ids
     from cve_env.utils.run import run_with_timeout
 
@@ -541,7 +554,7 @@ def _enumerate_run_ports(
         timeout=15,
     )
     if outcome.timed_out or outcome.returncode != 0:
-        return frozenset()
+        return None
     import re as _re
 
     ports: set[int] = set()
@@ -598,7 +611,7 @@ def _endpoint_binding_issue(
     host_ip: str,
     host_port: int,
     plan: list[dict[str, Any]],
-    endpoint_ports: frozenset[int],
+    endpoint_ports: frozenset[int] | None,
 ) -> str:
     """Gate the agent-supplied probe endpoint; "" means acceptable.
 
@@ -614,8 +627,13 @@ def _endpoint_binding_issue(
     * when this run's containers publish host ports
       (``endpoint_ports`` non-empty), the port must be one of them — a
       sibling run's sidecar port never qualifies. Runs whose containers
-      publish nothing (or whose enumeration failed) keep the
-      loopback-only rule.
+      genuinely publish nothing (empty set) keep the loopback-only
+      rule;
+    * ``endpoint_ports is None`` means enumeration FAILED (docker ps
+      timeout/error) — refuse with a retryable reason. Skipping the
+      port check there let an agent-authored plan aim http/tcp probes
+      at ANY loopback port (the operator's local services) whenever the
+      docker CLI hiccuped.
     """
     if not _plan_uses_endpoint(plan):
         return ""
@@ -624,6 +642,12 @@ def _endpoint_binding_issue(
             f"verify: host_ip {host_ip!r} is not a loopback address — "
             "probes are pinned to this run's own containers, which are "
             "reached via 127.0.0.1"
+        )
+    if host_port and endpoint_ports is None:
+        return (
+            "verify: could not enumerate this run's published ports "
+            "(docker ps failed) — the endpoint port cannot be vetted; "
+            "retry verify (transient docker-CLI failure)"
         )
     if host_port and endpoint_ports and host_port not in endpoint_ports:
         allowed = ", ".join(str(p) for p in sorted(endpoint_ports))
