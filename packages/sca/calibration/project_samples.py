@@ -31,6 +31,17 @@ per ecosystem can come later via the ``popular/<eco>.json``
 auto-derived list. Curated start lets us control which licenses
 we touch (only OSI-approved permissive). Each entry pins the
 clone target so re-runs are reproducible.
+
+Derivation trigger (hand-curated universe feeding the calibration
+oracle — documented, not deferred): when a per-ecosystem
+``by_ecosystem`` block in the validation report goes thin (total
+below ~200 findings) or a new ecosystem gains scanner support,
+derive candidate rows from ``data/popular/<eco>.json`` (maintained
+by ``refresh_typosquat_lists``) and adjudicate each candidate's
+license by hand before adding it here. The hand step is the
+license-compliance gate, so FULL automation is deliberately
+withheld — the mechanical source is named, the acceptance filter
+is operator judgment.
 """
 
 from __future__ import annotations
