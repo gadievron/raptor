@@ -47,9 +47,11 @@ _SEMGREP_EXTS: set[str] = {
 def detect_engine(file_path: str) -> str | None:
     """Pick the synthesis engine for a source file.
 
-    Returns ``"coccinelle"`` for C/C++ headers + sources, ``"semgrep"``
-    for everything else we support, or ``None`` for files we don't
-    recognise (binary, unknown extension, no extension).
+    Returns ``"coccinelle"`` for C sources/headers (.c/.h only —
+    C++ routes to Semgrep, whose tree-sitter C++ support beats
+    Coccinelle's), ``"semgrep"`` for everything else we support, or
+    ``None`` for files we don't recognise (binary, unknown
+    extension, no extension).
     """
     if not file_path:
         return None

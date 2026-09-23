@@ -435,3 +435,15 @@ class TestCliMain:
         assert rc == 0
         report = json.loads(capsys.readouterr().out)
         assert report["cve_id"] == CVE
+
+
+def test_non_object_osv_body_is_structured_refusal(tmp_path):
+    """A JSON-array OSV body passes the bounded read; it must surface
+    the ProvenanceError refusal, not an AttributeError traceback."""
+    out = tmp_path / "cve-run"
+    out.mkdir()
+    (out / f"{CVE}.osv.json").write_text(
+        json.dumps(["not", "an", "object"]), encoding="utf-8",
+    )
+    with pytest.raises(ProvenanceError, match="not a JSON object"):
+        load_cve_run(out)

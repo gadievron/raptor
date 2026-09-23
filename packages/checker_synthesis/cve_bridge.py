@@ -143,6 +143,12 @@ def load_cve_run(output_dir: Path | str) -> CveFixRecord:
     except (OSError, ValueError) as exc:
         msg = f"unreadable OSV record {osv_path}: {exc}"
         raise ProvenanceError(msg) from exc
+    if not isinstance(osv, dict):
+        # A JSON-array body passes the bounded read; .get below must
+        # surface the structured exit-2 refusal, not an AttributeError
+        # traceback out of cli_main.
+        msg = f"OSV record {osv_path} is not a JSON object"
+        raise ProvenanceError(msg)
 
     cve_id = str(osv.get("id", ""))
     if not _CVE_RE.match(cve_id):

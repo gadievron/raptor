@@ -575,3 +575,32 @@ class TestGraduatedStemJoin:
         assert report.recorded_updates == 1
         entry = RuleLibrary(lib_dir).all_entries()[0]
         assert any(t.matches == 2 for t in entry.targets)
+
+
+class TestGraduatedSkipAccounting:
+    def test_graduated_only_non_c_target_records_skip(
+        self, tmp_path, monkeypatch,
+    ):
+        """A graduated-only sweep on a non-C target skips its cocci
+        rules the same way library entries do — the skip must land in
+        cocci_skipped_targets, not vanish from the accounting."""
+        lib_dir = _write_library(tmp_path, [])
+        engine_rules = tmp_path / "engine-rules"
+        (engine_rules / "coccinelle").mkdir(parents=True)
+        (engine_rules / "coccinelle" / "gradc.cocci").write_text(
+            "@@\n@@\n- x\n",
+        )
+        target = tmp_path / "pyproj"
+        target.mkdir()
+        (target / "app.py").write_text("x = 1\n")
+        called = []
+        monkeypatch.setattr(
+            rs.cocci_runner, "run_rule",
+            lambda *a, **k: called.append(a) or _spatch_result(0),
+        )
+        report = rs.run_sweep(
+            [target], library_dir=lib_dir,
+            engine_rules_dir=engine_rules, record=False,
+        )
+        assert not called
+        assert report.cocci_skipped_targets == [str(target)]
