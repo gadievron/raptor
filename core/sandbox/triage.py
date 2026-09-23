@@ -354,11 +354,22 @@ def _verify_audit_degraded(
 
 
 def _cap_evidence(items: list[str]) -> list[str]:
+    """Escape + bound evidence values at the one chokepoint every
+    signal's evidence list passes through. Escaping is structural,
+    not per-consumer: evidence strings can carry target-derived
+    bytes (the Landlock-lane child-append residual means a hostile
+    child can forge whole denial records), and today's consumers
+    printing only sanitised fields is no contract for tomorrow's —
+    raw control bytes must never reach sandbox-triage.json. Escape
+    BEFORE capping so the length bound holds on what is actually
+    emitted."""
+    from core.security.log_sanitisation import escape_nonprintable
+    escaped = [escape_nonprintable(item) for item in items]
     capped = [
         item if len(item) <= _MAX_EVIDENCE_ITEM_LEN
         else item[:_MAX_EVIDENCE_ITEM_LEN]
         + f"...[+{len(item) - _MAX_EVIDENCE_ITEM_LEN} chars]"
-        for item in items
+        for item in escaped
     ]
     if len(capped) > _MAX_EVIDENCE_ITEMS:
         dropped = len(capped) - _MAX_EVIDENCE_ITEMS
