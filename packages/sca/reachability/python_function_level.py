@@ -74,6 +74,7 @@ from typing import Any
 from collections.abc import Iterable
 
 from ..models import Confidence, Dependency, Reachability
+from ._shared import UNRESOLVED_ENTRY
 from ._shared import extract_function_names as _extract_function_names
 
 logger = logging.getLogger(__name__)
@@ -221,6 +222,13 @@ def refine_pypi_verdicts(
         paired: list[tuple[str, ReachabilityResult]] = []
         for fn in funcs:
             if not fn:
+                continue
+            if fn == UNRESOLVED_ENTRY:
+                # Counted-unresolved marker (junk-shaped advisory
+                # data): never composed into a query — composing it
+                # would pair NOT_CALLED and defeat the marker — but
+                # it stays unpaired, so the coverage gate below
+                # blocks the downgrade.
                 continue
             # Advisory flat lists ship three entry shapes, and each
             # needs a resolver-bindable query spelling (the

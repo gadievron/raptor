@@ -41,6 +41,7 @@ from . import maven as _maven
 from . import nodejs as _nodejs
 from . import nuget as _nuget
 from . import python as _python
+from ._shared import UNRESOLVED_ENTRY
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +426,19 @@ def _build_go_symbol_map(
 
     Returns ``{dep_key: [symbol_name, ...]}`` from
     ``advisory.ecosystem_specific.imports[].symbols``.
+
+    OSV feed data is hostile-input tier: elements are validated
+    per-entry. A junk (non-string) element degrades to the shared
+    ``UNRESOLVED_ENTRY`` marker — visible in the map and counted,
+    but its NUL prefix can never satisfy the downstream
+    identifier-boundary grep, and it can never crash the symbol
+    sweep (``re.escape`` on a non-string TypeError'd the whole
+    reachability stage). A non-list ``symbols`` container is
+    junk-shaped in one piece (a bare string would iterate
+    CHAR-BY-CHAR, turning one advisory into single-letter grep
+    probes that upgrade verdicts from garbage) and degrades to one
+    marker. Empty strings name no function and are excluded — the
+    same contract as the function-tier builders.
     """
     if not osv_results:
         return {}
@@ -443,8 +457,19 @@ def _build_go_symbol_map(
                 if not isinstance(imp, dict):
                     continue
                 syms = imp.get("symbols", [])
-                if syms:
-                    out.setdefault(r.dep_key, []).extend(syms)
+                cleaned: list[str]
+                if isinstance(syms, list):
+                    cleaned = [
+                        s if isinstance(s, str) else UNRESOLVED_ENTRY
+                        for s in syms
+                        if not (isinstance(s, str) and not s)
+                    ]
+                elif syms:
+                    cleaned = [UNRESOLVED_ENTRY]
+                else:
+                    cleaned = []
+                if cleaned:
+                    out.setdefault(r.dep_key, []).extend(cleaned)
     for key in out:
         out[key] = list(dict.fromkeys(out[key]))
     return out

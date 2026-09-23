@@ -210,6 +210,13 @@ def extract_qualified_symbols(
                         out.append(UNRESOLVED_ENTRY)
                 continue
             symbols = imp.get("symbols") or []
+            if not isinstance(symbols, list):
+                # Junk-shaped container: a bare string would iterate
+                # CHAR-BY-CHAR (each char composing a garbage query
+                # that pairs NOT_CALLED); anything else is junk too.
+                # One counted marker — visible, blocks the downgrade.
+                out.append(UNRESOLVED_ENTRY)
+                continue
             path_head = _normalise_qualified(path) if path else ""
             path_ok = bool(
                 path_head and _NAMESPACE_HEAD_RE.fullmatch(path_head)
@@ -270,7 +277,12 @@ def extract_function_names(advisory: Any) -> list[str]:
     out: list[str] = []
     es = getattr(advisory, "ecosystem_specific", None) or {}
     ds = getattr(advisory, "database_specific", None) or {}
-    # ``imports[].symbols`` shape (mirrors Go convention).
+    # ``imports[].symbols`` shape (mirrors Go convention). A
+    # junk-shaped (non-list) container degrades to one counted
+    # :data:`UNRESOLVED_ENTRY` marker — a bare string would iterate
+    # char-by-char into single-letter "function names". Consumers
+    # must skip the marker when composing queries (it counts against
+    # the coverage gate but is never bindable).
     for source in (es, ds):
         if not isinstance(source, dict):
             continue
@@ -278,6 +290,9 @@ def extract_function_names(advisory: Any) -> list[str]:
             if not isinstance(imp, dict):
                 continue
             syms = imp.get("symbols") or []
+            if not isinstance(syms, list):
+                out.append(UNRESOLVED_ENTRY)
+                continue
             out.extend(s for s in syms if isinstance(s, str) and s)
     # Flat-list variants. Empty strings are schema junk that names no
     # function — excluded so they can neither pair as NOT_CALLED nor

@@ -45,6 +45,7 @@ import logging
 from typing import Any, TYPE_CHECKING
 
 from ..models import Confidence, Dependency, Reachability
+from ._shared import UNRESOLVED_ENTRY
 from ._shared import extract_function_names as _extract_function_names
 
 if TYPE_CHECKING:
@@ -152,6 +153,12 @@ def refine_npm_verdicts(
             n for n in (d.alias_name, d.name) if n
         ))
         for fn in funcs:
+            if fn == UNRESOLVED_ENTRY:
+                # Counted-unresolved marker (junk-shaped advisory
+                # data): never composed into a query — it stays
+                # unpaired, so the coverage gate below blocks the
+                # downgrade.
+                continue
             best: ReachabilityResult | None = None
             for name in names:
                 qualified = _qualified_name(name, fn)
