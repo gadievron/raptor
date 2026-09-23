@@ -6,13 +6,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
-from .schema import json_loads
+from .schema import _like_escape, json_loads
 from .store import query_graph
-
-
-def _like_escape(value: str) -> str:
-    r"""Escape LIKE wildcards using backslash as escape char."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 # The confidence column is TEXT, so ``ORDER BY confidence DESC`` sorts
