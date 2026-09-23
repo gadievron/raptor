@@ -2046,15 +2046,43 @@ def _category_from_sink(sink: str) -> str:
     return "unchecked_trust_boundary"
 
 
+#: One home for the category vocabulary _category_from_sink mints
+#: (plus its "unchecked_trust_boundary" fallback). STRIDE tags and the
+#: CWE-family evidence map below are both keyed on it, with a closure
+#: test pinning the two key sets together — a new category cannot gain
+#: STRIDE tags while silently missing evidence attachment.
+_CATEGORY_STRIDE: dict[str, list[str]] = {
+    "command_execution": ["tampering", "elevation_of_privilege"],
+    "sql_injection": ["tampering", "information_disclosure"],
+    "server_side_template_injection": ["tampering", "elevation_of_privilege"],
+    "path_traversal": ["information_disclosure", "tampering"],
+    "secret_exposure": ["information_disclosure", "elevation_of_privilege"],
+    "memory_corruption": ["tampering", "denial_of_service", "elevation_of_privilege"],
+}
+
+#: CWE families accepted as a CATEGORY-tier match by
+#: _outcome_match_kind — attach-only kinship (evidence rows for the
+#: operator to weigh); status flips still require identity plus
+#: verified provenance. Families are the canonical CWEs for each
+#: category the module mints.
+_CATEGORY_CWE_NUMBERS: dict[str, frozenset[str]] = {
+    "command_execution": frozenset({"77", "78"}),
+    "sql_injection": frozenset({"89"}),
+    "server_side_template_injection": frozenset({"94", "1336"}),
+    "path_traversal": frozenset({"22"}),
+    # Hardcoded credentials family: 798 (generic), 259 (password),
+    # 321 (crypto key).
+    "secret_exposure": frozenset({"259", "321", "798"}),
+    "memory_corruption": frozenset({
+        "119", "120", "121", "122", "125", "415", "416", "476", "787",
+    }),
+    "unchecked_trust_boundary": frozenset({"501"}),
+}
+
+
 def _stride_for_category(category: str) -> list[str]:
-    return {
-        "command_execution": ["tampering", "elevation_of_privilege"],
-        "sql_injection": ["tampering", "information_disclosure"],
-        "server_side_template_injection": ["tampering", "elevation_of_privilege"],
-        "path_traversal": ["information_disclosure", "tampering"],
-        "secret_exposure": ["information_disclosure", "elevation_of_privilege"],
-        "memory_corruption": ["tampering", "denial_of_service", "elevation_of_privilege"],
-    }.get(category, ["tampering", "information_disclosure"])
+    return _CATEGORY_STRIDE.get(
+        category, ["tampering", "information_disclosure"])
 
 
 def _controls_for_category(category: str) -> list[str]:
@@ -2119,7 +2147,8 @@ def _outcome_match_kind(
         return "id"
     cwe_num = _extract_cwe_number(data.get("cwe_id"))
     category = str(threat.get("category") or "").lower()
-    if bool(cwe_num and (cwe_num == "78" and category == "command_execution" or cwe_num == "89" and category == "sql_injection" or cwe_num == "1336" and "template" in category or cwe_num == "22" and category == "path_traversal")):
+    if cwe_num and cwe_num in _CATEGORY_CWE_NUMBERS.get(
+            category, frozenset()):
         return "category"
     return None
 
