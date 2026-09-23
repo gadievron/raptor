@@ -68,6 +68,26 @@ logger = logging.getLogger(__name__)
 _LICENSE_POLICY_FILENAME = ".raptor-sca-license-policy.yml"
 
 
+def _registry_metadata_client(
+    cls: type, *, http: Any, cache: JsonCache | None, options: RunOptions,
+) -> Any:
+    """Single owner of registry-METADATA client construction.
+
+    ``--no-cache`` zeroes the TTL here: freshness is these clients'
+    whole reason to exist (recent_publish / maintainer_change /
+    yanked_version / transitive-drop / LLM registry views / parent-POM
+    fetch), and hand-constructed clients silently served day-old
+    registry metadata to the one flag whose documented purpose is
+    bypassing the cache. Without ``--no-cache`` each client keeps its
+    own default TTL. The closure test over this module pins that no
+    registry client is constructed outside this helper.
+    """
+    kwargs: dict[str, Any] = {"offline": options.offline}
+    if options.no_cache:
+        kwargs["ttl_seconds"] = 0
+    return cls(http, cache, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Options + result
 # ---------------------------------------------------------------------------
@@ -307,7 +327,9 @@ def run_sca(
 
     # Apply --no-cache by zeroing TTLs at every client level. This
     # avoids special-casing every caller; a TTL of 0 forces a refetch
-    # while still letting fresh in-process state be reused.
+    # while still letting fresh in-process state be reused. The
+    # registry-METADATA clients get the same treatment through
+    # ``_registry_metadata_client`` (the single construction owner).
     osv_query_ttl = 0 if options.no_cache else 24 * 3600
     osv_vuln_ttl = 0 if options.no_cache else 24 * 3600
     kev_ttl = 0 if options.no_cache else 24 * 3600
@@ -342,7 +364,8 @@ def run_sca(
     # 2 (network parent) and 3 (BOM imports) need the Maven client.
     from .parsers import pom_inheritance as _pom_inh
     from .registries.maven import MavenClient as _MvnC
-    _maven_for_pom = _MvnC(http, cache, offline=options.offline)
+    _maven_for_pom = _registry_metadata_client(
+        _MvnC, http=http, cache=cache, options=options)
     _pom_inh.set_inheritance_resolver(
         _pom_inh.PomInheritanceResolver(
             _maven_for_pom, offline=options.offline,
@@ -570,9 +593,12 @@ def run_sca(
         from .registries.github_actions import GitHubActionsClient
         from .registries.npm import NpmClient
         from .registries.pypi import PyPIClient
-        sc_pypi = PyPIClient(http, cache, offline=options.offline)
-        sc_npm = NpmClient(http, cache, offline=options.offline)
-        sc_gha = GitHubActionsClient(http, cache, offline=options.offline)
+        sc_pypi = _registry_metadata_client(
+            PyPIClient, http=http, cache=cache, options=options)
+        sc_npm = _registry_metadata_client(
+            NpmClient, http=http, cache=cache, options=options)
+        sc_gha = _registry_metadata_client(
+            GitHubActionsClient, http=http, cache=cache, options=options)
         supply_chain_findings = evaluate_supply_chain(
             target, manifests, joined,
             pypi_client=sc_pypi,
@@ -602,10 +628,14 @@ def run_sca(
         from .registries.rubygems import RubyGemsClient as _GemYC
         yanked_findings = scan_pinned_versions(
             joined,
-            pypi_client=_PypiYC(http, cache, offline=options.offline),
-            npm_client=_NpmYC(http, cache, offline=options.offline),
-            cargo_client=_CratesYC(http, cache, offline=options.offline),
-            rubygems_client=_GemYC(http, cache, offline=options.offline),
+            pypi_client=_registry_metadata_client(
+                _PypiYC, http=http, cache=cache, options=options),
+            npm_client=_registry_metadata_client(
+                _NpmYC, http=http, cache=cache, options=options),
+            cargo_client=_registry_metadata_client(
+                _CratesYC, http=http, cache=cache, options=options),
+            rubygems_client=_registry_metadata_client(
+                _GemYC, http=http, cache=cache, options=options),
         )
         hygiene_findings.extend(yanked_findings)
         progress.done(f"{len(yanked_findings)} yanked-version finding(s)")
@@ -671,10 +701,15 @@ def run_sca(
                 policy = DEFAULT_POLICY
         # Enrichment fetches from PyPI / npm registries. Skipped
         # offline (cache may still populate via prior runs).
+        # ``--no-cache`` passes cache=None (the harden shape): the
+        # license fetchers hardcode their read TTLs internally, so a
+        # zeroed-TTL cache can't be threaded through them — a cache-
+        # less run forces the refetch the flag documents.
         if not options.offline:
             try:
                 enriched = enrich_licenses(
-                    joined, http=http, cache=cache,
+                    joined, http=http,
+                    cache=None if options.no_cache else cache,
                     offline=options.offline,
                 )
                 if enriched:
@@ -778,9 +813,11 @@ def run_sca(
         vulnrichment = VulnrichmentClient(
             http, cache, offline=options.offline,
             # Vulnrichment is shipped via raw.githubusercontent.com
-            # one-CVE-at-a-time; a 7-day TTL matches the SSVC update
-            # cadence (CISA refreshes daily, but per-CVE drift within
-            # a week is rare).
+            # one-CVE-at-a-time; the client's default 7-day TTL
+            # matches the SSVC update cadence (CISA refreshes daily,
+            # but per-CVE drift within a week is rare). --no-cache
+            # still forces a refetch like every other feed client.
+            **({"ttl_seconds": 0} if options.no_cache else {}),
         )
 
     # 6. Reachability — skip if disabled or when no advisories were
@@ -902,13 +939,20 @@ def run_sca(
             vuln_findings=vuln_findings,
             supply_chain_findings=supply_chain_findings,
             hygiene_findings=hygiene_findings,
-            pypi_client=_PypiC(http, cache, offline=options.offline),
-            npm_client=_NpmC(http, cache, offline=options.offline),
-            cargo_client=_CratesC(http, cache, offline=options.offline),
-            composer_client=_PackC(http, cache, offline=options.offline),
-            rubygems_client=_GemC(http, cache, offline=options.offline),
-            maven_client=_MvnC(http, cache, offline=options.offline),
-            nuget_client=_NgC(http, cache, offline=options.offline),
+            pypi_client=_registry_metadata_client(
+                _PypiC, http=http, cache=cache, options=options),
+            npm_client=_registry_metadata_client(
+                _NpmC, http=http, cache=cache, options=options),
+            cargo_client=_registry_metadata_client(
+                _CratesC, http=http, cache=cache, options=options),
+            composer_client=_registry_metadata_client(
+                _PackC, http=http, cache=cache, options=options),
+            rubygems_client=_registry_metadata_client(
+                _GemC, http=http, cache=cache, options=options),
+            maven_client=_registry_metadata_client(
+                _MvnC, http=http, cache=cache, options=options),
+            nuget_client=_registry_metadata_client(
+                _NgC, http=http, cache=cache, options=options),
         )
         from .transitive_drop.adapter import to_supply_chain_findings
         td_sc = to_supply_chain_findings(drop_findings)
@@ -1335,8 +1379,10 @@ def _run_maintainer_review(client, supply_chain_findings, canonical, http, optio
     cache = JsonCache(
         root=options.cache_root or SCA_CACHE_ROOT,
     )
-    pypi = PyPIClient(http, cache, offline=options.offline)
-    npm = NpmClient(http, cache, offline=options.offline)
+    pypi = _registry_metadata_client(
+        PyPIClient, http=http, cache=cache, options=options)
+    npm = _registry_metadata_client(
+        NpmClient, http=http, cache=cache, options=options)
 
     from .llm.registry_view import build_registry_view
 
@@ -1453,8 +1499,10 @@ def _run_slopsquat_review(
     cache = JsonCache(
         root=options.cache_root or SCA_CACHE_ROOT,
     )
-    pypi = PyPIClient(http, cache, offline=options.offline)
-    npm = NpmClient(http, cache, offline=options.offline)
+    pypi = _registry_metadata_client(
+        PyPIClient, http=http, cache=cache, options=options)
+    npm = _registry_metadata_client(
+        NpmClient, http=http, cache=cache, options=options)
 
     # Cap at 20 to bound LLM cost — the same cap
     # ``_run_maintainer_review`` uses. An operator seeing >20

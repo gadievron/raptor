@@ -547,3 +547,57 @@ def test_canonical_merges_alias_name_regardless_of_order() -> None:
         # reset for the second iteration
         plain.alias_name = None
         aliased.alias_name = "my-lodash"
+
+
+# ---------------------------------------------------------------------------
+# --no-cache must reach every registry-metadata client
+# ---------------------------------------------------------------------------
+
+
+def test_no_cache_zeroes_registry_metadata_ttl() -> None:
+    """The single-owner constructor zeroes the TTL under --no-cache
+    and keeps each client's own default otherwise — freshness is these
+    clients' whole reason to exist (recent_publish, maintainer_change,
+    yanked_version, transitive-drop, LLM registry views)."""
+    from packages.sca.pipeline import RunOptions, _registry_metadata_client
+    from packages.sca.registries.pypi import PyPIClient
+
+    fresh = _registry_metadata_client(
+        PyPIClient, http=None, cache=None,
+        options=RunOptions(no_cache=True))
+    assert fresh._ttl == 0
+    default = _registry_metadata_client(
+        PyPIClient, http=None, cache=None, options=RunOptions())
+    assert default._ttl > 0
+
+
+def test_registry_metadata_clients_route_through_single_owner() -> None:
+    """Closure over pipeline.py: no registry client may be constructed
+    directly — every construction routes through
+    _registry_metadata_client, so a new call site cannot silently
+    serve day-old registry metadata to a --no-cache run (the exact
+    drift the harden entry point documents and defends against)."""
+    import ast
+    import inspect
+
+    from packages.sca import pipeline as pipeline_mod
+
+    tree = ast.parse(inspect.getsource(pipeline_mod))
+    registry_names: set[str] = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.ImportFrom) and node.module
+                and node.module.split(".")[0] == "registries"):
+            for alias in node.names:
+                registry_names.add(alias.asname or alias.name)
+    assert registry_names, "universe empty — import shape changed?"
+    offenders = [
+        (node.func.id, node.lineno)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in registry_names
+    ]
+    assert offenders == [], (
+        f"registry client(s) constructed outside "
+        f"_registry_metadata_client: {offenders}"
+    )
