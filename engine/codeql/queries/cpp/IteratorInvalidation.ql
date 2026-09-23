@@ -39,18 +39,6 @@ class StlContainerType extends Class {
   }
 }
 
-/**
- * Holds when `c` is a node-based container where `erase` only invalidates
- * the erased element (not all iterators).
- */
-predicate isNodeBasedContainer(StlContainerType c) {
-  c.hasQualifiedName(["std", "bsl"],
-    [
-      "list", "forward_list", "set", "multiset", "map", "multimap", "unordered_set",
-      "unordered_multiset", "unordered_map", "unordered_multimap"
-    ])
-}
-
 /** A call to a method that can invalidate iterators on the container. */
 class ContainerMutatingCall extends FunctionCall {
   Variable containerVar;
