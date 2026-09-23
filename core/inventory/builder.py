@@ -65,6 +65,7 @@ from .languages import (
     RECORD_ONLY_EXTENSIONS,
     detect_language,
     detect_language_from_content,
+    language_extensions,
     refine_language,
 )
 from .module_load_abort import detect_module_load_abort
@@ -1427,14 +1428,25 @@ def _collect_source_files(
             # instead of leaving them silently invisible.
             if ext in extensions or ext in RECORD_ONLY_EXTENSIONS:
                 file_list.append(filepath)
-            elif detect_language_from_content(str(filepath)):
+            else:
                 # Files whose name says nothing carry their language in
                 # the content: extensionless interpreter scripts
                 # (launcher / dispatch surfaces) in the shebang line,
                 # PHP shipped under foreign extensions (plugin module
                 # files) in the open tag. The extension gate alone left
-                # both invisible to every downstream scanner.
-                file_list.append(filepath)
+                # both invisible to every downstream scanner. Two gates
+                # keep the probe inside its derivation: shebang routing
+                # applies to EXTENSIONLESS names only (probing shebangs
+                # on named documents minted review units from
+                # notes.txt-class non-source), and a probe-detected
+                # language is admitted only when the caller's
+                # ``extensions`` narrowing includes it (the documented
+                # parameter contract).
+                probe_lang = detect_language_from_content(
+                    str(filepath), allow_shebang=not ext)
+                if probe_lang and (
+                        language_extensions(probe_lang) & extensions):
+                    file_list.append(filepath)
 
     return file_list, pruned_dirs
 

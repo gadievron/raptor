@@ -543,3 +543,64 @@ def test_inc_php_routing_requires_leading_tag():
     assert refine_language("inc", "f.inc", "<?PHP\nfunction v(){}\n") == "php"
     assert refine_language(
         "inc", "f.inc", "  <?= $x ?>\n") == "php"
+
+
+def test_named_document_with_shebang_not_inventoried(tmp_path):
+    # Shebang routing is derived from EXTENSIONLESS interpreter
+    # scripts; probing shebangs on named documents minted review units
+    # from notes.txt-class non-source (coverage denominator and review
+    # spend inflation).
+    import json
+    import tempfile
+
+    from core.inventory.builder import build_inventory
+
+    (tmp_path / "notes.txt").write_text("#!/bin/sh\necho hi\n")
+    (tmp_path / "run").write_text("#!/bin/sh\necho hi\n")
+    (tmp_path / "mod.theme").write_text("<?php\nfunction v(){}\n")
+    with tempfile.TemporaryDirectory() as td:
+        build_inventory(str(tmp_path), td, parallel=False)
+        cl = json.loads(
+            (__import__("pathlib").Path(td) / "checklist.json").read_text())
+    by_path = {f["path"]: f["language"] for f in cl["files"]}
+    assert "notes.txt" not in by_path
+    # The two derivations stay: extensionless shebang scripts and PHP
+    # under foreign extensions.
+    assert by_path.get("run") == "shell"
+    assert by_path.get("mod.theme") == "php"
+
+
+def test_extensions_narrowing_gates_probe_admissions(tmp_path):
+    # The documented `extensions` contract: probe-admitted files obey
+    # the caller's narrowing exactly like extension-admitted ones.
+    import json
+    import tempfile
+
+    from core.inventory.builder import build_inventory
+
+    (tmp_path / "app.py").write_text("def f():\n    return 1\n")
+    (tmp_path / "data.weird").write_text("<?php\nfunction v(){}\n")
+    (tmp_path / "run").write_text("#!/bin/sh\necho hi\n")
+    with tempfile.TemporaryDirectory() as td:
+        build_inventory(str(tmp_path), td, extensions={".py"},
+                        parallel=False)
+        cl = json.loads(
+            (__import__("pathlib").Path(td) / "checklist.json").read_text())
+    assert [(f["path"], f["language"]) for f in cl["files"]] == [
+        ("app.py", "python")]
+
+
+def test_extensions_including_php_admits_probed_php(tmp_path):
+    import json
+    import tempfile
+
+    from core.inventory.builder import build_inventory
+
+    (tmp_path / "data.weird").write_text("<?php\nfunction v(){}\n")
+    with tempfile.TemporaryDirectory() as td:
+        build_inventory(str(tmp_path), td, extensions={".php"},
+                        parallel=False)
+        cl = json.loads(
+            (__import__("pathlib").Path(td) / "checklist.json").read_text())
+    assert [(f["path"], f["language"]) for f in cl["files"]] == [
+        ("data.weird", "php")]

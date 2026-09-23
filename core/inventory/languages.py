@@ -191,7 +191,9 @@ def _php_leads(head: bytes) -> bool:
     return _php_leading_tag(head.decode('latin-1'))
 
 
-def detect_language_from_content(filepath: str) -> str | None:
+def detect_language_from_content(
+    filepath: str, *, allow_shebang: bool = True,
+) -> str | None:
     """Detect language for a file whose extension says nothing.
 
     Consulted when the extension is absent or unrecognised: a ``#!``
@@ -199,15 +201,33 @@ def detect_language_from_content(filepath: str) -> str | None:
     :func:`detect_language_from_shebang`), then a leading PHP open
     tag. Anything unreadable or unrecognisable returns None — the
     file stays uninventoried exactly as before.
+
+    ``allow_shebang=False`` restricts the probe to the PHP open tag —
+    the inventory walk passes it for files that HAVE an (unrecognised)
+    extension: shebang routing is derived from extensionless
+    interpreter scripts, and probing shebangs on named documents
+    (``notes.txt`` opening with ``#!/bin/sh``) minted review units
+    from non-source.
     """
     head = _read_probe_head(filepath, _CONTENT_PROBE_BYTES)
     if not head:
         return None
     if head.startswith(b'#!'):
-        return _parse_shebang(head)
+        return _parse_shebang(head) if allow_shebang else None
     if _php_leads(head):
         return 'php'
     return None
+
+
+@functools.lru_cache(maxsize=None)
+def language_extensions(language: str) -> frozenset:
+    """Canonical extensions mapped to ``language`` in LANGUAGE_MAP —
+    lets the walk honour a caller's ``extensions`` narrowing for
+    content-probed files (a probe-admitted php/shell file is admitted
+    only when its language's extensions are in the allowed set)."""
+    return frozenset(
+        ext for ext, lang in LANGUAGE_MAP.items() if lang == language
+    )
 
 
 # ---------------------------------------------------------------------
