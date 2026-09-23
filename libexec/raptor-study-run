@@ -16,6 +16,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 # ─── trust-marker check (do not import; inline by design) ───
 # fmt: off
@@ -42,6 +43,30 @@ logger = logging.getLogger("raptor-study-run")
 
 def _progress(phase: str, message: str) -> None:
     print(f"study-run[{phase}]: {message}", file=sys.stderr, flush=True)
+
+
+def _write_spend_record(client: Any, output_dir: Path) -> None:
+    """Persist this leg's actual LLM spend as ``study-cost.json``.
+
+    Multi-pass drivers (raptor-binary-study) subtract it from their
+    total budget between passes. Written on failure paths too — a
+    failed leg's spend is still money gone. Best-effort: bookkeeping
+    must never mask the study result.
+    """
+    try:
+        spent = max(
+            float(getattr(client, "total_cost", 0.0) or 0.0),
+            float(getattr(client, "provider_spend_usd", 0.0) or 0.0),
+        )
+    except (TypeError, ValueError):
+        spent = 0.0
+    try:
+        from core.json import save_json
+        save_json(output_dir / "study-cost.json",
+                  {"cost_usd": round(spent, 6)})
+    except Exception:  # noqa: BLE001 — see docstring
+        logger.warning("could not write study-cost.json",
+                       exc_info=True)
 
 
 
@@ -74,8 +99,27 @@ def main() -> int:
                          "Lower it for slow/thinking models whose "
                          "single-batch responses outlive transport "
                          "read timeouts.")
+    ap.add_argument("--max-cost", type=float, default=None,
+                    metavar="USD",
+                    help="Maximum LLM cost in USD before stopping — "
+                         "for THIS invocation (one study leg; "
+                         "multi-pass drivers divide their total "
+                         "across legs). When the cap trips the batch "
+                         "loop stops cleanly and keeps the partial "
+                         "results. Default: the LLM config's "
+                         "per-scan cap.")
     ap.add_argument("-v", "--verbose", action="store_true")
     parsed = ap.parse_args()
+
+    # isfinite: argparse's float() accepts "nan"/"inf", and NaN
+    # passes a naive `<= 0` gate — the cap then never trips
+    # (`spent > nan` is always False), silently unlimited.
+    import math
+    if parsed.max_cost is not None and (
+            not math.isfinite(parsed.max_cost) or parsed.max_cost <= 0):
+        print("study-run: --max-cost must be a positive finite "
+              "dollar amount", file=sys.stderr)
+        return 1
 
     # Escaping console formatter — see core.logging.configure_cli_logging.
     configure_cli_logging(
@@ -131,14 +175,25 @@ def main() -> int:
     # just as easily as an explicit --model pin.
     _ensure_llm_dispatcher(client, "raptor-study-run")
 
+    if parsed.max_cost is not None:
+        # The client enforces config.max_cost_per_scan live on every
+        # dispatch, so post-construction assignment is the one
+        # chokepoint that covers both client paths.
+        cfg_obj = getattr(client, "config", None)
+        if cfg_obj is not None:
+            cfg_obj.max_cost_per_scan = parsed.max_cost
+
     _progress("start", f"Reading {study_list}")
-    model = run_study(
-        study_list,
-        output_dir,
-        client,
-        on_progress=_progress,
-        batch_target=parsed.batch_target,
-    )
+    try:
+        model = run_study(
+            study_list,
+            output_dir,
+            client,
+            on_progress=_progress,
+            batch_target=parsed.batch_target,
+        )
+    finally:
+        _write_spend_record(client, output_dir)
 
     print(
         f"study-run: domain model written — "

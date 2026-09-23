@@ -149,13 +149,13 @@ def is_budget_exceeded_error(exc: BaseException) -> bool:
     1. the typed :class:`LLMBudgetExceededError` anywhere on the
        chain is definitive;
     2. response-shape failures (schema violations, JSON decode
-       errors) anywhere on the chain are NEVER budget — their
-       messages quote MODEL-CHOSEN content (the strict schema floor
-       embeds unknown field names verbatim), and the all-models-failed
-       wrapper relays that text into a bare ``RuntimeError``: one
-       injected key literally named "budget exceeded" would otherwise
-       stop the entire remaining run with zero transport failure and
-       zero real spend;
+       errors, pydantic validation) anywhere on the chain are NEVER
+       budget — their messages quote MODEL-CHOSEN content (the strict
+       schema floor embeds unknown field names verbatim), and the
+       all-models-failed wrapper relays that text into a bare
+       ``RuntimeError``: one injected key literally named "budget
+       exceeded" would otherwise stop the entire remaining run with
+       zero transport failure and zero real spend;
     3. only then does the historical message fallback run, for
        exceptions raised by older code paths or re-wrapped by
        intermediaries that lose both the type and the causal chain.
@@ -166,6 +166,10 @@ def is_budget_exceeded_error(exc: BaseException) -> bool:
         if isinstance(e, LLMBudgetExceededError):
             return True
         if isinstance(e, (SchemaUnknownFieldError, json.JSONDecodeError)):
+            return False
+        if type(e).__name__ == "ValidationError":
+            # pydantic/instructor shape failures, matched by name so
+            # the classifier stays import-light.
             return False
     return (
         isinstance(exc, RuntimeError)

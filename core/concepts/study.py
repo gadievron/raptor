@@ -544,6 +544,33 @@ class _BatchLLMError(Exception):
         self.truncation = truncation
 
 
+class _PhaseBudgetExhausted(Exception):
+    """The LLM client's spend cap tripped mid-phase.
+
+    Deterministic and non-retryable: every further call fails the
+    same way, so the batch loops stop dispatching immediately and
+    keep whatever already succeeded — never burning the
+    consecutive-failure counter (a provider-health breaker) or the
+    remaining batches on a known-terminal condition.
+
+    ``partial`` carries results already PAID FOR inside the failing
+    batch (a split sibling that succeeded before the cap tripped) so
+    the phase loops can salvage them — a budget stop must never
+    convert paid partial coverage into an empty-handed failure.
+    """
+
+    def __init__(
+        self,
+        msg: str,
+        *,
+        partial: "tuple[list, list, list, list, list] | None" = None,
+    ) -> None:
+        super().__init__(msg)
+        self.partial: tuple[list, list, list, list, list] = (
+            partial if partial is not None else ([], [], [], [], [])
+        )
+
+
 def _is_truncation_error(exc: BaseException) -> bool:
     """Chain-walking output-truncation check.
 
@@ -2812,6 +2839,17 @@ def _run_one_batch(
         msg = f"batch {idx + 1}/{total} wall-timeout"
         raise _BatchLLMError(msg) from None
     if kind == "err":
+        try:
+            from core.llm.client import is_budget_exceeded_error
+            budget = is_budget_exceeded_error(payload)
+        except ImportError:
+            budget = False
+        if budget:
+            # Terminal for the phase, not a batch-shaped failure —
+            # classified before the generic wrap so the loops can
+            # stop dispatching instead of churning.
+            msg = f"batch {idx + 1}/{total}: {payload}"
+            raise _PhaseBudgetExhausted(msg) from payload
         logger.warning(
             "Phase 2 batch %d/%d failed", idx + 1, total,
             exc_info=payload,
@@ -2974,6 +3012,14 @@ def _run_batch_splitting_on_truncation(
                 doc_context=doc_context, correlate=correlate,
                 discard_sink=discard_sink, vocab_sink=vocab_sink,
             )
+        except _PhaseBudgetExhausted as stop:
+            # Salvage the sibling half's already-paid results onto
+            # the budget stop before it propagates (see the class
+            # docstring) — a budget trip must never convert paid
+            # partial coverage into an empty-handed failure.
+            for acc, part in zip(stop.partial, combined):
+                acc.extend(part)
+            raise
         except _BatchLLMError as sub:
             if sub.truncation:
                 last_trunc = sub
@@ -3108,6 +3154,31 @@ def _run_phase2_serial(
                     vocab_sink=vocab_sink,
                 )
             )
+        except _PhaseBudgetExhausted as exc:
+            failures += 1
+            # A budget stop is deterministic — every remaining batch
+            # would fail identically, so stop dispatching NOW and
+            # keep the partial coverage already earned. Distinct from
+            # the consecutive-failure abort: this is a chosen spend
+            # cap, not a provider outage.
+            if any(exc.partial):
+                # Paid results salvaged from inside the failing
+                # batch (a split sibling that finished before the
+                # cap tripped) count as coverage — never let the
+                # empty-model guard discard money already spent.
+                for acc, part in zip(
+                    (all_concepts, all_invariants, all_contracts,
+                     all_bug_patterns, all_struct_annots),
+                    exc.partial,
+                ):
+                    acc.extend(part)
+                successes += 1
+            logger.error(
+                "Phase 2: LLM budget exhausted at batch %d/%d — "
+                "stopping cleanly with %d completed batch(es): %s",
+                idx + 1, total, successes, exc,
+            )
+            break
         except _BatchLLMError as exc:
             failures += 1
             if exc.truncation:
@@ -3120,8 +3191,8 @@ def _run_phase2_serial(
             consecutive_failures += 1
             if consecutive_failures >= _CONSECUTIVE_FAIL_LIMIT:
                 logger.error(
-                    "Phase 2: %d consecutive batch failures — aborting "
-                    "(provider may be down or budget exceeded)",
+                    "Phase 2: %d consecutive batch failures — "
+                    "aborting (provider may be down)",
                     consecutive_failures,
                 )
                 break
@@ -3195,7 +3266,32 @@ def _run_phase2_parallel(
 
     _failed = [0]
 
+    _budget_stopped = [False]
+
     def _on_batch_error(item: Any, exc: Exception) -> tuple:
+        if isinstance(exc, _PhaseBudgetExhausted):
+            # Deterministic spend-cap trip — stop dispatching, keep
+            # the partial coverage; see the sequential path's twin.
+            salvaged = any(exc.partial)
+            with _fail_lock:
+                _failed[0] += 1
+                if salvaged:
+                    # Paid split-sibling results ride the exception;
+                    # returning them (instead of the empty tuple)
+                    # folds them into the phase output and keeps the
+                    # empty-model guard honest.
+                    _successes[0] += 1
+                first = not _budget_stopped[0]
+                _budget_stopped[0] = True
+                completed = _successes[0]
+                _abort.set()
+            if first:
+                logger.error(
+                    "Phase 2: LLM budget exhausted — stopping "
+                    "dispatch cleanly with %d completed batch(es): "
+                    "%s", completed, exc,
+                )
+            return exc.partial
         truncated = (
             isinstance(exc, _BatchLLMError) and exc.truncation
         )
@@ -3207,8 +3303,8 @@ def _run_phase2_parallel(
                 _consecutive_failures[0] += 1
             if _consecutive_failures[0] >= _CONSECUTIVE_FAIL_LIMIT:
                 logger.error(
-                    "Phase 2: %d consecutive batch failures — aborting "
-                    "(provider may be down or budget exceeded)",
+                    "Phase 2: %d consecutive batch failures — "
+                    "aborting (provider may be down)",
                     _consecutive_failures[0],
                 )
                 _abort.set()

@@ -655,8 +655,11 @@ class TestRunPhase2:
             for i in range(10)
         ]
         mock_client = MagicMock()
+        # A transport-shaped error: budget exhaustion has its own
+        # terminal lane now (TestPhase2BudgetStop) and never feeds
+        # this breaker.
         mock_client.generate_structured.side_effect = RuntimeError(
-            "budget exceeded",
+            "connection reset by peer",
         )
         with pytest.raises(_BatchLLMError, match="refusing"):
             run_phase2(items, "t/", mock_client)
@@ -2903,6 +2906,143 @@ class TestTruncationMatcher:
         from core.concepts.study import _is_truncation_error
         assert not _is_truncation_error(
             RuntimeError("connection reset by peer"))
+
+
+class TestPhase2BudgetStop:
+    """Budget exhaustion is terminal — stop cleanly, keep partials,
+    never burn the provider-health breaker on it."""
+
+    _OK = ({"concepts": [{
+        "id": "c", "description": "desc",
+        "evidence": [{"type": "doc", "file": "x.c",
+                      "observation": "obs"}],
+        "confidence": "inferred"}],
+        "invariants": [], "contracts": []}, "raw")
+
+    def _items(self, n: int) -> list[StudyItem]:
+        # One file per item so batch_target=1 yields one batch each.
+        return [StudyItem(id=f"i{k}", kind="function", name=f"fn{k}",
+                          file=f"d{k}/f.c") for k in range(n)]
+
+    def test_midrun_trip_stops_cleanly_with_partials(self, caplog):
+        import logging
+
+        from core.llm.client import LLMBudgetExceededError
+        client = MagicMock()
+        client.generate_structured.side_effect = [
+            self._OK, self._OK,
+            LLMBudgetExceededError(
+                "LLM budget exceeded: $10.0010 spent > $10.0000 "
+                "limit"),
+        ]
+        with caplog.at_level(logging.ERROR, logger="core.concepts.study"):
+            concepts, *_ = run_phase2(
+                self._items(4), "t/", client, batch_target=1)
+        # Two completed batches survive; the remaining batch is never
+        # dispatched (a budget trip is deterministic).
+        assert len(concepts) == 2
+        assert client.generate_structured.call_count == 3
+        messages = [r.getMessage() for r in caplog.records]
+        assert any(
+            "LLM budget exhausted" in m and "2 completed batch(es)" in m
+            for m in messages
+        )
+        assert not any("provider may be down" in m for m in messages)
+
+    def test_trip_before_any_success_refuses_empty_model(self):
+        import pytest
+
+        from core.concepts.study import _BatchLLMError
+        from core.llm.client import LLMBudgetExceededError
+        client = MagicMock()
+        client.generate_structured.side_effect = LLMBudgetExceededError(
+            "LLM budget exceeded: $10.0010 spent > $10.0000 limit")
+        with pytest.raises(_BatchLLMError, match="refusing"):
+            run_phase2(self._items(3), "t/", client, batch_target=1)
+        assert client.generate_structured.call_count == 1
+
+    class _SplitThenBudgetClient:
+        """One two-item batch: together truncates; the fn0 half
+        succeeds, the fn1 half trips the spend cap."""
+
+        def generate_structured(self, prompt: str, schema, **kw):
+            import re as _re
+
+            from core.llm.client import LLMBudgetExceededError
+            names = set(_re.findall(r"\bfn\d+\b", prompt))
+            if len(names) > 1:
+                raise RuntimeError(
+                    "Structured response truncated (output token "
+                    "limit reached, stop_reason=max_tokens, "
+                    "instructor tool-use leg)")
+            if "fn1" in names:
+                raise LLMBudgetExceededError(
+                    "LLM budget exceeded: $10.0010 spent > "
+                    "$10.0000 limit")
+            return ({"concepts": [
+                {"id": n, "description": f"desc {n}",
+                 "evidence": [{"type": "doc", "file": "x.c",
+                               "observation": "obs"}],
+                 "confidence": "inferred"} for n in sorted(names)],
+                "invariants": [], "contracts": []}, "raw")
+
+    def test_midcascade_trip_salvages_paid_sibling_serial(self):
+        """Budget trip inside a split cascade must keep the sibling
+        half's PAID results — a first-batch trip previously converted
+        them into a hard refusing failure."""
+        # `calls` boosts fn0's priority so the succeeding half runs
+        # (and is paid for) BEFORE the budget-tripping half.
+        items = [StudyItem(id="i0", kind="function", name="fn0",
+                           file="x.c", calls=["a", "b"]),
+                 StudyItem(id="i1", kind="function", name="fn1",
+                           file="x.c")]
+        client = self._SplitThenBudgetClient()
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=2)
+        assert [c.id for c in concepts] == ["fn0"]
+
+    def test_midcascade_trip_salvages_paid_sibling_parallel(
+        self, monkeypatch,
+    ):
+        monkeypatch.setattr(
+            "core.llm.concurrency.derive_max_workers", lambda _m: 2)
+        items = [StudyItem(id="i0", kind="function", name="fn0",
+                           file="x.c", calls=["a", "b"]),
+                 StudyItem(id="i1", kind="function", name="fn1",
+                           file="x.c"),
+                 StudyItem(id="i2", kind="function", name="fn2",
+                           file="y.c"),
+                 StudyItem(id="i3", kind="function", name="fn3",
+                           file="y.c")]
+        client = self._SplitThenBudgetClient()
+        client.model = "gemini-2.5-flash"
+        concepts, *_ = run_phase2(items, "t/", client, batch_target=2)
+        # Both batches split; each salvages its fn0/fn2-style half…
+        # except the fn2/fn3 batch has no budget item — fn1 is the
+        # only tripping name — so it recovers fully.
+        ids = sorted(c.id for c in concepts)
+        assert "fn0" in ids
+        assert "fn1" not in ids
+
+    def test_hostile_echo_does_not_end_the_phase(self):
+        """Model-authored text quoting 'budget exceeded' inside a
+        response-shape failure must stay an ordinary batch failure —
+        never the terminal budget stop."""
+        import json as _json
+
+        ok = self._OK
+        shape_err = _json.JSONDecodeError(
+            "Expecting value: budget exceeded is not valid JSON",
+            '{"note": "budget exceeded"}', 1)
+        wrapped = RuntimeError(
+            "structured parse failed: budget exceeded echo")
+        wrapped.__cause__ = shape_err
+        client = MagicMock()
+        client.generate_structured.side_effect = [wrapped, ok, ok, ok]
+        concepts, *_ = run_phase2(
+            self._items(4), "t/", client, batch_target=1)
+        # All remaining batches still dispatched (no terminal stop).
+        assert client.generate_structured.call_count == 4
+        assert len(concepts) == 3
 
 
 class TestStudyOutputCap:

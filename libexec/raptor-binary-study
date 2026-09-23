@@ -85,9 +85,55 @@ _DECOMP_MAX_CONF = "traced"
 _DECOMP_TAG = "decompiled-evidence"
 
 
+#: Do not launch another study pass with less than this much budget
+#: left: a pass that cannot afford even one batch still pays prep and
+#: trips the cap on its first call, reporting a failure the operator
+#: then has to triage. Too high and legitimately cheap tail passes
+#: (a handful of reading-list items) get skipped with money left.
+_MIN_PASS_BUDGET_USD = 0.25
+
+
 def _fail(msg: str) -> int:
     print(f"error: {msg}", file=sys.stderr)
     return 1
+
+
+def _read_pass_cost(output_dir: Path) -> float:
+    """This pass's LLM spend from study-run's ``study-cost.json``.
+
+    Missing or malformed records read as zero spend — the budget then
+    degrades to per-pass caps (each pass still launched with the
+    unreduced remainder), never to a refusal to study.
+    """
+    path = output_dir / "study-cost.json"
+    if not path.is_file():
+        return 0.0
+    try:
+        data = load_json(path, max_bytes=1024 * 1024)
+        return max(0.0, float(data.get("cost_usd", 0.0)))
+    except (AttributeError, TypeError, ValueError):
+        return 0.0
+
+
+def _pass_budget(max_cost: float, spent_total: float,
+                 output_dir: Path, pass_no: int) -> "float | None":
+    """Budget for the NEXT study pass, or ``None`` to stop the loop.
+
+    ``None`` when the remainder is below ``_MIN_PASS_BUDGET_USD``
+    (see the constant's trade-off note). Otherwise unlinks the
+    previous pass's spend record BEFORE launching — a stale
+    ``study-cost.json`` from an earlier pass (or an earlier run in a
+    reused output dir) must not be double-counted when the pass dies
+    before study-run writes a fresh one — and returns the remainder.
+    """
+    remaining = max_cost - spent_total
+    if remaining < _MIN_PASS_BUDGET_USD:
+        print(f"binary-study: LLM budget exhausted "
+              f"(${spent_total:.2f} of ${max_cost:.2f} spent) — "
+              f"stopping before pass {pass_no}", file=sys.stderr)
+        return None
+    (output_dir / "study-cost.json").unlink(missing_ok=True)
+    return remaining
 
 
 def _resolve_redb_path(arg: Path) -> "Path | None":
@@ -441,8 +487,27 @@ def main() -> int:
                     help="Outer prep+study passes (default 3).")
     ap.add_argument("--decompile-batch", type=int, default=12,
                     help="Max functions decompiled between passes.")
+    ap.add_argument("--max-cost", type=float, default=None,
+                    metavar="USD",
+                    help="Total LLM budget in USD across ALL study "
+                         "passes of this invocation: each pass runs "
+                         "with the remaining budget and the pass "
+                         "loop stops cleanly when it is spent. "
+                         "Covers the study-run leg (the dominant "
+                         "spend). Without this flag every pass runs "
+                         "on the LLM config's default per-scan cap — "
+                         "an effective ceiling of passes x default.")
     ap.add_argument("-v", "--verbose", action="store_true")
     parsed = ap.parse_args()
+
+    # isfinite: argparse's float() accepts "nan"/"inf", and NaN
+    # passes a naive `<= 0` gate — the remaining-budget arithmetic
+    # then never stops a pass, silently unlimited.
+    import math
+    if parsed.max_cost is not None and (
+            not math.isfinite(parsed.max_cost) or parsed.max_cost <= 0):
+        return _fail("--max-cost must be a positive finite dollar "
+                     "amount")
 
     if parsed.finalize:
         out = parsed.output_dir
@@ -532,6 +597,7 @@ def main() -> int:
     identifiers = parsed.identifier
     last_pending: "set[str] | None" = None
     loop_rc = 0
+    spent_total = 0.0
     for pass_no in range(1, max(1, parsed.max_passes) + 1):
         cmd = [sys.executable, str(libexec / "raptor-study-loop"),
                str(tree_root), str(output_dir),
@@ -547,9 +613,17 @@ def main() -> int:
             cmd.extend(["--concept", parsed.concept])
         if parsed.model:
             cmd.extend(["--model", parsed.model])
+        if parsed.max_cost is not None:
+            remaining = _pass_budget(
+                parsed.max_cost, spent_total, output_dir, pass_no)
+            if remaining is None:
+                break
+            cmd.extend(["--max-cost", f"{remaining:.4f}"])
         if parsed.verbose:
             cmd.append("-v")
         rc = _run(cmd, parsed.verbose, gap_dir=output_dir)
+        if parsed.max_cost is not None:
+            spent_total += _read_pass_cost(output_dir)
         if rc != 0:
             print(f"binary-study: study-loop failed on pass "
                   f"{pass_no} (exit {rc})", file=sys.stderr)
