@@ -877,14 +877,20 @@ def _filter_volumes(volumes: list[Any], staging: Path) -> list[Any]:
                 kept.append(vol)  # anonymous volume, container path only
                 continue
             source = parts[0].strip()
-            if source.startswith(("/", ".", "~")):
+            # Any '/'-bearing source is a PATH, never a named volume
+            # (compose volume names are [a-zA-Z0-9._-]). The old
+            # leading-char test classified `foo/../x:/x` as a named
+            # volume — safe only because the sanitizer happens to run
+            # on the RESOLVED model today; align the discriminator
+            # with the grammar so that ordering is not load-bearing.
+            if source.startswith(("/", ".", "~")) or "/" in source:
                 if _bind_source_ok(source):
                     kept.append(vol)
                 else:
                     logger.warning(
                         "compose sanitize: dropping host bind %r", vol)
             else:
-                kept.append(vol)  # named volume
+                kept.append(vol)  # named volume (no path separator)
         elif isinstance(vol, dict):
             vtype = str(vol.get("type") or "volume")
             if vtype in ("volume", "tmpfs"):

@@ -1214,3 +1214,23 @@ def test_secret_file_outside_writable_binds_kept(tmp_path: Path) -> None:
     })
     assert doc["secrets"]["s1"]["file"] == "./sec/tok"
     assert "s1" in doc["services"]["b"]["secrets"]
+
+
+class TestNamedVolumeDiscriminator:
+    """Any '/'-bearing volume source is a path, never a named volume
+    (compose names are [a-zA-Z0-9._-]) — `foo/../x:/x` must take the
+    bind lane so the staging containment does not depend on the
+    sanitizer running post-resolution."""
+
+    def test_relative_traversal_source_treated_as_bind(self, tmp_path: Path) -> None:
+        kept = cco._filter_volumes(["foo/../../etc:/x"], tmp_path)
+        assert kept == []
+
+    def test_relative_inside_staging_bind_kept(self, tmp_path: Path) -> None:
+        (tmp_path / "data").mkdir()
+        kept = cco._filter_volumes(["data/sub/..:/x"], tmp_path)
+        assert kept == ["data/sub/..:/x"]
+
+    def test_named_volume_still_named(self, tmp_path: Path) -> None:
+        kept = cco._filter_volumes(["pgdata:/var/lib/postgresql"], tmp_path)
+        assert kept == ["pgdata:/var/lib/postgresql"]
