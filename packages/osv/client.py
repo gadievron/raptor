@@ -209,11 +209,21 @@ class OsvClient:
 
     @staticmethod
     def _slot_ids(slot: dict[str, Any]) -> list[str]:
-        """Extract string vuln IDs from one querybatch result slot."""
+        """Extract string vuln IDs from one querybatch result slot.
+
+        Empty ids are dropped: they are server-minted junk, and the
+        hydration loop would only feed them back to the per-vuln
+        endpoint (where the degenerate-id gate refuses them). A truthy
+        non-list ``vulns`` is equally junk — never iterated.
+        """
+        vulns = slot.get("vulns")
+        if not isinstance(vulns, list):
+            return []
         return [
             v["id"]
-            for v in slot.get("vulns") or []
+            for v in vulns
             if isinstance(v, dict) and isinstance(v.get("id"), str)
+            and v["id"]
         ]
 
     # ------------------------------------------------------------------
@@ -223,7 +233,17 @@ class OsvClient:
     def _cached_get_vuln(self, vuln_id: str) -> dict[str, Any] | None:
         """Raw record dict, ``None`` for a definitive 404, or
         :class:`OsvLookupError` for any non-definitive failure."""
-        cache_key = f"osv/vulns/{_safe_id(vuln_id)}"
+        # Shape-gate the id BEFORE it joins a cache key or URL. Ids
+        # arrive from server-controlled querybatch output, not just
+        # operator input (the epss/vulnrichment clients carry the same
+        # validate-first discipline for the same reason); '' / '.' /
+        # '..' would raise ValueError out of the cache-key layer —
+        # escaping the OsvLookupError-only catches upstream and
+        # killing the scan on one hostile slot.
+        if not vuln_id or vuln_id in (".", ".."):
+            msg = f"osv: refusing degenerate vuln id {vuln_id!r}"
+            raise OsvLookupError(msg)
+        cache_key = f"osv/vulns/{_encode_id(vuln_id)}"
         if self._cache is not None:
             cached = self._cache.get(cache_key, ttl_seconds=self._ttl)
             if isinstance(cached, dict):
@@ -238,12 +258,10 @@ class OsvClient:
         # query string), `#` (fragment), spaces, or control
         # bytes (worst case), the resulting URL was either
         # malformed (server returned 400) or resolved to the
-        # wrong endpoint silently. `_safe_id` already sanitises
-        # for the CACHE KEY but the URL path needed proper
-        # percent-encoding via `urllib.parse.quote(..., safe="")`
-        # so even `/` gets encoded as %2F.
-        from urllib.parse import quote
-        encoded_id = quote(vuln_id, safe="")
+        # wrong endpoint silently. The same injective encoding
+        # keys the cache above, so URL identity and cache identity
+        # cannot diverge.
+        encoded_id = _encode_id(vuln_id)
         try:
             data = self._http.get_json(f"{OSV_BASE_URL}/vulns/{encoded_id}")
         except HttpError as exc:
@@ -263,6 +281,18 @@ class OsvClient:
         return data
 
 
-def _safe_id(s: str) -> str:
-    """Make a vuln ID safe for path-segment caching."""
-    return s.replace("/", "_").replace("\\", "_")
+def _encode_id(s: str) -> str:
+    """Injective, path-safe encoding of a vuln ID for the cache key.
+
+    The previous ``/`` / ``\\`` → ``_`` replacement was lossy:
+    ``GHSA-a/b`` and ``GHSA-a_b`` shared one cache file, letting a
+    crafted id shadow another id's cached record for the TTL.
+    Percent-encoding every reserved byte (``safe=""``) is injective —
+    JsonCache documents exactly this responsibility for callers that
+    interpolate externally-sourced names into key segments. Keys for
+    ids containing ``/`` change spelling once; the old entries simply
+    expire unread.
+    """
+    from urllib.parse import quote
+
+    return quote(s, safe="")
