@@ -27,8 +27,21 @@ from core.coverage.record import RUN_ARTIFACT_MAX_BYTES as _OUTPUT_MAX_BYTES
 
 # Maximum bytes to persist from OpenAnt subprocess stderr. Generous upper bound
 # for any reasonable error trace; bounded so a misbehaving OpenAnt that spams
-# stderr in a tight loop cannot fill the disk.
+# stderr in a tight loop cannot fill the disk. Byte-true: the cap is
+# measured on the encoded bytes (a char-count slice admitted up to 4x
+# the budget in UTF-8) and the truncation notice fits INSIDE it.
 STDERR_MAX_BYTES = 1_000_000  # 1 MiB
+
+# Per-stream ceiling for subprocess output captured back into this
+# parent (stdout is json.loads'd whole for the usage record; stderr
+# feeds the persist cap above). The consent gate's own threat model
+# has a hostile/consented core executing here — without a ceiling it
+# buffered unbounded stream data in parent memory. Enforced via the
+# sandbox's max_capture_bytes: a hard transient bound on the fork
+# spawn backend, and a result-size clamp (truncation-marked) on the
+# other lanes — bounding everything that flows downstream (parse,
+# persist) even where the lane's own pipe buffering stays transient.
+_CAPTURE_MAX_BYTES = 8 * 1024 * 1024
 
 # Languages exposed by OpenAnt's --language CLI flag.
 # Zig and others may be auto-detected but are not valid --language values.
@@ -691,6 +704,7 @@ def _run_subprocess(
             caller_label="openant",
             capture_output=True,
             text=True,
+            max_capture_bytes=_CAPTURE_MAX_BYTES,
             timeout=config.timeout_seconds,
             env=env,
             cwd=str(config.core_path),
@@ -710,17 +724,7 @@ def _run_subprocess(
     # fill the disk by spamming stderr in a tight loop.
     if proc.stderr:
         try:
-            stderr_to_write = proc.stderr[:STDERR_MAX_BYTES]
-            if len(proc.stderr) > STDERR_MAX_BYTES:
-                stderr_to_write += (
-                    f"\n\n[truncated — original was {len(proc.stderr)} bytes, "
-                    f"capped at {STDERR_MAX_BYTES}]\n"
-                )
-            # Explicit encoding: the subprocess stderr quotes hostile
-            # target content — an encoding-less write crashed under a
-            # C locale exactly when the content was non-ASCII.
-            (out_dir / "openant.stderr.log").write_text(
-                stderr_to_write, encoding="utf-8")
+            _persist_stderr(out_dir, proc.stderr)
         except OSError:
             pass
 
@@ -748,6 +752,25 @@ def _run_subprocess(
         "error": None,
         "skipped": False,
     }
+
+
+def _persist_stderr(out_dir: Path, stderr: str) -> None:
+    """Write the subprocess stderr to ``openant.stderr.log``,
+    byte-true capped at :data:`STDERR_MAX_BYTES` with the truncation
+    notice INSIDE the cap (the old char-count slice admitted up to 4x
+    the budget in UTF-8 and appended the notice past it). Explicit
+    encoding: the content quotes hostile target text — an
+    encoding-less write crashed under a C locale exactly when the
+    content was non-ASCII."""
+    raw = stderr.encode("utf-8", "replace")
+    if len(raw) > STDERR_MAX_BYTES:
+        notice = (
+            f"\n\n[truncated — original was {len(raw)} bytes, "
+            f"capped at {STDERR_MAX_BYTES}]\n"
+        )
+        keep = max(0, STDERR_MAX_BYTES - len(notice.encode("utf-8")))
+        stderr = raw[:keep].decode("utf-8", "ignore") + notice
+    (out_dir / "openant.stderr.log").write_text(stderr, encoding="utf-8")
 
 
 def _find_venv_python(core_path: Path) -> str:
