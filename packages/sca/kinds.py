@@ -73,3 +73,14 @@ BUMP_ID_PREFIX = "sca:bump:"
 # Scorecard decision-class for the major-bump LLM prefilter, keyed by
 # ecosystem: f"{MAJOR_BUMP_DECISION_CLASS_PREFIX}{ecosystem}".
 MAJOR_BUMP_DECISION_CLASS_PREFIX = "sca:major_bump:"
+
+# RAPTOR-owned per-repo config files. These are NOT dependency
+# manifests: the generic YAML surfaces (the kubernetes candidate
+# router — which also feeds the image-ref walker) skip them so
+# "ignored when untrusted" holds for the FILE, not just the
+# suppression/license lane. Owners: suppressions.SUPPRESS_FILENAME,
+# pipeline._LICENSE_POLICY_FILENAME (membership pinned by tests).
+RAPTOR_CONFIG_FILENAMES = (
+    ".raptor-sca-suppress.yml",
+    ".raptor-sca-license-policy.yml",
+)

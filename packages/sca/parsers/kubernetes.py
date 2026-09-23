@@ -40,6 +40,7 @@ import logging
 
 from core.oci.image_ref import split_image_ref as _split_image_ref
 
+from ..kinds import RAPTOR_CONFIG_FILENAMES
 from ..models import Confidence, Dependency, PinStyle
 from ..models import classify_pin_style as _classify_pin_style
 from . import _safe_read, register
@@ -149,6 +150,11 @@ def _is_k8s_manifest(path: Path) -> bool:
     if name in ("chart.yaml", "chart.lock"):
         return False
     if name in (".pre-commit-config.yaml", ".pre-commit-config.yml"):
+        return False
+    # RAPTOR's own per-repo config files are not manifests; routing
+    # them here meant an "ignored when untrusted" suppression overlay
+    # was still read (bounded, no-follow) as a k8s candidate.
+    if name in RAPTOR_CONFIG_FILENAMES:
         return False
     # GHA workflows are handled by ``inline_installs.parse_gha_workflow``.
     parts = path.parts
