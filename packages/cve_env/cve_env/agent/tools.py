@@ -976,9 +976,11 @@ ALL_TOOLS: list[ToolDef] = [
         "silent_end_turn (was silent_end_turn_p0x, Phase 24A rename), "
         "stuck_after_launch_intervention (Phase 8.4 era — currently dormant), "
         "no_image_without_resolve (Phase 7.4 CF-4), "
-        "refusal_persistent (Phase 7.5 CF-6), "
-        "max_tool_attempts_<tool> (Phase 12.5 attempts cap), "
-        "stage_budget_exhausted_<stage> (Phase 12.3 hard mode).",
+        "refusal_persistent (Phase 7.5 CF-6). "
+        "Historical reasons no longer emitted by any surviving code path "
+        "(retired with the SDK engine; old audit JSONLs may still carry "
+        "them — do not read their absence as 0 fires): "
+        "max_tool_attempts_<tool>, stage_budget_exhausted_<stage>.",
         input_schema={
             "type": "object",
             "properties": {
