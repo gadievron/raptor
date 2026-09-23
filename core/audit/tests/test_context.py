@@ -2382,3 +2382,38 @@ class TestFindHeadersConfinement:
             self._clear_cache()
         names = {h.name for h in headers}
         assert {"types.h", "alias.h"} <= names
+
+
+class TestSourceLineModel:
+    r"""Context windows speak the \n line model of their line ranges.
+
+    The line numbers sliced here come from inventory items and SARIF
+    findings, which count \n only.  A splitlines() view shifted every
+    window after a string-literal form feed, handing the audit LLM
+    context for the wrong lines.
+    """
+
+    _SRC = (
+        'const char *P = "a\x0c\x0cb";\n'  # 1: two FFs in a literal
+        "void handle(char *d, const char *s) {\n"  # 2
+        "    strcpy(d, s);\n"                      # 3
+        "}\n"                                      # 4
+    )
+
+    def test_read_source_window_is_nl_addressed(self, tmp_path):
+        (tmp_path / "a.c").write_bytes(self._SRC.encode())
+        out = _read_source(tmp_path, "a.c", 3, 3)
+        assert "strcpy(d, s);" in out
+        assert "   3" in out
+
+    def test_type_definition_found_past_a_form_feed(self, tmp_path):
+        content = (
+            'const char *P = "a\x0cb";\n'
+            "struct conn {\n"
+            "    int fd;\n"
+            "};\n"
+        )
+        got = _extract_type_definition(content, "conn")
+        assert got is not None
+        assert got["line"] == 2
+        assert "int fd;" in got["source"]
