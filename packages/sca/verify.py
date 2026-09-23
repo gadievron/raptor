@@ -19,6 +19,9 @@ whether the patch is safe to apply:
         patch (or some advisory the operator expected to clear didn't)
     2 — invalid arguments
     3 — internal error during pipeline run
+    4 — verdict unavailable: an analyse run behind the delta carries the
+        ``sca:scan_health:osv_lookup_degraded`` row, so advisory coverage
+        was incomplete and "resolved"/"new" counts cannot be trusted
 
 Outputs (under ``--out``):
 
@@ -175,7 +178,24 @@ def main(
 
     summary, exit_code = _verdict(delta, severity_floor=args.fail_on_severity,
                                   applied=applied, overlay_root=overlay_dir)
-    delta_md = _render_markdown(target, proposed, applied, delta, summary)
+    osv_degraded = (_rows_osv_degraded(rows_before)
+                    or _rows_osv_degraded(rows_after))
+    delta_md = _render_markdown(target, proposed, applied, delta, summary,
+                                osv_degraded=osv_degraded)
+    if osv_degraded:
+        # A degraded analyse run cannot answer "does proposed/ resolve
+        # the findings": failed OSV slots make advisories invisible, so
+        # the delta reads them as resolved/absent and a network outage
+        # would wave an unverified patch through this gate with exit 0.
+        # Refuse to conclude — the artifacts above stay for inspection.
+        delta_md += (
+            "\n## OSV lookups degraded — verdict unavailable\n\n"
+            "An analyse run behind this delta carries the "
+            "`sca:scan_health:osv_lookup_degraded` row: advisory "
+            "coverage was incomplete, so the resolved/new counts above "
+            "cannot be trusted. Re-run when the network/OSV recovers.\n"
+        )
+        exit_code = 4
     from ._atomic import atomic_write_text
     atomic_write_text(out_dir / "delta.md", delta_md)
     save_json(
@@ -294,6 +314,20 @@ def _apply_overlay(proposed: Path, overlay: Path) -> list[Path]:
 # Verdict + rendering
 # ---------------------------------------------------------------------------
 
+def _rows_osv_degraded(rows: Any) -> bool:
+    """True when a findings.json row set carries the pipeline's
+    OSV-degradation scan-health row (see ``pipeline`` step 4 — the row
+    is the machine-readable "advisory coverage was incomplete" signal
+    CI consumers key on)."""
+    from .kinds import SCAN_HEALTH_PREFIX
+    degraded_type = f"{SCAN_HEALTH_PREFIX}osv_lookup_degraded"
+    if not isinstance(rows, list):
+        return False
+    return any(
+        isinstance(r, dict) and r.get("vuln_type") == degraded_type
+        for r in rows
+    )
+
 def _verdict(
     delta, *, severity_floor: str, applied: list[Path] | None = None,
     overlay_root: Path | None = None,
@@ -370,10 +404,21 @@ def _render_markdown(
     applied: list[Path],
     delta,
     summary: dict[str, Any],
+    *,
+    osv_degraded: bool = False,
 ) -> str:
     lines: list[str] = []
     lines.append(f"# sca verify — `{target}` ⇐ `{proposed}`\n")
-    if summary["regressing_above_threshold"]:
+    if osv_degraded:
+        # The human-readable verdict must reflect the degradation — a
+        # "clean"/"pass" line above the exit-4 refusal section would
+        # contradict it. The counts below stay for inspection.
+        lines.append(
+            "**Verdict: unavailable** — OSV lookups degraded during "
+            "the analyse run(s); the resolved/new counts below cannot "
+            "be trusted.\n"
+        )
+    elif summary["regressing_above_threshold"]:
         lines.append(
             f"**Verdict: regression** — proposed/ introduces "
             f"{summary['regressing_above_threshold']} new finding(s) "

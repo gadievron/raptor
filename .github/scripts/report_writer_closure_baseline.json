@@ -661,6 +661,9 @@
     "packages/sca/verify.py::main::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
+    "packages/sca/verify.py::main::unsanitised_llm_value::delta_md": {
+      "note": "bool-propagation false positive: osv_degraded is a boolean derived from findings rows and passed into _render_markdown, so the detector taints the returned markdown; the render routes every foreign cell through md_cell and the degraded verdict line is a constant \u2014 the flag itself cannot carry bytes"
+    },
     "packages/source_intel/measurement.py::_run_one::unsanitised_exception_text::e": {
       "note": "broad-handler exception relay (mechanism residual): the handler prints str(e) which can quote lower-layer content; triaged as a burn-down residual \u2014 sanitise + register on next functional touch"
     },
