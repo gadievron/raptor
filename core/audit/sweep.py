@@ -4414,8 +4414,8 @@ def _store_sweep_witness(
     """Store the solved bytes; optionally replay (dynamic-gated)."""
     try:
         from packages.exploitability_validation.symbolic_witness import (
-            _replay,
-            _store_witness,
+            replay_witness,
+            store_witness,
         )
         record = {
             "mode": "sweep",
@@ -4424,11 +4424,11 @@ def _store_sweep_witness(
             "_input_bytes": witness_bytes,
         }
         if replay:
-            record.update(_replay(Path(binary), witness_bytes))
+            record.update(replay_witness(Path(binary), witness_bytes))
         else:
             record["replay_outcome"] = "not_run"
         finding = {"function": function_name, "cwe": cwe, "file": file_path}
-        digest = _store_witness(finding, record, Path(binary), Path(out_dir))
+        digest = store_witness(finding, record, Path(binary), Path(out_dir))
         out = {
             "replay_outcome": record.get("replay_outcome"),
             "witness_hash": digest,

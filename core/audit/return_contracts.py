@@ -31,6 +31,7 @@ target-specific name with no learned input resolves to *no* contract
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -195,6 +196,45 @@ def _wur_contract(callee: str, ctx: RoleContext) -> ContractEvidence | None:
 # ── operator annotations ────────────────────────────────────────────
 
 
+def _annotation_entries(base: Path) -> list[Any]:
+    """The first ``_MAX_ANNOTATION_SCAN`` annotations under *base*,
+    memoised on a stat fingerprint of the tree — the per-callee
+    rescan re-parsed every annotation file on every lookup. An edited
+    or added note changes the fingerprint and reloads."""
+    fp_items: list[tuple[str, int, int]] = []
+    try:
+        for root, _dirs, files in os.walk(base):
+            for name in files:
+                if not name.endswith(".md"):
+                    continue
+                full = os.path.join(root, name)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                fp_items.append(
+                    (os.path.relpath(full, base),
+                     st.st_mtime_ns, st.st_size),
+                )
+    except OSError:
+        return []
+    fingerprint = tuple(sorted(fp_items))
+    key = str(base)
+    cached = _ANNOTATION_SCAN_CACHE.get(key)
+    if cached is not None and cached[0] == fingerprint:
+        return cached[1]
+    from core.annotations.storage import iter_all_annotations
+    entries: list[Any] = []
+    for ann in iter_all_annotations(base):
+        if len(entries) >= _MAX_ANNOTATION_SCAN:
+            break
+        entries.append(ann)
+    if len(_ANNOTATION_SCAN_CACHE) >= _CONTRACT_CACHE_MAX:
+        _ANNOTATION_SCAN_CACHE.clear()
+    _ANNOTATION_SCAN_CACHE[key] = (fingerprint, entries)
+    return entries
+
+
 def _annotation_contract(
     callee: str, ctx: RoleContext,
 ) -> ContractEvidence | None:
@@ -207,15 +247,8 @@ def _annotation_contract(
     tail = callee.rsplit(".", 1)[-1]
     try:
         from core.annotations.provenance import is_human_grade
-        from core.annotations.storage import (
-            annotation_file_mtime,
-            iter_all_annotations,
-        )
-        scanned = 0
-        for ann in iter_all_annotations(Path(base)):
-            scanned += 1
-            if scanned > _MAX_ANNOTATION_SCAN:
-                break
+        from core.annotations.storage import annotation_file_mtime
+        for ann in _annotation_entries(Path(base)):
             fn_tail = (ann.function or "").rsplit(".", 1)[-1]
             if fn_tail != tail:
                 continue
@@ -347,6 +380,44 @@ def _tier_a_contract(
 # ── IRIS/taint specs ────────────────────────────────────────────────
 
 
+#: Stat-stamped reload caches for the per-callee contract sources:
+#: both the IRIS spec file and the annotation tree were re-read and
+#: re-parsed on EVERY callee lookup. Keyed on (path, mtime, size) —
+#: an edited file reloads, an unchanged one is served. Small and
+#: process-scoped; cleared wholesale at the tiny cap.
+_IRIS_SPEC_CACHE: dict[str, tuple[tuple[int, int], list[Any]]] = {}
+_ANNOTATION_SCAN_CACHE: dict[
+    str, tuple[tuple[tuple[str, int, int], ...], list[Any]],
+] = {}
+_CONTRACT_CACHE_MAX = 8
+
+
+def _iris_specs_cached(spec_path: Path) -> list[Any] | None:
+    """Parsed IRIS specs for *spec_path*, memoised per stat stamp."""
+    try:
+        st = os.stat(spec_path)
+    except OSError:
+        return None
+    stamp = (st.st_mtime_ns, st.st_size)
+    key = str(spec_path)
+    cached = _IRIS_SPEC_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    try:
+        from core.audit.iris_specs import specs_from_json
+        specs = list(
+            specs_from_json(spec_path.read_text(encoding="utf-8")),
+        )
+    except Exception:
+        logger.debug("return contract: iris spec load failed",
+                     exc_info=True)
+        return None
+    if len(_IRIS_SPEC_CACHE) >= _CONTRACT_CACHE_MAX:
+        _IRIS_SPEC_CACHE.clear()
+    _IRIS_SPEC_CACHE[key] = (stamp, specs)
+    return specs
+
+
 def _iris_contract(
     callee: str, ctx: RoleContext,
 ) -> ContractEvidence | None:
@@ -355,12 +426,8 @@ def _iris_contract(
     spec_path = Path(ctx.out_dir) / "iris-taint-specs.json"
     if not spec_path.is_file():
         return None
-    try:
-        from core.audit.iris_specs import specs_from_json
-        specs = specs_from_json(spec_path.read_text(encoding="utf-8"))
-    except Exception:
-        logger.debug("return contract: iris spec load failed",
-                     exc_info=True)
+    specs = _iris_specs_cached(spec_path)
+    if specs is None:
         return None
     tail = callee.rsplit(".", 1)[-1]
     for spec in specs:

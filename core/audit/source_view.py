@@ -383,8 +383,9 @@ def _strip_c_family(
                 ch == "`" and spec.backtick == "raw"):
             end = _string_end(source, i, ch, raw=(ch == "`"))
             # Keep the delimiters so shapes like ``""`` stay visible;
-            # blank only the contents.
-            blank_str(i + 1, min(end, n) - 1 if end <= n else n)
+            # blank only the contents. (_string_end never returns
+            # past n, so the bound is simply end - 1.)
+            blank_str(i + 1, end - 1)
             i = end
         else:
             i += 1
@@ -502,9 +503,7 @@ def _strip_python_like(
                     escapes=_quote_escapes(source, i, ch, lang),
                     doubling=(lang == "yaml" and ch == "'"))
                 if not keep_strings:
-                    _blank(
-                        chars, i + 1,
-                        min(end, n) - 1 if end <= n else n)
+                    _blank(chars, i + 1, end - 1)
                 i = end
         else:
             i += 1
@@ -995,7 +994,7 @@ def _strip_lua(source: str, *, keep_strings: bool = False) -> str:
         elif ch in ('"', "'"):
             end = _string_end(source, i, ch)
             if not keep_strings:
-                _blank(chars, i + 1, min(end, n) - 1 if end <= n else n)
+                _blank(chars, i + 1, end - 1)
             i = end
         else:
             i += 1
@@ -1304,7 +1303,7 @@ def _template_literal(source: str, chars: list[str], i: int, blank_str) -> int:
                     j = _template_literal(source, chars, j, blank_str)
                 elif c2 in ('"', "'"):
                     end = _string_end(source, j, c2)
-                    blank_str(j + 1, min(end, n) - 1 if end <= n else n)
+                    blank_str(j + 1, end - 1)
                     j = end
                 elif c2 == "/" and source.startswith("//", j):
                     end = source.find("\n", j)

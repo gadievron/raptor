@@ -348,6 +348,21 @@ class TestIRISExtraSecurityNames:
         )
         assert len(seqs) == 1
 
+    def test_extra_names_match_method_chain_steps(self):
+        # Method-chain steps carry ".method"-shaped call names — the
+        # extra (learned) names must match the bare tail too, or the
+        # arm is dead for every chain-shaped sequence.
+        src = textwrap.dedent("""\
+            def process(data):
+                return data.frobnicate().whizzle()
+        """)
+        assert extract_transform_sequences({"app.py": src}) == []
+        seqs = extract_transform_sequences(
+            {"app.py": src},
+            extra_security_names=frozenset({"frobnicate", "whizzle"}),
+        )
+        assert len(seqs) == 1
+
 
 class TestFormatForPrompt:
     def test_empty(self):

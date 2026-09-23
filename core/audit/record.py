@@ -89,8 +89,12 @@ def load_audit_log(out_dir: Path) -> list[dict[str, Any]]:
     Row contract: rows written by this install carry the per-purpose,
     run-bound ``integrity`` stamp (see :func:`stamp_audit_log_row`)
     and are returned WITH it — consumers read fields and must
-    tolerate the stamp like any additive key; only the resume
-    suppression reader gives it meaning.
+    tolerate the stamp like any additive key. Authority-bearing
+    consumers (resume suppression, fail-open deferral, the re-log
+    join, cmd_record's gates, the G3 feed) route through
+    :func:`load_verified_audit_log` instead, where the stamp decides;
+    this tolerant loader serves the telemetry tier only. The consumer
+    census test pins which readers sit on which side.
     """
     log_path = out_dir / ".audit-log.jsonl"
     from core.json import load_jsonl
