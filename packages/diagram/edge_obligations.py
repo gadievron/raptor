@@ -24,12 +24,24 @@ def _node_id(prefix: str, name: str, registry: dict) -> str:
     return registry[key]
 
 
+def _dict_elements(value: Any) -> list:
+    """flow_trace's ingestion idiom: non-list fields and non-dict
+    elements drop, the rest still renders."""
+    if not isinstance(value, list):
+        return []
+    return [r for r in value if isinstance(r, dict)]
+
+
 def generate(data: dict[str, Any]) -> str:
     """Flowchart of tiered edge obligations."""
-    tier1 = data.get("tier1") or []
-    tier2 = data.get("tier2") or []
-    blind = data.get("blind_spots") or []
-    stats = data.get("stats") or {}
+    tier1 = _dict_elements(data.get("tier1"))
+    tier2 = _dict_elements(data.get("tier2"))
+    blind = data.get("blind_spots")
+    if not isinstance(blind, list):
+        blind = []
+    stats = data.get("stats")
+    if not isinstance(stats, dict):
+        stats = {}
 
     lines = ["flowchart LR"]
     nodes: dict = {}
@@ -71,7 +83,9 @@ def generate(data: dict[str, Any]) -> str:
             f'    blind["Blind spots: {len(blind)} call site(s) the '
             'static graph cannot follow"]')
         lines.append("    style blind stroke-dasharray: 5 5")
-    degraded = stats.get("degraded") or []
+    degraded = stats.get("degraded")
+    if not isinstance(degraded, list):
+        degraded = []
     if degraded:
         deg = _sanitize(", ".join(str(d) for d in degraded[:_MAX_DEGRADED]))
         more = (f" (+{len(degraded) - _MAX_DEGRADED} more)"
