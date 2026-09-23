@@ -290,8 +290,32 @@ def _child_failure_tail(proc: subprocess.CompletedProcess) -> str:
     return "(no output captured on either stream)"
 
 
+def _timeout_partial_capture(
+    exc: subprocess.TimeoutExpired,
+) -> subprocess.CompletedProcess:
+    """CompletedProcess-shaped view of a timeout kill's partial capture.
+
+    ``TimeoutExpired`` surfaces whatever the runner captured before
+    the kill — the only account of what the child was doing when the
+    clock ran out. Streams may arrive as bytes on this path (the kill
+    can precede decoding); decode with replacement so hostile bytes
+    cannot fail the forensics. ``returncode`` is a placeholder — the
+    caller labels the artifact's exit line ``timeout``.
+    """
+    def _decoded_stream(stream: object) -> str:
+        if isinstance(stream, bytes):
+            return stream.decode("utf-8", errors="replace")
+        return stream if isinstance(stream, str) else ""
+
+    return subprocess.CompletedProcess(
+        args=exc.cmd, returncode=-1,
+        stdout=_decoded_stream(exc.stdout),
+        stderr=_decoded_stream(exc.stderr))
+
+
 def _persist_child_tail(
     run_dir: Path | None, proc: subprocess.CompletedProcess,
+    exit_label: str | None = None,
 ) -> None:
     """Write bounded child-stream tails beside the failed pass.
 
@@ -300,12 +324,15 @@ def _persist_child_tail(
     child. Stream content quotes hostile-target bytes — escaped
     (newlines kept: it is a multi-line narrative) before landing in an
     operator-readable file. Best-effort — never let forensics fail the
-    failure path.
+    failure path. ``exit_label`` replaces the numeric exit on paths
+    with no real exit status (the timeout kill).
     """
     if run_dir is None:
         return
+    exit_text: str = (exit_label if exit_label is not None
+                      else str(proc.returncode))
     content = (
-        f"exit={proc.returncode}\n--- stderr tail ---\n"
+        f"exit={exit_text}\n--- stderr tail ---\n"
         + _esc((proc.stderr or "")[-_CHILD_TAIL_PERSIST_CHARS:])
         + "\n--- stdout tail ---\n"
         + _esc((proc.stdout or "")[-_CHILD_TAIL_PERSIST_CHARS:])
@@ -877,9 +904,18 @@ def run_skill_dispatch(
                     ),
                     caller_label=caller_label,
                 )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             lifecycle_settled = True
             fail_lifecycle(run_dir, f"timeout after {timeout_s}s")
+            # The exception carries the kill's partial capture — the
+            # only account of what the multi-minute child was doing
+            # when the clock ran out. Persist it like the rc!=0 and
+            # validate-failure legs (previously discarded: the arm
+            # returned without writing, and the operator got a bare
+            # timeout line).
+            _persist_child_tail(
+                run_dir, _timeout_partial_capture(e),
+                exit_label=f"timeout after {timeout_s}s")
             logger.warning("%s timed out after %ds", log_label, timeout_s)
             return SkillDispatchResult(
                 ran=False, skipped_reason=f"timeout after {timeout_s}s",
