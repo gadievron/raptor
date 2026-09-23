@@ -131,3 +131,34 @@ class TestTraceSeedSanitisation:
         assert list(out.keys()) == [sanitise_string(hostile_key,
                                                     max_chars=100)]
         assert hostile_key not in out
+
+
+class TestNearbySinksScalarCoercion:
+    def test_string_nearby_sinks_not_iterated_per_character(
+            self, understand_module):
+        """A scalar-where-array ``nearby_sinks`` (LLM-emitted) sliced
+        per character, rendering "s, y, s" instead of the sink name.
+        Strings coerce comma-separably, like the context-map id-list
+        shape."""
+        seeds = {"hypothesis_seeds": [{
+            "file": "src/parse.c",
+            "function": "parse_header",
+            "line": 42,
+            "nearby_sinks": "system, memcpy",
+        }]}
+        out = understand_module._hunt_pattern_with_seeds("pattern", seeds)
+        assert "system" in out
+        assert "memcpy" in out
+        assert "s, y, s" not in out
+
+    def test_non_list_non_str_nearby_sinks_contribute_nothing(
+            self, understand_module):
+        seeds = {"hypothesis_seeds": [{
+            "file": "src/parse.c",
+            "function": "parse_header",
+            "line": 42,
+            "nearby_sinks": {"not": "a list"},
+        }]}
+        out = understand_module._hunt_pattern_with_seeds("pattern", seeds)
+        assert "near sinks: )" in out or "near sinks: " in out
+        assert "not" not in out.split("near sinks:")[1].splitlines()[0]

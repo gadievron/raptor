@@ -495,14 +495,33 @@ def cocci_hunt_dispatch(
             pass
         _scratch_stack.close()
 
-    if not result.ok and not result.matches:
-        # Nothing matched AND spatch reported errors — surface the
-        # error so the operator can refine the pattern. (Empty
-        # matches with rc=0 is a legitimate "no variants found"
-        # answer — return [] in that case.)
+    if not result.ok:
         err = "; ".join(result.errors)[:500] if result.errors else (
             f"spatch returncode {result.returncode}"
         )
-        return [{"error": f"cocci rule did not execute cleanly: {err}"}]
+        if not result.matches:
+            # Nothing matched AND spatch reported errors — surface the
+            # error so the operator can refine the pattern. (Empty
+            # matches with rc=0 is a legitimate "no variants found"
+            # answer — return [] in that case.)
+            return [{"error": f"cocci rule did not execute cleanly: {err}"}]
+        # Partial yield: the run errored (a file failed to parse, a
+        # per-file timeout hit, ...) but still produced matches.
+        # Swallowing the errors made the incomplete match set read as
+        # a complete answer — stamp each variant with a degradation
+        # note instead (extra keys ride variant dicts by contract; an
+        # appended error ENTRY would be stripped by the substrate's
+        # error filter and surface nowhere).
+        logger.warning(
+            "cocci hunt: rule did not execute cleanly; %d match(es) "
+            "may be a partial set: %s", len(result.matches), err,
+        )
+        variants = _spatch_matches_to_variants(result, repo_path)
+        for v in variants:
+            v["degradation"] = (
+                f"cocci rule did not execute cleanly: {err}; "
+                f"match set may be partial"
+            )
+        return variants
 
     return _spatch_matches_to_variants(result, repo_path)

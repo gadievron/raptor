@@ -423,9 +423,23 @@ def _hunt_pattern_with_seeds(pattern: str,
         s_file = sanitise_string(str(seed.get('file') or '?'), max_chars=200)
         s_func = sanitise_string(str(seed.get('function') or '?'),
                                  max_chars=100)
+        # Scalar-where-array coercion (the context-map `_id_list`
+        # shape): an LLM-emitted string ``nearby_sinks`` sliced and
+        # iterated PER CHARACTER, rendering "s, y, s" instead of the
+        # sink name. Strings split on commas; non-list/str shapes
+        # contribute nothing.
+        raw_sinks = seed.get('nearby_sinks')
+        if isinstance(raw_sinks, str):
+            sink_items: list[Any] = [
+                part.strip() for part in raw_sinks.split(",") if part.strip()
+            ]
+        elif isinstance(raw_sinks, list):
+            sink_items = raw_sinks
+        else:
+            sink_items = []
         s_sinks = ", ".join(
             sanitise_string(str(s), max_chars=80)
-            for s in (seed.get('nearby_sinks') or [])[:3]
+            for s in sink_items[:3]
         )
         try:
             loc = f"{s_file}:{int(seed.get('line'))}"
