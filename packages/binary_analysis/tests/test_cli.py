@@ -496,3 +496,86 @@ def test_print_file_json_lane_ascii_encodes_c1(tmp_path, capsys) -> None:
     for raw in ("\x1b", "\x07", "\x9b", "\x9d", "‮"):
         assert raw not in out
     assert json.loads(out)["nodes"][0]["name"] == hostile  # intact
+
+
+class TestRunActivePhaseStreaming:
+    """_run_active_phase streams child output to the log files —
+    capture_output buffered an hour-long fuzz/frida child's whole
+    stdout+stderr in this process's memory before writing them."""
+
+    def test_output_streams_to_log_files(self, tmp_path):
+        from packages.binary_analysis.cli import _run_active_phase
+
+        phase = _run_active_phase(
+            kind="probe",
+            cmd=[sys.executable, "-c",
+                 "import sys; print('to-out'); print('to-err', file=sys.stderr)"],
+            output_dir=tmp_path / "phase",
+        )
+        assert phase["status"] == "completed"
+        assert "to-out" in Path(phase["stdout"]).read_text()
+        assert "to-err" in Path(phase["stderr"]).read_text()
+
+    def test_child_output_never_buffered_in_memory(self, tmp_path):
+        import packages.binary_analysis.cli as cli_mod
+        from packages.binary_analysis.cli import _run_active_phase
+
+        seen = {}
+        real_run = cli_mod.subprocess.run
+
+        def spying_run(cmd, **kwargs):
+            seen.update(kwargs)
+            return real_run(cmd, **kwargs)
+
+        with patch.object(cli_mod.subprocess, "run", spying_run):
+            _run_active_phase(
+                kind="probe",
+                cmd=[sys.executable, "-c", "print('x')"],
+                output_dir=tmp_path / "phase",
+            )
+        assert not seen.get("capture_output"), (
+            "child output must stream to the log files, not buffer "
+            "in memory")
+        assert hasattr(seen.get("stdout"), "write")
+        assert hasattr(seen.get("stderr"), "write")
+
+    def test_failure_appends_error_after_partial_output(self, tmp_path):
+        import packages.binary_analysis.cli as cli_mod
+        from packages.binary_analysis.cli import _run_active_phase
+
+        def exploding_run(cmd, **kwargs):
+            kwargs["stderr"].write("partial diagnostics\n")
+            raise subprocess.TimeoutExpired(cmd, 1)
+
+        with patch.object(cli_mod.subprocess, "run", exploding_run):
+            phase = _run_active_phase(
+                kind="probe",
+                cmd=["whatever"],
+                output_dir=tmp_path / "phase",
+            )
+        assert phase["status"] == "failed"
+        text = Path(phase["stderr"]).read_text()
+        assert "partial diagnostics" in text
+        assert "TimeoutExpired" in text
+
+    def test_failure_message_scrubs_target_influenced_bytes(self, tmp_path):
+        """Exception text echoes the child's argv/paths — a hostile
+        filename rides e.g. TimeoutExpired's message, so the appended
+        error line gets the terminal-grade scrub like every other exc
+        interpolation in this module."""
+        import packages.binary_analysis.cli as cli_mod
+
+        def exploding_run(cmd, **kwargs):
+            raise subprocess.TimeoutExpired(
+                ["fuzz", "/tmp/evil\x1b]0;pwn\x07.bin"], 1)
+
+        with patch.object(cli_mod.subprocess, "run", exploding_run):
+            phase = cli_mod._run_active_phase(
+                kind="probe",
+                cmd=["whatever"],
+                output_dir=tmp_path / "phase",
+            )
+        text = Path(phase["stderr"]).read_text()
+        assert "\x1b" not in text and "\x07" not in text
+        assert "\x1b" not in phase["error"]
+        assert "TimeoutExpired" in text
