@@ -708,6 +708,75 @@ class TestHashLangInterpolation:
         assert sanitized_view(src, "a.py", keep_strings=True) == src
 
 
+class TestInterpolationNestingDesync:
+    """Quote-state desyncs a hostile repo can spell in ONE line: the
+    scanner pairing the outer quote with a NESTED string's opener, or
+    applying the wrong escape model, resumed the scan mid-string and
+    blanked live code out of the view (forged absence receipts /
+    skip-steering — the swallow direction)."""
+
+    def test_shell_ansi_c_quoting_escapes_apply(self):
+        # $'It\'s' — ANSI-C quoting: \' stays INSIDE the literal.
+        # Ending it there opened a phantom string over live code.
+        src = "x=$'It\\'s'; eval \"$evil\""
+        view = sanitized_view(src, language="bash")
+        assert "eval" in view
+        assert "It" not in view
+
+    def test_shell_nested_single_quote_no_escapes(self):
+        # Inside $(…) a nested 'a\' ends at the second quote (POSIX
+        # single quotes have no escapes) — the default escape model
+        # swallowed the following live code as string content.
+        src = "x=\"$(echo 'a\\'; eval \"$evil\" 'junk')\""
+        view = sanitized_view(src, language="bash")
+        assert "eval" in view
+        assert "junk" not in view
+
+    def test_ruby_nested_string_in_interpolation(self):
+        # "#{ f("#{a}") }" — the outer quote must pair with the TRUE
+        # closer, not the nested string's opener; the desync made the
+        # interior #{ read as a comment and blanked system(cmd).
+        src = 'x = "#{ f("#{a}") }"; system(cmd)'
+        view = sanitized_view(src, language="ruby")
+        assert "system(cmd)" in view
+        assert "f(" in view
+
+    def test_ruby_nested_string_keep_strings_view(self):
+        src = 'x = "#{ f("#{a}") }"; system(cmd)'
+        view = sanitized_view(src, language="ruby", keep_strings=True)
+        assert view == src
+
+    def test_ruby_nested_literal_text_is_data(self):
+        # The nested string's LITERAL text blanks; its own field
+        # stays visible (same recursion rule as python f-strings).
+        src = 'x = "#{ f("prose popen( #{run(c)}") }"; go()'
+        view = sanitized_view(src, language="ruby")
+        assert "run(c)" in view
+        assert "popen" not in view
+        assert "go()" in view
+
+    def test_shell_expression_may_span_lines(self):
+        # $(…) is code either way — a multi-line command substitution
+        # must not desync the closing quote.
+        src = "x=\"$(cmd one\ncmd two)\"; eval \"$y\""
+        view = sanitized_view(src, language="bash")
+        assert "eval" in view
+
+    def test_shell_plain_single_quote_still_no_escapes(self):
+        # The pre-existing POSIX rule is untouched: '\' closes at the
+        # second quote and following code stays live.
+        src = "x='a\\'; eval x"
+        view = sanitized_view(src, language="bash")
+        assert "eval x" in view
+
+    def test_ruby_unterminated_interpolation_over_includes(self):
+        # Unterminated #{ keeps the remainder visible — costs a
+        # review, never a swallow.
+        src = 'x = "#{ f(a ; system(cmd)'
+        view = sanitized_view(src, language="ruby")
+        assert "system(cmd)" in view
+
+
 class TestPhp:
     def test_hash_line_comment_blanked(self):
         view = sanitized_view("$x = 1; # system( in prose\nrun($c);\n",
