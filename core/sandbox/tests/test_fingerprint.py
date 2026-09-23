@@ -452,6 +452,30 @@ def test_proc_stat_per_cpu_lines_split_the_aggregate(tmp_path):
         assert int(line.split()[4]) == agg_idle // cpu_count
 
 
+def test_proc_stat_intr_ctxt_corroborate_interrupts_file(tmp_path):
+    """intr/ctxt must agree with the persona's OWN /proc/interrupts:
+    "intr 0 / ctxt 0" on a box claiming days of uptime contradicted
+    the LOC timer row one read-pair away — the cross-checking-
+    detector class the module's other derivations exist to survive."""
+    cpu_count = 2
+    persona = build_persona(tmp_path, cpu_count=cpu_count)
+    stat = Path(persona.files["/proc/stat"]).read_text()
+    intr = int(next(line for line in stat.splitlines()
+                    if line.startswith("intr ")).split()[1])
+    ctxt = int(next(line for line in stat.splitlines()
+                    if line.startswith("ctxt ")).split()[1])
+    interrupts = Path(persona.files["/proc/interrupts"]).read_text()
+    loc_row = next(line for line in interrupts.splitlines()
+                   if line.startswith("LOC:"))
+    loc_total = sum(int(x) for x in loc_row.split()[1:1 + cpu_count])
+    assert intr > 0 and ctxt > 0
+    # intr covers at least the summed timer interrupts; ctxt runs a
+    # small multiple of intr on a low-load box.
+    assert intr >= loc_total
+    assert intr <= loc_total * 4
+    assert ctxt > intr
+
+
 def test_proc_stat_includes_required_kernel_fields(tmp_path):
     """Tools that parse /proc/stat (htop, monitoring) expect these
     fields. Missing them can crash the parser."""

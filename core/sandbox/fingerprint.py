@@ -457,8 +457,17 @@ def build_persona(tmpdir: Path, cpu_count: int,
     stat_lines.extend(f"cpu{i} {user_jiffies // cpu_count} 0 "
             f"{system_jiffies // cpu_count} "
             f"{idle_jiffies // cpu_count} 0 0 0 0 0 0\n" for i in range(cpu_count))
+    # intr/ctxt derive from the SAME fake-uptime arithmetic as the
+    # /proc/interrupts LOC row below (fake_uptime_s * 250 per CPU):
+    # "intr 0 / ctxt 0" on a box claiming days of uptime contradicted
+    # its own interrupts file in one read-pair — exactly the
+    # cross-checking-detector class this module's derivations exist
+    # to survive. intr tracks the summed timer interrupts; ctxt runs
+    # a small multiple of intr on a low-load box.
+    intr_total = fake_uptime_s * 250 * cpu_count
+    ctxt_total = intr_total * 3
     stat_lines.append(
-        f"intr 0\nctxt 0\nbtime {btime}\n"
+        f"intr {intr_total}\nctxt {ctxt_total}\nbtime {btime}\n"
         f"processes {fake_processes}\nprocs_running 1\n"
         f"procs_blocked 0\nsoftirq 0\n"
     )
