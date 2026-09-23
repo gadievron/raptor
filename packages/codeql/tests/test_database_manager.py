@@ -343,6 +343,16 @@ class TestFilterBuildEnvVars:
             "COMPILE.c": "echo pwned #",
             "LINK.o": "echo pwned #",
             "LEX.l": "echo pwned #",
+            # make's env-consumed option carriers: GNUMAKEFLAGS is
+            # appended to MAKEFLAGS before parsing, so it carries the
+            # exact primitives above through an otherwise-unfiltered
+            # wrapper — `--eval=$(shell …)` execs at parse time (even
+            # under -n), and a `CC=`/`COMPILE.c=` word resurrects the
+            # program/recipe overrides. MFLAGS is the historical
+            # spelling of the option word.
+            "GNUMAKEFLAGS": "--eval=$(shell touch /tmp/pwned)",
+            "gnumakeflags": "CC=./evil-cc",  # case-folded membership
+            "MFLAGS": "COMPILE.c=./evil-cc",
         })
         assert admitted == {}
 

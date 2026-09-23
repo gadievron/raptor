@@ -614,7 +614,9 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
         ecosystem="native",
         source=("GNU make manual: 'Variables Used by Implicit Rules' "
                 "(the full executed-program + flags catalogs), "
-                "MAKEFLAGS/MAKEFILES; CMake docs: environment variables "
+                "'Communicating Options to a Sub-make' (the "
+                "env-consumed option carriers MAKEFLAGS/GNUMAKEFLAGS/"
+                "MFLAGS), MAKEFILES; CMake docs: environment variables "
                 "(CMAKE_TOOLCHAIN_FILE, CMAKE_PREFIX_PATH, "
                 "CMAKE_PROGRAM_PATH, CMAKE_<LANG>_COMPILER_LAUNCHER, "
                 "CC/CXX); pkg-config as consumed by autotools "
@@ -627,8 +629,15 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
                      "cross-check is EXECUTABLE: the unit suite runs "
                      "`make -p -f /dev/null`, extracts the $(VAR) "
                      "references mechanically, and asserts exec-tier "
-                     "coverage; cmake envvar manual full walk; "
-                     "`go help environment` cgo block"),
+                     "coverage; 2026-09-22, make manual 5.7.3 option "
+                     "carriers (MAKEFLAGS/GNUMAKEFLAGS/MFLAGS) — make "
+                     "consumes these from the ENVIRONMENT without any "
+                     "$(VAR) reference, so they are outside the "
+                     "reference-derived universe; the unit suite's "
+                     "env option-injection arm probes every "
+                     "database-defined name behaviorally and asserts "
+                     "the injectors are members; cmake envvar manual "
+                     "full walk; `go help environment` cgo block"),
         tool_override=frozenset({
             # The full executed-program catalog of make's implicit
             # rules (each value is a program the matching rule runs),
@@ -666,6 +675,28 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
             # `-Wl,--plugin`, `@file`). The list is the make manual's
             # flags catalog for the program vars above.
             "MAKEFLAGS",
+            # make's other env-consumed option carriers (manual 5.7.3,
+            # 'Communicating Options to a Sub-make'). GNUMAKEFLAGS is
+            # appended to MAKEFLAGS before makefiles are parsed — the
+            # SAME power as MAKEFLAGS one name over: an
+            # `--eval=$(shell <cmd>)` word executes at parse time
+            # (even under `-n`), and `CC=<prog>` / `COMPILE.c=<cmd>`
+            # words resurrect the program/recipe overrides above
+            # through an otherwise-unfiltered wrapper. Exec power
+            # argues tool_override-tier, but the whole belt refuses
+            # every tier equally and MAKEFLAGS itself is homed here —
+            # same home, same rationale. MFLAGS is the historical
+            # spelling of the option word: GNU make 4.x no longer
+            # consumes it from the environment (behaviorally probed),
+            # but its ONLY documented meaning is option carriage and
+            # older/other make implementations honour it — admitting
+            # it grants nothing legitimate. None of the three appears
+            # as a $(VAR) reference in the default-rule database, so
+            # the reference-derived cross-check is structurally blind
+            # to this class; the env option-injection oracle arm
+            # covers it behaviorally.
+            "GNUMAKEFLAGS",
+            "MFLAGS",
             "ARFLAGS", "ASFLAGS", "CFLAGS", "COFLAGS", "CPPFLAGS",
             "CXXFLAGS", "DEFFLAGS", "FFLAGS", "GFLAGS", "LDFLAGS",
             "LDLIBS", "LFLAGS", "LINTFLAGS", "M2FLAGS",
@@ -723,6 +754,16 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
             "suffix spellings) by hand; the executable database "
             "cross-check keeps the family honest against the "
             "installed make. "
+            "Env-read-only names (MAKEFLAGS / GNUMAKEFLAGS / MFLAGS / "
+            "MAKEFILES class): consumed by make directly from the "
+            "environment, never referenced as $(VAR) in the default "
+            "database — OUTSIDE the reference-derived oracle's "
+            "universe, so membership is transcribed from manual "
+            "5.7.3 and kept honest by the behavioral env "
+            "option-injection oracle arm. The F77-style "
+            "'defined-but-unreferenced = inert' adjudication does "
+            "NOT generalize to this class (GNUMAKEFLAGS is "
+            "defined-unreferenced and live). "
             "Loader-redirect names (LD_PRELOAD family) and locale/"
             "temp-dir names are homed in DANGEROUS_ENV_VARS. "
             "F77 / F77FLAGS: default-database entries defined via "
