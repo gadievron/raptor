@@ -14,6 +14,7 @@ from .sanitize import sanitize as _sanitize
 
 _MAX_TIER1 = 30
 _MAX_TIER2 = 20
+_MAX_DEGRADED = 4
 
 
 def _node_id(prefix: str, name: str, registry: dict) -> str:
@@ -72,7 +73,9 @@ def generate(data: dict[str, Any]) -> str:
         lines.append("    style blind stroke-dasharray: 5 5")
     degraded = stats.get("degraded") or []
     if degraded:
-        deg = _sanitize(", ".join(str(d) for d in degraded[:4]))
-        lines.append(f'    deg["Degraded: {deg}"]')
+        deg = _sanitize(", ".join(str(d) for d in degraded[:_MAX_DEGRADED]))
+        more = (f" (+{len(degraded) - _MAX_DEGRADED} more)"
+                if len(degraded) > _MAX_DEGRADED else "")
+        lines.append(f'    deg["Degraded: {deg}{more}"]')
 
     return "\n".join(lines)
