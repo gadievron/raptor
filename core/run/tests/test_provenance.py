@@ -337,12 +337,23 @@ class TestToolVersion(unittest.TestCase):
         # loaded `-n auto` battery — and tool_version returns None on
         # timeout BY DESIGN (provenance is best-effort). Canned
         # subprocess output pins the parse path deterministically.
+        # The PATH resolution is pinned too: tool_version routes
+        # through the toolprobe chokepoint, whose which() gate
+        # returns None BEFORE any subprocess on hosts without
+        # semgrep — the run patch alone only intercepts where the
+        # tool happens to be installed. (toolprobe.shutil IS the
+        # shared shutil module, so this patches the module attribute
+        # for the block — toolprobe's documented per-test seam, not a
+        # toolprobe-local view.)
         import core.run.provenance as prov
+        import core.run.toolprobe as toolprobe
         fake = subprocess.CompletedProcess(
             args=["semgrep", "--version"], returncode=0,
             stdout="1.99.0\nextra probe noise\n", stderr="",
         )
         with mock.patch.object(
+            toolprobe.shutil, "which", return_value="/opt/probe/semgrep",
+        ), mock.patch.object(
             prov.subprocess, "run", return_value=fake,
         ):
             v = tool_version("semgrep")
@@ -350,9 +361,15 @@ class TestToolVersion(unittest.TestCase):
 
     def test_probe_timeout_returns_none(self):
         # The timeout path must degrade to None, never raise — run
-        # finalisation depends on it.
+        # finalisation depends on it. which() is pinned like the
+        # happy-path pin above: without it, semgrep-less hosts return
+        # None from the PATH gate and never reach the timeout arm
+        # this test exists for.
         import core.run.provenance as prov
+        import core.run.toolprobe as toolprobe
         with mock.patch.object(
+            toolprobe.shutil, "which", return_value="/opt/probe/semgrep",
+        ), mock.patch.object(
             prov.subprocess, "run",
             side_effect=subprocess.TimeoutExpired(
                 cmd=["semgrep", "--version"], timeout=5.0,
