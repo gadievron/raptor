@@ -171,6 +171,7 @@ def row_sha256(row: dict) -> str:
 # versa.
 _JOURNAL_DOMAIN = b"review-journal-row\x00"
 _AUDIT_LOG_DOMAIN = b"audit-log-row\x00"
+_PREP_CACHE_DOMAIN = b"prep-cache-artifact\x00"
 
 
 def _mac_message(sha256_hex: str, domain: bytes = _JOURNAL_DOMAIN) -> bytes:
@@ -259,6 +260,35 @@ def verify_audit_log_row(
     return _verify(row, token, _audit_domain(run_binding))
 
 
+def _prep_cache_domain(run_binding: str) -> bytes:
+    return (_PREP_CACHE_DOMAIN
+            + run_binding.encode("utf-8", "surrogatepass") + b"\x00")
+
+
+def mint_prep_cache_row(row: dict, run_binding: str) -> str | None:
+    """Token for a ``prep-cache/`` artifact row (fingerprint +
+    payload): resumed segments serve these payloads back as
+    MECHANICAL analysis inputs (detector results, codeql prep,
+    consistency prepass), and the cache lives in the target-writable
+    run dir while its fingerprint is computed over attacker-knowable
+    inputs — so fingerprint equality alone authenticates nothing.
+    Same canonical form and key as the journal, own domain, RUN-BOUND
+    via :func:`audit_log_run_binding` (a payload replayed from a
+    sibling run must not verify). ``None`` = persist unstamped (the
+    loader then treats it as a miss and rebuilds — fail toward
+    recompute)."""
+    return _mint(row, _prep_cache_domain(run_binding))
+
+
+def verify_prep_cache_row(
+    row: dict, token: str | None, run_binding: str,
+) -> bool:
+    """Prep-cache twin of :func:`verify_audit_log_row`. Loaders MUST
+    treat False as a cache miss (rebuild from the tree) — never serve
+    an unverified payload."""
+    return _verify(row, token, _prep_cache_domain(run_binding))
+
+
 def entry_provenance(entry) -> str:
     """Tri-state provenance of a loaded ``ReviewJournalEntry``.
 
@@ -289,8 +319,10 @@ __all__ = [
     "entry_provenance",
     "key_usable",
     "mint_audit_log_row",
+    "mint_prep_cache_row",
     "mint_row",
     "row_sha256",
     "verify_audit_log_row",
+    "verify_prep_cache_row",
     "verify_row",
 ]
