@@ -1221,6 +1221,25 @@ class TestWorklistFixedPoint:
             if not s.summary_unknown
         )
 
+    def test_chain_recomputation_count_is_linear(self, monkeypatch):
+        # The discriminating pin vs the old Jacobi sweep (which
+        # recomputed EVERY function per pass — O(n²) on a chain):
+        # per-function recomputations stay bounded by a small
+        # constant.
+        import core.analysis.taint_summaries as ts_mod
+        n = 30
+        calls = {"n": 0}
+        real = ts_mod._compute_one_summary
+
+        def counting(cg, name, summaries):
+            calls["n"] += 1
+            return real(cg, name, summaries)
+
+        monkeypatch.setattr(ts_mod, "_compute_one_summary", counting)
+        _, summaries = _summaries(self._chain_src(n))
+        assert not summaries[f"f{n-1}"].summary_unconverged
+        assert calls["n"] <= 5 * n
+
     def test_unknown_summaries_stay_unknown_not_unconverged(
             self, monkeypatch):
         import core.analysis.taint_summaries as ts_mod
