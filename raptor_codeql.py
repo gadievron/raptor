@@ -67,6 +67,21 @@ def get_multi_turn_analyzer(llm_client):
         return None
 
 
+def _all_run_results(sarif: dict) -> list[tuple[dict, dict]]:
+    """Every run's ``(run, result)`` pairs, in file order.
+
+    Single-run files are the CodeQL norm, but a multi-run SARIF's
+    ``runs[1:]`` were previously never analysed (``runs[0]`` only).
+    Each result stays paired with ITS run — the analyzer resolves
+    rule metadata against the owning run's driver.
+    """
+    return [
+        (run, result)
+        for run in sarif.get("runs", []) if isinstance(run, dict)
+        for result in run.get("results", []) if isinstance(result, dict)
+    ]
+
+
 def run_autonomous_workflow(args: argparse.Namespace) -> None:
     """
     Run complete autonomous CodeQL workflow.
@@ -242,8 +257,9 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
         if not runs:
             logger.warning("No runs in SARIF file: %s", sarif_file)
             continue
-        run = runs[0]
-        results = run.get("results", [])
+        run_results = _all_run_results(sarif)
+        results = [result for _run, result in run_results]
+        run_by_result_id = {id(result): run for run, result in run_results}
 
         # Analyze findings (up to max_findings across all SARIF files).
         # Signal-sorted, never a head slice: the shared truncator ranks
@@ -268,7 +284,7 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
             try:
                 analysis = autonomous_analyzer.analyze_finding_autonomous(
                     sarif_result=result,
-                    sarif_run=run,
+                    sarif_run=run_by_result_id[id(result)],
                     repo_path=Path(args.repo),
                     out_dir=agent.out_dir / "autonomous"
                 )
