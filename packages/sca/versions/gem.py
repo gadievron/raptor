@@ -33,8 +33,16 @@ _Segment = Union[int, str]
 # layer's parse probe meaningful here: a comparator that best-effort
 # orders ANY string reports git SHAs / crafted garbage "parseable",
 # letting them outrank real fix versions in advisory combines.
+# The optional version body carries its trailing whitespace INSIDE
+# the optional group: the naive ``\s*(V)?\s*\Z`` puts two unbounded
+# whitespace spans around the optional body, and an advisory-derived
+# string that is one long whitespace run makes the engine try every
+# split of the run between them — superlinear in the string length.
+# Match set and the capture groups are unchanged (body absent: the
+# two spans collapse to one).
 _ANCHORED_VERSION_RE = re.compile(
-    r"\s*(\d+(\.[0-9a-zA-Z]+)*(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)?\s*\Z"
+    r"\s*(?:(\d+(\.[0-9a-zA-Z]+)*(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)"
+    r"\s*)?\Z"
 )
 
 

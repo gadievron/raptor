@@ -236,3 +236,22 @@ def test_nuget_rejects_no_leading_numeric_segment(bad: str) -> None:
         compare("NuGet", bad, "1.2.3")
     with pytest.raises(VersionError):
         compare("NuGet", "1.2.3", bad)
+
+
+def test_gem_whitespace_run_is_fast() -> None:
+    """Hostile advisory-derived version string that is one long
+    whitespace run with a trailing non-version char: the previous
+    anchored-pattern spelling put two unbounded whitespace spans
+    around the optional version body and tried every split of the
+    run between them — superlinear in the string length. Folding the
+    body's trailing whitespace into the optional group is linear.
+    Both-direction bound: fast AND the grammar still accepts/rejects
+    the same strings."""
+    from core.testing.wallclock import cpu_budget
+
+    hostile = " " * (1 << 16) + "x"
+    with cpu_budget(1.0, what="gem version whitespace-run parse"):
+        with pytest.raises(VersionError):
+            compare("RubyGems", hostile, "3.2.1")
+    # Whitespace-padded real versions still parse.
+    assert compare("RubyGems", "  3.2.1  ", "0.1") == 1
