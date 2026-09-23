@@ -314,6 +314,7 @@ def _step_refutes_path(
             )
             and not _lexical_validator_in_branch(
                 source_text, step_line, sink_line, guard_shaped=True,
+                language=language,
             )
         )
     if not dominates:
