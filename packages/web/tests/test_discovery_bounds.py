@@ -46,3 +46,90 @@ class TestRobotsDisallowParseIsBounded:
         paths = _parse_disallow(text)
         assert "/kept" in paths
         assert "/past-the-cap" not in paths
+
+
+class TestCrawlerRetainedStateIsBounded:
+    """max_pages bounds VISITS and _BS4_MAX_BYTES bounds one parse —
+    neither bounds what a single hostile page inflates into retained
+    discovery state, which consumers then re-materialise."""
+
+    def _crawler(self, monkeypatch, **caps):
+        import packages.web.crawler as crawler_module
+        from unittest.mock import MagicMock
+
+        for name, value in caps.items():
+            monkeypatch.setattr(crawler_module, name, value, raising=False)
+        client = MagicMock()
+        client._is_in_scope.return_value = True
+        client.reveal_secrets = False
+        client.base_url = "http://t.example"
+        return crawler_module.WebCrawler(client, max_depth=2, max_pages=100)
+
+    def _response(self, html: str):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            content=html.encode(),
+            headers={"Content-Type": "text/html"},
+            status_code=200,
+        )
+
+    def test_one_hostile_page_cannot_inflate_discovery_past_the_caps(
+        self, monkeypatch,
+    ):
+        import pytest as pytest_module
+
+        pytest_module.importorskip("bs4")
+        from collections import deque
+
+        crawler = self._crawler(
+            monkeypatch,
+            _MAX_LINKS_PER_PAGE=50,
+            _MAX_DISCOVERED_URLS=30,
+            _MAX_DISCOVERED_PARAMS=10,
+            _MAX_PARAM_URL_FANOUT=5,
+        )
+        anchors = "".join(
+            f'<a href="/p?id={i}&u{i}=x">l</a>' for i in range(500)
+        )
+        queue: deque = deque()
+        crawler._process_html_response(
+            "http://t.example/", self._response(anchors), 0, _queue=queue,
+        )
+        assert len(crawler.discovered_urls) <= 30
+        assert len(crawler.discovered_parameters) <= 10
+        assert all(
+            len(urls) <= 5 for urls in crawler.parameter_urls.values()
+        )
+        assert len(queue) <= 50
+
+    def test_bfs_queue_dedups_repeated_links(self, monkeypatch):
+        import pytest as pytest_module
+
+        pytest_module.importorskip("bs4")
+        from collections import deque
+
+        crawler = self._crawler(monkeypatch)
+        html = '<a href="/same">a</a>' * 40 + '<a href="/other">b</a>'
+        queue: deque = deque()
+        crawler._process_html_response(
+            "http://t.example/", self._response(html), 0, _queue=queue,
+        )
+        assert sorted(url for url, _depth in queue) == [
+            "http://t.example/other", "http://t.example/same",
+        ]
+
+
+class TestSignalCollectionIsBounded:
+    def test_entries_past_the_cap_do_not_feed_the_token_scan(self):
+        from packages.web.research_landscape import (
+            _MAX_SIGNAL_ITEMS,
+            _collect_signals,
+        )
+
+        urls = [f"http://t.example/x{i}" for i in range(_MAX_SIGNAL_ITEMS)]
+        urls.append("http://t.example/zzz-beyond-cap-marker")
+        tokens = _collect_signals(None, {"discovered_urls": urls})
+        assert "x0" in tokens
+        assert not any("beyond_cap_marker" in t or "beyond-cap-marker" in t
+                       for t in tokens)
