@@ -56,7 +56,8 @@ _FILE_COLUMN_INDEX = FINDINGS_COLUMNS.index("File")
 
 
 def _markdown_rows(rows: list[tuple]) -> list[tuple]:
-    r"""Escape cells and wrap file paths in backticks for markdown rendering.
+    r"""Escape cells and wrap file paths in backticks for markdown
+    that this module emits DIRECTLY (``findings_summary``).
 
     `build_findings_rows` output is shared with the console renderer
     (which does its own `escape_nonprintable` pass and must not show
@@ -66,6 +67,13 @@ def _markdown_rows(rows: list[tuple]) -> list[tuple]:
     split table columns or open an inline-code span. Matches the
     per-finding detail table, which already escapes via
     `_md_table_cell`.
+
+    NOT for rows destined for a :class:`ReportSpec`: the spec
+    renderer's ``_render_table`` defangs every cell itself (its
+    chokepoint contract), so pre-escaped rows came out
+    double-escaped — the wrapping backticks entity-escaped into
+    literal ``&#96;`` characters and the ``\|`` escape survived as a
+    visible stray backslash in every rendered report.
     """
     return [
         tuple(
@@ -270,9 +278,12 @@ def build_finding_detail(finding: dict[str, Any], index: int) -> ReportSection:
     # Section titles render as one heading line — collapse and sanitise
     # the finding-derived pieces (id, type, file:line) so a crafted value
     # cannot inject extra heading lines or live markup. Same policy as
-    # core.project.report._md_heading.
+    # core.project.report._md_heading. No backticks: these titles are
+    # rendered through the spec renderer's heading defang, which
+    # entity-escapes them into literal ``&#96;`` characters instead of
+    # a code span.
     title = sanitise_string(
-        " ".join(f"{fid} — {vtype} in `{loc}`".split()), max_chars=300,
+        " ".join(f"{fid} — {vtype} in {loc}".split()), max_chars=300,
     )
 
     lines = []
@@ -398,7 +409,11 @@ def build_findings_spec(
     (what columns, how to count, what note to show) lives here.
     Pipeline-specific data goes in metadata, extra_summary, extra_sections.
     """
-    rows = _markdown_rows(build_findings_rows(findings))
+    # RAW rows: the spec renderer defangs every table cell exactly
+    # once at its own chokepoint (escaping here double-escaped — see
+    # _markdown_rows). Cell markup like code spans cannot survive
+    # that defang, so none is added.
+    rows = build_findings_rows(findings)
     counts = build_findings_summary(findings)
 
     # Build summary metrics — extra_summary first (caller controls order),

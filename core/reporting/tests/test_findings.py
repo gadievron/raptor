@@ -357,6 +357,46 @@ class TestBuildFindingsSpec(unittest.TestCase):
         self.assertEqual(len(spec.detail_sections), 0)
 
 
+class TestSpecPathEscapedExactlyOnce(unittest.TestCase):
+    """One defang owner per surface: rows and titles destined for the
+    spec renderer arrive RAW and are escaped exactly once at the
+    renderer's chokepoint. Pre-fix they were pre-escaped here too —
+    the File cell's wrapping backticks entity-escaped into literal
+    ``&#96;`` characters (rendered as backticks, never a code span)
+    and the ``\\|`` pipe escape survived as a visible stray backslash
+    on every rendered report."""
+
+    FINDINGS = [{
+        "id": "FIND-0001",
+        "vuln_type": "sql_injection",
+        "file": "src/a|b.py",
+        "line": 10,
+        "final_status": "confirmed",
+    }]
+
+    def test_table_cell_single_escaped(self):
+        report = render_report(build_findings_spec(self.FINDINGS))
+        self.assertNotIn("&#96;", report)
+        self.assertNotIn("\\&#124;", report)
+        self.assertIn("src/a&#124;b.py:10", report)
+
+    def test_detail_heading_has_no_entity_backticks(self):
+        report = render_report(build_findings_spec(self.FINDINGS))
+        heading = next(
+            line for line in report.splitlines()
+            if line.startswith("### FIND-0001")
+        )
+        self.assertNotIn("&#96;", heading)
+        self.assertIn("src/a", heading)
+
+    def test_direct_markdown_path_unchanged(self):
+        # findings_summary emits final markdown itself — its cells
+        # keep the single findings-side escape (backtick-wrapped File
+        # cell, escaped pipe).
+        out = findings_summary(self.FINDINGS)
+        self.assertIn("`src/a\\|b.py:10`", out)
+
+
 class TestMdTableCellAutofetch(unittest.TestCase):
     """Report-injection: finding-derived cell values must not render
     autofetch markup (same defense the LLM-output sanitiser applies —
