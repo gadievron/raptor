@@ -157,11 +157,6 @@ _ALLOWLIST: frozenset[tuple[str, int]] = frozenset({
     # that share the module's "?" placeholder convention; no verdict
     # semantics are consumed and "?" reads as absent, not as a level.
     ("core/audit/synthesis_seeds.py", 257),
-    # Presence check, not verdict consumption: the verdict was
-    # already taken from read_verdict two lines up (abstained arm);
-    # the raw read only distinguishes present-but-junk (normalised to
-    # an explicit None) from absent/already-None (left untouched).
-    ("core/witness/provenance.py", 743),
 })
 
 

@@ -801,12 +801,15 @@ def sanitise_findings_evidence(
                 if _claim is True:
                     finding["is_exploitable"] = False
                 elif _claim is None:
-                    # Presence check on the raw value (not verdict
-                    # consumption — the verdict was read above):
-                    # present-but-junk becomes the explicit
-                    # abstention; absent / already-None untouched.
-                    _raw_claim = finding.get("is_exploitable")
-                    if _raw_claim is not None:
+                    # Key-presence check, never a value read: the
+                    # verdict already abstained above, so a present
+                    # key holds either the explicit None (re-writing
+                    # None is a no-op) or a junk shape (normalised to
+                    # the explicit abstention); an absent key stays
+                    # absent. Spelled as key membership so no raw
+                    # verdict value is ever bound or compared — the
+                    # tri-state idiom closure needs no exemption here.
+                    if "is_exploitable" in finding:
                         finding["is_exploitable"] = None
                 stats["final_status_demoted"] += 1
 
