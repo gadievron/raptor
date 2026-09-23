@@ -254,3 +254,54 @@ class TestIrisSpecs:
         ctx = _context_map()
         enrich_with_taint_flows(ctx, FakeServer(), _checklist(), iris_dir=run_dir)
         assert ctx["taint_summary"]["iris_sinks_loaded"] == 0
+
+
+class TestBoundedMaterialisation:
+    """The cap bounds ENUMERATION cost, not just downstream use.
+
+    Both sections are LLM-authored; a degenerate n-per-section map must
+    cost O(cap) tuples, never the O(n^2) cross product (1000x1000
+    previously materialised 1,000,000 tuples / ~147MB before the cap).
+    """
+
+    @staticmethod
+    def _dense_map(n):
+        return {
+            "entry_points": [
+                {"id": f"ep{i}", "name": f"handler_{i}"} for i in range(n)
+            ],
+            "sink_details": [
+                {"id": f"sk{i}", "operation": f"dangerous_call_{i}(buf)"}
+                for i in range(n)
+            ],
+        }
+
+    def test_cap_bounds_materialisation_memory(self):
+        import tracemalloc
+
+        ctx = self._dense_map(1000)
+        tracemalloc.start()
+        pairs = build_taint_pairs(ctx, None, max_pairs=500)
+        _cur, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        assert len(pairs) == 500
+        # Full-product materialisation of this fixture peaks ~147MB;
+        # bounded enumeration stays well under 32MB even with
+        # allocator noise.
+        assert peak < 32 * 1024 * 1024, f"peak {peak/1e6:.1f}MB"
+
+    def test_capped_prefix_matches_uncapped_order(self):
+        ctx = self._dense_map(30)
+        full = build_taint_pairs(ctx, None)
+        capped = build_taint_pairs(self._dense_map(30), None, max_pairs=100)
+        def _ids(rows):
+            return [(ep["id"], sink["id"], sm, sc)
+                    for ep, sink, sm, sc in rows]
+        assert _ids(capped) == _ids(full)[:100]
+
+    def test_enrich_dense_map_is_capped_and_records_drop(self):
+        ctx = self._dense_map(100)
+        srv = FakeServer()
+        enrich_with_taint_flows(ctx, srv, None, max_pairs=50)
+        assert len(srv.queries) <= 50
+        assert ctx["taint_summary"]["pairs_dropped_over_cap"] == 100 * 100 - 50
