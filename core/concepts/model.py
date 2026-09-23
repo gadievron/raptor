@@ -460,8 +460,22 @@ class DomainModel:
                 return c
         return None
 
-    def get_contracts_for(self, function: str) -> list[Contract]:
-        return [c for c in self.contracts if c.function == function]
+    def get_contracts_for(
+        self, function: str, file: str | None = None,
+    ) -> list[Contract]:
+        """Contracts for *function*, optionally narrowed to *file*.
+
+        Contracts are keyed by (function, file) — same-named functions
+        in different files carry different contracts, so a name-only
+        lookup returns every file's contract for that name. Callers
+        that know the file should pass it; contracts recording no file
+        always pass the narrowing.
+        """
+        return [
+            c for c in self.contracts
+            if c.function == function
+            and (file is None or not c.file or c.file == file)
+        ]
 
     def concepts_at_confidence(self, min_grade: str) -> list[Concept]:
         try:

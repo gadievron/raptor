@@ -365,3 +365,23 @@ class TestForwardCompatibleLoad:
         loaded = DomainModel.load(p)
         assert len(loaded.contracts) == 1
         assert loaded.contracts[0].function == "foo"
+
+
+class TestGetContractsForQualified:
+    def test_file_narrows_same_named_functions(self):
+        from core.concepts.model import Contract, DomainModel
+        m = DomainModel(contracts=[
+            Contract(function="init", file="a.c", when="A"),
+            Contract(function="init", file="b.c", when="B"),
+            Contract(function="init", file="", when="anywhere"),
+        ])
+        got = m.get_contracts_for("init", file="a.c")
+        assert {c.when for c in got} == {"A", "anywhere"}
+
+    def test_name_only_returns_all(self):
+        from core.concepts.model import Contract, DomainModel
+        m = DomainModel(contracts=[
+            Contract(function="init", file="a.c"),
+            Contract(function="init", file="b.c"),
+        ])
+        assert len(m.get_contracts_for("init")) == 2
