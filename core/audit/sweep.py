@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.json import load_json
+from core.paths import strip_file_uri
 
 from ._util import is_valid_identifier, safe_join
 from .run_memo import BoundedMemo
@@ -503,8 +504,10 @@ def _normalize_sarif_path(uri_or_path: str) -> str:
     forward-slash-separated relative path so that lookup keys match
     insertion keys regardless of how the caller spells the path.
     """
-    p = uri_or_path
-    p = p.removeprefix("file://")
+    # Leading-scheme strip delegates to the shared helper; the
+    # absolute->relative collapse (lstrip) stays local — it is this
+    # key normalisation's own contract, not part of URI stripping.
+    p = strip_file_uri(uri_or_path)
     p = p.lstrip("/")
     p = p.removeprefix("./")
     return p.replace("\\", "/")
