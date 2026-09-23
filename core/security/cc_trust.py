@@ -568,6 +568,15 @@ def _scan_settings(path: Path, raw: bytes | None = None) -> FileScan | None:
                     _truncate(repr(permissions)), True))
 
         env_cfg = data.get("env")
+        if env_cfg is not None and not isinstance(env_cfg, dict):
+            # Fail-closed like hooks/statusLine/permissions: env is
+            # the highest-value field this scan guards, and a shape a
+            # future CC accepts more leniently than this scanner (a
+            # KEY=VALUE list form, say) would otherwise carry every
+            # blocked member past the scan with zero findings.
+            fs.findings.append(Finding(
+                "env (unrecognised shape)",
+                _mask(repr(env_cfg)), True))
         if isinstance(env_cfg, dict):
             # Pre-fix the membership check was exact-match, so a target
             # setting `http_proxy` or `Https_Proxy` (both honoured by
@@ -631,6 +640,13 @@ def _scan_mcp(path: Path, raw: bytes | None = None) -> FileScan | None:
     fs = FileScan(path=path)
     try:
         servers = data.get("mcpServers")
+        if servers is not None and not isinstance(servers, dict):
+            # Fail-closed twin of the settings env arm: an
+            # unrecognised mcpServers shape must surface loudly, not
+            # pass silently.
+            fs.findings.append(Finding(
+                "mcpServers (unrecognised shape)",
+                _mask(repr(servers)), True))
         if isinstance(servers, dict):
             for name, cfg in servers.items():
                 n = _truncate(str(name), limit=40)
