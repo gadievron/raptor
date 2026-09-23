@@ -30,6 +30,7 @@ finding has injection-shaped strings inside the code under review.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -193,6 +194,15 @@ def preflight(
                 f"Loaded corpora: {sorted(loaded)!r}"
             )
             raise ValueError(msg)
+    # NFKC-fold before matching: fullwidth Latin
+    # (``ｉｇｎｏｒｅ ｐｒｅｖｉｏｕｓ ...``) and the other Unicode
+    # compatibility forms read as the ordinary words to every
+    # tokenizer while matching NONE of the ASCII corpora — the
+    # cheapest deliberate evasion of this layer. One normalize call
+    # closes the whole compatibility-form respelling class and keeps
+    # the corpora ASCII; the caller's content is never mutated (this
+    # layer only reports indicators).
+    content = unicodedata.normalize("NFKC", content)
     indicators: list[str] = []
     for name, patterns in _PATTERNS.items():
         if corpora is not None and name not in corpora:
