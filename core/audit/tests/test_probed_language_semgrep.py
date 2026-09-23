@@ -300,6 +300,7 @@ class TestLiveProbedTarget:
         If a future semgrep starts selecting such targets unaided, this
         fails and the flag plumbing can be retired."""
         import json
+        import os
         import subprocess
 
         target = tmp_path / "check.mod"
@@ -308,14 +309,20 @@ class TestLiveProbedTarget:
             "semgrep", "scan", "--config", self._rule(), "--metrics",
             "off", "--json", "--quiet", str(target),
         ]
+        # PYTHONPATH dropped like the runtime spawn path does: the CI
+        # preflight dependency simulation hides modules via a stub
+        # PYTHONPATH, which must not leak into the semgrep child.
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
         proc = subprocess.run(
             base, capture_output=True, text=True, timeout=180, check=False,
+            env=env,
         )
         assert proc.returncode == 0, proc.stderr[:500]
         assert json.loads(proc.stdout)["paths"]["scanned"] == []
         proc = subprocess.run(
             base[:-1] + ["--scan-unknown-extensions", str(target)],
             capture_output=True, text=True, timeout=180, check=False,
+            env=env,
         )
         assert proc.returncode == 0, proc.stderr[:500]
         scanned = json.loads(proc.stdout)["paths"]["scanned"]

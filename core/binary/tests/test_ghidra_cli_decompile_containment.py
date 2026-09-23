@@ -140,11 +140,12 @@ def _stub_bridge(monkeypatch, calls: list):
         def __exit__(self, *exc):
             return False
 
-        def import_project(self, out_dir, decompile=False):
+        def import_project(self, out_dir, decompile=False, timeout=None):
             calls.append("import_project")
             return "db"
 
-        def import_and_enrich(self, out_dir, binary_path=None):
+        def import_and_enrich(self, out_dir, binary_path=None,
+                              decompile=False, timeout=None):
             calls.append("import_and_enrich")
             return "db"
 
@@ -158,7 +159,8 @@ def test_binary_without_enrich_warns(monkeypatch, tmp_path, proj, capsys):
     calls: list = []
     _stub_bridge(monkeypatch, calls)
     args = SimpleNamespace(binary=tmp_path / "b.elf", enrich=False,
-                           program=None, decompile_all=False)
+                           program=None, decompile_all=False,
+                           timeout=None)
     mod._do_import(proj, args, tmp_path / "out")
     captured = capsys.readouterr()
     # The operator asked for r2 enrichment data; dropping --binary
@@ -174,7 +176,8 @@ def test_binary_with_enrich_does_not_warn(monkeypatch, tmp_path, proj, capsys):
     binary = tmp_path / "b.elf"
     binary.write_bytes(b"\x7fELF")
     args = SimpleNamespace(binary=binary, enrich=True,
-                           program=None, decompile_all=False)
+                           program=None, decompile_all=False,
+                           timeout=None)
     mod._do_import(proj, args, tmp_path / "out")
     captured = capsys.readouterr()
     assert "--binary is only used with --enrich" not in captured.err
