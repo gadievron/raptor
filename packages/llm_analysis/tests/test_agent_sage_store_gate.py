@@ -17,7 +17,27 @@ from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
+import pytest  # noqa: E402
+
 import packages.llm_analysis.agent as agent_mod  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _no_source_intel(monkeypatch):
+    """Stub the source-intel cache priming for the whole module.
+
+    Every test here targets the SAGE store gate, and none consumes
+    source-intel evidence — but process_findings primes the cache
+    unconditionally, paying seconds of coccinelle rule sweeps and
+    tree-sitter analysis per test (tens of seconds for the hash-bound
+    test's deliberately giant fixture file). That real-I/O cost is
+    orthogonal to the gate under test and blows the default-tier
+    per-test budget on a loaded worker. Same seam the orchestrate-rank
+    wiring tests patch."""
+    import packages.llm_analysis.source_intel_inject as sii
+
+    monkeypatch.setattr(sii, "prepare_source_intel",
+                        lambda *a, **k: None)
 
 
 def _make_agent(tmp_path: Path):
