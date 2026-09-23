@@ -265,6 +265,26 @@ is the default: suppress-verdict findings are removed from
 `--no-sanitizer-cut-enforce` keeps the verdicts record-only;
 `--no-sanitizer-cut-postpass` skips the pass entirely.
 
+### Sanitizer-recognition contract
+
+Across the rule engines, multi-step sanitizer chains are recognized
+only within a single expression. A sanitization sequence written as
+one chained expression (`value.replace('\r', '').replace('\n', '')`)
+is recognized; the identical sequence split across statements
+(`v = v.replace('\r', ''); v = v.replace('\n', '')`) is not — the
+finding is still reported. This is deliberate:
+
+- Every miss in this class is FP-direction: the code is still
+  flagged and downstream validation adjudicates. Nothing is ever
+  silently suppressed by the contract.
+- A statement-chain upgrade is per-engine dataflow work (a CodeQL
+  local-flow join; Semgrep cannot express it outside
+  `by-side-effect`) with no observed FP burden justifying it.
+- Recognitions that carry SUPPRESSION authority must be either
+  single-call sanitizers (one call is complete — most rules) or
+  proof-gated (the SMT barrier validator only claims a barrier when
+  a solver proof backs it).
+
 ### Metrics
 
 `scan_metrics.json` contains timing data, per-pack finding counts,
