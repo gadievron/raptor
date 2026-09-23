@@ -549,35 +549,61 @@ def build_from_journal(run_dir: Path,
         tool_name: ``tool`` field for the resulting record.
 
     Returns:
-        Coverage record dict, or None if no journal entries exist.
+        Coverage record dict, or None when no journal entries exist
+        (edge-contract rows alone count as none — they never
+        participate). A journal whose rows are all screened
+        (dark/error) still yields a record: empty
+        ``functions_analysed`` with the unresolved counts visible in
+        ``journal_statuses``.
     """
-    from core.coverage.journal import load_entries
+    from core.coverage.journal import (
+        entry_earns_function_coverage,
+        load_entries,
+    )
 
     entries = load_entries(run_dir)
     if not entries:
         return None
 
-    functions: list[dict[str, str]] = []
-    seen = set()
-    statuses: dict[str, int] = {}
-
+    # The record's tool label is review-grade (llm/ANALYSED — see
+    # core/coverage/registry.py), so a functions_analysed row here is
+    # a durable "this function was reviewed" mark. Latest-per-key
+    # across ALL non-edge rows FIRST, then the shared screening
+    # predicate — the same order as the store's journal import (the
+    # index collapses latest-per-key before its screen), so the two
+    # durable lanes agree: a Reflexion correction — not the seed row —
+    # determines the recorded status, and a later error/dark row
+    # parks the credit until re-review (over-review direction). Edge
+    # rows never participate: they carry the EDGE subject's verdict
+    # under the caller's (file, function) and would mark a
+    # never-reviewed function.
+    best: dict[tuple[str, str], Any] = {}
     for entry in entries:
-        key = (entry.file, entry.function)
-        if key in seen:
+        if entry.edge_callee:
             continue
-        seen.add(key)
-        func_entry: dict[str, str] = {
-            "file": entry.file,
-            "function": entry.function,
-        }
+        key = (entry.file, entry.function)
+        existing = best.get(key)
+        if existing is None or entry.ts > existing.ts:
+            best[key] = entry
+
+    functions: list[dict[str, str]] = []
+    statuses: dict[str, int] = {}
+    for (file, function), entry in best.items():
+        if entry.verdict:
+            # Screened rows stay counted here (observability: the
+            # record still says "this journal carried N unresolved
+            # rows") — they just never become coverage rows.
+            statuses[entry.verdict] = statuses.get(entry.verdict, 0) + 1
+        if not entry_earns_function_coverage(entry):
+            continue
+        func_entry: dict[str, str] = {"file": file, "function": function}
         if entry.verdict:
             func_entry["status"] = entry.verdict
-            statuses[entry.verdict] = statuses.get(entry.verdict, 0) + 1
         if entry.source_hash:
             func_entry["hash"] = entry.source_hash
         functions.append(func_entry)
 
-    if not functions:
+    if not functions and not statuses:
         return None
     # Deliberately NO files_examined: the record's tool label is
     # review-grade (llm/analysed — see core/coverage/registry.py), and

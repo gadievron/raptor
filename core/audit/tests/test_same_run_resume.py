@@ -1017,3 +1017,160 @@ class TestDarkRecordSurfaces:
         assert bool(
             store.tool_coverage_of_range("auth.c", 1, 5)
         ) is bool(marked), verdict
+
+    def test_store_import_skips_edge_rows(self, tmp_path):
+        # An edge-contract row keys on the CALLER: marking its full
+        # range would vanish a never-reviewed function from every
+        # store-derived gap view (the entry.key invariant).
+        from unittest import mock
+
+        from core.coverage.importer import import_journal
+        from core.coverage.store import CoverageStore
+
+        target = _write_target(tmp_path)
+        entry = _entry(target, edge_callee="lib.c:callee")
+        store = CoverageStore(tmp_path / "coverage.json")
+        with mock.patch(
+            "core.coverage.journal.load_index",
+            return_value={entry.key: entry},
+        ):
+            marks = import_journal(store, tmp_path, _checklist(target))
+        assert marks == 0
+        assert not store.tool_coverage_of_range("auth.c", 1, 5)
+
+    # ── record BUILDER directions (coverage-journal.json) ───────────
+    #
+    # The builder feeds two durable consumers with the same row: the
+    # coverage store (import_functions_analysed → llm-gap views,
+    # --fail-under) and the audit gap fold (_build_covered_set). A
+    # dark/error/edge journal row must not become a
+    # functions_analysed mark on either.
+
+    def _build_record(self, tmp_path, *entries):
+        from core.coverage.record import build_from_journal
+        run_dir = tmp_path / "builder-run"
+        run_dir.mkdir(exist_ok=True)
+        for entry in entries:
+            append_entry(run_dir, entry)
+        return build_from_journal(run_dir)
+
+    @pytest.mark.parametrize("verdict", ["dark", "error"])
+    def test_builder_screens_unresolved_rows(self, tmp_path, verdict):
+        target = _write_target(tmp_path)
+        record = self._build_record(
+            tmp_path, _entry(target, verdict=verdict))
+        # No earner → no coverage rows, but the unresolved counts
+        # stay visible in journal_statuses (a record of "this run
+        # carried unresolved work", never a mark).
+        assert record is not None
+        assert record["functions_analysed"] == []
+        assert record["journal_statuses"] == {verdict: 1}
+
+    def test_builder_screens_edge_rows(self, tmp_path):
+        target = _write_target(tmp_path)
+        record = self._build_record(
+            tmp_path, _entry(target, edge_callee="lib.c:callee"))
+        assert record is None
+
+    def test_builder_keeps_earners_beside_screened_rows(self, tmp_path):
+        target = _write_target(tmp_path)
+        record = self._build_record(
+            tmp_path,
+            _entry(target, verdict="clean"),
+            _entry(target, function="f_dark", verdict="dark"),
+            _entry(target, function="f_err", verdict="error"),
+            _entry(target, function="f_edge",
+                   edge_callee="lib.c:callee"),
+        )
+        assert record is not None
+        rows = {
+            (fa["file"], fa["function"]): fa.get("status")
+            for fa in record["functions_analysed"]
+        }
+        assert rows == {("auth.c", "check_pw"): "clean"}
+        # The screened unresolved rows stay visible in the summary
+        # counts (observability), just never as coverage rows.
+        assert record["journal_statuses"].get("dark") == 1
+        assert record["journal_statuses"].get("error") == 1
+
+    def test_builder_latest_per_key_prefers_correction(self, tmp_path):
+        # A Reflexion correction — not the seed row — determines the
+        # recorded status (the seed's first-seen-wins buried it).
+        target = _write_target(tmp_path)
+        record = self._build_record(
+            tmp_path,
+            _entry(target, verdict="suspicious"),
+            _entry(target, verdict="clean",
+                   body="[resolution] corrective entry"),
+        )
+        assert record is not None
+        (fa,) = record["functions_analysed"]
+        assert fa["status"] == "clean"
+
+    def test_builder_later_unresolved_row_parks_credit(self, tmp_path):
+        # Latest-per-key runs BEFORE the screen — the same order as
+        # the store's journal import — so a settled review followed
+        # by an errored/interrupted re-review resurfaces the function
+        # on BOTH durable lanes (over-review direction) instead of
+        # the two lanes disagreeing.
+        target = _write_target(tmp_path)
+        record = self._build_record(
+            tmp_path,
+            _entry(target, verdict="clean"),
+            _entry(target, verdict="error"),
+        )
+        assert record is not None
+        assert record["functions_analysed"] == []
+        assert record["journal_statuses"] == {"error": 1}
+
+    def test_builder_record_feeds_no_covered_set_for_screened(
+            self, tmp_path):
+        # Lane composition: the builder's record, walked by the audit
+        # gap fold, covers only the earner.
+        from core.audit.gaps import _build_covered_set
+        target = _write_target(tmp_path)
+        record = self._build_record(
+            tmp_path,
+            _entry(target, verdict="clean"),
+            _entry(target, function="f_dark", verdict="dark"),
+            _entry(target, function="f_edge",
+                   edge_callee="lib.c:callee"),
+        )
+        assert _build_covered_set([record]) == {"auth.c:check_pw"}
+
+    @pytest.mark.parametrize("status,marked", [
+        ("dark", 0),
+        ("error", 0),
+        ("clean", 1),
+    ])
+    def test_store_import_screens_legacy_record_rows(
+            self, tmp_path, status, marked):
+        # Legacy coverage-journal.json records written BEFORE the
+        # builder screen persist in old run dirs and are re-imported
+        # raw at every render — the store-lane consumer must apply
+        # the same discipline the audit gap fold already does.
+        from core.coverage.importer import (
+            _function_ranges,
+            _inventory_paths,
+            import_functions_analysed,
+        )
+        from core.coverage.store import CoverageStore
+
+        target = _write_target(tmp_path)
+        checklist = _checklist(target)
+        record = {
+            "tool": "journal",
+            "functions_analysed": [{
+                "file": "auth.c", "function": "check_pw",
+                "status": status,
+            }],
+        }
+        store = CoverageStore(tmp_path / "coverage.json")
+        marks = import_functions_analysed(
+            store, record, _function_ranges(checklist, normalise_hi=True),
+            _inventory_paths(checklist),
+        )
+        assert marks == marked, status
+        assert bool(
+            store.tool_coverage_of_range("auth.c", 1, 5)
+        ) is bool(marked), status

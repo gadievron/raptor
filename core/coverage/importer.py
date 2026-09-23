@@ -205,7 +205,11 @@ def import_journal(
 
     Returns the number of function-level marks applied.
     """
-    from .journal import entry_producer, load_index
+    from .journal import (
+        entry_earns_function_coverage,
+        entry_producer,
+        load_index,
+    )
 
     try:
         entries = load_index(project_dir)
@@ -231,27 +235,16 @@ def import_journal(
 
     marks = 0
     for entry in entries.values():
-        if entry.verdict in ("error", "dark"):
-            # Error verdicts are transient failures (budget exceeded,
-            # API error, truncation) — the function was never actually
-            # reviewed. Marking it as covered would misrepresent the
-            # coverage view AND suppress it from any consumer that
-            # derives "already reviewed" from the store. Keep it
-            # unreviewed, consistent with journal.reviewed_set() and
-            # the gap computation's index fold. ``dark`` is excluded
-            # for the same direction: it is the UNRESOLVED
-            # gate-resolution bucket, and a store mark has no
-            # re-adjudication route — an interrupted run's dark rows
-            # must stay visible as unreviewed in every store-derived
-            # coverage view.
-            continue
-        if entry.edge_callee:
-            # Tier-1 edge-contract review: only the CALL EDGE was
-            # examined, not the caller's body. JournalEntry.key
-            # documents the invariant ("an edge review must never mark
-            # the caller function itself as reviewed") — marking the
-            # caller's full range here made unreviewed functions
-            # vanish from store-derived gap listings.
+        if not entry_earns_function_coverage(entry):
+            # The shared screening rule (journal.py): error rows are
+            # transient failures that must be retried, dark rows are
+            # the unresolved gate-resolution bucket with no
+            # re-adjudication route out of a store mark, and an
+            # edge-contract row examined only the CALL EDGE — none of
+            # them may mark the function reviewed in any store-derived
+            # coverage view. Consistent with journal.reviewed_set()
+            # and the record builder (record.build_from_journal),
+            # which consumes the same predicate.
             continue
         rng = ranges.get((entry.file, entry.function))
         if rng is None:
@@ -638,6 +631,16 @@ def import_functions_analysed(
     inv_index = _inventory_name_index(inventory_paths)
     for fa in fa_list:
         if not isinstance(fa, dict) or not isinstance(fa.get("file"), str):
+            continue
+        if fa.get("status") in ("error", "dark"):
+            # A row that errored — or sits in the unresolved ``dark``
+            # gate-resolution bucket — is not review evidence: the
+            # store mark has no re-adjudication route, so it would
+            # durably suppress the function from every store-derived
+            # gap view. The record BUILDERS no longer emit such rows,
+            # but legacy records persisted before that screen are
+            # re-imported raw at every render; same discipline as the
+            # audit gap fold (core.audit.gaps._build_covered_set).
             continue
         f = _to_inventory_path(fa.get("file") or "", inventory_paths, inv_index)
         rng = ranges.get((f, fa.get("function")))
