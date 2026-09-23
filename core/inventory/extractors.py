@@ -298,7 +298,11 @@ class JavaScriptExtractor:
         r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?function\s*\(',
         r'(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\([^)]*\)\s*=>',
         r'^\s+(?:async\s+)?(\w+)\s*\([^)]*\)\s*\{',
-        r'(\w+)\s*:\s*(?:async\s+)?(?:function\s*)?\([^)]*\)\s*(?:=>)?\s*\{',
+        # ``(?:=>\s*)?`` gates the arrow with its trailing whitespace
+        # (same language as ``\s*(?:=>)?\s*``): two bare ``\s*`` runs
+        # around the optional arrow backtracked every split of a
+        # whitespace run after ``)`` when no ``{`` follows.
+        r'(\w+)\s*:\s*(?:async\s+)?(?:function\s*)?\([^)]*\)\s*(?:=>\s*)?\{',
     ]
     # Several patterns repeat `\s*` between optional tokens. On a long
     # whitespace-only run that fails the structural part, the engine
@@ -441,24 +445,28 @@ class CExtractor:
     risk breaking existing extraction).
     """
 
-    # `[\w\s\*]+` is greedy and overlaps the following `\s+` (both match
-    # space). On a line that's a long run of word/space chars without a
-    # following `{` or `(`, the engine must try every backtrack position
-    # before declaring no-match. Pathological input
-    # (e.g. `"a" * 50000 + "\n"`) made `re.match` quadratic in line
-    # length. C source lines aren't longer than ~10 KB in practice (per
-    # most house style guides); cap the per-line input at `_MAX_C_LINE`
-    # before running the matcher so a stray minified file or a
-    # generated source dump (single-line concatenated declarations)
-    # can't hang inventory.
+    # The declaration prefix is spelled as deterministic token+space
+    # iterations (`(?:[\w*]+\s+)+`, with a pure-whitespace branch for
+    # the two-plus-space indent case): the earlier `[\w\s\*]+\s+`
+    # spelling overlapped its own continuation (both match space), so
+    # a long word/space run without a following `{` or `(` backtracked
+    # every split — `re.match` quadratic in line length (~1.6 s on one
+    # 16 KB line; a generated dump of such lines stalled inventory for
+    # minutes).  The token form accepts exactly the same lines with
+    # the same name capture and scans them once.  The `_MAX_C_LINE`
+    # cap stays as defense in depth: raising it admits longer
+    # generated/minified lines at linear cost, lowering it starts
+    # dropping legitimate long declarations.
     # Compile with `re.ASCII` so the `\w` captures match only ASCII
     # word chars. C identifiers are ASCII per the language spec; without
     # the flag, Python's `\w` admits Unicode word characters that would
     # be captured as the function name and surfaced into the inventory
     # under a homoglyph that visually matches a real ASCII identifier
     # — confusing greps and downstream cross-references.
-    ANSI_PATTERN = r'(?a)^(?:[\w\s\*]+)\s+(\w+)\s*\([^;]*\)\s*\{'
-    ANSI_SPLIT_PATTERN = r'(?a)^(?:[\w\s\*]+)\s+(\w+)\s*\([^;{]*\)\s*$'
+    ANSI_PATTERN = \
+        r'(?a)^(?:\s{2,}|\s*(?:[\w*]+\s+)+)(\w+)\s*\([^;]*\)\s*\{'
+    ANSI_SPLIT_PATTERN = \
+        r'(?a)^(?:\s{2,}|\s*(?:[\w*]+\s+)+)(\w+)\s*\([^;{]*\)\s*$'
     _MAX_C_LINE = 16 * 1024
     KNR_FUNCNAME = r'(?a)^(\w+)\s*\([\w\s,]*\)\s*$'
     FUNCNAME_OPEN_PAREN = r'(?a)^(\w+)\s*\([^)]*$'
@@ -1742,14 +1750,33 @@ class GenericExtractor:
 
     PATTERNS: ClassVar[list[str]] = [
         r'(?:function|func|fun|fn|def|sub)\s+(\w+)\s*\(',
-        r'(?:public|private|protected)?\s*(?:static)?\s*\w+\s+(\w+)\s*\([^)]*\)\s*\{',
+        # Modifier keywords are gated with their own trailing
+        # whitespace: the earlier optional-keyword spelling put bare
+        # `\s*` runs between three optional atoms, and a long
+        # whitespace run that fails the structural tail backtracked
+        # every split of that run (worse than cubic on a planted
+        # line).  A glued modifier (``publicstatic``) still matches —
+        # the plain ``\w+`` type token absorbs it — and the captured
+        # name group is unchanged for every input.
+        r'(?:(?:public|private|protected)\s+)?(?:static\s+)?'
+        r'\w+\s+(\w+)\s*\([^)]*\)\s*\{',
     ]
+
+    # Same per-line bound as the JS extractor (which shares the
+    # brace-and-paren pattern shape): real source lines routed to the
+    # generic fallback are far shorter, and an unbounded line lets a
+    # single planted multi-kilobyte line dominate the scan.  Raising
+    # the cap admits longer minified/generated lines at linear cost;
+    # lowering it starts dropping legitimate long declarations.
+    _MAX_LINE = 16 * 1024
 
     def extract(self, _filepath: str, content: str) -> list[FunctionInfo]:
         functions = []
         seen = set()
 
         for i, line in enumerate(content.split('\n'), 1):
+            if len(line) > self._MAX_LINE:
+                continue
             for pattern in self.PATTERNS:
                 match = re.search(pattern, line)
                 if match:

@@ -823,7 +823,12 @@ def _checks_return_value(
     source = sanitized_view(source, file_path)
 
     patterns = [
-        rf"if\s*\(\s*!?\s*{re.escape(function_name)}\s*\(",
+        # ``(?:!\s*)?`` gates the bang with its trailing whitespace
+        # (same language as ``!?\s*`` after ``\s*``): two bare ``\s*``
+        # runs around an optional atom backtrack every split of a
+        # whitespace run when the callee never follows — quadratic
+        # over hostile function source.
+        rf"if\s*\(\s*(?:!\s*)?{re.escape(function_name)}\s*\(",
         rf"(?:ret|rc|err|result|status|rv)\s*=\s*{re.escape(function_name)}\s*\(",
         r"if\s*\(\s*(?:ret|rc|err|result|status|rv)\s*[!=<>]",
     ]

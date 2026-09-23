@@ -243,9 +243,16 @@ TIER_B_FRAMEWORK_HOOKS: tuple[FrameworkHook, ...] = (
     # by chi and most router ecosystems) and gin's HandlerFunc type.
     # Plain `func(w, r)` request handlers deliberately do NOT match —
     # a handler is not a gate; the wrapper shape is.
+    # The optional function name is gated (``(?:\s*\w+)?``) so the
+    # whitespace runs on either side of it can never trade
+    # characters: the earlier ``\s*\w*\s*`` spelling backtracked
+    # every split of a whitespace run when the paren tail failed
+    # (quadratic over hostile function source).  Language unchanged:
+    # with a name present the run splits deterministically, without
+    # one a single ``\s*`` remains.
     FrameworkHook(
         "go-net/http", "middleware",
-        r"func\s*\w*\s*\(\s*\w+\s+http\.Handler\s*\)\s*http\.Handler",
+        r"func(?:\s*\w+)?\s*\(\s*\w+\s+http\.Handler\s*\)\s*http\.Handler",
     ),
     FrameworkHook(
         "gin", "middleware",
@@ -260,9 +267,10 @@ TIER_B_FRAMEWORK_HOOKS: tuple[FrameworkHook, ...] = (
     # surfaces and naming stems only.
     FrameworkHook(
         "express", "middleware",
+        # Same gated-optional-name shape as the Go hook above.
         r"\(\s*(?:req|request)\s*,\s*(?:res|response)\s*,\s*next\s*\)"
         r"\s*(?:=>|\{)"
-        r"|function\s*\w*\s*\(\s*(?:req|request)\s*,\s*(?:res|response)"
+        r"|function(?:\s*\w+)?\s*\(\s*(?:req|request)\s*,\s*(?:res|response)"
         r"\s*,\s*next\s*\)",
     ),
 )
