@@ -186,3 +186,36 @@ class TestThroughProductionMachinery:
         cfg = build_java_intraproc_cfg(src, "handle")
         assert cfg is not None
         assert "if:constant-resolved" in cfg.build_notes
+
+
+class TestUtf16CodeUnitSemantics:
+    """Java length()/charAt()/substring() operate on UTF-16 code
+    units; the folder uses Python code points. They agree exactly when
+    every code point is BMP — astral (non-BMP) receivers must refuse,
+    or the fold selects the WRONG branch downstream (live-branch
+    pruning is the false-suppression direction)."""
+
+    def test_astral_length_refuses(self):
+        # Java: "😀".length() == 2 (surrogate pair); Python len == 1.
+        assert _fold('"😀".length()') is REFUSE
+
+    def test_astral_charat_refuses(self):
+        assert _fold('"a😀x".charAt(1)') is REFUSE
+
+    def test_astral_substring_refuses(self):
+        assert _fold('"a😀x".substring(1)') is REFUSE
+
+    def test_astral_ternary_condition_refuses(self):
+        # The end-to-end shape: a wrong-VALUE fold in branch-selection
+        # position picked the "safe" arm while Java executes the other.
+        assert _fold('"😀".length() == 2 ? "T" : "safe"') is REFUSE
+
+    def test_bmp_length_still_folds(self):
+        # Controls: ASCII and BMP non-ASCII agree code-unit-for-code-
+        # point; the fold must not over-refuse.
+        assert _fold('"abc".length()') == 3
+        assert _fold('"héllo".length()') == 5
+
+    def test_bmp_charat_and_substring_still_fold(self):
+        assert _fold('"héllo".charAt(1)') == "é"
+        assert _fold('"héllo".substring(1, 3)') == "él"
