@@ -734,7 +734,7 @@ def enrich_from_context_map(model: ThreatModel, context_map: dict[str, Any]) -> 
     if not model.assumptions:
         model.assumptions = seed.assumptions
 
-    if model.source == "operator":
+    if model.source in _OPERATOR_TIER_SOURCES:
         model.source = "enriched"
     model.updated_at = datetime.now(timezone.utc).isoformat()
     return _clip_model_strings(model)
@@ -747,6 +747,14 @@ def enrich_from_context_map(model: ThreatModel, context_map: dict[str, Any]) -> 
 #: dataclass schema in ``_clip_model_strings``, never enumerated,
 #: so a new field is capped by construction.
 _MODEL_PROSE_FIELDS = frozenset({"summary", "notes"})
+
+#: Source spellings that carry operator-tier trust. ONE home for the
+#: allowlist: the prompt-block readers grant these the tag-forgery
+#: neutraliser skip and operator framing, so the enrich demotion MUST
+#: key off the same tuple — a spelling trusted by the readers but not
+#: demoted on enrich would let context-map-derived content ride
+#: operator provenance.
+_OPERATOR_TIER_SOURCES: tuple[str, ...] = ("operator", "manual")
 
 
 def _clip_model_strings(model: ThreatModel) -> ThreatModel:
@@ -1081,7 +1089,7 @@ def threat_model_prompt_block(target: Path) -> str:
         content = prompt_context(model)
         source = str(model.source or "operator").lower()
         source = re.sub(r"[^a-z0-9_-]", "", source) or "operator"
-        if source not in ("operator", "manual"):
+        if source not in _OPERATOR_TIER_SOURCES:
             content = neutralize_tag_forgery(content)
         blocks.append(
             f"\n[{_TMC} source={source}]\n"
@@ -1134,7 +1142,7 @@ def threat_model_untrusted_blocks(target: Path) -> list[UntrustedBlock]:
         source = str(model.source or "operator").lower()
         kind_label = (
             "operator-threat-model"
-            if source in ("operator", "manual")
+            if source in _OPERATOR_TIER_SOURCES
             else "untrusted-derived-threat-model"
         )
         blocks.append(UntrustedBlock(

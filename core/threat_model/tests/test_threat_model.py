@@ -1339,3 +1339,24 @@ def test_enrich_from_context_map_caps_derived_records(tmp_path):
             assert len(s) <= _MAX_NOTES_BYTES, (
                 f"field {f.name} carries an uncapped {len(s)}-char string"
             )
+
+
+def test_enrich_demotes_manual_source_like_operator(tmp_path):
+    # Both operator-tier spellings must lose operator attribution once
+    # context-map-derived content is merged in: the prompt-block reader
+    # grants the ("operator", "manual") allowlist the neutraliser skip
+    # and operator framing, so an enriched model keeping source="manual"
+    # rides target-derived text on operator provenance.
+    from core.threat_model import ThreatModel
+    cm = {"unchecked_flows": [{"entry_point": "e", "sink": "s"}],
+          "entry_points": [{"id": "e"}], "sinks": [{"id": "s"}]}
+
+    manual = ThreatModel(project_name="p", target=str(tmp_path),
+                         source="manual")
+    enrich_from_context_map(manual, cm)
+    assert manual.source == "enriched"
+
+    operator = ThreatModel(project_name="p", target=str(tmp_path),
+                           source="operator")
+    enrich_from_context_map(operator, cm)
+    assert operator.source == "enriched"
