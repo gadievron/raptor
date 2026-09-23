@@ -242,16 +242,34 @@ def rewrite_file_with(
 
     Shared driver for rewriters whose entry point is "read the file,
     apply each edit in sequence against the evolving text, write
-    once at the end". A read failure fails every edit; a write
-    failure fails the edits that had applied while keeping the
+    once at the end". A read failure or refusal fails every edit; a
+    write failure fails the edits that had applied while keeping the
     results of those that hadn't.
+
+    The read goes through the parsers' bounded reader with
+    ``follow_symlinks=False`` — the one target-tree read in the
+    package otherwise sat outside that chokepoint: a bare
+    ``read_text`` followed a symlinked manifest out of the tree
+    (echoing out-of-tree file content into operator-facing
+    ``value_mismatch`` reason strings) and buffered an over-cap
+    manifest whole. Scan and fix are routinely separate invocations,
+    so the rewrite side cannot lean on the parse side having vetted
+    the same file. The reader returns raw text; the historical
+    text-mode newline view (CRLF/CR read as LF) is restored below so
+    the write side's recorded newline behaviour is unchanged.
     """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as e:
+    from ..parsers import _safe_read
+
+    text = _safe_read.read_bounded(path, follow_symlinks=False)
+    if text is None:
+        # ``read_bounded`` already warned in the canonical refusal
+        # shape (oversize / symlink / vanished / unreadable).
         return [RewriteResult(edit=ed, applied=False,
-                              reason=f"error: read failed: {e}")
+                              reason="error: read refused "
+                                     "(oversize, symlinked, or "
+                                     "unreadable manifest)")
                 for ed in edits]
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     new_text = text
     results: list[RewriteResult] = []
