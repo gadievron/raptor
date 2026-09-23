@@ -3637,3 +3637,58 @@ def test_value_bound_java_precheck_read_is_capped(monkeypatch, tmp_path):
     )
     assert out is True
     assert seen["path"] == str(src)
+
+
+# ---------------------------------------------------------------------------
+# find_validator_line: best-occurrence selection (Tier 1B parity)
+# ---------------------------------------------------------------------------
+
+def test_find_validator_line_prefers_sink_function_occurrence():
+    """First-match-wins picked an occurrence in an UNRELATED function
+    and the dominance check then refused a genuinely sound barrier —
+    a pure yield loss. With the sink known, selection matches Tier
+    1B: closest code occurrence before the sink, same-function for
+    Python."""
+    src = (
+        "import re\n"
+        "def unrelated(name):\n"
+        "    if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"   # line 3
+        "        return None\n"
+        "    return name\n"
+        "def handler(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"   # line 8
+        "        return None\n"
+        "    open('/etc/app/' + name)\n"                        # line 10
+    )
+    spec = sb.ValidatorSpec(
+        kind="charset", var_name="name", charset="A-Za-z0-9_+-",
+        source_line="if not re.match(r'^[A-Za-z0-9_+-]+$', name):",
+    )
+    # Historical rule without a sink: first occurrence.
+    assert sb.find_validator_line(src, spec) == 3
+    # With the sink: the occurrence in the sink's function.
+    assert sb.find_validator_line(src, spec, sink_line=10) == 8
+
+
+def test_try_tier0_sound_when_first_occurrence_is_in_another_function(
+        tmp_path: Path):
+    src = (
+        "import re\n"
+        "def unrelated(name):\n"
+        "    if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"
+        "        return None\n"
+        "    return name\n"
+        "def handler(request):\n"
+        "    name = request.args.get('name')\n"
+        "    if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"
+        "        return None\n"
+        "    open('/etc/app/' + name)\n"
+    )
+    (tmp_path / "app.py").write_text(src)
+    diff = "+    if not re.match(r'^[A-Za-z0-9_+-]+$', name):\n"
+    r = sb.try_tier0(
+        fix_diff=diff, repo_root=tmp_path, sink_uri="app.py",
+        sink_line=10, sink_class="pathtrav", language="python",
+    )
+    assert r.status is sb.Tier0Status.SOUND, r.reasoning
