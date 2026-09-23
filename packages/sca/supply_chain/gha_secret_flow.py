@@ -91,7 +91,12 @@ What this detector must defend against:
     ``KEY`` to the job's ``secret_bound_env`` so later sinks treat
     references to it as tainted just like a direct
     ``env: KEY: ${{ secrets.X }}`` binding.  The laundering step
-    itself doesn't fire — the downstream sink does.
+    itself doesn't fire — the downstream sink does.  GitHub's
+    documented MULTILINE env-file framing (``KEY<<DELIM`` written
+    to the target, value lines, then the bare delimiter) binds
+    ``KEY`` the same way when any interior content is tainted —
+    both the grouped one-liner and the per-line three-append
+    spellings.
 
   * **Cross-step laundering via ``$GITHUB_OUTPUT``** — an earlier
     step (with an ``id:``) writes ``KEY=<secret-derived>`` to
@@ -672,12 +677,83 @@ def _extract_redirect_blocks(
     return blocks
 
 
+# Redirect-destination token names — never KEY bindings themselves.
+_TARGET_TOKEN_NAMES = ("GITHUB_ENV", "GITHUB_OUTPUT", "GITHUB_PATH")
+
+# GitHub's documented multiline env-file framing: writing
+# ``KEY<<DELIM`` to the target opens a frame; everything written
+# until the bare delimiter is KEY's value. The ``KEY`` sits
+# immediately before ``<<`` (a real shell heredoc is spelled with
+# whitespace before ``<<`` and is handled by the heredoc block arm).
+_KEY_HEREDOC_OPEN_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*)<<-?['\"]?([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def _extract_envfile_multiline_writes(
+    body: str, target: str,
+) -> list[tuple]:
+    """Extract ``[(key, interior)]`` pairs from GitHub's documented
+    multiline env-file syntax (``KEY<<DELIM`` … ``DELIM`` written to
+    the target) — grouped one-liners and the per-line three-append
+    spelling the GitHub docs show. The interior is handed to the
+    caller's taint check verbatim; only content actually redirected
+    to the target participates."""
+    if len(body) > _MAX_RUN_BODY_BYTES:
+        body = body[:_MAX_RUN_BODY_BYTES]
+    aliases = _aliased_targets(body, target)
+    target_alts = [target, *aliases][:_MAX_ALIAS_SET_SIZE]
+    target_pat = _multi_redirect_target_pattern(target_alts)
+    redirect_re = re.compile(rf">>?\s*{target_pat}")
+    tee_re = re.compile(rf"\|\s*tee\s+(?:-a\s+)?{target_pat}")
+    pairs: list[tuple] = []
+    open_key: str | None = None
+    close_re: re.Pattern[str] | None = None
+    parts: list[str] = []
+    for line in body.split("\n"):
+        rm = redirect_re.search(line) or tee_re.search(line)
+        if rm is None:
+            # Content not written to the target — not part of the
+            # env-file stream, frame state unchanged.
+            continue
+        content = line[:rm.start()]
+        pos = 0
+        while True:
+            if open_key is None:
+                m = _KEY_HEREDOC_OPEN_RE.search(content, pos)
+                if m is None or m.group(1) in _TARGET_TOKEN_NAMES:
+                    break
+                open_key = m.group(1)
+                close_re = re.compile(
+                    rf"(?<![A-Za-z0-9_]){re.escape(m.group(2))}"
+                    rf"(?![A-Za-z0-9_])"
+                )
+                parts = []
+                pos = m.end()
+            else:
+                assert close_re is not None
+                c = close_re.search(content, pos)
+                if c is None:
+                    parts.append(content[pos:])
+                    break
+                parts.append(content[pos:c.start()])
+                pairs.append((open_key, "\n".join(parts)))
+                open_key = None
+                close_re = None
+                parts = []
+                pos = c.end()
+                if len(pairs) > _MAX_REDIRECT_BLOCKS_PER_BODY:
+                    return pairs[:_MAX_REDIRECT_BLOCKS_PER_BODY]
+    return pairs
+
+
 def _extract_redirected_writes(
     body: str, target: str,
 ) -> list[tuple]:
     """Extract ``[(key, value)]`` pairs written to a target
     (``GITHUB_ENV`` / ``GITHUB_OUTPUT``) across all supported
-    redirect shapes."""
+    redirect shapes, including the documented multiline
+    ``KEY<<DELIM`` env-file framing."""
     pairs: list[tuple] = []
     for block in _extract_redirect_blocks(body, target):
         for m in _KEY_VALUE_RE.finditer(block):
@@ -685,9 +761,10 @@ def _extract_redirected_writes(
             value = m.group(2).strip().strip('"').strip("'")
             # Drop the special token names — these are the redirect
             # destinations, not actual KEY=VALUE writes.
-            if key in ("GITHUB_ENV", "GITHUB_OUTPUT", "GITHUB_PATH"):
+            if key in _TARGET_TOKEN_NAMES:
                 continue
             pairs.append((key, value))
+    pairs.extend(_extract_envfile_multiline_writes(body, target))
     return pairs
 
 
