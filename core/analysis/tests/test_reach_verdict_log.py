@@ -323,3 +323,20 @@ def test_reset_leaves_no_lock_residue(tmp_path):
     rvl.reset(sidecar)
     assert not sidecar.exists()
     assert not sidecar.with_suffix(sidecar.suffix + ".lock").exists()
+
+
+def test_held_lock_revalidates_unlinked_inode(tmp_path):
+    """A waiter can win an flock on an inode reset() just unlinked;
+    the acquire helper must detect the stale inode and reacquire on
+    the fresh path so two holders can never coexist."""
+    import os
+
+    from core.analysis.reach_verdict_log import _held_lock
+    lock_path = tmp_path / "v.json.lock"
+    lock_path.touch()
+    stale_ino = os.stat(lock_path).st_ino
+    lock_path.unlink()          # simulate reset() racing ahead
+    with _held_lock(lock_path) as fh:
+        held_ino = os.fstat(fh.fileno()).st_ino
+        assert os.stat(lock_path).st_ino == held_ino
+        assert held_ino != stale_ino
