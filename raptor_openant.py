@@ -75,7 +75,13 @@ def _build_parser() -> argparse.ArgumentParser:
              "the active project / caller dir when run via raptor.py)",
     )
     parser.add_argument("--out", help="Output directory (injected by raptor.py lifecycle)")
-    from packages.openant.config import env_choice
+    from packages.openant.config import (
+        OPENANT_LEVEL_CHOICES,
+        OPENANT_LEVEL_DEFAULT,
+        OPENANT_MODEL_CHOICES,
+        OPENANT_MODEL_DEFAULT,
+        env_choice,
+    )
 
     parser.add_argument(
         "--model",
@@ -84,18 +90,17 @@ def _build_parser() -> argparse.ArgumentParser:
         # value itself — argparse does NOT check string defaults
         # against choices, so an unvalidated env default would let a
         # typo'd knob silently steer the run.
-        default=env_choice("OPENANT_MODEL", ("opus", "sonnet"), "sonnet"),
-        choices=["opus", "sonnet"],
+        default=env_choice("OPENANT_MODEL", OPENANT_MODEL_CHOICES,
+                           OPENANT_MODEL_DEFAULT),
+        choices=list(OPENANT_MODEL_CHOICES),
         help="OpenAnt LLM model (default: $OPENANT_MODEL or sonnet)",
     )
     parser.add_argument(
         "--level",
         default=env_choice(
-            "OPENANT_LEVEL",
-            ("all", "reachable", "codeql", "exploitable"),
-            "reachable",
+            "OPENANT_LEVEL", OPENANT_LEVEL_CHOICES, OPENANT_LEVEL_DEFAULT,
         ),
-        choices=["all", "reachable", "codeql", "exploitable"],
+        choices=list(OPENANT_LEVEL_CHOICES),
         help="Analysis depth (default: $OPENANT_LEVEL or reachable)",
     )
     parser.add_argument("--no-enhance", action="store_true", help="Skip OpenAnt enhance phase")
