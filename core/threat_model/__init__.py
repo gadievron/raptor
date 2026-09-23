@@ -100,6 +100,17 @@ def _clip_str(value: Any, byte_cap: int = _MAX_STRING_BYTES) -> str:
     s = escape_nonprintable(s)
     if len(s) > byte_cap:
         s = s[:byte_cap]
+    return _cap_utf8_bytes(s, byte_cap)
+
+
+def _cap_utf8_bytes(s: str, byte_cap: int) -> str:
+    """Enforce the cap in actual UTF-8 BYTES, as the constant and
+    parameter names promise. The char-count pre-clips above bound the
+    work; without this final pass astral-plane text reached ~4x the
+    stated byte budget."""
+    b = s.encode("utf-8")
+    if len(b) > byte_cap:
+        return b[:byte_cap].decode("utf-8", "ignore")
     return s
 
 
@@ -138,7 +149,7 @@ def _safe_for_render(value: Any, byte_cap: int = _MAX_STRING_BYTES) -> str:
     s = escape_nonprintable(s)
     if len(s) > byte_cap:
         s = s[:byte_cap]
-    return s
+    return _cap_utf8_bytes(s, byte_cap)
 
 
 def _clip_str_list(values: Any) -> list[str]:
@@ -1632,8 +1643,8 @@ def _data_flows_from_context_map(context_map: dict[str, Any]) -> list[dict[str, 
     for i, flow in enumerate((context_map.get("unchecked_flows") or [])[:_MAX_LIST_ENTRIES]):
         if not isinstance(flow, dict):
             continue
-        entry_id = str(flow.get("entry_point") or "")
-        sink_id = str(flow.get("sink") or "")
+        entry_id = _clip_str(flow.get("entry_point") or "")
+        sink_id = _clip_str(flow.get("sink") or "")
         entry = entries_by_id.get(entry_id, {})
         sink = sinks_by_id.get(sink_id, {})
         boundary = flow.get("missing_boundary") or flow.get("boundary")
@@ -1807,12 +1818,14 @@ def _summaries_from_unchecked_flows(
 ) -> list[str]:
     if not isinstance(flows, list):
         return []
+    # Clipped-key indexes to match the _clip_str-escaped lookups
+    # below — see _records_by_id for the join rationale.
     entries_by_id = {
-        str(e.get("id")): e for e in entries
+        _clip_str(str(e.get("id"))): e for e in entries
         if isinstance(e, dict) and e.get("id")
     } if isinstance(entries, list) else {}
     sinks_by_id = {
-        str(s.get("id")): s for s in sinks
+        _clip_str(str(s.get("id"))): s for s in sinks
         if isinstance(s, dict) and s.get("id")
     } if isinstance(sinks, list) else {}
 
@@ -1923,10 +1936,19 @@ def _records(key: str, data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _records_by_id(records: Any) -> dict[str, dict[str, Any]]:
+    """Index records by their CLIPPED id.
+
+    Lookups arrive through ``_clip_str`` (ids are adversarial input
+    like everything else), so the index must be keyed the same way —
+    a raw-keyed index never matched its own record for a control-char
+    or over-cap id, silently dropping the joined detail. Two distinct
+    hostile ids sharing a clipped spelling collide; that degrades a
+    label, never a verdict.
+    """
     if not isinstance(records, list):
         return {}
     return {
-        str(r.get("id")): r
+        _clip_str(str(r.get("id"))): r
         for r in records
         if isinstance(r, dict) and r.get("id")
     }
@@ -2045,7 +2067,7 @@ def _controls_for_category(category: str) -> list[str]:
     return _dedup(controls)
 
 
-_CWE_NUMBER_RE = __import__("re").compile(r"(?:CWE-)?(\d+)", __import__("re").IGNORECASE)
+_CWE_NUMBER_RE = re.compile(r"(?:CWE-)?(\d+)", re.IGNORECASE)
 
 
 def _extract_cwe_number(value: Any) -> str:
