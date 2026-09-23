@@ -388,7 +388,9 @@ def extract_files_from_tar(
 
 
 __all__ = [
+    "TarEntryCountExceeded",
     "TarOpenError",
     "TarReadError",
+    "TarTotalBytesExceeded",
     "extract_files_from_tar",
 ]

@@ -682,3 +682,24 @@ def test_intact_xz_archive_still_extracts():
     out = extract_files_from_tar(
         buf.getvalue(), selector=_select_all, mode="r:*")
     assert out == {"pkg/a.py": b"data"}
+
+
+class TestPackageExportClosure:
+    """The package facade must re-export its submodules' public API.
+
+    Pinned mechanically over the submodule __all__ lists so a name
+    added to a submodule cannot silently miss the facade (TarReadError
+    was listed in extract.__all__ yet not importable from core.tar).
+    """
+
+    def test_every_submodule_export_reachable_from_package(self):
+        import core.tar as pkg
+        from core.tar import extract, safe_member
+
+        for name in (*extract.__all__, *safe_member.__all__):
+            assert hasattr(pkg, name), f"core.tar lacks {name}"
+            assert name in pkg.__all__, f"core.tar.__all__ lacks {name}"
+
+    def test_tar_read_error_importable_and_typed(self):
+        from core.tar import TarOpenError, TarReadError
+        assert issubclass(TarReadError, TarOpenError)
