@@ -873,6 +873,29 @@ class TestValidateSpec:
         assert err is not None
         assert "invalid function name" in err
 
+    def test_ruby_bang_and_predicate_method_names_accepted(self):
+        # `save!` / `valid?` are ordinary ruby method names — refusing
+        # them refused every finding on such methods (over-refusal).
+        for fn in ("save!", "valid?"):
+            spec = DarkWitnessSpec(
+                finding_key="f1", file="app/m.rb", function=fn,
+                language="ruby",
+            )
+            assert validate_spec(spec) is None, fn
+
+    def test_ruby_suffix_grammar_stays_tight(self):
+        # One trailing sigil only, and only for ruby.
+        for fn, lang, file in (
+            ("save!!", "ruby", "a.rb"),
+            ("va!lid", "ruby", "a.rb"),
+            ("save!", "python", "a.py"),
+            ("valid?", "c", "a.c"),
+        ):
+            spec = DarkWitnessSpec(
+                finding_key="f1", file=file, function=fn, language=lang,
+            )
+            assert validate_spec(spec) is not None, (fn, lang)
+
     def test_function_with_semicolon_rejected(self):
         spec = DarkWitnessSpec(
             finding_key="f1", file="a.c", function="foo;bar",
@@ -3893,6 +3916,96 @@ class TestAnchoredCapture:
         at_report = text.find("ERROR: AddressSanitizer")
         assert at_sentinel >= 0 and at_report >= 0
         assert at_sentinel < at_report, "stream order must be preserved"
+
+
+class TestCFormatWidths:
+    """printf conversions must be width-exact for the declared return
+    type: %lu for `unsigned int` and %ld for `long long` were
+    LP64-benign varargs mismatches but wrong on ILP32."""
+
+    def test_width_exact_conversions(self):
+        cases = {
+            "unsigned int": "%u",
+            "unsigned": "%u",
+            "unsigned char": "%u",
+            "unsigned short": "%u",
+            "unsigned long": "%lu",
+            "unsigned long long": "%llu",
+            "long long": "%lld",
+            "int64_t": "%lld",
+            "uint64_t": "%llu",
+            "uint32_t": "%u",
+            "size_t": "%zu",
+            "ssize_t": "%zd",
+            "ptrdiff_t": "%td",
+            "long": "%ld",
+            "int": "%d",
+            "char": "%c",
+            "char *": "%p",
+        }
+        for rt, expected in cases.items():
+            assert hy._c_format_for_type(rt) == expected, rt
+
+
+class TestChattyStdoutClassification:
+    """A target that prints its own text around the harness epilogue
+    must not classify inconclusive — the token-bearing epilogue line
+    is recoverable, and ONLY that line (the token authenticates it;
+    chatter can parse as JSON but never carries the token)."""
+
+    _TOKEN = "cafef00d"
+
+    def _spec(self):
+        return DarkWitnessSpec(
+            finding_key="f1", file="a.py", function="f",
+            language="python",
+        )
+
+    def test_epilogue_recovered_from_chatter(self):
+        stdout = (
+            "debug: opening database\n"
+            "progress 50%\n"
+            '{"status": "returned", "token": "' + self._TOKEN
+            + '", "value": "3"}\n'
+            "trailing chatter\n"
+        )
+        r = ex._classify_json_output(
+            self._spec(), stdout, "python", expected_token=self._TOKEN,
+        )
+        assert r.verdict != "inconclusive" or "unparseable" not in (
+            r.match_detail or "")
+        assert "unparseable" not in (r.match_detail or "")
+
+    def test_forged_untokened_line_not_recovered(self):
+        stdout = (
+            '{"status": "returned", "value": "forged"}\n'
+            "chatter\n"
+        )
+        r = ex._classify_json_output(
+            self._spec(), stdout, "python", expected_token=self._TOKEN,
+        )
+        assert r.verdict == "inconclusive"
+
+    def test_unauthenticated_lane_does_not_recover(self):
+        # No expected token → nothing distinguishes the epilogue from
+        # chatter; the conservative whole-stdout behavior stands.
+        stdout = 'chatter\n{"status": "returned", "value": "3"}\n'
+        r = ex._classify_json_output(
+            self._spec(), stdout, "python", expected_token="",
+        )
+        assert r.verdict == "inconclusive"
+        assert "unparseable" in (r.match_detail or "")
+
+    def test_tampered_duplicate_key_line_skipped(self):
+        stdout = (
+            "chatter\n"
+            '{"status": "x", "status": "returned", "token": "'
+            + self._TOKEN + '"}\n'
+        )
+        r = ex._classify_json_output(
+            self._spec(), stdout, "python", expected_token=self._TOKEN,
+        )
+        assert r.verdict == "inconclusive"
 
 
 class TestCapArtifactPlantRefusal:

@@ -293,9 +293,31 @@ def _c_format_for_type(return_type: str) -> str:
         return "%g"
     if rt in ("char",):
         return "%c"
-    if "unsigned" in return_type or rt in ("size_t",):
-        return "%lu"
-    if rt in ("long", "long long", "ssize_t", "ptrdiff_t", "int64_t"):
+    # Width-exact conversions: %lu for `unsigned int` and %ld for
+    # `long long` were LP64-benign varargs mismatches but wrong on
+    # ILP32. size_t/ssize_t/ptrdiff_t take their own C99 modifiers;
+    # the 64-bit fixed-width types are `long long`-width on every
+    # target this harness compiles for spelling purposes (matching
+    # width on LP64, exact on ILP32).
+    if rt == "size_t":
+        return "%zu"
+    if rt == "ssize_t":
+        return "%zd"
+    if rt == "ptrdiff_t":
+        return "%td"
+    if "unsigned" in return_type:
+        if "long long" in rt:
+            return "%llu"
+        if "long" in rt:
+            return "%lu"
+        return "%u"  # unsigned int/short/char: promoted, non-negative
+    if rt in ("long long", "int64_t"):
+        return "%lld"
+    if rt in ("uint64_t",):
+        return "%llu"
+    if rt in ("uint32_t", "uint16_t", "uint8_t"):
+        return "%u"
+    if rt == "long":
         return "%ld"
     return "%d"
 

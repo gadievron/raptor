@@ -42,7 +42,9 @@ class TestLearning:
     def test_defaults(self):
         lrn = Learning(text="test")
         assert lrn.category == "note"
-        assert lrn.source == "human"
+        # Unlabelled construction claims the humbler tier — human
+        # provenance is asserted, never defaulted.
+        assert lrn.source == "llm"
         assert lrn.file == ""
         assert lrn.function == ""
         assert lrn.strategy == ""
@@ -202,8 +204,8 @@ class TestAddLearning:
         run_dir = tmp_path / "run-001"
         run_dir.mkdir()
 
-        add_learning(run_dir, "same text")
-        result = add_learning(run_dir, "same text")
+        add_learning(run_dir, "same text", source="llm")
+        result = add_learning(run_dir, "same text", source="llm")
         assert result is None
 
         loaded = load_project_context(run_dir)
@@ -214,7 +216,8 @@ class TestAddLearning:
         run_dir.mkdir()
 
         try:
-            add_learning(run_dir, "test", category="invalid")
+            add_learning(run_dir, "test", category="invalid",
+                         source="llm")
             assert False, "should raise ValueError"
         except ValueError as exc:
             assert "invalid" in str(exc)
@@ -224,7 +227,9 @@ class TestAddLearning:
         run_dir.mkdir()
 
         for cat in VALID_CATEGORIES:
-            result = add_learning(run_dir, f"test {cat}", category=cat)
+            result = add_learning(
+                run_dir, f"test {cat}", category=cat, source="llm",
+            )
             assert result is not None
 
     def test_with_scope(self, tmp_path: Path):
@@ -234,6 +239,7 @@ class TestAddLearning:
         result = add_learning(
             run_dir,
             "encrypt_block uses AES-128-CBC",
+            source="human",
             file="src/crypto.c",
             function="encrypt_block",
             strategy="crypto",

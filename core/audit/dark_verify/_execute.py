@@ -76,6 +76,11 @@ _AUDIT_RUN_DIR: contextvars.ContextVar[str | None] = contextvars.ContextVar(
 
 
 _IDENTIFIER_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*\Z")
+# Ruby method names may end in one `!` or `?` (`save!`, `valid?`) —
+# the plain identifier grammar refused every such finding outright.
+# The suffix is pasted into a ruby `.send(:name)`-style call site
+# only; it grants no new syntax beyond the method-name grammar.
+_RUBY_METHOD_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*[!?]?\Z")
 _QUALIFIED_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.:/]*\Z")
 
 _DANGEROUS_INTERP_FUNCS = frozenset({
@@ -430,11 +435,12 @@ def validate_spec(
     before code generation. When *target_root* is given, the load-path
     fields must also resolve inside it.
     """
-    if not _IDENTIFIER_RE.match(spec.function):
-        return f"invalid function name: {spec.function!r}"
     # Derive the language the same way execute_witness dispatches — a
     # spec with language unset must not skip the interpreter check.
     lang = spec.language or language_for_file(spec.file) or ""
+    name_re = _RUBY_METHOD_RE if lang == "ruby" else _IDENTIFIER_RE
+    if not name_re.match(spec.function):
+        return f"invalid function name: {spec.function!r}"
     if lang in ("python", "ruby", "php", "perl", "javascript", "typescript",
                 "lua") and spec.function.lower() in _DANGEROUS_INTERP_FUNCS:
         return f"dangerous builtin as function name: {spec.function!r}"
@@ -721,6 +727,29 @@ def _reject_duplicate_keys(pairs: list) -> dict:
     return dict(pairs)
 
 
+def _recover_token_line(
+    stdout: str, expected_token: str,
+) -> dict | None:
+    """The LAST stdout line that parses as a JSON object carrying the
+    harness token, or None. Scanned from the end (the epilogue prints
+    last); a line that repeats a key is skipped as tampered, exactly
+    like the whole-stdout path. Lines without the token are target
+    chatter — never candidates, whatever they parse as."""
+    for line in reversed(stdout.splitlines()):
+        line = line.strip()
+        if not line.startswith("{") or expected_token not in line:
+            continue
+        try:
+            candidate = json.loads(
+                line, object_pairs_hook=_reject_duplicate_keys)
+        except (_DuplicateKeyError, json.JSONDecodeError):
+            continue
+        if isinstance(candidate, dict) \
+                and candidate.get("token") == expected_token:
+            return candidate
+    return None
+
+
 def _classify_json_output(
     spec: DarkWitnessSpec,
     stdout: str,
@@ -760,11 +789,23 @@ def _classify_json_output(
             ),
         )
     except json.JSONDecodeError:
-        return DarkVerifyResult(
-            finding_key=spec.finding_key, verdict="inconclusive",
-            language=language,
-            match_detail=f"unparseable output: {stdout[:200]}",
-        )
+        # Chatty target: the function under test may print its own
+        # text around the harness epilogue's single JSON line, and a
+        # whole-stdout parse classified every such run inconclusive.
+        # Recover the epilogue line — AUTHENTICATED lane only: the
+        # token (minted in-process after the LLM response was parsed)
+        # is what distinguishes the harness's line from anything the
+        # target printed, so without an expected token there is
+        # nothing safe to recover from chatter.
+        data = None
+        if expected_token:
+            data = _recover_token_line(stdout, expected_token)
+        if data is None:
+            return DarkVerifyResult(
+                finding_key=spec.finding_key, verdict="inconclusive",
+                language=language,
+                match_detail=f"unparseable output: {stdout[:200]}",
+            )
 
     if expected_token and data.get("token") != expected_token:
         return DarkVerifyResult(

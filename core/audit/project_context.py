@@ -52,7 +52,12 @@ _SCHEMA_VERSION = 1
 class Learning:
     text: str
     category: str = "note"
-    source: str = "human"
+    # Provenance default claims the HUMBLER tier: an unlabelled
+    # construction must never mint a human-labelled learning (the
+    # annotations doctrine — human provenance is asserted, never
+    # defaulted). Machine producers set it explicitly anyway; the
+    # legacy loader keeps its own tolerance for pre-source rows.
+    source: str = "llm"
     created: str = ""
     id: str = ""
     file: str = ""
@@ -242,13 +247,17 @@ def add_learning(
     out_dir: Path,
     text: str,
     *,
+    source: str,
     category: str = "note",
-    source: str = "human",
     file: str = "",
     function: str = "",
     strategy: str = "",
 ) -> Learning | None:
-    """Add a learning to the project context. Returns the Learning if added."""
+    """Add a learning to the project context. Returns the Learning if
+    added. *source* is deliberately required: it is a provenance
+    claim ("human" gets the operator tier in readers), and a default
+    minted human-labelled learnings for every caller that forgot to
+    say otherwise — machine callers pass "llm"."""
     if category not in VALID_CATEGORIES:
         msg = f"invalid category {category!r}; valid: {sorted(VALID_CATEGORIES)}"
         raise ValueError(msg)

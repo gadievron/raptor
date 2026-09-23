@@ -787,6 +787,24 @@ class TestRuleTimings:
         )
         assert seen["timeout_per_rule"] == 42
 
+    def test_cocci_scripting_default_on_for_shipped(
+        self, tmp_path, monkeypatch,
+    ):
+        _, seen = self._cocci_run(tmp_path, monkeypatch, [])
+        assert seen["allow_scripting"] is True
+
+    def test_cocci_scripting_off_when_requested(
+        self, tmp_path, monkeypatch,
+    ):
+        # Graduated rules arrive through the synthesis pipeline —
+        # script execution must not rest solely on the synthesis-side
+        # persistence gate, so the graduated pass runs with
+        # scripting disabled.
+        _, seen = self._cocci_run(
+            tmp_path, monkeypatch, [], allow_scripting=False,
+        )
+        assert seen["allow_scripting"] is False
+
     def test_cocci_timeout_default_matches_production(
         self, tmp_path, monkeypatch,
     ):
