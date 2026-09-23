@@ -72,3 +72,70 @@ def test_shell_redirect_not_emitted_as_package(tmp_path: Path) -> None:
     deps = parse_shell_script(sh)
     names = {d.name for d in deps}
     assert names == {"uv", "requests", "flask", "numpy"}
+
+
+def test_pipe_tail_not_emitted_as_packages(tmp_path: Path) -> None:
+    """Everything after an unquoted ``|`` is a separate command, not
+    install arguments — ``tee`` and ``grep`` are REAL registry names,
+    so the leak produced live SBOM rows and registry/OSV queries."""
+    sh = tmp_path / "setup.sh"
+    sh.write_text(
+        "pip install requests==2.31.0 | tee build.log\n"
+        "pip install flask 2>&1 | grep -v warning\n"
+        "apt-get install nginx | tee -a apt.log\n",
+        encoding="utf-8",
+    )
+    deps = parse_shell_script(sh)
+    names = {d.name for d in deps}
+    assert {"requests", "flask", "nginx"} <= names
+    for phantom in ("tee", "grep", "warning", "build-log", "apt.log"):
+        assert phantom not in names, names
+
+
+def test_append_all_and_clobber_redirect_spellings_stripped(
+    tmp_path: Path,
+) -> None:
+    """``&>>`` (append-all) and ``>|`` (noclobber override) are
+    redirection operators; their target words must not surface as
+    packages. Both leaked through the enumerated-spelling stripper."""
+    sh = tmp_path / "setup.sh"
+    sh.write_text(
+        "pip install numpy &>> out.log\n"
+        "pip install pandas >| capture.txt\n",
+        encoding="utf-8",
+    )
+    deps = parse_shell_script(sh)
+    names = {d.name for d in deps}
+    assert names == {"numpy", "pandas"}, names
+
+
+def test_quoted_pipe_and_comparators_stay_intact(tmp_path: Path) -> None:
+    """Two-direction guard: an unquoted pipe splits, but the same
+    characters INSIDE quotes are argument text — a quoted PEP 508
+    range spec keeps its comparators and never loses its tail to the
+    redirect stripper."""
+    sh = tmp_path / "setup.sh"
+    sh.write_text(
+        "pip install 'requests>=2.0,<3.0'\n"
+        'echo "a | b" && pip install uv==0.12.6\n',
+        encoding="utf-8",
+    )
+    deps = parse_shell_script(sh)
+    by = {d.name: d for d in deps}
+    assert "requests" in by
+    assert by["requests"].version_floor == "2.0"
+    assert by["requests"].version_ceiling == "3.0"
+    assert "uv" in by and by["uv"].version == "0.12.6"
+
+
+def test_post_pipe_install_command_still_scanned(tmp_path: Path) -> None:
+    """Splitting (rather than truncating) at the pipe keeps a genuine
+    install on the pipeline's right-hand side visible."""
+    sh = tmp_path / "setup.sh"
+    sh.write_text(
+        "curl -s https://example.invalid/reqs | pip install uv==0.12.6\n",
+        encoding="utf-8",
+    )
+    deps = parse_shell_script(sh)
+    by = {d.name: d for d in deps}
+    assert "uv" in by and by["uv"].version == "0.12.6"

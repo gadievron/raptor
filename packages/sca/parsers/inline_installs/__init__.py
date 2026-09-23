@@ -177,12 +177,25 @@ _GHA_EXPR_RE = re.compile(r"\$\{\{(?:[^}]|\}(?!\})){0,400}\}\}")
 # PM arg parsing so ``2>&1``, ``>> logfile``, ``> /dev/null`` etc. don't
 # leak through as phantom packages (``2>&1`` looks like package "2" with
 # a ``>`` version comparator to the PEP 508 classifier).
-_REDIRECT_TOKEN_RE = re.compile(r"^\d*[><](?!=)")
-_FD_DUP_RE = re.compile(r"^\d*>&\d+$")
+#
+# The operator set is the POSIX shell redirection-token grammar —
+# optional IO-number prefix, then one operator, longest match first:
+# ``<<<  <<-  <<  <>  <&  >&  >>  >|  <  >`` plus bash's ``&>`` /
+# ``&>>``. Derived from the grammar rather than an enumerated list of
+# spellings: the previous enumeration let ``&>>`` (startswith ``&>``
+# but != ``&>``, so its target survived) and ``>|`` (fails a bare
+# ``[><]{1,3}$`` check) leak their targets through as phantom
+# packages. The single-char ``<`` / ``>`` arms refuse a following
+# ``=`` so version comparators split out of quoted specs (``'foo >=
+# 1.2'`` tokenises as ``'foo``, ``>=``, ``1.2'``) keep their meaning.
+_REDIRECT_OP_RE = re.compile(
+    r"^(?:\d*(?:<<<|<<-|<<|<>|<&|>&|>>|>\||<(?!=)|>(?!=))|&>>|&>)"
+)
 
 
 def _strip_redirects(args: str) -> str:
-    """Remove shell I/O redirections from an argument string."""
+    """Remove shell I/O redirection tokens (and, for a bare operator,
+    the following target word) from an argument string."""
     tokens = args.split()
     out: list[str] = []
     skip_next = False
@@ -190,17 +203,17 @@ def _strip_redirects(args: str) -> str:
         if skip_next:
             skip_next = False
             continue
-        if _FD_DUP_RE.match(tok):
+        m = _REDIRECT_OP_RE.match(tok)
+        if m is None:
+            out.append(tok)
             continue
-        if _REDIRECT_TOKEN_RE.match(tok):
-            if re.match(r"^\d*[><]{1,3}$", tok):
-                skip_next = True
-            continue
-        if tok.startswith("&>"):
-            if tok == "&>":
-                skip_next = True
-            continue
-        out.append(tok)
+        if m.end() == len(tok):
+            # Bare operator: the NEXT word is its operand (redirect
+            # target, fd, or heredoc delimiter) — consume it too.
+            skip_next = True
+        # Operator with an attached operand (``2>&1``, ``>file``,
+        # ``&>>log``, ``>|out``): the whole token is the redirection.
+        continue
     return " ".join(out)
 
 
@@ -280,7 +293,18 @@ def _scan_shell_lines(
 
 
 def _split_compound(line: str) -> list[str]:
-    """Split a shell line on ``&&`` / ``||`` / ``;`` outside quotes."""
+    """Split a shell line on ``&&`` / ``||`` / ``;`` / ``|`` / ``|&``
+    outside quotes.
+
+    A pipeline is a command sequence like any other compound: without
+    the ``|`` split, everything after the pipe parsed as arguments of
+    the install verb — ``pip install requests | tee build.log`` minted
+    phantom deps ``tee`` and ``build-log`` (both REAL registry names,
+    so they drove live registry/OSV queries). Splitting scans each
+    side independently, which also keeps genuine post-pipe install
+    commands visible. A ``|`` glued to a preceding ``>`` or ``<`` is
+    NOT a pipe — shell tokenisation is longest-match, so ``>|`` is one
+    redirection operator (handled by ``_strip_redirects``)."""
     out: list[str] = []
     buf: list[str] = []
     in_single = False
@@ -308,6 +332,11 @@ def _split_compound(line: str) -> list[str]:
                 out.append("".join(buf))
                 buf = []
                 i += 1
+                continue
+            if ch == "|" and not (i > 0 and line[i - 1] in "<>"):
+                out.append("".join(buf))
+                buf = []
+                i += 2 if line[i:i + 2] == "|&" else 1
                 continue
         buf.append(ch)
         i += 1
