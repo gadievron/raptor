@@ -206,12 +206,12 @@ class TestMakeRepoFromFullName:
         with pytest.raises(ValueError, match="must be 'owner/repo' format"):
             make_repo_from_full_name("single-name")
 
-    def test_handles_multiple_slashes(self):
-        """Handles repo name with multiple slashes (takes first as owner)."""
-        repo = make_repo_from_full_name("owner/repo/with/slashes")
-        assert repo.owner == "owner"
-        assert repo.name == "repo/with/slashes"
-        assert repo.full_name == "owner/repo/with/slashes"
+    def test_rejects_multiple_slashes(self):
+        """Rejects extra slashes: a repository name containing ``/``
+        would splice extra path segments into the verification URL,
+        and GitHub names never contain one."""
+        with pytest.raises(ValueError):
+            make_repo_from_full_name("owner/repo/with/slashes")
 
 
 if __name__ == "__main__":

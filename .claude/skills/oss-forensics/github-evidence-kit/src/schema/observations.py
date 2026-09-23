@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 from .common import (
     EvidenceSource,
@@ -14,6 +14,9 @@ from .common import (
     GitHubRepository,
     IOCType,
     VerificationInfo,
+    validate_git_ref_name,
+    validate_repo_relative_path,
+    validate_sha1_hex,
 )
 
 
@@ -88,6 +91,13 @@ class CommitObservation(Observation):
     files: list[FileChange] = Field(default_factory=list)
     is_dangling: bool = False  # Not on any branch
 
+    @field_validator("sha")
+    @classmethod
+    def _sha_is_hex(cls, value: str) -> str:
+        # The sha joins the verification URL; length-40 alone let
+        # non-hex path-shaped values through to the API client.
+        return validate_sha1_hex(value, "commit sha")
+
 
 class IssueObservation(Observation):
     """Issue or PR."""
@@ -110,6 +120,20 @@ class FileObservation(Observation):
     content_hash: str | None = None  # SHA256
     size_bytes: int = 0
 
+    @field_validator("file_path")
+    @classmethod
+    def _file_path_shape(cls, value: str) -> str:
+        # Joins the verification URL; traversal here re-addressed the
+        # contents fetch to an attacker-chosen repository.
+        return validate_repo_relative_path(value, "file_path")
+
+    @field_validator("branch")
+    @classmethod
+    def _branch_shape(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_git_ref_name(value, "branch")
+
 
 class ForkObservation(Observation):
     """Fork relationship."""
@@ -130,6 +154,18 @@ class BranchObservation(Observation):
     head_sha: str | None = None
     protected: bool = False
 
+    @field_validator("branch_name")
+    @classmethod
+    def _branch_name_shape(cls, value: str) -> str:
+        return validate_git_ref_name(value, "branch_name")
+
+    @field_validator("head_sha")
+    @classmethod
+    def _head_sha_is_hex(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_sha1_hex(value, "head_sha")
+
 
 class TagObservation(Observation):
     """Tag."""
@@ -137,6 +173,18 @@ class TagObservation(Observation):
     observation_type: Literal["tag"] = "tag"
     tag_name: str
     target_sha: str | None = None
+
+    @field_validator("tag_name")
+    @classmethod
+    def _tag_name_shape(cls, value: str) -> str:
+        return validate_git_ref_name(value, "tag_name")
+
+    @field_validator("target_sha")
+    @classmethod
+    def _target_sha_is_hex(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_sha1_hex(value, "target_sha")
 
 
 class ReleaseObservation(Observation):
@@ -150,6 +198,11 @@ class ReleaseObservation(Observation):
     published_at: datetime | None = None
     is_prerelease: bool = False
     is_draft: bool = False
+
+    @field_validator("tag_name")
+    @classmethod
+    def _tag_name_shape(cls, value: str) -> str:
+        return validate_git_ref_name(value, "tag_name")
 
 
 class WaybackSnapshot(BaseModel):
