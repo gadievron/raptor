@@ -1335,6 +1335,7 @@ class TestDowngradeReferee:
             validation_report=report, annotations_dir=ann_dir,
             audit_out_dir=audit_out)
         entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry is not None
         assert entry.verdict == "suspicious"
 
     def test_abstained_cocci_record_blocks_clean(self, tmp_path: Path):
@@ -1357,6 +1358,7 @@ class TestDowngradeReferee:
             validation_report=report, annotations_dir=ann_dir,
             audit_out_dir=audit_out)
         entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry is not None
         assert entry.verdict == "suspicious"
 
     def test_errored_sweep_end_to_end_blocks_clean(self, tmp_path: Path):
@@ -1398,6 +1400,7 @@ class TestDowngradeReferee:
             validation_report=report, annotations_dir=ann_dir,
             audit_out_dir=audit_out)
         entry = _latest_journal_entry(audit_out, "src/vuln.c", "vuln_fn")
+        assert entry is not None
         assert entry.verdict == "suspicious"
 
     def test_bare_sanity_failure_blocks_clean(self, tmp_path: Path):
