@@ -942,3 +942,51 @@ class TestCallsiteMatch:
         re_dict = out[0]["steps"][0]["runtime_evidence"]
         assert "callsite_match" not in re_dict
         assert re_dict["observed_callsites"][0]["source"] is None
+
+
+class TestContradictedCallsiteFloor:
+    """A callsite_match of False means the resolved call sites
+    CONTRADICT the step — contradicting evidence must not establish
+    the proximity floor (None — nothing resolved — still floors)."""
+
+    def _evidence(self, source: str | None):
+        return {"memcpy": RuntimeEvidence(
+            function_observed=True, call_count=1,
+            observed_callsites=[{"module": "srv", "offset": "0x10",
+                                 "source": source}])}
+
+    def test_contradicted_step_does_not_floor(self):
+        paths = [{"steps": [{"function": "memcpy",
+                             "call_site": "src/parse.c:48"}],
+                  "proximity": 1}]
+        out = annotate_attack_paths(
+            paths, self._evidence("/build/src/other.c:200"))
+        step = out[0]["steps"][0]
+        assert step["runtime_evidence"]["callsite_match"] is False
+        # Evidence is still recorded and surfaced...
+        assert out[0]["runtime_evidence_available"] is True
+        # ...but the floor is withheld: the trace points elsewhere.
+        assert out[0]["proximity"] == 1
+
+    def test_corroborated_sibling_step_still_floors(self):
+        evidence = self._evidence("/build/src/other.c:200")
+        evidence["open"] = RuntimeEvidence(
+            function_observed=True, call_count=4, trace_id="/out/run")
+        paths = [{"steps": [
+            {"function": "memcpy", "call_site": "src/parse.c:48"},
+            {"function": "open"},
+        ], "proximity": 1}]
+        out = annotate_attack_paths(paths, evidence)
+        assert out[0]["steps"][0]["runtime_evidence"][
+            "callsite_match"] is False
+        assert out[0]["proximity"] >= PROXIMITY_FLOOR
+
+    def test_matching_callsite_floors(self):
+        paths = [{"steps": [{"function": "memcpy",
+                             "call_site": "src/parse.c:48"}],
+                  "proximity": 1}]
+        out = annotate_attack_paths(
+            paths, self._evidence("/build/src/parse.c:48"))
+        assert out[0]["steps"][0]["runtime_evidence"][
+            "callsite_match"] is True
+        assert out[0]["proximity"] >= PROXIMITY_FLOOR

@@ -131,3 +131,35 @@ class TestEnrichment:
              "callee_module_path": str(binary), "count": 3, "tid": 0},
         ], binary)
         assert collect_runtime_evidence([tmp_path]) == {}
+
+
+class TestNameOnlyMatchDiscount:
+    """Ambiguous bare-name joins do not witness reachability.
+
+    The enrichment marks ``name_only_match`` when the same name is
+    defined in more than one TU and no callsite resolved into the
+    item's file — the observation may belong to the twin, so the
+    SOUND promotion claim does not hold for it.
+    """
+
+    def test_name_only_call_edge_does_not_witness(self):
+        inv = _inventory({"frida_call_edge": {
+            "observed": True, "call_count": 3, "name_only_match": True}})
+        assert not frida_call_edge_present(
+            inv, "src/lib.c", "hidden_target")
+
+    def test_name_only_runtime_trace_does_not_witness(self):
+        from core.analysis.reachability import frida_runtime_trace_present
+        inv = _inventory({"frida_runtime_trace": {
+            "observed": True, "call_count": 1, "name_only_match": True}})
+        assert not frida_runtime_trace_present(
+            inv, "src/lib.c", "hidden_target")
+
+    def test_unambiguous_joins_still_witness(self):
+        from core.analysis.reachability import frida_runtime_trace_present
+        assert frida_call_edge_present(
+            _inventory({"frida_call_edge": {"observed": True}}),
+            "src/lib.c", "hidden_target")
+        assert frida_runtime_trace_present(
+            _inventory({"frida_runtime_trace": {"observed": True}}),
+            "src/lib.c", "hidden_target")

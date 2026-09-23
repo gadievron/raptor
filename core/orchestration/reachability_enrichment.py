@@ -387,6 +387,53 @@ def enrich_with_caller_context(
     return enriched
 
 
+def _native_name_collisions(files: list) -> dict[str, int]:
+    """Count how many NATIVE files define each function name.
+
+    C ``static`` functions routinely share names across translation
+    units, and frida evidence joins on the bare function name — the
+    join must know when a name is ambiguous so the un-executed twin
+    never inherits unqualified "observed at runtime" evidence.
+    """
+    counts: dict[str, int] = {}
+    for file_entry in files:
+        if not isinstance(file_entry, dict):
+            continue
+        fpath = file_entry.get("path", "")
+        if not any(fpath.endswith(s) for s in _NATIVE_SUFFIXES):
+            continue
+        items = file_entry.get("items")
+        if not isinstance(items, list):
+            continue
+        seen: set[str] = set()
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name", "")
+            if isinstance(name, str) and name and name not in seen:
+                seen.add(name)
+                counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def _evidence_names_file(ev: Any, fpath: str) -> bool:
+    """True when a resolved callsite source sits in ``fpath``.
+
+    Component-suffix compare (resolved paths are compile-dir absolute,
+    checklist paths repo-relative) mirroring the callsite matcher in
+    frida_validation_bridge.
+    """
+    for site in getattr(ev, "observed_callsites", None) or []:
+        source = site.get("source") if isinstance(site, dict) else None
+        if not isinstance(source, str) or ":" not in source:
+            continue
+        src_path = source.rsplit(":", 1)[0]
+        if (src_path == fpath or src_path.endswith("/" + fpath)
+                or fpath.endswith("/" + src_path)):
+            return True
+    return False
+
+
 def enrich_with_frida_traces(
     checklist: dict[str, Any],
     target_path: Path,
@@ -425,11 +472,30 @@ def enrich_with_frida_traces(
         return 0
 
 
-    annotated = 0
     files = checklist.get("files")
     if not isinstance(files, list):
         return 0
 
+    def _trace_annotation(ev: Any, fn_name: str, fpath: str,
+                          collisions: dict[str, int]) -> dict:
+        annotation: dict[str, Any] = {
+            "observed": True,
+            "call_count": ev.call_count,
+            "trace_id": ev.trace_id,
+        }
+        # The evidence join is by bare name. When the same name is
+        # defined in more than one TU (classic C `static`) and the
+        # evidence does not resolve a callsite into THIS file, the
+        # observation may belong to the twin — mark it so consumers
+        # (reach_witness promotion, Stage-B priority, prompts) can
+        # discount instead of treating it as ground truth.
+        if (collisions.get(fn_name, 0) > 1
+                and not _evidence_names_file(ev, fpath)):
+            annotation["name_only_match"] = True
+        return annotation
+
+    annotated = 0
+    collisions = _native_name_collisions(files)
     for file_entry in files:
         if not isinstance(file_entry, dict):
             continue
@@ -449,17 +515,15 @@ def enrich_with_frida_traces(
             if ev is None:
                 continue
             meta = item.setdefault("metadata", {})
-            meta["frida_runtime_trace"] = {
-                "observed": True,
-                "call_count": ev.call_count,
-                "trace_id": ev.trace_id,
-            }
+            meta["frida_runtime_trace"] = _trace_annotation(
+                ev, fn_name, fpath, collisions)
             annotated += 1
 
     # Also annotate inventory items (dual-write) if provided.
     if inventory and isinstance(inventory, dict):
         inv_files = inventory.get("files")
         if isinstance(inv_files, list):
+            inv_collisions = _native_name_collisions(inv_files)
             for file_entry in inv_files:
                 if not isinstance(file_entry, dict):
                     continue
@@ -477,11 +541,8 @@ def enrich_with_frida_traces(
                     if ev is None:
                         continue
                     meta = item.setdefault("metadata", {})
-                    meta["frida_runtime_trace"] = {
-                        "observed": True,
-                        "call_count": ev.call_count,
-                        "trace_id": ev.trace_id,
-                    }
+                    meta["frida_runtime_trace"] = _trace_annotation(
+                        ev, fn_name, fpath, inv_collisions)
 
     if annotated:
         logger.info(
@@ -600,6 +661,7 @@ def enrich_with_frida_call_edges(
 
     def _annotate_items(files: list) -> int:
         n = 0
+        collisions = _native_name_collisions(files)
         for file_entry in files:
             if not isinstance(file_entry, dict):
                 continue
@@ -617,12 +679,21 @@ def enrich_with_frida_call_edges(
                 if edge is None:
                     continue
                 meta = item.setdefault("metadata", {})
-                meta["frida_call_edge"] = {
+                annotation = {
                     "observed": True,
                     "call_count": edge["call_count"],
                     "callers": edge["callers"],
                     "trace_id": edge["trace_id"],
                 }
+                # Call-edge payloads carry no source resolution for
+                # the callee, so a name defined in more than one TU
+                # cannot be discriminated at all — mark every twin so
+                # consumers can discount (the ground-truth claim in
+                # this witness's contract holds only for unique
+                # names).
+                if collisions.get(fn_name, 0) > 1:
+                    annotation["name_only_match"] = True
+                meta["frida_call_edge"] = annotation
                 n += 1
         return n
 

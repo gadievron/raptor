@@ -2624,7 +2624,10 @@ def frida_runtime_trace_present(
     SOUND — runtime observation is mechanically sound evidence of
     reachability (stronger than static call-graph edges). But
     earns_suppression=False because this PROMOTES (proves reachable);
-    it doesn't suppress.
+    it doesn't suppress. Soundness holds only for unambiguous joins:
+    annotations the enrichment marked ``name_only_match`` (the name is
+    defined in more than one TU and no callsite resolved into this
+    file) may credit a same-named twin, so they do not witness.
     """
     if not file_path or not name:
         return False
@@ -2644,7 +2647,7 @@ def frida_runtime_trace_present(
         frida = meta.get("frida_runtime_trace")
         if not isinstance(frida, dict):
             continue
-        if frida.get("observed"):
+        if frida.get("observed") and not frida.get("name_only_match"):
             return True
     return False
 
@@ -2665,7 +2668,8 @@ def frida_call_edge_present(
     because the call executed.
 
     SOUND, earns_suppression=False (promotes reachable, never
-    suppresses).
+    suppresses). Soundness holds only for unambiguous joins: see
+    :func:`frida_runtime_trace_present` on ``name_only_match``.
     """
     if not file_path or not name:
         return False
@@ -2685,7 +2689,7 @@ def frida_call_edge_present(
         edge = meta.get("frida_call_edge")
         if not isinstance(edge, dict):
             continue
-        if edge.get("observed"):
+        if edge.get("observed") and not edge.get("name_only_match"):
             return True
     return False
 
