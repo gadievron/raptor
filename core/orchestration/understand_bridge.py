@@ -39,7 +39,9 @@ from pathlib import Path
 from typing import Any
 
 from core.artifacts.provenance import (
+    CONTEXT_MAP_TEXT_SCHEMA,
     provenance_of,
+    sanitise_artifact_text,
     sanitise_free_text,
     stamp_provenance,
 )
@@ -639,6 +641,12 @@ def load_understand_graph_context(
     if filtered:
         logger.info("understand_bridge: graph excluded %d entries referencing stale files", filtered)
 
+    # Provenance chokepoint: graph memory replays persisted
+    # /understand-LLM output, so the rebuilt map gets the same
+    # treatment as every other bridge write — marked free-text
+    # defanged, stamped untrusted.
+    sanitise_free_text(context_map, CONTEXT_MAP_TEXT_SCHEMA)
+    stamp_provenance(context_map, _BRIDGE_GENERATOR, untrusted=True)
     save_json(validate_dir / "context-map.graph.json", context_map, mode=0o600)
     surface_stats = _merge_attack_surface(
         context_map, validate_dir, validate_dir / "context-map.graph.json")
@@ -1920,6 +1928,28 @@ def _sanitise_and_stamp_paths(paths: list) -> None:
                      overwrite_generator=False)
 
 
+def _defang_strings_deep(obj: Any) -> None:
+    """Defang EVERY string value in a JSON-shaped structure, in place.
+
+    For bridge artifacts with no formal schema that embed whole raw
+    node/flow dicts from graph memory (arbitrary keys, LLM-authored
+    values quoting target identifiers) — a marked-field walk cannot
+    reach them, so every string gets the artifact-tier escape.
+    """
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if isinstance(value, str):
+                obj[key] = sanitise_artifact_text(value)
+            else:
+                _defang_strings_deep(value)
+    elif isinstance(obj, list):
+        for i, value in enumerate(obj):
+            if isinstance(value, str):
+                obj[i] = sanitise_artifact_text(value)
+            else:
+                _defang_strings_deep(value)
+
+
 
 
 def _import_graph_attack_paths(
@@ -1943,6 +1973,16 @@ def _import_graph_attack_paths(
     if not graph_paths:
         return {"count": 0, "imported_as_paths": 0}
 
+    # Provenance chokepoint: graph paths replay persisted
+    # /understand-LLM output (labels, missing_boundary, evidence, and
+    # whole raw node dicts quote target identifiers). This artifact
+    # has no formal schema and embeds arbitrary-keyed raw dicts, so
+    # every string is defanged; stamped untrusted per element like the
+    # sibling importers' writes. Defanging BEFORE the attack-path
+    # entries are built below means those entries inherit clean text.
+    _defang_strings_deep(graph_paths)
+    stamp_provenance(graph_paths, _BRIDGE_GENERATOR, untrusted=True,
+                     overwrite_generator=False)
     save_json(validate_dir / "graph-priority-paths.json", graph_paths, mode=0o600)
 
     paths_path = validate_dir / "attack-paths.json"
@@ -1986,6 +2026,10 @@ def _import_graph_attack_paths(
         imported += 1
 
     if imported:
+        # Provenance chokepoint — see comment on the flow-trace
+        # importer's paths_path write.
+        _sanitise_and_stamp_paths(existing_paths)
+        # mode=0o600 — see comment on the flow-trace importer's write.
         save_json(paths_path, existing_paths, mode=0o600)
 
     return {"count": len(graph_paths), "imported_as_paths": imported}
