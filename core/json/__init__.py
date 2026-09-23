@@ -39,6 +39,7 @@ _LAZY_EXPORTS = {
     # MISSING lives outside core.json.* so test_f046's sys.modules
     # reset doesn't replace the singleton — see core/sentinels/.
     "MISSING":                ("core.sentinels", "MISSING"),
+    "RE_DATABASE_MAX_BYTES":  ("core.json.utils", "RE_DATABASE_MAX_BYTES"),
     "TTL_FOREVER":            ("core.json.cache", "TTL_FOREVER"),
     "append_jsonl":           ("core.json.jsonl", "append_jsonl"),
     "dumps_artifact":         ("core.json.utils", "dumps_artifact"),
@@ -90,6 +91,7 @@ __all__ = [
     "CacheEnvelope",
     "JsonBudgetExceededError",
     "JsonCache",
+    "RE_DATABASE_MAX_BYTES",
     "append_jsonl",
     "dumps_artifact",
     "dumps_canonical",

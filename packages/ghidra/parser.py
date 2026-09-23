@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 from typing import Any, Dict
@@ -23,17 +24,6 @@ from .model import (
 
 logger = logging.getLogger(__name__)
 
-#: Byte ceiling for the export JSON. The export is written by the
-#: sandboxed JVM FROM the attacker's project — its size is
-#: attacker-influenced by construction (``--decompile`` volume), and
-#: the sandbox scopes writes, not write volume. This is the
-#: entry-point reader that materialises the content FIRST, in the
-#: unsandboxed parent; every sibling reader of the same data class is
-#: 64 MiB-budgeted (context_inject/attach/decomp_tree
-#: ``_MAX_CACHE_BYTES``). Larger than theirs on purpose: a full
-#: --decompile export of a big binary legitimately exceeds 64 MiB.
-_MAX_EXPORT_BYTES = 256 * 1024 * 1024
-
 
 def parse_export(path: Path) -> REDatabase:
     """Parse a Ghidra export JSON file into an REDatabase.
@@ -45,16 +35,20 @@ def parse_export(path: Path) -> REDatabase:
         An REDatabase populated with the Ghidra project data.
 
     Raises:
-        ValueError: If the JSON is missing, malformed, over the
-            ``_MAX_EXPORT_BYTES`` budget, or lacks required fields.
+        ValueError: If the JSON is malformed or missing required fields.
     """
-    from core.json import load_json
-    data = load_json(path, max_bytes=_MAX_EXPORT_BYTES)
-    if data is None:
-        raise ValueError(
-            f"failed to read Ghidra export (missing, unparseable, or "
-            f"over {_MAX_EXPORT_BYTES} bytes): {path}"
-        )
+    # Bounded read at the shared RE-database ceiling: the export is
+    # produced by the sandboxed JVM while parsing a HOSTILE binary,
+    # which controls the document's size — an unbounded whole-document
+    # json.load in the trusted parent is a memory-exhaustion
+    # primitive (same artifact family, and same effective budget, as
+    # the re-database.json this export becomes).
+    from core.json.bounded import load_json_bounded
+    from core.json.utils import RE_DATABASE_MAX_BYTES
+    try:
+        data = load_json_bounded(path, max_bytes=RE_DATABASE_MAX_BYTES)
+    except (json.JSONDecodeError, OSError, ValueError) as e:
+        raise ValueError(f"failed to read Ghidra export: {e}") from e
 
     if not isinstance(data, dict):
         raise ValueError("Ghidra export must be a JSON object")

@@ -1076,7 +1076,7 @@
     "note": "LLM transport-routing env vars carried into LLM child envs (backend-selection flags and AWS profile/region names - infrastructure constants, not a learnable name vocabulary); same class as cc_proxy_hosts._PROVIDER_ENV_KEYS"
   },
   "core/config/__init__.py::SAFE_ENV_ALLOWLIST": {
-    "count": 12,
+    "count": 13,
     "kind": "literal",
     "note": "subprocess env allowlist (infrastructure env-var names, not a learned name vocabulary); grew by the RAPTOR_SANITIZER_CUT* transport family"
   },

@@ -348,7 +348,7 @@ class REDatabase:
         O(xrefs x functions) PER RENDERED FINDING on the prompt
         assembly hot path — a cost a large real binary pays in
         minutes and an attacker-authored cache maximizes for free
-        within the 64MiB read ceiling.
+        within the shared RE-database read ceiling.
         """
         cached = getattr(self, "_addr_index_cache", None)
         if cached is not None and cached[0] == len(self.functions):

@@ -184,8 +184,14 @@ def find_redb(out_dir: Path | None, target_path: Path | None) -> Path | None:
 
 #: re-database.json read ceiling. RAPTOR-written, but derived from a
 #: hostile binary's decompilation/symbols — a pathological import can
-#: balloon it. Parity with the unit's other 64 MiB artifact budgets.
-_MAX_REDB_BYTES = 64 * 1024 * 1024
+#: balloon it. Bound to the ONE shared RE-database constant (never a
+#: value copy): a private 64MiB cap here refused the legitimate
+#: --decompile-all artifact the importer itself recommends creating,
+#: erroring the build-checklist lane on it. Imported at the
+#: definition site so the binding and its rationale read as one unit.
+from core.json.utils import (  # noqa: E402
+    RE_DATABASE_MAX_BYTES as _MAX_REDB_BYTES,
+)
 
 
 def load_redb(redb_path: Path):

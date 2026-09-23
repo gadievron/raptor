@@ -121,6 +121,17 @@ class TestGetSafeEnv:
                             "RAPTOR_EF_CONFIG", "RAPTOR_EF_CACHE_DIR"):
                 assert blocked not in env, blocked
 
+    def test_redb_ceiling_override_survives_scrub(self):
+        """RAPTOR_REDB_MAX_BYTES must reach scrub-spawned children:
+        the RE-database ceiling is resolved per process, so stripping
+        it means a parent's raised ceiling writes a database its own
+        child pipelines then refuse. Numeric knob, strictly
+        re-validated at consumption — no injection surface."""
+        with patch.dict(os.environ,
+                        {"RAPTOR_REDB_MAX_BYTES": "1048576"}):
+            env = RaptorConfig.get_safe_env()
+            assert env.get("RAPTOR_REDB_MAX_BYTES") == "1048576"
+
     def test_does_not_strip_term(self):
         """TERM is read as a string (terminfo lookup), not shell-evaluated — must not be stripped."""
         with patch.dict(os.environ, {"TERM": "xterm-256color"}):

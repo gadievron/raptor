@@ -64,8 +64,13 @@ import subprocess  # noqa: E402
 
 from core.json import load_json, save_json  # noqa: E402
 
-#: Read ceiling shared with the other RE-database readers.
-_MAX_DB_BYTES = 64 * 1024 * 1024
+#: Read ceiling shared with the other RE-database readers AND the
+#: write-side guard below — bound to the ONE core constant
+#: (env-overridable via RAPTOR_REDB_MAX_BYTES), never a value copy,
+#: so this script cannot drift from what the other readers accept.
+from core.json.utils import (  # noqa: E402
+    RE_DATABASE_MAX_BYTES as _MAX_DB_BYTES,
+)
 
 #: Confidence order for the decomp clamp — from the model's own
 #: grade ladder so a legal below-ceiling grade ("observed") is never

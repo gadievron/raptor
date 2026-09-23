@@ -589,6 +589,22 @@ class GhidraBridge:
         from core.json import save_json
         save_json(out_path, doc)
         logger.info("wrote %s (%d functions)", out_path, len(db.functions))
+        # Writer-side parity with the shared read ceiling: silently
+        # writing past what every capped reader accepts strands the
+        # operator with an artifact only a re-import can replace.
+        from core.json.utils import RE_DATABASE_MAX_BYTES
+        try:
+            size = out_path.stat().st_size
+        except OSError:
+            return
+        if size > RE_DATABASE_MAX_BYTES:
+            logger.warning(
+                "wrote %s at %d bytes — past the %d-byte shared read "
+                "ceiling; capped readers will refuse it "
+                "(RAPTOR_REDB_MAX_BYTES raises the ceiling on "
+                "large-memory hosts)",
+                out_path, size, RE_DATABASE_MAX_BYTES,
+            )
 
 
 def _walk_program_paths(folder, prefix: str = "") -> list:
