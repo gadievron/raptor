@@ -1020,9 +1020,18 @@ def threat_model_prompt_block(target: Path) -> str:
     attacker-influenced symbol names in auto-derived models
     cannot forge envelope tags.
     """
+    # The block's boundary tag comes from the prompt-envelope
+    # registry (BLOCK_BOUNDARY_TAG_NAMES): minting through the shared
+    # constant keeps this tag inside neutralize_tag_forgery's derived
+    # vocabulary by construction. A hand-spelled tag here once sat
+    # OUTSIDE that vocabulary, so target-derived content could forge
+    # the block's own closer even on the lanes that DID neutralise.
+    from core.security.prompt_envelope import (
+        THREAT_MODEL_CONTEXT_TAG as _TMC,
+    )
+    from core.security.prompt_envelope import neutralize_tag_forgery
     graph_context = graph_risk_context_for_target(target)
     if graph_context:
-        from core.security.prompt_envelope import neutralize_tag_forgery
         graph_context = neutralize_tag_forgery(graph_context)
     model = load_for_target(target)
     if not model and not graph_context:
@@ -1033,12 +1042,11 @@ def threat_model_prompt_block(target: Path) -> str:
         source = str(model.source or "operator").lower()
         source = re.sub(r"[^a-z0-9_-]", "", source) or "operator"
         if source not in ("operator", "manual"):
-            from core.security.prompt_envelope import neutralize_tag_forgery
             content = neutralize_tag_forgery(content)
         blocks.append(
-            f"\n[threat-model-context source={source}]\n"
+            f"\n[{_TMC} source={source}]\n"
             f"{content}\n"
-            f"[/threat-model-context]\n"
+            f"[/{_TMC}]\n"
         )
     if graph_context:
         # Graph risks are rebuilt from /understand memory: node labels
@@ -1048,9 +1056,9 @@ def threat_model_prompt_block(target: Path) -> str:
         # operator-attributed block would upgrade hostile-derived text
         # to operator provenance.
         blocks.append(
-            "\n[threat-model-context source=understand_graph]\n"
+            f"\n[{_TMC} source=understand_graph]\n"
             f"{graph_context}\n"
-            "[/threat-model-context]\n"
+            f"[/{_TMC}]\n"
         )
     return (
         "".join(blocks)

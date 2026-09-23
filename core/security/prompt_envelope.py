@@ -278,6 +278,31 @@ _AUTOFETCH_MARKUP_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# Registry of bracket-style block-boundary tag NAMES the in-tree
+# assemblers mint. ONE home, derived both ways: the neutraliser's
+# bracket arm below is BUILT from this tuple, and minting sites
+# reference the named constants — so a new block type joins the
+# forgery vocabulary by construction. The closure test
+# (test_prompt_envelope: bracket-boundary registry closure) scans the
+# runtime tree for pair-minted bracket tags and fails on any name
+# missing here; `[threat-model-context]` was hand-omitted from the
+# vocabulary exactly this way (the threat-model block's own boundary
+# was forgeable on the lanes that DID run the neutraliser).
+MARK_INPT_TAG = "MARK_INPT"
+THREAT_MODEL_CONTEXT_TAG = "threat-model-context"
+BLOCK_BOUNDARY_TAG_NAMES: tuple[str, ...] = (
+    MARK_INPT_TAG,
+    THREAT_MODEL_CONTEXT_TAG,
+)
+
+# One arm per registered name: opener (with optional attributes, e.g.
+# `[threat-model-context source=operator]`) and closer, whitespace-
+# tolerant like the XML arms. Attribute run bounded at 256.
+_BRACKET_BOUNDARY_ARMS = "".join(
+    r"|\[/?\s*" + re.escape(name) + r"\b[^\]]{0,256}\]"
+    for name in BLOCK_BOUNDARY_TAG_NAMES
+)
+
 _ENVELOPE_TAG_RE = re.compile(
     # Spelling note: this pattern neutralises ASCII spellings only. A
     # fullwidth/homoglyph respelling of a closing tag (`＜/untrusted＞`)
@@ -301,13 +326,14 @@ _ENVELOPE_TAG_RE = re.compile(
     r'<\s*/?\s*untrusted'
     r'|<\s*/?\s*slots?\b'
     r'|<\s*/?\s*document(?:_content)?\b'
-    # Bracket-style markers used by the PASSTHROUGH / [MARK_INPT]
-    # envelope (prompt_envelope._render_passthrough). Without these,
-    # untrusted content containing the literal `[MARK_INPT]` or
-    # `[/MARK_INPT]` could visually close the envelope and inject
-    # text the model treats as outside-the-mark — same prompt-
-    # injection class the XML cases above neutralise.
-    r'|\[/?\s*MARK_INPT\s*\]'
+    # Bracket-style block boundaries — DERIVED from
+    # BLOCK_BOUNDARY_TAG_NAMES above ([MARK_INPT] from the
+    # PASSTHROUGH envelope, [threat-model-context source=…] from the
+    # threat-model prompt block). Untrusted content carrying a
+    # literal closer could visually close the block and inject text
+    # the model treats as outside the labeled-untrusted region —
+    # same prompt-injection class the XML cases above neutralise.
+    + _BRACKET_BOUNDARY_ARMS +
     # Line-marker style used by the BEGIN_/END_ envelope variant.
     # The marker name is `[A-Z_]+`; an attacker including
     # `BEGIN_INPT` or `END_X` in untrusted content could similarly
