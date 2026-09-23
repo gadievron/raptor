@@ -45,9 +45,14 @@ logger = logging.getLogger(__name__)
 # The relative-path is what matters; everything else is incidental.
 # Match permissively (don't require matched quote style) so we
 # tolerate operator hand-edits.
+# Bounded quoted/braced bodies: unbounded ``[^}]+``/``[^"]*`` let
+# every line anchor re-scan a close-less tail — quadratic over
+# planted Project-shaped lines. Bounds sit far above real solution
+# rows (trade-off both directions: larger admits absurd rows but
+# raises per-anchor reach, smaller drops them).
 _PROJECT_LINE_RE = re.compile(
-    r"""^Project\("\{[^}]+\}"\)\s*=\s*"""
-    r""""[^"]*"\s*,\s*"(?P<path>[^"]+)"\s*,\s*"\{[^}]+\}"\s*$""",
+    r"""^Project\("\{[^}]{1,256}\}"\)\s*=\s*"""
+    r""""[^"]{0,512}"\s*,\s*"(?P<path>[^"]{1,512})"\s*,\s*"\{[^}]{1,256}\}"\s*$""",
     re.MULTILINE,
 )
 

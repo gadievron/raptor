@@ -57,7 +57,12 @@ _REQUIRE_RE = re.compile(
     (?:                                       # match either:
         \brequire\s*\(\s*['"`]([^'"`]+)['"`]\s*\)         # require(...)
       | \bimport\s*\(\s*['"`]([^'"`]+)['"`]\s*\)          # import(...)
-      | \bimport\s+(?:[^'";]+?\bfrom\s+)?['"`]([^'"`]+)['"`]
+      # (?=\S) pins the whitespace run before the lazy specifier
+      # clause (same language — the clause or the quote absorbed any
+      # remainder); the naive ``\s+[^'";]+?`` overlapped the run and
+      # the clause — quadratic on an import ending in a whitespace
+      # run.
+      | \bimport\s+(?=\S)(?:[^'";]+?\bfrom\s+)?['"`]([^'"`]+)['"`]
                                                           # static import
       | \bexport\s+(?:(?:[^'";]|"[^"\n;]*"|'[^'\n;]*')*?\bfrom\s+)
             ['"`]([^'"`]+)['"`]                               # re-export

@@ -295,8 +295,10 @@ _NAME_GRAMMARS: dict[str, re.Pattern[str]] = {
     # exponentially on hostile feed rows): same language, linear
     # time.  Must stay in lock-step with the Packagist grammar in
     # supply_chain/_name_grammar.py (tested).
+    # \b keeps the unanchored scan from restarting inside a name
+    # run (quadratic); earliest-start matches unchanged.
     "Packagist": re.compile(
-        r"[a-z0-9]+([_.-][a-z0-9]+)*/[a-z0-9]+(([_.]|-{1,2})[a-z0-9]+)*"),
+        r"\b[a-z0-9]+([_.-][a-z0-9]+)*/[a-z0-9]+(([_.]|-{1,2})[a-z0-9]+)*"),
 }
 
 # Churn guard: refuse an update that would replace more than this

@@ -847,8 +847,10 @@ def _pin_bare_pyproject(
             )
             if opener:
                 array_key = opener.group(2)
+        # gated optional comma — the ``\s*,?\s*$`` tail was
+        # quadratic on a dep row ending in a whitespace run
         m = re.match(
-            r"""^(['"])([A-Za-z0-9_\-.]+)\s*(['"])\s*,?\s*$""",
+            r"""^(['"])([A-Za-z0-9_\-.]+)\s*(['"])\s*(?:,\s*)?$""",
             stripped,
         )
         if (m and bracket_depth > 0

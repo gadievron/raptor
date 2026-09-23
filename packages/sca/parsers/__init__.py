@@ -67,9 +67,13 @@ class ParseFailure:
 # ``package_lock_json.py``, etc. The path captured is the
 # parser's view of the manifest, which is what we want to show
 # operators.
+# (?=\S) pins the whitespace run before the lazy path (same
+# language — the path group absorbed any remainder): the naive
+# ``for\s+(?P<path>.+?)`` overlapped the run and the DOTALL group —
+# quadratic on a failure line ending in a whitespace run.
 _PARSE_FAILURE_RE = re.compile(
     r"sca\.parsers\.[\w_]+:\s+"
-    r"(?P<kind>\w+(?:\s\w+)?)\s+parse failed for\s+"
+    r"(?P<kind>\w+(?:\s\w+)?)\s+parse failed for\s+(?=\S)"
     r"(?P<path>.+?):\s+(?P<reason>.+)$",
     # DOTALL: PyYAML (and friends) raise multi-line error messages
     # with source-context snippets; the reason must capture them or

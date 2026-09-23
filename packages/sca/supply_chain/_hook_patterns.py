@@ -70,7 +70,10 @@ _DANGEROUS_PATTERNS: tuple[tuple[re.Pattern, str], ...] = (
      "curl piped to shell"),
     (re.compile(r"\bwget\b[^|\n]*\|\s*(?:bash|sh|zsh)\b"),
      "wget piped to shell"),
-    (re.compile(r"\bnc\s+(?:-[^ ]+\s+)*[\w.\-]+\s+\d+"),
+    # flag tokens are \S+ (not [^ ]+): the space-only negation let a
+    # tab-run split between the token and the separator — quadratic.
+    # A flag containing embedded tabs is not a real nc invocation.
+    (re.compile(r"\bnc\s+(?:-\S+\s+)*[\w.\-]+\s+\d+"),
      "netcat to remote host"),
     (re.compile(r"\bbash\s+-c\s+[\"']?\$\("),
      "bash -c with command substitution"),
