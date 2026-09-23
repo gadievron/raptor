@@ -226,6 +226,16 @@ def query_graph(path: Path, fn, *args, **kwargs):
     return None
 
 
+class GraphSchemaNewerError(RuntimeError):
+    """The store was written by a newer RAPTOR's schema.
+
+    RuntimeError subclass so pre-existing broad handlers keep working;
+    typed so the read guard can degrade (report + None) instead of
+    crashing every consumer — and never quarantine: the file is not
+    corrupt, it is from the future.
+    """
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     current = int(conn.execute("PRAGMA user_version").fetchone()[0])
     if current == SCHEMA_VERSION:
@@ -235,27 +245,68 @@ def migrate(conn: sqlite3.Connection) -> None:
         # write lock against in-flight ingests.
         return
     if current > SCHEMA_VERSION:
-        raise RuntimeError(
+        raise GraphSchemaNewerError(
             f"graph schema version {current} is newer than this RAPTOR ({SCHEMA_VERSION})"
         )
-    if current < 1:
-        _migrate_1(conn)
-        current = 1
-    if current < 2:
-        _migrate_2(conn)
-        current = 2
-    if current < 3:
-        _migrate_3(conn)
-        current = 3
-    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-    conn.execute(
-        "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
-        ("schema_version", str(SCHEMA_VERSION)),
-    )
+    # The whole mutating path runs in ONE immediate transaction and
+    # commits here — never relying on the caller. The pre-fix
+    # statement-at-a-time swap autocommitted its DDL while the row
+    # copy rode an implicit transaction, so an interrupt (or a caller
+    # that closed without committing) left ``nodes`` empty with
+    # ``nodes_v1_tmp`` holding the only copy of every legacy row.
+    # FK enforcement is toggled OUTSIDE the transaction — PRAGMA
+    # foreign_keys is a no-op inside one.
+    conn.execute("PRAGMA foreign_keys=OFF")
+    prev_isolation = conn.isolation_level
+    conn.isolation_level = None
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Re-read under the write lock: a concurrent first-open
+            # may have migrated while we waited (the check-then-write
+            # window that made two pre-v3 openers race the v3 ALTER
+            # into a "duplicate column name" crash).
+            current = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if current > SCHEMA_VERSION:
+                raise GraphSchemaNewerError(
+                    f"graph schema version {current} is newer than this RAPTOR ({SCHEMA_VERSION})"
+                )
+            if current < SCHEMA_VERSION:
+                if current < 1:
+                    _migrate_1(conn)
+                if current < 2:
+                    _migrate_2(conn)
+                if current < 3:
+                    _migrate_3(conn)
+                conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                conn.execute(
+                    "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
+                    ("schema_version", str(SCHEMA_VERSION)),
+                )
+            conn.execute("COMMIT")
+        except BaseException:
+            # All-or-nothing: the pre-migration store stays intact.
+            # Corruption-class failures still quarantine downstream
+            # (query_graph); everything else leaves the file alone.
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+    finally:
+        conn.isolation_level = prev_isolation
+        try:
+            conn.execute("PRAGMA foreign_keys=ON")
+        except sqlite3.Error:
+            pass
 
 
 def _migrate_1(conn: sqlite3.Connection) -> None:
-    conn.executescript(
+    # Individual execute() calls, never executescript(): executescript
+    # COMMITs any pending transaction first, which would tear the
+    # all-or-nothing migration transaction open around it.
+    _execute_statements(
+        conn,
         """
         CREATE TABLE IF NOT EXISTS metadata (
             key TEXT PRIMARY KEY,
@@ -326,12 +377,20 @@ def _migrate_1(conn: sqlite3.Connection) -> None:
             ON edges(src_id);
         CREATE INDEX IF NOT EXISTS idx_edges_dst
             ON edges(dst_id);
-        """
+        """,
     )
     conn.execute(
         "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
         ("schema_version", "1"),
     )
+
+
+def _execute_statements(conn: sqlite3.Connection, script: str) -> None:
+    """Run a ';'-separated DDL block one execute() at a time (the
+    statements here contain no literal semicolons)."""
+    for statement in script.split(";"):
+        if statement.strip():
+            conn.execute(statement)
 
 
 def _migrate_2(conn: sqlite3.Connection) -> None:
@@ -371,7 +430,8 @@ def _migrate_2(conn: sqlite3.Connection) -> None:
     nodes_old = "nodes_v1_tmp"
     edges_old = "edges_v1_tmp"
 
-    conn.execute("PRAGMA foreign_keys=OFF")
+    # FK enforcement is already off: migrate() toggles it outside the
+    # migration transaction (PRAGMA foreign_keys is a no-op inside one).
     conn.execute("PRAGMA legacy_alter_table=ON")
     conn.execute(f"ALTER TABLE nodes RENAME TO {nodes_old}")
     conn.execute(
@@ -433,26 +493,51 @@ def _migrate_2(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst_id)")
     conn.execute("PRAGMA legacy_alter_table=OFF")
-    conn.execute("PRAGMA foreign_keys=ON")
+
+
+_V2_COPY_COLUMNS = {
+    "nodes": ("id, kind, stable_key, name, file, line_start, line_end, "
+              "snapshot_id, stale, props_json"),
+    "edges": ("id, src_id, dst_id, kind, confidence, snapshot_id, stale, "
+              "evidence_json, props_json"),
+}
 
 
 def _recover_interrupted_v2_migration(conn: sqlite3.Connection) -> None:
+    """Direction-aware sweep for a torn v1->v2 table swap.
+
+    An interrupted swap can leave the ``*_v1_tmp`` table holding the
+    ONLY copy of every legacy row (rename + CREATE autocommitted, the
+    row copy rolled back). The pre-fix sweep DROPped the tmp whenever
+    the new table also existed — destroying the store on the very open
+    that should have healed it. Recovery now re-copies the tmp rows
+    into the live table first (``INSERT OR IGNORE`` — a no-op when the
+    copy had already landed) and only then drops the tmp. Runs inside
+    migrate()'s transaction, so recovery itself is all-or-nothing.
+    """
     tables = {
         row["name"]
         for row in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     }
-    for old_name in ("nodes_v1_tmp", "nodes_v1"):
-        if old_name in tables and "nodes" in tables:
+    for current, legacy_names in (
+        ("nodes", ("nodes_v1_tmp", "nodes_v1")),
+        ("edges", ("edges_v1_tmp", "edges_v1")),
+    ):
+        for old_name in legacy_names:
+            if old_name not in tables:
+                continue
+            if current not in tables:
+                conn.execute(f"ALTER TABLE [{old_name}] RENAME TO {current}")
+                tables.add(current)
+                continue
+            cols = _V2_COPY_COLUMNS[current]
+            conn.execute(
+                f"INSERT OR IGNORE INTO {current} ({cols}) "
+                f"SELECT {cols} FROM [{old_name}]"  # noqa: S608 — identifiers are code constants
+            )
             conn.execute(f"DROP TABLE [{old_name}]")
-        elif old_name in tables and "nodes" not in tables:
-            conn.execute(f"ALTER TABLE [{old_name}] RENAME TO nodes")
-    for old_name in ("edges_v1_tmp", "edges_v1"):
-        if old_name in tables and "edges" in tables:
-            conn.execute(f"DROP TABLE [{old_name}]")
-        elif old_name in tables and "edges" not in tables:
-            conn.execute(f"ALTER TABLE [{old_name}] RENAME TO edges")
 
 
 def _migrate_3(conn: sqlite3.Connection) -> None:
