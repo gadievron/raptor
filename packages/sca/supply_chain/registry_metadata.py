@@ -80,6 +80,15 @@ def scan_deps(
     rest of the run.
     """
     now = now or datetime.now(timezone.utc)
+    # Per-SCAN memo: the cache exists so the five detectors in this
+    # one scan don't re-parse the same raw JSON — its key carries no
+    # client/offline axis, so letting entries outlive the scan
+    # poisons every later scan in the process (an offline or errored
+    # first scan memoised None per (ecosystem, name) forever,
+    # silently disabling all registry-metadata detectors for that
+    # dep once a client WAS wired). Reset at entry — same lifetime
+    # discipline as reachability.scan's per-scan state.
+    _reset_meta_cache()
     # Dedup by (ecosystem, name): monorepos with many package.json
     # workspaces (Grafana, NX, Lerna) repeat the same direct-dep
     # declaration across multiple manifests. Without dedup the
@@ -245,9 +254,9 @@ def _fetch(
     return meta
 
 
-def _reset_meta_cache_for_tests() -> None:
-    """Clear the per-run memo. Tests that exercise the parse path
-    repeatedly need to evict between cases."""
+def _reset_meta_cache() -> None:
+    """Clear the per-scan memo (``scan_deps`` calls this at entry;
+    tests that drive the parse path directly evict between cases)."""
     with _META_CACHE_LOCK:
         _META_CACHE.clear()
 
@@ -926,3 +935,8 @@ def _parse_iso(value: Any) -> datetime | None:
 
 
 __all__ = ["RegistryMetaFinding", "scan_deps"]
+
+
+# Historical test-facing name — the reset is now a production
+# lifetime control, not a test-only hook.
+_reset_meta_cache_for_tests = _reset_meta_cache
