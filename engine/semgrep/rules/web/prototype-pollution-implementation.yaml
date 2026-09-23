@@ -34,14 +34,22 @@ rules:
     severity: HIGH
     mode: taint
     pattern-sources:
-      - pattern-either:
-          - pattern: $REQ.query.$PROP
-          - pattern: $REQ.query[...]
-          - pattern: $REQ.params.$PROP
-          - pattern: $REQ.params[...]
-          - pattern: $REQ.body.$PROP
-          - pattern: $REQ.body[...]
-          - pattern: $REQ.headers[...]
+      # Receiver-name anchored, mirroring the library-sink sibling
+      # (web/prototype-pollution.yaml): a bare $REQ.query/.body source
+      # matches those field names on ANY local object, tainting fully
+      # hardcoded data (self-taint).
+      - patterns:
+          - pattern-either:
+              - pattern: $REQ.query.$PROP
+              - pattern: $REQ.query[...]
+              - pattern: $REQ.params.$PROP
+              - pattern: $REQ.params[...]
+              - pattern: $REQ.body.$PROP
+              - pattern: $REQ.body[...]
+              - pattern: $REQ.headers[...]
+          - metavariable-regex:
+              metavariable: $REQ
+              regex: '(?i)^(req|request)$'
     pattern-sinks:
       - patterns:
           - pattern: $OBJ[$K1][$K2] = $V
@@ -58,7 +66,9 @@ rules:
   # anywhere in its body. The definition itself is the risk surface (any
   # caller passing parsed user JSON pollutes); pattern-not-regex excludes
   # implementations that mention __proto__ / hasOwnProperty, the two
-  # canonical guard idioms.
+  # canonical guard idioms. Object.keys is deliberately NOT excluded:
+  # JSON.parse yields an own __proto__ key that Object.keys enumerates,
+  # so iterating it guards nothing.
   - id: raptor.web.prototype-pollution.unguarded-merge-impl.javascript
     message: >-
       Recursive merge implementation without a __proto__ /
@@ -76,7 +86,6 @@ rules:
           }
       - pattern-not-regex: __proto__
       - pattern-not-regex: hasOwnProperty
-      - pattern-not-regex: Object\.keys
     metadata:
       cwe: ["CWE-1321"]
       owasp_top_10: ["A3:2021-Injection"]

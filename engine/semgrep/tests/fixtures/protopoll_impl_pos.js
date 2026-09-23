@@ -16,3 +16,18 @@ app.post("/prefs", (req, res) => {
   settings[path1][path2] = req.body.value;
   res.send("ok");
 });
+
+// Object.keys is NOT a guard: JSON.parse yields an own "__proto__"
+// key, Object.keys enumerates it, and the computed assignment in the
+// recursion still pollutes.
+function keysMerge(target, source) {
+  for (const key of Object.keys(source)) {
+    if (typeof source[key] === "object" && source[key] !== null) {
+      if (!target[key]) target[key] = {};
+      keysMerge(target[key], source[key]);
+    } else {
+      target[key] = source[key];
+    }
+  }
+  return target;
+}
