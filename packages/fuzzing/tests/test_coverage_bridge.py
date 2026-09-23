@@ -470,9 +470,12 @@ class TestDefaultRunnerSandboxed:
 
         def fake_run(cmd, **kwargs):
             calls.append((cmd, kwargs))
-            return sp.CompletedProcess(
-                cmd, returncode, stdout=stdout, stderr=b"",
-            )
+            # gcov capture is file-redirected (bounded read-back),
+            # not PIPE-buffered - emit like the tool would.
+            out = kwargs.get("stdout")
+            if out is not None and hasattr(out, "write"):
+                out.write(stdout)
+            return sp.CompletedProcess(cmd, returncode)
 
         monkeypatch.setattr(core.sandbox, "run", fake_run)
         return calls
@@ -525,7 +528,9 @@ class TestDefaultRunnerSandboxed:
             ["gcov", "-f", "-t", str(gcda)], cwd=build, timeout=60,
         )
         cmd, kwargs = calls[0]
-        assert kwargs["stdout"] == sp.PIPE
+        assert kwargs["stdout"] != sp.PIPE, (
+            "PIPE buffers the whole stream before the cap can run"
+        )
         assert kwargs["block_network"] is True
         assert len(proc.stdout) == _MAX_CAPTURE_BYTES
 
@@ -545,3 +550,53 @@ class TestDefaultRunnerSandboxed:
         gcda.write_bytes(b"z")
         with pytest.raises(SandboxSetupError):
             collect_gcov_function_coverage(tmp_path / "b", runner=runner)
+
+
+class TestBaseVoteSpanCountCap:
+    def test_span_count_participation_is_capped(self, monkeypatch):
+        """Span WIDTH is already gated; span COUNT rides the
+        attacker-controlled checklist symtab and must be bounded too
+        (the vote is O(sample x spans))."""
+        import packages.fuzzing.coverage_bridge as cb
+
+        monkeypatch.setattr(cb, "_BASE_VOTE_MAX_SPANS", 1)
+        base = 0x555555000000
+        spans = [
+            (0x1000, 0x1FFF, "first"),      # participates
+            (0x2000, 0x2FFF, "second"),     # beyond the cap — ignored
+        ]
+        # PCs landing only in the SECOND span's rebased range: with
+        # the cap at 1 they can produce no quorum candidate.
+        pcs = [base + 0x2100 + i for i in range(0, 64 * 0x1000, 0x1000)]
+        assert cb._base_candidates(pcs, spans) == []
+
+
+class TestGcovCaptureBounded:
+    def test_default_runner_gcov_capture_goes_to_file(
+        self, tmp_path, monkeypatch,
+    ):
+        """gcov report capture must not buffer unbounded in a PIPE
+        before the truncation loop — redirect to a file and read back
+        capped."""
+        import subprocess as sp
+
+        import core.sandbox as sandbox_mod
+        import packages.fuzzing.coverage_bridge as cb
+
+        big = b"L" * (cb._MAX_CAPTURE_BYTES + 4096)
+
+        def fake_run(cmd, **kwargs):
+            stdout = kwargs.get("stdout")
+            assert stdout != sp.PIPE, (
+                "unbounded in-memory PIPE capture of gcov output"
+            )
+            assert hasattr(stdout, "write"), "stdout must be a file"
+            stdout.write(big)
+            return sp.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(sandbox_mod, "run", fake_run)
+        gcov = tmp_path / "gcov"
+        gcov.write_text("#!/bin/sh\n")
+        proc = cb._default_runner([str(gcov)], cwd=tmp_path)
+        assert isinstance(proc.stdout, bytes)
+        assert len(proc.stdout) <= cb._MAX_CAPTURE_BYTES

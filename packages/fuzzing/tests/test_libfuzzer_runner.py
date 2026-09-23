@@ -256,3 +256,58 @@ class TestSeedWorkingCorpusSymlinks(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSeedCopyBounded:
+    def test_oversized_seed_skipped_with_warning(self, tmp_path, monkeypatch, caplog):
+        """A hostile in-repo corpus can plant a huge \"seed\" — the
+        stager must skip it (recorded, like symlinks), not copy
+        gigabytes into the run dir (corpus_manager's bounded-copy
+        idiom)."""
+        import packages.fuzzing.libfuzzer_runner as lf
+
+        monkeypatch.setattr(lf.LibFuzzerRunner, "_MAX_SEED_BYTES", 1024)
+        source = tmp_path / "src"
+        source.mkdir()
+        (source / "ok").write_bytes(b"A" * 100)
+        (source / "huge").write_bytes(b"B" * 4096)
+        dest = tmp_path / "work"
+        dest.mkdir()
+        with caplog.at_level("WARNING"):
+            lf.LibFuzzerRunner._seed_working_corpus(source, dest)
+        assert (dest / "ok").read_bytes() == b"A" * 100
+        assert not (dest / "huge").exists()
+        assert any("skipped" in r.getMessage() for r in caplog.records)
+
+    def test_seed_growing_past_cap_between_stat_and_read_truncated_out(
+        self, tmp_path, monkeypatch,
+    ):
+        """The copy itself is a bounded read, so a file growing after
+        the stat can never land oversize in the working corpus."""
+        import packages.fuzzing.libfuzzer_runner as lf
+
+        monkeypatch.setattr(lf.LibFuzzerRunner, "_MAX_SEED_BYTES", 1024)
+        source = tmp_path / "src"
+        source.mkdir()
+        seed = source / "grower"
+        seed.write_bytes(b"A" * 100)
+
+        real_stat = type(seed).stat
+
+        def lying_stat(self, **kw):
+            st = real_stat(self, **kw)
+            if self.name == "grower" and st.st_size == 4096:
+                # pretend the pre-growth size was still visible
+                import os
+                vals = list(st)
+                vals[6] = 100
+                return os.stat_result(vals)
+            return st
+
+        seed.write_bytes(b"A" * 4096)  # "grew" after the stat
+        monkeypatch.setattr(type(seed), "stat", lying_stat)
+        dest = tmp_path / "work"
+        dest.mkdir()
+        lf.LibFuzzerRunner._seed_working_corpus(source, dest)
+        copied = dest / "grower"
+        assert not copied.exists() or copied.stat().st_size <= 1024

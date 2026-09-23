@@ -1136,3 +1136,18 @@ class TestBoundedTargetWritableReads:
         runner._resolved_binary_mode = None
         coverage = runner.run_showmap()
         assert coverage.get("edges_covered") == "7"
+
+
+class TestMaxCrashExecsAllInstances:
+    def test_secondary_instance_execs_reach_lower_bound(self, tmp_path):
+        """Secondary crashes count in the campaign totals — their
+        filename exec metadata must reach telemetry's lower bound too,
+        not just main's."""
+        for inst, execs in (("main", 100), ("secondary1", 56269)):
+            d = tmp_path / inst / "crashes"
+            d.mkdir(parents=True)
+            (d / f"id:000000,sig:11,src:000000,time:1,execs:{execs},op:havoc,rep:1").write_bytes(b"a")
+        assert AFLRunner._max_crash_execs_all(tmp_path) == 56269
+
+    def test_no_crash_dirs_is_zero(self, tmp_path):
+        assert AFLRunner._max_crash_execs_all(tmp_path) == 0

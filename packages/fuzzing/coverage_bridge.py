@@ -94,25 +94,46 @@ def _default_runner(
             continue
 
     is_gcov = Path(cmd[0]).name == "gcov"
-    proc = _sandbox_run(
-        cmd,
-        block_network=True,
-        target=str(workdir),
-        output=str(workdir),
-        readable_paths=sorted(readable),
-        cwd=str(workdir),
-        input=stdin_bytes,
-        stdout=subprocess.PIPE if is_gcov else subprocess.DEVNULL,
-        stderr=subprocess.PIPE if is_gcov else subprocess.DEVNULL,
-        timeout=timeout,
-        check=False,
-        caller_label="fuzz-coverage-bridge",
-        sanitise_host_fingerprint=True,
-    )
-    for stream in ("stdout", "stderr"):
-        data = getattr(proc, stream, None)
-        if isinstance(data, (bytes, str)) and len(data) > _MAX_CAPTURE_BYTES:
-            setattr(proc, stream, data[:_MAX_CAPTURE_BYTES])
+    if not is_gcov:
+        return _sandbox_run(
+            cmd,
+            block_network=True,
+            target=str(workdir),
+            output=str(workdir),
+            readable_paths=sorted(readable),
+            cwd=str(workdir),
+            input=stdin_bytes,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            check=False,
+            caller_label="fuzz-coverage-bridge",
+            sanitise_host_fingerprint=True,
+        )
+    # gcov output is captured via anonymous temp FILES, then read back
+    # capped: a PIPE buffers the whole stream in memory BEFORE any
+    # truncation could run, defeating the cap's stated purpose.
+    import tempfile
+    with tempfile.TemporaryFile() as out_fh, \
+            tempfile.TemporaryFile() as err_fh:
+        proc = _sandbox_run(
+            cmd,
+            block_network=True,
+            target=str(workdir),
+            output=str(workdir),
+            readable_paths=sorted(readable),
+            cwd=str(workdir),
+            input=stdin_bytes,
+            stdout=out_fh,
+            stderr=err_fh,
+            timeout=timeout,
+            check=False,
+            caller_label="fuzz-coverage-bridge",
+            sanitise_host_fingerprint=True,
+        )
+        for stream, fh in (("stdout", out_fh), ("stderr", err_fh)):
+            fh.seek(0)
+            setattr(proc, stream, fh.read(_MAX_CAPTURE_BYTES))
     return proc
 
 
@@ -571,6 +592,12 @@ _PAGE = 0x1000
 #: would turn the per-(pc, span) interval walk into a CPU/memory sink
 #: (millions of page candidates per pair). Real functions fit easily.
 _BASE_VOTE_MAX_SPAN = 256 * _PAGE
+#: Span COUNT cap for base voting. Span WIDTH is gated above, but the
+#: spans themselves build from the attacker-controlled checklist
+#: symtab, and the vote is O(sample x spans) — an unbounded span list
+#: is a CPU sink. Real binaries carry tens of thousands of functions
+#: at most.
+_BASE_VOTE_MAX_SPANS = 50_000
 #: Hit-validation sample for candidate SELECTION; the winner is then
 #: re-scored on the full PC set once.
 _BASE_VALIDATE_CAP = 200_000
@@ -594,6 +621,12 @@ def _base_candidates(pcs, spans) -> list:
     if len(sample) > _BASE_SAMPLE_CAP:
         stride = -(-len(sample) // _BASE_SAMPLE_CAP)
         sample = sample[::stride][:_BASE_SAMPLE_CAP]
+    if len(spans) > _BASE_VOTE_MAX_SPANS:
+        logger.debug(
+            "base vote: span list truncated %d -> %d (checklist symtab "
+            "is attacker-controlled)", len(spans), _BASE_VOTE_MAX_SPANS,
+        )
+        spans = spans[:_BASE_VOTE_MAX_SPANS]
     votes: Counter = Counter()
     for pc in sample:
         for start, end, _name in spans:
