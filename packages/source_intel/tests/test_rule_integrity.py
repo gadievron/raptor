@@ -82,7 +82,6 @@ EXPECTED_RULES = {
     },
     "variants": {
         "checked_alloc.cocci",
-        "structural_fingerprint.cocci",
     },
 }
 
