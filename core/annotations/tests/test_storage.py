@@ -229,6 +229,18 @@ class TestIterAll:
     def test_empty_tree_yields_nothing(self, tmp_path):
         assert list(iter_all_annotations(tmp_path)) == []
 
+    def test_invalid_filename_in_tree_skipped_not_fatal(self, tmp_path):
+        """One directory entry whose recovered source path fails
+        validation (legal on Linux — planted, rsync artifact, or a
+        tool bug) used to crash every whole-tree reader; the valid
+        annotations after it were never yielded."""
+        write_annotation(tmp_path, Annotation(
+            file="good.py", function="f", body="x",
+        ))
+        (tmp_path / "evil\rname.py.md").write_text("## fn\n\nbody\n")
+        got = list(iter_all_annotations(tmp_path))
+        assert [a.file for a in got] == ["good.py"]
+
     def test_nonexistent_base_yields_nothing(self, tmp_path):
         assert list(iter_all_annotations(tmp_path / "nope")) == []
 
