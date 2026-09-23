@@ -436,3 +436,27 @@ def test_get_vuln_transient_failure_not_cached(tmp_path) -> None:
     http.get_responses[url] = {"id": "CVE-R", "summary": "recovered"}
     rec = client.get_vuln("CVE-R")
     assert rec is not None and rec.id == "CVE-R"
+
+
+def test_get_vuln_parse_typeerror_degrades_to_none(tmp_path, monkeypatch) -> None:
+    """Parse failures on a fetched record must degrade per the
+    documented contract ("None on 404 / error / parse failure") even
+    when the parser raises TypeError rather than ValueError — and a
+    cached copy of the same record must degrade identically on later
+    reads instead of replaying a crash for the TTL."""
+    import packages.osv.client as osv_client_mod
+
+    def _boom(record):
+        raise TypeError("'int' object is not iterable")
+
+    monkeypatch.setattr(osv_client_mod, "parse_record", _boom)
+    cache = JsonCache(tmp_path / "cache")
+    http = _FakeHttp()
+    http.get_responses[f"{OSV_BASE_URL}/vulns/GHSA-x"] = {
+        "id": "GHSA-x", "references": 7,
+    }
+    client = OsvClient(http=http, cache=cache)  # type: ignore[arg-type]
+    assert client.get_vuln("GHSA-x") is None
+    # Second client reads the cached record — same graceful degrade.
+    client2 = OsvClient(http=_FakeHttp(), cache=cache, offline=True)  # type: ignore[arg-type]
+    assert client2.get_vuln("GHSA-x") is None
