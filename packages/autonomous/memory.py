@@ -6,6 +6,7 @@ improve over time through persistent knowledge storage.
 """
 
 import fcntl
+import json
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -48,14 +49,23 @@ class FuzzingKnowledge:
     binary_hash: str | None = None  # Which binary did we learn this from?
     campaign_id: str | None = None  # Which fuzzing campaign?
 
+    def _coerce_confidence(self) -> None:
+        """Shared-file entries may carry a non-numeric confidence
+        (other processes' writes / hand edits) — reset to the neutral
+        default instead of raising into the caller."""
+        if not isinstance(self.confidence, (int, float)):
+            self.confidence = 0.5
+
     def update_success(self) -> None:
         """Record a successful application of this knowledge."""
+        self._coerce_confidence()
         self.success_count += 1
         self.confidence = min(1.0, self.confidence + 0.1)
         self.last_updated = time.time()
 
     def update_failure(self) -> None:
         """Record a failed application of this knowledge."""
+        self._coerce_confidence()
         self.failure_count += 1
         self.confidence = max(0.0, self.confidence - 0.05)
         self.last_updated = time.time()
@@ -160,6 +170,16 @@ class FuzzingMemory:
             campaign_id=k_dict.get("campaign_id"),
         )
 
+    #: Lock-acquisition deadline. Trade-off, both directions: longer
+    #: waits ride out big concurrent merges but let ONE wedged holder
+    #: (crashed mid-save under a debugger, D-state on a dead network
+    #: mount) stall every campaign's periodic flush behind it; shorter
+    #: waits shed load fast but can skip knowledge saves under mere
+    #: contention. Saves are additive best-effort (a timed-out save
+    #: logs and retries on the next flush), so 30s errs toward
+    #: liveness.
+    _LOCK_TIMEOUT_S: float = 30.0
+
     @contextmanager
     def _locked(self) -> "Iterator[None]":
         """Exclusive advisory lock over the shared memory file.
@@ -171,10 +191,26 @@ class FuzzingMemory:
         discards the other's learned knowledge. flock on a sibling
         ``.lock`` file (never the data file itself — save_json
         replaces it by rename, which would drop the lock identity).
+
+        Acquisition is non-blocking with a deadline: a wedged holder
+        must not stall the caller forever (saves are best-effort by
+        contract — ``save()`` catches and logs the timeout).
         """
         lock_path = self.memory_file.with_name(self.memory_file.name + ".lock")
         with open(lock_path, "w", encoding="utf-8") as fh:
-            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            deadline = time.monotonic() + self._LOCK_TIMEOUT_S
+            while True:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(
+                            f"memory lock {lock_path} not acquired "
+                            f"within {self._LOCK_TIMEOUT_S:.0f}s — "
+                            f"another campaign may be wedged holding it"
+                        ) from None
+                    time.sleep(0.05)
             try:
                 yield
             finally:
@@ -208,11 +244,26 @@ class FuzzingMemory:
                     self.knowledge[key] = entry
         disk_campaigns = data.get("campaigns")
         if isinstance(disk_campaigns, list):
+            # Canonical-JSON keys instead of `c not in merged`: the
+            # membership test was an O(n²) dict-equality scan over a
+            # store that only ever grows.
             merged = list(disk_campaigns)
+            seen_keys = {self._campaign_key(c) for c in merged}
             for c in self.campaigns:
-                if c not in merged:
+                key = self._campaign_key(c)
+                if key not in seen_keys:
                     merged.append(c)
+                    seen_keys.add(key)
             self.campaigns = merged
+
+    @staticmethod
+    def _campaign_key(campaign: Any) -> str:
+        """Hashable identity for a campaign record (JSON-plain data;
+        sort_keys makes key order irrelevant, matching dict ==)."""
+        try:
+            return json.dumps(campaign, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            return repr(campaign)
 
     def flush(self) -> None:
         """Flush any pending dirty state to disk."""
@@ -402,8 +453,22 @@ class FuzzingMemory:
                 binary_hash=binary_hash,
             )
 
-        # Update counts
+        # Update counts. The recalled value may be another process's
+        # write to the shared file (schema drift, hand edits): a
+        # non-dict value or non-int counter raised KeyError/TypeError
+        # out of here into the crash-analysis path. Malformed learning
+        # state resets — the store is additive best-effort.
         value = knowledge.value
+        if not isinstance(value, dict):
+            value = {
+                "signal": signal,
+                "function": function,
+                "exploitable_count": 0,
+                "total_count": 0,
+            }
+        for counter in ("total_count", "exploitable_count"):
+            if not isinstance(value.get(counter), int):
+                value[counter] = 0
         value["total_count"] += 1
         if exploitable:
             value["exploitable_count"] += 1
@@ -508,15 +573,25 @@ class FuzzingMemory:
                 pass
             return signal_probs.get(lookup_key, 0.3)
 
-        # Use historical data
+        # Use historical data. Same shared-file shape hazard as
+        # record_crash_pattern: malformed entries read as no-data
+        # instead of raising into the crash-analysis path.
         value = knowledge.value
-        if value["total_count"] == 0:
+        if not isinstance(value, dict):
+            return 0.3
+        total = value.get("total_count")
+        exploitable = value.get("exploitable_count")
+        if (not isinstance(total, int) or not isinstance(exploitable, int)
+                or total <= 0):
             return 0.3
 
-        exploitable_rate = value["exploitable_count"] / value["total_count"]
+        exploitable_rate = exploitable / total
 
         # Combine with confidence
-        return exploitable_rate * knowledge.confidence
+        confidence = (knowledge.confidence
+                      if isinstance(knowledge.confidence, (int, float))
+                      else 0.5)
+        return exploitable_rate * confidence
 
     def record_campaign(self, campaign_data: dict) -> None:
         """
