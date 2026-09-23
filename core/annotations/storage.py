@@ -222,6 +222,27 @@ _FORBIDDEN_META_VALUE_SUBSTRINGS = ("-->", "<!--")
 _MAX_META_KEY_LEN = 256
 _MAX_META_VALUE_LEN = 4096
 
+# Bound the prose body too — the metadata cap's own rationale applies
+# verbatim to the 1000x-larger sibling field (agent-tier CLI adds via
+# --body-file are sanctioned writers, and 29 whole-tree reader sites
+# materialise every body per pass). Trade-off both ways: higher and a
+# single scripted add can bloat the tree every reader walks; lower
+# and legitimate pasted evidence (long traces, tool transcripts) gets
+# refused — realistic operator prose tops out well under 100 KiB, so
+# 1 MiB is comfortable headroom while still bounding a hostile body
+# to ~one page-cache blip.
+_MAX_BODY_LEN = 1024 * 1024
+
+# Read-side budget for one annotation file. The tolerant read path
+# exists so one bad file can't take the whole-tree readers down, and
+# an unbudgeted read_text() materialises whatever a planted file
+# weighs. Trade-off both ways: lower and a legitimately large file
+# (many sections near the body cap) fails its own rewrite — data
+# lockout; higher and every reader pays more memory per planted file
+# before the parse even starts. 32 MiB holds 30+ cap-sized bodies,
+# far beyond any legitimate per-source-file annotation set.
+_MAX_FILE_BYTES = 32 * 1024 * 1024
+
 
 def _validate_metadata(metadata) -> None:
     """Reject metadata key/value pairs that would corrupt the
@@ -352,6 +373,12 @@ def _validate_body(body) -> None:
     if not body:
         return
     body_str = str(body)
+    if len(body_str) > _MAX_BODY_LEN:
+        msg = (
+            f"annotation body exceeds {_MAX_BODY_LEN} chars: "
+            f"{len(body_str)}"
+        )
+        raise ValueError(msg)
     bad = sorted({c for c in _LINE_SPLICE_CHARS if c in body_str})
     if bad:
         msg = (
@@ -628,6 +655,24 @@ def _load_file_state(
     content + parsed sections). See :func:`read_file_annotations`
     for the strict/tolerant contract."""
     path = annotation_path(base_dir, source_file)
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    if size > _MAX_FILE_BYTES:
+        if strict:
+            msg = (
+                f"annotation file {path} is {size} bytes (budget "
+                f"{_MAX_FILE_BYTES}); refusing to rewrite it — "
+                f"inspect the file (the writer never produces this), "
+                f"then retry"
+            )
+            raise AnnotationFileError(msg)
+        logger.warning(
+            "annotation file %s is %s bytes (budget %s) — skipping",
+            path, size, _MAX_FILE_BYTES,
+        )
+        return _FileState(False, False, "", [])
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:

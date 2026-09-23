@@ -465,6 +465,48 @@ class TestAdversarialInputs:
         assert all_ == []
 
 
+class TestSizeBudgets:
+    """Two-direction pins for the churn-prone limits: at/below the
+    cap is accepted, above is refused/skipped."""
+
+    def test_body_at_cap_accepted(self, tmp_path):
+        from core.annotations.storage import _MAX_BODY_LEN
+        assert write_annotation(tmp_path, Annotation(
+            file="a.py", function="f", body="A" * _MAX_BODY_LEN,
+        )) is not None
+
+    def test_body_over_cap_rejected(self, tmp_path):
+        from core.annotations.storage import _MAX_BODY_LEN
+        with pytest.raises(ValueError, match="body exceeds"):
+            write_annotation(tmp_path, Annotation(
+                file="a.py", function="f",
+                body="A" * (_MAX_BODY_LEN + 1),
+            ))
+        assert not (tmp_path / "a.py.md").exists()
+
+    def test_oversize_file_skipped_by_tolerant_read(self, tmp_path):
+        import core.annotations.storage as storage
+        path = annotation_path(tmp_path, "a.py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("## f\n\n" + "x" * 64)
+        original = path.read_bytes()
+        # Budget shrunk for the test — writing a real >32 MiB file
+        # per run would be wasteful.
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(storage, "_MAX_FILE_BYTES", 32)
+            assert read_file_annotations(tmp_path, "a.py") == []
+            assert list(iter_all_annotations(tmp_path)) == []
+            # Strict path refuses, leaving the bytes untouched.
+            from core.annotations import AnnotationFileError
+            with pytest.raises(AnnotationFileError, match="budget"):
+                write_annotation(tmp_path, Annotation(
+                    file="a.py", function="g", body="y",
+                ))
+        assert path.read_bytes() == original
+        # Back under the real budget everything reads again.
+        assert len(read_file_annotations(tmp_path, "a.py")) == 1
+
+
 class TestAtomicWrite:
     def test_no_partial_file_on_concurrent_reader(self, tmp_path):
         """Atomic-rename means a reader who opens the path between
