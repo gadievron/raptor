@@ -92,7 +92,7 @@ def _translate_finding(
 
     location = finding.get("location") or {}
     cwe_id_raw = finding.get("cwe_id")
-    cwe_str = f"CWE-{cwe_id_raw}" if cwe_id_raw else None
+    cwe_str = _canonical_cwe(cwe_id_raw)
 
     file_rel = location.get("file") or ""
     route_key = location.get("function") or finding.get("id") or ""
@@ -102,8 +102,8 @@ def _translate_finding(
     finding_name = finding.get("name") or finding.get("cwe_name") or ""
 
     return {
-        "finding_id": _make_finding_id(finding, file_rel, cwe_id_raw, index),
-        "rule_id": f"openant/CWE-{cwe_id_raw}" if cwe_id_raw else "openant/unknown",
+        "finding_id": _make_finding_id(finding, file_rel, cwe_str, index),
+        "rule_id": f"openant/{cwe_str}" if cwe_str else "openant/unknown",
         "file": file_rel,
         "startLine": None,
         "endLine": None,
@@ -142,17 +142,35 @@ def _compute_level(verdict: str, finding: dict) -> Optional[str]:
     return base
 
 
+def _canonical_cwe(raw) -> Optional[str]:
+    """Canonical ``CWE-N`` spelling via ``core.cve.cwe`` — never a
+    hand-rolled f-string. OpenAnt documents ``cwe_id`` as an int, but
+    LLM-shaped drift ships strings like ``"CWE-78"``: the old
+    ``f"CWE-{raw}"`` minted ``CWE-CWE-78``, which silently voided the
+    SARIF dedup join for that finding (the SARIF side canonicalises
+    via the same module). Garbage yields ``None`` (rule
+    ``openant/unknown``)."""
+    from core.cve.cwe import canonicalize_cwe, format_cwe
+
+    canon = format_cwe(raw)
+    if canon is not None:
+        return canon
+    if isinstance(raw, str):
+        return canonicalize_cwe(raw)
+    return None
+
+
 def _make_finding_id(
     finding: dict,
     file_rel: str,
-    cwe_id,
+    cwe: Optional[str],
     index: int,
 ) -> str:
     openant_id = finding.get("id")
     if openant_id:
         return f"openant:{openant_id}"
     if file_rel:
-        cwe_part = cwe_id or "0"
+        cwe_part = cwe or "0"
         return f"openant:{file_rel}:{cwe_part}:{index}"
     return f"openant:VULN-{index+1:03d}"
 
@@ -240,9 +258,17 @@ def deduplicate_with_sarif(
 
 
 def _finding_key(f: dict, repo_root: Optional[Path] = None) -> Optional[tuple]:
-    """Dedup key: (repo-relative file, cwe). Shared by both sides."""
+    """Dedup key: (repo-relative file, cwe). Shared by both sides.
+
+    A finding missing EITHER half never joins (``None``): a missing
+    cwe used to key as ``""``, which is not a CWE match but a wildcard
+    bucket — any CWE-less OpenAnt finding was silently dropped against
+    ANY CWE-less SARIF finding in the same file (both sides
+    legitimately lack CWEs; same-file no-CWE collisions are far
+    likelier than same-file same-CWE ones, and the failure direction
+    is finding LOSS, not double-report)."""
     file_ = f.get("file") or ""
     cwe = f.get("cwe_id") or ""
-    if not file_:
+    if not file_ or not cwe:
         return None
     return (_normalize_path(file_, repo_root), str(cwe).upper())
