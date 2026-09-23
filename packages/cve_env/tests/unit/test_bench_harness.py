@@ -269,3 +269,29 @@ def test_report_only_requires_results(bench, tmp_path) -> None:
     empty.mkdir()
     assert bench.main(["--report-only", "--out", str(empty)]) == 1
     assert bench.main(["--report-only"]) == 2
+
+
+# ── report escaping: sidecar text lanes ───────────────────────────────
+
+
+def test_render_report_defangs_hostile_sidecar_fields(bench) -> None:
+    """give_up_reason (and status / labels) relay agent-run text into
+    report.md cells; markdown structure and control bytes must not
+    arrive live."""
+    records = [{
+        "cve_id": "CVE-2024-0001",
+        "backend": "core",
+        "repeat": 1,
+        "status": "unresolvable\r# fake",
+        "verify_passed": False,
+        "num_turns": 3,
+        "total_cost_usd": 0.1,
+        "refusals": 0,
+        "give_up_reason": "no_image | EVIL\x1b[31m\n# Injected",
+        "duration_s": 4,
+    }]
+    text = bench.render_report(records, {"source": "test"})
+    assert "\x1b" not in text
+    assert "| EVIL" not in text          # pipe escaped, cell not split
+    assert "\n# Injected" not in text    # no injected heading
+    assert "\r# fake" not in text        # CR flattened
