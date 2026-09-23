@@ -135,15 +135,27 @@ def _write_validated(directory, filename, filehash, schema_type=None):
     validation request under a different type.
     """
     vfile = Path(directory) / ".validated"
-    existing = _read_validated(directory)
-    existing[filename] = (
-        f"{schema_type}:{filehash}" if schema_type else filehash
-    )
-    lines = [f"{k}:{v}" for k, v in sorted(existing.items())]
-    # Atomic write: two concurrent stage validations read-modify-write
-    # this index; a torn write would drop every cached record.
-    from core.atomic_fs import write_text_atomically
-    write_text_atomically(vfile, "\n".join(lines) + "\n")
+    # Advisory lock around the read-modify-write: without it two
+    # concurrent stage validations both read the same pre-state and
+    # the later rename drops the earlier one's entry. On flock
+    # failure proceed unlocked — this is a validation CACHE, so the
+    # loss direction is benign (the dropped entry re-validates) and
+    # refusing the write would cost more than the race.
+    import fcntl
+    lock_path = Path(directory) / ".validated.lock"
+    with open(lock_path, "a+b") as lock_fh:
+        try:
+            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+        except OSError:
+            pass
+        existing = _read_validated(directory)
+        existing[filename] = (
+            f"{schema_type}:{filehash}" if schema_type else filehash
+        )
+        lines = [f"{k}:{v}" for k, v in sorted(existing.items())]
+        # Atomic write: a torn write would drop every cached record.
+        from core.atomic_fs import write_text_atomically
+        write_text_atomically(vfile, "\n".join(lines) + "\n")
 
 
 def _validate_stage_file(data, filename):
