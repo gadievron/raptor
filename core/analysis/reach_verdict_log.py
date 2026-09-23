@@ -46,6 +46,7 @@ import atexit
 import fcntl
 import os
 import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -125,6 +126,34 @@ def _drain_in_memory() -> dict[str, dict[str, int]]:
         return out
 
 
+@contextmanager
+def _held_lock(lock_path: Path):
+    """flock on ``lock_path``, revalidated against unlink races.
+
+    ``reset()`` unlinks the lock file while holding it, so a waiter
+    can wake up holding an flock on an UNLINKED inode while a third
+    process creates-and-locks a fresh file at the same path — two
+    "holders" at once (lost-update on the sidecar merge). After
+    acquiring, re-stat the path and verify it is still THIS inode;
+    otherwise reopen and retry. Bounded retries; on exhaustion the
+    lock is held best-effort (telemetry must never block a run)."""
+    for _ in range(5):
+        fh = Path(lock_path).open("a+", encoding="utf-8")
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+        try:
+            if os.fstat(fh.fileno()).st_ino == os.stat(lock_path).st_ino:
+                break
+        except OSError:
+            pass  # path vanished — retry with a fresh file
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+    try:
+        yield fh
+    finally:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        fh.close()
+
+
 def _merge_disk(path: Path, increments: dict[str, dict[str, int]]) -> None:
     """Read-modify-write the sidecar under flock.
 
@@ -134,45 +163,42 @@ def _merge_disk(path: Path, increments: dict[str, dict[str, int]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
     # ``a+`` semantics — create if absent, never written to. flock
-    # operates on the inode so the lock-file's contents are irrelevant.
-    with Path(lock_path).open("a+", encoding="utf-8") as lock_fh:
-        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
-        try:
-            if path.exists():
-                try:
-                    data = load_json(path)
-                except Exception as e:
-                    logger.warning(
-                        "reach_verdict_log: corrupt JSON at %s — "
-                        "reading as empty (%s)", path, e)
-                    data = None
-            else:
+    # operates on the inode so the lock-file's contents are irrelevant
+    # (unlink-revalidated — see _held_lock).
+    with _held_lock(lock_path):
+        if path.exists():
+            try:
+                data = load_json(path)
+            except Exception as e:
+                logger.warning(
+                    "reach_verdict_log: corrupt JSON at %s — "
+                    "reading as empty (%s)", path, e)
                 data = None
-            if data is None:
-                data = {"version": SCHEMA_VERSION, "languages": {}}
-            version = data.get("version")
-            if version != SCHEMA_VERSION:
-                msg = (
-                    f"reach_verdict_log: refusing to write — sidecar at "
-                    f"{path} has version={version!r}, expected "
-                    f"{SCHEMA_VERSION!r}. Delete the sidecar to reset."
-                )
-                raise RuntimeError(msg)
-            languages: dict[str, Any] = data.setdefault("languages", {})
-            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            for lang, verdicts in increments.items():
-                slot = languages.setdefault(
-                    lang, {"verdicts": {}, "last_seen_at": now})
-                vs = slot.setdefault("verdicts", {})
-                for v, n in verdicts.items():
-                    try:
-                        vs[v] = int(vs.get(v, 0)) + int(n)
-                    except (ValueError, TypeError):
-                        pass
-                slot["last_seen_at"] = now
-            save_json(path, data)
-        finally:
-            fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+        else:
+            data = None
+        if data is None:
+            data = {"version": SCHEMA_VERSION, "languages": {}}
+        version = data.get("version")
+        if version != SCHEMA_VERSION:
+            msg = (
+                f"reach_verdict_log: refusing to write — sidecar at "
+                f"{path} has version={version!r}, expected "
+                f"{SCHEMA_VERSION!r}. Delete the sidecar to reset."
+            )
+            raise RuntimeError(msg)
+        languages: dict[str, Any] = data.setdefault("languages", {})
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        for lang, verdicts in increments.items():
+            slot = languages.setdefault(
+                lang, {"verdicts": {}, "last_seen_at": now})
+            vs = slot.setdefault("verdicts", {})
+            for v, n in verdicts.items():
+                try:
+                    vs[v] = int(vs.get(v, 0)) + int(n)
+                except (ValueError, TypeError):
+                    pass
+            slot["last_seen_at"] = now
+        save_json(path, data)
 
 
 def _redeposit(increments: dict[str, dict[str, int]]) -> None:
@@ -254,8 +280,7 @@ def reset(path: Path | None = None) -> None:
     p = path or _sidecar_path()
     lock_path = p.with_suffix(p.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(lock_path, "a+", encoding="utf-8") as lock_fh:
-        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+    with _held_lock(lock_path):
         p.unlink(missing_ok=True)
         lock_path.unlink(missing_ok=True)
 
