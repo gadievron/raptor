@@ -334,6 +334,13 @@ _ECOSYSTEM_MEMBER_TIERS = {
     "CMAKE_PREFIX_PATH": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
     "CMAKE_PROGRAM_PATH": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
     "MAKEFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
+    # Env-consumed option carriers (manual 5.7.3): GNUMAKEFLAGS is
+    # appended to MAKEFLAGS before parsing (`--eval=$(shell …)` execs
+    # at parse time even under -n; `CC=` / `COMPILE.c=` words ride it);
+    # MFLAGS is the historical option word (ignored by GNU make 4.x's
+    # env read, honoured by older/other implementations).
+    "GNUMAKEFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
+    "MFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
     "ARFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
     "ASFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
     "CFLAGS": CREDENTIAL_EXEC_REDIRECT_ENV_VARS,
@@ -498,6 +505,35 @@ class TestPatternMembers:
         # multi-homing regression the derivation removed.
         for pattern in CREDENTIAL_ENV_NAME_PATTERNS:
             assert pattern.example not in CREDENTIAL_ENV_FAMILY, pattern
+
+
+class TestMakeOptionCarrierBelt:
+    """make's env-consumed option carriers are family members.
+
+    GNUMAKEFLAGS reopened the dot-var class one name over: an
+    environment `GNUMAKEFLAGS=--eval=$(shell <cmd>)` executes at
+    makefile PARSE time (even under `-n`), and `CC=<prog>` /
+    `COMPILE.c=<cmd>` words ride it into every make-driven build.
+    Both hostile-env belts derive from CREDENTIAL_ENV_FAMILY, so
+    membership here is the refusal pin for both."""
+
+    @pytest.mark.parametrize("name", [
+        "MAKEFLAGS", "GNUMAKEFLAGS", "MFLAGS",
+    ])
+    def test_option_carriers_are_exec_tier_members(self, name):
+        assert name in CREDENTIAL_EXEC_REDIRECT_ENV_VARS, name
+        assert name in CREDENTIAL_ENV_FAMILY, name
+
+    @pytest.mark.parametrize("name", [
+        # make-SET information carriers with no env-side option or
+        # exec power — the refusal must not widen into these.
+        "MAKELEVEL",
+        "MAKE_TERMOUT",
+        "MAKE_TERMERR",
+        "MAKE_RESTARTS",
+    ])
+    def test_inert_make_names_stay_out(self, name):
+        assert name not in CREDENTIAL_ENV_FAMILY, name
 
 
 class TestMakeDefaultDatabaseCrossCheck:
