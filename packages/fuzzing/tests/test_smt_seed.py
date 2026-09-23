@@ -216,3 +216,45 @@ class TestEndToEnd:
         source = (repo_root / "raptor_fuzzing.py").read_text(encoding="utf-8")
         assert '"--from-smt-witness"' in source
         assert "synthesize_from_run_dir" in source
+
+
+class TestLengthPathOverwriteGuard:
+    def test_preexisting_length_seed_not_silently_overwritten(
+        self, tmp_path,
+    ):
+        """The magic-value path records a skip when its filename
+        already exists; the length path lacked the guard — a
+        pre-existing file was overwritten with fill bytes AND listed
+        in the manifest, refuting the manifest's no-silent-drop
+        promise."""
+        victim = tmp_path / "smt_000_buf_len_len16"
+        victim.write_text("OPERATOR-CONTENT", encoding="utf-8")
+        manifest = synthesize_seeds([_record({"buf_len": 16})], tmp_path)
+        assert victim.read_text(encoding="utf-8") == "OPERATOR-CONTENT", (
+            "pre-existing file overwritten by the length rule"
+        )
+        length_seeds = [
+            s for s in manifest["seeds"] if s["rule"] == "length"
+        ]
+        assert length_seeds == []
+        assert any(
+            sk.get("reason") == "seed filename collision"
+            for sk in manifest["skipped"]
+        ), "the drop must be recorded, never silent"
+
+
+class TestCollectWitnessesShapes:
+    def test_list_shaped_analysis_report_recorded_as_skipped(
+        self, tmp_path,
+    ):
+        """A list-shaped autonomous_analysis_report.json must degrade
+        to a skip record, not AttributeError out of the .get() walk."""
+        (tmp_path / "autonomous_analysis_report.json").write_text(
+            '["junk"]', encoding="utf-8",
+        )
+        records, skipped = collect_witnesses(tmp_path)
+        assert records == []
+        assert any(
+            sk["file"] == "autonomous_analysis_report.json"
+            for sk in skipped
+        )
