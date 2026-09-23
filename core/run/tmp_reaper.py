@@ -41,7 +41,11 @@ to preserve it for re-inspection.
 
 Safety posture (world-writable /tmp on a shared box):
 
-  - Only entries directly under :func:`tempfile.gettempdir` whose name
+  - Only entries directly under a sweep root — :func:`tempfile.gettempdir`,
+    the real system tmp root (under the launcher gettempdir() is the
+    per-session TMPDIR, so root-level strays from bare-shell runs were
+    otherwise invisible forever), and the lane-socket fallback base
+    ``/run/user/<uid>`` (lane dirs only) — whose name
     matches a known RAPTOR prefix, an anchored third-party tool name
     that only RAPTOR's own tool runs strand here
     (``_ANCHORED_DIR_PREFIXES``), or a neutral de-branded scratch name
@@ -182,9 +186,9 @@ _DIR_PREFIXES = (
     # so only SIGKILL strands one). A live lane's socket still answers
     # and the in-use probe below keeps it out of the sweep. Lanes
     # minted under make_lane_dir's short-path fallback bases
-    # (/run/user/<uid>, /tmp when the temp dir is deep) sit outside
-    # the gettempdir() root this sweep covers — kept, never
-    # mis-deleted.
+    # (/run/user/<uid>, /tmp when the ambient temp dir is deep) are
+    # swept too, under the same guards — the fallback bases are extra
+    # sweep roots (see _sweep_roots; the /run/user base is lane-only).
     ".raptor-lane-",
     # Sandbox root stubs (core/sandbox/_spawn mkdtemp and the mount-ns
     # pid-named fallback); removed post-exit by _cleanup_stub, leaked
@@ -475,6 +479,57 @@ def _dir_in_use(path: Path, live_cwds: set[str]) -> bool:
     return False
 
 
+# Fixed roots swept IN ADDITION to gettempdir(). Under the launcher,
+# gettempdir() is the per-session TMPDIR — strays with reaper-known
+# prefixes minted at the REAL system tmp root (bare-shell runs,
+# pre-containment sessions, the lane-socket short-path fallback) were
+# invisible to every launcher-session sweep and accumulated forever.
+# Module-level so tests can pin the sweep to private roots. Every root
+# gets the identical per-entry guards (same-euid, age floor, internal
+# activity, live-cwd/socket probes, identity re-check).
+_SYSTEM_TMP_ROOTS: tuple[str, ...] = ("/tmp",)
+
+# Keep in sync with core/sandbox/proxy.py's _LANE_DIR_PREFIX (proxy.py
+# imports heavier machinery; this module stays import-light).
+_LANE_DIR_PREFIX = ".raptor-lane-"
+
+
+def _lane_fallback_bases() -> tuple[str, ...]:
+    """``make_lane_dir()``'s fixed short-path fallback bases that are
+    not already full sweep roots (see core/sandbox/proxy.py: the lane
+    dir falls back to ``/run/user/<uid>`` then ``/tmp`` when the
+    ambient temp path would overflow ``sun_path``). ``/tmp`` is a full
+    root via _SYSTEM_TMP_ROOTS; ``/run/user/<uid>`` is swept for lane
+    dirs ONLY — the one RAPTOR artifact ever minted there."""
+    return (f"/run/user/{os.getuid()}",)
+
+
+def _sweep_roots() -> list[tuple[Path, bool]]:
+    """``(root, lane_only)`` pairs, existing dirs only, deduped by
+    realpath (a bare-shell run's gettempdir() IS the system root)."""
+    roots: list[tuple[Path, bool]] = []
+    seen: set[str] = set()
+
+    def _add(base: str, lane_only: bool) -> None:
+        if not base or not os.path.isdir(base):
+            return
+        try:
+            real = os.path.realpath(base)
+        except OSError:
+            return
+        if real in seen:
+            return
+        seen.add(real)
+        roots.append((Path(base), lane_only))
+
+    _add(tempfile.gettempdir(), False)
+    for base in _SYSTEM_TMP_ROOTS:
+        _add(base, False)
+    for base in _lane_fallback_bases():
+        _add(base, True)
+    return roots
+
+
 def reap_stale_tmp(now: float | None = None) -> list[Path]:
     """Remove orphaned RAPTOR temp artifacts; return the reaped paths.
 
@@ -492,30 +547,38 @@ def _reap(now: float | None) -> list[Path]:
     max_age = _max_age_seconds()
     if max_age is None:
         return []
-    tmp_root = Path(tempfile.gettempdir())
-    try:
-        names = os.listdir(tmp_root)
-    except OSError:
-        return []
 
     dir_candidates: list[Path] = []
     file_candidates: list[Path] = []
-    for name in names:
-        if any(name.startswith(p) for p in _dir_prefixes()) or any(
-            _anchored_name_match(name, p) for p in _ANCHORED_DIR_PREFIXES
-        ) or any(
-            _mkdtemp_anchored_match(name, p)
-            for p in _MKDTEMP_ANCHORED_DIR_PREFIXES
-        ):
-            dir_candidates.append(tmp_root / name)
-        elif any(
-            name.startswith(pre) and name.endswith(suf)
-            for pre, suf in _FILE_PATTERNS
-        ) or any(
-            _anchored_name_match(name, pre, suf)
-            for pre, suf in _ANCHORED_FILE_PATTERNS
-        ):
-            file_candidates.append(tmp_root / name)
+    for tmp_root, lane_only in _sweep_roots():
+        try:
+            names = os.listdir(tmp_root)
+        except OSError:
+            continue
+        for name in names:
+            if lane_only:
+                # Narrow-scope root: only the lane-dir fallback ever
+                # lands RAPTOR artifacts here — everything else in it
+                # belongs to other subsystems entirely.
+                if name.startswith(_LANE_DIR_PREFIX):
+                    dir_candidates.append(tmp_root / name)
+                continue
+            if any(name.startswith(p) for p in _dir_prefixes()) or any(
+                _anchored_name_match(name, p)
+                for p in _ANCHORED_DIR_PREFIXES
+            ) or any(
+                _mkdtemp_anchored_match(name, p)
+                for p in _MKDTEMP_ANCHORED_DIR_PREFIXES
+            ):
+                dir_candidates.append(tmp_root / name)
+            elif any(
+                name.startswith(pre) and name.endswith(suf)
+                for pre, suf in _FILE_PATTERNS
+            ) or any(
+                _anchored_name_match(name, pre, suf)
+                for pre, suf in _ANCHORED_FILE_PATTERNS
+            ):
+                file_candidates.append(tmp_root / name)
     if not dir_candidates and not file_candidates:
         return []
 

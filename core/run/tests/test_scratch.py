@@ -29,6 +29,15 @@ def tmp_root(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _pin_sweep_roots(monkeypatch):
+    """Hermeticity: the sweep walks the real system tmp root and the
+    lane fallback base in addition to gettempdir() — the reap
+    assertions here must only ever see the private tmp_root."""
+    monkeypatch.setattr(tmp_reaper, "_SYSTEM_TMP_ROOTS", ())
+    monkeypatch.setattr(tmp_reaper, "_lane_fallback_bases", lambda: ())
+
+
+@pytest.fixture(autouse=True)
 def _isolated_runtime_prefixes(monkeypatch):
     monkeypatch.setattr(tmp_reaper, "_RUNTIME_DIR_PREFIXES", set())
 
