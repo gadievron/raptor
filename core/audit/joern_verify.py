@@ -1163,6 +1163,23 @@ def run_flow_reachability_check(
         )
 
     flows = list(getattr(result, "flows", []) or [])
+
+    # Consistency belt: the count record says the engine FOUND flows
+    # but no flow record decoded. A whole JOERN_FLOW line lost
+    # without a marker fragment leaves no parse error, and the empty
+    # flow list would otherwise ride the refutation lane — the same
+    # partial-protocol rule the guard channel applies to its
+    # unguarded count. One-directional on purpose: decoded flows
+    # fewer than the count is server-side dedup of identical rendered
+    # paths, not damage.
+    if not flows and (facts["flow_count"] or 0) > 0:
+        return _error(
+            tool_stamp, file_path, function_name,
+            f"flow protocol damage: count record reports "
+            f"{facts['flow_count']} flow(s) but no flow record "
+            "decoded",
+        )
+
     if flows:
         # Identifier-consistency: some step of some flow must mention
         # the named source, and the flow must end in the named sink's

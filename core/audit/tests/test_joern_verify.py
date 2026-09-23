@@ -669,6 +669,23 @@ class TestRunFlowReachability:
         r = self._run(tmp_path, FakeServer(raw))
         assert r.outcome == "inconclusive"
 
+    def test_flow_count_without_records_is_protocol_damage(
+        self, tmp_path: Path,
+    ):
+        # The count record says the engine found a flow; no JOERN_FLOW
+        # record decoded (a whole line lost without a marker fragment
+        # leaves no parse error) — the empty flow list must not ride
+        # the refutation lane. Same partial-protocol rule as the
+        # guard channel's unguarded count.
+        raw = (
+            "RAPTOR_FLOW_FUNC:found\nRAPTOR_FLOW_SRC:1\n"
+            "RAPTOR_FLOW_SNK:1\nRAPTOR_FLOW_COUNT:1\n"
+            "RAPTOR_FLOW_DEEP:0\n"
+        )
+        r = self._run(tmp_path, FakeServer(raw))
+        assert r.outcome == "error"
+        assert "protocol damage" in r.errors[0]
+
     def test_qualified_sink_uses_bare_name(self, tmp_path: Path):
         server = FakeServer("RAPTOR_FLOW_FUNC:missing\n")
         self._run(tmp_path, server, sink_call="subprocess.Popen")
