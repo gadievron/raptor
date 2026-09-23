@@ -435,3 +435,78 @@ def test_query_edges_nonexistent_path(tmp_path: Path):
 
 def test_query_evidence_nonexistent_path(tmp_path: Path):
     assert query_evidence(tmp_path / "nope.sqlite") == []
+
+
+def test_reopen_of_current_schema_commits_no_write(tmp_path: Path):
+    """A pure re-open of an up-to-date DB must not take a write
+    transaction: the unconditional version re-stamp made every read
+    lane (graph_summary, query_edges, report) contend as a writer."""
+    db = tmp_path / "graph.sqlite"
+    open_graph(db).close()                       # create at current schema
+    watcher = sqlite3.connect(db)
+    try:
+        before = watcher.execute("PRAGMA data_version").fetchone()[0]
+        open_graph(db).close()                   # pure re-open
+        after = watcher.execute("PRAGMA data_version").fetchone()[0]
+    finally:
+        watcher.close()
+    assert after == before, "re-open of an up-to-date graph committed a write"
+
+
+def test_v1_to_v2_migration_race_loser_treated_as_done(tmp_path: Path):
+    """Two connections racing the v1→v2 rebuild: the loser must land
+    on the migrated schema instead of erroring out mid-upgrade."""
+    import threading
+
+    db = tmp_path / "graph.sqlite"
+    _make_v1_db(db)
+    errors: list[str] = []
+
+    def opener():
+        try:
+            open_graph(db).close()
+        except Exception as exc:  # noqa: BLE001 — surfaced below
+            errors.append(f"{type(exc).__name__}: {exc}")
+
+    threads = [threading.Thread(target=opener) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert not errors, errors
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        conn.close()
+
+
+def test_latest_snapshot_id_same_timestamp_tie_breaks_by_insertion(
+        tmp_path: Path):
+    db = tmp_path / "graph.sqlite"
+    with BinaryGraphStore(db) as store:
+        conn = store._get_conn()
+        for snap in ("snap-first", "snap-second"):
+            conn.execute(
+                "INSERT INTO snapshots(id, binary_sha256, binary_path, "
+                "created_at, producer_run, props_json) "
+                "VALUES (?, 'sha', '/bin/x', '2026-01-01T00:00:00+00:00', "
+                "'run', '{}')",
+                (snap,),
+            )
+        conn.commit()
+        assert store.latest_snapshot_id() == "snap-second"
+
+
+def test_add_artifact_digest_matches_streamed_hash(tmp_path: Path):
+    import hashlib
+
+    db = tmp_path / "graph.sqlite"
+    artifact = tmp_path / "artifact.json"
+    artifact.write_bytes(b'{"k": 1}')
+    with BinaryGraphStore(db) as store:
+        snap = store.begin_snapshot("sha", "/bin/x", tmp_path)
+        store.add_artifact(snap, "binary_context_map", artifact)
+        conn = store._get_conn()
+        row = conn.execute("SELECT sha256 FROM artifacts").fetchone()
+    assert row["sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
