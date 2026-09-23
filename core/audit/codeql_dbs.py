@@ -26,6 +26,12 @@ logger = logging.getLogger(__name__)
 #: the discovery side applies (packages/llm_analysis/
 #: dataflow_validation.py) — CodeQL handles Kotlin via the Java
 #: extractor and TypeScript via the JavaScript one.
+# Extension → CODEQL EXTRACTOR language (`codeql database create
+# --language=<value>`), not the inventory language: CodeQL's `cpp`
+# extractor covers C (so `.c`/`.h` route to cpp — the inventory
+# splits them), Kotlin analyses under `java`, and TypeScript under
+# `javascript`. Divergences from core.inventory.languages are
+# deliberate and pinned by test_language_map_alignment.
 CODEQL_EXT_LANGUAGE = {
     ".c": "cpp", ".h": "cpp", ".cc": "cpp", ".hh": "cpp",
     ".cpp": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hxx": "cpp",

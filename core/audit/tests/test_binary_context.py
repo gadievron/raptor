@@ -455,3 +455,66 @@ class TestBinaryStaleness:
         (tmp_path / "checklist.json").write_text(json.dumps(cl2))
         gaps2 = compute_gaps(cl2, [], out_dir=run, project_dir=project)
         assert any(g["name"] == "f" for g in gaps2)
+
+
+class TestServerBootSingleFlight:
+    def test_concurrent_first_calls_boot_once(self, tmp_path, monkeypatch):
+        # Check-then-set on the server cache double-booted the ~4s
+        # sandboxed JVM under concurrent review workers (the loser
+        # leaked until atexit) — boots must single-flight per binary.
+        import threading
+
+        import core.audit.binary_context as bc
+
+        boots = []
+        boot_gate = threading.Event()
+
+        class FakeServer:
+            def __init__(self, gpr):
+                boots.append(gpr)
+
+            def start(self):
+                boot_gate.wait(5)
+
+            def open(self):
+                pass
+
+            def stop(self):
+                pass
+
+            def decompile(self, target):
+                return f"decompiled {target}"
+
+        import packages.ghidra.detect as det
+        import packages.ghidra.server as srv_mod
+        monkeypatch.setattr(det, "pyghidra_available", lambda: True)
+        monkeypatch.setattr(srv_mod, "GhidraServer", FakeServer)
+        gpr = tmp_path / "p.gpr"
+        gpr.write_text("project")
+        monkeypatch.setattr(
+            bc, "_project_for_binary", lambda *_a, **_k: gpr,
+        )
+        binary = tmp_path / "app.gpr"
+        binary.write_text("x")
+
+        results = []
+
+        def worker():
+            results.append(
+                bc._lazy_decompile(str(binary), "main", None),
+            )
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for t in threads:
+            t.start()
+        boot_gate.set()
+        for t in threads:
+            t.join(10)
+        try:
+            assert len(boots) == 1, boots
+            assert results == ["decompiled main"] * 4
+        finally:
+            key = str(binary.resolve())
+            with bc._SERVER_CACHE_LOCK:
+                bc._SERVER_CACHE.pop(key, None)
+                bc._SERVER_BOOT_LOCKS.pop(key, None)

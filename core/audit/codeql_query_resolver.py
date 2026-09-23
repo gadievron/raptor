@@ -78,7 +78,12 @@ def _version_key(name: str) -> tuple:
 # pack name → {query id → absolute .ql path}; None marks "pack not
 # found" so a missing pack is probed once, not per lookup.
 _PACK_INDEX_CACHE: dict[str, dict[str, str] | None] = {}
+# _CACHE_LOCK guards dict operations only. Pack indexing (a `codeql
+# resolve qlpacks` subprocess + an up-to-_MAX_PACK_FILES rglob) runs
+# under a PER-PACK lock so it computes once per pack without
+# serialising concurrent resolvers of other packs behind it.
 _CACHE_LOCK = threading.Lock()
+_PACK_LOCKS: dict[str, threading.Lock] = {}
 
 
 def clear_cache() -> None:
@@ -200,9 +205,18 @@ def resolve_query_id(query_id: str) -> str | None:
     if pack is None:
         return None
     with _CACHE_LOCK:
-        if pack not in _PACK_INDEX_CACHE:
-            _PACK_INDEX_CACHE[pack] = _index_pack(pack)
-        index = _PACK_INDEX_CACHE[pack]
+        cached = pack in _PACK_INDEX_CACHE
+        index = _PACK_INDEX_CACHE.get(pack)
+        pack_lock = _PACK_LOCKS.setdefault(pack, threading.Lock())
+    if not cached:
+        with pack_lock:
+            with _CACHE_LOCK:
+                cached = pack in _PACK_INDEX_CACHE
+                index = _PACK_INDEX_CACHE.get(pack)
+            if not cached:
+                index = _index_pack(pack)
+                with _CACHE_LOCK:
+                    _PACK_INDEX_CACHE[pack] = index
     if not index:
         return None
     path = index.get(query_id)

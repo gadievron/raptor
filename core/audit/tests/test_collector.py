@@ -632,3 +632,18 @@ class TestReusedVerdictChokepoint:
         alarms = load_alarms(tmp_path)
         assert len(alarms) == 1
         assert alarms[0]["blocked"] is True
+
+
+class TestFlushExceptionTotal:
+    def test_flush_never_raises_on_unexpected_error(
+        self, tmp_path: Path, monkeypatch,
+    ) -> None:
+        # "Never raises" must be exception-total: flush runs from
+        # end-of-run paths and the SIGTERM hook.
+        collector = Collector(out_dir=tmp_path, target_path=tmp_path)
+
+        def boom() -> None:
+            raise RuntimeError("row-shape surprise")
+
+        monkeypatch.setattr(collector, "_flush_audit_log", boom)
+        collector.flush()  # must not raise

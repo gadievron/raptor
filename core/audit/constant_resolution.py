@@ -216,7 +216,16 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
                 "skipped", p, _MAX_SOURCE_FILE_BYTES // (1024 * 1024),
             )
             continue
-        text = raw.decode("utf-8", errors="replace")
+        raw_text = raw.decode("utf-8", errors="replace")
+        # Comments and string literals are blanked (offsets and
+        # newlines preserved) BEFORE matching: a #define living only
+        # in a comment otherwise resolved as a "provably-unique"
+        # constant and fed SMT guard-equivalence with a value the
+        # compiler never saw. The whole module previously ran its
+        # regexes on raw text.
+        from .source_view import sanitized_view
+
+        text = sanitized_view(raw_text, str(p))
 
         text_joined = text.replace("\\\n", " ")
         cond_depth = _compute_conditional_depths(text)

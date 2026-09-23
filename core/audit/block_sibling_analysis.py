@@ -312,7 +312,7 @@ def _collect_branches_ts(
 # Indent captures are HORIZONTAL-only ([^\S\n]): the MULTILINE
 # ^\s* idiom is quadratic on blank-line runs in scanned source.
 _CASE_HEADER_RE = re.compile(
-    r"^([^\S\n]*)(?:case\s+(.+?):|when\s+(.+?)\s|default\s*:)",
+    r"^([^\S\n]*)(?:case\s+(.+?):|when\s+(.+?)(?::|\s|$)|default\s*:)",
     re.MULTILINE,
 )
 
@@ -382,7 +382,10 @@ def _collect_if_groups_regex(lines, source, _file_path, groups) -> None:
 
     for m in matches:
         indent = len(m.group(1))
-        keyword = m.group(2).strip()
+        # `else\s+if` admits any whitespace run (tab, line break) —
+        # normalise before comparing against the literal spellings or
+        # the chain breaks on `else\tif`.
+        keyword = re.sub(r"\s+", " ", m.group(2)).strip()
 
         if keyword == "if":
             if len(current_chain) >= MIN_BRANCHES:
@@ -403,7 +406,7 @@ def _collect_if_groups_regex(lines, source, _file_path, groups) -> None:
     for chain in chains:
         branches: list[tuple[str, str, int]] = []
         for i, m in enumerate(chain):
-            label = m.group(2).strip()
+            label = re.sub(r"\s+", " ", m.group(2)).strip()
             start_line = source[:m.start()].count("\n") + 1
             if i + 1 < len(chain):
                 body = source[m.end():chain[i + 1].start()]

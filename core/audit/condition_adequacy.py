@@ -310,11 +310,16 @@ def _has_upper_bound_comparison(text: str) -> bool:
 # compares are direction-ambiguous lexically; the mirror inherits
 # exactly the ambiguity the required-sense pair already carries
 # (lint-grade signal, co-gated at the consumer).
+# A bare-zero comparand is excluded on BOTH spellings: ``len >= 0``
+# / ``0 <= len`` negate to ``len < 0`` — a sign check, not a size
+# bound; counting it as a negated upper bound was a narrow FP path
+# into SUFFICIENT (whose consumer skips review). Nonzero literals
+# keep matching (``len >= 64`` negates to a genuine upper bound).
 _NEG_UPPER_BOUND_FWD_RE = re.compile(
-    r"(?:\b[a-zA-Z_]\w*|[)\]])\s*>=?\s*[a-zA-Z_0-9]"
+    r"(?:\b[a-zA-Z_]\w*|[)\]])\s*>=?\s*(?!0(?![\w.]))[a-zA-Z_0-9]"
 )
 _NEG_UPPER_BOUND_REV_RE = re.compile(
-    r"[\w)\]]\s*<=?\s*[a-zA-Z_]"
+    r"(?:\b(?!0(?![\w.]))\w+|[)\]])\s*<=?\s*[a-zA-Z_]"
 )
 
 

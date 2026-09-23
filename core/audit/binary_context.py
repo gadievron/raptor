@@ -16,21 +16,31 @@ from a scanned repo.
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
 from core.inventory.binary_builder import BINARY_PATH_PREFIX
 
+from .run_memo import BoundedMemo
+
 logger = logging.getLogger(__name__)
 
 #: Cached (path, mtime) → REDatabase so a gap loop over hundreds of
-#: functions parses the JSON once.
-_REDB_CACHE: dict[str, Any] = {}
+#: functions parses the JSON once. Bounded + thread-safe with
+#: per-key in-flight collapse — concurrent review workers raced the
+#: previous bare dict's check-then-set into duplicate parses.
+_REDB_MEMO: "BoundedMemo[Any]" = BoundedMemo(32)
 
 #: One sandboxed GhidraServer per analysed binary, booted lazily the
 #: first time a checklist function has no cached decompilation and
 #: reused for the rest of the run (JVM boot ~4s once vs per call).
+#: The per-key boot lock keeps concurrent workers from double-booting
+#: the ~4s JVM (the loser leaked until atexit); the cache lock guards
+#: dict operations only.
 _SERVER_CACHE: dict[str, Any] = {}
+_SERVER_CACHE_LOCK = threading.Lock()
+_SERVER_BOOT_LOCKS: dict[str, threading.Lock] = {}
 
 
 def _lazy_decompile(
@@ -48,28 +58,37 @@ def _lazy_decompile(
     except ImportError:
         return None
     key = str(Path(binary_path).resolve())
-    srv = _SERVER_CACHE.get(key)
+    with _SERVER_CACHE_LOCK:
+        srv = _SERVER_CACHE.get(key)
+        boot_lock = _SERVER_BOOT_LOCKS.setdefault(key, threading.Lock())
+    if srv is None:
+        with boot_lock:
+            with _SERVER_CACHE_LOCK:
+                srv = _SERVER_CACHE.get(key)
+            if srv is None:
+                try:
+                    gpr = _project_for_binary(Path(binary_path), out_dir)
+                    if gpr is None:
+                        with _SERVER_CACHE_LOCK:
+                            _SERVER_CACHE[key] = False
+                        return None
+                    srv = GhidraServer(gpr)
+                    srv.start()
+                    import atexit
+                    atexit.register(srv.stop)
+                    srv.open()
+                    with _SERVER_CACHE_LOCK:
+                        _SERVER_CACHE[key] = srv
+                except Exception:  # noqa: BLE001 — boot failure poisons the cache
+                    logger.debug(
+                        "lazy decompile server boot failed for %s",
+                        binary_path, exc_info=True,
+                    )
+                    with _SERVER_CACHE_LOCK:
+                        _SERVER_CACHE[key] = False
+                    return None
     if srv is False:
         return None  # previous BOOT failed — don't retry every call
-    if srv is None:
-        try:
-            gpr = _project_for_binary(Path(binary_path), out_dir)
-            if gpr is None:
-                _SERVER_CACHE[key] = False
-                return None
-            srv = GhidraServer(gpr)
-            srv.start()
-            import atexit
-            atexit.register(srv.stop)
-            srv.open()
-            _SERVER_CACHE[key] = srv
-        except Exception:  # noqa: BLE001 — boot failure poisons the cache
-            logger.debug(
-                "lazy decompile server boot failed for %s",
-                binary_path, exc_info=True,
-            )
-            _SERVER_CACHE[key] = False
-            return None
     target = address if address is not None else function_name
     try:
         return srv.decompile(target)
@@ -98,7 +117,8 @@ def _lazy_decompile(
                     "lazy decompile server restart failed",
                     exc_info=True,
                 )
-                _SERVER_CACHE[key] = False
+                with _SERVER_CACHE_LOCK:
+                    _SERVER_CACHE[key] = False
         return None
 
 
@@ -178,15 +198,16 @@ def load_redb(redb_path: Path):
     from core.json import load_json_bounded
     from packages.ghidra.model import REDatabase
 
-    key = str(Path(redb_path).resolve())
-    mtime = Path(redb_path).stat().st_mtime_ns
-    cached = _REDB_CACHE.get(key)
-    if cached and cached[0] == mtime:
-        return cached[1]
-    db = REDatabase.from_dict(
-        load_json_bounded(redb_path, max_bytes=_MAX_REDB_BYTES)
+    key = (
+        str(Path(redb_path).resolve()),
+        Path(redb_path).stat().st_mtime_ns,
     )
-    _REDB_CACHE[key] = (mtime, db)
+    db, _cached = _REDB_MEMO.get_or_compute(
+        key,
+        lambda: REDatabase.from_dict(
+            load_json_bounded(redb_path, max_bytes=_MAX_REDB_BYTES)
+        ),
+    )
     return db
 
 
@@ -343,6 +364,16 @@ def assemble_binary_context(
                     callee["source_snippet"], content_type="source",
                     location=location,
                 )
+        # Recovered type bodies are DWARF/Ghidra-derived (type and
+        # field names come from the hostile binary) — same trust
+        # footing as the decompilation above.
+        for td in ctx.get("type_definitions", []):
+            if td.get("source"):
+                td["source"] = sanitise_for_prompt(
+                    td["source"], content_type="source",
+                    location=f"{location} (recovered type "
+                             f"{td.get('name', '?')})",
+                )
     except Exception:
         logger.warning("prompt defence failed", exc_info=True)
 
@@ -389,7 +420,7 @@ def _xref_call_adjacency(db) -> tuple[dict[Any, list], dict[Any, list]]:
     once per database object and memoised on it (same count-based
     invalidation discipline as the model's ``_addr_index``: the
     enrich path appends xrefs).  The memo dies with the db object,
-    so the (path, mtime)-keyed ``_REDB_CACHE`` carries it across the
+    so the (path, mtime)-keyed ``_REDB_MEMO`` carries it across the
     whole run and a changed re-database.json starts fresh.
     """
     cached = getattr(db, "_audit_xref_adjacency", None)

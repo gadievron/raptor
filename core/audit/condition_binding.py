@@ -258,7 +258,7 @@ def check_guard_binding(
         # - Direct variable match: 0.9
         # - Auth/config always-relevant: 0.7
         # - No overlap but guard has few identifiers (might be aliased): 0.4
-        # - Clear no-overlap: 0.9 confidence it's decorative
+        # - Clear no-overlap: 0.85 confidence it's decorative
         if bound:
             conf = 0.9
         elif always_relevant:

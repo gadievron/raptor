@@ -631,3 +631,21 @@ class TestRealProducerContract:
         ]
         chains = synthesize_chains(outcomes, context_map)
         assert chains, "chain synthesis dead on real producer edges"
+
+
+class TestReachabilityWalkBounds:
+    def test_deep_caller_chain_does_not_recurse(self):
+        # A hostile call graph can be arbitrarily deep; the walker
+        # must use an explicit stack (a 5000-deep chain blew the
+        # interpreter recursion limit and the consumer's blanket
+        # except turned it into a lost attack-chains.json).
+        from core.audit.attacker_synthesis import _find_reachable_entries
+
+        edges = [
+            {"caller_file": "a.c", "caller": f"f{i}",
+             "callee": f"f{i + 1}", "callee_file": "a.c"}
+            for i in range(5000)
+        ]
+        eps = [{"file": "a.c", "name": "f0"}]
+        out = _find_reachable_entries("a.c:f5000", eps, edges)
+        assert out == ["a.c:f0"]

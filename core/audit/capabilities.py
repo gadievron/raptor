@@ -9,9 +9,12 @@ instead of upgrading to OBSERVED_RUNTIME; etc.
 from __future__ import annotations
 
 import importlib
+import logging
 import shutil
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -90,6 +93,10 @@ def probe_capabilities(
         _joern_issues = tuple(_joern_prereqs())
     except ImportError:
         _joern_issues = ("packages.joern not available",)
+    except Exception as exc:  # noqa: BLE001 — a prereq-probe surprise must
+        # degrade to "joern unavailable", not crash the audit at start.
+        logger.debug("joern prereq probe failed", exc_info=True)
+        _joern_issues = (f"joern prereq probe failed: {exc}",)
 
     return AuditCapabilities(
         joern=len(_joern_issues) == 0,

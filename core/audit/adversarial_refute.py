@@ -160,6 +160,15 @@ def parse_refutation(raw: Any) -> RefutationResult | None:
     Returns None for unusable responses (missing/unknown verdict) so
     the caller treats the refutation attempt as a no-op — an errored
     refuter must never demote anything.
+
+    Acceptance contract vs the prompt's quality bar: the prompt
+    DEMANDS a named defeating mechanism for ``refuted``, but a
+    counter-argument-only refutation is still accepted here BY DESIGN
+    — the consumer treats it as the textual-only demotion tier
+    (documented at the orchestrator's refutation-application site):
+    one level, argument recorded, never below suspicious for
+    tool-backed outcomes. Only an argument-free, mechanism-free
+    ``refuted`` is rejected outright.
     """
     if not isinstance(raw, dict):
         return None
