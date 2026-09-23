@@ -6774,6 +6774,19 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
                         result = subprocess.CompletedProcess(
                             cmd, returncode=-9,
                         )
+                        # SYNTHETIC result: an infrastructure race
+                        # (a concurrently-closed fd inside the Popen
+                        # plumbing) — the target's real execution
+                        # state is UNKNOWN, and rc=-9 with no output
+                        # would otherwise read as a genuine SIGKILL
+                        # (mechanical crash evidence) to
+                        # observe._interpret_result and every crash
+                        # oracle. Stamp it so evidence consumers can
+                        # exclude the fabricated shape; the stamp is
+                        # transferred onto sandbox_info in the
+                        # epilogue (sandbox_info does not exist yet
+                        # here).
+                        result._synthetic_ebadf = True  # type: ignore[attr-defined]
                         # Post-check executor death — see above.
                         result._floor_checked = True  # type: ignore[attr-defined]
                     finally:
@@ -6830,6 +6843,16 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             )
         # Interpret process termination for observability
         _interpret_result(result, cmd_display)
+
+        # Synthetic-result stamp transfer (EBADF teardown race): the
+        # handler minted a CompletedProcess whose rc=-9 reflects no
+        # real signal — evidence consumers (crash oracles, observe
+        # readers) must be able to exclude it. sandbox_info is only
+        # attached by _interpret_result above, so the handler parks
+        # the stamp on the result object.
+        if getattr(result, "_synthetic_ebadf", False):
+            result.sandbox_info["synthetic_result"] = (
+                "ebadf-teardown-race")
 
         # Record whether mount-ns engaged on this run so per-run
         # forensic readers (sandbox-summary.json consumers) can tell
