@@ -1366,3 +1366,56 @@ class TestShadowScanSelfReference:
         )
         v = rwa.audit_source(src)
         assert not any("shadow" in x.kind for x in v), [x.kind for x in v]
+
+
+def test_rule_catches_severity_dict_read_at_sink():
+    """severity is a finding-derived display field — the SCA table
+    lane rendered it raw while the vocabulary had no such name, so
+    the lane produced nothing to baseline."""
+    src = (
+        "def render(f, rows):\n"
+        "    rows.append(f\"{f.get('severity')}\")\n"
+        "    print(f['severity'])\n"
+    )
+    vs = audit_source(src)
+    assert sum(1 for v in vs if v.detail == "severity") == 2
+
+
+def test_rule_catches_label_read_at_sink():
+    """label is the diff view's rendered display string (built raw for
+    the JSON payload) — a print of it must fire."""
+    src = (
+        "def show(c):\n"
+        "    print(f\"~ {c['label']}\")\n"
+    )
+    assert any(v.detail == "label" for v in audit_source(src))
+
+
+def test_rule_passes_sanitised_severity_and_label():
+    # Two-direction guard for the widened names.
+    src = (
+        "def render(f, c, rows):\n"
+        "    rows.append(sanitise_for_terminal(str(f.get('severity'))))\n"
+        "    print(sanitise_for_terminal(str(c['label'])))\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_rule_accepts_clip_str_helper():
+    """core/threat_model's _clip_str ingest-boundary clip builds on
+    escape_nonprintable — recognised, so the module's summary-builder
+    lanes read clean when every field routes through it."""
+    src = (
+        "def summarise(entry, out):\n"
+        "    out.append(f\"{_clip_str(entry.get('severity'))}\")\n"
+    )
+    assert audit_source(src) == []
+
+
+def test_render_lane_writer_files_registered():
+    """The volatile-banner and threat-model renderer files print
+    attacker-influenced text — they must stay under audit (a hit
+    fails CI instead of landing in the unregistered baseline)."""
+    from core.security.report_writer_audit import _REPORT_WRITER_FILES
+    for rel in ("core/run/output.py", "core/threat_model/__init__.py"):
+        assert rel in _REPORT_WRITER_FILES

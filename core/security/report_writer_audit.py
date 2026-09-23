@@ -191,6 +191,18 @@ _LABEL_KEYS = frozenset({
     "version",
     "file",
     "function",
+    # severity/label: finding-derived display fields two live /project
+    # render lanes carried raw (the SCA findings table's severity cell
+    # and the diff view's changed-row label) while the detector's
+    # vocabulary had neither name — the lanes produced no findings to
+    # baseline. Measured before widening at this (dict-read, sink-tier)
+    # level: 5 sites tree-wide, each fixed or triaged with a note —
+    # no flooding. The full-propagation tier was measured too and
+    # REJECTED: 85 new keys, dominated by container round-trips of
+    # already-sanitised markdown rows — exactly the amplification the
+    # tier split exists to avoid.
+    "severity",
+    "label",
 })
 
 
@@ -322,6 +334,10 @@ _SANITISERS = frozenset({
     # markdown chars, then escape_nonprintable, byte-capped) — every
     # renderer lane in that module routes untrusted values through it.
     "_safe_for_render",
+    # core/threat_model's ingest-boundary clip (escape_nonprintable +
+    # byte cap — sanitise_for_terminal grade); summary-builder lanes
+    # apply it per-field at construction.
+    "_clip_str",
 })
 
 
@@ -365,7 +381,22 @@ _REPORT_WRITER_FILES = (
     # sanitise_for_terminal grade at construction.
     "core/project/annotations_diff.py",
     "core/reporting/renderer.py",
+    # Default-target resolution: the volatile-target refusal banner
+    # interpolates the active project's name/target (adopt-inferred
+    # from child-writable run metadata, or import-restored) into a
+    # bare stderr print. Terminal writer — sanitise_for_terminal
+    # grade. NOTE: the banner variables reach the sink as tuple-
+    # unpacked locals (no vocabulary-key read), so the detector is
+    # structurally blind to this lane — the render-scrub regression
+    # tests are its oracle; registration keeps future keyed lanes in
+    # this file under audit.
+    "core/run/output.py",
     "core/run/provenance.py",
+    # Threat-model store + renderers: report/prompt lanes interpolate
+    # LLM-refreshed model fields; the module's _safe_for_render /
+    # _clip_str chokepoints are the discipline. Registered so renderer
+    # drift fails CI instead of landing in the unregistered baseline.
+    "core/threat_model/__init__.py",
     # SAGE boot-payload review: the compare display prints
     # server-derived variant diffs at the operator's approve/reject
     # surface. Terminal writer — sanitise_for_terminal grade via its
@@ -1231,6 +1262,43 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
             "binary-investigation.json artifact-file save; the "
             "markdown render on the same lines routes through "
             "_md_escape"
+        ),
+    ),
+    # --- severity/label vocabulary widening: adjudicated hits --------
+    AllowlistEntry(
+        file="core/project/cli.py",
+        func_name="_print_sca_findings_section",
+        kind="unsanitised_llm_value",
+        detail="i",
+        audit_note=(
+            "i is the enumerate() counter over the severity-sorted "
+            "findings list; the taint chains through the sort key's "
+            "severity read — every string field on the same lines is "
+            "sanitise_for_terminal-wrapped"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/sandbox/triage.py",
+        func_name="_cli_main",
+        kind="unsanitised_llm_value",
+        detail="severity",
+        audit_note=(
+            "signal severity is the triage module's own SEVERITY_* "
+            "constant set (code-authored enum labels), not target/LLM "
+            "text"
+        ),
+    ),
+    AllowlistEntry(
+        file="core/threat_model/__init__.py",
+        func_name="prompt_context",
+        kind="unsanitised_llm_value",
+        detail="rendered",
+        audit_note=(
+            "threat-ledger lines are built from fields _clip_str-"
+            "bounded at model ingest and the join is "
+            "escape_nonprintable-wrapped at the sink; prompt-context "
+            "lane, not a rendered report (moved from the closure "
+            "baseline when the module was registered)"
         ),
     ),
     AllowlistEntry(
