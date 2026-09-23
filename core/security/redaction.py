@@ -47,6 +47,10 @@ _VENDOR_SECRET_PATTERNS = (
     (re.compile(r"\bgh[opusr]_[A-Za-z0-9]{36}\b"), "[REDACTED]"),
     # GitHub fine-grained PAT (github_pat_ + 22-char prefix + _ + 59-char body).
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{82}\b"), "[REDACTED]"),
+    # GitLab personal/project/group access token: `glpat-` + 20+ char body.
+    (re.compile(r"\bglpat-[0-9A-Za-z_-]{20,}"), "[REDACTED]"),
+    # Hugging Face access token: `hf_` + 30+ char alnum body.
+    (re.compile(r"\bhf_[A-Za-z0-9]{30,}\b"), "[REDACTED]"),
     # Slack tokens. Full letter class: beyond the app/bot/user set,
     # `xoxc` (browser session) and `xoxe` (refresh) are live secret
     # shapes — any xox?- + version + body redacts.
@@ -204,6 +208,13 @@ def _redact_url_pair(match: re.Match[str]) -> str:
 def is_secret_field_name(name: object) -> bool:
     """Return whether a field/parameter name conventionally carries a secret value."""
     normalized = str(name).strip().lower()
+    # npm's canonical .npmrc secret spellings carry a LEADING
+    # underscore (`_authToken`, `_auth`, `_password`) — `_authtoken`
+    # is neither an exact member (`authtoken` is) nor a `_token`
+    # suffix match. Strip leading `_`/`-` so the npm spellings hit
+    # the same vocabulary; resolver/npm stderr quoting an .npmrc
+    # line is a routine leak path into shareable artifacts.
+    normalized = normalized.lstrip("_-")
     return normalized in _SECRET_QUERY_KEYS or normalized.endswith(
         _SECRET_FIELD_SUFFIXES
     )
@@ -364,8 +375,12 @@ def redact_secrets(value: object, *, reveal_secrets: bool = False) -> str:
     # token shape published by the vendor; substring-only false positives
     # are acceptable here because the redaction target is shareable
     # logs / artifacts where false-positive redaction is far cheaper than
-    # a credential leak. Order doesn't matter — patterns are mutually
-    # disjoint by prefix.
+    # a credential leak. Order doesn't matter for correctness even
+    # though the prefixes are NOT all disjoint (the generic
+    # `sk-(proj-)?` OpenAI arm also matches `sk-ant-…` prefixes):
+    # every overlapping pair substitutes the identical replacement
+    # text, so whichever arm wins first leaves nothing sensitive
+    # behind. Revisit if a pattern ever gains a distinct replacement.
     for pattern, replacement in _VENDOR_SECRET_PATTERNS:
         text = pattern.sub(replacement, text)
 

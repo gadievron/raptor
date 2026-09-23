@@ -404,3 +404,42 @@ class TestCodeShapedAssignmentValues:
         out = redact_secrets("password = hunter2hunter2")
         assert "hunter2hunter2" not in out
         assert "[REDACTED]" in out
+
+
+class TestNpmrcAndVendorTokenShapes:
+    """npm's canonical .npmrc secret spellings carry a LEADING
+    underscore; resolver/npm stderr quoting an .npmrc line is a
+    routine leak path into shareable artifacts."""
+
+    def test_npmrc_authtoken_line_redacted(self):
+        out = redact_secrets(
+            "//registry.npmjs.org/:_authToken=npm_secretvalue123456")
+        assert "npm_secretvalue123456" not in out
+        assert "_authToken=[REDACTED]" in out
+
+    def test_npmrc_auth_line_redacted(self):
+        out = redact_secrets("_auth=dXNlcjpodW50ZXIyMjIyMg==")
+        assert "dXNlcjpodW50ZXIyMjIyMg" not in out
+
+    def test_gitlab_pat_redacted(self):
+        out = redact_secrets("using glpat-AbCdEfGhIjKlMnOpQrSt here")
+        assert "AbCdEfGhIjKlMnOpQrSt" not in out
+
+    def test_huggingface_token_redacted_by_shape(self):
+        # By SHAPE, not by a `token=` name prefix.
+        out = redact_secrets(
+            "hf_ABCDEFGHIJabcdefghij0123456789XY pulled the model")
+        assert "ABCDEFGHIJabcdefghij0123456789XY" not in out
+
+    def test_is_secret_field_name_leading_underscore(self):
+        from core.security.redaction import is_secret_field_name
+        assert is_secret_field_name("_authToken")
+        assert is_secret_field_name("_auth")
+        assert is_secret_field_name("-password")
+        # Two-direction: benign names stay benign after the strip.
+        assert not is_secret_field_name("_id")
+        assert not is_secret_field_name("__version__")
+
+    def test_benign_prose_untouched(self):
+        s = "the glpat prefix and hf hub are mentioned in prose"
+        assert redact_secrets(s) == s
