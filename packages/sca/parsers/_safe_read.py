@@ -21,11 +21,11 @@ Mirrors ``core.inventory.builder.MAX_FILE_BYTES`` (8 MiB for
 source code) — same defensive shape, looser cap because SCA
 manifests legitimately run larger than source files.
 
-Other parsers in this package read target files via
-``path.read_text(encoding="utf-8")`` without a bound. They should
-migrate to this helper; until they do, the OS-level fail (sandbox
-memory limit) is the backstop. New parsers added to the package
-should use this from the start.
+Every parser and the shared rewriter driver read target-tree
+content through this helper — the migration away from bare
+``path.read_text`` is complete, and new target-tree read sites in
+the package must use it from the start (an unbounded read is a
+regression, not a pending migration).
 """
 
 from __future__ import annotations
