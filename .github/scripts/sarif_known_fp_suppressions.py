@@ -25,7 +25,8 @@ uploads carrying stamped suppressions left the alerts open), so
 stamping is not a dismissal mechanism. Deleting the result instead
 closes the corresponding alert as no-longer-detected on the next
 upload. The reviewed justification for every removal lives in the
-tables below; adding a new entry
+tables below; adding a new entry requires its justification row and
+a paired regression test in test_sarif_known_fp_suppressions.
 """
 
 from __future__ import annotations

@@ -26,6 +26,10 @@ concurrency:
 
 jobs:
   reaudit:
+    # Canonical-repo guard (the refresh-sca-data.yml idiom): a
+    # monthly cron with issues:write on a fork would open re-audit
+    # issues on the fork; dispatch stays available everywhere.
+    if: github.repository == 'gadievron/raptor' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

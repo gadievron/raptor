@@ -257,9 +257,15 @@ class TestCiLintTriggerClosure:
 
         assert pinned, "no _read() pins found — enumeration broke"
         triggers = TIERS["ci_lint"]["extra_triggers"]
+        from test_scope import is_dependency_manifest
+
         uncovered = sorted(
             p for p in pinned
-            if not any(p == t or p.startswith(t + "/") for t in triggers)
+            # Dependency manifests need no trigger row: a change to
+            # them forces FULL dispatch (see is_dependency_manifest),
+            # which runs ci_lint along with every other tier.
+            if not is_dependency_manifest(p)
+            and not any(p == t or p.startswith(t + "/") for t in triggers)
         )
         assert not uncovered, (
             f"ci_lint tests pin the content of {uncovered} but those "
