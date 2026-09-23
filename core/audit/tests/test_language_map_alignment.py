@@ -29,6 +29,16 @@ _EXTRA_KEYS: dict[str, dict[str, str]] = {
     "codeql": {
         ".pyi": "Python stub files — the python extractor reads them",
         ".erb": "Rails templates — the ruby extractor reads them",
+        # Extension-routing additions: the js extractor ingests all
+        # three (TS module variants; .vue is a declared file type of
+        # the extractor). The inventory deliberately does not know
+        # them yet — checklist visibility for these suffixes is a
+        # separate adjudication (they would land as typescript/vue,
+        # not javascript, so a LANGUAGE_MAP addition also needs
+        # _VALUE_DIVERGENCES rows here).
+        ".mts": "TS module variant — the js extractor ingests it",
+        ".cts": "TS module variant — the js extractor ingests it",
+        ".vue": "Vue SFC — a declared file type of the js extractor",
     },
 }
 
