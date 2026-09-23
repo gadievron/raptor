@@ -276,7 +276,15 @@ def run_consensus(cve_id: str) -> ConsensusReport:
 
 
 def render_markdown(report: ConsensusReport) -> str:
-    """Format a `ConsensusReport` as a Markdown section."""
+    """Format a `ConsensusReport` as a Markdown section.
+
+    Escaped like its production twin (`markdown._render_consensus`):
+    slug/detail relay OSV/NVD-derived text, so the cells route through
+    md_inline — leaving this renderer raw was a divergence trap for
+    the next caller that imports it instead of the escaped twin.
+    """
+    from core.security.markdown_render import md_inline
+
     lines: list[str] = []
     lines.append("## Consensus from 2 methods")
     lines.append("")
@@ -285,16 +293,21 @@ def render_markdown(report: ConsensusReport) -> str:
     for m in report.methods:
         if m.found:
             lines.append(
-                f"| {m.name} | ✓ | {m.slug} / {m.sha[:SHA_DISPLAY_LEN]} | "
-                f"{(m.detail or '')[:80]} |"
+                f"| {md_inline(m.name)} | ✓ | "
+                f"{md_inline(m.slug)} / {md_inline(m.sha[:SHA_DISPLAY_LEN])} | "
+                f"{md_inline((m.detail or '')[:80])} |"
             )
         else:
-            lines.append(f"| {m.name} | — | — | {(m.detail or '')[:80]} |")
+            lines.append(
+                f"| {md_inline(m.name)} | — | — | "
+                f"{md_inline((m.detail or '')[:80])} |"
+            )
     lines.append("")
     if report.agreement_count >= 2:
         lines.append(
             f"**Both methods agree on "
-            f"`{report.consensus_slug}/{report.consensus_sha[:SHA_DISPLAY_LEN]}`.**"
+            f"`{md_inline(report.consensus_slug)}/"
+            f"{md_inline(report.consensus_sha[:SHA_DISPLAY_LEN])}`.**"
         )
     elif report.attempted_count == 0:
         lines.append("**No method found a fix-commit pointer for this CVE.**")

@@ -377,3 +377,18 @@ def test_render_event_neutralizes_fence_breakout(
     payload = inner[1]
     assert "```" not in payload  # ZWSP-defanged
     assert "injected heading" in payload  # content preserved inside
+
+
+def test_turn_lines_cannot_open_a_fence() -> None:
+    """repr() escapes control bytes but not backticks — a 3+ backtick
+    run inside an LLM-derived turn field could open a fence in the
+    rendered log. The line-level defuser must break the run."""
+    from cve_env.agent.refusals import _render_turn_line
+
+    line = _render_turn_line({
+        "kind": "assistant_text",
+        "turn": 3,
+        "text": "before\n```\n# Injected heading\n```",
+    })
+    assert "```" not in line
+    assert "Injected heading" in line

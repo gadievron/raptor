@@ -475,12 +475,6 @@
     "packages/cve_diff/cve_diff/oracle/cross_check.py::main::unsanitised_llm_value::summary_path": {
       "note": "operator-run dev/bench tool over self-produced corpora; terminal exposure triaged low \u2014 sanitise + register on next functional touch"
     },
-    "packages/cve_diff/cve_diff/report/consensus.py::render_markdown::unsanitised_llm_value::detail": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
-    },
-    "packages/cve_diff/cve_diff/report/consensus.py::render_markdown::unsanitised_llm_value::slug": {
-      "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
-    },
     "packages/cve_diff/cve_diff/report/markdown.py::_render_consensus::unsanitised_llm_value::slug": {
       "note": "widened-vocabulary hit in an unregistered writer; triaged residual \u2014 sanitise + register on next functional touch"
     },
