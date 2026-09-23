@@ -172,12 +172,12 @@
   "core/analysis/test_discovery.py::_PHP_CALL_NOISE": {
     "count": 10,
     "kind": "literal",
-    "note": "PHP construct/stdlib noise stoplist for test-target inference, .php-suffix-scoped so the same names stay valid call-reference targets in other languages — ecosystem names like the C libc entries inline in _infer_target_functions, not project APIs"
+    "note": "PHP construct/stdlib noise stoplist for test-target inference, .php-suffix-scoped so the same names stay valid call-reference targets in other languages \u2014 ecosystem names like the C libc entries inline in _infer_target_functions, not project APIs"
   },
   "core/analysis/test_discovery.py::_infer_target_functions": {
     "count": 55,
     "kind": "literal",
-    "note": "call-reference stoplist: language keywords, Python builtin/pytest scaffolding, and C libc noise the name( heuristic would misread as targets — ecosystem vocabulary, not project APIs (PHP entries live in the suffix-scoped _PHP_CALL_NOISE)"
+    "note": "call-reference stoplist: language keywords, Python builtin/pytest scaffolding, and C libc noise the name( heuristic would misread as targets \u2014 ecosystem vocabulary, not project APIs (PHP entries live in the suffix-scoped _PHP_CALL_NOISE)"
   },
   "core/analysis/typestate.py::_BLOCKING_CALLS": {
     "count": 26,
@@ -1008,17 +1008,17 @@
   "core/build/build_detector.py::_VALIDATION_COMMANDS": {
     "count": 18,
     "kind": "literal",
-    "note": "closed build-system taxonomy: version-probe command per supported build system; a missing entry silently downgrades a good detection to no-build mode (rationale at the definition site) — infrastructure enumeration, not a learned name vocabulary"
+    "note": "closed build-system taxonomy: version-probe command per supported build system; a missing entry silently downgrades a good detection to no-build mode (rationale at the definition site) \u2014 infrastructure enumeration, not a learned name vocabulary"
   },
   "core/build/build_flags.py::_HARDENING_CONFIGS": {
     "count": 19,
     "kind": "literal",
-    "note": "closed kernel-hardening kconfig option set consulted when reporting a traced build's hardening posture — platform constant names, not a learned name vocabulary"
+    "note": "closed kernel-hardening kconfig option set consulted when reporting a traced build's hardening posture \u2014 platform constant names, not a learned name vocabulary"
   },
   "core/build/recipe.py::_RECIPES": {
     "count": 12,
     "kind": "literal",
-    "note": "closed build-system-to-recipe dispatch table (one synthesised debug-build recipe per supported build system) — infrastructure enumeration, not a learned name vocabulary"
+    "note": "closed build-system-to-recipe dispatch table (one synthesised debug-build recipe per supported build system) \u2014 infrastructure enumeration, not a learned name vocabulary"
   },
   "core/concepts/audit_bridge.py::_STOPWORDS": {
     "count": 24,
@@ -1364,6 +1364,11 @@
   "core/llm/scorecard/scorecard.py::cell": {
     "count": 13,
     "kind": "literal"
+  },
+  "core/llm/scripts/transport-churn-measure::_drive": {
+    "count": 15,
+    "kind": "literal",
+    "note": "measurement-record field manifest for the transport-churn harness's JSON output (persistence schema keys in the summary dict, not a learned name vocabulary; stays in lockstep with _drive's return literal)"
   },
   "core/llm/tool_use/types.py::TerminationReason": {
     "count": 14,
@@ -2113,12 +2118,12 @@
   "packages/cve_env/scripts/raptor-cve-env-bench::_RECORD_FIELDS": {
     "count": 10,
     "kind": "literal",
-    "note": "bench-record schema field manifest copied verbatim from the outcome sidecar — persistence schema keys, not a vocabulary (dev-time bench harness)"
+    "note": "bench-record schema field manifest copied verbatim from the outcome sidecar \u2014 persistence schema keys, not a vocabulary (dev-time bench harness)"
   },
   "packages/cve_env/scripts/raptor-cvefix-envs::sidecar": {
     "count": 11,
     "kind": "literal",
-    "note": "outcome-sidecar schema keys written per CVE row — persistence schema, not a vocabulary (dev-time corpus builder)"
+    "note": "outcome-sidecar schema keys written per CVE row \u2014 persistence schema, not a vocabulary (dev-time corpus builder)"
   },
   "packages/describe/package_manager.py::_INSTALL_ADVICE": {
     "count": 11,
@@ -2177,18 +2182,6 @@
     "count": 11,
     "kind": "literal"
   },
-  "packages/exploit_feasibility/smt_verbs.py::_result_to_dict": {
-    "count": 13,
-    "kind": "literal",
-    "note": "JSON result-shape keys (validate_path's documented dict shape), not a name vocabulary; the key set is pinned to smt_path.validate_path by the shape-parity tests",
-    "reviewed": "2026-09-22"
-  },
-  "packages/exploit_feasibility/smt_verbs.py::_smt_unavailable_result": {
-    "count": 13,
-    "kind": "literal",
-    "note": "same validate_path result-shape keys on the z3-unavailable lane; shape parity is test-enforced against smt_path.validate_path",
-    "reviewed": "2026-09-22"
-  },
   "packages/exploit_feasibility/mechanism_coverage.py::MITIGATION_COVERAGE": {
     "count": 21,
     "kind": "literal"
@@ -2219,6 +2212,18 @@
   "packages/exploit_feasibility/smt_path.py::validate_path": {
     "count": 13,
     "kind": "literal"
+  },
+  "packages/exploit_feasibility/smt_verbs.py::_result_to_dict": {
+    "count": 13,
+    "kind": "literal",
+    "note": "JSON result-shape keys (validate_path's documented dict shape), not a name vocabulary; the key set is pinned to smt_path.validate_path by the shape-parity tests",
+    "reviewed": "2026-09-22"
+  },
+  "packages/exploit_feasibility/smt_verbs.py::_smt_unavailable_result": {
+    "count": 13,
+    "kind": "literal",
+    "note": "same validate_path result-shape keys on the z3-unavailable lane; shape parity is test-enforced against smt_path.validate_path",
+    "reviewed": "2026-09-22"
   },
   "packages/exploit_feasibility/techniques.py::get_technique_requirements": {
     "count": 19,
@@ -2559,12 +2564,12 @@
   "packages/sca/scripts/raptor-sca-compromise-check::_FIXTURE_ALLOWED_FILENAMES": {
     "count": 30,
     "kind": "literal",
-    "note": "closed ecosystem manifest/lockfile filename set that may appear in committed fixtures (content-bearing samples are pulled at runtime instead) — platform filename enumeration, not a learned name vocabulary"
+    "note": "closed ecosystem manifest/lockfile filename set that may appear in committed fixtures (content-bearing samples are pulled at runtime instead) \u2014 platform filename enumeration, not a learned name vocabulary"
   },
   "packages/sca/scripts/raptor-sca-compromise-check::_KIND_TO_PREFIXES": {
     "count": 10,
     "kind": "literal",
-    "note": "signal-kind to finding-id-prefix dispatch table (legacy + current prefix spellings) — schema mapping, not a vocabulary"
+    "note": "signal-kind to finding-id-prefix dispatch table (legacy + current prefix spellings) \u2014 schema mapping, not a vocabulary"
   },
   "packages/sca/supply_chain/__init__.py::_commit_provenance_to_finding": {
     "count": 10,
