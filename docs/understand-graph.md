@@ -28,14 +28,16 @@ The graph stores snapshots of:
 - trace steps from `flow-trace-*.json`
 - variant/finding candidates from `variants.json` or model-backed
   `/understand --hunt`
-- scan findings from `findings-deduped.json` (preferred) or
-  `findings.json`, linked to function nodes via `AFFECTS` edges
+- scan findings from `findings.json` (the artifact scan-family runs
+  write), linked to function nodes via `AFFECTS` edges
 - CodeQL SARIF results from `*.sarif` / `*.sarif.json` files in the run
   directory
-- validation outcomes from `validation-outcomes.json`, linked to the
-  findings they validate via `VALIDATES` edges
-- `/audit` journal entries from `review-journal.jsonl` (hypothesis and
-  tool-verdict nodes)
+- validation outcomes from `validation-outcomes.json` (written by the
+  `/validate` stage-1 helper from `findings.json`'s per-finding
+  verdicts), linked to the findings they validate via `VALIDATES` edges
+- `/audit` journal rows from `review-journal.jsonl` — hypothesis nodes
+  from each row's `hypotheses` list, tool-verdict nodes from its
+  `evidence_tools` receipts, with MAC provenance recorded per node
 - annotations from the `annotations/` subtree, linked to function nodes
   via `ANNOTATED` edges
 

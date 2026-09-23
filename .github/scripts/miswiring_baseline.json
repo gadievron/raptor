@@ -145,9 +145,6 @@
     "artifacts:orphan_reader::understand-graph-diff.json": {
       "note": "reader-without-writer: the diagram renderer accepts this alternate spelling of graph-diff.json, but no in-repo writer or documented recipe produces a file under this name today \u2014 wiring pending (either document the raptor-graph-query --diff redirect or drop the alias)"
     },
-    "artifacts:orphan_reader::validation-outcomes.json": {
-      "note": "runtime pipeline artifact: produced by /validate (validation_report.py save_json), consumed by graph ingest (ingest.py:412) to promote exploitability verdicts into graph nodes"
-    },
     "artifacts:write_only_artifact::-manifest.json": {
       "note": "seed-harvest corpus manifest (packages/frida/seeds.py writes <seeds>-manifest.json): operator-facing harvest accounting, deliberately written NEXT TO the corpus dir so AFL never ingests it as a seed; consumed by the operator reviewing a harvest, production code uses extract_seeds' return value"
     },
