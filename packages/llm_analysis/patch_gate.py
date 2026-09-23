@@ -562,6 +562,68 @@ def _scope_check(
     return out
 
 
+def _applied_region_drift(
+    baseline_file: Path,
+    patched_file: Path,
+    start_line: int,
+    end_line: int,
+    slack: int,
+) -> list[str]:
+    """Changed regions of the APPLIED result outside the finding span.
+
+    The parse-time scope check grades the CLAIMED ``@@`` offsets, but
+    ``git apply`` locates hunks by context with an effectively
+    unbounded offset search — a hunk declaring an in-span line whose
+    context only matches far away is silently relocated there. This
+    check grades what actually changed: a line-diff of the baseline
+    vs the applied copy, in baseline coordinates, against the same
+    slack window the claimed-offset check used.
+
+    Returns descriptions of out-of-window changes (empty = clean).
+    Reads are capped like every other target-file read; a truncated
+    read compares the capped prefixes and says so.
+    """
+    import difflib
+
+    from core.source import read_text_capped
+
+    got_base = read_text_capped(baseline_file)
+    got_patched = read_text_capped(patched_file)
+    if got_base is None or got_patched is None:
+        return ["apply-verify: could not read the applied result"]
+    base_text, base_trunc = got_base
+    patched_text, patched_trunc = got_patched
+    out: list[str] = []
+    if base_trunc or patched_trunc:
+        out.append(
+            "apply-verify: file exceeds the read cap — differential "
+            "check covers the capped prefix only"
+        )
+    lo = max(1, start_line - slack)
+    hi = end_line + slack
+    # \n-only line discipline (see _split_lines): coordinates must
+    # count lines the way the file and git apply do, or a target file
+    # salted with splitlines()' extra separators shifts an
+    # out-of-window change's coordinate into the window.
+    sm = difflib.SequenceMatcher(
+        None, _split_lines(base_text), _split_lines(patched_text),
+        autojunk=False,
+    )
+    for tag, i1, i2, _j1, _j2 in sm.get_opcodes():
+        if tag == "equal":
+            continue
+        change_lo = i1 + 1
+        change_hi = max(i2, i1 + 1)
+        if change_hi < lo or change_lo > hi:
+            out.append(
+                f"applied change at lines {change_lo}-{change_hi} "
+                f"(outside finding lines {start_line}-{end_line} "
+                f"±{slack} — hunk relocated by git apply's context "
+                "search)"
+            )
+    return out
+
+
 def _net_added_lines(diff: ParsedDiff, file_path: str) -> int:
     """Net line growth in the finding's file (for patched-copy region math)."""
     total = 0
@@ -1091,6 +1153,21 @@ def run_patch_gate(
                 result.notes.append(f"apply: {apply_err}")
             return result
         result.apply = "ok"
+
+        # Post-apply differential scope verification: the parse-time
+        # scope check graded the CLAIMED hunk offsets; git apply may
+        # have relocated a context-matched hunk far from them.
+        if has_span:
+            drift = _applied_region_drift(
+                baseline_file, patched_file, start_line, end_line, slack,
+            )
+            if drift:
+                result.out_of_scope_hunks.extend(drift)
+                result.scope = "OUT-OF-SCOPE HUNKS"
+                result.notes.append(
+                    "apply-verify: applied changes landed outside the "
+                    "claimed hunk offsets"
+                )
 
         spec, reason = _resolve_detector(rule_id, tool, checkers_dir, rule_config)
         if spec is None:

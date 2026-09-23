@@ -1470,3 +1470,112 @@ class TestSemgrepCacheMemo:
         st = pack.stat()
         _os.utime(pack, ns=(st.st_atime_ns, st.st_mtime_ns + 10**9))
         assert patch_gate._find_cached_semgrep_rule("rule-one") is None
+
+
+class TestAppliedRegionVerification:
+    """git apply locates hunks by CONTEXT with an unbounded offset
+    search — a hunk declaring an in-span @@ line whose context only
+    matches far away is silently relocated there, so the claimed-
+    offset scope check alone can grade a relocated backdoor
+    in-bounds. The post-apply differential grades what actually
+    changed."""
+
+    BIG_C = "\n".join(
+        [f"int filler_{i};" for i in range(1, 150)]
+        + ["int admin_check_a;", "int admin_check_b;", "int admin_check_c;"]
+    ) + "\n"
+
+    # Claims lines 10-12 (inside the finding window) but its context
+    # only exists at lines 150-152.
+    LYING_DIFF = (
+        "--- a/big.c\n"
+        "+++ b/big.c\n"
+        "@@ -10,3 +10,3 @@\n"
+        " int admin_check_a;\n"
+        "-int admin_check_b;\n"
+        "+int admin_check_backdoored;\n"
+        " int admin_check_c;\n"
+    )
+
+    def test_drift_detected_in_baseline_coordinates(self, tmp_path):
+        baseline = tmp_path / "base.c"
+        patched = tmp_path / "patched.c"
+        baseline.write_text(self.BIG_C, encoding="utf-8")
+        patched.write_text(
+            self.BIG_C.replace("admin_check_b", "admin_check_backdoored"),
+            encoding="utf-8",
+        )
+        drift = patch_gate._applied_region_drift(
+            baseline, patched, start_line=10, end_line=12, slack=5,
+        )
+        assert drift
+        assert any("151" in d for d in drift)
+
+    def test_in_span_change_is_clean(self, tmp_path):
+        baseline = tmp_path / "base.c"
+        patched = tmp_path / "patched.c"
+        baseline.write_text(self.BIG_C, encoding="utf-8")
+        patched.write_text(
+            self.BIG_C.replace("int filler_10;", "int filler_10_fixed;"),
+            encoding="utf-8",
+        )
+        assert patch_gate._applied_region_drift(
+            baseline, patched, start_line=10, end_line=12, slack=5,
+        ) == []
+
+    @needs_sandbox
+    def test_context_relocated_hunk_flagged_by_gate(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "big.c").write_text(self.BIG_C, encoding="utf-8")
+        result = run_patch_gate(
+            "Fix:\n\n" + self.LYING_DIFF,
+            repo_path=repo, file_path="big.c",
+            start_line=10, end_line=12,
+        )
+        # The claimed offsets are in-span, the patch applies cleanly —
+        # only the post-apply differential sees the relocation.
+        assert result.apply == "ok"
+        assert result.scope == "OUT-OF-SCOPE HUNKS"
+        assert any("relocated" in h for h in result.out_of_scope_hunks)
+
+    @needs_sandbox
+    def test_honest_in_span_patch_stays_in_bounds(self, tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "vuln.c").write_text(VULN_C, encoding="utf-8")
+        result = run_patch_gate(
+            _fenced_response(_make_diff(VULN_C, FIXED_C)),
+            repo_path=repo, file_path="vuln.c",
+            start_line=FINDING_LINE, end_line=FINDING_LINE,
+        )
+        assert result.apply == "ok"
+        assert result.scope == "in-bounds"
+
+
+class TestAppliedRegionLineDiscipline:
+    """The post-apply differential must count lines the way the file
+    (and git apply) does — \\n only. splitlines()' extra split points
+    inflate parser-line coordinates, so a target file salted with
+    \\x0c characters could relocate an out-of-window change INTO the
+    window's coordinate range and evade the drift flag."""
+
+    def test_splitter_salted_file_cannot_mislocate_drift(self, tmp_path):
+        # Real change at line 3; finding window is lines 100-140.
+        # 120 \x0c characters in line 1 push the change's
+        # splitlines() coordinate into the window.
+        salt = "// salt" + ("\x0c" * 120)
+        lines = [salt, "int keep;", "int target_line;"] + [
+            f"int filler_{i};" for i in range(4, 200)
+        ]
+        base = "\n".join(lines) + "\n"
+        patched = base.replace("int target_line;", "int backdoored;")
+        baseline_f = tmp_path / "base.c"
+        patched_f = tmp_path / "patched.c"
+        baseline_f.write_text(base, encoding="utf-8")
+        patched_f.write_text(patched, encoding="utf-8")
+        drift = patch_gate._applied_region_drift(
+            baseline_f, patched_f, start_line=120, end_line=120, slack=20,
+        )
+        assert drift, "out-of-window change hidden by splitter salting"
+        assert any("lines 3-3" in d for d in drift)
