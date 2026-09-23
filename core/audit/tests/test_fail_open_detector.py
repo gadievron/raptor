@@ -636,3 +636,36 @@ class TestDeadConstantRemoved:
     def test_truncation_signal_re_intact(self):
         body = "for x in items:\n    if len(out) >= cap:\n        break\nreturn out, True\n"
         assert mod._TRUNCATION_SIGNAL_RE.search(body)
+
+
+class TestExceptHeaderWhitespaceRun:
+    def test_except_line_whitespace_run_is_fast(self):
+        """Hostile source line opening ``except a`` and ending in a
+        long whitespace run with no ``:``: the previous spelling
+        chained three unbounded whitespace-capable spans around
+        optional atoms and tried every split of the run between them
+        — cubic in the line length. The branch-per-shape spelling is
+        linear. Both-direction bound: fast AND real headers still
+        match."""
+        from core.audit.fail_open_detector import _EXCEPT_HEADER_RE
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "except a" + " " * (1 << 16) + "("
+        with cpu_budget(1.0, what="except-header whitespace-run scan"):
+            assert _EXCEPT_HEADER_RE.match(hostile) is None
+
+    def test_except_header_forms_still_match(self):
+        from core.audit.fail_open_detector import _EXCEPT_HEADER_RE
+
+        for header in (
+            "except:",
+            "except :  ",
+            "    except ValueError:",
+            "except OSError, ValueError:",
+            "  except ValueError as e:",
+            "except socket.error as err :",
+            "exceptas e:",  # matched by the previous spelling too
+        ):
+            assert _EXCEPT_HEADER_RE.match(header), header
+        for non_header in ("except ValueError", "exception:", "raise x:"):
+            assert _EXCEPT_HEADER_RE.match(non_header) is None, non_header

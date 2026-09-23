@@ -141,9 +141,18 @@ _TRUNCATION_SIGNAL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Except clause header
+# Except clause header. One branch per header shape: with an
+# exception list (``\s+\w[\w.,\s]*`` — the class already admits the
+# ``as name`` tail and interior whitespace), a directly-adjoined
+# ``as`` clause (``exceptas e:`` — matched by the previous spelling,
+# kept for equivalence), or bare (``\s*``). The naive
+# ``(?:\s+\w[\w.,\s]*)?\s*(?:as\s+\w+)?\s*:`` chained THREE
+# unbounded whitespace-capable spans around optional atoms with the
+# same match set: an ``except a``-opening line ending in a long
+# whitespace run with no ``:`` made the engine try every split of
+# the run between the spans — cubic in the line length.
 _EXCEPT_HEADER_RE = re.compile(
-    r"^\s*except(?:\s+\w[\w.,\s]*)?\s*(?:as\s+\w+)?\s*:\s*$"
+    r"^\s*except(?:\s+\w[\w.,\s]*|as\s+\w+\s*|\s*):\s*$"
 )
 
 # Any return with a literal value
