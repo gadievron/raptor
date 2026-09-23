@@ -532,8 +532,11 @@ class CodeQLAdapter(ToolAdapter):
                 # Bounded header scan for @id — the metadata comment
                 # normally sits in the first few hundred bytes; 64 KiB
                 # tolerates long licence/doc headers while still
-                # capping the read on a pathological file.
-                ql_header = Path(qp).read_text(encoding="utf-8", errors="replace")[:65536]
+                # capping the read on a pathological file. f.read(n)
+                # actually bounds the READ — a post-hoc slice would
+                # materialise the whole file first.
+                with Path(qp).open(encoding="utf-8", errors="replace") as fh:
+                    ql_header = fh.read(65536)
                 for line in ql_header.split("\n"):
                     stripped = line.strip().lstrip("*").strip()
                     if stripped.startswith("@id "):
