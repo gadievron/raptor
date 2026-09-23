@@ -32,7 +32,11 @@ class _SyntheticDriver:
     name: str = "synthetic"
     description: str = (
         "In-tree fixture (8 functions, hand-labeled verdicts) — fast "
-        "classifier sanity check, no external deps.")
+        "classifier sanity check, no external deps. The two fold rows "
+        "(folded_a/folded_b) take their expected verdict from the "
+        "classifier itself (linker identical-code-folding varies by "
+        "toolchain), so they pin cross-run consistency only and can "
+        "never fail a fold-detection mutation.")
     mode: Literal["synthetic"] = "synthetic"
 
     def prepare(self, work_dir: Path) -> dict[str, Any]:

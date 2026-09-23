@@ -76,15 +76,6 @@ _FIXTURE_PATH_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"(^|/)[^/]+Test\.java$", "Java *Test.java"),
 )
 
-_FIXTURE_PATH_RE = re.compile(
-    "|".join(p for p, _ in _FIXTURE_PATH_PATTERNS),
-)
-
-_PATTERN_LABELS: dict[str, str] = {
-    p: label for p, label in _FIXTURE_PATH_PATTERNS
-}
-
-
 @dataclass(frozen=True)
 class HarnessEvidence:
     """One piece of evidence supporting a fixture-detection verdict.

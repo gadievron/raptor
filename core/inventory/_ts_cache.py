@@ -26,9 +26,10 @@ ThreadPoolExecutor, so a shared module-level dict would hand the same
 Parser to multiple workers simultaneously. ``threading.local`` gives
 every thread its own dict of parsers; the grammar is immutable, so
 each thread still gets exactly one Parser per key for its lifetime.
-The two consumers share the dict with disjoint key spaces: extractors
-keys by language-name string, call_graph by grammar-function identity
-(int), so the spaces cannot collide.
+The three consumers share the dict with disjoint key spaces:
+extractors keys by language-name string, call_graph by
+grammar-function identity (int), lexical_view by a
+``("lexical_view", language)`` tuple — so the spaces cannot collide.
 """
 
 from __future__ import annotations
