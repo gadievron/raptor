@@ -526,10 +526,30 @@ class GhidraBridge:
         doc = db.to_dict()
         try:
             bp = Path(db.binary_path or "")
-            if bp.is_file():
+            # binary_path is a free string inside the (attacker-
+            # controlled) project — the same field import_and_enrich
+            # already refuses outside the .gpr's directory. Hashing it
+            # unconstrained turned this writer into a same-user
+            # file-existence + sha256 oracle: whatever local path the
+            # project author named got its digest stamped into the
+            # long-lived re-database.json deliverable. Same
+            # containment rule, and on refusal the hash is simply
+            # omitted (consumers already tolerate its absence).
+            if bp.parts and not bp.is_absolute():
+                bp = self.gpr_path.parent / bp
+            contained = bool(bp.parts) and bp.resolve().is_relative_to(
+                self.gpr_path.parent.resolve(),
+            )
+            if contained and bp.is_file():
                 from core.hash import sha256_file
                 doc.setdefault("metadata", {})["binary_sha256"] = (
                     sha256_file(bp)
+                )
+            elif bp.parts and bp.is_file():
+                logger.info(
+                    "re-database: not stamping binary_sha256 — the "
+                    "project-metadata binary path resolves outside "
+                    "the project directory",
                 )
         except OSError:
             logger.debug("could not hash %s", db.binary_path, exc_info=True)
