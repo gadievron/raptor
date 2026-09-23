@@ -176,7 +176,7 @@ for _p in p:
 // ---------------------------------------------------------------
 // Group 2: format string is the SECOND argument
 //   fprintf, vfprintf, sprintf, vsprintf, syslog, vsyslog,
-//   dprintf, err, errx
+//   dprintf, err, errx, asprintf, vasprintf
 // ---------------------------------------------------------------
 
 @safe_g2@
@@ -203,6 +203,10 @@ position p;
   err@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
   errx@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
+|
+  asprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
+|
+  vasprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 )
 
 @safe_local_g2@
@@ -233,6 +237,10 @@ position p;
   err@p(ARG1, fmt, ...)
 |
   errx@p(ARG1, fmt, ...)
+|
+  asprintf@p(ARG1, fmt, ...)
+|
+  vasprintf@p(ARG1, fmt, ...)
 )
 
 @safe_global_g2@
@@ -261,6 +269,10 @@ position p;
   err@p(ARG1, fmt, ...)
 |
   errx@p(ARG1, fmt, ...)
+|
+  asprintf@p(ARG1, fmt, ...)
+|
+  vasprintf@p(ARG1, fmt, ...)
 )
 
 @bug_g2@
@@ -286,6 +298,10 @@ position p != {safe_g2.p, safe_local_g2.p, safe_global_g2.p};
 * err@p(ARG1, E, ...)
 |
 * errx@p(ARG1, E, ...)
+|
+* asprintf@p(ARG1, E, ...)
+|
+* vasprintf@p(ARG1, E, ...)
 )
 
 @script:python@
