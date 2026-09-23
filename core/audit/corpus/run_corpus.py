@@ -51,6 +51,7 @@ from core.llm.coerce import structured_result
 from core.run.scratch import keepalive_register, keepalive_unregister
 
 from .sources import FIXTURES_DIR
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -1705,7 +1706,7 @@ def _extract_source(
     src_file = source_dir / label.source.file
     if not src_file.is_file():
         return None
-    lines = src_file.read_text(encoding="utf-8", errors="replace").splitlines()  # raw-open: operator-curated corpus tree (eval lane)
+    lines = split_lines(src_file.read_text(encoding="utf-8", errors="replace"))  # raw-open: operator-curated corpus tree (eval lane)
     start = max(0, label.source.line_start - 1)
     end = label.source.line_end
     return "\n".join(lines[start:end])

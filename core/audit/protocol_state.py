@@ -486,7 +486,7 @@ def _local_call_sources(source: str, span: tuple[int, int] | None,
                         ) -> dict[str, str]:
     """One-hop local provenance: ``v = decode_ack_largest(frame)``
     → ``{"v": "decode_ack_largest"}`` within the function span."""
-    lines = source.splitlines()
+    lines = split_lines(source)
     seg = lines[span[0] - 1:span[1]] if span else lines
     out: dict[str, str] = {}
     assign_re = re.compile(

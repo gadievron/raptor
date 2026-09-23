@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 from ._util import find_enclosing_function as _find_enclosing_function
 from pathlib import Path
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +223,7 @@ def _extract_if_elif_tables_from_source(
 ) -> list[DispatchTable]:
     """Find if/elif chains comparing a variable to string literals."""
     tables: list[DispatchTable] = []
-    lines = source.splitlines()
+    lines = split_lines(source)
     i = 0
     while i < len(lines):
         m = _IF_ELIF_STR_RE.match(lines[i])

@@ -165,7 +165,9 @@ def _rewrite_file(
 ) -> tuple[str, list[HashPinChange], list[tuple[Path, int, str, str]]]:
     changes: list[HashPinChange] = []
     skipped: list[tuple[Path, int, str, str]] = []
-    lines = text.splitlines(keepends=True)
+    # Keepends rewriter: out_lines must reproduce the file's exact
+    # bytes; idx + 1 feeds a skip diagnostic only.
+    lines = text.splitlines(keepends=True)  # line-model: keepends rewriter, exact-byte reconstruction; idx+1 is diagnostic-only
     out_lines: list[str] = []
     for idx, raw in enumerate(lines):
         m = _USES_RE.search(raw)

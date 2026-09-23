@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .gaps import read_gap_source
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -2062,7 +2063,7 @@ def check_auth_mode_registration(
         return []
     terms = _auth_terms_from_domain_model(domain_model)
 
-    lines = source.splitlines()
+    lines = split_lines(source)
     gated_spans: list[tuple[int, int]] = []  # [start, end) line idx
     cond_snippets: list[str] = []
 
@@ -2307,7 +2308,7 @@ def check_url_boundary_composition(
 
     findings: list[NegativeSpaceFinding] = []
     seen: set[str] = set()
-    lines = source.splitlines()
+    lines = split_lines(source)
     lower_src = source.lower()
 
     def _header_derived(var: str) -> bool:

@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from core.analysis import threat_model_java as _tm
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -374,7 +375,7 @@ def _scan_file_for_kinds(
     resolver = None
     resolver_built = False
     out: list[tuple] = []
-    for i, line in enumerate(text.splitlines()):
+    for i, line in enumerate(split_lines(text)):
         lineno = i + 1
         kinds = set()
         for kind, spec in active.items():

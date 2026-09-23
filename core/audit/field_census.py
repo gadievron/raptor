@@ -889,7 +889,7 @@ def _scan_file_ts(
 ) -> list[FunctionSpan]:
     src = source.encode("utf-8", errors="replace")
     spans = _function_spans_ts(tree, source)
-    lines = source.splitlines()
+    lines = split_lines(source)
     lock_cache: dict[str, str] = {}
 
     def _lock_for(span: FunctionSpan | None) -> str:

@@ -409,7 +409,8 @@ class TestReadFunctionSource:
 
         (tmp_path / "a.c").write_text("l1\nl2\nl3\nl4\nl5\n")
         gap = {"file": "a.c", "line_start": 2, "line_end": 4}
-        assert _read_function_source(gap, tmp_path) == "l2\nl3\nl4\n"
+        # \n-model join: the slice carries no trailing newline
+        assert _read_function_source(gap, tmp_path) == "l2\nl3\nl4"
 
     def test_traversal_path_reads_empty(self, tmp_path):
         from core.audit.triage import _read_function_source

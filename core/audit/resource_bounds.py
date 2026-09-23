@@ -50,6 +50,7 @@ from pathlib import Path
 
 from core.json import save_json
 from typing import Any
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -446,9 +447,11 @@ def _segment_view_lines(
     hostile-repo steerable in both directions (a block-comment clamp
     mints a refutation, a block-comment insert mints a site)."""
     from .source_view import sanitized_view
-    view = sanitized_view(
+    # \n-model split: the view rows must stay 1:1 with segment_lines
+    # (an exotic terminator surviving sanitisation must not add rows).
+    view = split_lines(sanitized_view(
         "\n".join(segment_lines), file_path,
-    ).splitlines()
+    ))
     while len(view) < len(segment_lines):
         view.append("")
     return view
@@ -721,7 +724,7 @@ def _c_function_spans(source: str) -> list[tuple[str, int, int]]:
     enclosing function; misses degrade to a smaller searched set,
     which the receipt reports honestly."""
     spans: list[tuple[str, int, int]] = []
-    lines = source.splitlines()
+    lines = split_lines(source)
     header_re = re.compile(r"^[A-Za-z_][\w\s\*]*?\b(\w+)\s*\([^;{}]*\)\s*\{?\s*$")
     i = 0
     while i < len(lines):
@@ -877,7 +880,7 @@ def _caller_bound_search(
         # whose dominating guards then refute.
         if fp not in views_cache:
             views_cache[fp] = _segment_view_lines(
-                source_texts.get(fp, "").splitlines(), fp,
+                split_lines(source_texts.get(fp, "")), fp,
             )
         return views_cache[fp]
 
@@ -1259,7 +1262,7 @@ def run_resource_bounds_check(
         span = c_function_span(source, function_name, language=language)
     except ImportError:
         span = None
-    lines = source.splitlines()
+    lines = split_lines(source)
     if span:
         segment_lines = lines[span[0] - 1:span[1]]
         span_start = span[0]
@@ -1396,7 +1399,7 @@ def run_resource_bounds_prepass(
             continue
         if not _has_insert(source):
             continue
-        lines = lines_cache.setdefault(fp, source.splitlines())
+        lines = lines_cache.setdefault(fp, split_lines(source))
         for name, start, end in _c_function_spans(source):
             segment = "\n".join(lines[start - 1:end])
             if _has_insert(segment):
@@ -1412,7 +1415,7 @@ def run_resource_bounds_prepass(
             telemetry["budget_exceeded"] = True
             break
         source = source_texts[fp]
-        lines = lines_cache.setdefault(fp, source.splitlines())
+        lines = lines_cache.setdefault(fp, split_lines(source))
         segment_lines = lines[start - 1:end]
         sites = _enumerate_sites(
             segment_lines, start, insert_vocab, alloc_vocab,

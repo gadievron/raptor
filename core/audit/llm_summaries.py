@@ -18,6 +18,7 @@ from core.analysis.summaries import FunctionSummary, Precondition, TaintRule
 from core.evidence import EvidenceTier
 from core.orchestration.llm_json import strip_json_fences
 from core.security.prompt_framing import with_audit_framing
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -410,7 +411,7 @@ def _read_source(
                 file_path, line_start, line_end,
             )
             return None
-        lines = text.splitlines()
+        lines = split_lines(text)
         start = max(0, line_start - 1)
         # A missing/zero line_end clamps to the start line rather than
         # falling through to the whole file (up to 500KB into the

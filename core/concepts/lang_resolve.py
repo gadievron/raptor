@@ -42,6 +42,7 @@ from core.inventory.extractors import (
 from core.inventory.languages import LANGUAGE_MAP
 
 from .model import StudyItem
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -795,7 +796,7 @@ def resolve_identifiers(
         wanted_tails = [t for t in tails_ordered if t in content]
         if not wanted_tails:
             continue
-        lines = content.splitlines()
+        lines = split_lines(content)
         py_docs = _python_docstrings(content) if lang == "python" else {}
 
         try:
@@ -896,7 +897,7 @@ def resolve_identifiers(
                 if not m:
                     continue
                 lang_seen.setdefault(orig, lang)
-                lines = content.splitlines()
+                lines = split_lines(content)
                 line_no = content.count("\n", 0, m.start()) + 1
                 # ^[ \t]* anchors keep the match on one line, but a
                 # match can still start at the newline of line N-1
@@ -940,7 +941,7 @@ def resolve_identifiers(
                 ci for ci in file_items.get(_path, [])
                 if ci.kind == KIND_FUNCTION
             ]
-            lines = content.splitlines()
+            lines = split_lines(content)
             for ci in fn_items:
                 start = max(1, ci.line_start or 1)
                 end = ci.line_end or start

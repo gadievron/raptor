@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from core.json import save_json
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -326,7 +327,7 @@ def _function_segment(
         span = c_function_span(source, function_name, language=language)
     except ImportError:
         span = None
-    lines = source.splitlines()
+    lines = split_lines(source)
     if span:
         return lines[span[0] - 1:span[1]], span[0]
     return lines, 1
@@ -873,7 +874,7 @@ def run_release_order_prepass(
             continue
         if not (fin_re.search(source) and rel_re.search(source)):
             continue
-        lines = source.splitlines()  # once per file, not per span
+        lines = split_lines(source)  # once per file, not per span
         for name, start, end in _c_function_spans(source):
             segment = "\n".join(lines[start - 1:end])
             if fin_re.search(segment) and rel_re.search(segment):

@@ -55,6 +55,7 @@ from core.inventory.extractors import extract_functions
 from core.source.contained import read_text_capped
 from core.inventory.languages import detect_language
 from typing import TYPE_CHECKING
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -410,6 +411,6 @@ def _has_inline_asm(
         return False
     # Slice the function body by lines (1-indexed). String slicing
     # is cheap relative to parsing the whole file again.
-    lines = content.splitlines()
+    lines = split_lines(content)
     body = "\n".join(lines[line_start - 1: line_end])
     return bool(_ASM_PATTERN.search(body))

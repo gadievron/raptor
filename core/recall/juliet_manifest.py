@@ -98,7 +98,7 @@ def split_bad_good_spans(
     would make span labels lie).
     """
     decls: list[tuple[int, str]] = []
-    lines = text.splitlines()
+    lines = split_lines(text)
     for i, line in enumerate(lines, 1):
         m = _DECL_RE.match(line)
         if m:

@@ -197,6 +197,7 @@ def read_contained(
     *,
     max_chars: int = DEFAULT_MAX_SOURCE_CHARS,
     errors: str = "replace",
+    newline: str | None = None,
 ) -> str | None:
     """Containment-checked, capped text read of *candidate* under *root*.
 
@@ -213,9 +214,14 @@ def read_contained(
     concurrent swap of an intermediate directory between the check
     and the open refuses instead of steering the read out of root —
     the residual this module previously documented as open.
+
+    *newline* is passed through to the anchored :func:`open` (same
+    contract as :func:`read_text_capped`): scanner-paired callers
+    pass ``newline=""`` so a plantable bare ``\r`` stays in-line.
     """
     anchored = _open_contained(
         root, candidate, "r", encoding="utf-8", errors=errors,
+        newline=newline,
     )
     if anchored is None:
         return None

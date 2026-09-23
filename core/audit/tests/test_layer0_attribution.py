@@ -119,3 +119,40 @@ class TestPathContainment:
         toctou_decl = [f for f in _findings("tty_flag", 1, 1)
                        if f.vuln_type == "toctou"]
         assert toctou_decl == []
+
+
+class TestSpanLineModel:
+    r"""The span slice speaks the checklist's \n line model.
+
+    Spans come from the pinned checklist (inventory, \n-counted); a
+    splitlines() view shifted the whole "function source" after any
+    in-comment form feed, so the Layer-0 pre-sweep pattern checks ran
+    against neighbouring padding functions instead of the real body.
+    """
+
+    def test_form_feed_above_span_does_not_shift_it(self, tmp_path):
+        (tmp_path / "v.c").write_bytes(
+            b"/* p\x0c\x0cad */\n"       # 1
+            b"void pad1() {}\n"          # 2
+            b"void pad2() {}\n"          # 3
+            b"void vuln(char *p) {\n"    # 4
+            b"    strcpy(b, p);\n"       # 5
+            b"}\n"                       # 6
+        )
+        src = read_function_source(tmp_path, "v.c", "vuln", 4, 6)
+        assert src == "void vuln(char *p) {\n    strcpy(b, p);\n}"
+
+    def test_bare_carriage_return_above_span_does_not_shift_it(
+        self, tmp_path,
+    ):
+        # The OTHER plantable byte: the read must not let universal
+        # newline translation turn a bare \r into a break either.
+        (tmp_path / "v.c").write_bytes(
+            b'const char *B = "a\rb";\n'   # 1
+            b"void pad1() {}\n"            # 2
+            b"void vuln(char *p) {\n"      # 3
+            b"    strcpy(b, p);\n"         # 4
+            b"}\n"                         # 5
+        )
+        src = read_function_source(tmp_path, "v.c", "vuln", 3, 5)
+        assert src == "void vuln(char *p) {\n    strcpy(b, p);\n}"

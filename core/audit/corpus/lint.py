@@ -61,6 +61,7 @@ from core.json import dumps_artifact, load_json
 
 from .label import FunctionLabel, compute_span_sha, load_label
 from .sources import FIXTURES_DIR
+from core.source.lines import split_lines
 
 LABELS_DIR = Path(__file__).parent / "labels"
 
@@ -492,7 +493,7 @@ def _tree_search(tree: Path, name: str, limit: int = 3) -> list[str]:
                 text = fpath.read_text(encoding="utf-8", errors="replace")  # raw-open: operator-curated corpus tree (eval lane)
             except OSError:
                 continue
-            for i, line in enumerate(text.splitlines()):
+            for i, line in enumerate(split_lines(text)):
                 if pattern.search(line):
                     rel = fpath.relative_to(tree)
                     hits.append(f"{rel}:{i + 1}")
@@ -662,7 +663,7 @@ def verify_pin(
             detail=f"unreadable: {exc}",
         )
     return _check_span(
-        label, text.splitlines(), rel_file, path,
+        label, split_lines(text), rel_file, path,
         tree=tree, tree_search=tree_search,
     )
 

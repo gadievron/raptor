@@ -810,8 +810,8 @@ def _scan_file_for_calls(
     from .source_view import sanitized_view
     view = sanitized_view(text, str(path))
     sites: list[dict[str, Any]] = []
-    lines = text.splitlines()
-    view_lines = view.splitlines()
+    lines = split_lines(text)
+    view_lines = split_lines(view)
     call_re = re.compile(rf"(?<![\w.>]){re.escape(function_name)}\s*\(")
     offset = 0
     line_starts: list[int] = []

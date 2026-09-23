@@ -27,6 +27,7 @@ from typing import Any
 from core.source import read_contained, read_text_capped
 
 from core.recall.score import LABEL_CLASS
+from core.source.lines import split_lines
 
 UNCLASSIFIED = "unclassified"
 
@@ -123,7 +124,7 @@ def _read_clean_source(entry: dict[str, Any],
         return text
     if not isinstance(end, int) or end < start:
         end = start
-    lines = text.splitlines()
+    lines = split_lines(text)
     lo = max(0, start - 1 - _REGION_WINDOW_LINES)
     hi = min(len(lines), end + _REGION_WINDOW_LINES)
     return "\n".join(lines[lo:hi])

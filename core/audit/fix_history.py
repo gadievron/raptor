@@ -215,7 +215,9 @@ def _read_target_text(full: Path) -> str:
     context, when the content merely lies past the cap.
     """
     from core.source import read_text_capped
-    got = read_text_capped(full, errors="replace")
+    # newline="": callers pair this text with fix-commit/git line
+    # coordinates (raw-byte \n model) — a bare \r must stay in-line.
+    got = read_text_capped(full, errors="replace", newline="")
     if got is None:
         raise OSError(f"unreadable: {full}")
     text, truncated = got
@@ -295,7 +297,7 @@ def _callee_near_added_guard(
         try:
             full = (target / file_path).resolve()
             full.relative_to(target)
-            lines = _read_target_text(full).splitlines()
+            lines = split_lines(_read_target_text(full))
         except (ValueError, OSError):
             continue
         for ln, text in added:
@@ -415,7 +417,7 @@ def _window_has_guard(
         target = Path(target_path).resolve()
         full = (target / file_path).resolve()
         full.relative_to(target)
-        lines = _read_target_text(full).splitlines()
+        lines = split_lines(_read_target_text(full))
     except (ValueError, OSError):
         return False
     lo = max(0, line - 1 - _GUARD_WINDOW)
@@ -584,7 +586,7 @@ def _fixed_region(
             try:
                 full = (target / file_path).resolve()
                 full.relative_to(target)
-                lines = _read_target_text(full).splitlines()
+                lines = split_lines(_read_target_text(full))
             except (ValueError, OSError):
                 continue
             lo = max(0, ln - 1 - _REGION_WINDOW)

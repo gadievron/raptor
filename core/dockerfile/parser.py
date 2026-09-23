@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -186,7 +187,7 @@ def parse_dockerfile(text: str) -> list[Instruction]:
     """
     out: list[Instruction] = []
     current_stage: str | None = None
-    raw_lines = text.splitlines()
+    raw_lines = split_lines(text)
     i = 0
     while i < len(raw_lines):
         # Skip blank + comment-only lines. Track i for line numbers.

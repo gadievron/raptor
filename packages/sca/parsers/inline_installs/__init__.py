@@ -136,7 +136,7 @@ def _collapse_continuations(text: str) -> list[tuple[int, str, bool]]:
     ``is_commented`` is True if every constituent line was a comment.
     """
     out: list[tuple[int, str, bool]] = []
-    raw = text.splitlines()
+    raw = split_lines(text)
     i = 0
     while i < len(raw):
         start = i + 1            # 1-indexed line number
@@ -849,7 +849,7 @@ def _extract_live_run_blocks_regex(
     pathological Dockerfile still yields its install lines rather
     than zero deps."""
     out: list[tuple[int, str, bool]] = []
-    raw = text.splitlines()
+    raw = split_lines(text)
     i = 0
     while i < len(raw):
         line = raw[i]
@@ -881,7 +881,7 @@ def _extract_commented_run_blocks(
     """Scan for ``# RUN ...`` blocks. Returns the same shape as the
     live-RUN extractor with ``commented=True``."""
     out: list[tuple[int, str, bool]] = []
-    raw = text.splitlines()
+    raw = split_lines(text)
     i = 0
     while i < len(raw):
         stripped = raw[i].lstrip()
@@ -929,7 +929,7 @@ def _extract_gha_run_blocks(text: str) -> list[tuple[int, str, bool]]:
     first content line's indent.
     """
     out: list[tuple[int, str, bool]] = []
-    raw = text.splitlines()
+    raw = split_lines(text)
     i = 0
     while i < len(raw):
         # rstrip is part of the regex contract — see the pattern

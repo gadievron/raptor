@@ -412,7 +412,7 @@ def sentinel_comparison_sites(
         logger.debug("return_domain: parse failed for %s", file_path,
                      exc_info=True)
         return []
-    lines = source.splitlines()
+    lines = split_lines(source)
     sites: list[SentinelSite] = []
     for node in _walk(tree.root_node):
         if node.type != "call_expression":

@@ -48,6 +48,7 @@ from ._util import (
 from core.source import read_text_capped
 
 from .run_memo import BoundedMemo
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from .constraints import Constraint
@@ -270,7 +271,9 @@ def _scope_to_function(
     caller_line with a heuristic end boundary.  Returns the full source
     unchanged if scoping fails entirely.
     """
-    lines = source.splitlines(keepends=True)
+    # \n-model split (core.source.lines contract): the scoping line
+    # numbers come from the checklist/inventory, which count \n.
+    lines = split_lines(source)
     start = 0
     end = len(lines)
 
@@ -288,7 +291,7 @@ def _scope_to_function(
     if start == 0 and end == len(lines):
         return source
 
-    return "".join(lines[start:end])
+    return "\n".join(lines[start:end])
 
 
 def _score_from_source(

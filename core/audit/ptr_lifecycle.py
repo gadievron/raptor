@@ -58,6 +58,7 @@ from .field_census import (
     build_field_census,
 )
 from .peer_evidence import PeerEvidence, PeerExhibit
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -729,7 +730,7 @@ def _adjudicate_alias(
     context: Any = None,
 ) -> AliasEvidence:
     """Adjudicate one (event, alias-edge) pair."""
-    lines = source_texts.get(file_path, "").splitlines()
+    lines = split_lines(source_texts.get(file_path, ""))
     segment = lines[function_span.start - 1:function_span.end]
 
     # 6c parity: rcu-safe deferred free of an rcu-read alias refutes.
@@ -930,7 +931,7 @@ def run_ptr_lifecycle_check(
             census_tier=census.tier,
         )
 
-    lines = source.splitlines()
+    lines = split_lines(source)
     segment = lines[span.start - 1:span.end]
     events = _find_events(segment, span.start, domain_vocab)
     if not events:
@@ -1070,7 +1071,7 @@ def run_ptr_lifecycle_prepass(
                     source_texts[file_path], file_path,
                 )
                 census.functions[file_path] = spans
-            lines = source_texts[file_path].splitlines()
+            lines = split_lines(source_texts[file_path])
             for span in spans:
                 if candidates >= MAX_ALIAS_CANDIDATES:
                     break
