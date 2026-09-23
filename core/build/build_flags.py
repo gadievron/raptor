@@ -45,6 +45,7 @@ from pathlib import Path
 from core.build.macro_config import (
     _MAX_COMPILE_COMMANDS_BYTES,
     _MAX_KCONFIG_BYTES,
+    _compile_commands_candidates,
     _nests_like_a_bomb,
     _read_bounded,
 )
@@ -139,9 +140,10 @@ def extract_flags(target: Path) -> BuildFlagsContext:
     if not target.is_dir():
         return BuildFlagsContext()
 
-    # 1. compile_commands.json — highest signal
-    cc_path = _find_compile_commands(target)
-    if cc_path is not None:
+    # 1. compile_commands.json — highest signal. Candidates iterate:
+    # a root candidate that fails to read (e.g. the clangd symlink
+    # layout) or parse must not veto the build/ fallback.
+    for cc_path in _compile_commands_candidates(target):
         try:
             ctx = _from_compile_commands(cc_path)
             # If parse yielded actual signal, use it; else fall through
@@ -179,18 +181,6 @@ def extract_flags(target: Path) -> BuildFlagsContext:
 # =====================================================================
 # Source-specific extractors
 # =====================================================================
-
-def _find_compile_commands(target: Path) -> Path | None:
-    """Locate ``compile_commands.json``. CMake convention puts it in
-    a build/ subdirectory; Bazel and bear at project root."""
-    for candidate in (
-        target / "compile_commands.json",
-        target / "build" / "compile_commands.json",
-    ):
-        if candidate.is_file():
-            return candidate
-    return None
-
 
 def _from_compile_commands(path: Path) -> BuildFlagsContext:
     """Parse clang-style ``compile_commands.json``.

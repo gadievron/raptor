@@ -296,12 +296,47 @@ def _nests_like_a_bomb(raw: str) -> bool:
     return False
 
 
-def _find_compile_commands(target: Path) -> Path | None:
+def _compile_commands_candidates(target: Path) -> list[Path]:
+    """Readable ``compile_commands.json`` candidates, priority order.
+
+    CMake convention puts the manifest under ``build/``; bear and
+    Bazel at the project root — and the standard clangd layout
+    SYMLINKS the root name at the build-dir copy
+    (``ln -s build/compile_commands.json .``). The hardened reader
+    refuses symlinks at the final component, so a root symlink used
+    to zero all three extractors silently: candidate iteration
+    stopped at the first ``is_file()`` hit, the O_NOFOLLOW open
+    failed with ELOOP, and the fallback candidate was never tried.
+
+    A candidate whose RESOLVED path leaves the (resolved) target tree
+    is skipped with an operator-visible INFO — the symlink acceptance
+    is an in-tree layout convenience, never a portal to host files.
+    Accepted candidates contribute their resolved path, which the
+    hardened reader then opens with O_NOFOLLOW intact. Callers
+    ITERATE: one candidate failing to read or parse must not veto the
+    next (this helper is the one home for the candidate list — it was
+    previously duplicated byte-similar in build_flags).
+    """
+    out: list[Path] = []
+    try:
+        resolved_target = target.resolve()
+    except OSError:
+        return out
     for c in (target / "compile_commands.json",
               target / "build" / "compile_commands.json"):
-        if c.is_file():
-            return c
-    return None
+        if not c.is_file():  # follows symlinks; FIFOs/dirs excluded
+            continue
+        try:
+            resolved = c.resolve()
+        except OSError:
+            continue
+        if resolved != c and not resolved.is_relative_to(resolved_target):
+            logger.info(
+                "compile_commands.json at %s resolves outside the "
+                "target (%s) — skipped", c, resolved)
+            continue
+        out.append(resolved if resolved != c else c)
+    return out
 
 
 def extract_macro_config(target: Path) -> MacroConfig:
@@ -315,8 +350,7 @@ def extract_macro_config(target: Path) -> MacroConfig:
     if not target.is_dir():
         return MacroConfig()
 
-    cc = _find_compile_commands(target)
-    if cc is not None:
+    for cc in _compile_commands_candidates(target):
         try:
             mc = _from_compile_commands(cc)
             if mc:
@@ -352,20 +386,20 @@ def extract_build_tus(target: Path) -> frozenset | None:
     target = Path(target)
     if not target.is_dir():
         return None
-    cc = _find_compile_commands(target)
-    if cc is None:
-        return None
-    try:
-        raw = _read_bounded(cc, _MAX_COMPILE_COMMANDS_BYTES)
-        if _nests_like_a_bomb(raw):
-            logger.warning("deeply nested compile_commands.json at %s — "
-                           "refused before parse", cc)
-            return None
-        entries = json.loads(raw)
-    except (OSError, json.JSONDecodeError, ValueError,
-            RecursionError) as exc:
-        logger.debug("compile_commands.json TU-set parse failed: %s", exc)
-        return None
+    entries = None
+    for cc in _compile_commands_candidates(target):
+        try:
+            raw = _read_bounded(cc, _MAX_COMPILE_COMMANDS_BYTES)
+            if _nests_like_a_bomb(raw):
+                logger.warning("deeply nested compile_commands.json at %s "
+                               "— refused before parse", cc)
+                continue
+            entries = json.loads(raw)
+            break
+        except (OSError, json.JSONDecodeError, ValueError,
+                RecursionError) as exc:
+            logger.debug("compile_commands.json TU-set parse failed: %s",
+                         exc)
     if not isinstance(entries, list):
         return None
     tus = set()
