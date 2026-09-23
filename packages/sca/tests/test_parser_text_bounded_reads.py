@@ -215,3 +215,36 @@ class TestScanRootSymlinkContainment:
         with scan_root_context(tmp_path):
             deps = gomod.parse_manifest(link)
         assert [d.name for d in deps] == ["github.com/foo/bar"]
+
+
+class TestReadRefusalPatternWhitespaceRun:
+    def test_refusal_line_whitespace_run_is_fast(self) -> None:
+        """Hostile refusal-shaped log line whose path region is a
+        long whitespace run with no '(': the previous trim spelling
+        (.+?)\\s+\\( overlapped three unbounded repeats on horizontal
+        whitespace and tried every split of the run between them —
+        cubic in the log-line length (the path region interpolates
+        target-derived file names). The \\S-delimited path spelling
+        is linear."""
+        from core.testing.wallclock import cpu_budget
+        from packages.sca.parsers import _READ_REFUSAL_RE
+
+        hostile = "sca.parsers: refusing to read x" + " " * (1 << 16) + ")"
+        with cpu_budget(1.0, what="refusal-line whitespace-run scan"):
+            assert _READ_REFUSAL_RE.search(hostile) is None
+
+    def test_refusal_forms_still_parse(self) -> None:
+        from packages.sca.parsers import _READ_REFUSAL_RE
+
+        m = _READ_REFUSAL_RE.search(
+            "sca.parsers: refusing to read /t/a b/pom.xml "
+            "(size=99999999 > max=52428800)",
+        )
+        assert m is not None
+        assert m.group("path") == "/t/a b/pom.xml"
+        assert m.group("reason") == "size=99999999 > max=52428800"
+        m = _READ_REFUSAL_RE.search(
+            "sca.parsers: refusing to read req.txt (not a regular file)",
+        )
+        assert m is not None
+        assert m.group("path") == "req.txt"

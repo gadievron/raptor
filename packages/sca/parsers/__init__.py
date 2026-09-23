@@ -84,9 +84,19 @@ _PARSE_FAILURE_RE = re.compile(
 # structured ``parse_failures`` on the run report, while a malformed
 # sibling shows up — the operator would have no structured trace of
 # the skipped file.
+# The path group is \S-delimited: the naive trim spelling
+# (.+?)\s+\( overlaps the lazy path and the following whitespace
+# span on horizontal whitespace, and a refusal line whose
+# target-derived path region carries a long whitespace run with no
+# '(' makes the engine try every split of the run between them —
+# cubic in the log-line length. Real refusal lines (the
+# read_bounded writer always interpolates a non-empty path) match
+# identically; the one dropped corner is a degenerate all-whitespace
+# path region, which previously minted a ParseFailure whose path
+# stripped to '' — noise, not signal.
 _READ_REFUSAL_RE = re.compile(
     r"sca\.parsers:\s+refusing to read\s+"
-    r"(?P<path>.+?)\s+\((?P<reason>[^)]+)\)"
+    r"(?P<path>\S(?:.*?\S)?)\s+\((?P<reason>[^)]+)\)"
 )
 
 
