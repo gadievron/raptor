@@ -524,6 +524,16 @@ proxy events, and degradation stamps (`audit_engaged`,
 `mount_ns_degraded`, `proxy_enforcement`, `degraded_net_deny`) that
 tell you exactly which isolation tier a run actually got.
 
+`degraded_net_deny` means one specific thing: the per-call Landlock
+TCP-connect deny-all engaged because no namespace backend could
+deliver the requested network block. Its ABSENCE on a proxied run
+that resolved to the tier-2 `landlock_tcp` lane is a named contract,
+not an oversight — on that lane the proxy port allowlist is the live
+network policy and no deny-all engages, so read
+`proxy_enforcement` (`"landlock_tcp"` there) for the delivered
+network posture rather than inferring anything from the missing
+deny stamp.
+
 ### Per-run denial summary
 
 For commands that go through the run lifecycle (everything driven by

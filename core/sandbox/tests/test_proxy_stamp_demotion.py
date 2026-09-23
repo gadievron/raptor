@@ -80,3 +80,41 @@ def test_demoted_proxy_run_is_not_stamped_netns(tmp_path, monkeypatch):
     # The demoted Landlock deny-all DID engage for this call; the
     # machine-readable stamp must say so.
     assert si.get("degraded_net_deny") is True, si
+
+
+def test_tier2_construction_lane_contract_no_deny_stamp(
+        tmp_path, monkeypatch):
+    """NAMED CONTRACT (construction arm): a proxied block-network run
+    demoted at CONSTRUCTION time to the tier-2 landlock_tcp lane (no
+    namespace backend on the host) carries NO degraded_net_deny stamp
+    — the proxy lane's port allowlist is the live network policy and
+    no per-call deny-all engages, so stamping it would be untruthful.
+    Forensic readers key on proxy_enforcement == "landlock_tcp"
+    instead. This is the scenario the call-time demotion test above
+    does NOT cover: there the construction tier was netns and the
+    per-call deny-all genuinely engaged."""
+    from core.sandbox import _spawn as sp
+    from core.sandbox import context as ctx
+    from core.sandbox.landlock import _get_landlock_abi
+
+    if _get_landlock_abi() < 4:
+        pytest.skip("Landlock ABI < 4 — tier 2 needs the TCP rule")
+
+    # Construction-time capability shape: no namespace backend at all,
+    # so the proxied run resolves to tier 2 (landlock_tcp) up front.
+    monkeypatch.setattr(ctx, "check_net_available", lambda: False)
+    monkeypatch.setattr(ctx, "check_mount_available", lambda: False)
+    monkeypatch.setattr(sp, "mount_ns_available", lambda: False)
+
+    res = ctx.run(
+        ["/bin/sh", "-c", "echo ran-on-lane"],
+        target=str(tmp_path), output=str(tmp_path),
+        use_egress_proxy=True, proxy_hosts=["localhost"],
+        capture_output=True, text=True, timeout=30,
+    )
+    si = res.sandbox_info
+    assert res.returncode == 0
+    assert si.get("proxy_enforcement") == "landlock_tcp", si
+    # The absence is the contract, not an oversight — see the
+    # construction-arm comment in core/sandbox/context.py.
+    assert "degraded_net_deny" not in si, si

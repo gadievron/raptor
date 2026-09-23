@@ -2102,6 +2102,27 @@ def sandbox(block_network=_UNSET, target: str | None = None, output: str | None 
             # it on this backend-less path — the deny-all lane would
             # break the allowlist. The block_network+allowed_tcp_ports
             # combination itself gets the dead-combo warning below.
+            #
+            # NAMED CONTRACT — degraded_net_deny stays UNSET here, by
+            # design, and that includes proxied tier-2 runs (a
+            # use_egress_proxy call demoted off the netns tier, e.g.
+            # userns denied, arrives on this arm with the proxy lane
+            # port as its allowlist). The stamp means "the per-call
+            # Landlock TCP-connect DENY-ALL engaged because the
+            # namespace tier was unavailable"; on this arm no deny-all
+            # engages — the port allowlist is the live policy — so
+            # stamping it would be untruthful and would make the
+            # observe-layer loopback-deny diagnostics lie. Census at
+            # the time this contract was written: no consumer reads
+            # degraded_net_deny for a trust or verdict decision (the
+            # readers are the observe-layer diagnostic message, the
+            # posture docs, and tests); forensic readers of proxied
+            # tier-2 runs key on sandbox_info["proxy_enforcement"]
+            # (== "landlock_tcp" on this lane), which names the
+            # enforcement actually delivered. If a future consumer
+            # needs a trust decision from this arm, it must read
+            # proxy_enforcement — not infer from the absence of
+            # degraded_net_deny.
             pass
         elif not strict_required:
             # Neither deny lane can engage: no namespace backend for
