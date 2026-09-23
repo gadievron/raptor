@@ -68,6 +68,11 @@ class _ClassStats:
     blocked: int = 0
     consumed: int = 0
     cost_usd: float = 0.0
+    # Spend carried by attempt_failed records (paid generations whose
+    # response the shape/truncation guards rejected). Separate from
+    # cost_usd so mean_call_cost — which sizes budget reservations
+    # from COMPLETED calls — never inflates on a failure burst.
+    failed_cost_usd: float = 0.0
     duration_s: float = 0.0
     tokens_in: int = 0
     tokens_out: int = 0
@@ -153,8 +158,14 @@ class TelemetrySink:
         # sizes the client's budget reservations — one NaN record
         # would poison every later reservation and, through
         # _acquire_budget's pre-debit, the budget ledger itself.
+        # Failed-attempt spend books into its own counter (see
+        # _ClassStats.failed_cost_usd) so the completed-call mean
+        # stays honest while the money stays visible.
         from core.llm.cost import sanitize_cost
-        st.cost_usd += sanitize_cost(rec.get("cost_usd"))
+        if event == "attempt_failed":
+            st.failed_cost_usd += sanitize_cost(rec.get("cost_usd"))
+        else:
+            st.cost_usd += sanitize_cost(rec.get("cost_usd"))
         st.duration_s += float(rec.get("duration_s") or 0.0)
         st.tokens_in += int(rec.get("tokens_in") or 0)
         st.tokens_out += int(rec.get("tokens_out") or 0)
@@ -167,8 +178,8 @@ class TelemetrySink:
         """Mean cost of completed calls in ``call_class``, or None when
         the class has no completed calls yet. Feeds the LLM client's
         per-call budget reservation estimate (cache hits count no call
-        and ~zero cost; failed attempts carry no ``cost_usd`` record —
-        neither skews the mean)."""
+        and ~zero cost; failed-attempt spend books into
+        ``failed_cost_usd`` — neither skews the mean)."""
         with self._lock:
             st = self._by_class.get(str(call_class))
             if st is None or st.calls <= 0:
@@ -185,12 +196,31 @@ class TelemetrySink:
                 for cls, s in self._by_class.items()
             }
 
-    def total_cost_usd(self) -> float:
-        """Total spend across every class (completed calls; failed
-        attempts and cache hits contribute whatever ``cost_usd`` their
-        records carried, usually zero)."""
+    def failed_class_costs(self) -> dict[str, tuple[int, float]]:
+        """Per-class failed-attempt counts and the spend those
+        attempts carried: ``{call_class: (failed_attempts,
+        failed_cost_usd)}``. The count covers every failed attempt;
+        the cost covers only attempts whose record carried paid usage
+        (a guard-rejected completed generation). End-of-run
+        reconciliation books this into the cost breakdown so a burn
+        loop is itemised instead of invisible."""
         with self._lock:
-            return sum(s.cost_usd for s in self._by_class.values())
+            return {
+                cls: (s.failed_attempts, s.failed_cost_usd)
+                for cls, s in self._by_class.items()
+                if s.failed_attempts or s.failed_cost_usd
+            }
+
+    def total_cost_usd(self) -> float:
+        """Total money across every class — completed calls plus the
+        paid spend failed-attempt records carried. This is the "money
+        actually gone" figure the end-of-run reconciliation compares
+        against the summary ledger (which also books both)."""
+        with self._lock:
+            return sum(
+                s.cost_usd + s.failed_cost_usd
+                for s in self._by_class.values()
+            )
 
     @property
     def total_records(self) -> int:
@@ -214,6 +244,9 @@ class TelemetrySink:
             blocked = sum(s.blocked for s in self._by_class.values())
             consumed = sum(s.consumed for s in self._by_class.values())
             cost = sum(s.cost_usd for s in self._by_class.values())
+            failed_cost = sum(
+                s.failed_cost_usd for s in self._by_class.values()
+            )
             tin = sum(s.tokens_in for s in self._by_class.values())
             tout = sum(s.tokens_out for s in self._by_class.values())
             cread = sum(s.cache_read_tokens for s in self._by_class.values())
@@ -247,13 +280,31 @@ class TelemetrySink:
                     # from the rollup and weigh the
                     # RAPTOR_LLM_RETRY_CONSUMED=1 trade consciously.
                     breakdown += f", {consumed} consumed"
+                if failed_cost > 0:
+                    # Paid generations whose response the guards
+                    # rejected — real money with zero yield. Surfaced
+                    # in dollars so a burn loop reads as spend, not
+                    # as free retry noise.
+                    breakdown += f", ${failed_cost:.2f} paid"
                 parts.append(
                     f"{failed} failed attempts ({breakdown})"
                 )
+            # Per-class failure RATE, not just counts: a class failing
+            # half its calls interleaved with successes never trips
+            # any consecutive-failure breaker, and absolute counts
+            # bury the signal on long runs — the ratio is what tells
+            # an operator one call class is systematically sick.
             per_class = ", ".join(
                 f"{cls}={s.calls}/${s.cost_usd:.2f}"
+                + (
+                    f" ({s.failed_attempts} failed"
+                    + (f"/${s.failed_cost_usd:.2f}"
+                       if s.failed_cost_usd > 0 else "")
+                    + f", {s.failed_attempts / (s.calls + s.failed_attempts):.0%} of attempts)"
+                    if s.failed_attempts else ""
+                )
                 for cls, s in sorted(self._by_class.items())
-                if s.calls
+                if s.calls or s.failed_attempts
             )
             if per_class:
                 parts.append(f"classes: {per_class}")

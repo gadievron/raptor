@@ -369,3 +369,125 @@ class TestPaidCallAttributionStubExemption:
     def test_non_stub_alias_attributed(self, monkeypatch):
         ctxs = self._record("gemini-2.5-pro", monkeypatch)
         assert ctxs == {"fake_test.py::test_x"}
+
+
+class TestFailedAttemptSpend:
+    """Failed-attempt records that carry paid usage (guard-rejected but
+    billed generations) book into a dedicated per-class counter: the
+    money stays visible in the rollup and the cost breakdown, the
+    completed-call mean that sizes budget reservations stays honest."""
+
+    def test_failed_cost_books_separate_counter(self, tmp_path):
+        sink = TelemetrySink(tmp_path / "t.jsonl")
+        sink.record({"event": "call", "call_class": "study",
+                     "cost_usd": 0.50})
+        sink.record({"event": "attempt_failed", "call_class": "study",
+                     "disposition": "fatal", "cost_usd": 0.95,
+                     "tokens_in": 14000, "tokens_out": 16384})
+        assert sink.failed_class_costs() == {"study": (1, 0.95)}
+        # completed-call snapshot and reservation mean are unaffected
+        assert sink.class_costs()["study"] == (1, 0.50)
+        assert sink.mean_call_cost("study") == 0.50
+        # ...but "money actually gone" counts both
+        assert sink.total_cost_usd() == pytest.approx(1.45)
+
+    def test_summary_line_surfaces_failed_spend_and_rate(self, tmp_path):
+        sink = TelemetrySink(tmp_path / "t.jsonl")
+        sink.record({"event": "call", "call_class": "study",
+                     "cost_usd": 0.50})
+        sink.record({"event": "attempt_failed", "call_class": "study",
+                     "disposition": "fatal", "cost_usd": 0.95})
+        line = sink.summary_line()
+        assert "$0.95 paid" in line
+        # rate signal: 1 failed of 2 attempts — a class failing half
+        # its calls interleaved with successes trips no consecutive
+        # counter, so the rollup must carry the ratio.
+        assert "50% of attempts" in line
+
+    def test_failed_only_class_appears_in_rollup(self, tmp_path):
+        """A class with ZERO completed calls (fully wedged) was
+        previously absent from the per-class rollup entirely — the
+        worst failure mode was the least visible one."""
+        sink = TelemetrySink(tmp_path / "t.jsonl")
+        sink.record({"event": "attempt_failed", "call_class": "study",
+                     "disposition": "fatal", "cost_usd": 0.95})
+        line = sink.summary_line()
+        assert "study=" in line
+        assert "100% of attempts" in line
+
+    def test_client_emits_paid_usage_from_stamped_error(
+        self, tmp_path, monkeypatch,
+    ):
+        """A provider guard that stamped billed usage on its exception
+        produces an attempt_failed row carrying the paid cost and
+        token counts — and stays non-retryable (attempt 1 only)."""
+        import core.llm.client as client_mod
+        from core.llm.providers import (
+            _attach_billed_usage,
+            _llm_truncation_error,
+        )
+        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        sink = TelemetrySink(tmp_path / "t.jsonl")
+        set_sink(sink)
+        err = _llm_truncation_error(
+            "Anthropic returned no text content block "
+            "(got: thinking; stop_reason=max_tokens)",
+        )
+        _attach_billed_usage(
+            err, cost_usd=0.95, tokens_in=14000, tokens_out=16384,
+        )
+        client = _client(max_retries=3)
+        with patch.object(client, "_get_provider") as mock_get:
+            prov = MagicMock()
+            prov.generate.side_effect = err
+            mock_get.return_value = prov
+            with pytest.raises(RuntimeError):
+                client.generate("p", call_class="study")
+
+        recs = _read_jsonl(tmp_path / "t.jsonl")
+        assert len(recs) == 1  # deterministic truncation: no retry
+        rec = recs[0]
+        assert rec["event"] == "attempt_failed"
+        assert rec["cost_usd"] == 0.95
+        assert rec["tokens_in"] == 14000
+        assert rec["tokens_out"] == 16384
+
+    def test_unstamped_failures_carry_no_cost_fields(
+        self, tmp_path, monkeypatch,
+    ):
+        """Transport failures that never reached generation cost
+        nothing — their rows must not grow zero-value fields."""
+        import core.llm.client as client_mod
+        monkeypatch.setattr(client_mod.time, "sleep", lambda _s: None)
+        sink = TelemetrySink(tmp_path / "t.jsonl")
+        set_sink(sink)
+        client = _client(max_retries=3)
+        with patch.object(client, "_get_provider") as mock_get:
+            prov = MagicMock()
+            prov.generate.side_effect = RuntimeError(
+                "Anthropic model refused request "
+                "(stop_reason=refusal, empty content)",
+            )
+            mock_get.return_value = prov
+            with pytest.raises(RuntimeError):
+                client.generate("p", call_class="study")
+        rec = _read_jsonl(tmp_path / "t.jsonl")[0]
+        assert "cost_usd" not in rec
+
+    def test_billed_usage_read_through_wrapper_chain(self):
+        from core.llm.client import _billed_failure_usage
+        from core.llm.providers import (
+            _attach_billed_usage,
+            _llm_truncation_error,
+        )
+        inner = _llm_truncation_error("truncated")
+        _attach_billed_usage(
+            inner, cost_usd=0.5, tokens_in=100, tokens_out=200,
+        )
+        try:
+            try:
+                raise inner
+            except RuntimeError as e:
+                raise RuntimeError("wrapped") from e
+        except RuntimeError as outer:
+            assert _billed_failure_usage(outer) == (0.5, 100, 200)
