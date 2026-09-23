@@ -435,6 +435,31 @@ def detect_constant_dangerous_calls(
     return results
 
 
+def format_constant_dangerous_calls(
+    const_calls: list[dict[str, Any]],
+) -> str:
+    """Format gate-D annotations for LLM context injection.
+
+    Call names and argument reprs derive from analysed source, so
+    each renders through ``defend_prompt_field`` (newline flatten +
+    tag/heading neutralise).
+    """
+    if not const_calls:
+        return ""
+    from core.audit.prompt_defence import defend_prompt_field as _dpf
+
+    lines = ["CONSTANT-ARGUMENT CALLS (mechanical):"]
+    for cc in const_calls[:10]:
+        args = ", ".join(_dpf(str(a), 80) for a in cc.get("args", [])[:5])
+        lines.append(
+            f"- `{_dpf(str(cc.get('call', '?')), 120)}` at line "
+            f"{cc.get('line', 0)} uses only literal/module-constant "
+            f"arguments ({args}) — not attacker-controllable unless a "
+            f"binding this analysis missed exists."
+        )
+    return "\n".join(lines)
+
+
 def _collect_module_constants(tree: ast.Module) -> dict[str, Any]:
     """Collect module-level constant assignments (NAME = literal).
 
@@ -724,18 +749,22 @@ def format_universal_preconditions(
     """
     if not preconditions:
         return ""
+    from core.audit.prompt_defence import defend_prompt_field as _dpf
+
     lines = ["UNIVERSAL CALLER CONSTRAINT (mechanical):"]
     for p in preconditions:
+        param = _dpf(p["param"], 120)
+        conds = _dpf(p["conditions"], 400)
         if p.get("arg_verified") == "true":
             lines.append(
-                f"- ALL {p['n_callers']} callers validate param `{p['param']}` "
-                f"with: {p['conditions']}. This parameter CANNOT reach this "
+                f"- ALL {p['n_callers']} callers validate param `{param}` "
+                f"with: {conds}. This parameter CANNOT reach this "
                 f"function unvalidated.",
             )
         else:
             lines.append(
                 f"- {p['n_callers']} callers each guard a variable named "
-                f"`{p['param']}` ({p['conditions']}), but the guarded name "
+                f"`{param}` ({conds}), but the guarded name "
                 f"was not confirmed to be passed at the call sites — "
                 f"treat as an observation, not a structural guarantee.",
             )
@@ -783,11 +812,17 @@ def extract_type_constraints(
 
 
 def format_type_constraints(constraints: list[dict[str, str]]) -> str:
+    """Param and type names derive from analysed source — rendered
+    through ``defend_prompt_field`` like every repo-derived field."""
     if not constraints:
         return ""
+    from core.audit.prompt_defence import defend_prompt_field as _dpf
+
     lines = ["TYPE CONSTRAINTS (mechanical):"]
-    lines.extend(f"- param `{tc['param']}` is `{tc['type']}` — "
-            f"{tc['constraint_note']}" for tc in constraints)
+    lines.extend(
+        f"- param `{_dpf(tc['param'], 120)}` is `{_dpf(tc['type'], 120)}` — "
+        f"{tc['constraint_note']}" for tc in constraints
+    )
     return "\n".join(lines)
 
 

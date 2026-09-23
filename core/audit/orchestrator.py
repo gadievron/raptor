@@ -44,7 +44,6 @@ from core.evidence import (
     EvidenceRecord,
     build_evidence_index,
     format_evidence_prose,
-    format_evidence_structured,
 )
 from core.json import load_json, save_json
 from core.smt_solver.availability import Z3_ERRORS
@@ -2589,9 +2588,27 @@ def review_one_function(
 
     if ctx.get("callers"):
         with contextlib.suppress(*_ENRICH_ERRORS):
-            from .mechanical_gates import sort_callers_by_constraint
+            from .mechanical_gates import (
+                dedup_callers,
+                detect_universal_preconditions,
+                sort_callers_by_constraint,
+            )
 
-            ctx["callers"] = sort_callers_by_constraint(ctx["callers"])
+            # Gate E chain: dedup by call-site pattern, then sort by
+            # constraint. sort_callers_by_constraint is a no-op
+            # without the taint summaries (it reads
+            # preconditions/error_paths off them), so the summaries
+            # must be passed — the bare call was pure passthrough.
+            ctx["callers"] = sort_callers_by_constraint(
+                dedup_callers(ctx["callers"]),
+                taint_summary_results or None,
+            )
+            if taint_summary_results:
+                up = detect_universal_preconditions(
+                    ctx["callers"], taint_summary_results,
+                )
+                if up:
+                    ctx["universal_preconditions"] = up
 
     if _gate_raw_src:
         with contextlib.suppress(*_ENRICH_ERRORS):
@@ -11652,8 +11669,10 @@ def _build_context(
         key = f"{gap['file']}:{gap['name']}"
         rec = evidence_index.get(key)
         if not blind and rec and rec.has_any_evidence():
+            # The prose rendering is the prompt form; the structured
+            # twin (format_evidence_structured) had no renderer and
+            # no other consumer — computing it was paid dead work.
             ctx["mechanical_evidence"] = format_evidence_prose(rec)
-            ctx["mechanical_evidence_structured"] = format_evidence_structured(rec)
 
             from .evidence_grade import grade_evidence_record
 
@@ -12580,7 +12599,6 @@ def _timeout_reduced_retry(
     )
     for key in _TRUNCATION_STRIP_KEYS:
         ctx.pop(key, None)
-    ctx["error_retry"] = True
     ctx["timeout_s"] = _TIMEOUT_RETRY_TIMEOUT_S
     try:
         outcome = review_fn(ctx, config)
@@ -12675,7 +12693,6 @@ def _retry_error_outcomes(
             # (per-call caps are honoured by the claudecode
             # transport; SDK providers keep their own class ceiling).
             ctx["timeout_s"] = _TIMEOUT_RETRY_TIMEOUT_S
-        ctx["error_retry"] = True
 
         try:
             new_outcome = review_fn(ctx, config)
@@ -27957,7 +27974,9 @@ def _review_flow_traces(
             "file": sf or skf,
             "function": f"flow:{source.get('name', '?')}→{sink.get('name', '?')}",
             "source": source.get("source", ""),
-            "flow_trace": trace,
+            # The hop summaries are the rendered flow context; the
+            # raw trace artifact had no consumer downstream of this
+            # dict.
             "flow_hops": hop_summaries,
             "review_mode": "flow",
             "trace_id": trace.get("id", trace_file.stem),
@@ -28781,7 +28800,6 @@ def _re_review_joern_enriched(
                 gap["file"],
                 gap["name"],
             )
-        ctx["joern_re_review"] = True
         prior_hyps = _prior_hypotheses_for(prior_outcome)
         if prior_hyps:
             ctx["prior_hypotheses"] = prior_hyps
@@ -29006,7 +29024,6 @@ def _callee_contract_requeue(
             "callee_status": callee_outcome.status,
             "callee_hypothesis": callee_outcome.hypothesis or "",
         }
-        ctx["force_review"] = True
         prepared.append((len(prepared), gap, caller_outcome, ctx))
 
     # Environment gate shares the per-item dispatch points with the
