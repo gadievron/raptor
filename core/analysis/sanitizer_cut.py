@@ -1795,10 +1795,28 @@ def evaluate_finding(
         graph, sources_set, sink, full_cf_nodes,
     )
 
-    # Legacy control-flow-only path. Suppression bit-identical to
-    # Phase 7 behaviour — Phase 5 wrapper code or older callers
-    # that haven't been taught about value binding land here.
+    # Legacy control-flow-only path — Phase 5 wrapper code or older
+    # callers that haven't been taught about value binding land here.
+    # (No production caller reaches it today: the postpass/smt_barrier
+    # paths always pass source_symbols + sink_arg via ResolvedFinding,
+    # which refuses findings whose sink_arg can't resolve. Enforcement
+    # never consumes a legacy verdict — it requires the full
+    # value-bound proof.)
+    #
+    # One divergence from raw Phase 7: a sanitizer ON the sink node
+    # itself is NOT a cut here. Without value binding, "the sink node
+    # is in the cut set" proves only that some sanitizer call shares
+    # the sink's statement — ``sink(escape(other), tainted)`` — so
+    # the shared helper's sink-in-cut convenience arm would suppress
+    # a finding whose flagged argument was never cleaned. The cut is
+    # re-asked over the non-sink sanitizer nodes; on-path sanitizers
+    # still suppress exactly as before.
     if source_symbols is None or sink_arg is None:
+        if sink in full_cf_nodes:
+            reduced_nodes = full_cf_nodes - {sink}
+            full_cf_cut = sanitizer_cuts_source_to_sink(
+                graph, sources_set, sink, reduced_nodes,
+            )
         if full_cf_cut:
             return SanitizerCutResult(
                 suppress=True,
