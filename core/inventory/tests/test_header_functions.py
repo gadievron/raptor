@@ -183,3 +183,29 @@ class TestExtractFunctionBody:
     def test_unclosed(self):
         lines = ["int f(void) {", "    x++;"]
         assert _extract_function_body(lines, 0) is None
+
+
+class TestMultiLineSignature:
+    def test_two_line_signature_gets_full_body(self, tmp_path):
+        # The depth<=0 exit fired after the FIRST line even when that
+        # line carried no brace — a multi-line signature returned a
+        # one-line "body" (degraded callee-enrichment hints).
+        (tmp_path / "multi.h").write_text(
+            "static inline int add_pair(int a,\n"
+            "                           int b) {\n"
+            "    return a + b;\n"
+            "}\n"
+        )
+        result = lookup_header_function(tmp_path, "add_pair")
+        assert result is not None
+        _, body = result
+        assert "return a + b;" in body
+        assert body.count("\n") >= 2
+
+    def test_single_line_body_still_extracted(self, tmp_path):
+        (tmp_path / "one.h").write_text(
+            "static inline int one(void) { return 1; }\n"
+        )
+        result = lookup_header_function(tmp_path, "one")
+        assert result is not None
+        assert "return 1;" in result[1]

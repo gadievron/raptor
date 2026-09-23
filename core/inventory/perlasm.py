@@ -46,6 +46,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -186,27 +187,50 @@ def default_cache_dir() -> Path:
     return Path(RaptorConfig.REPO_ROOT) / ".cache" / "perlasm"
 
 
-def _resolve_driver_sha(gen: PerlasmGenerator) -> str:
+def _resolve_driver_sha(gen: PerlasmGenerator,
+                        target: Path | None = None) -> str:
     """Hash the xlate driver the generator will load, when locatable.
 
     The emitted asm is a function of generator + driver + flavour, so
     the driver content belongs in the cache key. Mirrors the
     generator's own lookup: alongside it, then ``../../perlasm/``.
+
+    Containment: candidates are resolved and clamped inside ``target``
+    when given — for a generator near the target root the ``../..``
+    hop otherwise walks OUT of the analysed tree and hashes an
+    unrelated host file into the key. The read itself goes through
+    O_NOFOLLOW (single syscall — no is_symlink()-then-read window).
     """
     for cand in (
         gen.path.parent / f"{gen.driver}.pl",
         gen.path.parent / ".." / ".." / "perlasm" / f"{gen.driver}.pl",
     ):
         try:
-            if cand.is_file() and not cand.is_symlink():
-                return hashlib.sha256(cand.read_bytes()).hexdigest()
+            resolved = cand.resolve()
+            if target is not None and not resolved.is_relative_to(
+                    target.resolve()):
+                continue
+            fd = os.open(str(resolved), os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                st = os.fstat(fd)
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                data = b""
+                while chunk := os.read(fd, 1 << 20):
+                    data += chunk
+                    if len(data) > 64 * 1024 * 1024:
+                        break
+            finally:
+                os.close(fd)
+            return hashlib.sha256(data).hexdigest()
         except OSError:
             continue
     return "driver-unresolved"
 
 
-def _cache_key(gen: PerlasmGenerator, flavour: str) -> str:
-    driver_sha = _resolve_driver_sha(gen)
+def _cache_key(gen: PerlasmGenerator, flavour: str,
+               target: Path | None = None) -> str:
+    driver_sha = _resolve_driver_sha(gen, target)
     return hashlib.sha256(
         f"{gen.sha256}\0{driver_sha}\0{flavour}".encode()
     ).hexdigest()[:24]
@@ -221,7 +245,7 @@ def generate_asm(gen: PerlasmGenerator, flavour: str, target: Path,
     sandbox profile (namespace + Landlock + network deny) or nothing.
     """
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cached = cache_dir / f"{_cache_key(gen, flavour)}.S"
+    cached = cache_dir / f"{_cache_key(gen, flavour, target)}.S"
     if cached.is_file():
         return cached, None
 

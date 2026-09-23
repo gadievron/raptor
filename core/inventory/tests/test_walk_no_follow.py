@@ -93,3 +93,26 @@ class TestConsumersContained:
         table = build_rust_macro_table(target)
         assert "outmac" not in table
         assert "inmac" in table
+
+
+class TestScanBudget:
+    def test_scan_cap_bounds_nonmatching_walk(self, tmp_path, monkeypatch):
+        # The yield cap alone let a hostile tree of NON-matching names
+        # walk in full — the wall-time half of the file-farm class.
+        import core.inventory._walk as walk_mod
+
+        for i in range(30):
+            (tmp_path / f"junk{i}.bin").write_text("")
+        (tmp_path / "real.h").write_text("int x;\n")
+        monkeypatch.setattr(walk_mod, "_MAX_WALK_SCAN", 10)
+        found = list(walk_mod.iter_regular_files(tmp_path, {".h"}))
+        # Bounded: at most the first 10 entries were examined.
+        assert len(found) <= 1
+
+    def test_scan_cap_leaves_normal_trees_complete(self, tmp_path):
+        import core.inventory._walk as walk_mod
+
+        for i in range(5):
+            (tmp_path / f"f{i}.h").write_text("int x;\n")
+        found = list(walk_mod.iter_regular_files(tmp_path, {".h"}))
+        assert len(found) == 5

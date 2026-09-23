@@ -1664,12 +1664,12 @@ def _process_single_file(
         # symlink-to-/dev/zero, or hostile sample in a vendored
         # archive OOM-killed the inventory builder. stat-then-bound
         # caps the in-flight memory at MAX_FILE_BYTES + 1 regardless
-        # of file size.
-        try:
-            file_size = filepath.stat().st_size
-        except OSError:
+        # of file size. Reuses the stat taken just above instead of a
+        # second back-to-back syscall.
+        if file_stat is None:
             return {"path": rel_path, "_excluded": True,
                     "_reason": "stat_failed", "_pattern": None}
+        file_size = file_stat[1]
         if file_size > MAX_FILE_BYTES:
             return {"path": rel_path, "_excluded": True,
                     "_reason": "too_large",
@@ -1776,7 +1776,11 @@ def _process_single_file(
         # an interstitial item, so non-function code (top-level statements,
         # missed globals) is never invisible to coverage (coverage Decision #2).
         items = items + compute_interstitial_items(items, parse_text)
-        sloc = count_sloc(content, language, _tree=tree_cache.get("tree"))
+        # SLOC over the SAME view the tree was parsed from: counting
+        # blank lines from raw content while the tree (comment lines)
+        # came from parse_text made comment lines inside blanked
+        # preprocessor arms count as SLOC — the two inputs must agree.
+        sloc = count_sloc(parse_text, language, _tree=tree_cache.get("tree"))
 
         record: dict[str, Any] = {
             'path': rel_path,

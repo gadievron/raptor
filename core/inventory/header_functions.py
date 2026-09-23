@@ -11,6 +11,7 @@ Cached per target path.
 from __future__ import annotations
 
 import re
+import threading
 from collections import OrderedDict
 from typing import TYPE_CHECKING
 
@@ -47,30 +48,37 @@ _MAX_BODY_LINES = 30
 _MAX_CACHE_ENTRIES = 16
 
 _cache: OrderedDict[str, dict[str, tuple[str, str]]] = OrderedDict()
+# The builder fans out via thread pools; unlocked OrderedDict mutation
+# from concurrent lookups raced (worst case duplicate index builds and
+# a mid-move_to_end KeyError). The build itself runs outside the lock —
+# a rare duplicate build is cheaper than serialising every scan.
+_cache_lock = threading.Lock()
 
 _C_STRING_OR_CHAR_RE = re.compile(r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\'')
 
 
-def _count_braces(line: str) -> int:
-    cleaned = _C_STRING_OR_CHAR_RE.sub("", line)
-    return cleaned.count("{") - cleaned.count("}")
-
-
 def _extract_function_body(lines: list[str], open_brace_line: int) -> str | None:
-    """Extract function body from opening brace line to closing brace."""
+    """Extract function body from opening brace line to closing brace.
+
+    ``open_brace_line`` is where the SIGNATURE starts; a multi-line
+    signature means the first lines carry no brace, so the depth<=0
+    exit must wait until an opening brace has actually been seen
+    (otherwise a two-line signature returned a one-line "body").
+    """
     depth = 0
+    opened = False
     start = open_brace_line
     for i in range(start, min(start + _MAX_BODY_LINES + 5, len(lines))):
-        depth += _count_braces(lines[i])
-        if depth <= 0:
+        cleaned = _C_STRING_OR_CHAR_RE.sub("", lines[i])
+        if "{" in cleaned:
+            opened = True
+        depth += cleaned.count("{") - cleaned.count("}")
+        if opened and depth <= 0:
             body_lines = lines[start:i + 1]
             if len(body_lines) > _MAX_BODY_LINES:
                 return None
             return "\n".join(body_lines)
-    if depth > 0:
-        return None
-    body_lines = lines[start:start + 1]
-    return "\n".join(body_lines)
+    return None
 
 
 def build_header_function_index(
@@ -83,9 +91,10 @@ def build_header_function_index(
     Cached per target path.
     """
     key = str(target_path)
-    if key in _cache:
-        _cache.move_to_end(key)
-        return _cache[key]
+    with _cache_lock:
+        if key in _cache:
+            _cache.move_to_end(key)
+            return _cache[key]
 
     index: dict[str, tuple[str, str]] = {}
     try:
@@ -112,9 +121,10 @@ def build_header_function_index(
     except OSError:
         pass
 
-    _cache[key] = index
-    while len(_cache) > _MAX_CACHE_ENTRIES:
-        _cache.popitem(last=False)
+    with _cache_lock:
+        _cache[key] = index
+        while len(_cache) > _MAX_CACHE_ENTRIES:
+            _cache.popitem(last=False)
     return index
 
 

@@ -505,3 +505,71 @@ class TestEnrichment:
         enrich_inventory_with_perlasm(inv, target, cache_dir=tmp_path / "c")
         assert "perlasm" not in inv
         assert {k: v for k, v in inv.items() if k != "files"} == before
+
+
+class TestDriverResolutionContainment:
+    def test_out_of_tree_driver_not_hashed(self, tmp_path):
+        # A generator near the target root resolves ../../perlasm/
+        # OUTSIDE the analysed tree — the hash input must never come
+        # from a host file the target doesn't contain.
+        from core.inventory.perlasm import (
+            PerlasmGenerator,
+            _resolve_driver_sha,
+        )
+
+        target = tmp_path / "deep" / "nest" / "target"
+        target.mkdir(parents=True)
+        gen_dir = target / "asm"
+        gen_dir.mkdir()
+        (gen_dir / "gen.pl").write_text("# generator\n")
+        # Plant a driver where ../../perlasm/ escapes the target.
+        outside = tmp_path / "deep" / "perlasm"
+        outside.mkdir()
+        (outside / "arm-xlate.pl").write_text("# host file\n")
+        gen = PerlasmGenerator(
+            path=gen_dir / "gen.pl", rel_path="asm/gen.pl",
+            driver="arm-xlate", sha256="0" * 64)
+        assert _resolve_driver_sha(gen, target) == "driver-unresolved"
+
+    def test_in_tree_driver_hashed(self, tmp_path):
+        import hashlib
+
+        from core.inventory.perlasm import (
+            PerlasmGenerator,
+            _resolve_driver_sha,
+        )
+
+        target = tmp_path
+        gen_dir = target / "crypto" / "aes" / "asm"
+        gen_dir.mkdir(parents=True)
+        (gen_dir / "gen.pl").write_text("# generator\n")
+        drv_dir = target / "crypto" / "perlasm"
+        drv_dir.mkdir()
+        (drv_dir / "arm-xlate.pl").write_bytes(b"# driver\n")
+        gen = PerlasmGenerator(
+            path=gen_dir / "gen.pl", rel_path="crypto/aes/asm/gen.pl",
+            driver="arm-xlate", sha256="0" * 64)
+        assert _resolve_driver_sha(gen, target) == hashlib.sha256(
+            b"# driver\n").hexdigest()
+
+    def test_symlink_escaping_tree_refused(self, tmp_path):
+        # A driver-named symlink whose target resolves OUTSIDE the
+        # analysed tree is caught by the containment clamp — the hash
+        # input never comes from host content the target doesn't
+        # contain.
+        from core.inventory.perlasm import (
+            PerlasmGenerator,
+            _resolve_driver_sha,
+        )
+
+        target = tmp_path / "target"
+        gen_dir = target / "asm"
+        gen_dir.mkdir(parents=True)
+        (gen_dir / "gen.pl").write_text("# generator\n")
+        host_file = tmp_path / "host.pl"
+        host_file.write_text("# host content\n")
+        (gen_dir / "arm-xlate.pl").symlink_to(host_file)
+        gen = PerlasmGenerator(
+            path=gen_dir / "gen.pl", rel_path="asm/gen.pl",
+            driver="arm-xlate", sha256="0" * 64)
+        assert _resolve_driver_sha(gen, target) == "driver-unresolved"

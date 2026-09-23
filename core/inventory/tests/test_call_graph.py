@@ -428,3 +428,23 @@ class TestModuleExportContract:
 
         missing = [n for n in cg.__all__ if not hasattr(cg, n)]
         assert not missing
+
+
+class TestChecklistPathContainment:
+    def test_absolute_and_escaping_paths_skipped(self, tmp_path):
+        # Run artifacts are data, not authority: an absolute or
+        # parent-escaping path in a checklist must not read
+        # out-of-tree content into extraction (Path join with an
+        # absolute rhs REPLACES the root).
+        from core.inventory.call_graph import iter_call_graph_candidates
+
+        (tmp_path / "ok.py").write_text("def f():\n    pass\n")
+        outside = tmp_path.parent / "outside.py"
+        checklist = {"files": [
+            {"path": "ok.py", "language": "python"},
+            {"path": str(outside), "language": "python"},
+            {"path": "../outside.py", "language": "python"},
+        ]}
+        cands = iter_call_graph_candidates(tmp_path, checklist)
+        rels = [rel for rel, _, _ in cands]
+        assert rels == ["ok.py"]
