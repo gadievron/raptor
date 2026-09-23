@@ -1119,3 +1119,21 @@ def test_findings_rows_carry_alias_name(tmp_path: Path) -> None:
     write_findings_json(out2, vuln_findings=findings2)
     data2 = json.loads(out2.read_text())
     assert data2[0]["sca"]["alias_name"] is None
+
+
+def test_scan_health_row_kind_survives_evidence_key_collision(
+    tmp_path: Path,
+) -> None:
+    """``evidence`` merges into the row's ``sca`` block; an evidence
+    dict carrying its own ``kind`` key must not shadow the row's real
+    kind — vuln_type and sca.kind would silently disagree."""
+    from packages.sca.findings import _scan_health_to_row
+
+    row = _scan_health_to_row({
+        "kind": "osv_lookup_degraded",
+        "detail": "d",
+        "evidence": {"kind": "SOMETHING_ELSE", "failed_lookups": 3},
+    })
+    assert row["vuln_type"] == "sca:scan_health:osv_lookup_degraded"
+    assert row["sca"]["kind"] == "osv_lookup_degraded"
+    assert row["sca"]["failed_lookups"] == 3

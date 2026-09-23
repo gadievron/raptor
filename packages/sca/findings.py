@@ -1162,9 +1162,13 @@ def _scan_health_to_row(h: dict[str, Any]) -> dict[str, Any]:
     kind = str(h.get("kind") or "unknown")
     detail = str(h.get("detail") or "")
     evidence = h.get("evidence")
-    sca_block: dict[str, Any] = {"kind": kind}
-    if isinstance(evidence, dict):
-        sca_block.update(evidence)
+    # ``kind`` is written LAST: evidence is producer-supplied and an
+    # evidence dict carrying its own ``kind`` key used to shadow the
+    # row's real kind (vuln_type said one thing, sca.kind another).
+    sca_block: dict[str, Any] = (
+        dict(evidence) if isinstance(evidence, dict) else {}
+    )
+    sca_block["kind"] = kind
     return _row_envelope(
         finding_id=f"{SCAN_HEALTH_PREFIX}{kind}",
         vuln_type=f"{SCAN_HEALTH_PREFIX}{kind}",
