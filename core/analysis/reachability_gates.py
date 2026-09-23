@@ -399,12 +399,30 @@ def _joern_find_callers(
 # is persisted as a cross-run suppression learning.
 _FENCED_CODE_RE = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
-_QUOTE_LINE_RE = re.compile(r"^[ \t]*>.*$", re.MULTILINE)
+# Markdown INDENTED code blocks (contiguous runs of 4-space- or
+# tab-indented lines) reproduce target text exactly like fenced ones
+# — a planted phrase quoted indented survived the strip and fired the
+# demotion gates. Each repetition consumes a full line opened by a
+# mandatory indent, so the run match is linear.
+_INDENTED_BLOCK_RE = re.compile(
+    r"^(?:(?: {4}|\t)[^\n]*(?:\n|$))+", re.MULTILINE,
+)
+# Quote-line indent class is ALL horizontal whitespace ([^\S\n]), not
+# just space/tab — a U+00A0-indented ``>`` line carried planted text
+# past the plain-space pattern.
+_QUOTE_LINE_RE = re.compile(r"^[^\S\n]*>.*$", re.MULTILINE)
 
 
 def _prose_only(body: str) -> str:
-    """Strip quoted target content so gates scan only model prose."""
+    """Strip quoted target content so gates scan only model prose.
+
+    Over-stripping is the safe direction here: these gates DEMOTE
+    findings, so prose lost to an aggressive strip can only leave a
+    finding standing — while an unstripped quoted phrase lets a
+    scanned repo mechanically demote a real finding (and persist the
+    demotion as a cross-run suppression learning)."""
     body = _FENCED_CODE_RE.sub(" ", body)
+    body = _INDENTED_BLOCK_RE.sub(" ", body)
     body = _INLINE_CODE_RE.sub(" ", body)
     return _QUOTE_LINE_RE.sub(" ", body)
 
