@@ -83,6 +83,16 @@ def _transport_banner_shown() -> bool:
 # spamming the log after a few thousand subsequent writes.
 _CACHE_WRITE_FAILURE_THRESHOLD = 3
 
+# One constant for the per-dispatch local-model precision caveat, shared
+# by the ``generate`` and ``generate_structured`` fallback lanes so the
+# two sites cannot drift apart and the content pin
+# (test_ollama_warning.py) covers both. The longer constructor-time
+# warning stays bespoke — it carries the scorecard pointer prose.
+_OLLAMA_PRECISION_WARNING = (
+    "Local model — exploit-PoC reliability varies by model "
+    "size/quantization; see /scorecard"
+)
+
 # Floor for the per-call budget reservation. Acquired before each
 # provider call to close the check-then-act window that lets concurrent
 # dispatchers individually pass the cap and collectively overshoot.
@@ -2808,7 +2818,7 @@ class LLMClient:
                 else:
                     logger.warning("Falling back to: %s/%s", model.provider, model.model_name)
                 if model.provider.lower() == "ollama":
-                    logger.warning("Local model — exploit-PoC reliability varies by model size/quantization; see /scorecard")
+                    logger.warning(_OLLAMA_PRECISION_WARNING)
 
                 logger.debug("Trying model: %s/%s", model.provider, model.model_name)
 
@@ -3367,7 +3377,7 @@ class LLMClient:
                 else:
                     logger.warning("Falling back to: %s/%s (structured)", model.provider, model.model_name)
                 if model.provider.lower() == "ollama":
-                    logger.warning("Local model — exploit-PoC reliability varies by model size/quantization; see /scorecard")
+                    logger.warning(_OLLAMA_PRECISION_WARNING)
 
                 timeout_failures = 0
                 last_safe_e = ""
