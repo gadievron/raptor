@@ -848,3 +848,91 @@ class TestFormatManifestBlockHostile(unittest.TestCase):
                                       "calls": 1}]}
         block = format_manifest_block(m)
         self.assertLess(len(block), 2_000)
+
+
+class TestPublicViewValueValidation(unittest.TestCase):
+    """public_view allowlists KEYS but forwarded VALUES verbatim — a
+    crafted/imported .raptor-run.json smuggled nested dicts, junk
+    types, and raw escape bytes through allowlisted keys on the
+    publish lane ("never forward verbatim" refuted). Every forwarded
+    value is now type-checked per field; strings pass the same
+    L1-strict rejection finding_public_view applies."""
+
+    def _hostile_meta(self):
+        return {
+            "command": "scan\x1b[2Jevil",
+            "status": "completed",
+            "duration_seconds": {"nested": 1},
+            "manifest": {
+                "source_control": {
+                    "base_sha": {"smuggled": {"path": "/secret"}},
+                    "dirty": "not-a-bool",
+                    "diff_sha256": "abc123",
+                },
+                "target": {"archive_name": {"also": "nested"},
+                           "archive_sha256": 42,
+                           "format": "zip"},
+                "environment": {"python": "3.14", "os": ["l"],
+                                "arch": "x86_64"},
+                "models": [{"provider": {"deep": "dict"},
+                            "alias": "gpt", "calls": 3}],
+                "deterministically_reproducible": "yes-string",
+            },
+        }
+
+    def test_junk_values_dropped_not_forwarded(self):
+        from core.run.provenance import public_view
+        out = public_view(self._hostile_meta())
+        self.assertNotIn("command", out)  # raw ESC — dropped
+        self.assertNotIn("duration_seconds", out)
+        man = out["manifest"]
+        self.assertEqual(man["source_control"],
+                         {"diff_sha256": "abc123"})
+        self.assertEqual(man["target"], {"format": "zip"})
+        self.assertEqual(man["environment"],
+                         {"python": "3.14", "arch": "x86_64"})
+        self.assertEqual(man["models"], [{"alias": "gpt", "calls": 3}])
+        self.assertNotIn("deterministically_reproducible", man)
+        # Nothing non-scalar anywhere in the projection.
+        def _walk(v):
+            if isinstance(v, dict):
+                for x in v.values():
+                    _walk(x)
+            elif isinstance(v, list):
+                for x in v:
+                    _walk(x)
+            else:
+                self.assertIsInstance(v, (str, int, float, bool,
+                                          type(None)))
+                if isinstance(v, str):
+                    self.assertNotIn("\x1b", v)
+        _walk(out)
+
+    def test_clean_metadata_projects_unchanged(self):
+        from core.run.provenance import public_view
+        out = public_view({
+            "command": "scan", "timestamp": "2026-01-01T00:00:00+00:00",
+            "duration_seconds": 12.5, "status": "completed",
+            "version": 2,
+            "manifest": {
+                "source_control": {"base_sha": "beef1234", "dirty": False,
+                                   "diff_sha256": None},
+                "environment": {"python": "3.14", "os": "linux",
+                                "arch": "x86_64"},
+                "engines": {"semgrep": "1.0"},
+                "models": [{"provider": "p", "alias": "a",
+                            "resolved": "r", "role": "analysis",
+                            "calls": 2}],
+                "deterministically_reproducible": True,
+            },
+        })
+        self.assertEqual(out["command"], "scan")
+        self.assertEqual(out["duration_seconds"], 12.5)
+        self.assertEqual(out["version"], 2)
+        man = out["manifest"]
+        self.assertEqual(man["source_control"]["base_sha"], "beef1234")
+        self.assertIs(man["source_control"]["dirty"], False)
+        self.assertIsNone(man["source_control"]["diff_sha256"])
+        self.assertEqual(man["engines"], {"semgrep": "1.0"})
+        self.assertEqual(man["models"][0]["calls"], 2)
+        self.assertIs(man["deterministically_reproducible"], True)
