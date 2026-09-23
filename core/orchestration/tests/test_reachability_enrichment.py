@@ -970,3 +970,111 @@ class TestBuildExcludedGate:
         assert funcs["main"].get("priority_reason") != (
             "reachability:build_excluded"
         )
+
+
+class TestBareNameJoinDiscipline:
+    """Frida evidence joins by bare name; same-named functions across
+    TUs (classic C ``static``) must never inherit UNQUALIFIED
+    "observed at runtime" evidence — the un-executed twin gets a
+    ``name_only_match`` marker consumers can discount."""
+
+    @staticmethod
+    def _two_tu_checklist():
+        return {"files": [
+            {"path": "src/a.c",
+             "items": [{"name": "init", "line_start": 3}]},
+            {"path": "src/b.c",
+             "items": [{"name": "init", "line_start": 9}]},
+        ]}
+
+    def test_collision_without_callsite_marks_name_only(self, tmp_path):
+        from core.orchestration.frida_validation_bridge import (
+            RuntimeEvidence,
+        )
+        from core.orchestration.reachability_enrichment import (
+            enrich_with_frida_traces,
+        )
+        checklist = self._two_tu_checklist()
+        evidence = {"init": RuntimeEvidence(
+            function_observed=True, call_count=1,
+            trace_id="/out/frida_run_1")}
+        n = enrich_with_frida_traces(
+            checklist, tmp_path, evidence_map=evidence)
+        assert n == 2
+        for file_entry in checklist["files"]:
+            trace = file_entry["items"][0]["metadata"][
+                "frida_runtime_trace"]
+            assert trace["observed"] is True
+            assert trace["name_only_match"] is True
+
+    def test_resolved_callsite_disambiguates_the_twins(self, tmp_path):
+        from core.orchestration.frida_validation_bridge import (
+            RuntimeEvidence,
+        )
+        from core.orchestration.reachability_enrichment import (
+            enrich_with_frida_traces,
+        )
+        checklist = self._two_tu_checklist()
+        evidence = {"init": RuntimeEvidence(
+            function_observed=True, call_count=1,
+            trace_id="/out/frida_run_1",
+            observed_callsites=[{"module": "mybin", "offset": "0x10",
+                                 "source": "/build/src/a.c:4"}])}
+        enrich_with_frida_traces(checklist, tmp_path,
+                                 evidence_map=evidence)
+        by_path = {fe["path"]: fe["items"][0] for fe in checklist["files"]}
+        a_trace = by_path["src/a.c"]["metadata"]["frida_runtime_trace"]
+        b_trace = by_path["src/b.c"]["metadata"]["frida_runtime_trace"]
+        assert "name_only_match" not in a_trace
+        assert b_trace["name_only_match"] is True
+
+    def test_unique_name_keeps_unqualified_evidence(self, tmp_path):
+        from core.orchestration.frida_validation_bridge import (
+            RuntimeEvidence,
+        )
+        from core.orchestration.reachability_enrichment import (
+            enrich_with_frida_traces,
+        )
+        checklist = {"files": [
+            {"path": "src/a.c",
+             "items": [{"name": "init", "line_start": 3}]},
+        ]}
+        evidence = {"init": RuntimeEvidence(
+            function_observed=True, call_count=1,
+            trace_id="/out/frida_run_1")}
+        enrich_with_frida_traces(checklist, tmp_path,
+                                 evidence_map=evidence)
+        trace = checklist["files"][0]["items"][0]["metadata"][
+            "frida_runtime_trace"]
+        assert "name_only_match" not in trace
+
+    def test_call_edge_collision_marked(self, tmp_path):
+        from core.orchestration.reachability_enrichment import (
+            enrich_with_frida_call_edges,
+        )
+        checklist = self._two_tu_checklist()
+        edge_map = {"init": {"call_count": 2, "callers": ["dispatch"],
+                             "trace_id": "/out/frida_run_1"}}
+        n = enrich_with_frida_call_edges(
+            checklist, tmp_path, edge_map=edge_map)
+        assert n == 2
+        for file_entry in checklist["files"]:
+            edge = file_entry["items"][0]["metadata"]["frida_call_edge"]
+            assert edge["observed"] is True
+            assert edge["name_only_match"] is True
+
+    def test_call_edge_unique_name_unqualified(self, tmp_path):
+        from core.orchestration.reachability_enrichment import (
+            enrich_with_frida_call_edges,
+        )
+        checklist = {"files": [
+            {"path": "src/a.c",
+             "items": [{"name": "init", "line_start": 3}]},
+        ]}
+        edge_map = {"init": {"call_count": 2, "callers": ["dispatch"],
+                             "trace_id": "/out/frida_run_1"}}
+        enrich_with_frida_call_edges(
+            checklist, tmp_path, edge_map=edge_map)
+        edge = checklist["files"][0]["items"][0]["metadata"][
+            "frida_call_edge"]
+        assert "name_only_match" not in edge

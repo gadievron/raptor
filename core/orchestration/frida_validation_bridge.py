@@ -218,7 +218,9 @@ def annotate_attack_paths(
 
     For each attack path step whose function appears in the evidence
     map, adds a ``runtime_evidence`` dict to the step.  If any step
-    has runtime evidence, floors the path's proximity at
+    has runtime evidence that does not CONTRADICT the step (a
+    ``callsite_match`` of False means every resolved call site is a
+    different location), floors the path's proximity at
     ``PROXIMITY_FLOOR`` (precedent: SMT feasible:true floor in
     Stage B).
 
@@ -235,6 +237,7 @@ def annotate_attack_paths(
             continue
 
         has_evidence = False
+        floor_eligible = False
         first_trace_id = None
 
         steps = path.get("steps")
@@ -262,6 +265,7 @@ def annotate_attack_paths(
                 "observed_args": ev.observed_args,
                 "trace_id": ev.trace_id,
             }
+            match = None
             if ev.observed_callsites:
                 runtime_evidence["observed_callsites"] = [
                     dict(s) for s in ev.observed_callsites]
@@ -270,18 +274,27 @@ def annotate_attack_paths(
                     finding_locations, path.get("finding"))
                 if match is not None:
                     runtime_evidence["callsite_match"] = match
+            # A False match means every resolved call site is a
+            # DIFFERENT location than the step/finding names — this
+            # step's evidence contradicts the path rather than
+            # corroborating it, so it must not establish the
+            # proximity floor (None — nothing resolved — keeps the
+            # original name-level flooring semantics).
+            if match is not False:
+                floor_eligible = True
             step["runtime_evidence"] = runtime_evidence
 
         if has_evidence:
             path["runtime_evidence_available"] = True
             if first_trace_id:
                 path["frida_trace_id"] = first_trace_id
-            current_proximity = path.get("proximity")
-            if isinstance(current_proximity, (int, float)):
-                if current_proximity < PROXIMITY_FLOOR:
+            if floor_eligible:
+                current_proximity = path.get("proximity")
+                if isinstance(current_proximity, (int, float)):
+                    if current_proximity < PROXIMITY_FLOOR:
+                        path["proximity"] = PROXIMITY_FLOOR
+                else:
                     path["proximity"] = PROXIMITY_FLOOR
-            else:
-                path["proximity"] = PROXIMITY_FLOOR
 
     return result
 
@@ -363,9 +376,10 @@ def _callsite_match(
 # their function names (memcpy, system, dlopen, ...) fire constantly
 # from library internals — an IDLE process calls memcpy — so an
 # unattributed observation says nothing about a finding's call path,
-# yet annotate_attack_paths floors path proximity on a bare name
-# match. Legacy categories (file/network/parser/process) keep their
-# original semantics.
+# and annotate_attack_paths joins evidence to steps by name (the
+# floor is withheld only when a resolved call site actively
+# contradicts the step). Legacy categories (file/network/parser/
+# process) keep their original semantics.
 _TARGET_ATTRIBUTED_CATEGORIES = frozenset({"sink", "exec", "load", "heap"})
 
 # Categories that never count as call evidence: seed-harvest's ingest
