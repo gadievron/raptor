@@ -1161,3 +1161,104 @@ def test_rust_prefixed_literals_inside_one_block_still_range():
         "fn live() {}\n"
     )
     assert detect_dead_scopes("rust", src) == [(1, 4)]
+
+
+# ---------------------------------------------------------------------------
+# Rust lifetime tokens — `'_` / `'a` / `'label` never close with a
+# quote; treating one as a string opener swallows text to the next `'`
+# byte and extends a dead range over live functions (a hard-suppress
+# witness over rustc-clean, idiomatic code).
+# ---------------------------------------------------------------------------
+
+
+def test_rust_anonymous_lifetime_does_not_extend_dead_range():
+    _requires_lexical_grammar("rust")
+    src = (
+        "fn setup() {\n"
+        "    if false {\n"
+        "        let x: &'_ str = a();\n"
+        "    }\n"
+        "}\n"
+        "fn vuln() {\n"
+        "    let y: &'_ str = b();\n"
+        "    dangerous();\n"
+        "}\n"
+    )
+    assert detect_dead_scopes("rust", src) == [(2, 4)]
+
+
+def test_rust_anonymous_lifetime_in_cfg_lane_does_not_extend():
+    _requires_lexical_grammar("rust")
+    src = (
+        "#[cfg(any())]\n"
+        "fn dead() {\n"
+        "    let x: &'_ str = a();\n"
+        "}\n"
+        "fn vuln() {\n"
+        "    let y: &'_ str = b();\n"
+        "}\n"
+    )
+    assert detect_dead_scopes("rust", src) == [(1, 4)]
+
+
+def test_rust_named_lifetime_and_label_do_not_desync():
+    _requires_lexical_grammar("rust")
+    src = (
+        "fn f() {\n"
+        "    if false {\n"
+        "        let x: &'a str = g();\n"
+        "        'outer: loop { break 'outer; }\n"
+        "    }\n"
+        "}\n"
+        "fn live() { let y: &'_ str = h(); }\n"
+    )
+    assert detect_dead_scopes("rust", src) == [(2, 5)]
+
+
+def test_rust_unicode_lifetime_does_not_desync():
+    # rustc accepts XID_Start lifetimes; isalpha() is Unicode-aware.
+    _requires_lexical_grammar("rust")
+    src = (
+        "fn f() {\n"
+        "    if false {\n"
+        "        let x: &'\u03b1 str = g();\n"
+        "    }\n"
+        "}\n"
+        "fn live() {}\n"
+    )
+    assert detect_dead_scopes("rust", src) == [(2, 4)]
+
+
+def test_rust_char_literal_with_escape_still_balanced():
+    _requires_lexical_grammar("rust")
+    src = (
+        "fn f() {\n"
+        "    if false {\n"
+        "        let c = '\\n';\n"
+        "        let d = 'x';\n"
+        "    }\n"
+        "}\n"
+        "fn live() {}\n"
+    )
+    assert detect_dead_scopes("rust", src) == [(2, 5)]
+
+
+def test_rust_raw_string_braces_still_balanced():
+    _requires_lexical_grammar("rust")
+    src = (
+        "fn f() {\n"
+        "    if false {\n"
+        '        let r = r#"}}"#;\n'
+        "    }\n"
+        "}\n"
+        "fn live() {}\n"
+    )
+    assert detect_dead_scopes("rust", src) == [(2, 4)]
+
+
+def test_rust_lifetime_at_end_of_source_no_error():
+    _requires_lexical_grammar("rust")
+    # Truncated input ending in a quote must not raise (the dispatch
+    # swallows exceptions into [], hiding an IndexError as a silent
+    # behavior change).
+    assert detect_dead_scopes("rust", "fn f() { if false { let x: &'") == []

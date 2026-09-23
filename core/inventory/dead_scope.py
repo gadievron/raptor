@@ -447,7 +447,18 @@ def _match_brace(source: str, open_pos: int) -> int | None:
     while i < n:
         c = source[i]
         if c in "\"'`":
-            if c == "'" and i + 1 < n and source[i + 1].isalpha():
+            # Rust lifetime / loop-label tokens (``'a``, ``'static``,
+            # ``'_``, ``'label:``) never close with a quote — treating
+            # one as a string opener swallows everything to the next
+            # ``'`` byte and desyncs the depth count over live code.
+            # The token grammar is ``'`` + XID_Start-or-``_``; only a
+            # single-char form closing immediately (``'x'`` — a char
+            # literal, its interior blanked by the substrate but the
+            # quotes kept) is a literal. isalpha() is Unicode-aware,
+            # matching rustc's XID_Start acceptance of non-ASCII
+            # lifetimes.
+            if c == "'" and i + 1 < n and (
+                    source[i + 1].isalpha() or source[i + 1] == "_"):
                 if i + 2 >= n or source[i + 2] != "'":
                     i += 1
                     continue
