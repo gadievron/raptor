@@ -1750,6 +1750,20 @@ def _extract_values_from_json(text: str) -> set[str]:
                 for part in node.split("/"):
                     if _MIN_TOKEN_LEN <= len(part) <= _MAX_KNOWN_VALUE_LEN:
                         values.add(part)
+        elif isinstance(node, (int, float)) and not isinstance(node, bool):
+            # Numeric leaves register their str() form: the
+            # pre-dispatch gate requires numbers to have been
+            # "discovered in string form" (str(val) membership), and
+            # str leaves were the only shape collected — a
+            # numerically-typed discovered value (pid, port, count)
+            # was permanently blocked with a misleading
+            # "discover these values first" error. bool stays
+            # excluded (structural; the gate passes it
+            # unconditionally); the min-token-length rule applies to
+            # the rendered form like any other value.
+            rendered = str(node)
+            if _MIN_TOKEN_LEN <= len(rendered) <= _MAX_KNOWN_VALUE_LEN:
+                values.add(rendered)
 
     _walk(obj)
     return values
