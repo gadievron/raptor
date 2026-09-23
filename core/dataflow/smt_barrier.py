@@ -378,16 +378,20 @@ _SUB_CHARSET = _re.compile(r"^\[((?:[^\]\\]|\\.)+)\][+*]?$")
 # --------------------------------------------------------------------------
 
 # JS/TS — `if (!/^[chars]+$/.test(<var>)) return|throw …`
+# The optional brace gates its own trailing whitespace in all five
+# guard shapes ((?:\{\s*)?): the naive ``\{?\s*`` pair put two
+# whitespace spans around it — quadratic on a guard-opening line
+# ending in a whitespace run.
 _JS_GUARD_TEST = _re.compile(
     r"if\s*\(\s*!\s*/\^\[(?P<chars>[^\]]+)\][+*]\$/\s*\.test\s*\(\s*"
     r"(?P<var>[A-Za-z_$][A-Za-z_$0-9]*)\s*\)\s*\)\s*"
-    r"\{?\s*(?:return|throw)\b"
+    r"(?:\{\s*)?(?:return|throw)\b"
 )
 # JS/TS — `if (!<var>.match(/^[chars]+$/)) return|throw …`
 _JS_GUARD_MATCH = _re.compile(
     r"if\s*\(\s*!\s*(?P<var>[A-Za-z_$][A-Za-z_$0-9]*)\s*\.match\s*\(\s*"
     r"/\^\[(?P<chars>[^\]]+)\][+*]\$/\s*\)\s*\)\s*"
-    r"\{?\s*(?:return|throw)\b"
+    r"(?:\{\s*)?(?:return|throw)\b"
 )
 
 # Java — `if (!<var>.matches("[chars]+")) return|throw …`
@@ -397,7 +401,7 @@ _JS_GUARD_MATCH = _re.compile(
 _JAVA_GUARD = _re.compile(
     r'if\s*\(\s*!\s*(?P<var>[A-Za-z_$][A-Za-z_$0-9]*)\s*\.matches\s*\(\s*'
     r'"\^?\[(?P<chars>[^\]]+)\][+*]\$?"\s*\)\s*\)\s*'
-    r'\{?\s*(?:return|throw)\b'
+    r'(?:\{\s*)?(?:return|throw)\b'
 )
 
 # Ruby — `return|raise … unless <var> =~ /^[chars]+$/`
@@ -413,13 +417,18 @@ _JAVA_GUARD = _re.compile(
 # outside the modeled set; none of Onigmo's flags are modeled, so any
 # flagged literal declines the spec-lift (same suffix-blindness
 # doctrine as _RE_MATCH_CALL).
+# The statement filler either ends non-whitespace or is empty
+# ((?:[^\n]*?[^\s\n])?): the naive ``[^\n]*?\s+`` overlapped the
+# lazy filler and the whitespace run — quadratic on a
+# return-opening line ending in a whitespace run with no keyword.
+# Same language (the run's head chars belonged to either side).
 _RUBY_GUARD_UNLESS = _re.compile(
-    r"(?:return|raise)\b[^\n]*?\s+unless\s+(?P<var>[a-z_][a-z_0-9]*)\s*=~\s*"
+    r"(?:return|raise)\b(?:[^\n]*?[^\s\n])?\s+unless\s+(?P<var>[a-z_][a-z_0-9]*)\s*=~\s*"
     r"/\\A\[(?P<chars>[^\]]+)\][+*]\\z/(?![a-zA-Z])"
 )
 # Ruby — `return|raise … if <var> !~ /\A[chars]+\z/`
 _RUBY_GUARD_IF_NOT_MATCH = _re.compile(
-    r"(?:return|raise)\b[^\n]*?\s+if\s+(?P<var>[a-z_][a-z_0-9]*)\s*!~\s*"
+    r"(?:return|raise)\b(?:[^\n]*?[^\s\n])?\s+if\s+(?P<var>[a-z_][a-z_0-9]*)\s*!~\s*"
     r"/\\A\[(?P<chars>[^\]]+)\][+*]\\z/(?![a-zA-Z])"
 )
 
@@ -2039,17 +2048,17 @@ _FUNCTION_BOUNDARY_PATTERNS = {
     #     with a negative lookahead so `if (x) {` etc. don't match
     "javascript": _re.compile(
         rf"\bfunction\s*{_JSTS_GENERATOR}\w*\s*\("
-        r"|=>\s*\{?\s*$"
+        r"|=>\s*(?:\{\s*)?$"
         rf"|^\s*{_JSTS_METHOD_MODIFIERS}{_JSTS_GENERATOR}"
         rf"(?!{_JS_NOT_FUNC}\b)"
-        r"[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{",
+        r"[A-Za-z_$][\w$]*\s*\([^)]{0,4096}\)\s*\{",
     ),
     "typescript": _re.compile(
         rf"\bfunction\s*{_JSTS_GENERATOR}\w*\s*\("
-        r"|=>\s*\{?\s*$"
+        r"|=>\s*(?:\{\s*)?$"
         rf"|^\s*{_JSTS_METHOD_MODIFIERS}{_JSTS_GENERATOR}"
         rf"(?!{_JS_NOT_FUNC}\b)"
-        r"[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{",
+        r"[A-Za-z_$][\w$]*\s*\([^)]{0,4096}\)\s*\{",
     ),
     # Java:
     #   `<modifier+> <return-type?> name(args) [throws ...] {?` — the
@@ -2061,12 +2070,15 @@ _FUNCTION_BOUNDARY_PATTERNS = {
     #     negative lookahead excludes control-flow keywords so
     #     `if (x) {` doesn't false-positive match.
     "java": _re.compile(
+        # gated optional brace tails ((?:\{\s*)?$) — the
+        # ``\{?\s*$`` pairs were quadratic on signature lines
+        # ending in whitespace runs
         r"\b(?:public|private|protected|static|final|abstract|synchronized)\b"
-        r"[^{};]*\([^)]*\)\s*(?:throws[^{]*)?\{?\s*$"
+        r"[^{};]*\([^)]*\)\s*(?:throws[^{]*)?(?:\{\s*)?$"
         rf"|^\s*(?!{_JAVA_NOT_FUNC}\b)"
         r"(?:(?:void|boolean|byte|char|short|int|long|float|double)"
         r"|[A-Z]\w*(?:<[^>]*>)?(?:\[\])?)\s+"
-        r"\w+\s*\([^)]*\)\s*(?:throws[^{]*)?\{?\s*$",
+        r"\w+\s*\([^)]*\)\s*(?:throws[^{]*)?(?:\{\s*)?$",
     ),
     # Ruby: ``def name`` (instance) or ``def self.name`` (class method)
     # at line start (any indentation level for nested methods / class

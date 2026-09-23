@@ -3696,3 +3696,37 @@ def test_try_tier0_sound_when_first_occurrence_is_in_another_function(
         sink_line=10, sink_class="pathtrav", language="python",
     )
     assert r.status is sb.Tier0Status.SOUND, r.reasoning
+
+
+class TestGuardPatternWhitespaceRuns:
+    def test_guard_whitespace_run_is_fast(self):
+        """Hostile guard-shaped line ending in a long whitespace run
+        with no return/throw keyword: the ``\\{?\\s*`` tails put two
+        whitespace spans around the optional brace — quadratic. The
+        gated-brace spelling is linear."""
+        from core.dataflow.smt_barrier import _JS_GUARD_TEST
+        from core.testing.wallclock import cpu_budget
+
+        hostile = ("if (!/^[a-z]+$/.test(v))"
+                   + " " * (1 << 16) + "x")
+        with cpu_budget(1.0, what="guard whitespace run"):
+            assert _JS_GUARD_TEST.search(hostile) is None
+
+    def test_guard_forms_still_match(self):
+        from core.dataflow.smt_barrier import (
+            _JS_GUARD_TEST,
+            _RUBY_GUARD_UNLESS,
+        )
+
+        m = _JS_GUARD_TEST.search(
+            "if (!/^[a-z0-9]+$/.test(name)) { return null; }",
+        )
+        assert m is not None and m.group("var") == "name"
+        m = _JS_GUARD_TEST.search(
+            "if (!/^[a-z]+$/.test(id)) throw new Error();",
+        )
+        assert m is not None
+        m = _RUBY_GUARD_UNLESS.search(
+            "return :bad unless name =~ /\\A[a-z]+\\z/",
+        )
+        assert m is not None and m.group("var") == "name"
