@@ -964,6 +964,7 @@ class TestAnalyzeMajorBumps:
                    return_value=_SafeVerdict()):
             approved, verdicts = optimise._analyze_major_bumps(
                 major_blocked, vuln_plans, Path("/project"),
+                promote=True,       # the operator's --llm-approve-major
             )
 
         assert key in approved
@@ -1077,6 +1078,7 @@ class TestAnalyzeMajorBumps:
                    side_effect=_fake_assess):
             approved, verdicts = optimise._analyze_major_bumps(
                 major_blocked, vuln_plans, Path("/project"),
+                promote=True,       # the operator's --llm-approve-major
             )
 
         assert key_safe in approved
@@ -1126,6 +1128,7 @@ class TestAnalyzeMajorBumps:
                    side_effect=_fake_assess):
             approved, verdicts = optimise._analyze_major_bumps(
                 major_blocked, vuln_plans, Path("/project"),
+                promote=True,       # the operator's --llm-approve-major
             )
 
         # The successful dep should be approved despite the failure on the
@@ -1571,6 +1574,7 @@ class TestSafeVerdictConfidenceFloor:
                    "assess_upgrade_impact", return_value=verdict):
             approved, verdicts = optimise._analyze_major_bumps(
                 major_blocked, vuln_plans, Path("/project"),
+                promote=True,       # the operator's --llm-approve-major
             )
         return key, major_blocked, vuln_plans, approved, verdicts
 
@@ -1617,3 +1621,51 @@ class TestSafeVerdictConfidenceFloor:
         assert key in approved
         assert key in plans
         assert key not in blocked
+
+
+class TestLlmMajorApprovalGate:
+    def test_safe_verdict_is_annotation_only_without_opt_in(self):
+        """LLM output is not operator consent: the documented opt-in
+        for applying a major bump is --allow-major, and target-tree
+        content can steer the classification of its own bump. Without
+        the explicit --llm-approve-major opt-in a high-confidence
+        \"safe\" verdict stays an ANNOTATION — the bump remains
+        blocked."""
+        from pydantic import BaseModel
+
+        class _SafeVerdict(BaseModel):
+            verdict: str = "safe"
+            confidence: str = "high"
+            summary: str = "No breaking changes"
+            breaking_changes: list = []
+
+        key = ("PyPI", "pytest", "/r.txt")
+        plan = _PlanEntry(
+            ecosystem="PyPI", name="pytest",
+            installed="7.0.0", target="9.0.3",
+            manifest=Path("/r.txt"),
+            advisory_ids=["GHSA-y"],
+        )
+        major_blocked = {key: plan}
+        vuln_plans = {}
+
+        with patch("packages.sca.llm.get_llm_client",
+                   return_value=object()), \
+             patch("packages.sca.llm.upgrade_impact_review"
+                   ".assess_upgrade_impact",
+                   return_value=_SafeVerdict()):
+            approved, verdicts = optimise._analyze_major_bumps(
+                major_blocked, vuln_plans, Path("/project"),
+            )
+
+        assert approved == set()
+        assert vuln_plans == {}
+        assert key in major_blocked          # never applied
+        assert key in verdicts               # ...but the verdict shows
+        assert verdicts[key].verdict == "safe"
+
+    def test_llm_approve_major_flag_exists_and_defaults_off(self):
+        args = optimise._parse_args(["/x"])
+        assert args.llm_approve_major is False
+        args = optimise._parse_args(["/x", "--llm-approve-major"])
+        assert args.llm_approve_major is True
