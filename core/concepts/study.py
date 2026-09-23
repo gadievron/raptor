@@ -334,52 +334,18 @@ def _promotion_lock(canonical: Path) -> Iterator[None]:
     """Cross-process exclusive lock over a canonical study artifact's
     load → merge → write window.
 
-    Same idiom as ``core.iris.store.store_lock`` /
-    ``core.coverage.store.coverage_store_lock``: flock a sibling
-    ``<name>.lock`` file (never the artifact itself, which the merge
-    atomically replaces — locking a replaced inode splits lockers),
-    hold it across the WHOLE load → merge → write cycle, degrade to a
-    no-op without fcntl (non-POSIX). Without it, concurrent promoters
-    on one project (parallel study runs, the study loop beside
-    /agentic — projects explicitly support concurrent sessions) read
-    the same canonical state and the later writer silently drops the
-    earlier run's entire study contribution. O_NOFOLLOW: the lock file
-    lives in a project directory that may carry broader write grants —
-    a planted symlink must not steer the flock to an attacker-chosen
-    path; a refused open degrades to the unlocked path with a loud
-    warning rather than failing the promotion. The lock file is
-    deliberately never unlinked — unlink-after-unlock races split
-    lockers across two inodes.
+    Delegates to :func:`core.fs_lock.artifact_lock` (the shared flock
+    idiom: sibling ``.lock`` file, whole-window hold, O_NOFOLLOW, loud
+    unlocked degrade, no-op without fcntl). Without it, concurrent
+    promoters on one project (parallel study runs, the study loop
+    beside /agentic — projects explicitly support concurrent sessions)
+    read the same canonical state and the later writer silently drops
+    the earlier run's entire study contribution.
     """
-    if not _HAS_FCNTL:
+    from core.fs_lock import artifact_lock
+
+    with artifact_lock(canonical, subject="study promotion"):
         yield
-        return
-    lock_path = canonical.with_suffix(canonical.suffix + ".lock")
-    flags = (
-        os.O_WRONLY | os.O_CREAT
-        | getattr(os, "O_NOFOLLOW", 0)
-        | getattr(os, "O_CLOEXEC", 0)
-    )
-    try:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(lock_path), flags, 0o600)
-    except OSError as exc:
-        logger.warning(
-            "promotion lock %s: refusing to open (%s); proceeding "
-            "WITHOUT cross-process lock — concurrent promotions may "
-            "drop each other's contributions; investigate a planted "
-            "symlink at that path", lock_path, exc,
-        )
-        yield
-        return
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    finally:
-        os.close(fd)
 
 
 def merge_promote_domain_model(per_run_path: Path,

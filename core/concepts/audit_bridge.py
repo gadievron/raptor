@@ -1142,10 +1142,17 @@ def queue_reading_list_item(
         context=context,
     )
 
+    from core.fs_lock import artifact_lock
+
     # Load-modify-save cycle: hold the shared writer lock end to end
-    # so concurrent writers (premise questions, the study consumer)
-    # cannot drop this item or lose theirs to this save.
-    with READING_LIST_WRITE_LOCK:
+    # so concurrent in-process writers (premise questions, the study
+    # consumer) cannot drop this item or lose theirs to this save, and
+    # the file lock inside it so concurrent RUNS on a project-level
+    # reading list cannot either (thread lock outer, file lock inner —
+    # same order as ReadingList.save_merged).
+    with READING_LIST_WRITE_LOCK, artifact_lock(
+        rl_path, subject="reading list",
+    ):
         rl = ReadingList.load(rl_path)
         rl.queue(item)
         try:

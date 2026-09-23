@@ -49,8 +49,12 @@ def question_scoped_id(prefix: str, question: str) -> str:
 # load→mutate→save cycle (the per-instance ``ReadingList._lock`` only
 # serializes mutations of ONE loaded instance, which does nothing for
 # two writers holding separate instances of the same file).
-# In-process only: the file belongs to one run's out_dir, and one
-# process owns a run; cross-process exclusion is out of scope.
+# In-process half of the exclusion; the project-level reading list
+# (``<project>/concepts/reading-list.json``) has cross-PROCESS writers
+# too (concurrent runs of one project), so every load→mutate→save
+# window ALSO holds ``core.fs_lock.artifact_lock`` on the file, inside
+# this lock (thread lock outer, file lock inner — one order,
+# everywhere).
 READING_LIST_WRITE_LOCK = threading.Lock()
 
 # ------------------------------------------------------------------
@@ -214,19 +218,22 @@ class ReadingList:
         by id alone silently destroyed a concurrent writer's DISTINCT
         question that happened to share an id.
         """
+        from core.fs_lock import artifact_lock
+
         with READING_LIST_WRITE_LOCK:
             p = path or self._path
             if p is None:
                 msg = "no path specified"
                 raise ValueError(msg)
-            disk = ReadingList.load(p)
-            with self._lock:
-                known = {(i.id, i.question) for i in self.items}
-                self.items.extend(
-                    i for i in disk.items
-                    if (i.id, i.question) not in known
-                )
-            self.save(p)
+            with artifact_lock(p, subject="reading list"):
+                disk = ReadingList.load(p)
+                with self._lock:
+                    known = {(i.id, i.question) for i in self.items}
+                    self.items.extend(
+                        i for i in disk.items
+                        if (i.id, i.question) not in known
+                    )
+                self.save(p)
 
     @classmethod
     def load(cls, path: Path) -> ReadingList:

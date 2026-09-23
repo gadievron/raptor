@@ -13656,11 +13656,17 @@ def _mark_unsupported_unresolvable(
             ReadingList,
         )
 
+        from core.fs_lock import artifact_lock
+
         rl_path = out_dir / "reading-list.json"
         # Load-modify-save cycle: hold the shared writer lock end to
         # end so concurrent queuers (premise questions, audit_bridge)
-        # cannot be overwritten by this save.
-        with READING_LIST_WRITE_LOCK:
+        # cannot be overwritten by this save, plus the file lock for
+        # concurrent runs on a project-level list (thread lock outer,
+        # file lock inner — one order everywhere).
+        with READING_LIST_WRITE_LOCK, artifact_lock(
+            rl_path, subject="reading list",
+        ):
             rl = ReadingList.load(rl_path)
             changed = False
             for req in reqs:
@@ -24833,12 +24839,16 @@ def _queue_premise_study_question(
         counter = (h.get("counter") or "").strip()
         if not counter or config.out_dir is None:
             return
+        from core.fs_lock import artifact_lock
+
         rl_path = config.out_dir / "reading-list.json"
         question = (
             f"Does this hold: {counter[:400]} "
             f"(refutation premise for {outcome.function})?"
         )
-        with READING_LIST_WRITE_LOCK:
+        with READING_LIST_WRITE_LOCK, artifact_lock(
+            rl_path, subject="reading list",
+        ):
             rl = ReadingList.load(rl_path)
             if any(it.question == question for it in rl.items):
                 return
