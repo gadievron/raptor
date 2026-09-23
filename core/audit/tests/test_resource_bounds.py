@@ -691,6 +691,108 @@ class TestGatherSourceTextsContainment:
         assert "int f" in texts["src/a.c"]
 
 
+class TestSourceCensusAndMemo:
+    """The census walk is a pure function of the tree, priced once
+    per run (orchestrator memo) instead of once per hypothesis
+    dispatch; VCS internals are pruned — the old whole-tree rglob
+    materialised a kernel-sized .git/objects on every call."""
+
+    def _tree(self, tmp_path):
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        (target / "src/a.c").write_text("int f(void) { return 1; }\n")
+        (target / "src/b.c").write_text("int g(void) { return 2; }\n")
+        git = target / ".git" / "objects" / "ab"
+        git.mkdir(parents=True)
+        (git / "planted.c").write_text("int git_internal(void);\n")
+        return target
+
+    def test_census_prunes_vcs_internals(self, tmp_path):
+        from core.audit.resource_bounds import _source_census
+
+        target = self._tree(tmp_path)
+        rels = [rel for rel, _ in _source_census(target)]
+        assert "src/a.c" in rels and "src/b.c" in rels
+        assert not any(".git" in r for r in rels)
+
+    def test_census_selection_matches_rglob_order(self, tmp_path):
+        from core.audit import resource_bounds
+        from core.audit.resource_bounds import _source_census
+
+        target = tmp_path / "target"
+        for d in ("z", "a/nested", "m"):
+            (target / d).mkdir(parents=True)
+        names = [
+            "z/x.c", "a/nested/y.c", "m/q.h", "a/top.cpp", "root.c",
+        ]
+        for nm in names:
+            (target / nm).write_text(f"// {nm}\n")
+        rels = [rel for rel, _ in _source_census(target)]
+        expected = [
+            str(p.relative_to(target))
+            for p in sorted(target.rglob("*"))
+            if p.is_file() and p.suffix in resource_bounds._SOURCE_SUFFIXES
+        ]
+        assert rels == expected[:resource_bounds._MAX_SCAN_FILES]
+
+    def test_gather_with_census_does_not_walk(self, tmp_path, monkeypatch):
+        import os as _os
+
+        from core.audit.resource_bounds import (
+            _gather_source_texts as _rb_gather_source_texts,
+        )
+
+        target = self._tree(tmp_path)
+        census = [("src/b.c", "int g(void) { return 2; }\n")]
+
+        def boom(*a, **k):
+            raise AssertionError("walk must not run with a census")
+
+        monkeypatch.setattr(_os, "walk", boom)
+        texts = _rb_gather_source_texts(target, "src/a.c", census=census)
+        assert "src/a.c" in texts and "src/b.c" in texts
+
+    def test_orchestrator_memo_prices_census_once(
+        self, tmp_path, monkeypatch,
+    ):
+        from types import SimpleNamespace
+
+        from core.audit import resource_bounds
+        from core.audit.orchestrator import _hypothesis_source_texts
+        from core.audit.run_memo import BoundedMemo
+
+        target = self._tree(tmp_path)
+        calls = {"n": 0}
+        real = resource_bounds._source_census
+
+        def counting(t):
+            calls["n"] += 1
+            return real(t)
+
+        monkeypatch.setattr(resource_bounds, "_source_census", counting)
+        config = SimpleNamespace(hypothesis_source_memo=BoundedMemo(16))
+        t1 = _hypothesis_source_texts(config, target, "src/a.c")
+        t2 = _hypothesis_source_texts(config, target, "src/b.c")
+        assert calls["n"] == 1
+        assert "src/a.c" in t1 and "src/b.c" in t2
+
+    def test_non_c_primary_skips_intake(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        from core.audit import resource_bounds
+        from core.audit.orchestrator import _hypothesis_source_texts
+        from core.audit.run_memo import BoundedMemo
+
+        target = self._tree(tmp_path)
+
+        def boom(t):
+            raise AssertionError("census must not run for non-C primary")
+
+        monkeypatch.setattr(resource_bounds, "_source_census", boom)
+        config = SimpleNamespace(hypothesis_source_memo=BoundedMemo(16))
+        assert _hypothesis_source_texts(config, target, "app.py") is None
+
+
 class TestConsistencyGatherContainment:
     """Structural twin in consistency_verify: same intake contract."""
 
