@@ -51,7 +51,12 @@ def bucket_key(when: str | datetime) -> str:
             dt = datetime.fromisoformat(when)
         except (ValueError, TypeError):
             s = str(when)
-            if len(s) >= 7 and s[4] == "-" and s[:4].isdigit() and s[5:7].isdigit():
+            # isascii() first: str.isdigit() accepts non-ASCII digit
+            # runes that int() also parses, so a forged bucket key
+            # spelled in them would round-trip instead of reading as
+            # unparseable (defensive path — the writer emits ASCII).
+            if (len(s) >= 7 and s[4] == "-" and s[:7].isascii()
+                    and s[:4].isdigit() and s[5:7].isdigit()):
                 return s[:7]
             msg = f"unparseable timestamp for bucket_key: {when!r}"
             raise ValueError(msg) from None

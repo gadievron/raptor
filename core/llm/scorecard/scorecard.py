@@ -80,6 +80,12 @@ _unverified_warned_paths: set = set()
 # repeat the warning per cell per read.
 _malformed_warned_paths: set = set()
 
+# And for the flock-unavailable warning: it documents "log once and
+# proceed lock-free", but pre-guard it fired on EVERY lock cycle —
+# log noise on NFS-class filesystems where flock genuinely isn't
+# available.
+_flock_warned_paths: set = set()
+
 
 # v2 (2026-05): per-event-type counts are stratified into "YYYY-MM" age buckets
 # (``events[type] = {"2026-05": {"correct", "incorrect"}, ...}``) instead of a
@@ -415,6 +421,30 @@ def _redact_tree(v: object) -> object:
     if v is None or isinstance(v, (int, float, bool)):
         return v
     return _bounded(redact_secrets(str(v)))
+
+
+def _parse_seen_ts(value: object) -> datetime | None:
+    """Parse a cell's ``last_seen_at`` for age comparisons.
+
+    The writer stamps ``+00:00``-suffixed ISO, but ``adopt`` ingests
+    operator-blessed foreign history whose ``Z``-suffix or naive
+    stamps compared correctly against a lexicographic cutoff only by
+    accident of string ordering. Z-suffix normalises; naive stamps
+    read as UTC. ``None`` (missing / non-str / unparseable) means age
+    unknown — age-based deletion keeps the cell, matching the
+    timestampless-cell rule."""
+    if not isinstance(value, str) or not value:
+        return None
+    s = value.strip()
+    if s.endswith(("Z", "z")):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 
 
 def _now_iso() -> str:
@@ -1175,12 +1205,12 @@ class ModelScorecard:
                 data["models"] = {}
                 return deleted
 
-            cutoff_iso: str | None = None
+            cutoff_dt: datetime | None = None
             if older_than_days is not None:
-                cutoff = time.time() - older_than_days * 86400
-                cutoff_iso = datetime.fromtimestamp(
-                    cutoff, tz=timezone.utc,
-                ).replace(microsecond=0).isoformat()
+                cutoff_dt = datetime.fromtimestamp(
+                    time.time() - older_than_days * 86400,
+                    tz=timezone.utc,
+                )
 
             # Walk a snapshot of model keys so deletions during
             # iteration don't trip RuntimeError.
@@ -1196,23 +1226,23 @@ class ModelScorecard:
                     if (decision_class is not None
                             and dc_key != decision_class):
                         continue
-                    if cutoff_iso is not None:
+                    if cutoff_dt is not None:
                         cell = by_dc[dc_key]
                         # A non-dict cell carries no timestamp: like
                         # a timestampless cell below, an age-filtered
                         # reset keeps it (scoped/full resets remove).
-                        seen = (
-                            cell.get("last_seen_at", "")
-                            if isinstance(cell, dict) else ""
+                        seen_dt = _parse_seen_ts(
+                            cell.get("last_seen_at")
+                            if isinstance(cell, dict) else None,
                         )
-                        if not seen:
-                            # No timestamp (e.g. adopted legacy
-                            # history): age is unknown, so an
+                        if seen_dt is None:
+                            # No parseable timestamp (e.g. adopted
+                            # legacy history): age is unknown, so an
                             # age-filtered reset keeps the cell.
                             # Only a scoped or full reset removes
                             # timestampless cells.
                             continue
-                        if seen >= cutoff_iso:
+                        if seen_dt >= cutoff_dt:
                             continue
                     del by_dc[dc_key]
                     deleted += 1
@@ -1525,11 +1555,19 @@ class ModelScorecard:
                 )
             except OSError as e:
                 # NFS / unusual filesystems may not support flock.
-                # Log once and proceed lock-free; correctness in that
-                # environment depends on operator running serially.
-                logger.warning(
-                    "scorecard: flock not available on %s — concurrent updates may race (error: %s)", lock_path, e
-                )
+                # Log once per path and proceed lock-free; correctness
+                # in that environment depends on operator running
+                # serially.
+                if str(lock_path) not in _flock_warned_paths:
+                    _flock_warned_paths.add(str(lock_path))
+                    logger.warning(
+                        "scorecard: flock not available on %s — concurrent updates may race (error: %s)", lock_path, e
+                    )
+                else:
+                    logger.debug(
+                        "scorecard: flock not available on %s: %s",
+                        lock_path, e,
+                    )
             # Read the data file under lock. May not exist on cold
             # start; treat as empty. Doesn't matter that this is a
             # different fd from the lock — the lock guarantees we
@@ -1768,10 +1806,9 @@ class ModelScorecard:
         if now - last_gc_ts < self.auto_gc_interval_seconds:
             return
 
-        cutoff_ts = now - days * 86400
-        cutoff_iso = datetime.fromtimestamp(
-            cutoff_ts, tz=timezone.utc,
-        ).replace(microsecond=0).isoformat()
+        cutoff_dt = datetime.fromtimestamp(
+            now - days * 86400, tz=timezone.utc,
+        )
 
         # Per-model summary for the log line. Only models whose cells
         # actually got dropped end up in the dict — protected models
@@ -1798,8 +1835,8 @@ class ModelScorecard:
                 if not isinstance(cell, dict):
                     # Same rule as a junk by_dc above.
                     continue
-                seen = cell.get("last_seen_at", "")
-                if isinstance(seen, str) and seen and seen < cutoff_iso:
+                seen_dt = _parse_seen_ts(cell.get("last_seen_at"))
+                if seen_dt is not None and seen_dt < cutoff_dt:
                     # Tally before deletion so the log line is
                     # informative without a separate scan. Counts are
                     # age-bucketed (v2) — flatten across buckets.

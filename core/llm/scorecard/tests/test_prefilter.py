@@ -272,3 +272,41 @@ def test_run_cheap_fp_check_custom_verdict_literals():
         client2, system="s", schema=_SCHEMA,
         allowed_verdicts=("clear_safe", "needs_analysis"),
     ) is None
+
+
+class TestReasoningShapeCoercion:
+    """Schema-junk can put a dict/list where reasoning belongs; the
+    ``[:_MAX_REASONING_CHARS]`` slice raised TypeError, uncaught
+    in-module. One str() coercion at each boundary."""
+
+    def test_record_outcome_tolerates_dict_reasoning(self, tmp_path):
+        from core.llm.scorecard.scorecard import ModelScorecard
+        sc = ModelScorecard(tmp_path / "sc.json")
+        record_prefilter_outcome(
+            sc,
+            decision_class="dc", model="m",
+            cheap_says_fp=True, full_says_fp=False,
+            cheap_reasoning={"not": "a string"},
+            full_reasoning=["also", "not"],
+        )
+        stat = sc.get_stat("dc", "m")
+        assert stat.events["cheap_short_circuit"].incorrect == 1
+
+    def test_run_cheap_fp_check_str_coerces_reasoning(self):
+        class FakeResponse:
+            pass
+
+        class FakeClient:
+            def generate_structured(self, **kw):
+                return {"verdict": "clear_fp",
+                        "reasoning": {"shape": "junk"}}
+
+        result = run_cheap_fp_check(
+            FakeClient(),
+            system="s",
+            schema={"type": "object"},
+        )
+        assert result is not None
+        verdict, reasoning = result
+        assert verdict == "clear_fp"
+        assert isinstance(reasoning, str)

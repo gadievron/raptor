@@ -287,3 +287,27 @@ class TestIntegrityDemotion:
         report = audit_mod.audit(red_scorecard)
         assert report.key_unusable is False
         assert "unverified" not in audit_mod.render_markdown(report)
+
+
+class TestMissingFileReportsKeyState:
+    def test_missing_sidecar_still_reports_unusable_key(
+        self, tmp_path, monkeypatch,
+    ):
+        """The missing-file early return left key_unusable at its
+        dataclass default (False) even when the key IS unusable — a
+        no-data report claiming a healthy key."""
+        xdg = tmp_path / "xdg"
+        monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
+        key_dir = xdg / "raptor"
+        key_dir.mkdir(parents=True)
+        key = key_dir / "scorecard-mac.key"
+        key.write_bytes(b"k" * 32)
+        key.chmod(0o644)  # group-readable => refused
+        report = audit_mod.audit(tmp_path / "does-not-exist.json")
+        assert report.verdict == "no-data"
+        assert report.key_unusable is True
+
+    def test_missing_sidecar_healthy_key(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        report = audit_mod.audit(tmp_path / "does-not-exist.json")
+        assert report.key_unusable is False

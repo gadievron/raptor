@@ -682,7 +682,11 @@ def test_concurrent_writes_do_not_lose_updates(tmp_path):
         p.start()
         procs.append(p)
     for p in procs:
-        p.join()
+        # Bounded join + liveness assert: a wedged child (flock
+        # deadlock regression) must fail the test, not hang the
+        # whole slow tier.
+        p.join(timeout=60)
+        assert not p.is_alive(), "subprocess wedged past the join timeout"
         assert p.exitcode == 0, f"subprocess exited {p.exitcode}"
 
     sc = ModelScorecard(path)
@@ -1331,3 +1335,80 @@ def test_migrate_events_tolerates_non_dict_entry():
     assert cell["events"]["tool_evidence"] == {
         "2026-01": {"correct": 2, "incorrect": 1},
     }
+
+
+class TestSeenTimestampParsing:
+    """Age comparisons on ``last_seen_at`` parse the stamp instead of
+    comparing lexicographically against a ``+00:00``-suffixed cutoff:
+    adopt ingests operator-blessed foreign history, whose Z-suffix or
+    naive stamps compared in the conservative direction only by
+    accident of string ordering."""
+
+    def _cell(self, path, seen):
+        import json as _json
+        path.write_text(_json.dumps({
+            "version": 2,
+            "models": {"m": {"dc": {
+                "last_seen_at": seen, "events": {},
+            }}},
+        }))
+
+    def test_reset_age_filter_parses_z_suffix(self, tmp_path):
+        path = tmp_path / "sc.json"
+        self._cell(path, "2020-01-01T00:00:00Z")
+        # auto-GC off so the stale cell survives adopt's locked write
+        # and RESET is the surface under test.
+        sc = ModelScorecard(path, auto_gc_after_days=None)
+        assert sc.adopt_unverified() is True
+        assert sc.reset(older_than_days=30) == 1
+
+    def test_reset_age_filter_parses_naive_as_utc(self, tmp_path):
+        path = tmp_path / "sc.json"
+        self._cell(path, "2020-01-01T00:00:00")
+        sc = ModelScorecard(path, auto_gc_after_days=None)
+        assert sc.adopt_unverified() is True
+        assert sc.reset(older_than_days=30) == 1
+
+    def test_unparseable_stamp_kept_by_age_filter(self, tmp_path):
+        path = tmp_path / "sc.json"
+        self._cell(path, "not-a-timestamp")
+        sc = ModelScorecard(path, auto_gc_after_days=None)
+        assert sc.adopt_unverified() is True
+        # Age unknown → conservative keep (like timestampless cells).
+        assert sc.reset(older_than_days=30) == 0
+
+    def test_auto_gc_parses_z_suffix(self, tmp_path):
+        path = tmp_path / "sc.json"
+        self._cell(path, "2020-01-01T00:00:00Z")
+        sc = ModelScorecard(path, auto_gc_after_days=30,
+                            auto_gc_interval_seconds=0)
+        assert sc.adopt_unverified() is True
+        sc.record_event("dc2", "m2", "cheap_short_circuit", "correct")
+        import json as _json
+        raw = _json.loads(path.read_text())
+        assert "dc" not in raw["models"].get("m", {})
+
+
+class TestFlockWarningOnce:
+    def test_unavailable_flock_warns_once_per_path(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        """The 'flock not available' warning claimed log-once but
+        fired on EVERY lock cycle — log noise on NFS-class
+        filesystems."""
+        import logging as _logging
+
+        import core.llm.scorecard.scorecard as sc_mod
+
+        def broken_flock(fd, op):
+            raise OSError("flock unsupported here")
+
+        monkeypatch.setattr(sc_mod.fcntl, "flock", broken_flock)
+        sc = ModelScorecard(tmp_path / "sc.json")
+        with caplog.at_level(_logging.WARNING):
+            sc.get_stats()
+            sc.get_stats()
+            sc.record_event("dc", "m", "cheap_short_circuit", "correct")
+        hits = [r for r in caplog.records
+                if "flock not available" in r.getMessage()]
+        assert len(hits) == 1

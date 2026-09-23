@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from core.llm.scorecard.freshness import (
     bucket_age_days,
     bucket_key,
@@ -79,3 +81,18 @@ def test_is_bucketed_discriminates_v1_v2():
     assert is_bucketed({"2026-05": {"correct": 1, "incorrect": 0}}) is True
     assert is_bucketed({}) is True                          # empty == empty buckets
     assert is_bucketed({"correct": 5, "incorrect": 1}) is False  # v1 flat shape
+
+
+class TestBucketKeyAsciiDigits:
+    def test_non_ascii_digit_runes_read_as_unparseable(self):
+        """str.isdigit() accepts non-ASCII digit runes that int() also
+        parses — a forged bucket key spelled in them round-tripped
+        through the fallback instead of raising. Defensive path only;
+        the writer always emits ASCII."""
+        # Arabic-Indic digits in the YYYY-MM positions.
+        forged = "١٢٣٤-٠١T00:00:00"
+        with pytest.raises(ValueError):
+            bucket_key(forged)
+
+    def test_ascii_fallback_still_accepted(self):
+        assert bucket_key("2026-05-notquiteiso") == "2026-05"

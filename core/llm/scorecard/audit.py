@@ -185,6 +185,7 @@ def audit(path: Path | None = None) -> AuditReport:
     """
     if path is None:
         path = default_scorecard_path()
+    from core.llm.scorecard import integrity
     raw = _load_raw(path)
     if raw is None or not isinstance(raw, dict):
         return AuditReport(
@@ -203,8 +204,18 @@ def audit(path: Path | None = None) -> AuditReport:
                 if raw is None
                 else f"scorecard is not a JSON object at {path}"
             ),
+            # The key state is a property of the INSTALL, not the
+            # file — a no-data report must not claim a healthy key
+            # via the dataclass default when the key is unusable.
+            key_unusable=not integrity.key_usable(),
         )
 
+    # Consistency note: the raw walk below and the stats view read
+    # the same same-user-writable file at two instants; a swap between
+    # them can yield halves describing different documents. Both
+    # halves demote independently (integrity holds either way) — the
+    # report is best-effort observability, not a single-snapshot view.
+    #
     # Integrity gate for the RAW half of the report. The stats view
     # below verifies through ``ModelScorecard`` and discards unverified
     # content; reading the sidecar directly must not reopen that door —
@@ -215,7 +226,6 @@ def audit(path: Path | None = None) -> AuditReport:
     # (tamper-or-legacy) → discard; unusable key → operator-side
     # condition, content stays readable for introspection, matching
     # ``get_stats()``'s key-unusable clamp.
-    from core.llm.scorecard import integrity
     key_usable = integrity.key_usable()
     sidecar_demoted = (
         not integrity.verify(raw, integrity.extract_token(raw))

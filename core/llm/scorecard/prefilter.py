@@ -145,8 +145,10 @@ def record_prefilter_outcome(
             # ending up in the scorecard. The first ~500 chars are
             # almost always the model's verdict-summary; the rest
             # is usually procedural or restating the question.
-            "this_reasoning": (cheap_reasoning or "")[:_MAX_REASONING_CHARS],
-            "other_reasoning": (full_reasoning or "")[:_MAX_REASONING_CHARS],
+            # str-coerced: schema-junk can put a dict/list here and
+            # the slice would raise TypeError, uncaught in-module.
+            "this_reasoning": str(cheap_reasoning or "")[:_MAX_REASONING_CHARS],
+            "other_reasoning": str(full_reasoning or "")[:_MAX_REASONING_CHARS],
         }
     scorecard.record_event(
         decision_class=decision_class,
@@ -235,8 +237,10 @@ def run_cheap_fp_check(
     result = structured_result(response, default={})
     if not isinstance(result, Mapping):
         result = {}
-    verdict = (result.get("verdict") or "").strip().lower()
-    reasoning = result.get("reasoning") or ""
+    verdict = str(result.get("verdict") or "").strip().lower()
+    # str-coerced: a dict/list-shaped reasoning from schema-junk must
+    # not TypeError the consumer's later slice.
+    reasoning = str(result.get("reasoning") or "")
     if verdict not in allowed_verdicts:
         # Defensive: an unexpected verdict string means we can't gate
         # on it. Fall through to full analysis.
