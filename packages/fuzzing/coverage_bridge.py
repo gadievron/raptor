@@ -839,15 +839,28 @@ def emit_binary_fuzz_coverage(
     return out_path
 
 
+#: Budget for checklist.json — it lives in (or beside) the target-
+#: writable fuzz out dir, the same boundary MAX_TRACE_FILE_BYTES
+#: defends above. Real checklists (symtab of a large binary included)
+#: are a few MB.
+MAX_CHECKLIST_BYTES = 64 * 1024 * 1024
+
+
 def _load_binary_checklist(out_dir: Path) -> dict | None:
-    import json as _json
+    from core.json import load_json_bounded
     for cand in (out_dir / "checklist.json", out_dir.parent / "checklist.json"):
         if cand.is_file():
             try:
-                cl = _json.loads(cand.read_text())
+                # Budgeted loader: size is gated BEFORE the read, and
+                # the budget error subclasses ValueError so the
+                # malformed-file degrade below covers it.
+                cl = load_json_bounded(cand, max_bytes=MAX_CHECKLIST_BYTES)
             except (OSError, ValueError):
                 continue
-            if cl.get("target_kind") == "binary":
+            # Shape gate: a list-shaped (or otherwise non-object)
+            # planted file must degrade like a malformed one, not
+            # raise out of the .get() walk.
+            if isinstance(cl, dict) and cl.get("target_kind") == "binary":
                 return cl
     return None
 
@@ -860,7 +873,10 @@ def _binary_file_entry(checklist: dict | None, binary: Path) -> dict | None:
         wanted = binary_path_key(binary)
     except ImportError:
         wanted = f"binary:{Path(binary).stem}"
-    for fe in checklist.get("files", []):
-        if fe.get("path") == wanted:
+    files = checklist.get("files")
+    if not isinstance(files, list):
+        return None
+    for fe in files:
+        if isinstance(fe, dict) and fe.get("path") == wanted:
             return fe
     return None
