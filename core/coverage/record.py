@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from core.json import load_json, save_json
+from core.json import DEFAULT_JSON_MAX_BYTES, load_json, save_json
 
 COVERAGE_RECORD_FILE = "coverage-record.json"  # legacy single-file name
 
@@ -19,10 +19,13 @@ COVERAGE_RECORD_FILE = "coverage-record.json"  # legacy single-file name
 #: so artifact SIZE is attacker-writable like every other property —
 #: a sparse multi-GiB plant costs no disk and OOM-killed the importer
 #: /render/backfill process the containment boundary keeps alive.
-#: Same 256 MiB class as the journal and coverage-store budgets; the
-#: shared enforcement is ``load_json(max_bytes=...)`` (stat-gated, no
-#: read on refusal).
-RUN_ARTIFACT_MAX_BYTES = 256 * 1024 * 1024
+#: The value is the loader's own capped-by-default budget
+#: (``core.json.DEFAULT_JSON_MAX_BYTES``, 256 MiB — rationale and
+#: both-direction trade-off documented there), re-exported under the
+#: run-artifact name this package's readers and their tests key on;
+#: the shared enforcement is ``load_json(max_bytes=...)`` (stat-gated,
+#: no read on refusal).
+RUN_ARTIFACT_MAX_BYTES = DEFAULT_JSON_MAX_BYTES
 
 #: Cap on how many flow-trace-*.json files one reader globs from a
 #: run dir. Both the per-file SIZE and the file COUNT are run-dir-

@@ -55,6 +55,18 @@ from .validation_handoff import build_validation_handoff
 
 logger = logging.getLogger(__name__)
 
+#: Read budget for binary-decompilations.json — the one run artifact
+#: this pipeline both writes and re-reads whose legitimate size can
+#: exceed the loader's 256 MiB default: --decompile-all lifts
+#: max_decompile to 1M functions, and a very large binary's full
+#: decompilation corpus scales with code size. 1 GiB keeps the
+#: reader's memory bounded (a sparse plant in the run dir still
+#: refuses at the fstat gate) while covering the decompile-all
+#: extreme; LOWER silently drops the run's own decompilations from
+#: the report/handoff (degrade-to-{} below), HIGHER stops bounding
+#: the reader in any useful way.
+_DECOMPILATIONS_MAX_BYTES = 1024 * 1024 * 1024
+
 
 def _stamp_context_map(context_map: dict) -> None:
     """Provenance chokepoint for the binary pipeline's context maps.
@@ -2091,7 +2103,8 @@ def append_fuzz_evidence_to_run(
     save_context_map(out_dir / "binary-context-map.json", context_map)
     save_context_map(out_dir / "context-map.json", context_map)
     save_json(out_dir / "binary-evidence.json", {"evidence": existing})
-    decompilations = load_json(out_dir / "binary-decompilations.json")
+    decompilations = load_json(out_dir / "binary-decompilations.json",
+                               max_bytes=_DECOMPILATIONS_MAX_BYTES)
     if not isinstance(decompilations, dict):
         decompilations = {}
     all_evidence = _evidence_records_from_payload(existing)
@@ -2365,7 +2378,8 @@ def append_runtime_evidence_to_run(
             existing.append(record.to_dict())
             seen.add(record.id)
     all_evidence = _evidence_records_from_payload(existing)
-    decompilations = load_json(out_dir / "binary-decompilations.json")
+    decompilations = load_json(out_dir / "binary-decompilations.json",
+                               max_bytes=_DECOMPILATIONS_MAX_BYTES)
     if not isinstance(decompilations, dict):
         decompilations = {}
     fuzz = _fuzz_bundle_from_payload(load_json(out_dir / "binary-fuzz-evidence.json"))
