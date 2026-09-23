@@ -188,6 +188,20 @@ def _load_generated_exploit(agent_out_dir: Path, crash_id: str) -> str | None:
     return exploit_file.read_text(encoding="utf-8")
 
 
+def _campaign_execs(afl_runner: AFLRunner) -> int:
+    """Executions-done from the campaign's AFL stats, 0 when absent.
+
+    Strategy-outcome records previously hardcoded ``execs=0``, so
+    cross-run strategy memory could never weigh throughput — a
+    strategy that ran millions of execs finding nothing and one that
+    barely executed looked identical.
+    """
+    try:
+        return int(str(afl_runner.get_stats().get("execs_done") or 0))
+    except (AttributeError, TypeError, ValueError):
+        return 0
+
+
 def main() -> None:
     # So much more needed here but this is a start for us. :-)
     ap = argparse.ArgumentParser(
@@ -936,7 +950,7 @@ Examples:
                     binary_fingerprint=binary_hash,
                     strategy_id="default",
                     duration_s=args.duration,
-                    execs=0,
+                    execs=_campaign_execs(afl_runner),
                     unique_crashes=0,
                     hangs=0,
                     exploitable_crashes=0,
@@ -1378,7 +1392,7 @@ Examples:
         binary_fingerprint=binary_hash,
         strategy_id="default",
         duration_s=args.duration,
-        execs=0,
+        execs=_campaign_execs(afl_runner),
         unique_crashes=num_crashes,
         hangs=0,
         exploitable_crashes=exploitable,
