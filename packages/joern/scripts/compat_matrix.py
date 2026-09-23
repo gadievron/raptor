@@ -52,6 +52,7 @@ import contextlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -135,6 +136,52 @@ int main(int argc, char **argv) {
 def _arch() -> str:
     m = platform.machine()
     return {"x86_64": "x86_64", "aarch64": "arm64", "arm64": "arm64"}.get(m, m)
+
+
+#: Version-shaped release tags only (ASCII, no separators, bounded).
+#: Tags come from the LIVE releases API and become URL components, pin
+#: keys, and path components under the workdir — the shape gate is the
+#: derivation chokepoint that keeps a separator-bearing tag
+#: ("../victim") out of every later path arithmetic, including the
+#: per-tag cleanup that runs even on refusal branches. First char is
+#: alphanumeric (an optional leading "v" aside), so "." / ".." can
+#: never match; the class has no "/", "\\", NUL, or whitespace.
+_TAG_RE = re.compile(r"v?[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
+
+
+def _tag_refusal_row(tag: str) -> dict:
+    """Result row for a tag that failed the shape gate."""
+    return {
+        "pass": False,
+        "exception": "refused hostile release tag "
+                     "(not a version-shaped token)",
+    }
+
+
+def _contained_cleanup(workdir: Path, archive: Path, tree: Path) -> None:
+    """Delete one tag's artifacts, refusing anything that resolves
+    outside *workdir*.
+
+    Belt-and-braces beneath the ``_TAG_RE`` derivation gate: even a
+    validated-then-tampered path (a tree swapped for a symlink out of
+    the workdir mid-run) must never aim ``unlink``/``rmtree`` outside
+    the matrix's own scratch. Resolve-and-contain, then delete the
+    RESOLVED path only when it sits strictly inside the workdir.
+    """
+    root = workdir.resolve()
+    for path, is_tree in ((archive, False), (tree, True)):
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        if root not in resolved.parents:
+            print("refusing cleanup outside the workdir: "
+                  f"{_sft(str(path))}", flush=True)
+            continue
+        if is_tree:
+            shutil.rmtree(resolved, ignore_errors=True)
+        else:
+            resolved.unlink(missing_ok=True)
 
 
 def _newest_tags(count: int) -> list[str]:
@@ -470,8 +517,22 @@ def main() -> int:
     workdir.mkdir(parents=True, exist_ok=True)
 
     pins = _load_pins()
+    if args.require_pinned and not pins:
+        print(
+            "WARNING: --require-pinned with an empty pins file — every "
+            "tag will be refused. Record pins with --update-pins after "
+            "verifying a download out-of-band.", flush=True,
+        )
     rows: list[tuple[str, dict]] = []
     for tag in tags:
+        # Shape gate BEFORE any path arithmetic (see _TAG_RE): a
+        # hostile tag must never become an archive/tree path — the
+        # per-tag cleanup below fires on every branch, refusals
+        # included.
+        if not _TAG_RE.fullmatch(tag):
+            rows.append((tag, _tag_refusal_row(tag)))
+            print(_format_row(tag, rows[-1][1]), flush=True)
+            continue
         archive = workdir / f"{tag}.zip"
         tree = workdir / tag
         try:
@@ -511,8 +572,7 @@ def main() -> int:
                       "exception": f"{type(e).__name__}: {e}"[:200]}
         finally:
             if not args.keep:
-                archive.unlink(missing_ok=True)
-                shutil.rmtree(tree, ignore_errors=True)
+                _contained_cleanup(workdir, archive, tree)
         rows.append((tag, result))
         print(_format_row(tag, result), flush=True)
 
