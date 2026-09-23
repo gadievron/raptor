@@ -48,14 +48,69 @@ def test_apply_preserves_inline_comments(tmp_path: Path):
     assert "1.32" in line
 
 
-def test_apply_preserves_indentation(tmp_path: Path):
+def test_apply_ignores_indented_lookalikes(tmp_path: Path):
+    """Only column-0 module-level assignments are patch targets. An
+    indented duplicate (a doc example, a nested assignment) must
+    never absorb the update meant for the real constant — pre-fix
+    the LATER indented line was patched and the real constant was
+    silently left unchanged while the applier reported modified=1."""
     src = tmp_path / "risk.py"
     src.write_text(
-        "    _KEV_MULTIPLIER = 1.20  # weirdly indented\n"
+        "_KEV_MULTIPLIER = 1.20\n"
+        "#   example:\n"
+        "    _KEV_MULTIPLIER = 9.99  # doc example, not the constant\n"
     )
-    apply_refit_to_risk_py({"_KEV_MULTIPLIER": 1.32}, src)
-    line = src.read_text().splitlines()[0]
-    assert line.startswith("    ")
+    modified = apply_refit_to_risk_py({"_KEV_MULTIPLIER": 1.32}, src)
+    assert modified == 1
+    lines = src.read_text().splitlines()
+    assert lines[0] == "_KEV_MULTIPLIER = 1.32"
+    assert lines[2] == "    _KEV_MULTIPLIER = 9.99  # doc example, not the constant"
+
+
+def test_apply_duplicate_constant_lines_refused(tmp_path: Path):
+    """Two column-0 assignments for one name: refuse loudly rather
+    than guess (pre-fix: last match silently won)."""
+    src = tmp_path / "risk.py"
+    src.write_text(
+        "_KEV_MULTIPLIER = 1.20\n"
+        "_KEV_MULTIPLIER = 1.25\n"
+    )
+    with pytest.raises(RefitApplyError, match="duplicate"):
+        apply_refit_to_risk_py({"_KEV_MULTIPLIER": 1.32}, src)
+    # Nothing was modified.
+    assert "1.32" not in src.read_text()
+
+
+def test_apply_stray_name_outside_tunables_refused(tmp_path: Path):
+    """The refit report is this function's input and nothing else
+    re-checks membership at apply time — a corrupted / hand-edited
+    report must not turn the patcher into an arbitrary-constant
+    rewriter."""
+    src = tmp_path / "risk.py"
+    src.write_text(
+        "_KEV_MULTIPLIER = 1.20\n"
+        "_MAX_PARSER_BYTES = 52428800\n"
+    )
+    with pytest.raises(RefitApplyError, match="TUNABLE_CONSTANTS"):
+        apply_refit_to_risk_py(
+            {"_KEV_MULTIPLIER": 1.32, "_MAX_PARSER_BYTES": 1.0},
+            src,
+        )
+    assert "1.32" not in src.read_text()
+
+
+def test_apply_large_value_stays_fixed_point(tmp_path: Path):
+    """%g rendered large non-integers in scientific notation, which
+    the line regex then silently mis-split on a later re-apply
+    (value='1.23457', rest='e+06'). Fixed-point only, and a second
+    apply of the same dict is a no-op."""
+    src = tmp_path / "risk.py"
+    src.write_text("_KEV_FLOOR = 80.0\n")
+    apply_refit_to_risk_py({"_KEV_FLOOR": 1234567.5}, src)
+    assert src.read_text() == "_KEV_FLOOR = 1234567.5\n"
+    modified = apply_refit_to_risk_py({"_KEV_FLOOR": 1234567.5}, src)
+    assert modified == 0
+    assert src.read_text() == "_KEV_FLOOR = 1234567.5\n"
 
 
 def test_apply_idempotent(tmp_path: Path):
@@ -88,9 +143,12 @@ def test_apply_missing_constant_raises(tmp_path: Path):
     should raise — silently skipping would be a footgun."""
     src = tmp_path / "risk.py"
     src.write_text("_KEV_MULTIPLIER = 1.20\n")
+    # A genuine tunable that's absent from this (stripped) file —
+    # stray non-tunable names are refused earlier by the
+    # membership gate.
     with pytest.raises(RefitApplyError, match="not found"):
         apply_refit_to_risk_py(
-            {"_KEV_MULTIPLIER": 1.32, "_NON_EXISTENT": 1.0},
+            {"_KEV_MULTIPLIER": 1.32, "_KEV_FLOOR": 88.0},
             src,
         )
 
