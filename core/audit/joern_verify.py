@@ -425,12 +425,15 @@ def _guard_matches_kind(code: str, identifier: str, kind: str) -> bool:
     * ``bounds`` — the identifier participates in a RELATIONAL
       comparison; equality against zero is not a bounds check.
     """
+    # Paren runs gate their own trailing whitespace ((?:\(\s*)*):
+    # the ``\s*\(*\s*`` chains overlapped two unbounded whitespace
+    # spans around the optional parens — quadratic on a space run.
     ident = re.escape(identifier)
     if kind == "null":
         shapes = (
-            rf"!\s*\(*\s*{ident}\b(?!\s*(?:->|\.|\[))",
-            rf"\b{ident}\b\s*[!=]=\s*\(*\s*(?:NULL|nullptr|0)\b",
-            rf"\b(?:NULL|nullptr|0)\s*[!=]=\s*\(*\s*{ident}\b",
+            rf"!\s*(?:\(\s*)*{ident}\b(?!\s*(?:->|\.|\[))",
+            rf"\b{ident}\b\s*[!=]=\s*(?:\(\s*)*(?:NULL|nullptr|0)\b",
+            rf"\b(?:NULL|nullptr|0)\s*[!=]=\s*(?:\(\s*)*{ident}\b",
             # Bare truth-test conjunct: the identifier alone as a
             # boolean operand — not followed by a member/index/call
             # use, and not an argument of a call (a call paren is
@@ -443,7 +446,7 @@ def _guard_matches_kind(code: str, identifier: str, kind: str) -> bool:
             # (?<![->])> : the > of a -> member access is not a
             # comparison (live shape: `if (s->len)` must not count
             # as a bounds check on len).
-            rf"(?:<=|>=|(?<!<)<|(?<![->])>)\s*\(*\s*{ident}\b",
+            rf"(?:<=|>=|(?<!<)<|(?<![->])>)\s*(?:\(\s*)*{ident}\b",
         )
     else:
         return True

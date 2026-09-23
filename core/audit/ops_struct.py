@@ -11,7 +11,10 @@ import re
 #: Declaration line; the opening `{` may sit on the NEXT line
 #: (`= \n {`), so it is optional here and tracked as pending.
 _STRUCT_INIT_RE = re.compile(
-    r"(?:static\s+)?(?:const\s+)?struct\s+(\w+)\s+\w+\s*=\s*(\{)?\s*$"
+    # The optional `{` gates its own trailing whitespace — `(\{)?\s*$`
+    # after `=\s*` stacked two spans: quadratic on a `=`-ending line
+    # with a trailing space run.
+    r"(?:static\s+)?(?:const\s+)?struct\s+(\w+)\s+\w+\s*=\s*(?:(\{)\s*)?$"
     r"|(?:static\s+)?(?:const\s+)?struct\s+(\w+)\s+\w+\s*=\s*\{"
 )
 #: One designated member. Deliberately NOT end-anchored and scanned
