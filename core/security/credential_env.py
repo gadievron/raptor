@@ -182,7 +182,7 @@ _BASE_CREDENTIAL_EXEC_REDIRECT_ENV_VARS: frozenset[str] = frozenset({
 #     launcher execs ``$JAVA_HOME/bin/java`` at operator power), so
 #     the settings-scan lane blocks the whole class via
 #     :data:`TOOLCHAIN_HOME_ENV_VARS` below.
-#   * cache/output-dir names (GOPATH, NUGET_PACKAGES,
+#   * cache/output-dir names (GOPATH, GOBIN, NUGET_PACKAGES,
 #     CARGO_TARGET_DIR): write-location redirect only.
 #   * language-RUNTIME injection names (NODE_OPTIONS, PYTHONPATH,
 #     RUBYOPT, JAVA_TOOL_OPTIONS): homed in the runtime-injection
@@ -249,6 +249,16 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
             # The node-gyp script npm executes for every native-addon
             # build — same program-path power as script-shell.
             "NPM_CONFIG_NODE_GYP",
+            # The python interpreter node-gyp executes for every
+            # native-addon build (npm config `python`) — the same
+            # program-path power as node-gyp itself.
+            "NPM_CONFIG_PYTHON",
+            # npm config `shell` (npm explore) and `editor` (npm
+            # edit) each name a program npm executes on the operator
+            # subcommand — the per-tool respellings of blocked
+            # SHELL/EDITOR power.
+            "NPM_CONFIG_SHELL",
+            "NPM_CONFIG_EDITOR",
             # yarn berry: yarnPath names a Yarn release JS file that
             # the launcher EXECUTES on every yarn invocation.
             "YARN_YARN_PATH",
@@ -265,7 +275,10 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
             "axes in the config-key portion: case AND '-' vs '_' "
             "(npm_config_script-shell is honoured as script-shell), so "
             "hostile-lane consumers must match via fold_env_candidate, "
-            "never by case-fold alone."
+            "never by case-fold alone. npm_config_onload-script: "
+            "legacy module-load hook removed from modern npm (>=7) — "
+            "documented out with the no-current-consumer reason; "
+            "re-adjudicate if npm<7 hosts ever join the support set."
         ),
     ),
     BuildEcosystemEnvSurface(
@@ -959,7 +972,7 @@ TOOLCHAIN_HOME_ENV_VARS: frozenset[str] = frozenset({
 #   redirect power) + Claude Code settings docs (CLAUDE_CONFIG_DIR
 #   repoints CC's own config dir wholesale).
 # transcribed= 2026-09-22; basedir-spec full variable walk; CC env
-#   docs walk.
+#   docs walk; zsh startup-files section (ZDOTDIR).
 # completeness= XDG_RUNTIME_DIR: documented out — consumers require
 #   it to already exist with 0700 ownership, and it carries sockets,
 #   not executed config. Per-tool config-FILE pointers
@@ -978,6 +991,10 @@ CONFIG_HOME_REDIRECT_ENV_VARS: frozenset[str] = frozenset({
     "XDG_DATA_DIRS",
     "XDG_STATE_HOME",
     "XDG_CACHE_HOME",
+    # zsh's config home (zsh docs: startup files): every zsh start
+    # sources $ZDOTDIR/.zshenv — the zsh spelling of the blocked
+    # BASH_ENV/ENV power via the config-HOME axis this class owns.
+    "ZDOTDIR",
 })
 
 # --- BUILD_SYSTEMS census --------------------------------------------
