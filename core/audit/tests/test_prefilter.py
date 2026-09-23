@@ -761,3 +761,102 @@ class TestPrefilterSkipKnobWiring:
 
         cfg = OrchestratorConfig(target_path=Path("."), out_dir=Path("."))
         assert cfg.prefilter_skip is True
+
+
+class TestAccessorTierHonesty:
+    """The simple-accessor skip judges the WHOLE body on the shared
+    sanitized views — never raw prefix-dropped lines or a
+    suffix-anchored arm.
+
+    The old mechanism dropped any raw line starting with ``*`` or
+    ``#`` (a column-0 deref-store read as a block-comment
+    continuation; a string-continuation line carrying live code read
+    as a comment) and matched its arms with a suffix anchor (any
+    side-effecting statement rode in front of the accessor return).
+    Each shape below was journalled durably clean ("cannot contain
+    vulnerabilities") over live deref-stores, lifecycle ops, and an
+    os.system call.
+    """
+
+    def _run(self, name, fp, src, callees=None):
+        return run_prefilter(
+            target_path=Path("/nonexistent-target"), file_path=fp,
+            function_name=name, source=src, callees=callees,
+        )
+
+    def test_c_deref_store_col0_not_an_accessor(self):
+        r = self._run("get_val", "a.c",
+            "int get_val(struct ctx *x, int v) {\n"
+            "*x->owner_uid = v;\nreturn x->val;\n}")
+        assert not r.skip_llm
+
+    def test_c_privilege_flag_store_not_an_accessor(self):
+        r = self._run("mk", "a.c",
+            "int mk(struct s *s) {\n*s->is_admin = 1;\nreturn s->val;\n}")
+        assert not r.skip_llm
+
+    def test_go_deref_store_not_an_accessor(self):
+        r = self._run("G", "a.go",
+                      "func G(p *int, s *S) int {\n*p = 9\nreturn s.f\n}")
+        assert not r.skip_llm
+
+    def test_py_side_effect_before_return_not_an_accessor(self):
+        r = self._run("f", "a.py",
+                      "def f(path, ok):\n    os.unlink(path)\n    return ok",
+                      callees=[{"name": "os.unlink"}])
+        assert not r.skip_llm
+
+    def test_c_refcount_put_not_an_accessor(self):
+        r = self._run("put", "a.c",
+            "void put(struct obj *p){\np->refs--;\nreturn p->parent;\n}")
+        assert not r.skip_llm
+
+    def test_py_hash_continuation_hides_no_sink(self):
+        r = self._run("f", "a.py",
+            'def f(c):\n    s = """\n#"""; os.system(c)\n    return ok')
+        assert not r.skip_llm
+
+    def test_c_array_store_control_still_refused(self):
+        r = self._run("get_val", "a.c",
+            "int get_val(struct ctx *x, int v) {\n  y[0] = v;\n"
+            "  return x->val;\n}")
+        assert not r.skip_llm
+
+    # ── keep direction: honest accessors keep their skip ────────────
+
+    def test_c_field_accessor_keeps_skip(self):
+        r = self._run("get_uid", "a.c",
+            "int get_uid(const struct ctx *x)\n{\n"
+            "    /* owner uid */\n    return x->owner_uid;\n}")
+        assert r.skip_llm and "accessor" in r.skip_reason
+
+    def test_py_self_field_accessor_keeps_skip(self):
+        r = self._run("value", "a.py",
+                      "def value(self):\n    return self._value")
+        assert r.skip_llm and "accessor" in r.skip_reason
+
+    def test_py_docstring_accessor_keeps_skip(self):
+        r = self._run("value", "a.py",
+                      'def value(self):\n    """The value."""\n'
+                      "    return self._value")
+        assert r.skip_llm and "accessor" in r.skip_reason
+
+    def test_go_field_accessor_keeps_skip(self):
+        r = self._run("F", "a.go", "func (s *S) F() int {\nreturn s.f\n}")
+        assert r.skip_llm and "accessor" in r.skip_reason
+
+    def test_java_field_accessor_keeps_skip(self):
+        r = self._run("getName", "A.java",
+            "public String getName() {\n    return this.name;\n}")
+        assert r.skip_llm and "accessor" in r.skip_reason
+
+    def test_returned_sink_reference_refused_every_language(self):
+        # The dangerous-name gate the lua arm documented, applied to
+        # every arm: handing a sink back as a VALUE is never a clean
+        # accessor.
+        for name, fp, src in [
+            ("get", "a.py", "def get(self):\n    return system"),
+            ("get", "a.go", "func get() F {\nreturn os.Exec\n}"),
+        ]:
+            r = self._run(name, fp, src)
+            assert not r.skip_llm, (fp, src)
