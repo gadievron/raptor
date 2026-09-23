@@ -454,10 +454,15 @@ def _render_bench_markdown(summary: _BenchSummary) -> str:
         for t, n in tool_calls_total.most_common()
     ]
 
-    # Failure cluster (excluding PASS). Markdown-escape pipes and
-    # flatten newlines so a multi-line error stays in one table cell.
+    # Failure cluster (excluding PASS). Error text relays agent/tool
+    # exception strings (LLM- and repo-derived bytes) into a table cell:
+    # md_inline flattens CR/LF (CommonMark treats a bare CR as a line
+    # ending too), escapes in-slot structure, and strips control bytes —
+    # pipe-and-newline-only escaping left CR and ANSI through.
     def _error_cell(error: str | None) -> str:
-        return (error or "")[:200].replace("|", "\\|").replace("\n", " ")
+        from core.security.markdown_render import md_inline
+
+        return md_inline((error or "")[:200], max_chars=250)
 
     fail_lines = [
         f"| {r.cve_id} | {r.error_class or 'Other'} | {_error_cell(r.error)} |"
