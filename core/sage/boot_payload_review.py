@@ -24,6 +24,14 @@ Modes (driven by ``libexec/raptor-sage-setup``):
   merge    --authorized <stamp> --live <capture>   approved v2 BODY on stdout
   deny     --authorized <stamp> --live <capture>   rejected v2 BODY on stdout
 
+Live-only display/split helpers (no stamp, no guard import — the
+review prompt's drill-down and the install lane's first-capture
+display use these):
+  show-tool    --live <capture> --name <tool|#n>   one full definition
+  tools-digest --live <capture>                    first-capture digest
+  strip-tools  --live <capture>                    capture minus tools.list
+                                                   (byte-preserving)
+
 ``merge`` authorizes the live variants that are PENDING — the ones the
 compare screen showed as "Not Authorized". Previously rejected
 variants stay rejected: the compare display labels them "Rejected by
@@ -681,6 +689,45 @@ def _print_tools_drift(auth_tools: list, rows: list) -> None:
                               f'"{_line(excerpt)}"')
 
 
+def strip_tools_text(text: str) -> str:
+    """The capture body with the ``### tools.list`` section removed,
+    every other byte preserved.
+
+    Install-lane helper: a non-interactive first install stamps the
+    boot surfaces only (the tools surface defers to the interactive
+    review), and the first-capture display shows the boot text
+    full-size while the tools render as the digest. Byte preservation
+    matters — the stamp records raw text and the guard compares raw
+    text, so this must never re-render the surviving sections. Raw
+    ``\\n`` scanning only, mirroring the parsers (a splitlines-class
+    separator embedded in payload text must not fake a section
+    boundary here either).
+    """
+    out = []
+    in_tools = False
+    for line in text.split("\n"):
+        if line.startswith("### "):
+            in_tools = line[4:].strip() == SURFACE_TOOLS
+        if not in_tools:
+            out.append(line)
+    return "\n".join(out)
+
+
+def tools_digest(live: dict) -> int:
+    """Install-lane digest of a capture's tools surface (all entries
+    are first-capture pending by definition — there is no stamp yet)."""
+    tools = _json_lines((live or {}).get(SURFACE_TOOLS))
+    label = SURFACE_TOOLS
+    bar = "─" * max(4, 58 - len(label))
+    print(f"── {label} {bar}")
+    if not tools:
+        print("  no tool definitions captured")
+        return 0
+    _print_tools_digest([(v, NEW) for v in tools],
+                        decision_hint=_HINT_PROMPT)
+    return 0
+
+
 def show_tool(live: dict, name: str) -> int:
     """Print the full (escaped) definition of one live tool.
 
@@ -987,16 +1034,20 @@ def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="boot_payload_review")
     parser.add_argument("mode",
                         choices=("compare", "summary", "merge", "deny",
-                                 "show-tool"))
-    # Required for the stamp-comparing modes only: show-tool renders
-    # one LIVE definition (a drill-down, no comparison), so demanding
-    # a stamp path there would be a lie about what it reads.
+                                 "show-tool", "tools-digest",
+                                 "strip-tools"))
+    # Required for the stamp-comparing modes only: show-tool /
+    # tools-digest / strip-tools operate on the LIVE capture alone (a
+    # drill-down and the install lane's display/stamp split — no
+    # comparison), so demanding a stamp path there would be a lie
+    # about what they read.
     parser.add_argument("--authorized")
     parser.add_argument("--live", required=True)
     parser.add_argument("--name",
                         help="tool name (or #<n>) for show-tool")
     args = parser.parse_args(argv)
-    if args.mode != "show-tool" and not args.authorized:
+    live_only = args.mode in ("show-tool", "tools-digest", "strip-tools")
+    if not live_only and not args.authorized:
         parser.error(f"--authorized is required for {args.mode}")
     if args.mode == "show-tool" and not args.name:
         parser.error("show-tool requires --name")
@@ -1016,6 +1067,9 @@ def main(argv: list[str]) -> int:
                     f"{_MAX_CAPTURE_CHARS} characters — refusing to "
                     "review it", file=sys.stderr)
                 return 3
+            # Parsed even for strip-tools (which emits raw bytes): the
+            # duplicate-header rejection must fire before any mode acts
+            # on a possibly-injected capture.
             live = parse_sections(raw)
     except OSError as exc:
         print(f"boot_payload_review: cannot read live capture: {exc}",
@@ -1031,6 +1085,11 @@ def main(argv: list[str]) -> int:
 
     if args.mode == "show-tool":
         return show_tool(live, args.name)
+    if args.mode == "tools-digest":
+        return tools_digest(live)
+    if args.mode == "strip-tools":
+        sys.stdout.write(strip_tools_text(raw))
+        return 0
 
     # The comparing modes import the guard (its semantics are the
     # single source of truth); the drill-down above stays guard-free —

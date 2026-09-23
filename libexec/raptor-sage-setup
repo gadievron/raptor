@@ -1228,16 +1228,90 @@ sys.stdout.write("\n".join(rendered))
         fi
         # First capture on this machine: show the operator exactly what
         # they are authorizing — non-printables escaped so the display
-        # is honest (the recorded stamp keeps the raw bytes).
-        echo "Recording the SAGE boot payload as operator-authorized."
+        # is honest (the recorded stamp keeps the raw bytes). The boot
+        # surfaces render full-text (short, readable prose); the
+        # tools.list section renders as the reviewer's DIGEST instead
+        # (30+ full JSON definitions are an unreviewable wall — and can
+        # trip the renderer's fail-closed size ceilings outright), with
+        # full definitions one drill-down away. On a TTY the stamp
+        # waits for an explicit confirm; a NON-interactive first
+        # install records the boot surfaces as before (the operator's
+        # deliberate install invocation is that authorization) but
+        # leaves tools.list UNBASELINED — the guard forwards it with
+        # the unverified notice until `raptor-sage-setup review`
+        # baselines it at the operator's terminal, so a surface no one
+        # looked at is never stamped authorized.
+        local reviewer="$RAPTOR_DIR/core/sage/boot_payload_review.py"
+        local tmp_capture display_payload has_tools=0 tools_deferred=0
+        tmp_capture=$(mktemp); _RAPTOR_TMP_FILES+=("$tmp_capture")
+        printf '%s\n' "$payload" > "$tmp_capture"
+        display_payload="$payload"
+        # Probe the temp file, not a printf pipeline: grep -q exits on
+        # the first match and a large payload still mid-write would
+        # SIGPIPE printf — under pipefail that misreads "has tools" as
+        # "no tools" exactly on the payloads that most need the split.
+        if grep -qxF '### tools.list' "$tmp_capture"; then
+            has_tools=1
+            if ! display_payload=$(python3 "$reviewer" strip-tools --live "$tmp_capture"); then
+                echo "raptor-sage-setup: could not split the tools surface out of the payload display." >&2
+                echo "Refusing to record a boot-payload stamp that could not be reviewed." >&2
+                return 1
+            fi
+        fi
+        echo "First capture of the SAGE boot payload — review before it is recorded."
         echo "Payload text follows (non-printables escaped for display):"
         echo "-----------------------------------------------------------"
-        if ! printf '%s\n' "$payload" | _render_payload_display; then
+        if ! printf '%s\n' "$display_payload" | _render_payload_display; then
             echo "raptor-sage-setup: could not render the payload text safely (sanitiser failed)." >&2
             echo "Refusing to record a boot-payload stamp that could not be reviewed." >&2
             return 1
         fi
         echo "-----------------------------------------------------------"
+        if [ "$has_tools" = "1" ]; then
+            if ! python3 "$reviewer" tools-digest --live "$tmp_capture"; then
+                # Fail toward LESS authority, loudly: no digest means
+                # the tools surface was never reviewable, so it must
+                # not ride the stamp — defer it to the review lane.
+                echo "raptor-sage-setup: could not render the tools digest." >&2
+                echo "tools.list will NOT be baselined by this install; baseline it later" >&2
+                echo "at your own terminal: libexec/raptor-sage-setup review" >&2
+                tools_deferred=1
+            fi
+        fi
+        if [ -t 0 ]; then
+            local answer
+            while true; do
+                read -r -p "Baseline this surface? [y=record (trust-on-first-use) / d <tool>=show full definition / N=abort] " answer || answer=""
+                case "$answer" in
+                    y|Y|yes|YES) break ;;
+                    [dD]\ ?*)
+                        python3 "$reviewer" show-tool --live "$tmp_capture" \
+                            --name "${answer#[dD] }" || true
+                        ;;
+                    *)
+                        echo "NOT recorded. No boot payload is authorized; the MCP wrapper" >&2
+                        echo "withholds server boot instructions (and the guard notes the" >&2
+                        echo "tools surface as unverified) until one is. Re-run at your" >&2
+                        echo "terminal: bin/raptor sage-setup install" >&2
+                        return 0
+                        ;;
+                esac
+            done
+        elif [ "$has_tools" = "1" ]; then
+            tools_deferred=1
+            echo "tools.list left unbaselined (non-interactive first install): sessions"
+            echo "receive the server's tools/list with an unverified notice until you"
+            echo "baseline it at your own terminal: libexec/raptor-sage-setup review"
+        fi
+        if [ "$tools_deferred" = "1" ] && [ "$has_tools" = "1" ]; then
+            if ! payload=$(python3 "$reviewer" strip-tools --live "$tmp_capture"); then
+                echo "raptor-sage-setup: could not strip the deferred tools surface from the stamp." >&2
+                echo "Refusing to record definitions that were never reviewed." >&2
+                return 1
+            fi
+            # The stamp hash must cover exactly what is recorded.
+            sha=$(printf '%s\n' "$payload" | sha256sum | awk '{print $1}')
+        fi
     fi
     # Same-fs mktemp + atomic mv — see enable_sage_env for the rationale.
     mkdir -p "$(dirname "$AUTHORIZED_PAYLOAD")"
