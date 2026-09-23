@@ -216,7 +216,13 @@ _RESOURCE_LIFECYCLE_PATTERN = re.compile(
 _OWNED_TYPE_PATTERN = re.compile(r"\bstruct\s+(\w+)\s*\*")
 _REFERENCED_TYPE_PATTERN = re.compile(r"\bstruct\s+(\w+)\b")
 
-_FLEX_ARRAY_PATTERN = re.compile(r"(\w+)\s+(\w+)\s*\[\s*(?:0|1)?\s*\]\s*;")
+# Gated optional atoms (bound digit, bracket tail): the naive
+# ``\[\s*(?:0|1)?\s*\]\s*;`` chained whitespace spans around
+# optional atoms — quadratic on a field-shaped line ending in a
+# whitespace run.
+_FLEX_ARRAY_PATTERN = re.compile(
+    r"(\w+)\s+(\w+)\s*\[\s*(?:[01]\s*)?\]\s*;",
+)
 
 _FLAG_CHECK_PATTERN = re.compile(
     r"\bif\s*\([^)]*\b(\w+)\s*&\s*(\w+)",
@@ -265,7 +271,7 @@ _STATE_TRANSITION_PATTERN = re.compile(
 _GATE_CHECK_PATTERN = re.compile(
     r"(?:"
     r"err\s*=\s*(\w+_check_\w+)\s*\("          # err = check_key(...)
-    r"|if\s*\(\s*!?\s*(\w+)->(\w+)\s*\)\s*\{?"  # if (!obj->field) { return/goto
+    r"|if\s*\(\s*(?:!\s*)?(\w+)->(\w+)\s*\)\s*\{?"  # if (!obj->field) { return/goto
     r"|if\s*\(\s*atomic_read\s*\(&(\w+)->(\w+)\)"  # if (atomic_read(&obj->field))
     r")",
 )
@@ -275,8 +281,11 @@ _DISPATCH_TABLE_PATTERN = re.compile(
 )
 
 # Value constraint signals
+# The optional brace gates its own trailing whitespace: the naive
+# ``\)\s*\{?\s*\n`` chained spans around it — quadratic on an
+# if-line followed by a whitespace run.
 _NULL_GUARD_PATTERN = re.compile(
-    r"if\s*\(\s*!(\w+(?:->\w+)*)\s*\)\s*\{?\s*\n\s*"
+    r"if\s*\(\s*!(\w+(?:->\w+)*)\s*\)\s*(?:\{\s*)?\n\s*"
     r"(?:return\s+(-\w+)|goto\s+(\w+))",
 )
 
@@ -285,8 +294,10 @@ _VALIDATION_BOUND_PATTERN = re.compile(
     r"\s*\{?\s*\n?\s*return\s+(-\w+)",
 )
 
+# \b keeps the unanchored scan from restarting inside an
+# identifier run (quadratic); earliest-start matches unchanged.
 _ALLOC_THEN_CHECK_PATTERN = re.compile(
-    r"(\w+(?:->\w+)*)\s*=\s*(\w+alloc\w*|alloc_\w+)\s*\([^)]*\)\s*;"
+    r"\b(\w+(?:->\w+)*)\s*=\s*(\w+alloc\w*|alloc_\w+)\s*\([^)]*\)\s*;"
     r"\s*\n\s*if\s*\(\s*!(?:\1)\s*\)",
 )
 
@@ -847,11 +858,15 @@ def _extract_prototypes_regex(
 ) -> list[dict]:
     """Fallback prototype extraction when tree-sitter is unavailable."""
     nl_index = _nl_index if _nl_index is not None else _build_newline_index(source)
+    # Bounded whitespace gaps and parameter window (same discipline
+    # as _C_FUNC_RE above): unbounded ``\s+``/``[^)]*`` reach let
+    # every line anchor re-scan shared runs — quadratic on planted
+    # prototype-shaped lines. Bounds sit far above real prototypes.
     proto_re = re.compile(
         r"^(?:extern\s+)?(?:const\s+)?(?:unsigned\s+)?"
-        r"(?:struct\s+\w+(?:\s+\*\s*|\s+)|enum\s+\w+\s+|"
-        r"\w+(?:\s+\*\s*|\s+))"
-        r"(\w+)\s*\([^)]*\)\s*;",
+        r"(?:struct\s+\w+(?:\s{1,256}\*\s{0,256}|\s{1,256})|enum\s+\w+\s{1,256}|"
+        r"\w+(?:\s{1,256}\*\s{0,256}|\s{1,256}))"
+        r"(\w+)\s*\([^)]{0,4096}\)\s*;",
         re.MULTILINE,
     )
     results = []
@@ -963,12 +978,12 @@ def _extract_param_names(sig: str, type_name: str, lang: str) -> list[str]:
     elif lang in ("java", "go", "rust", "js", "python"):
         pat = re.compile(
             rf"\b(?:{re.escape(type_name)}|{re.escape(bare)})"
-            rf"\s*[*&]?\s*(\w+)",
+            rf"\s*(?:[*&]\s*)?(\w+)",
         )
     else:
         pat = re.compile(
             rf"\b(?:{re.escape(type_name)}|{re.escape(bare)})"
-            rf"\s*[*&]?\s*(\w+)",
+            rf"\s*(?:[*&]\s*)?(\w+)",
         )
     return pat.findall(sig)
 
