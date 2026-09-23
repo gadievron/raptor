@@ -719,15 +719,59 @@ class TestPhase4AuthContextIsolation(unittest.TestCase):
             self.assertNotIn(scanner.client, seen)
             fresh.close.assert_called_once_with()
 
-    def test_unauthenticated_scan_keeps_shared_client(self):
+    def test_unauthenticated_scan_also_probes_through_fresh_client(self):
+        """The isolation is unconditional: on unauthenticated scans the
+        login-probing checks can GRANT a session (a default-credential
+        success drops the admin cookie into whatever jar they probe
+        through), and nothing removes it — the rest of the scan would
+        silently run as the discovered admin while findings stay
+        stamped unauthenticated."""
         with tempfile.TemporaryDirectory() as tmpdir:
             scanner = _make_scanner(tmpdir)
             self.assertIsNone(scanner.session)
-            scanner.client.transport_errors = 0
-            with patch.object(scanner, "_make_principal_client") as make_client:
+            fresh = MagicMock()
+            fresh.transport_errors = 0
+            with patch.object(
+                scanner, "_make_principal_client", return_value=fresh,
+            ) as make_client:
                 seen = self._run_passive(scanner)
-            make_client.assert_not_called()
-            self.assertEqual(seen, [scanner.client])
+            make_client.assert_called_once_with()
+            self.assertEqual(seen, [fresh])
+            self.assertNotIn(scanner.client, seen)
+            fresh.close.assert_called_once_with()
+
+    def test_granted_login_cookie_never_reaches_the_shared_jar(self):
+        """A check that wins a login stamps its cookie only on the
+        phase-scoped client; the shared scan client's jar (what phases
+        6/6v/6o ride) stays principal-free."""
+
+        class _LoginWinningCheck(_RecordingCheck):
+            __name__ = "LoginWinningCheck"
+
+            def run(self, client, *args, **kwargs):
+                type(self).seen_clients.append(client)
+                client.cookies["session"] = "admintok"
+                return []
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scanner = _make_scanner(tmpdir)
+            self.assertIsNone(scanner.session)
+            scanner.client.cookies = {}
+            fresh = MagicMock()
+            fresh.transport_errors = 0
+            fresh.cookies = {}
+            _LoginWinningCheck.seen_clients = []
+            discovery = _discovery_mock()
+            with patch(
+                "packages.web.checks.registry.unauthenticated",
+                return_value=[_LoginWinningCheck],
+            ), patch.object(
+                scanner, "_make_principal_client", return_value=fresh,
+            ):
+                scanner.execution_policy = MagicMock()
+                scanner._phase_passive_checks(discovery, {})
+            self.assertEqual(fresh.cookies, {"session": "admintok"})
+            self.assertEqual(scanner.client.cookies, {})
 
 
 class TestPhase5SessionIntegrity(unittest.TestCase):
