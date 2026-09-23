@@ -71,8 +71,14 @@ _REFUSAL_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"(guidelines|policy|policies|usage\s+policy)\b",
         re.IGNORECASE,
     ),
+    # The gap between the persona phrase and the refusal keyword is
+    # bounded: with an unbounded gap, response text repeating the
+    # persona phrase makes every occurrence re-scan the rest of the
+    # line — quadratic. Real refusals keep the keyword nearby; 200
+    # chars is generous (beyond it the refusal is not classified).
     re.compile(
-        r"\b(as\s+an\s+AI|as\s+a\s+language\s+model)\b.*?\b(cannot|can'?t|won'?t)\b",
+        r"\b(as\s+an\s+AI|as\s+a\s+language\s+model)\b"
+        r".{0,200}?\b(cannot|can'?t|won'?t)\b",
         re.IGNORECASE,
     ),
     re.compile(r"\bI\s+don'?t\s+feel\s+comfortable\b", re.IGNORECASE),
@@ -100,7 +106,10 @@ _REFUSAL_PATTERNS: tuple[re.Pattern[str], ...] = (
     # "unable to help|assist") and "violate our Usage Policy" (not "violate
     # the/my/Anthropic's policy"), so the patterns above don't match. These two
     # patterns close that gap.
-    re.compile(r"\bAPI\s+Error:.*?\bunable\s+to\s+respond\b", re.IGNORECASE),
+    # Bounded gap: same scan-restart rationale as the persona
+    # pattern above.
+    re.compile(r"\bAPI\s+Error:.{0,200}?\bunable\s+to\s+respond\b",
+               re.IGNORECASE),
     re.compile(r"\bviolat(?:e|es)\s+(?:our|the)\s+Usage\s+Policy\b", re.IGNORECASE),
 )
 

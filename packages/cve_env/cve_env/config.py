@@ -604,10 +604,15 @@ VERSION_ASSERTION_CMD_PATTERN: re.Pattern[str] = re.compile(
     r"|\bnpm (ls|list)\b"
     r"|\byarn list\b"
     r"|\bgo version\b"
-    r"|\bfind .*\.jar\b"
+    # Bounded gaps in the find/cat/unzip rows: with unbounded `.*`, a
+    # command line repeating the head token makes every occurrence
+    # re-scan the rest of the line — quadratic. Real command
+    # arguments sit far inside 1000 chars (beyond it the command is
+    # not credited as a version assertion).
+    r"|\bfind .{0,1000}\.jar\b"
     r"|\bunzip -l\b"
-    r"|\bunzip -p .*MANIFEST\.MF\b"
-    r"|\bcat .*pom\.xml\b"
+    r"|\bunzip -p .{0,1000}MANIFEST\.MF\b"
+    r"|\bcat .{0,1000}pom\.xml\b"
     r"|\bphp -m\b"
     r"|\bphpversion\b"
     r"|\bapache2 -v\b"
@@ -618,7 +623,7 @@ VERSION_ASSERTION_CMD_PATTERN: re.Pattern[str] = re.compile(
     r"|\bdrush status\b"
     r"|\bwp core version\b"
     r"|\brpm -qa?\b"
-    r"|\bcat /etc/.*-release\b"
+    r"|\bcat /etc/.{0,1000}-release\b"
     r"|\bcat /etc/issue\b"
     # Lockfile-grep + versioned-dir finds are legitimate version proofs. The
     # strict-marker gate (loop._has_specific_version_marker) still requires the
@@ -628,6 +633,6 @@ VERSION_ASSERTION_CMD_PATTERN: re.Pattern[str] = re.compile(
     r"|\bcomposer\.lock\b"
     r"|\bpackage-lock\.json\b"
     r"|\bPipfile\.lock\b"
-    r"|\bfind .* -name ['\"]?[a-z]+[_.-]\d+\.\d+",
+    r"|\bfind .{0,1000} -name ['\"]?[a-z]+[_.-]\d+\.\d+",
     re.IGNORECASE,
 )
