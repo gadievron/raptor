@@ -148,3 +148,67 @@ class TestNormaliseTracePath:
 
         assert normalise_trace_path(
             "/repo/shared/util.c", {"shared/util.c"}) == "shared/util.c"
+
+
+class TestNormaliseTracePathIndex:
+    """The basename index keeps the suffix strategy O(candidates):
+    per-step O(inventory) scans admitted hours of CPU from one
+    budget-max hostile trace on the render path."""
+
+    def test_index_and_scan_agree(self):
+        from core.coverage.edges import normalise_trace_path
+        from core.coverage.summary import _inventory_name_index
+
+        inv = {"shared/util.c", "a/util.c", "src/main.c", ".hidden.c"}
+        idx = _inventory_name_index(inv)
+        for raw in ("/repo/src/main.c", "src/main.c", "./src/main.c",
+                    "/x/util.c", "/repo/shared/util.c",
+                    "../shared/util.c", "/nowhere/else.c", ".hidden.c"):
+            assert (normalise_trace_path(raw, inv, idx)
+                    == normalise_trace_path(raw, inv)), raw
+
+    def test_suffix_lookup_never_scans_inventory(self):
+        from core.coverage.edges import normalise_trace_path
+        from core.coverage.summary import _inventory_name_index
+
+        class CountingSet(set):
+            iters = 0
+
+            def __iter__(self):
+                CountingSet.iters += 1
+                return super().__iter__()
+
+        inv = CountingSet({"shared/util.c", "src/main.c"})
+        idx = _inventory_name_index(set(inv))
+        CountingSet.iters = 0
+        # Unresolvable absolute step — the hostile-trace shape that
+        # previously scanned the whole inventory per step.
+        assert normalise_trace_path("/abs/no/such.c", inv, idx) is None
+        assert normalise_trace_path("/repo/src/main.c", inv, idx) \
+            == "src/main.c"
+        assert CountingSet.iters == 0, (
+            "suffix strategy iterated the inventory despite the index"
+        )
+
+    def test_collect_touched_edges_passes_the_index(self, tmp_path,
+                                                    monkeypatch):
+        import core.coverage.edges as edges_mod
+
+        seen: list[bool] = []
+        real = edges_mod.normalise_trace_path
+
+        def _spy(raw, inv_paths, name_index=None):
+            seen.append(name_index is not None)
+            return real(raw, inv_paths, name_index)
+
+        monkeypatch.setattr(edges_mod, "normalise_trace_path", _spy)
+        _write_trace(tmp_path, "flow-trace-x.json", [{
+            "type": "call",
+            "call_site": "src/a.c:3",
+            "definition": "src/b.c:11",
+        }])
+        edges_mod.collect_touched_edges(tmp_path, _CHECKLIST)
+        assert seen and all(seen), (
+            "collect_touched_edges called normalise_trace_path "
+            "without the basename index"
+        )
