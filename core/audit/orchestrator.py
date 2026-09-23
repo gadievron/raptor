@@ -2563,12 +2563,25 @@ def review_one_function(
     if gap_key_mech in feeds_security_keys:
         ctx["feeds_security_decision"] = True
 
-    if ctx.get("source") and gap.get("file", "").endswith(".py"):
+    # Gates D / E-4 are AST-based: ctx["source"] is the PROMPT
+    # rendering — every line carries a "{n:4d}  " number prefix
+    # (context._read_source) that ast.parse rejects, so feeding it
+    # made both gates silently return []. Hand them the raw span
+    # (the gap's own extracted source, else the disk read the
+    # structural checkers use).
+    _gate_raw_src = gap.get("source") or _read_raw_source(
+        config.target_path,
+        gap.get("file", ""),
+        gap.get("line_start", 0),
+        gap.get("line_end"),
+    )
+
+    if _gate_raw_src and gap.get("file", "").endswith(".py"):
         with contextlib.suppress(*_ENRICH_ERRORS):
             from .mechanical_gates import detect_constant_dangerous_calls
 
             const_calls = detect_constant_dangerous_calls(
-                ctx["source"],
+                _gate_raw_src,
                 gap["file"],
             )
             if const_calls:
@@ -2580,12 +2593,12 @@ def review_one_function(
 
             ctx["callers"] = sort_callers_by_constraint(ctx["callers"])
 
-    if ctx.get("source"):
+    if _gate_raw_src:
         with contextlib.suppress(*_ENRICH_ERRORS):
             from .mechanical_gates import extract_type_constraints
 
             tc = extract_type_constraints(
-                ctx["source"],
+                _gate_raw_src,
                 gap.get("file", ""),
                 gap.get("name", ""),
             )
