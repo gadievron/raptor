@@ -130,3 +130,30 @@ def _tmp_src(tmp_path, text):
     f = tmp_path / "app.py"
     f.write_text(text, encoding="utf-8")
     return f
+
+
+def test_parity_finding_id_distinguishes_kinds(tmp_path, monkeypatch):
+    """A charset and a charset_sub observation at the same
+    file/line/cwe coordinates are two lexical decisions; the report's
+    last-record-wins dedupe must not collapse them."""
+    import core.dataflow.smt_barrier as sb
+    from core.dataflow import sanitizer_cut_config as scc
+    from core.dataflow.sanitizer_cut_parity import read_parity_records
+
+    log = tmp_path / "parity.jsonl"
+    monkeypatch.setattr(
+        scc, "parity_log_path", lambda: str(log),
+    )
+    monkeypatch.setattr(
+        "core.dataflow.sanitizer_cut_parity.value_bound_verdict_for",
+        lambda finding: "unresolved",
+    )
+    for kind in ("charset", "charset_sub"):
+        sb._maybe_record_parity(
+            kind=kind, file_path="app.py", validator_line=3,
+            sink_line=9, cwe="CWE-22", language="python",
+            lexical_suppressed=True,
+        )
+    records = read_parity_records(log)
+    assert len(records) == 2
+    assert len({r.finding_id for r in records}) == 2

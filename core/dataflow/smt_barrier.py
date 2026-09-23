@@ -1682,7 +1682,14 @@ def _maybe_record_parity(
         }
         verdict = value_bound_verdict_for(finding)
         record = build_parity_record(
-            finding_id=f"{file_path}:{validator_line}:{sink_line}:{cwe}",
+            # ``kind`` joins the id: a charset and a charset_sub
+            # observation at the same coordinates are two different
+            # lexical decisions, and the report's last-record-wins
+            # dedupe would otherwise collapse them (under-counting one
+            # shape in the window that gates lexical removal).
+            finding_id=(
+                f"{file_path}:{validator_line}:{sink_line}:{cwe}:{kind}"
+            ),
             file=file_path,
             cwe=cwe,
             language=language,
