@@ -319,3 +319,16 @@ def test_weak_crypto_case_negatives_stay_silent(rule_rel: str):
     results = _run_semgrep(rule_file, [target])["results"]
     hits = [(r["check_id"], r["start"]["line"]) for r in results]
     assert not hits, f"{rule_rel} fired on clean fixture: {hits}"
+
+
+def test_prototype_pollution_impl_exact_lines():
+    """Exact-line pin for the deep-set + unguarded-merge rules: the
+    Object.keys-iterating merge is individually witnessed (Object.keys
+    is NOT a guard — JSON.parse yields an own __proto__ key that it
+    enumerates), and the fires-at-least-once positive gate alone would
+    let it regress silently."""
+    rule_file = _RULES_DIR / "web/prototype-pollution-implementation.yaml"
+    results = _run_semgrep(
+        rule_file, [_FIXTURES / "protopoll_impl_pos.js"],
+    )["results"]
+    assert sorted({r["start"]["line"] for r in results}) == [1, 16, 23]

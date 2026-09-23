@@ -16,3 +16,11 @@ app.post("/prefs", (req, res) => {
   settings[section]["theme"] = req.body.value;
   res.send("ok");
 });
+
+// Receiver-anchored sources: a .query/.body field on a non-request
+// object is not attacker input (self-taint shape).
+function applyStoredPrefs(store, settings) {
+  const p1 = store.query.section;
+  const p2 = store.query.name;
+  settings[p1][p2] = store.body.value;
+}
