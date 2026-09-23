@@ -716,6 +716,28 @@ def test_credential_banner_lane_is_capped_with_one_shot_notice(
     assert len(notices) == 1, "exhaustion must be announced exactly once"
 
 
+def test_ambiguous_counter_counts_a_buffered_record_once(tmp_path):
+    """One pre-registration ambiguous record must count ONCE in
+    parse_ambiguous_records: it is evaluated twice through
+    _filter_and_append (reader pass buffers it; register_target_pid's
+    parent-thread flush re-enters), and counting before the pending
+    gate double-counted it — inflating the operator-facing tamper
+    diagnostic a forensic reader compares against the JSONL's flagged
+    rows, and double-firing the one-shot spoofing warning."""
+    streamer = seatbelt_audit.LogStreamer(tmp_path, require_scope=True)
+    import os as _os
+    rec = {"path": "/tmp/x", "type": "read",
+           "target_pid": _os.getpid(), "parse_ambiguous": True}
+    streamer._filter_and_append(rec)  # pre-registration: buffered
+    assert streamer._ambiguous_records == 0, (
+        "a buffered (not yet evaluated) record must not be counted")
+    assert len(streamer._pending) == 1
+    streamer.register_target_pid(_os.getpid())  # parent-thread flush
+    assert streamer._ambiguous_records == 1, (
+        "one record, one count — the flush re-entry double-counted")
+    assert streamer._ambiguous_admitted == 1
+
+
 def test_credential_banner_cap_matches_linux_tracer(tmp_path):
     """Both platforms' banner lanes carry the SAME cap — the constant
     is imported, not copied, so they cannot drift apart silently."""
