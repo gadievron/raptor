@@ -81,8 +81,14 @@ def check_landlock_available() -> bool:
         try:
             libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
             # Step 1: ABI probe — landlock_create_ruleset(NULL, 0, version=1).
+            # ABI versions start at 1, so <= 0 is the failure test: a
+            # zero would otherwise be accepted here but read as
+            # unavailable by every later cache check (`cache > 0`) —
+            # first call True, every subsequent call False. Treat any
+            # non-positive result as unavailable (fail closed,
+            # consistently).
             result = libc.syscall(_SYS_LANDLOCK_CREATE, 0, 0, 1)
-            if result < 0:
+            if result <= 0:
                 state._landlock_cache = -1
                 logger.debug("Sandbox: Landlock not available (errno=%d)", ctypes.get_errno())
                 return False
