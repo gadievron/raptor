@@ -19,15 +19,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-def _safe_float(name: str, default: float) -> float:
-    """Parse a float from env ``name``; fall back to ``default`` on absence or
-    malformed value (never raises at module scope)."""
-    try:
-        return float(os.environ.get(name) or default)
-    except (ValueError, TypeError):
-        return default
-
-
 def _safe_int(name: str, default: int) -> int:
     """Parse an int from env ``name``; fall back to ``default`` on absence or
     malformed value (never raises at module scope)."""
@@ -282,36 +273,6 @@ def get_recovery_gap_turns() -> int:
 
 
 
-# force-resolve-before-giveup knobs: make the cascade-skip re-query
-# continuation an operator dial — its compute cost on genuinely unbuildable
-# cascade-skips (~6× a clean unresolvable) is a trade-off.
-# `CVE_ENV_FORCE_RESOLVE_MAX=0` disables it entirely.
-_DEFAULT_FORCE_RESOLVE_MAX: int = 1
-
-
-
-
-_DEFAULT_FORCE_RESOLVE_BUDGET_FRACTION: float = 0.50
-
-
-
-
-_DEFAULT_BENIGN_VERIFY_CONTINUATION_MAX: int = 1
-
-
-
-
-
-
-_DEFAULT_PROPRIETARY_VERIFY_CONTINUATION_MAX: int = 1
-
-
-
-
-
-
-
-
 # image_resolve aggregate per-call budget. A single image_resolve call can run
 # ~1430s (10 candidates x ~70s + a 30s cooldown re-probe), alone approaching
 # the 1440s bench wall — and the connectivity breaker is suppressed during it
@@ -351,8 +312,12 @@ def get_recovery_eligible_stages() -> frozenset[str]:
 #
 # Override per stage: ``CVE_ENV_BUDGET_<STAGE>=<usd>`` env var.
 #
-# These are SOFT thresholds by default (telemetry only). Enable HARD
-# enforcement via ``CVE_ENV_BUDGET_<STAGE>_MODE=hard``.
+# These are SOFT thresholds (telemetry only): the outcome generator
+# surfaces over-budget stages via ``over_budget_stages``; nothing
+# terminates a run on them. The hard-enforcement mode that once read
+# ``CVE_ENV_BUDGET_<STAGE>_MODE`` belonged to the retired SDK engine
+# and was removed with it — the surviving run-level control is
+# core_loop's overall cost budget (``budget_exceeded``).
 _DEFAULT_STAGE_BUDGETS: dict[str, float] = {
     "RESEARCH": 0.50,
     "RESOLVE": 0.20,
@@ -422,17 +387,6 @@ def over_budget_stages(stage_costs: dict[str, float]) -> list[str]:
     return over
 
 
-# Per-stage budget enforcement mode.
-# Three modes:
-#   "soft" (default) — telemetry + over_budget_stages_list; NO termination
-#   "hard"           — over-budget terminates the run with
-#                      give_up_reason = f"stage_budget_exhausted_{stage}"
-#   "off"            — skip the budget check entirely (no telemetry,
-#                      no enforcement; useful when stage budgets aren't
-#                      meaningful for a particular use case)
-_VALID_BUDGET_MODES: frozenset[str] = frozenset({"soft", "hard", "off"})
-
-
 
 
 
@@ -449,30 +403,6 @@ MAX_COST_EXTENSIONS: int = _env_parse("CVE_ENV_MAX_COST_EXTENSIONS", int, 1)
 """Maximum number of cost-cap extensions per CVE. Default 1 (single
 extension); set to 0 to fully disable adaptive extension. Override via env var
 ``CVE_ENV_MAX_COST_EXTENSIONS``."""
-
-
-# Per-tool default attempt caps.
-# Backstops for cost-spirals; agent still reasons per-input. Each entry MUST
-# have M-class evidence (≥3 benches) AND be set at-or-above
-# max-across-successful-CVEs so no historical success is regressed.
-# Env var CVE_ENV_MAX_<TOOL>_ATTEMPTS still overrides.
-#
-# image_resolve=5: catches 6-call resolve spirals. Evidence: across benched
-#   runs, sampled successful CVEs show image_resolve max-successful=5, p95=3,
-#   p50=1 → cap=5 fires at attempt 6, zero historical regression.
-#
-# Other tools retain default 0 (unbounded) until their own M-class evidence
-# + pre-flight grounds a default. A verify spiral needs a consecutive-error
-# counter (not total-call counter) — deferred.
-_PER_TOOL_DEFAULT_CAPS: dict[str, int] = {
-    "image_resolve": 5,
-}
-
-
-
-
-
-
 
 
 def productive_extension_allowed(
