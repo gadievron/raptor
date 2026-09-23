@@ -1001,18 +1001,19 @@ def test_call_lines_of_internal_alias_target():
 
 def test_call_lines_dedups_same_line():
     """The recorder is idempotent: repeated calls with the same
-    (line, edge) don't introduce duplicates."""
-    from core.analysis.reachability import (
-        _AdjacencyIndex, _record_call_line,
-    )
-    idx = _AdjacencyIndex()
+    (line, edge) don't introduce duplicates. The recorder stages
+    into per-edge SETS; the index build freezes them to sorted
+    tuples once (per-insert tuple rebuilds were O(n²) per edge)."""
+    from core.analysis.reachability import _record_call_line
+    acc = {}
     fn = InternalFunction("a.py", "x", 1)
     callee = ExternalFunction("os.path.join")
-    _record_call_line(idx, fn, callee, 5)
-    _record_call_line(idx, fn, callee, 5)
-    _record_call_line(idx, fn, callee, 7)
-    _record_call_line(idx, fn, callee, 3)
-    assert idx.call_lines[(fn, callee)] == (3, 5, 7)
+    _record_call_line(acc, fn, callee, 5)
+    _record_call_line(acc, fn, callee, 5)
+    _record_call_line(acc, fn, callee, 7)
+    _record_call_line(acc, fn, callee, 3)
+    frozen = {k: tuple(sorted(v)) for k, v in acc.items()}
+    assert frozen[(fn, callee)] == (3, 5, 7)
 
 
 # ---------------------------------------------------------------------------
@@ -1592,3 +1593,60 @@ class TestRegistrationViaCall:
         ))
         target = InternalFunction("src/u.js", "handler", 1)
         assert is_registered_via_call(inv, target) is False
+
+
+# ---------------------------------------------------------------------------
+# Hostile import-bound fan-out cap (function_called token index)
+# ---------------------------------------------------------------------------
+
+
+def test_deep_import_bound_prefix_fanout_capped():
+    """One planted import line with tens of thousands of dotted
+    segments materialised O(L²) prefix characters (1.6GB peak at an
+    80KB line). Past the cap only the leading prefixes + full bound +
+    tail are indexed, and the file joins the always-considered
+    masking bucket so narrowing can never hide it."""
+    from core.analysis.reachability import (
+        _MAX_IMPORT_BOUND_SEGMENTS,
+        _build_function_called_index,
+    )
+    n = _MAX_IMPORT_BOUND_SEGMENTS * 40
+    bound = ".".join(f"s{i}" for i in range(n))
+    inv = {"files": [{"path": "x.py", "call_graph": {
+        "imports": {"m": bound}, "calls": []}}]}
+    idx = _build_function_called_index(inv)
+    # Bounded token count: capped prefixes + full bound + tail.
+    assert len(idx.files_by_token) <= _MAX_IMPORT_BOUND_SEGMENTS + 2
+    assert bound in idx.files_by_token
+    assert 0 in idx.files_with_non_wildcard_masking
+
+
+def test_deep_import_bound_lookup_still_resolves():
+    """Correctness direction: a lookup whose module prefix is deeper
+    than the cap still finds the file (through the masking bucket +
+    per-file import walk) — the cap must never manufacture a
+    NOT_CALLED."""
+    from core.analysis.reachability import (
+        _MAX_IMPORT_BOUND_SEGMENTS,
+        Verdict,
+        function_called,
+    )
+    depth = _MAX_IMPORT_BOUND_SEGMENTS + 8
+    module = ".".join(f"s{i}" for i in range(depth))
+    inv = {"files": [{"path": "x.py", "call_graph": {
+        "imports": {"m": module},
+        "calls": [{"chain": ["m", "target"], "line": 4}],
+    }}]}
+    result = function_called(inv, f"{module}.target")
+    assert result.verdict == Verdict.CALLED
+    assert ("x.py", 4) in result.evidence
+
+
+def test_shallow_import_bound_indexing_unchanged():
+    from core.analysis.reachability import Verdict, function_called
+    inv = {"files": [{"path": "x.py", "call_graph": {
+        "imports": {"np": "numpy"},
+        "calls": [{"chain": ["np", "solve"], "line": 2}],
+    }}]}
+    result = function_called(inv, "numpy.solve")
+    assert result.verdict == Verdict.CALLED
