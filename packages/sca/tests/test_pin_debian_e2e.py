@@ -58,6 +58,9 @@ class _FakeOsv:
     def query_batch(self, deps):
         return [OsvResult(dep_key=d.key(), advisories=[]) for d in deps]
 
+    def lookup_failed(self, dep_key: str) -> bool:
+        return False
+
 
 def _plan(target: Path, registry, **kw):
     return plan(target=target, registries={"Debian": registry},
