@@ -53,7 +53,8 @@ _MAX_SIG_CHARS = 512
 _MAX_NEIGHBORS = 8
 _MAX_TYPE_FIELDS = 64
 #: Hard ceiling on total emitted bytes — a hostile binary within the
-#: 64MiB cache cap must not balloon into an unbounded tree.
+#: shared RE-database cache cap must not balloon into an unbounded
+#: tree.
 _MAX_TREE_BYTES = 256 * 1024 * 1024
 #: Functions per emitted file: large connected components are split
 #: (address order) so study batching and file reads stay bounded.
@@ -471,11 +472,12 @@ def resolve_citation(
     hostile binary's function count.
     """
     from core.json import load_json
+    from core.json.utils import RE_DATABASE_MAX_BYTES
     sidecar = Path(tree_root) / SIDECAR_NAME
     if not sidecar.is_file():
         return None
     try:
-        data = load_json(sidecar, max_bytes=64 * 1024 * 1024)
+        data = load_json(sidecar, max_bytes=RE_DATABASE_MAX_BYTES)
     except Exception:  # noqa: BLE001 — corrupt sidecar degrades to None
         logger.debug("unreadable decomp sidecar: %s", sidecar,
                      exc_info=True)

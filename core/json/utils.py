@@ -115,6 +115,69 @@ def _orjson_default(obj: Any) -> Any:
     return str(obj)
 
 
+#: Default read/write ceiling for ``re-database.json`` and its
+#: sibling RE artifacts (domain-model, analysed-results reports).
+#: Both directions of the trade-off matter here: the previous 64MiB
+#: bound refused LEGITIMATE --decompile-all output (an import of a
+#: large binary writes ~5KB/function of decompilation — tens of
+#: thousands of functions cross 64MiB easily, so the importer wrote
+#: an artifact its own consumers then rejected, and recovery was a
+#: full re-import); the ceiling nonetheless STAYS — raised, not
+#: removed — because whole-document json loading amplifies 4-8x in
+#: memory, so an unbounded read of a corrupted or bloated cache is a
+#: memory-exhaustion primitive. 512MiB ≈ 100k functions at the
+#: observed density; targets beyond that need a storage-format change
+#: (sharded / sqlite), not a bigger constant.
+RE_DATABASE_MAX_BYTES_DEFAULT = 512 * 1024 * 1024
+
+
+def _resolve_re_database_max_bytes() -> int:
+    """Effective RE-database ceiling, with the operator env override.
+
+    ``RAPTOR_REDB_MAX_BYTES`` exists for operators on large-memory
+    hosts who accept the whole-document parse peak. Strictly
+    validated: a positive integer, or the default — garbage, zero,
+    and negative values warn and fall back rather than crashing or
+    silently reading as unlimited.
+    """
+    raw = os.environ.get("RAPTOR_REDB_MAX_BYTES", "")
+    if not raw:
+        return RE_DATABASE_MAX_BYTES_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        logger.warning(
+            "RAPTOR_REDB_MAX_BYTES=%r is not a positive integer — "
+            "using the %d-byte default",
+            raw, RE_DATABASE_MAX_BYTES_DEFAULT,
+        )
+        return RE_DATABASE_MAX_BYTES_DEFAULT
+    if value > 64 * 1024 * 1024 * 1024:
+        # Accepted by design (the override IS the large-memory escape
+        # hatch), but a >64GiB whole-document parse budget is almost
+        # certainly a typo'd unit — say so loudly rather than fail.
+        logger.warning(
+            "RAPTOR_REDB_MAX_BYTES=%d exceeds 64GiB — accepting, but "
+            "a whole-document JSON parse at this size can exhaust "
+            "memory (4-8x amplification); check the value's unit",
+            value,
+        )
+    return value
+
+
+#: Resolved once at import so every reader AND the write-side guards
+#: see the same effective value for the process lifetime — consumers
+#: import THIS name (never copy the value) so the sites cannot drift
+#: apart again. NOTE for test authors: some consumers bind this name
+#: at their own module import (e.g. the ghidra context-injection
+#: reader and the binary-study CLI), others at call time — override
+#: the CONSUMER's module attribute in tests, not this one, when
+#: exercising a specific site's bound.
+RE_DATABASE_MAX_BYTES = _resolve_re_database_max_bytes()
+
+
 def _reject_non_finite(token: str) -> Any:
     """`parse_constant` callback rejecting JSON5-ish ``NaN``/``Infinity``.
 

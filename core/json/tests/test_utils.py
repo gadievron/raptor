@@ -775,5 +775,56 @@ class TestLoadJsonWithCommentsSwapWindow(unittest.TestCase):
                 signal.signal(signal.SIGALRM, old)
 
 
+class TestReDatabaseMaxBytes(unittest.TestCase):
+    """RAPTOR_REDB_MAX_BYTES resolution: strict, warn-and-default on
+    garbage, never unlimited."""
+
+    def _resolve(self):
+        from core.json.utils import _resolve_re_database_max_bytes
+        return _resolve_re_database_max_bytes()
+
+    def test_default_when_unset(self):
+        from unittest.mock import patch
+        from core.json.utils import RE_DATABASE_MAX_BYTES_DEFAULT
+        with patch.dict(os.environ):
+            os.environ.pop("RAPTOR_REDB_MAX_BYTES", None)
+            self.assertEqual(self._resolve(), RE_DATABASE_MAX_BYTES_DEFAULT)
+        self.assertEqual(RE_DATABASE_MAX_BYTES_DEFAULT, 512 * 1024 * 1024)
+
+    def test_override_honored(self):
+        from unittest.mock import patch
+        with patch.dict(os.environ,
+                        {"RAPTOR_REDB_MAX_BYTES": "1048576"}):
+            self.assertEqual(self._resolve(), 1048576)
+
+    def test_garbage_warns_and_falls_back(self):
+        from unittest.mock import patch
+        from core.json.utils import RE_DATABASE_MAX_BYTES_DEFAULT
+        # Zero and negatives are garbage too — they must never read
+        # as "unlimited".
+        for bad in ("lots", "1.5", "0", "-5", " "):
+            with patch.dict(os.environ,
+                            {"RAPTOR_REDB_MAX_BYTES": bad}):
+                with self.assertLogs("core.json.utils",
+                                     level="WARNING") as cm:
+                    value = self._resolve()
+            self.assertEqual(value, RE_DATABASE_MAX_BYTES_DEFAULT)
+            self.assertIn("RAPTOR_REDB_MAX_BYTES", "\n".join(cm.output))
+
+    def test_absurd_override_accepted_with_loud_warning(self):
+        """The override is the sanctioned large-memory escape hatch —
+        an absurd value is accepted, but loudly (a typo'd unit must
+        not pass silently)."""
+        from unittest.mock import patch
+        absurd = 65 * 1024 * 1024 * 1024
+        with patch.dict(os.environ,
+                        {"RAPTOR_REDB_MAX_BYTES": str(absurd)}):
+            with self.assertLogs("core.json.utils",
+                                 level="WARNING") as cm:
+                value = self._resolve()
+        self.assertEqual(value, absurd)
+        self.assertIn("64GiB", "\n".join(cm.output))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -240,7 +240,8 @@ def _load_attached_db(gpr_path: Path, project=None):
     """
     from core.json import load_json
 
-    from .context_inject import _MAX_CACHE_BYTES
+    from core.json.utils import RE_DATABASE_MAX_BYTES as _MAX_CACHE_BYTES
+
     from .model import REDatabase
     from .roundtrip import redb_cache_candidates
 
@@ -430,8 +431,8 @@ def _read_analysed_results(out_dir: Path) -> List[Dict[str, Any]]:
     """
     from core.json import load_json
 
-    from .context_inject import _MAX_CACHE_BYTES
-    cap = _MAX_CACHE_BYTES
+    from core.json.utils import RE_DATABASE_MAX_BYTES
+    cap = RE_DATABASE_MAX_BYTES
     path = out_dir / "analysed_results.json"
     if path.is_file():
         data = load_json(path, max_bytes=cap)

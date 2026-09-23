@@ -249,6 +249,23 @@ class TestParseExport:
         assert len(db.functions) == 0
         assert db.source_tool == "ghidra"
 
+    def test_over_ceiling_export_refused(self, tmp_path, monkeypatch):
+        """The export document's size is controlled by the hostile
+        binary the sandboxed JVM analysed — the trusted parent must
+        not whole-document-parse it unbounded. parse_export binds the
+        shared ceiling at call time, so the constant's home is the
+        override point."""
+        monkeypatch.setattr("core.json.utils.RE_DATABASE_MAX_BYTES", 64)
+        p = tmp_path / "export.json"
+        p.write_text(json.dumps(
+            {"source_tool": "ghidra", "pad": "x" * 4096}),
+            encoding="utf-8")
+        try:
+            parse_export(p)
+            assert False, "should have raised"
+        except ValueError as e:
+            assert "failed to read" in str(e)
+
 
 class TestLooksAutoNamed:
     def test_ghidra_pattern(self):
@@ -277,17 +294,6 @@ class TestExportReadBudget:
     reader of the same data class (which cap at 64 MiB), with a larger
     named ceiling because --decompile exports can legitimately exceed
     theirs."""
-
-    def test_oversize_export_refused(self, tmp_path, monkeypatch):
-        import pytest
-        from packages.ghidra import parser as parser_mod
-        from packages.ghidra.parser import parse_export
-        big = tmp_path / "export.json"
-        big.write_text('{"functions": [' + ",".join(
-            ['{"name": "f", "address": 1}'] * 64) + "]}")
-        monkeypatch.setattr(parser_mod, "_MAX_EXPORT_BYTES", 128)
-        with pytest.raises(ValueError, match="over 128 bytes"):
-            parse_export(big)
 
     def test_bounded_export_parses(self, tmp_path):
         from packages.ghidra.parser import parse_export

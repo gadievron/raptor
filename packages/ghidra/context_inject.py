@@ -25,6 +25,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.json.utils import RE_DATABASE_MAX_BYTES
 from core.security.prompt_envelope import UntrustedBlock
 
 from .model import REDatabase, REFunction
@@ -48,8 +49,12 @@ _MAX_TYPE_FIELDS = 20
 #: Callers/callees COLLECTION cap (display shows 15) — collection
 #: itself must stay bounded on xref floods.
 _MAX_XREF_SCAN = 64
-#: Cache-file read ceiling (parity with the 64MiB report readers).
-_MAX_CACHE_BYTES = 64 * 1024 * 1024
+#: Cache-file read ceiling — the shared RE-database bound (bound to
+#: the imported name, never a value copy: writers and every reader
+#: must agree or the importer writes artifacts its own consumers
+#: reject; the trade-off rationale lives at the constant's
+#: definition in core.json.utils).
+_MAX_CACHE_BYTES = RE_DATABASE_MAX_BYTES
 
 _GHIDRA_CACHE: Dict[str, List[REDatabase]] = {}
 _GHIDRA_FUNC_INDEX: Dict[str, Dict[str, List[REFunction]]] = {}

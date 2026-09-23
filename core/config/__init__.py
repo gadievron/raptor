@@ -716,6 +716,17 @@ class RaptorConfig:
         # whole-process-tree hermeticity guarantee hold through
         # get_safe_env() children too.
         "RAPTOR_CC_TRANSPORT_DISABLED",
+        # RE-database size-ceiling override (core.json.utils.
+        # RE_DATABASE_MAX_BYTES). Must cross the scrub boundary:
+        # scanners, validators, and libexec dispatches are
+        # scrub-spawned children, and stripping it here means a
+        # parent's raised ceiling writes a database its own child
+        # pipelines then refuse — the write-then-strand failure the
+        # ceiling unification removed, resurrected at every spawn
+        # boundary. Numeric knob with no injection surface: the value
+        # is strictly re-validated at consumption (positive integer
+        # or warn-and-default, never unlimited).
+        "RAPTOR_REDB_MAX_BYTES",
     })
 
     # Environment variables that can be exploited for command injection or

@@ -2421,7 +2421,11 @@ def _redb_mechanical_items(
         print(f"study-prep: --redb ignored (packages.ghidra "
               f"unavailable: {exc})", file=sys.stderr)
         return []
-    cap = 64 * 1024 * 1024
+    # The shared RE-database ceiling — a private 64MiB cap here
+    # refused the legitimate --decompile-all databases the importer
+    # writes (rationale at the constant's definition).
+    from core.json.utils import RE_DATABASE_MAX_BYTES
+    cap = RE_DATABASE_MAX_BYTES
     try:
         raw = load_json(redb_path, max_bytes=cap)
         db = REDatabase.from_dict(raw) if isinstance(raw, dict) else None
