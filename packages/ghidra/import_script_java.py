@@ -22,7 +22,6 @@ import ghidra.app.script.GhidraScript;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.address.AddressSpace;
 import ghidra.program.model.listing.CodeUnit;
-import ghidra.program.model.listing.CommentType;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionManager;
 import ghidra.program.model.listing.Listing;
@@ -47,6 +46,7 @@ public class ImportRaptor extends GhidraScript {
         }
 
         Program program = currentProgram;
+        initCommentApi();
         int nComments = applyComments(program, enrichments);
         int nBookmarks = applyBookmarks(program, enrichments);
         int nFunctions = applyFunctions(program, enrichments);
@@ -56,12 +56,49 @@ public class ImportRaptor extends GhidraScript {
             nComments, nBookmarks, nFunctions));
     }
 
-    private CommentType commentType(String kind) {
+    // Comment API via reflection: newer Ghidra has the CommentType
+    // enum (get/setComment(CommentType, ...)); older releases have
+    // int constants on CodeUnit. A STATIC reference to either
+    // generation fails to COMPILE on the other, killing the whole
+    // sandboxed import while the version gate passes it — reflection
+    // compiles everywhere and binds at run time (same split the
+    // Python side handles with ImportError fallbacks).
+    private Object[] commentTypeArgs;   // eol, plate, pre, post
+    private java.lang.reflect.Method getCommentM;
+    private java.lang.reflect.Method setCommentM;
+
+    private void initCommentApi() throws Exception {
+        commentTypeArgs = new Object[4];
+        try {
+            Class<?> ct = Class.forName(
+                "ghidra.program.model.listing.CommentType");
+            String[] names = {"EOL", "PLATE", "PRE", "POST"};
+            for (int i = 0; i < 4; i++) {
+                commentTypeArgs[i] = ct.getField(names[i]).get(null);
+            }
+            getCommentM = CodeUnit.class.getMethod("getComment", ct);
+            setCommentM = CodeUnit.class.getMethod(
+                "setComment", ct, String.class);
+        } catch (ReflectiveOperationException e) {
+            String[] fields = {"EOL_COMMENT", "PLATE_COMMENT",
+                               "PRE_COMMENT", "POST_COMMENT"};
+            for (int i = 0; i < 4; i++) {
+                commentTypeArgs[i] = CodeUnit.class
+                    .getField(fields[i]).get(null);
+            }
+            getCommentM = CodeUnit.class.getMethod("getComment",
+                                                   int.class);
+            setCommentM = CodeUnit.class.getMethod(
+                "setComment", int.class, String.class);
+        }
+    }
+
+    private int commentKindIndex(String kind) {
         switch (kind) {
-            case "plate": return CommentType.PLATE;
-            case "pre":   return CommentType.PRE;
-            case "post":  return CommentType.POST;
-            default:      return CommentType.EOL;
+            case "plate": return 1;
+            case "pre":   return 2;
+            case "post":  return 3;
+            default:      return 0;
         }
     }
 
@@ -103,7 +140,8 @@ public class ImportRaptor extends GhidraScript {
         return null;
     }
 
-    private int applyComments(Program program, JsonObject enrichments) {
+    private int applyComments(Program program, JsonObject enrichments)
+            throws Exception {
         if (!enrichments.has("comments")) {
             return 0;
         }
@@ -119,17 +157,18 @@ public class ImportRaptor extends GhidraScript {
             if (cu == null) {
                 continue;
             }
-            CommentType ct = commentType(
+            int kindIdx = commentKindIndex(
                 entry.has("kind") ? entry.get("kind").getAsString() : "eol");
             String text = entry.get("text").getAsString();
-            String existing = cu.getComment(ct);
+            String existing = (String) getCommentM.invoke(
+                cu, commentTypeArgs[kindIdx]);
             if (existing != null) {
                 if (existing.contains(text)) {
                     continue;
                 }
                 text = existing + "\n" + text;
             }
-            cu.setComment(ct, text);
+            setCommentM.invoke(cu, commentTypeArgs[kindIdx], text);
             count++;
         }
         return count;
