@@ -622,3 +622,102 @@ class TestReturnFlowLink:
         )
         result = validate_structurally(path, tmp_path, language="python")
         assert result.verdict == "confirmed"
+
+
+# ── attribution divergence must abstain, never refute ───────────
+
+
+class TestAttributionDivergence:
+    """The span extractor and the call-graph extractor are two
+    attribution sources; when they diverge (JS arrow functions: span
+    says ``run``, the graph tags the calls ``caller=None``) the link
+    check filters on a name the graph never uses and finds vacuous
+    emptiness. That must land as inconclusive — a high-confidence
+    refutation feeds recommends_downgrade on an exploitable finding."""
+
+    HELPER_TAIL = "function helper(y) {\n  sink(y);\n}\n"
+
+    # Every fixture genuinely calls helper → sink, so "refuted" is
+    # always wrong; well-attributed shapes should stay confirmed.
+    LINKED_SHAPES = {
+        "arrow.js": (
+            "const run = (x) => {\n  helper(x);\n};\n", 2, 5),
+        "asyncarrow.js": (
+            "const run = async (x) => {\n  await helper(x);\n};\n", 2, 5),
+        "classmethod.js": (
+            "class App {\n  run(x) {\n    helper(x);\n  }\n}\n", 3, 7),
+        "iife.js": (
+            "const api = (function () {\n  function run(x) {\n"
+            "    helper(x);\n  }\n  return { run };\n})();\n", 3, 8),
+        "generator.js": (
+            "function* run(x) {\n  helper(x);\n  yield x;\n}\n", 2, 6),
+        "objmethod.js": (
+            "const app = {\n  run(x) {\n    helper(x);\n  },\n};\n", 3, 7),
+    }
+
+    @pytest.fixture(autouse=True)
+    def _need_js_grammar(self):
+        pytest.importorskip("tree_sitter")
+        pytest.importorskip("tree_sitter_javascript")
+
+    @pytest.mark.parametrize("name", sorted(LINKED_SHAPES))
+    def test_linked_js_shapes_are_never_refuted(self, tmp_path, name):
+        head, call_line, sink_line = self.LINKED_SHAPES[name]
+        (tmp_path / name).write_text(head + self.HELPER_TAIL)
+        path = _make_path(
+            _make_step(name, call_line), _make_step(name, sink_line),
+        )
+        result = validate_structurally(path, tmp_path)
+        assert result.verdict != "refuted", result.reasoning
+
+    def test_plain_function_control_still_confirms_high(self, tmp_path):
+        (tmp_path / "plain.js").write_text(
+            "function run(x) {\n  helper(x);\n}\n" + self.HELPER_TAIL,
+        )
+        path = _make_path(_make_step("plain.js", 2), _make_step("plain.js", 5))
+        result = validate_structurally(path, tmp_path)
+        assert result.verdict == "confirmed"
+        assert result.confidence == "high"
+
+    def test_truly_absent_edge_still_refutes(self, tmp_path):
+        """Two-direction: with clean attribution and a genuinely
+        missing edge, the refutation lane stays live."""
+        (tmp_path / "broken.js").write_text(
+            "function run(x) {\n  other(x);\n}\n" + self.HELPER_TAIL,
+        )
+        path = _make_path(
+            _make_step("broken.js", 2), _make_step("broken.js", 5),
+        )
+        result = validate_structurally(path, tmp_path)
+        assert result.verdict == "refuted"
+
+    def test_unresolved_attribution_downgrades_refutation_unit(self):
+        graph = FileCallGraph(
+            calls=[CallSite(chain=("helper",), line=2, caller=None)],
+            imports={}, indirection=False,
+        )
+        assert _check_call_link(
+            "run", "helper", graph, attribution_resolved=True,
+        ) == (False, False)
+        assert _check_call_link(
+            "run", "helper", graph, attribution_resolved=False,
+        ) == (None, False)
+
+    def test_extraction_failure_reads_as_unresolved(self, monkeypatch):
+        """from_func=None from a FAILED span extraction must not be
+        conflated with genuine module level."""
+        from core.dataflow.structural_validator import (
+            _enclosing_function_state,
+        )
+        import core.inventory.extractors as ex
+
+        def boom(*a, **k):
+            raise RuntimeError("grammar exploded")
+
+        monkeypatch.setattr(ex, "extract_functions", boom)
+        graph = FileCallGraph(calls=[], imports={}, indirection=False)
+        name, resolved = _enclosing_function_state(
+            1, graph, "function f() {}\n", "javascript",
+        )
+        assert name is None
+        assert resolved is False
