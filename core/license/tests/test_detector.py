@@ -1027,3 +1027,60 @@ class TestProprietaryPrecedence:
         lic = detect_target_license(tmp_path)
         assert lic.classification == "oss"
         assert lic.spdx_id in ("BSD-2-Clause", "BSD-3-Clause")
+
+
+class TestIndirectionDirectoryDepth:
+    """Directory children enqueue at the SAME depth as the reference
+    that named the directory: the dir itself isn't being classified,
+    just enumerated, so each file inside is the same hop as if it had
+    been referenced directly. Charging an extra hop made boundary
+    chains (dir reference at max depth) silently lose classification.
+    """
+
+    _MIT = (
+        "MIT License\n\nPermission is hereby granted, free of charge, "
+        "to any person obtaining a copy of this software and associated "
+        "documentation files"
+    )
+
+    def test_boundary_chain_through_directory_classifies(self, tmp_path):
+        (tmp_path / "LICENSE").write_text("see the file A.txt")
+        (tmp_path / "A.txt").write_text("see the file B.txt")
+        (tmp_path / "B.txt").write_text("see the L2/ directory")
+        (tmp_path / "L2").mkdir()
+        (tmp_path / "L2" / "MIT.txt").write_text(self._MIT)
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "oss"
+        assert lic.spdx_id == "MIT"
+
+    def test_shorter_chain_control(self, tmp_path):
+        (tmp_path / "LICENSE").write_text("see the file B.txt")
+        (tmp_path / "B.txt").write_text("see the L2/ directory")
+        (tmp_path / "L2").mkdir()
+        (tmp_path / "L2" / "MIT.txt").write_text(self._MIT)
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "oss"
+        assert lic.spdx_id == "MIT"
+
+    def test_over_depth_direct_chain_still_bounded(self, tmp_path):
+        # The depth budget itself still holds for file-to-file hops.
+        (tmp_path / "LICENSE").write_text("see the file A.txt")
+        (tmp_path / "A.txt").write_text("see the file B.txt")
+        (tmp_path / "B.txt").write_text("see the file C.txt")
+        (tmp_path / "C.txt").write_text("see the file D.txt")
+        (tmp_path / "D.txt").write_text(self._MIT)
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "unknown"
+
+    def test_same_depth_directory_chain_is_budget_bounded(self, tmp_path):
+        # Same-depth enumeration must not turn into an unbounded walk:
+        # a hostile chain of alternating directory references stops at
+        # the total-files budget instead of reading the whole tree.
+        (tmp_path / "LICENSE").write_text("see the D0/ directory")
+        for i in range(40):
+            d = tmp_path / f"D{i}"
+            d.mkdir()
+            (d / "license.txt").write_text(
+                f"see the ../D{i + 1}/ directory")
+        lic = detect_target_license(tmp_path)
+        assert lic.classification == "unknown"
