@@ -3623,6 +3623,29 @@ def main() -> None:
                 metrics['total_files_scanned']
             )
 
+        # Analysis gaps: files a parser abandoned during the scan's
+        # inventory/analysis passes (budget exceeded, stalled worker).
+        # Loud by contract — a crafted file that defeats a parser must
+        # be visible in the scan summary, never a silent skip.
+        try:
+            from core.run.gaps import gap_summary
+            from core.sandbox.summary import get_active_run_dir
+            _gap_dir = get_active_run_dir() or out_dir
+            _gap_counts = gap_summary(_gap_dir)
+            if _gap_counts:
+                _gap_desc = ", ".join(
+                    f"{n} {reason}"
+                    for reason, n in sorted(_gap_counts.items())
+                )
+                logger.warning(
+                    "Analysis gaps: %s record(s) — files NOT analysed "
+                    "(%s); see %s",
+                    sum(_gap_counts.values()), _gap_desc,
+                    _gap_dir / "analysis-gaps.jsonl",
+                )
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Analysis-gap summary failed (non-fatal): %s", e)
+
         # Provenance manifest. MUST be composed BEFORE cleanup runs,
         # because cleanup deletes most of the per-pack SARIFs we hash.
         try:
