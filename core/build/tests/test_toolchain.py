@@ -246,3 +246,27 @@ class TestBuildSystemsSchemaContract(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMissingToolchainMessage:
+    def test_warning_names_real_operator_surfaces_only(self, caplog):
+        """The missing-toolchain hint must point at surfaces that
+        exist (`/project set build-command`, the env= kwarg) — it
+        used to advertise a --build-env-file flag found nowhere in
+        the tree."""
+        import logging
+        from unittest.mock import patch
+
+        from core.build import toolchain
+
+        with patch.dict(toolchain.DETECTORS,
+                        {"JAVA_HOME": lambda: None}), \
+             caplog.at_level(logging.WARNING):
+            env: dict = {}
+            toolchain.apply_toolchain_env(env, ["JAVA_HOME"])
+        msgs = [r.message for r in caplog.records
+                if "not found on this host" in r.message]
+        assert msgs, "missing-toolchain warning did not fire"
+        assert all("--build-env-file" not in m for m in msgs)
+        assert any("/project set build-command" in m for m in msgs)
+        assert "JAVA_HOME" not in env

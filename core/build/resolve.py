@@ -57,6 +57,17 @@ def resolve_build_command(
         populated = [(k, v) for k, v in slots.items() if v]
         if len(populated) == 1:
             slot, command = populated[0]
+            if lang and slot != lang:
+                # Deliberate (an operator with exactly one slot
+                # expressed intent), but a cross-language serve is
+                # worth an operator-visible note: `mvn package`
+                # answering a cpp request is a real possibility of
+                # this mechanism.
+                logger.warning(
+                    "build-command: lone populated slot %r serves the "
+                    "%r request (set build-command.%s or default to "
+                    "silence this)", slot, lang, lang,
+                )
             return str(command), f"project-setting:{slot}"
 
     detected = _detect(target, lang)
@@ -106,10 +117,12 @@ def _detect(target: Path | str, lang: str | None) -> tuple[str, str] | None:
 
         detector = BuildDetector(Path(target))
         # The hinted language first, then the native chain: the
-        # detector's language table is sparse (e.g. no "c" key — cpp
+        # detector's language table is sparse (no "c" key — cpp
         # covers Makefile/CMake/autotools projects), so a hint must
-        # narrow the ORDER, never the coverage.
-        languages = ["cpp", "c"]
+        # narrow the ORDER, never the coverage. Only real table keys
+        # ride the default list: a dead "c" candidate warned "no
+        # build system detection" on every resolution.
+        languages = ["cpp"]
         if lang:
             languages = [lang] + [c for c in languages if c != lang]
         for candidate in languages:

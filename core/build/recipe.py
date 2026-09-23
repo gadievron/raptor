@@ -295,9 +295,13 @@ def _find_autotools_bootstrap(target: Path) -> str | None:
     first one present + executable. Returns None when no
     project-specific bootstrap is shipped (caller falls back to
     the canonical ``autoreconf -fi``)."""
+    import os
     for candidate in _AUTOTOOLS_BOOTSTRAP_CANDIDATES:
         path = target / candidate.lstrip("./")
-        if path.is_file():
+        # Executable required, as documented: recommending a
+        # non-executable ./autogen.sh produces a recipe step that
+        # fails at run; the canonical autoreconf fallback works.
+        if path.is_file() and os.access(path, os.X_OK):
             return candidate
     return None
 

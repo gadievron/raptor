@@ -10,8 +10,12 @@ Instead, each build-system entry in
 `core/build/build_detector.BUILD_SYSTEMS` declares an
 `env_detect: List[str]` naming the vars it needs. At build time, this
 module resolves each name by filesystem probing — never by reading
-`os.environ` (which would re-admit the operator's shell quirks we're
-trying to keep out of the sandbox).
+the requested variable from `os.environ` (which would re-admit the
+operator's shell quirks we're trying to keep out of the sandbox).
+Two scoped `$HOME` consultations are the documented exceptions, both
+away from the hostile direction: JAVA_HOME REFUSES a resolution that
+is the user's home dir, and RUSTUP_HOME falls back to `$HOME/.rustup`
+only after the kernel-ratified `pwd` lookup fails.
 
 Detection strategy per var:
 
@@ -289,7 +293,13 @@ def apply_toolchain_env(env: dict[str, str],
             value = None
         if value is None:
             logger.warning(
-                "build toolchain: %s not found on this host — the build step will likely fail with a missing-toolchain error. Install the toolchain or set %s explicitly via --build-env-file (future flag) / via your shell and the sandbox's env= kwarg.", name, name
+                "build toolchain: %s not found on this host — the "
+                "build step will likely fail with a "
+                "missing-toolchain error. Install the toolchain, or "
+                "supply your own build via `/project set "
+                "build-command` (callers with a trusted env can also "
+                "pass %s through the sandbox's env= kwarg).",
+                name, name,
             )
             continue
         env[name] = value
