@@ -292,3 +292,46 @@ class TestLoadFindingsOpenantFallback(unittest.TestCase):
                 json.dumps([self._openant_row("OA-1")]), encoding="utf-8")
             got = load_findings_from_dir(run_dir)
             self.assertEqual([f["id"] for f in got], ["MERGED-1"])
+
+
+class TestHostileKeyComponents(unittest.TestCase):
+    """Finding rows are LLM-authored and import-restored: one row
+    with a dict/list in function/file/vuln_type/line made the dedup
+    tuple unhashable and TypeError'd every keyed consumer (/project
+    findings, report, merge, diff, correlate) — main() catches no
+    TypeError."""
+
+    def test_dedup_and_group_keys_are_hashable(self):
+        hostile = {"function": {"evil": 1}, "file": ["a"],
+                   "line": ["x"], "vuln_type": {"t": 2}}
+        {dedup_key(hostile): 1}
+        {group_key(hostile): 1}
+
+    def test_diff_and_merge_survive_hostile_row(self):
+        import json
+        from tempfile import TemporaryDirectory
+
+        from core.project.diff import diff_runs
+        from core.project.merge import merge_findings
+        with TemporaryDirectory() as td:
+            a = Path(td) / "run_a"
+            b = Path(td) / "run_b"
+            for d in (a, b):
+                d.mkdir()
+            (a / "findings.json").write_text(json.dumps({"findings": [
+                {"id": "f1", "file": "a.c", "function": {"evil": 1},
+                 "line": 1, "vuln_type": "x", "status": "confirmed"},
+            ]}))
+            (b / "findings.json").write_text(json.dumps({"findings": [
+                {"id": "f1", "file": "a.c", "function": "ok",
+                 "line": 2, "vuln_type": "x", "status": "confirmed"},
+            ]}))
+            result = diff_runs(a, b)
+            self.assertEqual(result["summary"]["findings_a"], 1)
+            merged = merge_findings([a, b])
+            self.assertEqual(len(merged), 2)
+
+    def test_normal_keys_unchanged(self):
+        f = {"file": "a.c", "function": "p", "line": 7, "vuln_type": "x"}
+        self.assertEqual(dedup_key(f), ("a.c", "p", 7))
+        self.assertEqual(group_key(f), ("a.c", "p", "x"))

@@ -172,8 +172,11 @@ def _finding_key(finding: dict[str, Any]) -> tuple:
     location-based dedup; merge has its own slightly stricter
     key that keeps vuln-class information visible.
     """
+    from core.project.findings_utils import _key_str
     base = _dedup_key(finding)
-    return base + (finding.get("vuln_type", ""),)
+    # _key_str: a hostile row's dict-valued vuln_type made the tuple
+    # unhashable and one row wedged the whole merge (see findings_utils).
+    return base + (_key_str(finding.get("vuln_type", "")),)
 
 
 # Status progression: higher rank = more information about the finding.
