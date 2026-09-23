@@ -1426,3 +1426,38 @@ class TestCorruptFileWritesFailClosed:
         path.write_bytes(b"\xff\xfe garbage")
         assert read_file_annotations(tmp_path, "b.py") == []
         assert list(iter_all_annotations(tmp_path)) == []
+
+
+class TestMetaLineWhitespaceRun:
+    def test_meta_line_whitespace_run_is_fast(self):
+        """Hostile annotation-file line opening ``<!-- meta:`` and
+        ending in a long whitespace run with no ``-->``: with the body
+        spelled ``\\s*(.*?)\\s*-->`` three unbounded repeats overlap on
+        horizontal whitespace and the engine tries every split of the
+        run between them — cubic in the line length. The
+        ``\\S``-delimited body spelling is linear. Both-direction
+        bound: fast AND real meta lines still parse."""
+        from core.annotations.storage import _META_RE
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "<!-- meta:" + " " * (1 << 16) + "x"
+        with cpu_budget(1.0, what="meta-line whitespace-run scan"):
+            assert _META_RE.match(hostile) is None
+
+    def test_meta_line_forms_still_parse(self):
+        from core.annotations.storage import _META_RE, _parse_meta
+
+        m = _META_RE.match('<!-- meta: status=clean cwe="CWE-78" -->')
+        assert m is not None
+        assert _parse_meta(m.group(1) or "") == {
+            "status": "clean", "cwe": "CWE-78",
+        }
+        # Trimming semantics unchanged.
+        m = _META_RE.match("<!--   meta:   status=clean   -->  ")
+        assert m is not None
+        assert m.group(1) == "status=clean"
+        # All-whitespace body parses as empty metadata (group None).
+        m = _META_RE.match("<!-- meta:   -->")
+        assert m is not None
+        assert _parse_meta(m.group(1) or "") == {}
+        assert _META_RE.match("<!-- other: x -->") is None
