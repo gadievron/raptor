@@ -135,7 +135,23 @@ def fetch_pack(pack_id: str) -> bytes:
             msg = f"  FAILED: {pack_id} — could not parse response: {exc}"
             raise SystemExit(msg) from exc
 
-    return json.dumps(parsed, separators=(",", ":")).encode()
+    # YAML scalars with no JSON twin (unquoted ISO dates in rule
+    # metadata: parse as datetime.date) render as strings — the shape
+    # a JSON registry response carries. Anything default=str cannot
+    # rescue (e.g. a non-string mapping key) is that one pack's
+    # failure, reported inside the per-pack contract like every other
+    # arm above — never an escaping traceback that aborts the whole
+    # fetch/update on pack 1 of N.
+    try:
+        return json.dumps(
+            parsed, separators=(",", ":"), default=str,
+        ).encode()
+    except (TypeError, ValueError) as exc:
+        msg = (
+            f"  FAILED: {pack_id} — response not JSON-serialisable: "
+            f"{exc}"
+        )
+        raise SystemExit(msg) from exc
 
 
 def cmd_list(args: argparse.Namespace) -> None:
