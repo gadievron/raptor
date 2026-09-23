@@ -1749,10 +1749,32 @@ def evaluate_finding(
                     )
 
     matched_bindings = match_sanitizers_in_cfg(graph, cwe, language)
+    # Shadow guard on the catalog join: matching is by the WRITTEN
+    # dotted name, but when the analysed function itself binds the
+    # chain's root (``html = FakeNs`` / a parameter named ``html``
+    # before ``html.escape(x)``), the runtime callee is the local
+    # object, not the catalog sanitizer — a hostile repo collides the
+    # name and the forged binding drives an enforced suppression.
+    # Any local definition of the root degrades the binding
+    # (refusal direction; a function-local ``import html`` also
+    # degrades — rare, and the module it binds may itself be a
+    # repo-local shadow). Flow-insensitive by design: an ambiguous
+    # identity can only lose suppression power, never gain it.
+    if matched_bindings:
+        local_roots: set = set(getattr(graph, "params", ()) or ())
+        for _n in graph.nodes():
+            local_roots.update(getattr(_n, "defs", ()) or ())
+        if local_roots:
+            matched_bindings = frozenset(
+                b for b in matched_bindings
+                if b.callable.split(".", 1)[0] not in local_roots
+            )
     # Phase 14 — fold in inter-procedural synthetic bindings. A
     # finding whose enclosing function has NO direct catalog
     # sanitizer but DOES call an in-module helper that sanitizes
-    # reaches the gate only because of these.
+    # reaches the gate only because of these. (Their own shadow guard
+    # lives at the AST layer in interproc.synthetic_sanitizer_bindings,
+    # which sees the full local-binding vocabulary.)
     if extra_bindings:
         matched_bindings = matched_bindings | frozenset(extra_bindings)
     if not matched_bindings:
