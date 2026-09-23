@@ -236,7 +236,6 @@ FAST_TIER_IGNORES = {
     "packages/llm_analysis/tests",
     "packages/cve_diff/tests",
     "packages/fuzzing/tests",
-    "packages/oss_forensics/tests",
     "packages/source_intel/tests",
     "packages/sca",
     "core/sage/tests",

@@ -201,6 +201,27 @@ class TestTierConsistency:
                 )
 
 
+class TestFastTierIgnoresLiveness:
+    def test_every_ignore_row_exists_on_disk(self):
+        """The oracle guarding FAST_TIER_IGNORES short-circuits
+        nonexistent rows (``is_dir()`` guard), so a carve-out for a
+        deleted package sat in the registry unnoticed — dead rows
+        read as coverage and hide the day the path is recreated with
+        a different layout. Every row must be a live directory or
+        test file."""
+        from test_scope import FAST_TIER_IGNORES
+
+        repo = Path(__file__).resolve().parents[2]
+        dead = sorted(
+            row for row in FAST_TIER_IGNORES
+            if not (repo / row).exists()
+        )
+        assert not dead, (
+            f"FAST_TIER_IGNORES row(s) for paths not on disk: {dead} "
+            "— delete the stale row(s)"
+        )
+
+
 class TestCiLintTriggerClosure:
     """Registry closure: every repo file whose CONTENT a ci_lint test
     pins must fire the ci_lint tier, or a breaking edit to it merges
