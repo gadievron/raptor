@@ -325,6 +325,64 @@ def test_ipv6_literal_spellings_of_loopback_are_blocked(literal):
         client._resolve_and_validate(literal)
 
 
+# -- body-read wall-clock deadline (drip-fed responses) ------------------------
+
+
+def test_drip_fed_body_is_cut_at_the_wall_clock_deadline(monkeypatch):
+    """The request `timeout` is a PER-READ socket timeout: a server
+    sending one byte per window keeps every read alive, and the
+    buffered read inside iter_content does not yield until its chunk
+    fills — so the byte cap alone never fires and get() stalls for as
+    long as the server has patience. The watchdog must cut the read at
+    the deadline and hand back the buffered prefix."""
+    import socketserver
+
+    monkeypatch.setattr(
+        client_module, "_MAX_BODY_READ_SECONDS", 1.0, raising=False,
+    )
+
+    class DripHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            try:
+                # One byte per 0.25s for up to 8s: each write succeeds,
+                # nothing fills a 64 KiB read chunk, EOF never comes
+                # inside the test window.
+                for _ in range(32):
+                    self.wfile.write(b"y")
+                    self.wfile.flush()
+                    time.sleep(0.25)
+            except OSError:
+                pass  # reader hung up: the deadline fired
+
+    class _Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
+        daemon_threads = True
+
+    server = _Server(("127.0.0.1", 0), DripHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = WebClient(
+            _base_url(server), timeout=2, rate_limit=0,
+            block_private_ips=False,
+        )
+        start = time.monotonic()
+        response = client.get("/")
+        wall = time.monotonic() - start
+        client.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert wall < 4.0, f"get() held for {wall:.1f}s past the deadline"
+    assert response.status_code == 200
+    # The buffered prefix (whatever dripped in) is what the caller sees.
+    assert len(response.content) < 1000
+
+
 @pytest.mark.parametrize("evasion_host", ["0x7f000001", "0177.0.0.1"])
 def test_octal_hex_ipv4_forms_are_caught_at_the_resolution_gate(evasion_host):
     """Not IP literals for `ipaddress`, but glibc resolves them via
