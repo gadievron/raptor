@@ -56,6 +56,7 @@ from core.analysis.cfg_builder import (
 from core.analysis.dataflow import reaching_defs
 from core.analysis.python_module_callgraph import (
     PyModuleCallGraph,
+    local_binding_names,
 )
 
 # ---------------------------------------------------------------------------
@@ -417,9 +418,22 @@ def _expr_taint(
     cfg_node: PyCFGNode,
     in_state_fn,
     summaries: dict[str, TaintSummary],
+    local_bindings: frozenset[str] = frozenset(),
 ) -> TaintState:
     """Compute the :data:`TaintState` produced by evaluating an
     arbitrary expression at ``cfg_node``'s IN.
+
+    ``local_bindings`` is the enclosing function's own bound-name set
+    (:func:`core.analysis.python_module_callgraph.local_binding_names`).
+    The Call arm refuses the name-keyed summary join whenever the
+    callable's root name has ANY local definition — ``esc = str``
+    before (or after: flow-insensitive) ``y = esc(x)`` makes the
+    runtime callee the local binding, not the module table's ``esc``,
+    so joining would copy a summary the call provably may not reach
+    (a hostile repo mints a clean-sanitizer wrapper from exactly this
+    collision). Refused joins stamp a ``<shadowed:…>`` callable at
+    :data:`_OPAQUE_ARG`: the marker can never match a catalog
+    sanitizer name, so the consumer refuses rather than suppresses.
 
     AST shapes handled:
 
@@ -479,6 +493,18 @@ def _expr_taint(
         return in_state_fn(cfg_node, base)
     if isinstance(expr, ast.Call):
         callable_name = _attribute_chain_str(expr.func) or ""
+        # Shadow guard: a local binding of the chain's ROOT name means
+        # the runtime callee is the local object, not the module-table
+        # (or catalog) entry the dotted name suggests. The summary
+        # join below is refused and every stamp carries a
+        # ``<shadowed:…>`` marker instead of the written name — a
+        # marker can never match a catalog sanitizer, so downstream
+        # certification refuses rather than suppresses.
+        base_name = callable_name.split(".", 1)[0] if callable_name else ""
+        shadowed = bool(base_name) and base_name in local_bindings
+        stamp_name = (
+            f"<shadowed:{callable_name}>" if shadowed else callable_name
+        )
         # ``g(*xs)`` makes every later positional index unknowable —
         # taint still flows, but positions can't be trusted.
         has_starred = any(isinstance(a, ast.Starred) for a in expr.args)
@@ -487,14 +513,15 @@ def _expr_taint(
         arg_states: list[TaintState] = [
             _expr_taint(
                 a.value if isinstance(a, ast.Starred) else a,
-                cfg_node, in_state_fn, summaries,
+                cfg_node, in_state_fn, summaries, local_bindings,
             )
             for a in expr.args
         ]
         # Keyword args (``**expr`` expansion never reaches here — it
         # marks the whole function ``summary_unknown`` upstream).
         kw_states: list[tuple[str | None, TaintState]] = [
-            (kw.arg, _expr_taint(kw.value, cfg_node, in_state_fn, summaries))
+            (kw.arg, _expr_taint(kw.value, cfg_node, in_state_fn,
+                                 summaries, local_bindings))
             for kw in expr.keywords
         ]
         # Method-call receiver: ``recv.m(...)`` evaluates ``recv`` and
@@ -506,7 +533,7 @@ def _expr_taint(
         # the chain doesn't bottom out at a Name) is never a catalog
         # sanitizer, so the consumer refuses rather than suppresses.
         recv_state = _empty_state()
-        recv_stamp = callable_name
+        recv_stamp = stamp_name
         if isinstance(expr.func, ast.Lambda):
             # IIFE: the lambda body evaluates NOW over enclosing-scope
             # names (``(lambda: a)()``), and parameter DEFAULTS
@@ -527,9 +554,9 @@ def _expr_taint(
             recv_stamp = "<lambda>"
         if isinstance(expr.func, ast.Attribute):
             recv_state = _expr_taint(
-                expr.func.value, cfg_node, in_state_fn, summaries,
+                expr.func.value, cfg_node, in_state_fn, summaries, local_bindings,
             )
-            recv_stamp = callable_name or expr.func.attr
+            recv_stamp = stamp_name or expr.func.attr
 
         def _with_receiver(state: TaintState) -> TaintState:
             if not recv_state:
@@ -538,7 +565,7 @@ def _expr_taint(
                 state, _add_effect(recv_state, recv_stamp, _OPAQUE_ARG),
             )
 
-        callee = summaries.get(callable_name)
+        callee = None if shadowed else summaries.get(callable_name)
         if (callee is not None and not callee.summary_unknown
                 and not has_starred):
             # In-module callee with a known summary. Positional args
@@ -603,13 +630,13 @@ def _expr_taint(
         for arg_idx, arg_state in enumerate(arg_states):
             if not arg_state:
                 continue
-            idx = _OPAQUE_ARG if has_starred else arg_idx
-            stamped = _add_effect(arg_state, callable_name, idx)
+            idx = _OPAQUE_ARG if (has_starred or shadowed) else arg_idx
+            stamped = _add_effect(arg_state, stamp_name, idx)
             result = _merge_states(result, stamped)
         for _kw_name, kw_state in kw_states:
             if not kw_state:
                 continue
-            stamped = _add_effect(kw_state, callable_name, _OPAQUE_ARG)
+            stamped = _add_effect(kw_state, stamp_name, _OPAQUE_ARG)
             result = _merge_states(result, stamped)
         return _with_receiver(result)
     if isinstance(expr, ast.JoinedStr):
@@ -624,37 +651,37 @@ def _expr_taint(
                 # Recurse on the FormattedValue NODE (not just its
                 # value) so nested format specs contribute too.
                 out = _merge_states(
-                    out, _expr_taint(v, cfg_node, in_state_fn, summaries),
+                    out, _expr_taint(v, cfg_node, in_state_fn, summaries, local_bindings),
                 )
         return out
     if isinstance(expr, ast.FormattedValue):
-        out = _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
+        out = _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings)
         if expr.format_spec is not None:
             # ``f"{v:{width}}"`` — the format spec's interpolations
             # carry their inputs' taint into the rendered result.
             out = _merge_states(out, _expr_taint(
-                expr.format_spec, cfg_node, in_state_fn, summaries,
+                expr.format_spec, cfg_node, in_state_fn, summaries, local_bindings,
             ))
         return out
     if isinstance(expr, ast.BinOp):
         return _merge_states(
-            _expr_taint(expr.left, cfg_node, in_state_fn, summaries),
-            _expr_taint(expr.right, cfg_node, in_state_fn, summaries),
+            _expr_taint(expr.left, cfg_node, in_state_fn, summaries, local_bindings),
+            _expr_taint(expr.right, cfg_node, in_state_fn, summaries, local_bindings),
         )
     if isinstance(expr, ast.BoolOp):
         out = _empty_state()
         for v in expr.values:
             out = _merge_states(
-                out, _expr_taint(v, cfg_node, in_state_fn, summaries),
+                out, _expr_taint(v, cfg_node, in_state_fn, summaries, local_bindings),
             )
         return out
     if isinstance(expr, ast.IfExp):
         return _merge_states(
-            _expr_taint(expr.body, cfg_node, in_state_fn, summaries),
-            _expr_taint(expr.orelse, cfg_node, in_state_fn, summaries),
+            _expr_taint(expr.body, cfg_node, in_state_fn, summaries, local_bindings),
+            _expr_taint(expr.orelse, cfg_node, in_state_fn, summaries, local_bindings),
         )
     if isinstance(expr, ast.UnaryOp):
-        return _expr_taint(expr.operand, cfg_node, in_state_fn, summaries)
+        return _expr_taint(expr.operand, cfg_node, in_state_fn, summaries, local_bindings)
     # Element/container shapes: the contained expressions' taint flows
     # into the result (an element carries its container's taint, a
     # container carries its elements'). Unstamped — same
@@ -662,16 +689,16 @@ def _expr_taint(
     # direct atom makes the consumer refuse, never suppress.
     if isinstance(expr, ast.Subscript):
         return _merge_states(
-            _expr_taint(expr.value, cfg_node, in_state_fn, summaries),
-            _expr_taint(expr.slice, cfg_node, in_state_fn, summaries),
+            _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings),
+            _expr_taint(expr.slice, cfg_node, in_state_fn, summaries, local_bindings),
         )
     if isinstance(expr, ast.Starred):
-        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings)
     if isinstance(expr, (ast.List, ast.Tuple, ast.Set)):
         out = _empty_state()
         for e in expr.elts:
             out = _merge_states(
-                out, _expr_taint(e, cfg_node, in_state_fn, summaries),
+                out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings),
             )
         return out
     if isinstance(expr, ast.Dict):
@@ -679,15 +706,15 @@ def _expr_taint(
         for e in (*expr.keys, *expr.values):
             if e is not None:  # None key = ``**expr`` expansion's slot
                 out = _merge_states(
-                    out, _expr_taint(e, cfg_node, in_state_fn, summaries),
+                    out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings),
                 )
         return out
     if isinstance(expr, ast.NamedExpr):
         # ``(t := v)`` evaluates to v — keep v's chains intact so a
         # walrus-wrapped sanitizer stays clean.
-        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings)
     if isinstance(expr, ast.Await):
-        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries)
+        return _expr_taint(expr.value, cfg_node, in_state_fn, summaries, local_bindings)
     if isinstance(
         expr, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp),
     ):
@@ -705,7 +732,7 @@ def _expr_taint(
         out = _empty_state()
         for e in parts:
             out = _merge_states(
-                out, _expr_taint(e, cfg_node, in_state_fn, summaries),
+                out, _expr_taint(e, cfg_node, in_state_fn, summaries, local_bindings),
             )
         return out
     if isinstance(expr, (ast.Constant, ast.Lambda)):
@@ -936,6 +963,9 @@ def _compute_one_summary(
     # the loop reads it per (node, symbol) — same lineno-map approach
     # the post-fixed-point collection loop below already uses.
     _assign_map = _build_assignment_value_map(fn_ast)
+    # Locally bound names — the shadow guard for _expr_taint's
+    # name-keyed callee join (see local_binding_names).
+    _local_bindings = local_binding_names(fn_ast)
     max_inner = 4 * max(1, len(list(cfg.nodes())))
     for _ in range(max_inner):
         changed = False
@@ -959,7 +989,7 @@ def _compute_one_summary(
                     new_state = _empty_state()
                     for value_ast, is_augmented in found:
                         rhs_state = _expr_taint(
-                            value_ast, n, _in_state_for, summaries_so_far,
+                            value_ast, n, _in_state_for, summaries_so_far, _local_bindings,
                         )
                         if is_augmented:
                             # ``q += rhs`` is ``q = q ⊕ rhs`` — the
@@ -1013,7 +1043,7 @@ def _compute_one_summary(
                 pass
             else:
                 state = _expr_taint(
-                    return_value, n, _in_state_for, summaries_so_far,
+                    return_value, n, _in_state_for, summaries_so_far, _local_bindings,
                 )
                 for pi, effects in state:
                     if not effects:
@@ -1035,7 +1065,7 @@ def _compute_one_summary(
                     continue
                 for arg_idx, arg_ast in enumerate(ast_n.args):
                     arg_state = _expr_taint(
-                        arg_ast, n, _in_state_for, summaries_so_far,
+                        arg_ast, n, _in_state_for, summaries_so_far, _local_bindings,
                     )
                     for pi, _ in arg_state:
                         call_arg_taint.add((callable_name, arg_idx, pi))

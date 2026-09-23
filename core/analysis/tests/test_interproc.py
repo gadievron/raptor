@@ -673,3 +673,70 @@ class TestVarargBoundary:
         )
         _, bindings = _bindings_for(src, "handler")
         assert bindings == frozenset()
+
+
+class TestShadowedCalleeNoBinding:
+    """synthetic_sanitizer_bindings joins call-site names against the
+    module summary table. A local binding of the callee's root name
+    in the analysed function means the runtime callee may not be the
+    table's helper — no binding may be minted (the enforced
+    sanitizer-cut consumes these directly)."""
+
+    def _bindings(self, src: str, fn_name: str = "handle"):
+        import ast as _ast
+
+        from core.analysis.cfg_builder import build_python_cfg
+        from core.analysis.interproc import synthetic_sanitizer_bindings
+        from core.analysis.python_module_callgraph import (
+            build_python_module_callgraph,
+        )
+        from core.analysis.taint_summaries import build_taint_summaries
+
+        cg = build_python_module_callgraph(src)
+        assert cg is not None
+        summaries = build_taint_summaries(cg, src)
+        cfg = build_python_cfg(src, fn_name)
+        assert cfg is not None
+        fn_ast = next(
+            n for n in _ast.walk(_ast.parse(src))
+            if isinstance(n, _ast.FunctionDef) and n.name == fn_name
+        )
+        return synthetic_sanitizer_bindings(
+            cfg, fn_ast, summaries, "CWE-79", "python",
+        )
+
+    def test_local_rebind_shadow_no_binding(self):
+        src = (
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    esc = str\n"
+            "    y = esc(x)\n"
+            "    render(y)\n"
+        )
+        assert self._bindings(src) == frozenset()
+
+    def test_param_shadow_no_binding(self):
+        src = (
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x, esc):\n"
+            "    y = esc(x)\n"
+            "    render(y)\n"
+        )
+        assert self._bindings(src) == frozenset()
+
+    def test_unshadowed_helper_still_binds(self):
+        src = (
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def handle(x):\n"
+            "    y = esc(x)\n"
+            "    render(y)\n"
+        )
+        bindings = self._bindings(src)
+        assert len(bindings) == 1
+        assert next(iter(bindings)).callable == "esc"
