@@ -1162,9 +1162,12 @@ def cmd_tool_evidence(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
     print(
-        "  reminder: re-running this command on the same reports "
-        "double-records. Track external state (commit hash, run id) "
-        "if invoking from automation.",
+        "  note: re-running on the same reports is idempotent per "
+        "finding_id (atomic claim-and-record). Residual: a cell that "
+        "accumulates more findings than the seen-id cap between "
+        "imports evicts oldest ids, so a re-import that far apart "
+        "can double-count those findings — a bounded counting "
+        "error, not a trust flip.",
         file=sys.stderr,
     )
     return 0
