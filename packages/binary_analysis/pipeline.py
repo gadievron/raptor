@@ -1798,6 +1798,34 @@ def _ingest_graph_body(store: BinaryGraphStore, result: BinaryAnalysisResult, ou
             store.add_artifact(snapshot_id, kind, path)
 
 
+def _resolve_requested_slice_arch(binary: Path, slice_arch: str) -> str:
+    """Validate an explicit ``--slice-arch`` against the binary's real
+    slices and return the canonical (alias-normalised) arch name.
+
+    Raises ``ValueError`` when the binary carries no matching slice —
+    including the non-Mach-O case, where forcing r2's ``-a``/``-b``
+    would decode the binary's bytes as the wrong ISA and stamp the
+    garbage output ``full``-depth.
+    """
+    from .macho import inspect_macho_slices, resolve_requested_slice
+    slices, _ = inspect_macho_slices(binary, "")
+    if not slices:
+        msg = (
+            f"--slice-arch {slice_arch!r} requested but {binary} is not "
+            "a Mach-O binary with architecture slices; drop --slice-arch"
+        )
+        raise ValueError(msg)
+    resolved = resolve_requested_slice(slices, slice_arch)
+    if resolved is None:
+        available = sorted({item.arch for item in slices})
+        msg = (
+            f"--slice-arch {slice_arch!r} matches no slice in {binary} "
+            f"(available: {available})"
+        )
+        raise ValueError(msg)
+    return resolved.arch
+
+
 def analyse_blackbox_binary(
     binary_path: Path,
     *,
@@ -1814,6 +1842,13 @@ def analyse_blackbox_binary(
     binary = Path(binary_path).resolve()
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    if slice_arch is not None:
+        # One shared slice decision, made BEFORE any analysis: the r2
+        # lane maps a requested arch to -a/-b unconditionally, so an
+        # arch the binary cannot satisfy must refuse here — never
+        # decode the fallback slice's bytes as the wrong ISA while
+        # the manifest reports the fallback's arch as analysed.
+        slice_arch = _resolve_requested_slice_arch(binary, slice_arch)
     try:
         context = analyse_binary_context(
             binary,

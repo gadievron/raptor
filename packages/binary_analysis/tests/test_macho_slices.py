@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from packages.binary_analysis.macho import MachOSlice, select_slice
+import pytest
+
+from packages.binary_analysis.macho import (
+    MachOSlice,
+    resolve_requested_slice,
+    select_slice,
+)
 
 
 def _slice(arch: str, cpu_type: int, bits: int) -> MachOSlice:
@@ -43,8 +49,25 @@ def test_x86_aliases_unchanged() -> None:
     assert select_slice([X86, X86_64], "x64", None) is X86_64
 
 
-def test_no_match_falls_back_to_first_slice() -> None:
-    assert select_slice([X86_64, ARM64], "riscv", None) is X86_64
+def test_requested_arch_with_no_matching_slice_refuses() -> None:
+    # Never fall back on an EXPLICIT request: the r2 lane forces -a/-b
+    # from the requested arch, so a silent slices[0] fallback decoded
+    # the fallback slice's bytes as the wrong ISA while the manifest
+    # reported the fallback's arch — garbage stamped full-depth.
+    with pytest.raises(ValueError, match="riscv"):
+        select_slice([X86_64, ARM64], "riscv", None)
+
+
+def test_resolve_requested_slice_shared_decision() -> None:
+    assert resolve_requested_slice([X86_64, ARM64], "aarch64") is ARM64
+    assert resolve_requested_slice([X86_64], "arm64") is None
+    assert resolve_requested_slice([], "arm64") is None
+
+
+def test_host_fallback_no_match_still_uses_first_slice() -> None:
+    # The coarse host-arch FALLBACK (no explicit request) keeps its
+    # slices[0] behaviour — there is no operator assertion to honour.
+    assert select_slice([X86_64, ARM64], None, "riscv") is X86_64
 
 
 def test_coarse_fallback_arch_disambiguated_by_bits() -> None:
@@ -58,3 +81,35 @@ def test_coarse_fallback_arch_disambiguated_by_bits() -> None:
 def test_coarse_fallback_32bit_selects_32bit_slice() -> None:
     assert select_slice([ARM32, ARM64], None, "arm", 32) is ARM32
     assert select_slice([X86, X86_64], None, "x86", 32) is X86
+
+
+class TestPipelineSliceArchGate:
+    """analyse_blackbox_binary refuses an explicit --slice-arch the
+    binary cannot satisfy BEFORE any analysis runs."""
+
+    def test_non_macho_binary_refuses(self, tmp_path) -> None:
+        from packages.binary_analysis.pipeline import analyse_blackbox_binary
+
+        binary = tmp_path / "plain.elf"
+        binary.write_bytes(b"\x7fELF" + b"\x00" * 60)
+        with pytest.raises(ValueError, match="slice-arch"):
+            analyse_blackbox_binary(
+                binary, out_dir=tmp_path / "out", quick=True,
+                slice_arch="arm64")
+
+    def test_fat_macho_without_requested_slice_refuses(
+            self, tmp_path) -> None:
+        import struct
+
+        from packages.binary_analysis.pipeline import analyse_blackbox_binary
+
+        # Fat (universal) header, big-endian, one x86_64 slice.
+        header = struct.pack(">II", 0xCAFEBABE, 1)
+        header += struct.pack(">IIIII", 7 | 0x01000000, 3, 48, 16, 0)
+        blob = header + b"\x00" * (48 - len(header)) + b"\x90" * 16
+        binary = tmp_path / "fat.bin"
+        binary.write_bytes(blob)
+        with pytest.raises(ValueError, match="arm64"):
+            analyse_blackbox_binary(
+                binary, out_dir=tmp_path / "out", quick=True,
+                slice_arch="arm64")
