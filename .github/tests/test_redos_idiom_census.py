@@ -102,23 +102,39 @@ call site lives in the ADJUDICATED lane: pinned by identity in
 cannot grow silently and a NEW superlinear table entry still refuses
 to pin.
 
-HONEST BOUNDARY — mechanisms these arms do NOT cover: (1) the
-unanchored scan-restart family, where an unbounded first token or
-filler makes ``re.search``'s position loop re-scan hostile runs
-(multi-term ``A.*B.*C`` chains, their lazy/DOTALL two-term degenerate
-case ``A.*?B``, ``prefix<sentence-body>`` families, and
-``backslash-s*``-prefixed searches); (2) nested-quantifier
-ambiguity (the classic ``(?:a+)+`` exponential) — no ADJACENT pair
-exists, so Rule C is blind by construction.  The boundary self-check
-pins exemplar shapes of both as non-members so nobody assumes
-coverage; an adversarial sweep at introduction time measured every
-nested-unbounded site in the tree and found no live member of the
-dangerous subclass.  Both families need their own membership rules
-and attack synthesis — follow-up census arms, not silent extensions
-of these.  Also outside the static universe, by construction: (3)
+SCAN-RESTART ARM (Rule S): the unanchored scan-restart family — the
+follow-up arm the boundary below called for.  At a SCANNING call
+site (search/finditer/findall/sub/split), ``re``'s position loop
+attempts a match at every input position; when an unbounded repeat R
+re-scans the remaining hostile run per attempt, cost is O(n^2)+
+WITHOUT nested quantifiers and WITHOUT an adjacent overlapping pair.
+Rule S proposes an unbounded repeat on the concatenation spine with
+a REQUIRED consuming failable continuation whose required prefix
+min-model (the "entry") is drawn from charset(R): entry == "" is the
+leading-density shape (``backslash-s*X``, ``[^.]*X``), entry != "" the
+planted-entry shape (multi-term ``A.*B.*C`` chains, their lazy/DOTALL
+two-term degenerate case ``A.*?B``, head-dense ``,[^;]*x``).  The
+position-density pump — (entry + fill)^k + poison — disposes; pins
+live in ``data/redos_scan_restart_expected.json`` under the same
+propose/refuse/nightly regime as the trailing-span arm, over the
+same universe (call sites and pattern-table entries both).
+
+HONEST BOUNDARY — mechanisms NO arm covers with a dedicated rule:
+(1) nested-quantifier ambiguity (the classic ``(?:a+)+``
+exponential) — no ADJACENT pair exists (Rule C blind) and the
+ambiguity lives inside one repeat rather than in the position loop
+(Rule S's pump happens to fire on some such shapes when the inner
+repeat sits on the spine, but coverage is NOT claimed).  The
+boundary self-check pins the exemplar shape as a non-member of Rule
+C/R so nobody assumes coverage; an adversarial sweep at introduction
+time measured every nested-unbounded site in the tree and found no
+live member of the dangerous subclass.  That family still needs its
+own membership rule and attack synthesis — a follow-up arm, not a
+silent extension of these.  Also outside the static universe, by
+construction: (2)
 patterns assembled or learned at RUNTIME (e.g. discovered-convention
 registries) — no static census can see them; their consumers own
-input bounds; and (4) a pattern table in a module that never binds
+input bounds; and (3) a pattern table in a module that never binds
 ``re`` itself and is compiled by ANOTHER module — cross-module
 constant resolution stays out of the resolver by design, so such a
 table sits with the chained-constant boundary.
@@ -224,6 +240,17 @@ def _const_str_parts(node: ast.AST, consts: dict[str, str]) -> str | None:
         for value in node.values:
             if isinstance(value, ast.Constant) and isinstance(value.value, str):
                 parts.append(value.value)
+            elif (isinstance(value, ast.FormattedValue)
+                    and isinstance(value.value, ast.Name)
+                    and value.format_spec is None
+                    and value.conversion == -1
+                    and value.value.id in consts):
+                # A plain module-constant interpolation resolves like
+                # the BinOp-concat spelling below — an rf-string built
+                # from pattern-fragment constants is the same pattern
+                # to the runtime, and the placeholder used to hide the
+                # fragment's repeats from every arm.
+                parts.append(consts[value.value.id])
             else:
                 parts.append("X")
         return "".join(parts)
@@ -1308,6 +1335,9 @@ def _oracle_probe_lines(pattern: str, flags: int, mode: str,
     ``n dt`` probe lines for one attack lane at doubling sizes."""
     import time
 
+    if kind == "scan":
+        _scan_oracle_probe_lines(pattern, flags, index)
+        return
     try:
         parsed = sre_parse.parse(pattern, flags)
     except (re.error, ValueError):
@@ -1518,6 +1548,306 @@ def _regen_expected(workers: int = 8) -> int:
     noatt = [k for k, v in rows.items() if v["verdict"] == "noattack"]
     print(f"pinned {len(rows)} members "
           f"({len(noatt)} noattack) -> {_EXPECTED_FILE}")
+    return 0
+
+
+# ═════════════════════════════════════════════════════════════════════
+# Scan-restart arm (Rule S): unanchored position-loop superlinearity.
+# Static rule proposes, position-density pump oracle disposes.
+# ═════════════════════════════════════════════════════════════════════
+
+_SCAN_EXPECTED_FILE = Path(__file__).resolve().parent / "data" / \
+    "redos_scan_restart_expected.json"
+
+# Rule S's identity-pinned manual-review lane, digest-keyed like
+# ``_TABLE_ADJUDICATED``: string-table entries the worst-case table
+# extraction admits but that are NEVER COMPILED as regexes — output
+# text a module emits verbatim (a generated C comment line, a QL
+# header line) or markers consumed by substring containment.  Read
+# as regexes they carry a quantified ``/`` and measure superlinear,
+# but rewriting the strings would corrupt real output.  Growth
+# requires editing this documented dict (the regeneration tool pins
+# these with the ``adjudicated`` verdict and refuses any other
+# superlinear member), so the lane cannot grow silently.
+_SCAN_ADJUDICATED: dict[str, str] = {
+    "0f64f014c82d": (
+        "core/audit/compile_probe.py lines[0]: the generated probe "
+        "TU's own header comment — emitted as C source text, never "
+        "compiled as a pattern"
+    ),
+    "8eba6201f599": (
+        "core/iris/specs.py lines[7]: the QL query header's "
+        "comment-closer line — emitted as query text, never "
+        "compiled as a pattern"
+    ),
+    "37de29a408f1": (
+        "core/inventory/exclusions.py GENERATED_MARKERS[10]: a "
+        "generated-file marker consumed via substring containment "
+        "(`marker in lowered`), never compiled as a pattern"
+    ),
+}
+
+
+def _seq_leading_anchor(seq) -> bool:
+    """True when the pattern is start-anchored (``\\A`` or ``^``):
+    the search loop cannot restart densely without MULTILINE, and
+    with MULTILINE the anchor-restart arm (Rule R) owns the
+    mechanism."""
+    for node in seq:
+        op, arg = node
+        if op is sre_parse.AT:
+            if str(arg).endswith(("AT_BEGINNING", "AT_BEGINNING_STRING")):
+                return True
+            continue
+        if op is sre_parse.SUBPATTERN:
+            return _seq_leading_anchor(arg[3])
+        return False
+    return False
+
+
+def _find_scan_restart_lanes(parsed, flags: int) -> list[dict]:
+    """Rule S lanes: for an unbounded repeat R on the concatenation
+    spine with a REQUIRED consuming continuation after it, the site
+    is start-dense when the min-model of everything required before
+    R (the "entry", possibly empty) is drawn from charset(R):
+
+    * entry == "": leading ``\\s*`` / ``.*`` / ``[^X]*`` — every
+      position of a hostile fill run is a match attempt and each
+      attempt re-scans the rest of the run;
+    * entry != "" and chars(entry) <= charset(R): the attacker
+      plants entry occurrences INSIDE R's own span (multi-term
+      ``A.*B.*C`` chains, head-dense ``,[^;]*x`` shapes) — attempts
+      multiply with density and each backtrack re-scans the tail.
+
+    Walks into subpatterns, branches, and repeat BODIES (an unbounded
+    repeat nested inside an optional group scan-restarts all the
+    same), with the enclosing tail visible, accumulating the
+    min-model entry string."""
+    lanes: list[dict] = []
+    seen: set[int] = set()
+
+    def walk(seq, entry: str, tail_after: tuple) -> None:
+        for i, node in enumerate(list(seq)):
+            op, arg = node
+            rest = tuple(list(seq)[i + 1:]) + tail_after
+            if op is sre_parse.SUBPATTERN:
+                walk(arg[3], entry, rest)
+            elif op is sre_parse.BRANCH:
+                for branch in arg[1]:
+                    walk(branch, entry, rest)
+            elif op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT) \
+                    and not _is_unbounded_repeat(node):
+                walk(arg[2], entry, rest)
+            elif _is_unbounded_repeat(node) and id(node) not in seen:
+                seen.add(id(node))
+                charset = _charset(node, flags)
+                if charset:
+                    tail = _tail_verdict(list(rest), flags)
+                    first = set(tail["first_consumable"])
+                    fills = [c for c in sorted(charset - first)
+                             if c not in (10, 13)]
+                    if tail["consuming"] and fills \
+                            and all(ord(ch) in charset for ch in entry):
+                        fill = chr(32 if 32 in fills else next(
+                            (c for c in fills if chr(c).isalnum()),
+                            fills[0]))
+                        poison = next(
+                            (chr(c) for c in (1, 46, 59, 88, 10, 33, 2)
+                             if c not in charset and c not in first),
+                            None,
+                        )
+                        lanes.append({
+                            "entry": entry, "fill": fill,
+                            "poison": poison or "",
+                        })
+                walk(arg[2], entry, rest)
+            try:
+                entry += _gen_min(node, flags)
+            except _Unsupported:
+                pass
+
+    if not _seq_leading_anchor(parsed):
+        walk(parsed, "", ())
+    return lanes
+
+
+def _build_scan_restart_attack(lane: dict, n: int) -> str | None:
+    """Position-density pump: (entry + fill)^k + poison.  Every entry
+    occurrence is a live attempt position inside the fill run; the
+    poison keeps the continuation failing so each attempt pays its
+    full re-scan.  The trailing-span pair pump does NOT fire on
+    these shapes (no adjacent overlapping pair) — this family needs
+    its own synthesis."""
+    unit = lane["entry"] + lane["fill"]
+    if not unit:
+        return None
+    return unit * max(2, n // len(unit)) + lane["poison"]
+
+
+def _site_scan_lanes(site: _Site) -> list[dict]:
+    """Rule S applies to scanning call modes only: an anchored
+    match/fullmatch site has a single start position, so the
+    position loop never restarts."""
+    if site.mode != "search":
+        return []
+    try:
+        parsed = sre_parse.parse(site.pattern, site.flags)
+    except (re.error, ValueError, OverflowError):
+        return []
+    return _find_scan_restart_lanes(parsed, parsed.state.flags)
+
+
+def _scan_restart_members() -> dict[tuple[str, str], dict]:
+    """Rule S's PROPOSED member set over runtime source, keyed and
+    digest-stamped like the trailing-span arm."""
+    import hashlib
+
+    members: dict[tuple[str, str], dict] = {}
+    for site in _all_runtime_sites():
+        lanes = _site_scan_lanes(site)
+        if not lanes:
+            continue
+        digest = hashlib.sha256(
+            f"{site.flags}:{site.mode}:{site.pattern}".encode(),
+        ).hexdigest()[:12]
+        record = members.setdefault(site.key, {
+            "digests": set(), "sites": [],
+        })
+        record["digests"].add(digest)
+        record["sites"].append(
+            (site.lineno, site.pattern, site.flags, site.mode),
+        )
+    return members
+
+
+def _load_scan_expected() -> dict:
+    import json
+
+    with _SCAN_EXPECTED_FILE.open(encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _scan_oracle_probe_lines(pattern: str, flags: int,
+                             index: int) -> None:
+    """Worker body (hard-killed subprocess): ``n dt`` probe lines
+    for one scan-restart lane at doubling sizes."""
+    import time
+
+    try:
+        parsed = sre_parse.parse(pattern, flags)
+    except (re.error, ValueError):
+        print("NOPARSE")
+        return
+    lanes = _find_scan_restart_lanes(parsed, parsed.state.flags)
+    if index >= len(lanes):
+        print("NOLANE")
+        return
+    lane = lanes[index]
+    rx = re.compile(pattern, flags)
+    n = 500
+    while n <= 32000:
+        text = _build_scan_restart_attack(lane, n)
+        if text is None:
+            print("NOATTACK")
+            return
+        start = time.perf_counter()
+        rx.search(text)
+        elapsed = time.perf_counter() - start
+        print(n, f"{elapsed:.6f}", flush=True)
+        if elapsed > 1.0:
+            break
+        n *= 2
+
+
+def _scan_oracle_classify(pattern: str,
+                          flags: int) -> tuple[float | None, bool]:
+    """(worst exponent | None, any-lane-synthesized) across the
+    site's scan-restart lanes (subprocess-hard-killed, same probe
+    protocol and trust floor as the pair/restart oracle)."""
+    try:
+        parsed = sre_parse.parse(pattern, flags)
+    except (re.error, ValueError):
+        return (None, False)
+    lanes = _find_scan_restart_lanes(parsed, parsed.state.flags)
+    worst: float | None = None
+    synthesized = False
+    for index in range(min(len(lanes), 4)):
+        exponent, status = _oracle_lane(
+            pattern, flags, "search", "scan", index, "",
+        )
+        if status not in ("NOATTACK", "NOPARSE", "NOLANE"):
+            synthesized = True
+        if exponent is not None and (worst is None or exponent > worst):
+            worst = exponent
+    return (worst, synthesized)
+
+
+def _regen_scan_expected(workers: int = 8) -> int:
+    """Re-run the position-density oracle over every Rule S proposal
+    and rewrite the pin file.  REFUSES to pin a superlinear member —
+    fixing the pattern is the only way through."""
+    import json
+    from concurrent.futures import ThreadPoolExecutor
+
+    members = _scan_restart_members()
+    rows: dict[str, dict] = {}
+    failures: list[str] = []
+
+    def classify(item):
+        key, record = item
+        _lineno, pattern, flags, _mode = record["sites"][0]
+        exponent, synthesized = _scan_oracle_classify(pattern, flags)
+        return key, record, exponent, synthesized
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for key, record, exponent, synthesized in pool.map(
+                classify, sorted(members.items())):
+            if record["digests"] <= set(_SCAN_ADJUDICATED):
+                # Never-compiled table string with a documented
+                # disposition (see _SCAN_ADJUDICATED) — pinned, not
+                # refused.
+                verdict = "adjudicated"
+            elif not synthesized:
+                verdict = "noattack"
+            elif exponent is not None and exponent >= 1.5:
+                failures.append(
+                    f"{key[0]} :: {key[1]} measures superlinear "
+                    f"(exp={exponent:.2f}) — fix the pattern (pin the "
+                    f"run start, bound the window, break the chain); "
+                    f"the pin file only accepts oracle-linear members",
+                )
+                continue
+            else:
+                verdict = "linear"
+            rows["\x1f".join(key)] = {
+                "digests": sorted(record["digests"]),
+                "verdict": verdict,
+                "exp": None if exponent is None else round(exponent, 2),
+            }
+    if failures:
+        print("REFUSED to regenerate:")
+        for failure in failures:
+            print(" ", failure)
+        return 1
+    _SCAN_EXPECTED_FILE.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "_comment": (
+            "Pinned scan-restart census members: Rule S proposals "
+            "the position-density pump oracle measured linear, keyed "
+            "file\x1fname with pattern digests. Regenerate with: "
+            "python3 .github/tests/test_redos_idiom_census.py "
+            "--regen-scan-restart  (the tool refuses superlinear "
+            "members; hand-editing a verdict is caught by the "
+            "nightly oracle re-check)."
+        ),
+        "members": dict(sorted(rows.items())),
+    }
+    with _SCAN_EXPECTED_FILE.open("w", encoding="utf-8") as fh:
+        json.dump(payload, fh, indent=1, sort_keys=True)
+        fh.write("\n")
+    noattack = [k for k, v in rows.items() if v["verdict"] == "noattack"]
+    print(f"pinned {len(rows)} members "
+          f"({len(noattack)} noattack) -> {_SCAN_EXPECTED_FILE}")
     return 0
 
 
@@ -2167,10 +2497,12 @@ class TrailingSpanCensus(unittest.TestCase):
     def test_boundary_shapes_are_not_members_of_these_arms(self) -> None:
         """HONEST BOUNDARY pins (see the module docstring): the
         unanchored scan-restart family is NOT covered by Rule C or
-        Rule R — three exemplar shapes (a multi-term dot-star chain,
-        a sentence-body family pattern, and a whitespace-prefixed
-        search) are pinned as non-members so nobody assumes coverage.
-        That family needs its own arm."""
+        Rule R — the exemplar shapes (a multi-term dot-star chain,
+        its lazy/DOTALL two-term case, a sentence-body family
+        pattern, and a whitespace-prefixed search) are pinned as
+        non-members of THESE arms.  Rule S now owns that family: the
+        same shapes must be PROPOSED by it (the coverage handshake
+        below), so the boundary is a routing statement, not a gap."""
         for pattern, flags in (
             # nested-quantifier ambiguity: the classic exponential
             # ((?:a+)+ tail) has NO adjacent pair — Rule C is blind
@@ -2194,11 +2526,16 @@ class TrailingSpanCensus(unittest.TestCase):
             # whitespace-prefixed unanchored search
             (r",?\s*leading to (?:a |an )?compromise", 0),
         ):
-            rule_c, rule_r, _pairs, _entries = _site_rules(_Site(
+            site = _Site(
                 ("<boundary>", pattern[:40]), 0, pattern, flags,
                 "search", None,
-            ))
+            )
+            rule_c, rule_r, _pairs, _entries = _site_rules(site)
             self.assertFalse(rule_c or rule_r, pattern)
+            # Coverage handshake: every boundary shape except the
+            # nested-quantifier exemplar is Rule S's to own.
+            if pattern != r"(?:\w+)+\)":
+                self.assertTrue(_site_scan_lanes(site), pattern)
 
 
 class TrailingSpanNightly(unittest.TestCase):
@@ -2277,6 +2614,271 @@ class TrailingSpanNightly(unittest.TestCase):
                         _SUPERLINEAR_EXP)
 
 
+class ScanRestartCensus(unittest.TestCase):
+    """Rule S arm: static scan-restart rule proposes, the pinned
+    position-density oracle verdicts dispose.  The default tier never
+    runs the oracle."""
+
+    def test_rule_s_catches_known_spellings(self) -> None:
+        """Detector self-check on the arm's founding shapes and
+        non-members (guards against the proposer going vacuous or
+        flooding)."""
+
+        def rule_s(pattern: str, flags: int = 0,
+                   mode: str = "search") -> bool:
+            return bool(_site_scan_lanes(_Site(
+                ("<probe>", pattern[:40]), 0, pattern, flags, mode,
+                None,
+            )))
+
+        # Founding shapes: the three exemplars the trailing-span arms
+        # pinned as out-of-coverage, plus the head-dense variant.
+        self.assertTrue(rule_s(
+            r",?\s*leading to (?:a |an )?compromise", re.IGNORECASE,
+        ))
+        self.assertTrue(rule_s(
+            r"ignore\b.*\ball\b.*\binstructions", re.IGNORECASE,
+        ))
+        self.assertTrue(rule_s(
+            r"\bthe\s+attacks?\s+(may|can)\s+be\s+launched"
+            r"[^.!?\n]*[.!?\n]", re.IGNORECASE,
+        ))
+        self.assertTrue(rule_s(r",[^;]*x"))
+        # Lazy-quantifier + DOTALL delimited-span shapes are
+        # first-class members: the lazy repeat expands from every
+        # planted opener and re-scans to the missing closer — the
+        # 2-term case of the planted-entry mechanism. (These shapes
+        # are INVISIBLE to Rule C — no adjacent pair — and to Rule R
+        # — no MULTILINE anchor; this arm owns them.)
+        self.assertTrue(rule_s(r"/\*.*?\*/", re.DOTALL))
+        self.assertTrue(rule_s(r"<!--.*?-->", re.DOTALL))
+        self.assertTrue(rule_s(r"/\*.*?\*/"))
+        # An unbounded repeat hidden inside an OPTIONAL group is
+        # still a scan-restart member (the walker descends into
+        # repeat bodies); the entry ("a ") is drawn from the inner
+        # repeat's own class, so occurrences can be planted in its
+        # span.
+        self.assertTrue(rule_s(r"a\s+(?:[\w\-][\w\- ]*?)?flag\b"))
+        # ... but when the entry carries a char OUTSIDE the repeat's
+        # class ('='), planted entries break the span and the
+        # position skip prunes attempts — correctly not a member.
+        self.assertFalse(rule_s(r"=\s+(?:[\w\-][\w\- ]*?)?flag\b"))
+        # Non-members: a literal head whose chars fall outside the
+        # repeat's set (position skip prunes attempts), a bounded
+        # window, an anchored pattern, an anchored CALL MODE, and a
+        # tail that cannot fail.
+        self.assertFalse(rule_s(r"leading to [a-z]+", re.IGNORECASE))
+        self.assertFalse(rule_s(r",?\s{0,16}leading to"))
+        self.assertFalse(rule_s(r"^\s*foo"))
+        self.assertFalse(rule_s(r"\s*==\s*0\b", 0, "match"))
+        self.assertFalse(rule_s(r"\s*(.*)"))
+
+    def test_oracle_flags_superlinear_and_passes_fixed(self) -> None:
+        """Oracle self-check with real timing: a known scan-restart
+        member measures superlinear and its run-start-pinned fix
+        measures linear — so a broken oracle cannot silently bless
+        the tree."""
+        bad = r"\s*==\s*0\b"
+        exponent, synthesized = _scan_oracle_classify(bad, 0)
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        good = r"(?<!\s)\s*==\s*0\b"
+        exponent, _ = _scan_oracle_classify(good, 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
+        # The lazy-DOTALL delimited-span exemplar: planted openers
+        # with the closer withheld make every opener re-scan to the
+        # end — the position-density pump must expose it.
+        exponent, synthesized = _scan_oracle_classify(
+            r"/\*.*?\*/", re.DOTALL,
+        )
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+
+    def test_members_match_the_pinned_verdicts(self) -> None:
+        """Default-tier closure: the live Rule S proposal set equals
+        the pinned set, digests match, and every pin is linear or
+        noattack — a new member, a drifted pattern, or a stale pin
+        fails here (and regeneration refuses superlinear members, so
+        the fix is the only way through)."""
+        live = _scan_restart_members()
+        pinned = _load_scan_expected()["members"]
+        live_keys = {"\x1f".join(key) for key in live}
+        pinned_keys = set(pinned)
+        regen = ("python3 .github/tests/test_redos_idiom_census.py "
+                 "--regen-scan-restart")
+        new_members = sorted(live_keys - pinned_keys)
+        self.assertFalse(new_members, (
+            f"unpinned scan-restart census member(s) — an unanchored "
+            f"scanning call site whose unbounded repeat re-scans a "
+            f"hostile run from every attempt position. Fix the "
+            f"pattern (pin the run start with \\b/(?<!...), bound "
+            f"the window, break the ``A.*B.*C`` chain) or, if the "
+            f"position-density oracle measures it linear, pin it "
+            f"with `{regen}`:\n  " + "\n  ".join(
+                member.replace("\x1f", " :: ")
+                for member in new_members)
+        ))
+        stale = sorted(pinned_keys - live_keys)
+        self.assertFalse(stale, (
+            f"stale scan-restart pins (member no longer proposed) — "
+            f"re-run `{regen}`:\n  " + "\n  ".join(
+                member.replace("\x1f", " :: ") for member in stale)
+        ))
+        drifted = []
+        bad_verdicts = []
+        for key, record in live.items():
+            row = pinned["\x1f".join(key)]
+            if set(row["digests"]) != record["digests"]:
+                drifted.append(" :: ".join(key))
+            if row["verdict"] == "adjudicated":
+                if not set(row["digests"]) <= set(_SCAN_ADJUDICATED):
+                    bad_verdicts.append(" :: ".join(key))
+            elif row["verdict"] not in ("linear", "noattack"):
+                bad_verdicts.append(" :: ".join(key))
+        self.assertFalse(sorted(drifted), (
+            f"pattern text drifted under existing scan-restart pins "
+            f"— re-run `{regen}`:\n  " + "\n  ".join(sorted(drifted))
+        ))
+        self.assertFalse(bad_verdicts, (
+            "scan-restart pin carries a verdict outside "
+            "linear/noattack (or an adjudicated pin whose digest the "
+            "_SCAN_ADJUDICATED lane does not carry) — hand-edited? "
+            "The nightly oracle re-check owns verdict truth; "
+            "regenerate instead."
+        ))
+
+    def test_planted_superlinear_member_is_caught(self) -> None:
+        """Self-check: a module planted with a KNOWN-superlinear
+        scan-restart spelling is proposed by Rule S — being unpinned
+        it would fail the closure — and the fixed spelling in the
+        same module is NOT proposed (bounded glue has no unbounded
+        repeat left)."""
+        import tempfile
+
+        source = (
+            "import re\n"
+            "BAD = re.compile(r',?\\s*leading to compromise')\n"
+            "OK = re.compile(r',?\\s{0,16}leading to compromise')\n"
+            "def strip(t):\n"
+            "    return BAD.sub('', OK.sub('', t))\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".py", delete=False,
+        ) as fh:
+            fh.write(source)
+            probe = Path(fh.name)
+        try:
+            proposed = {
+                site.name
+                for site in _extract_sites(probe)
+                if _site_scan_lanes(site)
+            }
+        finally:
+            probe.unlink()
+        self.assertIn("BAD", proposed)
+        self.assertNotIn("OK", proposed)
+
+    def test_fstring_constant_members_are_seen(self) -> None:
+        """Resolver self-check: a pattern assembled from module
+        pattern-fragment constants through an rf-string resolves to
+        its real spelling — the placeholder used to hide the
+        fragment's unbounded repeats from every arm."""
+        import tempfile
+
+        source = (
+            "import re\n"
+            "_BODY = r'[^.\\n]*'\n"
+            "PAT = re.compile(rf'{_BODY}leads to{_BODY}\\.')\n"
+            "def strip(t):\n"
+            "    return PAT.sub('', t)\n"
+        )
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".py", delete=False,
+        ) as fh:
+            fh.write(source)
+            probe = Path(fh.name)
+        try:
+            sites = {s.name: s.pattern for s in _extract_sites(probe)}
+        finally:
+            probe.unlink()
+        self.assertEqual(sites.get("PAT"),
+                         r"[^.\n]*leads to[^.\n]*\.")
+
+    def test_noattack_lane_is_exactly_the_documented_list(self) -> None:
+        """The scan-restart manual-review lanes are pinned by
+        IDENTITY so they cannot grow silently.  The noattack lane is
+        empty (the synthesizer built an attack for every proposed
+        member); the adjudicated lane is exactly the documented
+        never-compiled table strings, and every documented digest
+        must still be pinned (a stale disposition is drift too)."""
+        pinned = _load_scan_expected()["members"]
+        noattack = sorted(
+            key.replace("\x1f", " :: ")
+            for key, row in pinned.items()
+            if row["verdict"] == "noattack"
+        )
+        self.assertEqual(noattack, [])
+        adjudicated_digests: set[str] = set()
+        for row in pinned.values():
+            if row["verdict"] == "adjudicated":
+                adjudicated_digests |= set(row["digests"])
+        self.assertEqual(adjudicated_digests, set(_SCAN_ADJUDICATED))
+
+
+class ScanRestartNightly(unittest.TestCase):
+    """Nightly re-verification: the position-density oracle
+    re-measures every scan-restart pin, so a hand-edited verdict or
+    an environment-dependent regression cannot hide behind the
+    default tier's static-only check."""
+
+    @pytest.mark.slow
+    def test_nightly_oracle_agrees_with_pins(self) -> None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        live = _scan_restart_members()
+        pinned = _load_scan_expected()["members"]
+        violations: list[str] = []
+
+        def measure(item):
+            key, record = item
+            _lineno, pattern, flags, _mode = record["sites"][0]
+            return key, _scan_oracle_classify(pattern, flags)
+
+        items = [
+            (key, record) for key, record in sorted(live.items())
+            if pinned.get("\x1f".join(key)) is not None
+        ]
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for key, (exponent, synthesized) in pool.map(
+                    measure, items):
+                row = pinned["\x1f".join(key)]
+                if row["verdict"] == "adjudicated":
+                    # Never-compiled table strings (documented in
+                    # _SCAN_ADJUDICATED) hold their verdict by
+                    # identity, not by measurement.
+                    continue
+                if row["verdict"] == "noattack":
+                    if synthesized:
+                        violations.append(
+                            f"{key[0]} :: {key[1]}: noattack pin but "
+                            f"the synthesizer now builds an attack — "
+                            f"regenerate")
+                    continue
+                # Alarm threshold sits ABOVE the census threshold
+                # (1.6) so a pinned-linear member only fails on a
+                # real regression, not on a loaded runner.
+                if exponent is not None and exponent >= 1.9:
+                    violations.append(
+                        f"{key[0]} :: {key[1]}: pinned linear but "
+                        f"measures exp={exponent:.2f}")
+        self.assertFalse(violations,
+                         "scan-restart nightly oracle disagrees with "
+                         "pins:\n  " + "\n  ".join(violations))
+
+
 if __name__ == "__main__":
     import sys
 
@@ -2291,4 +2893,6 @@ if __name__ == "__main__":
         sys.exit(0)
     if "--regen-trailing-span" in sys.argv:
         sys.exit(_regen_expected())
+    if "--regen-scan-restart" in sys.argv:
+        sys.exit(_regen_scan_expected())
     unittest.main()

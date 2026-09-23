@@ -1,0 +1,2101 @@
+{
+ "_comment": "Pinned scan-restart census members: Rule S proposals the position-density pump oracle measured linear, keyed file\u001fname with pattern digests. Regenerate with: python3 .github/tests/test_redos_idiom_census.py --regen-scan-restart  (the tool refuses superlinear members; hand-editing a verdict is caught by the nightly oracle re-check).",
+ "members": {
+  "core/analysis/lifecycle_checker.py\u001f(?<!\\s)\\s*==\\s*0\\b": {
+   "digests": [
+    "9a5583a5d2c9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/analysis/lifecycle_checker.py\u001fs": {
+   "digests": [
+    "69dd5eb6013c",
+    "b7aa2cc00f8a",
+    "e0befcac5abc"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/analysis/peer_groups.py\u001f_SIG_TYPE_RE": {
+   "digests": [
+    "288de503bef9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/analysis/reachability.py\u001f_TEST_FILE_PATTERN": {
+   "digests": [
+    "2e025bb529a8"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/analysis/reachability_gates.py\u001f_FENCED_CODE_RE": {
+   "digests": [
+    "3cbc26c0f2a7"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/analysis/summaries.py\u001f_CALL_SHAPED_NAME_RE": {
+   "digests": [
+    "ba13be356eb2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/analysis/taint_multi_lang.py\u001f_JAVA_FUNC": {
+   "digests": [
+    "84f2036db20e"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/analysis/taint_multi_lang.py\u001fmethod_re": {
+   "digests": [
+    "afff5cd62a37"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/analysis/test_discovery.py\u001fcalls": {
+   "digests": [
+    "1488db168f73"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/analysis/typestate.py\u001f_CALL_NAME_RE": {
+   "digests": [
+    "9338a1fce094"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/annotations/storage.py\u001f_META_KV_RE": {
+   "digests": [
+    "055e4951eaba"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/api_boundary.py\u001f\\b(?:struct|union|enum|const|unsigned|si": {
+   "digests": [
+    "4fc561e893e5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/api_boundary.py\u001f_INTERVENING_CALL_RE": {
+   "digests": [
+    "263730b895c3"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/auth_witnesses.py\u001f_DIGESTY_CALL_RE": {
+   "digests": [
+    "7bac92ef17b0"
+   ],
+   "exp": 1.02,
+   "verdict": "linear"
+  },
+  "core/audit/auth_witnesses.py\u001f_KEYED_GET_RE": {
+   "digests": [
+    "d2099ebc94bc"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/auth_witnesses.py\u001fm": {
+   "digests": [
+    "c8f8ffc78d2c"
+   ],
+   "exp": 1.02,
+   "verdict": "linear"
+  },
+  "core/audit/binary_layer0.py\u001f_CALLEE_RE": {
+   "digests": [
+    "9338a1fce094"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/callback_lifetime.py\u001f_RCU_DEREF_RE": {
+   "digests": [
+    "0b25134acd98"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/caller_contract.py\u001fdealloc_on_param": {
+   "digests": [
+    "65ffe561ec4e"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/caller_lock.py\u001f\\b(?:X|X)\\w*\\s*\\(": {
+   "digests": [
+    "0028d3938560"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/caller_lock.py\u001f\\b([A-Za-z_]\\w*)\\s*\\(": {
+   "digests": [
+    "9338a1fce094"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/caller_lock.py\u001f_CALL_IDENT_RE": {
+   "digests": [
+    "9338a1fce094"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/caller_lock.py\u001f_LOCAL_STATIC_RE": {
+   "digests": [
+    "4a4c86afd691"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/caller_lock.py\u001f_STMT_LABEL_RE": {
+   "digests": [
+    "4afea957b20c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/callsite_consistency.py\u001f_CALL_IN_LINE_RE": {
+   "digests": [
+    "3c6564c8c3f5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/callsite_consistency.py\u001f_STRING_OR_COMMENT_OPEN_RE": {
+   "digests": [
+    "0b211d9f39cc"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/check_then_create.py\u001f_KEYED_MAP_READ_RE": {
+   "digests": [
+    "604e1eab6c34"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/clone_drift.py\u001f_CALL_NAME_RE": {
+   "digests": [
+    "5d94d1a0314d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/clone_drift.py\u001f_STRING_RE": {
+   "digests": [
+    "f47335305cc5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/cocci_flow.py\u001f[`'\\\"]?\\b([A-Za-z_][A-Za-z0-9_]*(?:(?:->": {
+   "digests": [
+    "67411e1bdce8"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/cocci_flow.py\u001f[`'\\\"]?\\b([A-Za-z_][A-Za-z0-9_]*)\\(\\)?[`": {
+   "digests": [
+    "8bd60f896a4e"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/compile_probe.py\u001f_IDENT_EXPR_RE": {
+   "digests": [
+    "21cabba43cfd"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/compile_probe.py\u001flines[0]": {
+   "digests": [
+    "0f64f014c82d"
+   ],
+   "exp": 2.02,
+   "verdict": "adjudicated"
+  },
+  "core/audit/condition_adequacy.py\u001f_NEG_UPPER_BOUND_FWD_RE": {
+   "digests": [
+    "a10f43f8717b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_adequacy.py\u001f_UPPER_BOUND_FWD_RE": {
+   "digests": [
+    "8b0f2d073d24"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_binding.py\u001f_FIELD_RE": {
+   "digests": [
+    "a149b9617044"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_binding.py\u001f_SUBSCRIPT_RE": {
+   "digests": [
+    "a1eefd952bd6"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_classifier.py\u001f_BOUNDS_RE": {
+   "digests": [
+    "92545d3b5a82"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_classifier.py\u001f_NULL_RE": {
+   "digests": [
+    "c173a0fff31c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_classifier.py\u001f_RESOURCE_RE": {
+   "digests": [
+    "b67df868c6f4"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_classifier.py\u001f_TYPE_RE": {
+   "digests": [
+    "f527a6acff01"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f\\b(\\w+)\\s*(?:,\\s*\\w+\\s*)?(?::?=)\\s*strco": {
+   "digests": [
+    "19da9704f7cc"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f\\b(\\w+)\\s*=\\s*(?:\\([\\w\\s*]+\\)\\s*)?(?:str": {
+   "digests": [
+    "da2512e1d0e2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f\\b(\\w+)\\s*=\\s*(X)\\s*\\(": {
+   "digests": [
+    "f599cb6c8d55"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f\\b(\\w+)\\s*=\\s*(\\w+_alloc_\\w+)\\s*\\(": {
+   "digests": [
+    "c2844d57a969"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f\\b(\\w+)\\s*=\\s*(kmalloc|kzalloc)\\s*\\(": {
+   "digests": [
+    "b98f460399ea"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f\\b(\\w+)\\s*=\\s*(malloc|calloc|realloc)\\s*": {
+   "digests": [
+    "459f5f0351de"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f\\b(\\w+_lock)\\s*\\(": {
+   "digests": [
+    "f9c9230480c7"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f\\b(security_\\w+)\\s*\\(": {
+   "digests": [
+    "c5ec51ab2cb7"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f\\b\\w+\\s*\\(": {
+   "digests": [
+    "bde475aac65c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f_COMPARISON_RE": {
+   "digests": [
+    "c83cc46c9b5d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f_COMPARISON_REV_RE": {
+   "digests": [
+    "3880807f1b2b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f_FREE_RE": {
+   "digests": [
+    "be592db3fa7b"
+   ],
+   "exp": 1.03,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f_GO_ATOI_RE": {
+   "digests": [
+    "19da9704f7cc"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f_GO_CAST_RE": {
+   "digests": [
+    "811cbc5ff442"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f_GO_MULTI_RETURN_RE": {
+   "digests": [
+    "d1f12128f583"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f_GO_READ_RE": {
+   "digests": [
+    "99ab2520309a"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001f_PARSED_INT_CALL_ARG_RE": {
+   "digests": [
+    "5cc2f8b7e1ea"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001ffield_re": {
+   "digests": [
+    "b18eead13bd2",
+    "f54dced9c5b0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001ffield_read_re": {
+   "digests": [
+    "714f8de5f0a6"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001ffunc_assign_re": {
+   "digests": [
+    "7d372584b7cf"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001ffunc_assigned_re": {
+   "digests": [
+    "7d372584b7cf"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001flock_re": {
+   "digests": [
+    "a10a364d0833"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001fmacro_read_re": {
+   "digests": [
+    "4fbb18adaa13"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001fout_param_re": {
+   "digests": [
+    "5263d3670f29"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001fparts": {
+   "digests": [
+    "17166ef01b2c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001frcu_bind_re": {
+   "digests": [
+    "0c68f67bf1f5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001fsig_re": {
+   "digests": [
+    "589dbb16e6c1"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001fsubsystem_free_pat": {
+   "digests": [
+    "a56ab90d3d8a"
+   ],
+   "exp": 1.01,
+   "verdict": "linear"
+  },
+  "core/audit/condition_smt.py\u001fwrapper_re": {
+   "digests": [
+    "dc8274bb4a2c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/consistency_dimensions.py\u001f_CAPTURE_CALL_RE": {
+   "digests": [
+    "be9abc92c8e9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/consistency_dimensions.py\u001f_CMP_LEFT_RE": {
+   "digests": [
+    "521dabd58062"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/consistency_dimensions.py\u001f_FIELD_SUBSCRIPT_RE": {
+   "digests": [
+    "d08e74d1180c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/consistency_dimensions.py\u001fpattern": {
+   "digests": [
+    "4b6626b10cf8"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/consistency_verify.py\u001f_CONSISTENCY_HYPOTHESIS_RE": {
+   "digests": [
+    "c9721dcf72df"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/consistency_verify.py\u001f_IDENT_CALL_RE": {
+   "digests": [
+    "6a154b91cf5b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/context.py\u001f_TYPE_NAME_RE": {
+   "digests": [
+    "eadcab2d1110"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/dark_verify/_execute.py\u001f_C_STRING_LIT_RE": {
+   "digests": [
+    "d6401e2b35da"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/dark_verify/_execute.py\u001f_RUST_MACRO_RE": {
+   "digests": [
+    "1786f93a3a67"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/decompiler_sanitise.py\u001f_CLASS_MEMBER_RE": {
+   "digests": [
+    "f82e2a972a36"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/decompiler_sanitise.py\u001f_SCOPED_STATIC_RE": {
+   "digests": [
+    "c73c4b0f8155"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/expanded_semgrep.py\u001f_MACRO_USE_RE": {
+   "digests": [
+    "340c470c0081"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/field_census.py\u001f_ACCESS_RE": {
+   "digests": [
+    "0c2293e086b8"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/field_census.py\u001f_LOCAL_ALIAS_RE": {
+   "digests": [
+    "c52d8ee7970f"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/field_census.py\u001f_WRITE_RE": {
+   "digests": [
+    "84785a6dea03"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/fix_history.py\u001f_CALL_RE": {
+   "digests": [
+    "9981b2cfc1eb"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/heap_copy_checker.py\u001f_ALLOC_RE": {
+   "digests": [
+    "b6611cb1ebea"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/heap_copy_checker.py\u001f_CALL_WITH_ARGS_RE": {
+   "digests": [
+    "4ec63effa2d0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/heap_copy_checker.py\u001f_CHECKED_COPY_RE": {
+   "digests": [
+    "7ebd359a4d82"
+   ],
+   "exp": 1.01,
+   "verdict": "linear"
+  },
+  "core/audit/integer_truncation_checker.py\u001f_ALLOC_RE": {
+   "digests": [
+    "e50ee36fe75c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/integer_truncation_checker.py\u001f_BYTE_ORDER_RE": {
+   "digests": [
+    "996bf7b3fa06"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/integer_truncation_checker.py\u001f_EXPLICIT_CAST_RE": {
+   "digests": [
+    "1a4d89793b5b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/integer_truncation_checker.py\u001f_NETWORK_PARSE_RE": {
+   "digests": [
+    "509748144f75"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/intra_function.py\u001f_COMPARISON_RE": {
+   "digests": [
+    "beb6654dde03"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/joern_verify.py\u001f[`'\\\"]?\\b([A-Za-z_][A-Za-z0-9_]*)[`'\\\"]?": {
+   "digests": [
+    "23dac0b018d1",
+    "91a01b927506"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/joern_verify.py\u001f_CALL_NAME_RE": {
+   "digests": [
+    "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/lock_region.py\u001f\\b([A-Za-z_]\\w*)\\s*\\(": {
+   "digests": [
+    "9338a1fce094"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/lock_region.py\u001f\\b\\w+_lock\\s*\\(": {
+   "digests": [
+    "1b7363b44eb1"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/lock_region.py\u001f_INDIRECT_CALL_RE": {
+   "digests": [
+    "69636de8133f"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/lock_region.py\u001fassign_re": {
+   "digests": [
+    "ec460d2b1d72"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/mechanical_gates.py\u001ftext": {
+   "digests": [
+    "1aaecb211267"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/negative_space.py\u001f_AMR_CALL_RE": {
+   "digests": [
+    "b74e81b7935d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/negative_space.py\u001f_CALL_SITE_RE": {
+   "digests": [
+    "809bb4069fbf"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/negative_space.py\u001f_LOCK_ACQUIRE": {
+   "digests": [
+    "d39778f43d5d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/orchestrator.py\u001f_EXTERNAL_SYMBOL_RE": {
+   "digests": [
+    "a51c462c44f9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/orchestrator.py\u001f_IDENTIFIER_TOKEN_RE": {
+   "digests": [
+    "8b8748439df5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/orchestrator.py\u001f_RECEIPT_CALL_NAME_RE": {
+   "digests": [
+    "edc71504a399"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/orchestrator.py\u001ftoken_re": {
+   "digests": [
+    "34791d3bd39d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/parser_shape.py\u001f_CALLED_NAME_RE": {
+   "digests": [
+    "9338a1fce094"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/parser_shape.py\u001f_CURSOR_ADVANCE_RE": {
+   "digests": [
+    "e1f4089e2628"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/parser_shape.py\u001f_LEN_ARITH_RE": {
+   "digests": [
+    "6ff853bf5c41"
+   ],
+   "exp": 0.97,
+   "verdict": "linear"
+  },
+  "core/audit/path_feasibility.py\u001fif_patterns": {
+   "digests": [
+    "6d1c6597e91a"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/path_feasibility.py\u001fnonneg_patterns": {
+   "digests": [
+    "e7ece6b29027"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/path_feasibility.py\u001fnull_patterns": {
+   "digests": [
+    "0cc2eef4ed68"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/precondition_check.py\u001f\\b([A-Za-z_]\\w*)\\s*\\(": {
+   "digests": [
+    "9338a1fce094"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/precondition_check.py\u001f\\b\\w+_CAP\\b": {
+   "digests": [
+    "b7dd5cdbb343"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/precondition_check.py\u001f\\b\\w+_LEN\\b": {
+   "digests": [
+    "3c0be0d0312a"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/precondition_check.py\u001f\\b\\w+_MAX\\b": {
+   "digests": [
+    "0445b4f01a92"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/precondition_check.py\u001f\\b\\w+_SIZE\\b": {
+   "digests": [
+    "7f688cffea9a"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/precondition_check.py\u001f\\b\\w{0,256}cap\\w*\\s*[<>=!]+": {
+   "digests": [
+    "0d3f53af0a22"
+   ],
+   "exp": 1.04,
+   "verdict": "linear"
+  },
+  "core/audit/precondition_check.py\u001f\\b\\w{0,256}len\\w*\\s*[<>=!]+": {
+   "digests": [
+    "d017fec15766"
+   ],
+   "exp": 1.06,
+   "verdict": "linear"
+  },
+  "core/audit/precondition_check.py\u001f\\b\\w{0,256}size\\w*\\s*[<>=!]+": {
+   "digests": [
+    "451711e8fcea"
+   ],
+   "exp": 1.07,
+   "verdict": "linear"
+  },
+  "core/audit/precondition_check.py\u001f\\bexecv\\w*\\s*\\(": {
+   "digests": [
+    "f56d59857288"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f=~\\s*s/(?:\\\\.|[^/\\\\\\n])*\\$(?:\\\\.|[^/\\\\\\n": {
+   "digests": [
+    "1c71b3b7ca32"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f\\b(\\w+)\\s*\\[(\\w+)\\]": {
+   "digests": [
+    "efecf4556579"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f\\bX\\s*(?:[<>]=?)\\s*\\w+|\\b\\w+\\s*(?:[<>]=?": {
+   "digests": [
+    "6d4e1f1ecfa0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f\\b\\w+\\s*\\[": {
+   "digests": [
+    "3e5aafdc5cb9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f\\bopen\\s*(?:\\(\\s*)?\\w+\\s*,\\s*[\"\\$]": {
+   "digests": [
+    "89ead33f7a24"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f_WRAPPER_CALL_RE": {
+   "digests": [
+    "7c659687fa94"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f_WRAPPER_PTR_ARITH_RE": {
+   "digests": [
+    "5182f1664553"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001f_WRAPPER_REF_TOKEN_RE": {
+   "digests": [
+    "32a789d81c03"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001floop_re": {
+   "digests": [
+    "16c2333dcc01"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/prefilter.py\u001fwrite_re": {
+   "digests": [
+    "8f6a4617ad02"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/propagation.py\u001f_CALLEE_VIOLATION_RE": {
+   "digests": [
+    "8a4ee851ea48"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/proto_length_checker.py\u001f_ALLOC_RE": {
+   "digests": [
+    "b6611cb1ebea"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/proto_length_checker.py\u001f_BYTE_EXTRACT_RE": {
+   "digests": [
+    "7dbdeb140942"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/proto_length_checker.py\u001f_FIELD_READ_RE": {
+   "digests": [
+    "aaa54e25e33a"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/protocol_state.py\u001fassign_re": {
+   "digests": [
+    "75f27ac0e379"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/ptr_lifecycle.py\u001f\\b(X|\\w{1,256}?_(?:free|destroy|release|": {
+   "digests": [
+    "6791b0fd26a9"
+   ],
+   "exp": 1.02,
+   "verdict": "linear"
+  },
+  "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
+   "digests": [
+    "b30fe2a95b7d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/ptr_lifecycle.py\u001fcall_re": {
+   "digests": [
+    "a323d32174b9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/refutation.py\u001f_INT_RECEIPT_TOKEN_RE": {
+   "digests": [
+    "1123b7bcd4b5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/refutation.py\u001f_WIDTH_PROSE_RE": {
+   "digests": [
+    "2512b5729afe"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
+   "digests": [
+    "2697160eb642"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/release_order.py\u001fcall_re": {
+   "digests": [
+    "81a85a2b0703"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/resource_bounds.py\u001f_CLAMP_RE": {
+   "digests": [
+    "ba9531b394a5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/resource_bounds.py\u001f_CMP_RE": {
+   "digests": [
+    "8df9d89afba0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/resource_bounds.py\u001f_STEM_INSERT_RE": {
+   "digests": [
+    "a0cc73423185"
+   ],
+   "exp": 1.15,
+   "verdict": "linear"
+  },
+  "core/audit/return_contracts.py\u001fdecl_re": {
+   "digests": [
+    "5d94d1a0314d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sentinel_collapse.py\u001f\\b(?P<var>\\w+)\\s+if\\s+(?P=var)\\s+else\\s+": {
+   "digests": [
+    "1a750940c888"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sentinel_collapse.py\u001f\\b(?P<var>\\w+)\\s+or\\s+(?P<default>\\[\\]|\\": {
+   "digests": [
+    "30a8fc2978f1"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sentinel_collapse.py\u001f\\b(\\w+)\\s*\\?\\?\\s*(\\[\\]|\\{\\})": {
+   "digests": [
+    "f0f85f676ee2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sentinel_collapse.py\u001f\\b(\\w+)\\s*\\|\\|\\s*(\\[\\]|\\{\\})": {
+   "digests": [
+    "419f02d34e8c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sentinel_collapse.py\u001f_CACHE_READ_COERCE": {
+   "digests": [
+    "a2f4afac3eeb"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sentinel_collapse.py\u001f_GO_MAP_NO_OK": {
+   "digests": [
+    "6ea260115b2e"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sentinel_collapse.py\u001f_GO_NIL_COERCE": {
+   "digests": [
+    "a0f1bdd8f152"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sentinel_collapse.py\u001f_JS_OPTIONAL_CHAIN_DEFAULT": {
+   "digests": [
+    "bea79002697b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sentinel_collapse.py\u001fcall_pat": {
+   "digests": [
+    "d2f045ab7131"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sibling_analysis.py\u001f_INCLUSIVE_BOUND_RE": {
+   "digests": [
+    "2b45a83c9d10"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sibling_analysis.py\u001f_STRICT_BOUND_RE": {
+   "digests": [
+    "2cde3d41b296"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/spec_inference.py\u001fdoc_match": {
+   "digests": [
+    "a3bd3a98c8ec"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/spec_inference.py\u001fvar_match": {
+   "digests": [
+    "eec71ddd6672"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/struct_accessor_index.py\u001f_FIELD_ACCESS_RE": {
+   "digests": [
+    "7a3289c01865"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/struct_accessor_index.py\u001f_LOCK_NAME_RE": {
+   "digests": [
+    "20ded8a5c53e"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/struct_field_checker.py\u001f\\b(\\w+)\\s*=\\s*\\(\\s*(?:struct\\s+)?X\\s*\\*+": {
+   "digests": [
+    "3c604d983e3e"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/struct_field_checker.py\u001f_STRUCT_FIELD_RE": {
+   "digests": [
+    "8e1c68a0973c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sweep.py\u001f\\b([A-Za-z_][A-Za-z0-9_]*)\\s*->": {
+   "digests": [
+    "f0d791cfefbc"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sweep.py\u001f\\b([A-Za-z_][A-Za-z0-9_]*)\\s*\\(": {
+   "digests": [
+    "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sweep.py\u001f_COMPARISON_PREMISE_RE": {
+   "digests": [
+    "c84100348568"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sweep.py\u001fm": {
+   "digests": [
+    "1e29e75c2a18",
+    "a3ebffff4ae0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/sweep.py\u001frelational": {
+   "digests": [
+    "e6701e38131b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/taint_specs.py\u001f_CACHE_KEY_RE": {
+   "digests": [
+    "26b4bf01e679"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/taint_specs.py\u001f_MODEL_NAME_RE": {
+   "digests": [
+    "72698a0fb523"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/transform_sequence.py\u001f_CALL_RE": {
+   "digests": [
+    "3c6564c8c3f5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/uninit_detector.py\u001f\\b&?\\s*X\\b": {
+   "digests": [
+    "fb6549ab1969"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/uninit_detector.py\u001f_FIELD_ASSIGN": {
+   "digests": [
+    "ab6853d912ad"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/audit/uninit_detector.py\u001f_ZERO_INIT": {
+   "digests": [
+    "aadc69462780"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/binary/glibc_versions.py\u001f_SEARCH_RE": {
+   "digests": [
+    "16700cf89dbd"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/concepts/lang_resolve.py\u001f^[ \\t]*(?:(?:public|private|protected|fi": {
+   "digests": [
+    "36b4b91d45e9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/concepts/lang_resolve.py\u001f_BARE_RE": {
+   "digests": [
+    "4d3eb152fb09"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/concepts/lang_resolve.py\u001f_CALL_RE": {
+   "digests": [
+    "333e2ddcbaf5"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/concepts/spot_check.py\u001f_QUESTION_VALUE_RE": {
+   "digests": [
+    "8fe688d1a940"
+   ],
+   "exp": 0.96,
+   "verdict": "linear"
+  },
+  "core/concepts/study.py\u001f\\b(struct\\s+\\w+|[A-Za-z_]\\w{3,}_[A-Za-z_": {
+   "digests": [
+    "e5dd486fa9c4"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/container/build.py\u001f(?<!\\s)\\s+AS\\s+": {
+   "digests": [
+    "b365f7763eb6"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/dataflow/cvefix_bridge.py\u001f_TEST_PATH_RE": {
+   "digests": [
+    "e082325c8dd4"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/dataflow/injection_prescreen.py\u001f_PY_STRICT_SUB": {
+   "digests": [
+    "0d182d44808d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/dataflow/parser_pack_harvest.py\u001f_CONTEXT_FUNC_RE": {
+   "digests": [
+    "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/dataflow/smt_barrier.py\u001f\\b(?:public|private|protected|static|fin": {
+   "digests": [
+    "5d3943e2b96d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/dataflow/smt_barrier.py\u001f\\bfunction\\s*(?:\\*\\s*)?(?:\\w+\\s*)?\\(|=>\\": {
+   "digests": [
+    "3c06c6b4b926"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/dataflow/smt_barrier.py\u001f_RE_SUB_REBIND": {
+   "digests": [
+    "728650ed96e0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/dataflow/tier1_llm.py\u001f\\b([A-Za-z_][\\w.]*)\\s*\\(": {
+   "digests": [
+    "b74e81b7935d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/dockerfile/parser.py\u001f_FROM_AS_RE": {
+   "digests": [
+    "4b0fe0a20190"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/env/verify.py\u001f(?<!\\d)\\d+\\.\\d+": {
+   "digests": [
+    "d95748f3b7e0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/binary_oracle_corpora/toolchain.py\u001f_VERSION_RE": {
+   "digests": [
+    "3a38139179b2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/exclusions.py\u001fGENERATED_MARKERS[10]": {
+   "digests": [
+    "37de29a408f1"
+   ],
+   "exp": 2.04,
+   "verdict": "adjudicated"
+  },
+  "core/inventory/extractors.py\u001fPATTERNS[1]": {
+   "digests": [
+    "922331e690c9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/extractors.py\u001fPATTERNS[4]": {
+   "digests": [
+    "925bcf89fac2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/extractors.py\u001f_JAVA_STRING_RE": {
+   "digests": [
+    "00e2d789000f"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[10]": {
+   "digests": [
+    "2d14af8c2afa"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[12]": {
+   "digests": [
+    "44d0e4615ec8"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[16]": {
+   "digests": [
+    "6ffbb755881b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[18]": {
+   "digests": [
+    "d55d447e294c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[20]": {
+   "digests": [
+    "f0f9084277e4"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[22]": {
+   "digests": [
+    "86a9d7ea6ce7"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/fixture_detection.py\u001f_FIXTURE_PATH_PATTERNS[24]": {
+   "digests": [
+    "52d0f6457044"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/header_api.py\u001f_DECL_RE": {
+   "digests": [
+    "0773b6abe32e"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/header_api.py\u001f_OF_DECL_RE": {
+   "digests": [
+    "f0085d199e6d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/header_functions.py\u001f_C_STRING_OR_CHAR_RE": {
+   "digests": [
+    "ffe6cc0b5471"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/languages.py\u001f_CPP_HEADER_RE": {
+   "digests": [
+    "39a9efa70ae9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/macro_resolve.py\u001f_ENUMERATOR_NAME_RE": {
+   "digests": [
+    "531fd6d6e49d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/macro_resolve.py\u001f_RUST_MACRO_CALL_RE": {
+   "digests": [
+    "5511a17d55fb"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/inventory/translation_view.py\u001f_CALL_IN_BODY": {
+   "digests": [
+    "d7965ae0a245"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/iris/specs.py\u001flines[7]": {
+   "digests": [
+    "8eba6201f599"
+   ],
+   "exp": 2.0,
+   "verdict": "adjudicated"
+  },
+  "core/license/detector.py\u001f_ANDOR_SPLIT_RE_CI": {
+   "digests": [
+    "489128edfcad"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/license/detector.py\u001f_WITH_SPLIT_RE_CI": {
+   "digests": [
+    "70f74eee5cac"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/license/spdx.py\u001f_OPERATOR_SPLIT_RE": {
+   "digests": [
+    "8d3a6059885f"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/llm/client.py\u001f_HTTP_400_STATUS_RE": {
+   "digests": [
+    "b6cfc899648f"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/llm/client.py\u001f_HTTP_500_STATUS_RE": {
+   "digests": [
+    "9bedfdedbdf2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/llm/client.py\u001fmsg": {
+   "digests": [
+    "2f7c541d5203",
+    "5905fc648538",
+    "fc67ab3acc53"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/llm/structured_call.py\u001fAUTH_KEYWORDS_RE": {
+   "digests": [
+    "399042636a4e"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/llm/structured_call.py\u001fAUTH_STATUS_RE": {
+   "digests": [
+    "08e5bcc031b3"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/llm/structured_call.py\u001fRATE_LIMIT_KEYWORDS_RE": {
+   "digests": [
+    "036baa0ec248"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/oci/auth.py\u001f_WWW_AUTH_PARAM_RE": {
+   "digests": [
+    "1e9498ad8e2b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/orchestration/context_map_sinks.py\u001f_MACRO_CALL_RE": {
+   "digests": [
+    "6a76f689a239"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/orchestration/context_map_taint.py\u001f_CALL_NAME_RE": {
+   "digests": [
+    "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/orchestration/frida_validation_bridge.py\u001f_ACTION_FN_RE": {
+   "digests": [
+    "d5fa979da3a1"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/orchestration/joern_hunt.py\u001f_CALL_NAME_RE": {
+   "digests": [
+    "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/orchestration/joern_trace.py\u001f_CALL_NAME_RE": {
+   "digests": [
+    "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/orchestration/validate_joern.py\u001f_CALL_NAME_RE": {
+   "digests": [
+    "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/run/toolprobe.py\u001f_VERSION_RE": {
+   "digests": [
+    "3a38139179b2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/sage/hooks.py\u001fm": {
+   "digests": [
+    "2175f8b67c77"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/sage/rowmac.py\u001f_TOKEN_RE": {
+   "digests": [
+    "fd2a9faef61f"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/security/prompt_envelope.py\u001f_SETEXT_UNDERLINE_RE": {
+   "digests": [
+    "18b497778a2b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/security/redaction.py\u001f\\be[wy][A-Za-z0-9_-]{7,}\\.[A-Za-z0-9_-]{": {
+   "digests": [
+    "e9dd27e731bb"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/smt_solver/canonicalise.py\u001f(?<=\\S)\\s+is\\s+null\\b": {
+   "digests": [
+    "d3f3a0a03200"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/smt_solver/canonicalise.py\u001f(?<=\\S)\\s+is\\s+zero\\b": {
+   "digests": [
+    "e7cdae2bf300"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/startup/init.py\u001fm": {
+   "digests": [
+    "8c37c47787c0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "core/symbolic/_detect.py\u001f_FMT_CALL_RE": {
+   "digests": [
+    "90e342cb5a65"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "libexec/raptor-lifecycle-hook\u001f_RAPTOR_INVOCATION_RE": {
+   "digests": [
+    "a7dfcf17837f"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "libexec/raptor-study-prep\u001f\\b(\\w+_t)\\b": {
+   "digests": [
+    "4b63c9e5db76"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "libexec/raptor-study-prep\u001f\\b\\w+\\s+\\w+\\s*[;\\[]": {
+   "digests": [
+    "9facb55489d4"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "libexec/raptor-study-prep\u001f_ALLOC_THEN_CHECK_PATTERN": {
+   "digests": [
+    "e1aaf0662117"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "libexec/raptor-study-prep\u001f_CALL_SITE_RE": {
+   "digests": [
+    "809bb4069fbf"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "libexec/raptor-study-prep\u001f_FLEX_ARRAY_PATTERN": {
+   "digests": [
+    "92f289923699"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "libexec/raptor-study-prep\u001f_IDENT_RE": {
+   "digests": [
+    "65f92119f599"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "libexec/raptor-study-prep\u001f_STATE_TRANSITION_PATTERN": {
+   "digests": [
+    "a237e46b9b09"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "libexec/raptor-study-prep\u001ffm": {
+   "digests": [
+    "13f45e410764"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/autonomous/dialogue.py\u001fcode_block_match": {
+   "digests": [
+    "694ecb2c3cd5",
+    "9302ace354f4"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/code_understanding/dispatch/hunt_cocci_dispatch.py\u001f_RULE_FENCE_RE": {
+   "digests": [
+    "aff2b0903484"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/agent/audit.py\u001f_SECRET_TOKEN_RE": {
+   "digests": [
+    "22279f13a1d0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/agent/loop.py\u001f_SPECIFIC_VERSION_MARKER_RE": {
+   "digests": [
+    "d95748f3b7e0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/cli.py\u001fm": {
+   "digests": [
+    "e4243b249c26"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f,?\\s{0,16}leading to (?:a |an )?(?:[a-zA": {
+   "digests": [
+    "731fe2e6e9dc"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001fAn attacker (can|could|may|with)(?:[^.\\n": {
+   "digests": [
+    "c8231b73e209"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001fIt (is|may be) possible to (launch|initi": {
+   "digests": [
+    "c46e9bb3e5c2"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001fSuccessful exploitation(?:[^.\\n]|\\.(?=\\d": {
+   "digests": [
+    "46d70f48b78f"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001fThe exploit has been (publicly )?disclos": {
+   "digests": [
+    "c82ad151d776"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001fThe manipulation of (the )?(argument|par": {
+   "digests": [
+    "19c430ed2361"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001fThis (allows|enables) (attackers?|advers": {
+   "digests": [
+    "4290801d04d6"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001fThis (issue|vulnerability) (affects|allo": {
+   "digests": [
+    "2a580237e8aa"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001fVDB-\\d+(?:[^.\\n]|\\.(?=\\d))*(?:\\.(?!\\d)|\\": {
+   "digests": [
+    "a5a06b050210"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f\\b(allows?|enables?|permits?)\\s+(a\\s+|an": {
+   "digests": [
+    "ec4f60198160"
+   ],
+   "exp": 0.9,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f\\b(the\\s+)?attacks?\\s+(may|can|could|wil": {
+   "digests": [
+    "a467ec7eea86"
+   ],
+   "exp": 1.07,
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f\\bexploitable by(?:[^.\\n]|\\.(?=\\d))*(?:\\": {
+   "digests": [
+    "37b3e2e874b4"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/exploit_feasibility/analyzer.py\u001fmatch": {
+   "digests": [
+    "16700cf89dbd"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/exploit_feasibility/profiles.py\u001fmatch": {
+   "digests": [
+    "b2286cd19b48"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/exploit_feasibility/smt_onegadget.py\u001fm": {
+   "digests": [
+    "8b9e79a0d962",
+    "b5dc1f3c99f0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/exploit_feasibility/strategies.py\u001fm": {
+   "digests": [
+    "509a592b6026"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/exploit_feasibility/strategies.py\u001fmatch": {
+   "digests": [
+    "16700cf89dbd"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/exploitability_validation/symbolic_witness.py\u001f_ATTRIBUTE_RE": {
+   "digests": [
+    "89a444c9286b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/joern/runner.py\u001f_CALL_RE": {
+   "digests": [
+    "809bb4069fbf"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/llm_analysis/intent_match.py\u001fpatterns[1]": {
+   "digests": [
+    "d2a9e57671cd"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/optimise.py\u001fcomment_split": {
+   "digests": [
+    "b1dd89e7cd15"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/parsers/__init__.py\u001f_PARSE_FAILURE_RE": {
+   "digests": [
+    "947d8518b1dd"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/parsers/gemfile.py\u001f(?:^[^\\S\\n]*(?:if|unless|case|while|for|": {
+   "digests": [
+    "bf274c5eaf4d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/parsers/gradle_dsl.py\u001f_CATALOG_ACCESSOR_RE": {
+   "digests": [
+    "555be25ccadb"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/parsers/gradle_dsl.py\u001f_NAMED_ARGS_RE": {
+   "digests": [
+    "6928487cf99e"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/parsers/gradle_dsl.py\u001f_SINGLE_STRING_RE": {
+   "digests": [
+    "fc24f81b0714"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/reachability/nodejs.py\u001f_REQUIRE_RE": {
+   "digests": [
+    "944ff0017e28"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/refresh_typosquat_lists.py\u001f[a-z0-9]([a-z0-9._-]*[a-z0-9])?": {
+   "digests": [
+    "d7b4d151ef0d"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/refresh_typosquat_lists.py\u001f\\b[a-z0-9]+([_.-][a-z0-9]+)*/[a-z0-9]+((": {
+   "digests": [
+    "a7c81f9b5f4c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/rewriters/gradle_version_catalog.py\u001f_TOML_MULTILINE_STRING_RE": {
+   "digests": [
+    "d3d339ca8a83"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/supply_chain/_hook_patterns.py\u001f\\bnc\\s+(?:-\\S+\\s+)*[\\w.\\-]+\\s+\\d+": {
+   "digests": [
+    "8c24bcc0af07"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/supply_chain/gha_secret_flow.py\u001f_EVAL_RE": {
+   "digests": [
+    "71651d801591"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/supply_chain/gha_secret_flow.py\u001f_KEY_VALUE_RE": {
+   "digests": [
+    "dc340e61cd81"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/supply_chain/gha_secret_flow.py\u001falias_re": {
+   "digests": [
+    "e20a6500fcbb"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/supply_chain/gha_secret_flow.py\u001findir_re": {
+   "digests": [
+    "9af72d7b56ad"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/update.py\u001fbare": {
+   "digests": [
+    "c3d564a3b591"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/update.py\u001fparts": {
+   "digests": [
+    "0b557ee90566"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/sca/update.py\u001fspec_re": {
+   "digests": [
+    "368ecfe41b1c"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/source_intel/adapter.py\u001f_RETURN_VALUE_RE": {
+   "digests": [
+    "623aa51b63a9"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/source_intel/adapter.py\u001ffixed_array_re": {
+   "digests": [
+    "aee040ca5299"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/source_intel/adapter.py\u001fm": {
+   "digests": [
+    "23a158ba2d3a"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/source_intel/adapter.py\u001fpat": {
+   "digests": [
+    "c0a626aa2b0a"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/source_intel/analyze.py\u001f_FUNC_NAME_CALL_RE": {
+   "digests": [
+    "9df2d9ac878b"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/source_intel/analyze.py\u001fstripped": {
+   "digests": [
+    "00e2d789000f",
+    "aaedb334e655"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/web/checks/headers.py\u001fversion_re": {
+   "digests": [
+    "d95748f3b7e0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  },
+  "packages/web/discovery/wordlists.py\u001fpair_re": {
+   "digests": [
+    "b835dc9c7be0"
+   ],
+   "exp": 1.0,
+   "verdict": "linear"
+  }
+ }
+}

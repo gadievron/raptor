@@ -2186,7 +2186,10 @@ def _is_simple_accessor(source: str, lang: str) -> bool:
     if lang == "lua":
         body_no_sig = re.sub(
             r"^\s*(?:local\s+)?function\b[^)]*\)\s*", "", body)
-        body_no_sig = re.sub(r"\s*\bend\s*$", "", body_no_sig).strip()
+        # No leading ``\s*``: it re-scanned a hostile whitespace run
+        # from every position (quadratic) and the trailing .strip()
+        # already removes whatever whitespace precedes the cut.
+        body_no_sig = re.sub(r"\bend\s*$", "", body_no_sig).strip()
     else:
         sig_end = body.find("{")
         if sig_end >= 0:

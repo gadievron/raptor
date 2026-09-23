@@ -203,8 +203,12 @@ _FAIL_OPEN_HYPOTHESIS_RE = re.compile(
 # Deliberately narrower than the routing regex above: bare
 # "error"/"exception" phrasings lean toward the swallow mechanism the
 # handler legs DO examine, and keep their refutation authority.
+# The keyword suffix run is bounded: unbounded ``\w*`` after a stem
+# drawn from word chars re-scans a hostile stem-repeating word from
+# every planted stem — quadratic on LLM-derived hypothesis prose.
+# English suffixes fit well inside 24 chars.
 _IGNORED_RETURN_HYPOTHESIS_RE = re.compile(
-    r"(?:(?:ignor|discard|unchecked)\w*.{0,30}"
+    r"(?:(?:ignor|discard|unchecked)\w{0,24}.{0,30}"
     r"(?:return\s+(?:value|code)|results?\b|\berr\b"
     r"|errors?\s+returned\b)"
     r"|(?:return\s+(?:value|code)|results?\b|\berr\b"

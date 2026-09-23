@@ -230,8 +230,12 @@ _JS_RETURN = re.compile(r"return\b")
 # ``return`` inside it abstains — the cheap under-detect direction; a
 # wrongly "function"-classified brace would instead let a module-level
 # return keep a false whole-file abort witness.
+# The parameter-list body is bounded: an unbounded ``[^{}]*`` re-scans
+# the window from every planted ``(`` — quadratic on hostile source —
+# and the caller only ever searches a 400-char window before the
+# brace, so params past 400 chars could never complete a match anyway.
 _JS_FN_BRACE = re.compile(
-    r"(?:=>|\bfunction\b(?:\s*\*)?(?:\s+[A-Za-z_$][\w$]*)?\s*\([^{}]*\))\s*$"
+    r"(?:=>|\bfunction\b(?:\s*\*)?(?:\s+[A-Za-z_$][\w$]*)?\s*\([^{}]{0,400}\))\s*$"
 )
 
 
