@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import BinaryIO
 
 from core.paths import confine
 from core.run.scratch import scratch_dir
@@ -1057,10 +1058,43 @@ _ANCHOR_SCAN_CHUNK = 1 << 20
 _SANITIZER_ANCHOR = b"Sanitizer"
 
 
+def _open_untrusted_regular(path: Path) -> BinaryIO | None:
+    """Open a child-writable artifact for reading, refusing plants.
+
+    The cap files live in the sandbox's child-writable output
+    directory: target-derived code runs there BY DESIGN and can
+    unlink the parent-created file and plant a symlink (exfiltrating
+    a foreign file into persisted witness stdout) or a FIFO (the
+    unsandboxed parent's ``open()`` then blocks forever).  Same
+    discipline as ``_read_child_tail_untrusted`` in
+    :mod:`core.audit.validate`: O_NOFOLLOW + O_NONBLOCK at open,
+    S_ISREG on the OPENED inode (fstat — no stat/open race), refusal
+    reads as an unreadable file.  O_NONBLOCK is inert once the inode
+    is verified regular.
+    """
+    import stat as _stat
+
+    try:
+        fd = os.open(
+            str(path), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+    except OSError:
+        return None
+    try:
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return None
+        return os.fdopen(fd, "rb")
+    except OSError:
+        os.close(fd)
+        return None
+
+
 def _scan_anchor_offsets(
-    path: Path, anchors: tuple[bytes, ...],
+    f: BinaryIO, anchors: tuple[bytes, ...],
 ) -> list[int]:
-    """Offsets of anchor-marker hits across the FULL stream.
+    """Offsets of anchor-marker hits across the FULL stream of the
+    already-vetted open file *f* (scanned from offset 0).
 
     Incremental chunked scan (bounded memory); per marker only the
     first and last ``_ANCHOR_HITS_KEPT`` hits are recorded so a stream
@@ -1075,29 +1109,29 @@ def _scan_anchor_offsets(
     overlap = max(len(m) for m in anchors) - 1
     carry = b""
     pos = 0  # absolute offset of the next unread byte
-    with open(path, "rb") as f:
-        while True:
-            block = f.read(_ANCHOR_SCAN_CHUNK)
-            if not block:
-                break
-            buf = carry + block
-            base = pos - len(carry)
-            for m in anchors:
-                start = 0
-                while True:
-                    i = buf.find(m, start)
-                    if i < 0:
-                        break
-                    # A match ending inside the carry region was fully
-                    # visible last round — skip the double-count.
-                    if i + len(m) > len(carry):
-                        off = base + i
-                        if len(firsts[m]) < _ANCHOR_HITS_KEPT:
-                            firsts[m].append(off)
-                        lasts[m].append(off)
-                    start = i + 1
-            pos += len(block)
-            carry = buf[-overlap:] if overlap > 0 else b""
+    f.seek(0)
+    while True:
+        block = f.read(_ANCHOR_SCAN_CHUNK)
+        if not block:
+            break
+        buf = carry + block
+        base = pos - len(carry)
+        for m in anchors:
+            start = 0
+            while True:
+                i = buf.find(m, start)
+                if i < 0:
+                    break
+                # A match ending inside the carry region was fully
+                # visible last round — skip the double-count.
+                if i + len(m) > len(carry):
+                    off = base + i
+                    if len(firsts[m]) < _ANCHOR_HITS_KEPT:
+                        firsts[m].append(off)
+                    lasts[m].append(off)
+                start = i + 1
+        pos += len(block)
+        carry = buf[-overlap:] if overlap > 0 else b""
     offsets: set[int] = set()
     for m in anchors:
         for off in firsts[m]:
@@ -1120,20 +1154,27 @@ def _read_capped(
     scanning the FULL stream — all in stream order, gaps replaced by
     ``_TRUNCATION_MARKER``. ``truncated`` is True when any byte of the
     stream was dropped.
+
+    The artifact sits in the child-writable capture directory, so the
+    open routes through :func:`_open_untrusted_regular` (symlink and
+    FIFO plants read as an unreadable file) and every pass — size,
+    anchor scan, interval reads — runs on that one vetted fd.
     """
+    f = _open_untrusted_regular(path)
+    if f is None:
+        return "", False
     try:
-        size = path.stat().st_size
-        with open(path, "rb") as f:
-            if size <= 2 * _CAPTURE_CAP_BYTES:
-                text = f.read(2 * _CAPTURE_CAP_BYTES).decode(
-                    "utf-8", errors="replace",
-                )
-                return text, False
+        size = os.fstat(f.fileno()).st_size
+        if size <= 2 * _CAPTURE_CAP_BYTES:
+            text = f.read(2 * _CAPTURE_CAP_BYTES).decode(
+                "utf-8", errors="replace",
+            )
+            return text, False
         intervals: list[tuple[int, int]] = [(0, _CAPTURE_CAP_BYTES)]
         if keep_tail:
             intervals.append((size - _CAPTURE_CAP_BYTES, size))
         if anchors:
-            for off in _scan_anchor_offsets(path, anchors):
+            for off in _scan_anchor_offsets(f, anchors):
                 lo = max(0, off - _ANCHOR_PRE_CONTEXT)
                 hi = min(size, off + _ANCHOR_POST_CONTEXT)
                 intervals.append((lo, hi))
@@ -1146,22 +1187,23 @@ def _read_capped(
                 merged.append([lo, hi])
         pieces: list[str] = []
         covered = 0
-        with open(path, "rb") as f:
-            prev_end = 0
-            for lo, hi in merged:
-                if lo > prev_end:
-                    pieces.append(_TRUNCATION_MARKER)
-                f.seek(lo)
-                pieces.append(
-                    f.read(hi - lo).decode("utf-8", errors="replace"),
-                )
-                covered += hi - lo
-                prev_end = hi
-            if prev_end < size:
+        prev_end = 0
+        for lo, hi in merged:
+            if lo > prev_end:
                 pieces.append(_TRUNCATION_MARKER)
+            f.seek(lo)
+            pieces.append(
+                f.read(hi - lo).decode("utf-8", errors="replace"),
+            )
+            covered += hi - lo
+            prev_end = hi
+        if prev_end < size:
+            pieces.append(_TRUNCATION_MARKER)
         return "".join(pieces), covered < size
     except OSError:
         return "", False
+    finally:
+        f.close()
 
 
 def _merge_capped_stderr_classification(proc, label: str) -> None:
