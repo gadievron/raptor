@@ -369,6 +369,29 @@ def main() -> int:
     for k in stale:
         print(f"[vocab] WARN stale baseline entry (no longer fires): {k}")
 
+    # Grown-count drift budget. INDIVIDUAL growth stays warn-only by
+    # design (a baselined list may legitimately grow ahead of its
+    # next reviewed refresh), but ACCUMULATED drift makes the
+    # recorded counts meaningless — at ~10% drift a hostile or
+    # careless addition to an already-baselined list was
+    # indistinguishable from noise. Threshold trade-off, both
+    # directions: lower re-arms a refresh-churn treadmill where every
+    # routine growth demands an immediate baseline commit; higher
+    # lets unreviewed additions pool under baselined keys whose notes
+    # vouch for a review they never had. 5% of the baseline (floor 10
+    # so small baselines are not gated on a couple of growths) forces
+    # a reviewed refresh (--write-baseline round-trips notes) once
+    # per accumulation cycle.
+    max_grown = max(10, len(baseline) // 20)
+    if len(grown) > max_grown:
+        print(
+            f"[vocab] {len(grown)} baselined list(s) exceed their "
+            f"recorded counts — over the drift budget of {max_grown}. "
+            f"Run --write-baseline (review notes are preserved), "
+            f"review the count-only diff, and commit it.",
+        )
+        return 1
+
     if new:
         print(f"[vocab] {len(new)} NEW literal function-name list(s) "
               f"(> {MAX_SEED_NAMES} names) outside the allowed paths:")
