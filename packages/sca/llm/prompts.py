@@ -117,6 +117,12 @@ operator.
 """
 
 
+# ------------------------------------------------------------------
+# Typosquat triage (v1.0.0)
+# ------------------------------------------------------------------
+
+TYPOSQUAT_TRIAGE_VERSION = "1.0.0"
+
 TYPOSQUAT_TRIAGE_SYSTEM = """\
 You are a supply-chain security analyst triaging a package whose \
 name is exactly one edit away from a MUCH-more-popular package \
@@ -327,6 +333,8 @@ Return the required JSON schema.
 # asymmetric framing is deliberate: only confidently-safe upgrades
 # short-circuit, anything else falls through. The cheap model is
 # never asked to greenlight a major migration.
+UPGRADE_IMPACT_PREFILTER_VERSION = "1.0.0"
+
 UPGRADE_IMPACT_PREFILTER_SYSTEM = """\
 You are reviewing a proposed dependency upgrade. Your job is to \
 identify CLEAR-SAFE upgrades that need no further analysis. Be \
