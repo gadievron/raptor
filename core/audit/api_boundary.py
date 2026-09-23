@@ -36,7 +36,11 @@ and whether the enumeration was verified complete
 (``enumeration_complete``). Completeness is earned only by an
 uncapped textual tree scan whose address-taken sweep finds no
 indirect-call escape of the callee — call-graph-driven enumerations
-are never marked complete. Consumers that ACT on a ``refuted``
+are never marked complete. The documented soundness bounds — the
+file/site/match budgets, the byte cap, AND the argument-span bound
+(a call-shaped match whose argument list stays unbalanced within
+``_balanced_span``'s window cannot be parsed into a site) — each
+set an honesty flag when hit; any of them vetoes completeness. Consumers that ACT on a ``refuted``
 verdict (the caller-contract confidence-demotion gate) must require
 completeness; a refutation over a possibly-partial caller list is a
 hint, not a receipt.
@@ -337,7 +341,14 @@ def parse_param_names(defining_source: str, function_name: str) -> list[str]:
             return []
         params_text, end = _balanced_span(defining_source, m.end() - 1)
         if params_text is None:
-            return []
+            # Unbalanced within the span bound (e.g. a planted
+            # over-long argument list at a CALL of the name before
+            # the definition) — skip this match and keep looking for
+            # the real definition instead of going blind.  A
+            # definition whose own parameter list overflows the span
+            # binds nothing and the check abstains downstream.
+            pos = m.end()
+            continue
         # A definition is followed by `{` (possibly after a newline);
         # declarations end in `;`, call sites in anything else.
         if defining_source[end:end + 200].lstrip().startswith("{"):
@@ -695,6 +706,9 @@ def _scan_file_for_calls(
     report carries the honesty facts consumers must not lose:
     ``size_skipped`` (file over the byte cap — a caller may hide in
     it), ``site_capped`` (site or match budget exhausted),
+    ``span_capped`` (a call-shaped match whose argument list stayed
+    unbalanced within the span bound was dropped — a real call site
+    may be hidden behind an over-long argument list),
     ``definitions`` (lines holding a DEFINITION of the name — used
     for cross-TU ambiguity detection), and ``alias_attr`` (an
     ``alias("name")`` attribute in the raw text — an indirect entry
@@ -702,6 +716,7 @@ def _scan_file_for_calls(
     freport: dict[str, Any] = {
         "size_skipped": False,
         "site_capped": False,
+        "span_capped": False,
         "definitions": [],
         "alias_attr": False,
     }
@@ -772,6 +787,14 @@ def _scan_file_for_calls(
         if in_skip or _looks_like_decl_or_def(line_text, function_name):
             continue
         if args_text is None:
+            # A call-shaped match whose argument list stays
+            # unbalanced within the span bound cannot be parsed into
+            # a site — but it may BE a real call site (one over-long
+            # argument list is trivially plantable).  Dropping it
+            # silently would let a partial site list pass for the
+            # whole caller set; record the honesty event so
+            # completeness claims and the caller-lock witness refuse.
+            freport["span_capped"] = True
             continue
         window_start = max(0, line_no - 1 - _GUARD_WINDOW_LINES)
         window = "\n".join(
@@ -832,8 +855,10 @@ def enumerate_call_sites_with_report(
     present-but-unresolving inventory) — plus the honesty facts a
     consumer needs before treating the list as exhaustive:
     ``scan_capped`` / ``scanned_files`` (bounded file walk),
-    ``site_capped`` (per-run site/match budget hit), ``size_skipped``
-    (files over the byte cap that may hide callers),
+    ``site_capped`` (per-run site/match budget hit), ``span_capped``
+    (a call-shaped match dropped because its argument list stayed
+    unbalanced within the span bound — a call site may be hidden),
+    ``size_skipped`` (files over the byte cap that may hide callers),
     ``extra_definitions`` (same-name definitions OUTSIDE the reviewed
     definition's file — textual sites cannot be attributed to the
     reviewed function), and ``alias_attrs`` (``alias("name")``
@@ -845,6 +870,7 @@ def enumerate_call_sites_with_report(
         "scan_capped": False,
         "scanned_files": 0,
         "site_capped": False,
+        "span_capped": False,
         "size_skipped": 0,
         "extra_definitions": [],
         "alias_attrs": [],
@@ -855,6 +881,8 @@ def enumerate_call_sites_with_report(
             report["size_skipped"] += 1
         if freport.get("site_capped"):
             report["site_capped"] = True
+        if freport.get("span_capped"):
+            report["span_capped"] = True
         if freport.get("alias_attr"):
             report["alias_attrs"].append(rel)
         if rel != def_file:
@@ -1529,6 +1557,13 @@ def adjudicate_contract(
             "call-site budget exhausted before covering the tree — "
             "enumeration incomplete"
         )
+    if report.get("span_capped"):
+        notes.append(
+            f"call-shaped match of {function_name} dropped because "
+            "its argument list stayed unbalanced within the span "
+            "bound — a call site may be hidden; enumeration "
+            "incomplete"
+        )
     if report.get("size_skipped"):
         notes.append(
             f"{report['size_skipped']} source file(s) exceeded the "
@@ -1618,6 +1653,7 @@ def adjudicate_contract(
         elif not (
             report.get("scan_capped")
             or report.get("site_capped")
+            or report.get("span_capped")
             or report.get("size_skipped")
             or report.get("alias_attrs")
         ):

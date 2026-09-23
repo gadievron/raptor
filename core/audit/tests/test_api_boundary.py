@@ -261,6 +261,75 @@ int unsigned_source(void) {
         assert files == {"user.c"}
 
 
+def _overlong_call(callee: str) -> str:
+    # One call whose argument list overflows the _balanced_span
+    # window — trivially plantable in a hostile repo.
+    args = ", ".join(f"arg_{i:04d}" for i in range(600))
+    return (
+        f"void evil_caller(void) {{\n    {callee}(NULL, {args});\n}}\n"
+    )
+
+
+class TestSpanBoundHonesty:
+    """A truncated enumeration must never claim completeness.
+
+    The span bound drops call-shaped matches whose argument list
+    stays unbalanced within the window; that drop is an honesty
+    event, never silent — a refutation over the surviving sites is a
+    hint, not a receipt.
+    """
+
+    GUARDED = """
+int b(void) {
+    return bio_lookup_ex("localhost", 80, 0);
+}
+"""
+
+    def test_span_capped_site_vetoes_enumeration_complete(
+        self, tmp_path,
+    ):
+        target = _write_target(
+            tmp_path, self.GUARDED + _overlong_call("bio_lookup_ex"),
+        )
+        res = run_api_boundary_check(
+            target, "lookup.c", "bio_lookup_ex", HYP_NULL,
+        )
+        # The surviving sites are guarded, so the outcome may refute —
+        # but never with a completeness stamp over a dropped match.
+        assert not res.enumeration_complete, res.to_dict()
+        assert any(
+            "span bound" in n for n in res.enumeration_notes
+        ), res.enumeration_notes
+
+    def test_control_without_overlong_call_earns_completeness(
+        self, tmp_path,
+    ):
+        # Two-direction pin: the honesty flag fires only on a bound
+        # hit — the clean shape still earns its completeness receipt.
+        target = _write_target(tmp_path, self.GUARDED)
+        res = run_api_boundary_check(
+            target, "lookup.c", "bio_lookup_ex", HYP_NULL,
+        )
+        assert res.outcome == "refuted", res.to_dict()
+        assert res.enumeration_complete, res.to_dict()
+
+    def test_overlong_call_cannot_blind_param_parsing(self):
+        # A planted over-long CALL before the definition must not
+        # stop the parser from reaching the real definition.
+        src = _overlong_call("bio_lookup_ex") + DEFINITION
+        assert parse_param_names(src, "bio_lookup_ex") == [
+            "host", "port", "family",
+        ]
+
+    def test_overlong_definition_params_bind_nothing(self):
+        # A definition whose own parameter list overflows the span
+        # binds no parameters (the check abstains downstream) —
+        # never a wrong binding.
+        params = ", ".join(f"int arg_{i:04d}" for i in range(600))
+        src = f"int f({params})\n{{\n    return 0;\n}}\n"
+        assert parse_param_names(src, "f") == []
+
+
 # Field exemplar (caller-proof FP family): the review asserts a
 # misuse contract that every actual call site upholds.
 HYP_SINGLE_CALL = (

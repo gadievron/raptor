@@ -591,6 +591,23 @@ class TestRefusesFalseClaims:
 
 
 class TestRefusesUndecidable:
+    def test_overlong_argument_list_caller_refuses(self, tmp_path):
+        # A call whose argument list overflows the span bound is
+        # dropped by the enumerator — an UNLOCKED caller can hide
+        # behind one planted over-long call, so the witness must
+        # refuse rather than certify the surviving (locked) sites as
+        # the whole caller set.
+        args = ", ".join(f"arg_{i:04d}" for i in range(600))
+        evil = (
+            "\nvoid evil_caller(struct inode *inode)\n{\n"
+            f"\tsample_collapse_range(inode, {args});\n"
+            "}\n"
+        )
+        r = _run(tmp_path, CALLEE + CALLER_LOCKED + evil)
+        assert not r.held
+        assert "span bound" in r.reasoning
+
+
     def test_name_referenced_in_another_file(self, tmp_path):
         r = _run(
             tmp_path, CALLEE + CALLER_LOCKED,

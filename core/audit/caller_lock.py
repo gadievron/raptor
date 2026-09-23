@@ -922,6 +922,12 @@ def check_caller_lock_serialization(
         return _refuse(f"defining file {rel_file} exceeds the byte cap")
     if freport.get("site_capped"):
         return _refuse("call-site enumeration capped — incomplete")
+    if freport.get("span_capped"):
+        return _refuse(
+            f"call-shaped match of {function_name} with an argument "
+            f"list unbalanced within the span bound in {rel_file} — "
+            f"the caller set is not verifiably TU-complete"
+        )
     if freport.get("alias_attr"):
         return _refuse(
             f'alias("{function_name}") attribute — an indirect entry '
