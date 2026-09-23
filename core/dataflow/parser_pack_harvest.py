@@ -44,9 +44,11 @@ and preserves proxy env for the lazy blob fetch.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import re
 import subprocess
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -385,6 +387,30 @@ def merge_results(pack: dict, results: list[HarvestResult]) -> dict:
     return merged
 
 
+
+@contextmanager
+def pack_write_lock(path: Path):
+    """Exclusive cross-process lock over the pack's read-merge-write
+    cycle.
+
+    write_pack's atomic rename protects against TORN files, not lost
+    updates: two harvests interleaving load -> merge -> write each
+    rename a complete pack, and the second rename silently discards
+    everything only the first one read and merged (the additive-only
+    merge protects only what the writer itself loaded). flock on a
+    sidecar keeps the whole cycle single-writer; the lock file stays
+    behind (unlinking a locked lock file races a third writer).
+    """
+    lock_path = Path(str(path) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
 def dumps_pack(pack: dict) -> str:
     return dumps_artifact(pack, indent=1, sort_keys=True) + "\n"
 
@@ -492,25 +518,26 @@ def main(argv: list[str] | None = None) -> int:
         for err in result.errors[:5]:
             print(f"    ! {err}", file=sys.stderr)
 
-    pack = load_pack(args.pack)
-    before = {e["name"] for e in pack["entries"]}
-    merged = merge_results(pack, results)
-    after = {e["name"] for e in merged["entries"]}
-    corroborated = sum(
-        1 for e in merged["entries"]
-        if PROVENANCE_CVE_FIX in e["provenance"]
-        and e["name"] in before
-    )
-    print(
-        f"pack: {len(before)} -> {len(after)} entries "
-        f"(+{len(after - before)} new, {corroborated} with CVE provenance "
-        f"among pre-existing)", file=sys.stderr,
-    )
+    with pack_write_lock(args.pack):
+        pack = load_pack(args.pack)
+        before = {e["name"] for e in pack["entries"]}
+        merged = merge_results(pack, results)
+        after = {e["name"] for e in merged["entries"]}
+        corroborated = sum(
+            1 for e in merged["entries"]
+            if PROVENANCE_CVE_FIX in e["provenance"]
+            and e["name"] in before
+        )
+        print(
+            f"pack: {len(before)} -> {len(after)} entries "
+            f"(+{len(after - before)} new, {corroborated} with CVE provenance "
+            f"among pre-existing)", file=sys.stderr,
+        )
 
-    if args.dry_run:
-        print(dumps_pack(merged), end="")
-        return 0
-    write_pack(merged, args.pack)
+        if args.dry_run:
+            print(dumps_pack(merged), end="")
+            return 0
+        write_pack(merged, args.pack)
     print(f"wrote {args.pack}", file=sys.stderr)
     return 0
 

@@ -448,3 +448,69 @@ def test_shim_bootstraps_via_raptor_dir(tmp_path: Path):
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout)
     assert {e["name"] for e in out["entries"]} == {"XML_ParseBuffer"}
+
+
+class TestPackWriteLock:
+    """write_pack's atomic rename protects torn files, not lost
+    updates: two interleaved load→merge→write cycles kept only the
+    later writer's names. The read-merge-write cycle must be
+    single-writer across processes."""
+
+    def test_lock_excludes_concurrent_lockers(self, tmp_path):
+        import subprocess
+        import sys
+        from core.dataflow.parser_pack_harvest import pack_write_lock
+
+        pack = tmp_path / "pack.json"
+        probe = (
+            "import fcntl, sys\n"
+            f"fh = open({str(pack) + '.lock'!r}, 'a')\n"
+            "try:\n"
+            "    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)\n"
+            "except BlockingIOError:\n"
+            "    sys.exit(42)\n"
+            "sys.exit(0)\n"
+        )
+        with pack_write_lock(pack):
+            r = subprocess.run([sys.executable, "-c", probe],
+                               capture_output=True, check=False)
+            assert r.returncode == 42, r.stderr
+        r = subprocess.run([sys.executable, "-c", probe],
+                           capture_output=True, check=False)
+        assert r.returncode == 0, r.stderr
+
+    def test_main_merge_cycle_runs_under_the_lock(self, tmp_path, monkeypatch):
+        """Wiring: load_pack must only ever run while this process
+        holds the pack lock."""
+        import json
+        from core.dataflow import parser_pack_harvest as pph
+
+        pack = tmp_path / "pack.json"
+        sources = tmp_path / "sources.json"
+        sources.write_text(json.dumps({"sources": []}))
+        held: list = []
+        real_lock = pph.pack_write_lock
+
+        class _Recorder:
+            def __init__(self, path):
+                self._cm = real_lock(path)
+
+            def __enter__(self):
+                held.append(True)
+                return self._cm.__enter__()
+
+            def __exit__(self, *exc):
+                held.pop()
+                return self._cm.__exit__(*exc)
+
+        monkeypatch.setattr(pph, "pack_write_lock", _Recorder)
+        real_load = pph.load_pack
+
+        def checked_load(path):
+            assert held, "load_pack ran without the pack lock"
+            return real_load(path)
+
+        monkeypatch.setattr(pph, "load_pack", checked_load)
+        rv = pph.main(["--sources", str(sources), "--pack", str(pack),
+                       "--dry-run"])
+        assert rv == 0

@@ -26,6 +26,7 @@ import sqlite3
 import stat
 import subprocess
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -460,9 +461,16 @@ def process_pair(
         else "autobuild" if lang in _AUTOBUILD_ONLY
         else None
     )
-    repo = work_dir / "repo"
-    db_a, db_b = work_dir / "db-a", work_dir / "db-b"
-    sa, sb = work_dir / "a.sarif", work_dir / "b.sarif"
+    # Unique per-invocation scratch: the subpath names used to be
+    # fixed ("repo", "db-a", ...), so two walkers sharing a work dir
+    # interleaved clone/build state mid-run and the loser persisted
+    # wrong-commit counts as normal rows (the finally-rmtree of one
+    # invocation deleted the other's in-flight tree). No attacker
+    # input in the name — pid + random suffix only.
+    scratch = work_dir / f"pair-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    repo = scratch / "repo"
+    db_a, db_b = scratch / "db-a", scratch / "db-b"
+    sa, sb = scratch / "a.sarif", scratch / "b.sarif"
     try:
         if not _fetch_pair(pair.repo_url, pair.fix_hash, repo, fetch_timeout):
             return WalkResult(pair.fix_hash, "fetch_fail")
@@ -487,8 +495,13 @@ def process_pair(
         # extraction fails).  Java's Maven cache doesn't have this
         # conflict shape — version conflicts resolve last-write-wins —
         # so cross-pair Maven reuse is fine and we leave it alone.
-        if lang in _AUTOBUILD_PROFILES and lang == "go":
+        # (The autobuild env keys the caches off db.parent, which is
+        # now this invocation's scratch dir; work_dir is swept too for
+        # caches left by pre-scratch layouts.)
+        if lang == "go":
+            _clean_go_caches(scratch)
             _clean_go_caches(work_dir)
+        shutil.rmtree(scratch, ignore_errors=True)
 
 
 # --- resumable results store ---
