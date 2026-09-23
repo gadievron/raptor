@@ -216,6 +216,7 @@ MEMBER_IDS = (
     "M12-startup-check-mismatch-menu",
     "M13-create-skill-persist-consent",
     "M14-openant-core-consent",
+    "M15-validation-recovery-fork",
 )
 
 
@@ -376,6 +377,17 @@ REGISTRY: dict[str, Entry] = {
         wire_tokens=("render entries with non-printables escaped and "
                      "cap the listing length explicitly",),
     ),
+    "tiers/validation-recovery.md": Entry(
+        lane="instruction", status="clean",
+        members=("M15-validation-recovery-fork",),
+        note="recovery-outcome fork offered at the completion fork "
+             "quotes failure/error excerpts from the target and "
+             "tooling; mid-pipeline recovery itself is report-and-"
+             "continue, never a blocking ask",
+        wire_tokens=("render them with non-printables escaped",
+                     "gate with `libexec/raptor-may-ask` first",
+                     "Non-interactive fallback",),
+    ),
     # ── instruction lane: adjudicated clean (no external content) ─
     "tiers/recovery.md": Entry(
         lane="instruction", status="clean",
@@ -391,6 +403,19 @@ REGISTRY: dict[str, Entry] = {
         lane="instruction", status="clean",
         note="BigQuery cost-threshold asks render numeric dry-run "
              "estimates",
+    ),
+    ".claude/commands/scorecard.md": Entry(
+        lane="instruction", status="clean",
+        note="model-name clarify question asks for missing operator "
+             "input (the ambiguous name the operator themselves "
+             "typed); no external content rendered",
+    ),
+    ".claude/agents/oss-investigator-gh-archive-agent.md": Entry(
+        lane="instruction", status="clean",
+        note="doctrine-compliant mention only: the file states the "
+             "dispatched subagent CANNOT ask and names the "
+             "github-archive skill's non-interactive fallback it "
+             "applies instead",
     ),
     "docs/environment.md": Entry(
         lane="instruction", status="clean",
@@ -440,7 +465,15 @@ _MD_PROMPT_EXACT_RE = re.compile(
     r"|\[[Nn]/[Yy]\]"
 )
 _MD_PROMPT_PROSE_RE = re.compile(
-    r"structured choice|offer the (?:user|operator) choices",
+    r"structured choice|offer the (?:user|operator) choices"
+    # Escaped-member spellings found live in the validation lane: an
+    # instruction can direct an ask as "ask (the) user" or as an
+    # offer-N-options menu without ever speaking the doctrine's own
+    # vocabulary — both must join the universe (doctrine-compliant
+    # mentions like "cannot ask the user" join too and are
+    # adjudicated clean).
+    r"|ask (?:the )?user"
+    r"|offer \d+(?:-\d+)? options",
     re.IGNORECASE,
 )
 
@@ -836,15 +869,22 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
             "Create this skill? [Y/n/Customize]",
             "Proceed? [y/N]",
             "[N/y] inverted default",
+            # validation-lane escaped-member spellings
+            "After 3 retries, ask user",
+            "Only ask the user if no binaries can be discovered",
+            "Always Offer 3-4 Options",
+            "offer 2 options",
         )
         for text in matching:
             self.assertTrue(_md_prompt_instruction(text), text)
         inert = (
             "compare [a/b] table columns",
             "an ask-user question is a different phrase",
+            "ask-the-user thresholds",   # hyphenated compound, not an ask
             "choices offered elsewhere in the doc",
             "[Y/X] is not a consent menu",
             "structured data, choice of encoding",
+            "offer options for recovery",   # no count — out of the menu net
         )
         for text in inert:
             self.assertFalse(_md_prompt_instruction(text), text)

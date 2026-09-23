@@ -114,7 +114,7 @@
 **Binary not found:**
 1. Check: Build instructions in README
 2. Search: Common paths (build/, bin/, out/)
-3. Ask: User for binary path
+3. Guidance: surface the `--binary <path>` re-run in the report — providing a binary is a run-boundary decision, never a mid-pipeline stop
 4. Skip: Use --skip-feasibility flag
 5. Mark: confirmed_unverified (still valid finding)
 
@@ -146,8 +146,8 @@
    - Tool missing? Suggest install or skip
 
 4. **Human escalation**
-   - After 3 retries, ask user
-   - Ambiguous cases → human review
+   - After 3 retries, stop retrying: record the failure and surface the decision at the run boundary (see "Recovery Outcome" below)
+   - Ambiguous cases → flag for human review in the report
 
 5. **Continue when possible**
    - One finding fails? Continue with others
@@ -170,10 +170,12 @@
 
 ---
 
-## Always Offer 3-4 Options
+## Recovery Outcome (report, don't block)
 
-When recovery fails, present:
-1. **Fix**: Specific action to resolve
-2. **Skip**: Continue without this component
-3. **Manual**: Human performs this step
-4. **Abort**: Stop pipeline, preserve partial results
+When recovery fails, do not stop the pipeline to wait for a decision — record the failure, apply the stage's documented default (skip the component, mark affected findings `confirmed_unverified`), and continue. In the run report, present the outcome with the paths not taken so the operator can decide at the run boundary:
+1. **Fix**: the specific action that would resolve it
+2. **Skip**: what continuing without this component cost
+3. **Manual**: the step a human would need to perform
+4. **Abort**: only when continuing would corrupt results — fail the run via the lifecycle stub, preserving partial results
+
+An interactive session may offer these as a structured choice at the completion fork (CLAUDE.md § INTERACTIVE PROMPTS: gate with `libexec/raptor-may-ask` first; the first option carries the "(Recommended)" tag; error excerpts quoted into options come from the target/tooling — render them with non-printables escaped and bound long excerpts). Non-interactive fallback: the documented default above, already applied.
