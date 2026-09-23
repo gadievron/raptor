@@ -145,7 +145,9 @@ def run_multi_model(
     # Sort for deterministic adapter input regardless of completion order.
     per_model_raw = dict(sorted(per_model_raw.items()))
     failed_models = sorted(failed_models)
-    per_model_filtered = _filter_errors(per_model_raw)
+    per_model_filtered = _filter_errors(
+        per_model_raw, exclude=frozenset(failed_models),
+    )
 
     if failed_models and len(failed_models) == len(models):
         logger.warning(
@@ -506,11 +508,25 @@ def _dispatch_parallel(
 
 def _filter_errors(
     per_model_raw: dict[str, list[dict[str, Any]]],
+    *,
+    exclude: frozenset[str] = frozenset(),
 ) -> dict[str, list[dict[str, Any]]]:
-    """Strip error entries before passing to adapter.merge / .correlate."""
+    """Strip error entries — and drop ``exclude``d (failed) models
+    entirely — before passing to adapter.merge / .correlate.
+
+    Dispatch is the one layer that can tell a FAILED member (task
+    raised / timed out / returned garbage) from a live member that
+    legitimately returned an empty list ("looked, found nothing").
+    Keeping failed members as empty-list keys made set-style
+    correlate count them in its recall denominator — a dead member
+    silently demoted every item one bucket (``all_models`` became
+    unreachable for the whole run) and the summary listed it as a
+    looker. Failed members stay visible via ``per_model_raw`` and
+    ``failed_models`` on the result."""
     return {
         name: [r for r in results if not _is_error(r)]
         for name, results in per_model_raw.items()
+        if name not in exclude
     }
 
 
