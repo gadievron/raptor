@@ -226,6 +226,21 @@ class TestTruncatePath(unittest.TestCase):
         self.assertTrue(result.startswith("..."))
         self.assertEqual(len(result), 40)
 
+    def test_zero_width_flood_bounded(self):
+        # Combining marks report zero display width, so the
+        # width-based walk alone kept a flooded path essentially
+        # whole (thousands of code points into a 40-column slot).
+        # The code-point ceiling must cut it.
+        flooded = "src/" + "à" + "̀" * 5000 + ".c"
+        result = truncate_path(flooded, max_len=40)
+        self.assertLessEqual(len(result), 4 * 40 + 8 + 3)
+
+    def test_non_ascii_within_budget_unchanged(self):
+        # Keep-direction: ordinary non-ASCII paths under both the
+        # display-width and code-point budgets pass through whole.
+        path = "src/héllo/wörld.c"
+        self.assertEqual(truncate_path(path, max_len=40), path)
+
 
 class TestFormatElapsed(unittest.TestCase):
 
