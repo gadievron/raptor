@@ -210,3 +210,32 @@ class TestLayer0PresweepCache:
             isinstance(f.line, int)
             for f in idx["f.c:check_and_open"].binary_layer0_findings
         )
+
+
+class TestFingerprintReadCap:
+    """The fingerprint's per-file reads pay the house source budget —
+    a planted blob contributes a deterministic marker instead of
+    being buffered (cap monkeypatched small; no giant fixture)."""
+
+    def test_over_cap_files_fingerprint_by_marker(
+        self, tmp_path, monkeypatch,
+    ):
+        from core.audit.binary_layer0 import _presweep_fingerprint
+
+        monkeypatch.setattr(bl0, "_MAX_FINGERPRINT_FILE_BYTES", 64)
+        root = tmp_path / "target"
+        root.mkdir()
+        rec = EvidenceRecord(
+            file="big.c", function="f",
+            line_start=1, line_end=2, kind="function",
+        )
+        gated = [("big.c:f", rec)]
+        (root / "big.c").write_text("a" * 100)
+        fp_a = _presweep_fingerprint(gated, root)
+        # Different content past the cap — same marker, same
+        # fingerprint (the cap is effective, nothing past it is read).
+        (root / "big.c").write_text("a" * 100 + "tail-b")
+        assert _presweep_fingerprint(gated, root) == fp_a
+        # Under-cap content changes still change the fingerprint.
+        (root / "big.c").write_text("short")
+        assert _presweep_fingerprint(gated, root) != fp_a

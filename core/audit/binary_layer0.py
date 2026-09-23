@@ -35,6 +35,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# House target-source read budget (matches
+# core/audit/context._MAX_SOURCE_FILE_BYTES): anything past it is a
+# planted blob whose only effect is memory exhaustion.
+_MAX_FINGERPRINT_FILE_BYTES = 64 * 1024 * 1024
+
 
 class PatternID:
     FORMAT_STRING = "L0-30.1"
@@ -876,10 +881,22 @@ def _presweep_fingerprint(
             if rec.file in seen:
                 continue
             seen.add(rec.file)
+            # House-capped read (64 MiB budget): a planted blob must
+            # not be buffered just to fingerprint it — an over-cap
+            # file contributes a deterministic marker instead.
+            from core.source import read_bytes_capped
+
             try:
-                data = (root / rec.file).read_bytes()
-            except (OSError, ValueError):
+                got = read_bytes_capped(
+                    root / rec.file, _MAX_FINGERPRINT_FILE_BYTES,
+                )
+            except ValueError:
+                got = None
+            if got is None:
                 data = b"<unreadable>"
+            else:
+                raw, truncated = got
+                data = b"<over-cap>" if truncated else raw
             yield f"file:{rec.file}", data
 
     return content_fingerprint(_items())

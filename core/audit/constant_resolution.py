@@ -55,6 +55,11 @@ _MAX_LITERAL_MAGNITUDE = 1 << 64
 _MAX_SHIFT_BITS = 256
 _MAX_RESULT_MAGNITUDE = 1 << 128
 
+# House target-source read budget (matches
+# core/audit/context._MAX_SOURCE_FILE_BYTES): anything past it is a
+# planted blob whose only effect is memory exhaustion.
+_MAX_SOURCE_FILE_BYTES = 64 * 1024 * 1024
+
 _ARITH_BINOPS: dict[type[ast.operator], object] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
@@ -196,10 +201,22 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
         return defs
 
     for p in paths:
-        try:
-            text = p.read_text(errors="replace", encoding="utf-8")
-        except OSError:
+        # House-capped read (64 MiB budget, cap+1 probe): every
+        # C/C++ file in the tree is read here on the default prep
+        # path — a planted blob must be refused, not buffered.
+        from core.source import read_bytes_capped
+
+        got = read_bytes_capped(p, _MAX_SOURCE_FILE_BYTES)
+        if got is None:
             continue
+        raw, truncated = got
+        if truncated:
+            logger.warning(
+                "constant scan: %s exceeds the %d MiB source cap — "
+                "skipped", p, _MAX_SOURCE_FILE_BYTES // (1024 * 1024),
+            )
+            continue
+        text = raw.decode("utf-8", errors="replace")
 
         text_joined = text.replace("\\\n", " ")
         cond_depth = _compute_conditional_depths(text)
