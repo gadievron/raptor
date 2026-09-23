@@ -228,6 +228,16 @@ class JavaConstIndex:
         # folded to its first arm and pruned the tainted switch arm
         # (b42 trap fixture).  Such keys refuse.
         self._multi_write_lines: set[tuple[int, str]] = set()
+        # (lineno, name) keys where a definer kind the index does NOT
+        # record binds the name: enhanced-for headers, catch params,
+        # try-with-resources names, pattern bindings, formal/lambda
+        # parameters. The reaching-defs oracle emits these as definers
+        # (correctly), but a line-keyed lookup cannot tell them apart
+        # from a same-line indexed write — serving the indexed RHS for
+        # BOTH mints a constant proof over the unindexed (possibly
+        # tainted) binding. Such keys refuse, mirroring
+        # _multi_write_lines for the indexed-vs-indexed collision.
+        self._unindexed_definers: set[tuple[int, str]] = set()
         self._compound_writers: set[str] = set()
         # name -> exact created class, poisoned to None on any
         # non-creation or differently-typed definition.
@@ -310,8 +320,34 @@ class JavaConstIndex:
                 for ch in n.children:
                     if ch.type == "identifier":
                         self._compound_writers.add(ch.text.decode())
+            elif n.type in ("enhanced_for_statement", "resource",
+                            "instanceof_expression", "formal_parameter",
+                            "spread_parameter"):
+                nm = n.child_by_field_name("name")
+                if nm is not None and nm.type == "identifier":
+                    self._note_unindexed_definer(n, nm)
+            elif n.type == "catch_formal_parameter":
+                idents = [c for c in n.children
+                          if c.type == "identifier"]
+                if idents:
+                    self._note_unindexed_definer(n, idents[-1])
+            elif n.type in ("type_pattern", "record_pattern_component"):
+                for c in n.children:
+                    if c.type == "identifier":
+                        self._note_unindexed_definer(n, c)
+            elif n.type == "lambda_expression":
+                params = n.child_by_field_name("parameters")
+                if params is not None and params.type == "identifier":
+                    self._note_unindexed_definer(n, params)
             stack.extend(n.children)
         self.ok = True
+
+    def _note_unindexed_definer(self, construct: Node, name_node: Node) -> None:
+        """Record every line the binding construct or its name node
+        starts on — reaching-defs definer nodes may carry either."""
+        nm = name_node.text.decode()
+        self._unindexed_definers.add((construct.start_point[0] + 1, nm))
+        self._unindexed_definers.add((name_node.start_point[0] + 1, nm))
 
     def _is_scoped_local(self, node: Node, name: str) -> bool:
         """True when ``node`` sits inside a method-like scope where a
@@ -359,6 +395,14 @@ class JavaConstIndex:
             # cannot disambiguate the oracle's definition nodes, and
             # serving either RHS collapses distinct definers (the b42
             # one-liner if/else trap).  Refuse.
+            return None
+        if (lineno, name) in self._unindexed_definers:
+            # A definer kind the index never records binds the name on
+            # this line (enhanced-for header, catch/formal param,
+            # resource, pattern binding): the oracle's definer for it
+            # would be served THIS indexed RHS — a constant proof over
+            # the unindexed binding.  Refuse (same one-liner
+            # co-location class as _multi_write_lines).
             return None
         return self._defs.get((lineno, name))
 
