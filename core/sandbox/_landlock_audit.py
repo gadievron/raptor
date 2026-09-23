@@ -747,6 +747,29 @@ def run_landlock_audit(
             err_w = -1
 
         # ----- Fork the tracer -----
+        # Resolve the tracer's import root PRE-FORK, in the parent,
+        # where logging works. PYTHONPATH-to-child is sys.path-
+        # equivalent injection, so the path-safety doctrine applies:
+        # RAPTOR_DIR is authoritative. The Path(__file__) fallback is
+        # a BLESSED doctrine exception, decided here rather than left
+        # implicit: this lane must stay usable as a library (bare
+        # callers without the launcher), and converting a missing env
+        # var into a hard KeyError would kill runs the fallback
+        # serves correctly on single-checkout hosts — but on a
+        # multi-checkout host it silently steers the tracer to
+        # whichever tree this module file sits in, so the ambiguity
+        # is surfaced loudly instead of guessed silently.
+        tracer_raptor_dir = os.environ.get("RAPTOR_DIR")
+        if tracer_raptor_dir is None:
+            tracer_raptor_dir = str(
+                Path(__file__).resolve().parent.parent.parent
+            )
+            logger.warning(
+                "landlock-audit: RAPTOR_DIR unset — tracer will "
+                "import from the tree containing this module (%s); "
+                "on multi-checkout hosts export RAPTOR_DIR to pin "
+                "the intended tree", tracer_raptor_dir,
+            )
         tracer_pid = os.fork()
 
         if tracer_pid == 0:
@@ -773,13 +796,10 @@ def run_landlock_audit(
                 if config_fd >= 0:
                     os.set_inheritable(config_fd, True)
                 os.set_inheritable(evidence_file.fd, True)
-                raptor_dir = os.environ.get("RAPTOR_DIR")
-                if raptor_dir is None:
-                    raptor_dir = str(
-                        Path(__file__).resolve().parent.parent.parent
-                    )
+                # Resolved pre-fork in the parent (see the comment at
+                # the fork site) — the child only closes over it.
                 tracer_env = {
-                    "PYTHONPATH": raptor_dir,
+                    "PYTHONPATH": tracer_raptor_dir,
                     "PATH": "/usr/bin:/bin",
                 }
                 tracer_argv = [
