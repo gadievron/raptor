@@ -48,6 +48,52 @@ class LogMessageSink extends DataFlow::Node {
   }
 }
 
+/** Holds if `mc` is a `String.replace` call removing the character `c`. */
+private predicate removesChar(MethodCall mc, string c) {
+  mc.getMethod().hasName("replace") and
+  c = ["\n", "\r"] and
+  (
+    mc.getArgument(0).(StringLiteral).getValue() = c
+    or
+    mc.getArgument(0).(CharacterLiteral).getValue().charAt(0) = c.charAt(0)
+  )
+}
+
+/** A method call in `mc`'s qualifier chain (transitive). */
+private MethodCall chainQualifier(MethodCall mc) {
+  result = mc.getQualifier()
+  or
+  result = chainQualifier(mc.getQualifier().(MethodCall))
+}
+
+/**
+ * Holds if `mc` completes a sanitiser that removes BOTH `\n` and `\r`.
+ * A single-character replace is NOT a sanitiser — the other bare
+ * character still forges log entries (the same both-characters
+ * contract the semgrep log-injection and header-injection rules
+ * state). Accepted spellings: chained per-character replaces (either
+ * order) and a `replaceAll` whose regex names both characters.
+ */
+private predicate handlesBothCrlf(MethodCall mc) {
+  exists(string c1, string c2 |
+    c1 = "\n" and c2 = "\r"
+    or
+    c1 = "\r" and c2 = "\n"
+  |
+    removesChar(mc, c1) and
+    removesChar(chainQualifier(mc), c2)
+  )
+  or
+  // Character-class (or alternation) regex covering both characters,
+  // in either the raw ("[\r\n]") or regex-escaped ("\\r|\\n")
+  // spelling.
+  mc.getMethod().hasName("replaceAll") and
+  exists(string rx | rx = mc.getArgument(0).(StringLiteral).getValue() |
+    (rx.matches("%\n%") or rx.matches("%\\n%")) and
+    (rx.matches("%\r%") or rx.matches("%\\r%"))
+  )
+}
+
 /** Taint configuration for log injection. */
 module LogInjConfig implements DataFlow::ConfigSig {
   predicate isSource(DataFlow::Node source) {
@@ -59,16 +105,10 @@ module LogInjConfig implements DataFlow::ConfigSig {
   }
 
   predicate isBarrier(DataFlow::Node node) {
-    // String.replace removing CRLF is a sanitiser
+    // A replace-based CRLF sanitiser must handle both characters.
     exists(MethodCall mc |
-      mc.getMethod().hasName("replace") and
       node.asExpr() = mc and
-      (
-        mc.getArgument(0).(StringLiteral).getValue() = "\n" or
-        mc.getArgument(0).(StringLiteral).getValue() = "\r" or
-        mc.getArgument(0).(CharacterLiteral).getValue().charAt(0) = "\n".charAt(0) or
-        mc.getArgument(0).(CharacterLiteral).getValue().charAt(0) = "\r".charAt(0)
-      )
+      handlesBothCrlf(mc)
     )
     or
     // OWASP encoder
