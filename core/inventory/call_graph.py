@@ -6473,6 +6473,18 @@ def iter_call_graph_candidates(
             rel = file_info.get("path", "")
             if not rel:
                 continue
+            # Run artifacts are data, not authority: an absolute or
+            # parent-escaping path in a checklist would read
+            # out-of-tree content into extraction (Path join with an
+            # absolute rhs REPLACES root). The builder's own scope
+            # handling hard-errors on the same shape; the loader skips
+            # and keeps going (best-effort surface).
+            rel_p = Path(rel)
+            if rel_p.is_absolute() or ".." in rel_p.parts:
+                logger.warning(
+                    "call-graph load: skipping non-relative checklist "
+                    "path %r", rel)
+                continue
             candidates.append(
                 (rel, root / rel, file_info.get("language")))
     else:

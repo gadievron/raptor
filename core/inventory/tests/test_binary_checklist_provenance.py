@@ -140,3 +140,33 @@ class TestBinaryStatsHonesty:
         block = checklist["binary_stats"]["provenance"]
         assert block["build_id"] == "abcd1234"
         assert block["stripped"] is False
+
+
+class TestDuplicateNameDisambiguation:
+    def test_forged_symtab_literal_at_suffix_does_not_collide(self):
+        # A symtab entry literally named "dup@0x2000" collides with the
+        # minted disambiguation of a duplicate "dup" at 0x2000 — the
+        # journal/coverage key namespace must stay collision-free even
+        # against a forged symbol table.
+        db = _db([
+            REFunction(name="dup", address=0x1000, size=64,
+                       source_tool="r2"),
+            REFunction(name="dup@0x2000", address=0x3000, size=64,
+                       source_tool="r2"),
+            REFunction(name="dup", address=0x2000, size=64,
+                       source_tool="r2"),
+        ])
+        checklist = build_binary_checklist(db, include_auto_named=True)
+        names = [i["name"] for i in _items(checklist)]
+        assert len(names) == len(set(names)), names
+
+    def test_ordinary_duplicates_get_address_suffix(self):
+        db = _db([
+            REFunction(name="local_init", address=0x1000, size=64,
+                       source_tool="r2"),
+            REFunction(name="local_init", address=0x2000, size=64,
+                       source_tool="r2"),
+        ])
+        checklist = build_binary_checklist(db, include_auto_named=True)
+        names = sorted(i["name"] for i in _items(checklist))
+        assert names == ["local_init", "local_init@0x2000"]

@@ -197,11 +197,19 @@ def build_binary_checklist(
         # Duplicate symbol names (cross-TU statics, or a forged
         # symtab aliasing a hot name) would collapse journal/coverage
         # keys — every instance after the first gets an address
-        # suffix so each function keys uniquely.
+        # suffix so each function keys uniquely. The minted spelling
+        # itself is forgeable (a symtab entry literally named
+        # "foo@0x.." collides with the disambiguation of a duplicate
+        # foo at that address), so minted names join the seen set and
+        # re-disambiguate until unique.
         item_name = func.name
         if item_name in seen_names:
             item_name = f"{func.name}@{func.address:#x}"
+            while item_name in seen_names:
+                item_name += "+"
         seen_names[func.name] = seen_names.get(func.name, 0) + 1
+        if item_name != func.name:
+            seen_names[item_name] = seen_names.get(item_name, 0) + 1
 
         item: Dict[str, Any] = {
             "name": item_name,
