@@ -574,3 +574,34 @@ class TestStudyReportSanitised:
         assert "# spilled" in inner  # stayed INSIDE the fence
         # Autofetch markup is stripped from prose.
         assert "//evil.example" not in report
+
+
+class TestStructDefinitionsTolerateMalformedItems:
+    """Report attachment of struct definitions runs AFTER the paid
+    study completed; a malformed study-list item (LLM-adjacent
+    artifact) must be skipped, never raise past the block's
+    (OSError, ValueError) handlers and throw away the report,
+    project promotion, and SAGE storage."""
+
+    def test_nameless_item_is_skipped_not_keyerror(self) -> None:
+        sl = {"items": [
+            {"kind": "struct", "relevance_tier": 1},          # no name
+            {"kind": "struct", "name": "", "relevance_tier": 1},
+            {"kind": "struct", "name": "good", "relevance_tier": 2,
+             "file": "a.h"},
+        ]}
+        defs = _loop._struct_definitions(sl)
+        assert [d["name"] for d in defs] == ["good"]
+
+    def test_junk_tier_keeps_item(self) -> None:
+        # Fail toward review: an unparseable tier must neither crash
+        # (TypeError on the > comparison) nor silently drop the item.
+        sl = {"items": [
+            {"kind": "struct", "name": "s1", "relevance_tier": "3"},
+            {"kind": "struct", "name": "s2", "relevance_tier": None},
+            {"kind": "struct", "name": "deep", "relevance_tier": 3},
+            {"kind": "other", "name": "not-a-struct"},
+            "not-a-dict",
+        ]}
+        defs = _loop._struct_definitions(sl)
+        assert [d["name"] for d in defs] == ["s1", "s2"]
