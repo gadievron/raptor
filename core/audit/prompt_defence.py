@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -106,24 +107,92 @@ def scan_for_homoglyphs(
     return warnings
 
 
-_INJECTION_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(
-        r"\b(?:ignore|disregard|forget|override|skip)\b.*"
-        r"\b(?:previous|prior|above|all|every)\b.*"
+@dataclass(frozen=True)
+class _ChainPattern:
+    """Ordered multi-term directive chain.
+
+    Spelled as a single ``A.*B.*C`` regex these chains were
+    superlinear on hostile input: with the head terms present and the
+    tail absent, the engine retries every (A-position × B-position)
+    split from every start offset — cubic on a planted
+    "ignore the previous text" run, minutes per 50 KB block on the
+    default per-function context path. Staged searches (find A, then
+    B after it, then C after that — :func:`_iter_chain_spans`) keep
+    the same ordered-presence predicate at linear cost, and unbounded
+    gaps stay detected: a gap cap would hand hostile repos a spacing
+    evasion instead.
+
+    ``dotall`` mirrors the original flag: a non-DOTALL chain requires
+    every inter-term GAP to stay on one line (the terms themselves may
+    still span lines through their own ``\\s+``, exactly as before).
+    ``pattern`` is the original combined regex text, kept so warning
+    records render the same rule identity as before.
+    """
+
+    pattern: str
+    parts: tuple[re.Pattern[str], ...]
+    dotall: bool = True
+
+
+def _chain(*parts: str, dotall: bool = True) -> _ChainPattern:
+    return _ChainPattern(
+        pattern=".*".join(parts),
+        parts=tuple(re.compile(p, re.IGNORECASE) for p in parts),
+        dotall=dotall,
+    )
+
+
+def _iter_chain_spans(
+    content: str, chain: _ChainPattern,
+) -> Iterator[tuple[int, int]]:
+    """Non-overlapping ``(start, end)`` spans where the chain's terms
+    appear in order (gaps newline-free for non-DOTALL chains). Linear:
+    every search start is monotonically increasing and a missing later
+    term ends the scan (it stays missing for every later head too)."""
+    parts = chain.parts
+    n = len(content)
+    pos = 0
+    while pos <= n:
+        m0 = parts[0].search(content, pos)
+        if m0 is None:
+            return
+        start, cur = m0.start(), m0.end()
+        restart = None
+        for p in parts[1:]:
+            m = p.search(content, cur)
+            if m is None:
+                return
+            if not chain.dotall:
+                nl = content.rfind("\n", cur, m.start())
+                if nl != -1:
+                    # The gap crosses a line: this head cannot reach
+                    # the term, but a later head on the term's own
+                    # line still can — restart there.
+                    restart = nl + 1
+                    break
+            cur = m.end()
+        if restart is not None:
+            pos = restart
+            continue
+        yield start, cur
+        pos = cur
+
+
+_INJECTION_MATCHERS: list[re.Pattern[str] | _ChainPattern] = [
+    _chain(
+        r"\b(?:ignore|disregard|forget|override|skip)\b",
+        r"\b(?:previous|prior|above|all|every)\b",
         r"\b(?:instructions?|rules?|guidelines?|findings?|vulnerabilit)",
-        re.IGNORECASE | re.DOTALL,
     ),
-    re.compile(
-        r"\b(?:do\s+not|don'?t|never)\b.*"
-        r"\b(?:report|flag|find|detect|mention|note)\b.*"
+    _chain(
+        r"\b(?:do\s+not|don'?t|never)\b",
+        r"\b(?:report|flag|find|detect|mention|note)\b",
         r"\b(?:vulnerabilit|bug|issue|flaw|problem|finding)",
-        re.IGNORECASE | re.DOTALL,
     ),
-    re.compile(
-        r"\b(?:this\s+code|this\s+function|this\s+file)\b.*"
+    _chain(
+        r"\b(?:this\s+code|this\s+function|this\s+file)\b",
         r"\b(?:is\s+safe|has\s+been\s+audited|is\s+secure|"
         r"has\s+no\s+(?:bugs?|vulnerabilit|issue|flaw))",
-        re.IGNORECASE | re.DOTALL,
     ),
     re.compile(
         r"\b(?:you\s+are|your\s+(?:instructions?|role|task|purpose)|"
@@ -135,10 +204,10 @@ _INJECTION_PATTERNS: list[re.Pattern[str]] = [
         r"binary-string|decompiled|dwarf-info|function-name)\b",
         re.IGNORECASE,
     ),
-    re.compile(
-        r"\b(?:report|mark|classify|label)\b.*"
+    _chain(
+        r"\b(?:report|mark|classify|label)\b",
         r"\b(?:clean|safe|no\s+(?:issues?|findings?|bugs?|vulnerabilit))",
-        re.IGNORECASE,
+        dotall=False,
     ),
 ]
 
@@ -251,15 +320,22 @@ def scan_for_injection(
     """Scan a block of target-derived content for injection patterns."""
     warnings: list[InjectionWarning] = []
 
-    for pattern in _INJECTION_PATTERNS:
-        for match in pattern.finditer(content):
-            start = max(0, match.start() - 20)
-            end = min(len(content), match.end() + 20)
+    for matcher in _INJECTION_MATCHERS:
+        if isinstance(matcher, _ChainPattern):
+            spans: Iterable[tuple[int, int]] = _iter_chain_spans(
+                content, matcher)
+        else:
+            spans = (
+                (m.start(), m.end()) for m in matcher.finditer(content)
+            )
+        for span_start, span_end in spans:
+            start = max(0, span_start - 20)
+            end = min(len(content), span_end + 20)
             snippet = content[start:end]
 
             warnings.append(InjectionWarning(
                 location=location,
-                pattern=pattern.pattern[:60],
+                pattern=matcher.pattern[:60],
                 snippet=snippet,
             ))
 
