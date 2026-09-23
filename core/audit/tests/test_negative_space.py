@@ -1495,3 +1495,27 @@ class TestTrailingSpanBounds:
         assert ns._RECURSIVE_CALL.search(near)
         far = "def walk(n):\n    pass\n" + ("x = 1\n" * 1200) + "walk(2)\n"
         assert not ns._RECURSIVE_CALL.search(far)
+
+
+class TestMemcpyOverlapWhitespaceRun:
+    def test_memcpy_whitespace_run_is_fast(self):
+        """Hostile 'memcpy('-opening line with a long whitespace run
+        and no +/- operator: the previous ``,\\s*[^,]+\\s*(?:\\+|-)``
+        spelling overlapped three unbounded repeats on whitespace —
+        cubic in the line length. The \\S-delimited second argument
+        is linear."""
+        import re
+
+        from core.audit import negative_space as ns
+        from core.testing.wallclock import cpu_budget
+
+        pat = next(
+            p for p, msg, _cwe in ns._UB_PATTERNS
+            if "memmove" in msg
+        )
+        assert isinstance(pat, re.Pattern)
+        hostile = "memcpy(dst, s" + " " * (1 << 16) + "x"
+        with cpu_budget(1.0, what="memcpy whitespace-run scan"):
+            assert pat.search(hostile) is None
+        assert pat.search("memcpy(dst, src + off, n);")
+        assert pat.search("memcpy(p, q - 4, len);")
