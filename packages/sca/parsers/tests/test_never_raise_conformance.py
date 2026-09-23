@@ -46,6 +46,8 @@ HOSTILE_CORPUS: list[tuple[str, bytes]] = [
     # flow-depth pre-bound is absent (the guard fires at ~30-40k).
     ("deep-yaml-flow", b"__metadata: {version: 8}\nx: " + b"[" * 50000),
     ("deep-xml", b"<a>" * 3000),
+    ("xml-entity-decl", b'<?xml version="1.0"?><!DOCTYPE a [<!ENTITY x '
+     b'"y">]><project>&x;</project>'),
     ("huge-int-version", b'[project]\ndependencies = ["p=='
      + b"9" * 50000 + b'"]'),
     ("huge-digit-line", b"p==" + b"9" * 50000 + b"\n"),

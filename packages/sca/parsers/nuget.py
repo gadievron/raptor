@@ -143,7 +143,7 @@ def parse_msbuild_project(path: Path) -> list[Dependency]:
 
     try:
         root = _safe_fromstring(text)
-    except _ET.ParseError as e:
+    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses
         logger.warning(
             "sca.parsers.nuget: XML parse failed for %s: %s", path, e)
         return []
@@ -528,7 +528,7 @@ def parse_packages_config(path: Path) -> list[Dependency]:
         return []
     try:
         root = _safe_fromstring(text)
-    except _ET.ParseError as e:
+    except (_ET.ParseError, *PARSE_ESCAPE_ERRORS) as e:  # defused XML refusals are ValueError subclasses
         logger.warning(
             "sca.parsers.nuget: XML parse failed for %s: %s", path, e)
         return []
