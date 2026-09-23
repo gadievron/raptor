@@ -29,5 +29,7 @@ test/
 - Wrapper-script tests → the package whose code the wrapper invokes
 
 If you find yourself reaching for `test/test_foo.py`, it's almost
-certainly in the wrong place. See `project_test_directory_cleanup.md`
-in the operator memory for the colocation principle.
+certainly in the wrong place. The colocation principle: a test lives
+beside the code it exercises, so the suite for a package moves,
+ships, and runs with that package — a central `test/` directory
+decays into an unowned mix of scan targets and real tests.

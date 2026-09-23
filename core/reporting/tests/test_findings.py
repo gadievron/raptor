@@ -454,10 +454,6 @@ class TestMdTableCellAutofetch(unittest.TestCase):
         self.assertEqual(_md_table_cell("a`b"), "aʼb")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TerminalStatusBucketsTest(unittest.TestCase):
     """not_disproven and confirmed_unverified are legitimate TERMINAL
     statuses — neither may fall into the 'other' bucket that feeds the
@@ -518,3 +514,7 @@ class TestChainBreaksShapes(unittest.TestCase):
     def test_string_shape_not_split_per_char(self):
         content = self._detail("nope")
         self.assertNotIn("n, o, p", content)
+
+
+if __name__ == "__main__":
+    unittest.main()

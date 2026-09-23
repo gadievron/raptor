@@ -1,6 +1,6 @@
 """Tolerant JSON-with-comments (JSONC) loading.
 
-``devcontainer.json``, ``tsconfig.json`` and friends aee JSONC: standard JSON
+``devcontainer.json``, ``tsconfig.json`` and friends are JSONC: standard JSON
 plus ``//`` / ``/* */`` comments and trailing commas. A naive regex strip of
 ``//`` corrupts string *values* that contain ``//`` — a ``https://`` URL is the
 common casualty, which silently breaks the parse — so the comment stripper here
