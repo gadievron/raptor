@@ -84,12 +84,17 @@ def inspect_binary(
     # tests that stub the sandbox (same convention as binary_oracle).
     from core.sandbox import run as _sandbox_run
     try:
-        target = str(Path(binary).resolve().parent)
+        # The resolved path is used in argv too, not just for the
+        # sandbox target: a caller-spelled relative name could be
+        # dash-leading or @-leading (binutils option / response-file
+        # expansion inside the sandbox); an absolute path is inert.
+        resolved = Path(binary).resolve()
+        target = str(resolved.parent)
     except OSError:
         return InspectResult(returncode=None)
     try:
         proc = _sandbox_run(
-            [tool, *args, str(binary)],
+            [tool, *args, str(resolved)],
             block_network=True,
             target=target,
             capture_output=True,
