@@ -472,7 +472,11 @@ def _write_markdown_report(
                     lines.append("```")
                     lines.append("")
 
-    out_dir.joinpath("openant-report.md").write_text("\n".join(lines))
+    # Explicit encoding: the fence defang (md_fence) inserts ZWSP, so
+    # the report is non-ASCII exactly when hostile content fired the
+    # defence — an encoding-less write crashed under a C locale.
+    out_dir.joinpath("openant-report.md").write_text(
+        "\n".join(lines), encoding="utf-8")
 
 
 if __name__ == "__main__":
