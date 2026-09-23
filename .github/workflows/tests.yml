@@ -1165,7 +1165,13 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install pytest
-        run: pip install pytest==9.0.3
+        # grep + pip install keeps requirements-dev.txt the single
+        # source of truth for the pytest pin (lint.yml's ruff idiom)
+        # — a hand-typed copy here drifted a minor version behind the
+        # dev pin, so this suite ran under a different pytest per
+        # lane than the nightly sweep, the exact collection-behaviour
+        # divergence the pin rationale names.
+        run: pip install "$(grep -E '^pytest==' requirements-dev.txt)"
 
       - name: Run prompt-envelope audit
         run: |
@@ -1227,7 +1233,13 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Install pytest
-        run: pip install pytest==9.0.3
+        # grep + pip install keeps requirements-dev.txt the single
+        # source of truth for the pytest pin (lint.yml's ruff idiom)
+        # — a hand-typed copy here drifted a minor version behind the
+        # dev pin, so this suite ran under a different pytest per
+        # lane than the nightly sweep, the exact collection-behaviour
+        # divergence the pin rationale names.
+        run: pip install "$(grep -E '^pytest==' requirements-dev.txt)"
 
       - name: Run CI filter-coverage tests
         # Both dirs: filter-coverage tests AND the checker-script
