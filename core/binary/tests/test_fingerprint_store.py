@@ -99,12 +99,19 @@ class TestAtomicWrite:
             data = json.load(f)
         assert data["ref"] == "ref"
 
-    def test_tmp_files_filtered_from_iter_refs(self, tmp_path):
-        """A leftover ``.tmp-*.json`` file (process killed
-        mid-write) doesn't pollute iter_refs."""
-        # Simulate the leftover
-        leftover = tmp_path / ".tmp-abc.json"
-        leftover.write_text('{"some": "data"}')
+    def test_stale_atomic_write_temps_filtered_from_iter_refs(
+            self, tmp_path):
+        """Leftover in-flight atomic-write temps (process killed
+        mid-write) don't pollute iter_refs. save_json's temps are
+        named ``.~savejson-<name>.json.<pid>.<tid>.<rand>.tmp`` and
+        atomic_fs's default prefix is ``.atomic-`` — BOTH end
+        ``.tmp``, so the ``.json`` suffix filter is what excludes
+        them (there is no separate prefix guard)."""
+        for stale in (
+            ".~savejson-x.json.3880225.140213.k9q2.tmp",
+            ".atomic-x.json.1234.5678.ab3f.tmp",
+        ):
+            (tmp_path / stale).write_text('{"some": "data"}')
         save_fingerprint(tmp_path, "real", _fp())
         refs = list(iter_refs(tmp_path))
         assert len(refs) == 1
