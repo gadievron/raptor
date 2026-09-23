@@ -795,6 +795,15 @@ def build_inventory(
 
     def _collect_result(result) -> None:
         nonlocal total_items, total_sloc, skipped
+        if isinstance(result, dict):
+            # Worker-buffered analysis-gap records: persist in the
+            # parent, where the active-run pointer resolves.
+            worker_gaps = result.pop("_analysis_gaps", None)
+            if worker_gaps:
+                from core.run.gaps import persist_gap_records
+                persist_gap_records(worker_gaps)
+            if result.pop("_gaps_only", False):
+                result = None
         if result is None:
             skipped += 1
         elif result.get("_excluded"):
@@ -842,9 +851,10 @@ def build_inventory(
 
             def submit_fn(fp, pool=pool):
                 return pool.submit(
-                    _process_single_file, fp, target, exclude_patterns,
-                    skip_generated, old_files_by_path, allow_unreachable,
-                    macro_config, build_tus, crate_modules,
+                    _process_one_with_gap_context, fp, target,
+                    exclude_patterns, skip_generated, old_files_by_path,
+                    allow_unreachable, macro_config, build_tus,
+                    crate_modules,
                 )
         else:
             def submit_fn(fp, pool=pool):
@@ -884,6 +894,13 @@ def build_inventory(
                     "reason": "processing_error",
                     "pattern_matched": exc.__class__.__name__,
                 })
+                from core.run.gaps import record_analysis_gap
+                record_analysis_gap(
+                    file_path=_rel_of(fp),
+                    reason="processing_error",
+                    tool="inventory",
+                    detail=exc.__class__.__name__,
+                )
                 skipped += 1
 
         stalled = set()
@@ -923,6 +940,16 @@ def build_inventory(
                             f"no completion in {INVENTORY_STALL_TIMEOUT_S}s"
                             " + retry failed",
                     })
+                    from core.run.gaps import record_analysis_gap
+                    record_analysis_gap(
+                        file_path=_rel_of(fp),
+                        reason="worker_stalled",
+                        tool="inventory",
+                        detail=(
+                            f"no completion in {INVENTORY_STALL_TIMEOUT_S}s"
+                            " + retry failed"
+                        ),
+                    )
                     skipped += 1
         finally:
             if stalled:
@@ -1501,8 +1528,37 @@ def _init_inventory_worker(
     _worker_ctx["crate_modules"] = crate_modules
 
 
+def _process_one_with_gap_context(
+    filepath: Path, *args: Any,
+) -> dict[str, Any] | None:
+    """Run :func:`_process_single_file` with analysis-gap plumbing.
+
+    parse_origin attributes any budget-abandoned parse under this
+    file to the file itself on the run's analysis-gap trail. Records
+    that could not be persisted in this process (pool workers do not
+    inherit the parent's active-run pointer) ride back to the parent
+    on the result dict, which persists them in _collect_result.
+    """
+    from core.run.gaps import drain_pending_gaps, parse_origin
+    target = args[0] if args else None
+    origin = str(filepath)
+    if isinstance(target, Path):
+        try:
+            origin = str(Path(filepath).relative_to(target))
+        except ValueError:
+            pass
+    with parse_origin(origin):
+        result = _process_single_file(filepath, *args)
+    pending = drain_pending_gaps()
+    if pending:
+        if result is None:
+            result = {"_gaps_only": True}
+        result["_analysis_gaps"] = pending
+    return result
+
+
 def _process_file_in_worker(filepath: Path) -> dict[str, Any] | None:
-    return _process_single_file(
+    return _process_one_with_gap_context(
         filepath,
         _worker_ctx["target"],
         _worker_ctx["exclude_patterns"],
