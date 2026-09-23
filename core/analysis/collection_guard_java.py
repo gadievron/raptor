@@ -391,11 +391,34 @@ def _resolve_local_collection(method, name: str, resolver) -> list[str]:
     return decl_elems
 
 
-def _resolve_static_field(root, name: str, resolver) -> list[str]:
-    """``static final`` field with a constant initializer, occurrence
-    discipline over the whole file."""
+def _enclosing_class(node) -> "Node | None":
+    """Nearest enclosing class-like declaration of ``node``."""
+    cur = node.parent
+    while cur is not None:
+        if cur.type in ("class_declaration", "enum_declaration",
+                        "record_declaration", "interface_declaration"):
+            return cur
+        cur = cur.parent
+    return None
+
+
+def _resolve_static_field(root, enclosing_class, name: str,
+                          resolver) -> tuple[list[str], bool]:
+    """``static final`` field with a constant initializer, declared
+    DIRECTLY by the sink's enclosing class — an unqualified field read
+    resolves through the class hierarchy, so binding any same-file
+    declaration could vouch a DIFFERENT collection than the runtime
+    receiver (an inherited, possibly mutable field). Occurrence
+    discipline over the whole file. Returns ``(elems, is_private)``:
+    a non-private field is writable from other files and needs the
+    caller's tree-wide mutation scan on top."""
+    body = enclosing_class.child_by_field_name("body")
+    if body is None:
+        msg = "enclosing class has no body"
+        raise _Refused(msg)
     found: list[str] | None = None
-    for n in _iter_named(root):
+    private = False
+    for n in body.children:
         if n.type != "field_declaration":
             continue
         decls = [c for c in n.children if c.type == "variable_declarator"]
@@ -422,13 +445,17 @@ def _resolve_static_field(root, name: str, resolver) -> list[str]:
                 )
                 raise _Refused(msg)
             found = elems
+            private = "private" in mod_texts
     if found is None:
-        msg = "no static final field of that name"
+        # Includes the inherited-field case: the enclosing class
+        # extends/implements something and declares no such field —
+        # the binding is unprovable through the hierarchy.
+        msg = "no static final field of that name on the sink's class"
         raise _Refused(msg)
     if not _occurrences_contains_only(root, name):
         msg = "field name used beyond contains() in its file"
         raise _Refused(msg)
-    return found
+    return found, private
 
 
 def _package_of(root) -> str:
@@ -480,11 +507,41 @@ def _resolve_cross_file(chain: str, field: str, source_root: Path,
     from core.analysis.cfg_builder_java import _NameResolver, build_import_map
     types, statics = build_import_map(declaring_root)
     resolver = _NameResolver(types, statics)
-    elems = _resolve_static_field(declaring_root, field, resolver)
+    declaring_class = _single_top_level_class(declaring_root, simple)
+    if declaring_class is None:
+        msg = "declaring class not found in its file"
+        raise _Refused(msg)
+    elems, _private = _resolve_static_field(
+        declaring_root, declaring_class, field, resolver)
 
     # Mutation-anywhere scan: a static collection is writable from any
     # file that can see it. Occurrences elsewhere must be contains
     # receivers only.
+    _scan_tree_contains_only(field, source_root, parser,
+                             skip_file=declaring)
+    return elems
+
+
+def _single_top_level_class(root, simple: str) -> "Node | None":
+    """The class-like declaration named ``simple`` in ``root``."""
+    for n in _iter_named(root):
+        if n.type in ("class_declaration", "enum_declaration",
+                      "record_declaration", "interface_declaration"):
+            nm = n.child_by_field_name("name")
+            if nm is not None and _text(nm) == simple:
+                return n
+    return None
+
+
+def _scan_tree_contains_only(field: str, source_root: Path, parser, *,
+                             skip_file: Path | None = None,
+                             skip_text: str | None = None) -> None:
+    """Refuse (raise) unless every occurrence of ``field`` outside the
+    declaring file is a ``contains()`` receiver. ``skip_file`` names
+    the declaring file by path (cross-file resolution); ``skip_text``
+    identifies it by CONTENT when the caller has only the analysed
+    source text (same-class resolution) — a byte-different copy is
+    scanned as foreign and refuses, the conservative direction."""
     n_files = 0
     n_refs = 0
     for f in source_root.rglob("*.java"):
@@ -503,7 +560,9 @@ def _resolve_cross_file(chain: str, field: str, source_root: Path,
         if n_refs > _MAX_REFERENCING_FILES:
             msg = "too many files reference the collection"
             raise _Refused(msg)
-        if f == declaring:
+        if skip_file is not None and f == skip_file:
+            continue
+        if skip_text is not None and text == skip_text:
             continue
         try:
             tree = parser.parse(text.encode("utf-8", errors="replace"))
@@ -532,7 +591,6 @@ def _resolve_cross_file(chain: str, field: str, source_root: Path,
                 continue
             msg = f"{f.name} uses the collection beyond contains()"
             raise _Refused(msg)
-    return elems
 
 
 # ---------------------------------------------------------------------------
@@ -714,8 +772,30 @@ def collection_guard_reason(
                     # Only the no-local-at-all refusal may consult the
                     # class field — a declared local SHADOWS the field
                     # (see _NoLocalDeclaration); its refusal reasons
-                    # must refuse the guard outright.
-                    elems = _resolve_static_field(root, name, resolver)
+                    # must refuse the guard outright. The lookup is
+                    # restricted to the sink's ENCLOSING class (an
+                    # unqualified read resolves through the hierarchy,
+                    # never to an unrelated same-file class), and a
+                    # non-private field needs the same tree-wide
+                    # mutation proof the cross-file path demands — a
+                    # package-visible static collection is writable
+                    # from any file.
+                    encl = _enclosing_class(method)
+                    if encl is None:
+                        msg = "no enclosing class for the field lookup"
+                        raise _Refused(msg)  # noqa: B904
+                    elems, private = _resolve_static_field(
+                        root, encl, name, resolver)
+                    if not private:
+                        if source_root is None:
+                            msg = (
+                                "package-visible field needs a source "
+                                "root for the mutation scan"
+                            )
+                            raise _Refused(msg)  # noqa: B904
+                        _scan_tree_contains_only(
+                            name, Path(source_root), parser,
+                            skip_text=source_text)
             elif recv_u is not None and recv_u.type in (
                     "field_access", "scoped_identifier"):
                 chain_text = _text(recv_u)
