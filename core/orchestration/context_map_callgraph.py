@@ -61,6 +61,14 @@ _MAX_CHECKLIST_BYTES = 256 * 1024 * 1024
 MAX_NAMES_PER_LIST = 10
 DEFAULT_MAX_DEPTH = 10
 
+# Cap on call_edges materialised into context-map.json — the whole
+# call graph x chain lengths previously landed unbounded (multi-MB
+# maps on large targets, and every consumer re-walks the array).
+# Sized above real large-target graphs; on hit the map is marked
+# call_edges_truncated so negative reachability consumers degrade to
+# inconclusive instead of reading a capped list as unreachability.
+_MAX_CALL_EDGES = 200_000
+
 
 def enrich_with_forward_reachable(
     context_map: dict[str, Any],
@@ -197,23 +205,45 @@ def enrich_with_call_edges(
                 func_to_file[name] = path
 
     edges: list = []
+    truncated = False
     for fi in checklist.get("files", []):
+        if truncated:
+            break
         path = fi.get("path", "")
         cg = fi.get("call_graph")
         if not isinstance(cg, dict):
             continue
         for call in cg.get("calls", []):
+            if truncated:
+                break
             caller = call.get("caller", "")
             if not caller:
                 continue
-            edges.extend({
+            for callee in call.get("chain", []):
+                if len(edges) >= _MAX_CALL_EDGES:
+                    truncated = True
+                    break
+                edges.append({
                     "caller_file": path,
                     "caller": caller,
                     "callee": callee,
                     "callee_file": func_to_file.get(callee, ""),
-                } for callee in call.get("chain", []))
+                })
 
     context_map["call_edges"] = edges
+    # The marker rides the map so NEGATIVE consumers (the
+    # precondition reachability walk) degrade to inconclusive rather
+    # than reading a capped edge list as proof of unreachability.
+    # Cleared on rebuild (idempotent overwrite) so a stale flag never
+    # outlives the edge set it described.
+    context_map.pop("call_edges_truncated", None)
+    if truncated:
+        context_map["call_edges_truncated"] = True
+        logger.warning(
+            "context_map_callgraph: call-edge cap (%d) reached — edge "
+            "list truncated and marked; negative reachability "
+            "conclusions degrade to inconclusive", _MAX_CALL_EDGES,
+        )
     if edges:
         logger.info(
             "context_map_callgraph: added %d call edges from checklist",
