@@ -1205,6 +1205,7 @@ def _extract_wp(
     *,
     cap: int = WP_MAX_SOLVER_CALLS,
     axioms: list[tuple[str, Any]] | None = None,
+    timeout_ms: int | None = None,
 ) -> tuple[str | None, list[str], bool]:
     """Extract the weakest-precondition predicate for a *sat* path.
 
@@ -1259,7 +1260,15 @@ def _extract_wp(
     kept = [True] * n
     calls = 0
     complete = True
-    solver = _new_solver(WP_TIMEOUT_MS)
+    # The caller's per-call budget CAPS the per-redundancy-test
+    # timeout: WP is a best-effort refinement (up to 32 solver
+    # calls), so a caller who asked for a tight overall budget must
+    # not pay the fixed default per test. It never RAISES it — WP
+    # cost stays bounded even under a generous caller budget.
+    effective_ms = WP_TIMEOUT_MS
+    if timeout_ms is not None:
+        effective_ms = min(WP_TIMEOUT_MS, timeout_ms)
+    solver = _new_solver(effective_ms)
     for idx in order:
         if calls >= cap:
             complete = False
@@ -1307,6 +1316,7 @@ def _solve_pending(
     prefer_witness: tuple[str, str] | None = None,
     vars_: dict[str, Any] | None = None,
     axioms: list[tuple[str, Any]] | None = None,
+    wp_timeout_ms: int | None = None,
 ) -> PathSMTResult:
     """Run the solver over pending predicates and produce a verdict.
 
@@ -1390,7 +1400,7 @@ def _solve_pending(
         # symbolic variables (minimal sat-preserving conjunct subset). Its
         # own fresh solver — the verdict above is unaffected.
         wp_predicate, wp_conjuncts, wp_complete = _extract_wp(
-            pending, axioms=_axioms,
+            pending, axioms=_axioms, timeout_ms=wp_timeout_ms,
         )
         return PathSMTResult(
             feasible=True,
@@ -1570,9 +1580,16 @@ def check_path_feasibility(
                     rendering.  Defaults to BV_C_UINT64 (64-bit unsigned).
                     Use BV_C_UINT32 for CWE-190 32-bit wraparound paths;
                     BV_C_INT32 for signed-integer path conditions; etc.
-        timeout_ms: Per-call Z3 solver timeout in milliseconds.  When
-                    None (default) the solver uses the substrate's
-                    ``DEFAULT_TIMEOUT_MS`` (5000 ms).
+        timeout_ms: Z3 solver timeout in milliseconds, applied to
+                    every solver this call builds: the final joint
+                    solve, the per-condition tautology checks, and
+                    (as a cap, never a raise) the per-test timeout of
+                    the WP redundancy pass. When None (default) the
+                    solvers use the substrate's ``DEFAULT_TIMEOUT_MS``
+                    (5000 ms; WP tests use ``WP_TIMEOUT_MS``). Note
+                    the bound is per SOLVER CALL — a call with many
+                    conditions can still spend
+                    ``O(len(conditions)) x timeout_ms`` overall.
         prefer_witness: When set to ``(var_name, "max")`` or
                     ``(var_name, "min")``, drive the satisfying witness
                     toward an extreme value of ``var_name`` instead of
@@ -1650,7 +1667,16 @@ def check_path_feasibility(
     # the final solve.  Z3 4.15.4.0 has been observed to return
     # models that violate tracked assertions after repeated
     # push/pop cycles on the same solver instance.
-    tautology_solver = _new_solver()
+    # The caller's budget reaches EVERY solver this call builds —
+    # the final solve below, and this tautology solver, which runs
+    # one full check() per condition (up to the per-call cap) and
+    # previously kept the 5 s default regardless of timeout_ms,
+    # making the documented per-call budget a fiction for the
+    # per-condition lane.
+    tautology_solver = (
+        _new_solver(timeout_ms) if timeout_ms is not None
+        else _new_solver()
+    )
     # Per-call timeout override. Default to the substrate's
     # DEFAULT_TIMEOUT_MS (5s). Callers that know their CWE-class
     # solving-cost profile (CWE-190 wraparound is fast; CWE-787
@@ -1732,7 +1758,7 @@ def check_path_feasibility(
         pending, solver, satisfied, unknown, unknown_reasons,
         profile=profile, anon_map=anon_map,
         prefer_witness=prefer_witness, vars_=vars_,
-        axioms=axioms,
+        axioms=axioms, wp_timeout_ms=timeout_ms,
     )
 
 
@@ -1929,6 +1955,7 @@ def check_path_feasibility_dual(
             ),
             unknown_reasons=primary.unknown_reasons,
             anon_var_map=primary.anon_var_map,
+            summary_axioms=primary.summary_axioms,
         )
     if sibling.feasible is True:
         sibling.reasoning += (
@@ -1953,4 +1980,5 @@ def check_path_feasibility_dual(
         ),
         unknown_reasons=primary.unknown_reasons,
         anon_var_map=primary.anon_var_map,
+        summary_axioms=primary.summary_axioms,
     )
