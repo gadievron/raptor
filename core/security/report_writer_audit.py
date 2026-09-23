@@ -646,6 +646,7 @@ _REPORT_WRITER_FILES = (
     # preserving _term_block helper.
     "libexec/raptor-graph-query",
     "libexec/raptor-render-diagrams",
+    "libexec/raptor-smt-check-encoding-residual",
     "libexec/raptor-smt-check-negative-bypass",
     "libexec/raptor-smt-check-null-deref",
     "libexec/raptor-smt-check-oob",
