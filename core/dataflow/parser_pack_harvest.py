@@ -81,7 +81,10 @@ _DIFF_FILE_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)")
 # Unified hunk header; group(1) is git's enclosing-context line.
 _HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@ ?(.*)$")
 # Last `name(` in the context line = the enclosing function.
-_CONTEXT_FUNC_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+# \b pin: unanchored, every position inside a long identifier run
+# starts a fresh scan of the hunk-context tail — quadratic; a
+# mid-word start is never a real function name.
+_CONTEXT_FUNC_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
 _C_FAMILY_EXTS = (".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh")

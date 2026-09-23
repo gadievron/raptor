@@ -638,8 +638,12 @@ class CExtractor:
                         if not fwd:
                             continue
                         # K&R parameter declaration: `type name;` possibly
-                        # followed by a comment (`unsigned start; /* ... */`)
-                        fwd_no_comment = re.sub(r'/\*.*?\*/', '', fwd).strip()
+                        # followed by a comment (`unsigned start; /* ... */`).
+                        # Comment gap bounded: an unbounded gap lets a
+                        # hostile line planting `/*` openers re-scan the
+                        # line tail per opener — quadratic. Real one-line
+                        # comments sit far inside 500 chars.
+                        fwd_no_comment = re.sub(r'/\*.{0,500}?\*/', '', fwd).strip()
                         if ';' in fwd_no_comment:
                             continue
                         break
@@ -736,7 +740,8 @@ class CExtractor:
             if prev_idx < 0:
                 return None
             prev = lines[prev_idx].rstrip()
-            prev_stripped = re.sub(r'/\*.*?\*/', '', prev)
+            # bounded comment gap — same rationale as the K&R case above
+            prev_stripped = re.sub(r'/\*.{0,500}?\*/', '', prev)
             prev_stripped = re.sub(r'//.*$', '', prev_stripped)
             if any(c in prev_stripped for c in '();:'):
                 return None
@@ -755,7 +760,8 @@ class CExtractor:
             text = lines[j].rstrip()
             if len(text) > self._MAX_C_LINE:
                 return None
-            text_clean = re.sub(r'/\*.*?\*/', '', text)
+            # bounded comment gap — same rationale as the K&R case above
+            text_clean = re.sub(r'/\*.{0,500}?\*/', '', text)
             text_clean = re.sub(r'//.*$', '', text_clean)
             pieces.append(text_clean)
             for ch in text_clean:
@@ -3689,7 +3695,10 @@ _MACRO_INERT_TOKEN_RE = re.compile(
     r')',
     re.ASCII,
 )
-_MACRO_COMMENT_RE = re.compile(r'/\*.*?\*/|//.*$')
+# Comment gap bounded — a hostile macro line planting `/*` openers
+# would otherwise re-scan the line tail per opener (quadratic); real
+# one-line comments sit far inside 500 chars.
+_MACRO_COMMENT_RE = re.compile(r'/\*.{0,500}?\*/|//.*$')
 
 
 def _object_macro_body_is_inert(body: str) -> bool:

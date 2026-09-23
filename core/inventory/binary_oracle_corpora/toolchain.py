@@ -92,7 +92,10 @@ def record_toolchain(
     return out
 
 
-_VERSION_RE = re.compile(r"(\d+)\.(\d+)(?:\.(\d+))?")
+# (?<!\d) pins the major to its digit-run start: unanchored, every
+# position inside a long digit run starts a fresh scan — quadratic on
+# adversarial tool output; a mid-run start is never a real version.
+_VERSION_RE = re.compile(r"(?<!\d)(\d+)\.(\d+)(?:\.(\d+))?")
 
 
 def _major_minor(version_text: str) -> tuple[int, int] | None:

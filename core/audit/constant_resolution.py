@@ -23,10 +23,10 @@ from dataclasses import dataclass, field
 
 from core.inventory.macro_resolve import (
     _C_EXTENSIONS,
-    _ENUM_BLOCK_RE,
     _ENUMERATOR_NAME_RE,
     _MACRO_DEF_RE,
     _SKIP_IDENTS_C,
+    _iter_enum_bodies,
     _parse_enumerator_value,
 )
 from typing import TYPE_CHECKING
@@ -288,10 +288,9 @@ def _scan_definitions(target_path: Path) -> dict[str, list[_RawDefinition]]:
                 _RawDefinition(name, params, body, rel, line, depth)
             )
 
-        for em in _ENUM_BLOCK_RE.finditer(text_joined):
-            block_line = _original_line(em.start())
+        for block_start, body in _iter_enum_bodies(text_joined):
+            block_line = _original_line(block_start)
             block_depth = cond_depth.get(block_line, 0)
-            body = em.group(1)
             for ev in _ENUMERATOR_NAME_RE.finditer(body):
                 ename = ev.group(1).strip()
                 evalue = _parse_enumerator_value(body, ev.end())

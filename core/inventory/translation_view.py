@@ -66,7 +66,10 @@ _IDENT_RE = re.compile(r"^(\w+)$")
 
 
 def _strip_pp_comments(rest: str) -> str:
-    r = re.sub(r"/\*.*?\*/", "", rest)
+    # bounded comment gap: an unbounded gap lets a hostile directive
+    # line planting `/*` openers re-scan the tail per opener —
+    # quadratic; real one-line comments sit far inside 500 chars.
+    r = re.sub(r"/\*.{0,500}?\*/", "", rest)
     return re.sub(r"//.*$", "", r).strip()
 
 
