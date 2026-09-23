@@ -380,16 +380,21 @@ class VulnrichmentClient:
         try:
             record = self._http.get_json(url)
         except HttpError as e:
-            # 404 is the common case (CVE not yet enriched).
-            # Cache a negative marker so the next call within
-            # the 1-day window doesn't re-probe and waste an
-            # HTTP request. ``HttpError`` carries the status code
-            # as a structured field; fall back to substring match
-            # on the message for stubs that don't propagate it.
+            # 404 is the common case (CVE not yet enriched); 410 is
+            # equally authoritative. Cache a negative marker so the
+            # next call within the 1-day window doesn't re-probe and
+            # waste an HTTP request. ONLY the structured status
+            # decides: the message embeds the request URL (which
+            # embeds the CVE id — thousands of ids contain "404") and
+            # status-less transport errors ("name or service not
+            # found") are transient, so any substring fallback turns
+            # blips into a day of cached "CISA hasn't enriched this".
             status = getattr(e, "status", None)
-            msg = str(e).lower()
-            is_404 = status == 404 or "404" in msg or "not found" in msg
-            if is_404:
+            is_missing = (
+                status in (404, 410)
+                and not getattr(e, "circuit_break", False)
+            )
+            if is_missing:
                 self._cache.put(
                     cache_key, {"_status": "missing"},
                     ttl_seconds=_NEGATIVE_TTL,

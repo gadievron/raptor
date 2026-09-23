@@ -286,7 +286,7 @@ class TestVulnrichmentClient:
             "HEAD/2024/12xxx/CVE-2024-12345.json"
         )
         http = FakeHttp(errors={
-            url: HttpError("404 Not Found"),
+            url: HttpError("404 Not Found", status=404),
         })
         cache = JsonCache(root=tmp_path)
         client = VulnrichmentClient(http, cache)
@@ -296,7 +296,7 @@ class TestVulnrichmentClient:
         # Second client (fresh process) — must read the negative
         # marker from disk, not re-probe.
         http2 = FakeHttp(errors={
-            url: HttpError("404 Not Found"),
+            url: HttpError("404 Not Found", status=404),
         })
         client2 = VulnrichmentClient(http2, cache)
         assert client2.lookup("CVE-2024-12345") is None
@@ -329,6 +329,73 @@ class TestVulnrichmentClient:
         d = c2.lookup("CVE-2024-12345")
         assert d is not None
         assert d.exploitation == "active"
+
+    def test_gone_410_caches_negative(self, tmp_path: Path):
+        """410 is equally authoritative not-found — negative-cached
+        like 404 (same statuses the SCA registry clients accept)."""
+        url = (
+            "https://raw.githubusercontent.com/cisagov/vulnrichment/"
+            "HEAD/2024/12xxx/CVE-2024-12345.json"
+        )
+        cache = JsonCache(root=tmp_path)
+        http = FakeHttp(errors={url: HttpError("gone", status=410)})
+        assert VulnrichmentClient(http, cache).lookup(
+            "CVE-2024-12345",
+        ) is None
+        http2 = FakeHttp(errors={url: HttpError("gone", status=410)})
+        assert VulnrichmentClient(http2, cache).lookup(
+            "CVE-2024-12345",
+        ) is None
+        assert http2.gets == []
+
+    def test_503_with_404_in_url_not_negative_cached(
+        self, tmp_path: Path,
+    ):
+        """The transport error message embeds the request URL, and the
+        URL embeds the CVE id — an id containing \"404\" must not turn
+        a transient 503 into a cached \"CISA hasn't enriched this CVE\"
+        for a day. Only the structured status decides."""
+        url = _url("CVE-2021-40444")
+        cache = JsonCache(root=tmp_path)
+        http = FakeHttp(errors={
+            url: HttpError(f"HTTP 503 from {url}", status=503),
+        })
+        assert VulnrichmentClient(http, cache).lookup(
+            "CVE-2021-40444",
+        ) is None
+
+        # The blip is over: the next client must re-probe and win.
+        http_ok = FakeHttp(responses={
+            url: _vulnrichment_record(exploitation="active"),
+        })
+        d = VulnrichmentClient(http_ok, cache).lookup("CVE-2021-40444")
+        assert d is not None
+        assert http_ok.gets == [url]
+
+    def test_statusless_not_found_message_not_negative_cached(
+        self, tmp_path: Path,
+    ):
+        """A status-less transport error whose message happens to say
+        \"not found\" (DNS: \"name or service not found\") is transient
+        for EVERY id — it must never mint a negative entry."""
+        url = _url("CVE-2021-34527")
+        cache = JsonCache(root=tmp_path)
+        http = FakeHttp(errors={
+            url: HttpError(
+                f"urlopen error [Errno -2] name or service not "
+                f"found for {url}",
+            ),
+        })
+        assert VulnrichmentClient(http, cache).lookup(
+            "CVE-2021-34527",
+        ) is None
+
+        http_ok = FakeHttp(responses={
+            url: _vulnrichment_record(exploitation="poc"),
+        })
+        d = VulnrichmentClient(http_ok, cache).lookup("CVE-2021-34527")
+        assert d is not None
+        assert http_ok.gets == [url]
 
     def test_offline_with_cold_cache_returns_none(
         self, tmp_path: Path,
