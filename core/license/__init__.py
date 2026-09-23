@@ -35,9 +35,10 @@ The two share no natural data today (SCA has no
 ``is_oss_spdx_id``-shaped constant — it's policy-based). If a
 third consumer materialises that wants ''is this id OSS?'' as a
 question, extract the allowlist here to a shared helper then.
-SCA's ``_looks_like_spdx_expression`` regex is the one natural
-future bridge — useful when this module gains compound-header
-support (``SPDX-License-Identifier: MIT OR Apache-2.0``).
+Compound-header support (``SPDX-License-Identifier: MIT OR
+Apache-2.0``) ships in this module: ``detector._classify_text``
+parses the expression via ``core/license/spdx.py``'s shared
+grammar (spdx.py names the detector as its consumer).
 """
 
 from .detector import (
