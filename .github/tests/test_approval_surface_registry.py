@@ -483,7 +483,7 @@ _MD_PROMPT_PROSE_RE = re.compile(
     # vocabulary — both must join the universe (doctrine-compliant
     # mentions like "cannot ask the user" join too and are
     # adjudicated clean).
-    r"|ask (?:the )?user"
+    r"|\bask (?:the )?user"
     r"|offer \d+(?:-\d+)? options",
     re.IGNORECASE,
 )
@@ -892,6 +892,7 @@ class TestApprovalSurfaceRegistry(unittest.TestCase):
             "compare [a/b] table columns",
             "an ask-user question is a different phrase",
             "ask-the-user thresholds",   # hyphenated compound, not an ask
+            "task the user runs next",   # word boundary: not an ask
             "choices offered elsewhere in the doc",
             "[Y/X] is not a consent menu",
             "structured data, choice of encoding",
