@@ -256,3 +256,83 @@ class TestDismissedFindingsAndRulingForwarding:
         saved_by_id = {f["id"]: f for f in saved["findings"]}
         for fid in ("dicted", "stringed", "bare"):
             assert saved_by_id[fid]["feasibility"]["verdict"] == "Difficult"
+
+
+class TestFlockFailureIsFailClosed:
+    """flock failure refuses the read-modify-write instead of racing.
+
+    ENOLCK-class failures correlate with exactly the contended
+    filesystems where the lock matters; the pre-fix warning-and-
+    proceed reopened the documented parallel Stage-E lost-update
+    clobber.
+    """
+
+    def _findings(self, tmp_path: Path, binary: Path) -> Path:
+        findings = tmp_path / "findings.json"
+        findings.write_text(json.dumps({"findings": [
+            {"id": "a", "vuln_type": "overflow",
+             "feasibility": {"binary_path": str(binary)}},
+        ]}), encoding="utf-8")
+        return findings
+
+    def test_persistent_flock_failure_exits_1(
+            self, feasibility_mod, monkeypatch, tmp_path: Path,
+            capsys):
+        import errno
+        import fcntl
+        import time
+
+        binary = tmp_path / "bin.elf"
+        binary.write_bytes(b"\x7fELF")
+        findings = self._findings(tmp_path, binary)
+        before = findings.read_text()
+        attempts: list[int] = []
+
+        def deny(fd, op):
+            attempts.append(op)
+            raise OSError(errno.ENOLCK, "No locks available")
+
+        monkeypatch.setattr(fcntl, "flock", deny)
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        monkeypatch.setattr(sys, "argv", [
+            "raptor-run-feasibility", str(binary), str(findings),
+            str(tmp_path / "out"),
+        ])
+        with pytest.raises(SystemExit) as exc:
+            feasibility_mod.main()
+        assert exc.value.code == 1
+        assert "refusing" in capsys.readouterr().err.lower()
+        # Bounded retry happened; the findings file was never touched.
+        # (The final entry is the finally-block LOCK_UN.)
+        assert attempts.count(fcntl.LOCK_EX) == 3
+        assert findings.read_text() == before
+
+    def test_transient_flock_failure_recovers(
+            self, feasibility_mod, monkeypatch, tmp_path: Path):
+        import errno
+        import fcntl
+        import time
+
+        binary = tmp_path / "bin.elf"
+        binary.write_bytes(b"\x7fELF")
+        # No findings reference resolution needed: an empty findings
+        # group returns cleanly AFTER the lock is acquired.
+        findings = tmp_path / "findings.json"
+        findings.write_text('{"findings": []}', encoding="utf-8")
+        real_flock = fcntl.flock
+        state = {"n": 0}
+
+        def flaky(fd, op):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise OSError(errno.ENOLCK, "No locks available")
+            return real_flock(fd, op)
+
+        monkeypatch.setattr(fcntl, "flock", flaky)
+        monkeypatch.setattr(time, "sleep", lambda s: None)
+        monkeypatch.setattr(sys, "argv", [
+            "raptor-run-feasibility", str(binary), str(findings),
+            str(tmp_path / "out"),
+        ])
+        feasibility_mod.main()  # returns, no SystemExit
+        assert state["n"] >= 2

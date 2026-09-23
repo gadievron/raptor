@@ -174,13 +174,36 @@ def main():
     # serialises stage transitions, so this script's lock is
     # the only contended writer.
     import fcntl
+    import time
     lock_path = findings_path.with_suffix(".lock")
     with open(lock_path, "a+b") as findings_lock_fh:
         try:
-            try:
-                fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_EX)
-            except OSError as e:
-                print(f"WARNING: could not acquire flock on {lock_path}: {e} — proceeding without lock", file=sys.stderr)
+            # Failure to LOCK is failure to RUN: flock errors (ENOLCK
+            # — e.g. NFS without lockd) correlate with exactly the
+            # contended filesystems where the lock matters, and
+            # proceeding unlocked reopens the documented lost-update
+            # race. Bounded retry for transient hiccups, then fail —
+            # the stage orchestrator already tolerates per-binary
+            # failures.
+            lock_error = None
+            for attempt in range(3):
+                if attempt:
+                    time.sleep(0.5 * attempt)
+                try:
+                    fcntl.flock(findings_lock_fh.fileno(), fcntl.LOCK_EX)
+                    lock_error = None
+                    break
+                except OSError as e:
+                    lock_error = e
+            if lock_error is not None:
+                print(
+                    f"✗ could not acquire flock on {lock_path}: "
+                    f"{lock_error} — refusing to run the unlocked "
+                    "read-modify-write (a parallel instance's "
+                    "feasibility merge would be silently lost)",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
 
             findings_data = load_json(findings_path)
             if findings_data is None:
