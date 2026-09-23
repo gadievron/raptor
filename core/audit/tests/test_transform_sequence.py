@@ -478,3 +478,32 @@ class TestAllDuplicatesReported:
         names = " ".join(v.violation for v in dups)
         assert "custom_sanitize" in names
         assert "validate_input" in names
+
+
+class TestFuncHeaderQualifierRun:
+    def test_qualifier_word_run_is_fast(self):
+        """Hostile source line that is one long run of qualifier
+        words with no paren: the keyword and type loops overlap on
+        every word, so the unbounded spelling tried every split of
+        the run between them — worse than quadratic per line. The
+        bounded loops are linear."""
+        from core.audit.transform_sequence import _FUNC_HEADER_RE
+        from core.testing.wallclock import cpu_budget
+
+        with cpu_budget(1.0, what="qualifier-run header scan"):
+            assert _FUNC_HEADER_RE.match("static " * 40000) is None
+
+    def test_header_forms_still_match(self):
+        from core.audit.transform_sequence import _FUNC_HEADER_RE
+
+        for line, name in (
+            ("static int copy_data(char *p) {", "copy_data"),
+            ("func (s *Server) Handle(w http.ResponseWriter) {",
+             "Handle"),
+            ("  def process(self):", "process"),
+            ("export async function render(props) {", "render"),
+        ):
+            m = _FUNC_HEADER_RE.match(line)
+            assert m is not None, line
+            assert m.group(1) == name, line
+        assert _FUNC_HEADER_RE.match("log_msg(x);") is None
