@@ -418,7 +418,7 @@ Idempotent. Downstream consumers: `/validate` Stage B imports
 `has_taint_flow` via the understand bridge, pre-confirming B-3.1
 reachability. `/diagram` renders confirmed flows as solid edges.
 
-**[MAP-5j] Enrich with mechanically-extracted imports**
+**[MAP-5j] Enrich with mechanically-extracted imports** *(not yet on the settings allowlist — a permission prompt here is expected, not an error; do not fall back to manual enumeration)*
 
 After normalisation, populate the `imports` key from `checklist.json`'s
 per-file `call_graph.imports` data. Ground-truth module names extracted by
