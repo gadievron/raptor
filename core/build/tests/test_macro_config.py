@@ -146,14 +146,20 @@ def test_extract_build_tus_malformed_is_none(tmp_path):
 # --- hardened read: symlink refusal + byte budgets --------------------------
 
 
-def test_symlinked_compile_commands_refused(tmp_path):
-    real = tmp_path / "elsewhere.json"
-    real.write_text(json.dumps([{
+def test_symlinked_compile_commands_out_of_tree_refused(tmp_path):
+    # Containment gate: a symlink resolving outside the target is
+    # never read. In-tree symlinks (the clangd root-symlink layout)
+    # are accepted via their resolved path — see
+    # TestCompileCommandsCandidates below.
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps([{
         "file": "a.c", "directory": ".",
         "arguments": ["cc", "-DFOO", "-c", "a.c"],
     }]))
-    (tmp_path / "compile_commands.json").symlink_to(real)
-    mc = extract_macro_config(tmp_path)
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "compile_commands.json").symlink_to(outside)
+    mc = extract_macro_config(target)
     assert not mc
     assert mc.source == "absent"
 
@@ -274,3 +280,60 @@ class TestNestingBombs:
         self._plant(tmp_path, json.dumps(entries))
         mc = extract_macro_config(tmp_path)
         assert mc.is_defined("_FORTIFY_SOURCE") is True
+
+
+class TestCompileCommandsCandidates:
+    """The clangd root-symlink layout and candidate iteration."""
+
+    _ENTRIES = [{"directory": "/src", "file": "a.c",
+                 "command": "cc -D_FORTIFY_SOURCE=2 -DFEATURE_X a.c"}]
+
+    def _build_layout(self, tmp_path, root_symlink=True):
+        (tmp_path / "build").mkdir()
+        (tmp_path / "build" / "compile_commands.json").write_text(
+            json.dumps(self._ENTRIES))
+        if root_symlink:
+            import os
+            os.symlink("build/compile_commands.json",
+                       tmp_path / "compile_commands.json")
+
+    def test_root_symlink_layout_feeds_all_three_extractors(self, tmp_path):
+        """`ln -s build/compile_commands.json .` is the canonical
+        clangd layout; it used to zero macro config, hardening
+        evidence, and the TU set silently (root candidate won, the
+        O_NOFOLLOW read failed, the fallback was never tried)."""
+        from core.build.build_flags import extract_flags
+        from core.build.macro_config import extract_build_tus
+
+        self._build_layout(tmp_path)
+        mc = extract_macro_config(tmp_path)
+        assert mc.is_defined("FEATURE_X") is True
+        assert extract_flags(tmp_path).fortify_source_level == 2
+        tus = extract_build_tus(tmp_path)
+        assert tus is not None and any(t.endswith("a.c") for t in tus)
+
+    def test_out_of_tree_symlink_refused_fallback_still_wins(self, tmp_path):
+        """The acceptance is containment-gated: a symlink escaping
+        the target is skipped (INFO), and iteration still reaches the
+        real build/ candidate."""
+        import os
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        target = tmp_path / "repo"
+        target.mkdir()
+        (outside / "cc.json").write_text(json.dumps(
+            [{"file": "evil.c", "command": "cc -DEVIL evil.c"}]))
+        (target / "build").mkdir()
+        (target / "build" / "compile_commands.json").write_text(
+            json.dumps(self._ENTRIES))
+        os.symlink(outside / "cc.json",
+                   target / "compile_commands.json")
+        mc = extract_macro_config(target)
+        assert mc.is_defined("EVIL") is None      # never read
+        assert mc.is_defined("FEATURE_X") is True  # fallback used
+
+    def test_malformed_root_candidate_does_not_veto_fallback(self, tmp_path):
+        self._build_layout(tmp_path, root_symlink=False)
+        (tmp_path / "compile_commands.json").write_text("{not json")
+        mc = extract_macro_config(tmp_path)
+        assert mc.is_defined("FEATURE_X") is True

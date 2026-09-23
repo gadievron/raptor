@@ -500,16 +500,20 @@ def test_fifo_makefile_refused_gracefully(tmp_path):
     assert ctx.source == "absent"
 
 
-def test_symlinked_compile_commands_refused(tmp_path):
-    """The hardened reader opens with O_NOFOLLOW — a symlink at the
-    artifact path (which could point anywhere) is refused and the
-    extraction degrades."""
-    real = tmp_path / "elsewhere.json"
-    real.write_text(json.dumps([
+def test_symlinked_compile_commands_out_of_tree_refused(tmp_path):
+    """A symlink at the artifact path resolving OUTSIDE the target is
+    refused (containment gate) and the extraction degrades. In-tree
+    symlinks — the clangd `ln -s build/compile_commands.json .`
+    layout — are accepted via their resolved path instead (see
+    TestCompileCommandsCandidates in test_macro_config)."""
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps([
         {"file": "a.c", "command": "gcc -fstack-protector a.c"},
     ]))
-    (tmp_path / "compile_commands.json").symlink_to(real)
-    ctx = extract_flags(tmp_path)
+    target = tmp_path / "repo"
+    target.mkdir()
+    (target / "compile_commands.json").symlink_to(outside)
+    ctx = extract_flags(target)
     assert ctx.source == "absent"
 
 
