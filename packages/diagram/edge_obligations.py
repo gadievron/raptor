@@ -64,8 +64,16 @@ def generate(data: dict[str, Any]) -> str:
     for rec in tier1[:_MAX_TIER1]:
         a = _emit_node(rec.get("caller_file"), rec.get("caller"))
         b = _emit_node(rec.get("callee_file"), rec.get("callee"))
+        # Quote-delimited edge label (the context_map/graph_memory
+        # idiom) — this was the only generator using |"…"| pipe
+        # delimiters, where a bare `|` in the value may terminate
+        # Mermaid's edgeText even inside the quotes. Reasons quote
+        # tier-1 obligation text (target identifiers), so the pipe is
+        # additionally entity-escaped: neither delimiter question nor
+        # payload pipe survives to the parser.
         reason = _sanitize(str(rec.get("reason") or "tier1"))[:40]
-        lines.append(f'    {a} -->|"{reason}"| {b}')
+        reason = reason.replace("|", "&#124;")
+        lines.append(f'    {a} -- "{reason}" --> {b}')
     if len(tier1) > _MAX_TIER1:
         lines.append(
             f'    t1more["+{len(tier1) - _MAX_TIER1} more tier-1 edges"]')
@@ -73,7 +81,7 @@ def generate(data: dict[str, Any]) -> str:
     for rec in tier2[:_MAX_TIER2]:
         a = _emit_node(rec.get("caller_file"), rec.get("caller"))
         b = _emit_node(rec.get("callee_file"), rec.get("callee"))
-        lines.append(f"    {a} -.->|folded| {b}")
+        lines.append(f'    {a} -. "folded" .-> {b}')
     if len(tier2) > _MAX_TIER2:
         lines.append(
             f'    t2more["+{len(tier2) - _MAX_TIER2} more tier-2 edges"]')

@@ -23,8 +23,21 @@ def _data(n1=1, n2=1, blind=0, degraded=None):
 def test_tiers_render_solid_and_dashed():
     out = edge_obligations.generate(_data())
     assert out.startswith("flowchart LR")
-    assert '-->|"boundary:x"|' in out
-    assert "-.->|folded|" in out
+    # Quote-delimited edge-label forms (the context_map/graph_memory
+    # idiom): inside |…| pipes, an in-value `|` may terminate Mermaid's
+    # edgeText even when quoted — this generator was the only
+    # pipe-delimited user, and tier-1 reasons quote target identifiers.
+    assert '-- "boundary:x" -->' in out
+    assert '-. "folded" .->' in out
+    assert "|" not in out
+
+
+def test_pipe_in_reason_cannot_break_edge_label():
+    data = _data()
+    data["tier1"][0]["reason"] = "boundary:a|b"
+    out = edge_obligations.generate(data)
+    assert "|" not in out
+    assert "a&#124;b" in out
 
 
 def test_caps_are_stated_never_silent():
