@@ -38,7 +38,9 @@ E << kfree_double.E;
 
 import json, sys
 for _p1, _p2 in zip(p1, p2):
-    if _p1.line != _p2.line:
+    # drop SELF-pairings only (same position bound twice); a
+    # second free on the same LINE is still a real double free
+    if (_p1.line, _p1.column) != (_p2.line, _p2.column):
         _m = {"file": _p2.file, "line": int(_p2.line), "col": int(_p2.column),
               "line_end": int(_p2.line_end), "col_end": int(_p2.column_end),
               "rule": "double_free",
@@ -70,7 +72,9 @@ E << kfree_err_double.E;
 
 import json, sys
 for _p1, _p2 in zip(p1, p2):
-    if _p1.line != _p2.line:
+    # drop SELF-pairings only (same position bound twice); a
+    # second free on the same LINE is still a real double free
+    if (_p1.line, _p1.column) != (_p2.line, _p2.column):
         _m = {"file": _p2.file, "line": int(_p2.line), "col": int(_p2.column),
               "line_end": int(_p2.line_end), "col_end": int(_p2.column_end),
               "rule": "double_free",
@@ -96,7 +100,9 @@ E << free_double.E;
 
 import json, sys
 for _p1, _p2 in zip(p1, p2):
-    if _p1.line != _p2.line:
+    # drop SELF-pairings only (same position bound twice); a
+    # second free on the same LINE is still a real double free
+    if (_p1.line, _p1.column) != (_p2.line, _p2.column):
         _m = {"file": _p2.file, "line": int(_p2.line), "col": int(_p2.column),
               "line_end": int(_p2.line_end), "col_end": int(_p2.column_end),
               "rule": "double_free",
