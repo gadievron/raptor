@@ -273,3 +273,69 @@ def test_fetch_pack_unserialisable_yaml_fails_per_pack(
     )
     with pytest.raises(SystemExit, match=r"FAILED: security-audit"):
         mod.fetch_pack("security-audit")
+
+
+# --- incomplete update/fetch exit non-zero ----------------------------------
+
+
+def test_update_all_failed_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """An update that wrote 0/N packs must not exit 0 — operators and
+    CI key off the exit code, and a silent zero leaves the cache
+    stale."""
+    mod = _load_tool()
+    mod.CACHE_DIR = tmp_path / "cache"
+
+    def _down(req, timeout):
+        raise OSError("registry unreachable")
+
+    monkeypatch.setattr(mod, "urlopen", _down)
+    with pytest.raises(SystemExit) as ei:
+        mod.cmd_update(argparse.Namespace(packs="security-audit,jwt"))
+    assert ei.value.code == 1
+    assert "0/2" in capsys.readouterr().out
+
+
+def test_update_complete_exits_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mod = _load_tool()
+    mod.CACHE_DIR = tmp_path / "cache"
+    monkeypatch.setattr(
+        mod, "urlopen",
+        lambda req, timeout: _FakeResponse(b'{"rules": []}'),
+    )
+    # No SystemExit: both packs written.
+    mod.cmd_update(argparse.Namespace(packs="security-audit,jwt"))
+    assert (tmp_path / "cache" / "c.p.jwt.json").exists()
+
+
+def test_fetch_partial_failure_writes_bundle_but_exits_nonzero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """A partial fetch still writes the bundle (the fetched packs are
+    useful) but must exit non-zero and say the bundle is incomplete —
+    an airgap build that silently lacks packs is a coverage loss on
+    the far side."""
+    mod = _load_tool()
+
+    def _flaky(req, timeout):
+        if "jwt" in req.full_url:
+            raise OSError("registry reset")
+        return _FakeResponse(b'{"rules": []}')
+
+    monkeypatch.setattr(mod, "urlopen", _flaky)
+    out_zip = tmp_path / "bundle.zip"
+    with pytest.raises(SystemExit) as ei:
+        mod.cmd_fetch(argparse.Namespace(
+            packs="security-audit,jwt", output=str(out_zip),
+        ))
+    assert ei.value.code == 1
+    assert out_zip.exists()
+    with zipfile.ZipFile(out_zip) as zf:
+        assert "c.p.security-audit.json" in zf.namelist()
+        assert "c.p.jwt.json" not in zf.namelist()
+    assert "INCOMPLETE" in capsys.readouterr().out
