@@ -23,6 +23,11 @@ class _Response:
     status_code = 200
     text = "body"
 
+    def __init__(self, url: str = "https://api.github.com/stub") -> None:
+        # The GitHub client verifies the response's final URL stayed
+        # on the canonical API host, so the stub must model it.
+        self.url = url
+
     @staticmethod
     def raise_for_status() -> None:
         return None
@@ -40,7 +45,7 @@ class _RecordingSession:
 
     def get(self, url, **kwargs):
         self.calls.append(kwargs)
-        return _Response()
+        return _Response(url)
 
 
 _GITHUB_CALLS = [

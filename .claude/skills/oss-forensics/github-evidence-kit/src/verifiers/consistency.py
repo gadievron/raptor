@@ -319,15 +319,25 @@ class ConsistencyVerifier:
             return VerificationResult(is_valid=False, errors=["No file path specified"])
 
         ref = getattr(obs, "branch", None) or "HEAD"
+        errors: list[str] = []
         data = self.github_client.get_file(*repo_info, file_path, ref)
+
+        # Echo check: the response must describe the path the
+        # observation claims (mirrors the commit/release legs). A
+        # response that resolves to some other object — whatever URL
+        # trickery produced it — must not verify the record.
+        actual_path = data.get("path")
+        if actual_path != file_path:
+            errors.append(
+                f"Path mismatch: expected {file_path}, got {actual_path}")
 
         if hasattr(obs, "content_hash") and obs.content_hash:
             raw = data.get("content", "")
             content = base64.b64decode(raw).decode("utf-8", errors="replace") if raw else ""
             if obs.content_hash != hashlib.sha256(content.encode()).hexdigest():
-                return VerificationResult(is_valid=False, errors=["Content hash mismatch"])
+                errors.append("Content hash mismatch")
 
-        return VerificationResult(is_valid=True, errors=[])
+        return VerificationResult(is_valid=len(errors) == 0, errors=errors)
 
     def _verify_branch(self, obs: Observation) -> VerificationResult:
         """Verify branch against GitHub API."""
@@ -339,14 +349,23 @@ class ConsistencyVerifier:
         if not branch_name:
             return VerificationResult(is_valid=False, errors=["No branch name specified"])
 
+        errors: list[str] = []
         data = self.github_client.get_branch(*repo_info, branch_name)
+
+        # Echo check: the response must name the branch the
+        # observation claims (mirrors the commit/release legs).
+        actual_name = data.get("name")
+        if actual_name != branch_name:
+            errors.append(
+                f"Branch name mismatch: expected {branch_name}, got {actual_name}")
 
         if hasattr(obs, "head_sha") and obs.head_sha:
             actual = data.get("commit", {}).get("sha")
             if obs.head_sha != actual:
-                return VerificationResult(is_valid=False, errors=[f"HEAD SHA mismatch: expected {obs.head_sha}, got {actual}"])
+                errors.append(
+                    f"HEAD SHA mismatch: expected {obs.head_sha}, got {actual}")
 
-        return VerificationResult(is_valid=True, errors=[])
+        return VerificationResult(is_valid=len(errors) == 0, errors=errors)
 
     def _verify_tag(self, obs: Observation) -> VerificationResult:
         """Verify tag against GitHub API."""
@@ -358,14 +377,24 @@ class ConsistencyVerifier:
         if not tag_name:
             return VerificationResult(is_valid=False, errors=["No tag name specified"])
 
+        errors: list[str] = []
         data = self.github_client.get_tag(*repo_info, tag_name)
+
+        # Echo check: the response ref must name the tag the
+        # observation claims (mirrors the commit/release legs).
+        actual_ref = data.get("ref")
+        expected_ref = f"refs/tags/{tag_name}"
+        if actual_ref != expected_ref:
+            errors.append(
+                f"Tag ref mismatch: expected {expected_ref}, got {actual_ref}")
 
         if hasattr(obs, "target_sha") and obs.target_sha:
             actual = data.get("object", {}).get("sha")
             if obs.target_sha != actual:
-                return VerificationResult(is_valid=False, errors=[f"Target SHA mismatch: expected {obs.target_sha}, got {actual}"])
+                errors.append(
+                    f"Target SHA mismatch: expected {obs.target_sha}, got {actual}")
 
-        return VerificationResult(is_valid=True, errors=[])
+        return VerificationResult(is_valid=len(errors) == 0, errors=errors)
 
     def _verify_release(self, obs: Observation) -> VerificationResult:
         """Verify release against GitHub API."""
