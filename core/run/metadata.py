@@ -296,23 +296,36 @@ def _harness_session_id() -> str | None:
 def _session_alive_for_meta(meta: dict) -> bool:
     """Is the session that owns this run metadata still alive?
 
+    Boolean projection of :func:`_session_liveness_for_meta` —
+    ``foreign`` (unverifiable) reads as alive: the fail-open direction
+    for sweeps (skip rather than fail a run they cannot judge). The
+    contention GATE consumes the tri-state directly so an unverifiable
+    holder does not block new runs forever.
+    """
+    return _session_liveness_for_meta(meta) != "dead"
+
+
+def _session_liveness_for_meta(meta: dict) -> str:
+    """Liveness verdict for the session that owns this run metadata:
+    ``"alive"`` / ``"dead"`` / ``"foreign"`` (unverifiable).
+
     Stamped metadata (``session_start`` + ``session_boot_id``) gets the
     full identity check: a live claude process at the recorded pid with
     a MISMATCHING stamp is a recycled pid — the owner is dead. Foreign
     stamps (other boot / machine / pid namespace) are unverifiable here
-    and read as ALIVE — the fail-open direction: sweeps skip rather
-    than fail a run they cannot judge, and the gate preserves
-    contention. Exception: a stamp from a PRIOR BOOT of this same
-    machine (``session_machine_id`` matches, boot_id differs) is
-    provably dead — see ``_prior_boot_entry``. Unstamped (pre-series)
-    metadata keeps the legacy comm-checked ``_pid_alive`` — also
-    fail-open.
+    and return ``"foreign"`` — consumers choose the fail direction
+    (sweeps treat it as alive; the contention gate applies an age
+    ceiling, see ``_live_conflicting_run``). Exception: a stamp from a
+    PRIOR BOOT of this same machine (``session_machine_id`` matches,
+    boot_id differs) is provably dead — see ``_prior_boot_entry``.
+    Unstamped (pre-series) metadata keeps the legacy comm-checked
+    ``_pid_alive`` — alive/dead only, never foreign.
     """
     pid = meta.get("session_pid")
     if isinstance(pid, str) and pid.isascii() and pid.isdigit():
         pid = int(pid)  # stringified pid: read like the hooks do
     if not isinstance(pid, int) or isinstance(pid, bool):
-        return False
+        return "dead"
     start = meta.get("session_start")
     boot = meta.get("session_boot_id")
     if start and boot:
@@ -333,10 +346,11 @@ def _session_alive_for_meta(meta: dict) -> bool:
             # permanent status=running zombies that also held the
             # project run-contention gate.
             if _sessions._prior_boot_entry(fields):
-                return False  # prior boot of this machine — dead
-            return True  # unverifiable — fail open
-        return _sessions._identity_matches(pid, fields)
-    return _pid_alive(pid)
+                return "dead"  # prior boot of this machine — dead
+            return "foreign"  # unverifiable
+        return ("alive" if _sessions._identity_matches(pid, fields)
+                else "dead")
+    return "alive" if _pid_alive(pid) else "dead"
 
 
 def _pid_alive(pid: int) -> bool:
@@ -535,6 +549,35 @@ def _gate_session_alive(pid: int) -> bool:
     return "claude" in comm
 
 
+# Gate-side age ceiling for FOREIGN-stamped running markers (see the
+# _live_conflicting_run docstring for the two-direction trade-off).
+_FOREIGN_HOLDER_CONTENTION_CEILING_S = 24 * 3600
+
+
+def _foreign_holder_past_ceiling(run_dir: Path, meta: dict) -> bool:
+    """True when a foreign-stamped running marker is past the gate's
+    contention ceiling AND its run dir shows no recent write activity.
+
+    A missing or unparseable timestamp counts as past the ceiling —
+    a forged marker must not earn a longer hold by omitting the field
+    the ceiling reads; the activity probe still protects a genuinely
+    live run (it keeps writing).
+    """
+    if _run_recently_active(run_dir):
+        return False
+    ts_str = meta.get("timestamp")
+    if isinstance(ts_str, str):
+        try:
+            started = datetime.fromisoformat(ts_str)
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            age_s = (datetime.now(timezone.utc) - started).total_seconds()
+            return age_s >= _FOREIGN_HOLDER_CONTENTION_CEILING_S
+        except ValueError:
+            pass
+    return True
+
+
 def _live_conflicting_run(project_dir: Path, self_dir: Path,
                           self_session_pid: int | None) -> dict | None:
     """Find a sibling run that makes a new start contention.
@@ -551,7 +594,26 @@ def _live_conflicting_run(project_dir: Path, self_dir: Path,
     * same session — parallel runs from one session stay legal (the
       `_cleanup_abandoned` freshness doctrine already supports them);
     * no recorded pid (legacy metadata) — unverifiable; never block on
-      what can't be checked.
+      what can't be checked;
+    * import-restored run (``IMPORTED_RUN_MARKER_FILE`` present) — the
+      marker's ``status=running`` describes a session on the EXPORTING
+      machine, never one this gate could be protecting (and a forged
+      archive gains nothing by self-labelling imported: skipping only
+      DECLINES the contention it was trying to mint);
+    * FOREIGN-stamped holder (other machine / pid namespace —
+      unverifiable here) past the age ceiling with a write-quiet run
+      dir. Without the ceiling one child-rewritten or hand-planted
+      marker held the gate FOREVER (the sweeps deliberately fail open
+      on foreign stamps and never clear it): a permanent
+      denial-of-service on every future run in the project. Ceiling
+      trade-offs both directions: too SHORT and a genuinely live
+      cross-machine run on a shared filesystem loses its contention
+      protection mid-flight (the activity probe absorbs most of this
+      — a live run keeps writing); too LONG and a planted marker
+      denies the project for that whole window. 24h covers the
+      longest legitimate runs observed while bounding the DoS; the
+      sweeps stay fail-open (the run keeps ``status=running`` and its
+      dir; only the GATE stops honouring it).
     """
     self_name = Path(self_dir).name
     try:
@@ -578,11 +640,28 @@ def _live_conflicting_run(project_dir: Path, self_dir: Path,
             continue
         if self_session_pid is not None and owner == self_session_pid:
             continue
+        try:
+            from core.project.findings_utils import run_is_imported
+            if run_is_imported(d):
+                continue  # restored marker — see the docstring bullet
+        except OSError:
+            pass
         # Stamped metadata gets the identity check (a recycled claude
         # pid must not hold contention forever); unstamped falls back
         # to the gate's EPERM-aware comm probe.
         if meta.get("session_start") and meta.get("session_boot_id"):
-            if not _session_alive_for_meta(meta):
+            liveness = _session_liveness_for_meta(meta)
+            if liveness == "dead":
+                continue
+            if (liveness == "foreign"
+                    and _foreign_holder_past_ceiling(d, meta)):
+                logger.warning(
+                    "run contention gate: ignoring foreign-stamped "
+                    "running marker in %s — older than the %dh "
+                    "contention ceiling and write-quiet (the marker "
+                    "is left untouched)",
+                    d.name, _FOREIGN_HOLDER_CONTENTION_CEILING_S // 3600,
+                )
                 continue
         elif not _gate_session_alive(owner):
             continue

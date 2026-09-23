@@ -346,3 +346,58 @@ class TestImportedProvenanceRefsNamespaced(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestImportedLivenessNeutralised(unittest.TestCase):
+    """A restored ``status=running`` marker described a session on the
+    EXPORTING machine (or a forged claim). Restored verbatim, its
+    foreign stamp read fail-open alive forever — a permanent
+    contention holder no sweep could clear. Import neutralises it."""
+
+    def test_running_marker_becomes_interrupted_and_unstamped(self):
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            src = d / "src" / "myproj"
+            run = src / "agentic-20260101-000000"
+            run.mkdir(parents=True)
+            (run / ".raptor-run.json").write_text(json.dumps({
+                "version": 2, "command": "agentic",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "status": "running",
+                "session_pid": 4194000, "tool_pid": 4194001,
+                "session_start": "123456",
+                "session_boot_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeffff0000",
+                "session_pidns": "999999999",
+                "session_machine_id": "0" * 64,
+                "session_id": "01234567-89ab-cdef-0123-456789abcdef",
+            }))
+            imported_root = _import_archive(d, src)
+            meta = json.loads(
+                (imported_root / "agentic-20260101-000000"
+                 / ".raptor-run.json").read_text())
+            self.assertEqual(meta["status"], "interrupted")
+            self.assertIs(meta["import_liveness_neutralised"], True)
+            for stamp in ("session_pid", "tool_pid", "session_start",
+                          "session_boot_id", "session_pidns",
+                          "session_machine_id", "session_id"):
+                self.assertNotIn(stamp, meta)
+
+    def test_terminal_statuses_restored_verbatim(self):
+        # Two-direction: only non-terminal liveness is neutralised.
+        with TemporaryDirectory() as td:
+            d = Path(td)
+            src = d / "src" / "myproj"
+            run = src / "scan-20260101-000000"
+            run.mkdir(parents=True)
+            (run / ".raptor-run.json").write_text(json.dumps({
+                "version": 2, "command": "scan",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "status": "completed",
+                "session_pid": 4194000,
+            }))
+            imported_root = _import_archive(d, src)
+            meta = json.loads(
+                (imported_root / "scan-20260101-000000"
+                 / ".raptor-run.json").read_text())
+            self.assertEqual(meta["status"], "completed")
+            self.assertNotIn("import_liveness_neutralised", meta)
