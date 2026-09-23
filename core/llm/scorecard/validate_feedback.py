@@ -31,6 +31,7 @@ from typing import Any
 
 from . import _MAX_REASONING_CHARS
 from ._batch import record_event_batch
+from .cwe import audit_decision_class
 from .scorecard import EventType, ModelScorecard
 
 logger = logging.getLogger(__name__)
@@ -39,12 +40,13 @@ _POSITIVE_VERDICTS = frozenset({"finding", "suspicious"})
 
 
 def _decision_class(cwe: str | None) -> str:
-    cwe = (cwe or "").strip().upper()
-    if cwe:
-        return f"audit:{cwe}"
-    # Keep in sync with core.audit.calibrated_merge.DEFAULT_DECISION_CLASS
-    # (not imported — core/llm must not depend on core/audit).
-    return "audit:review"
+    # One grammar with the calibrated-merge reader (which
+    # regex-extracts CWE-N precisely because journal-derived CWE text
+    # carries suffixes): a whole-string mint like
+    # "audit:CWE-89: SQL INJECTION" creates cells the reliability
+    # weight query never joins, silently keeping the merge
+    # prior-dominated.
+    return audit_decision_class(cwe)
 
 
 def classify_outcome(

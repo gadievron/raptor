@@ -2207,13 +2207,19 @@ def _record_scorecard(
     if not model or not results:
         return
     try:
+        from core.llm.scorecard.cwe import extract_cwe
         from core.llm.scorecard.paths import default_scorecard_path
         from core.llm.scorecard.scorecard import EventType, ModelScorecard
         scorecard = ModelScorecard(default_scorecard_path())
         for r in results:
             if r.get("actual") == "error":
                 continue
-            decision_class = f"audit:{r['bug_class']}"
+            # CWE-shaped bug classes normalise through the shared
+            # grammar so the calibrated-merge reader joins them
+            # (case/suffix spellings otherwise mint orphan cells);
+            # non-CWE bug classes keep their raw offline-research key.
+            cwe_tag = extract_cwe(r["bug_class"])
+            decision_class = f"audit:{cwe_tag or r['bug_class']}"
             outcome = "correct" if r.get("match") else "incorrect"
             sample = None
             if outcome == "incorrect":
