@@ -484,23 +484,75 @@ def _is_under_projects_base(directory: Path) -> bool:
 _DOC_MAX_BYTES = 8192
 _BATCH_WALL_TIMEOUT = 660  # seconds — abandon a hung API call.
 
-# Per-call output ceiling for Phase 2 batch calls. Study extraction is
-# a structured task, not open-ended reasoning: a batch's concepts fit
-# comfortably in this budget, and capping it keeps generation time on
-# slow/thinking models inside BOTH this module's wall timeout and the
-# provider's non-streaming request limit (Anthropic aborts ~10-minute
-# non-streaming requests; with a 128k ceiling a thinking model's batch
-# generation blew straight through it — observed live as
-# 'Request timed out ... long-requests' on every batch). Tunable via
-# RAPTOR_STUDY_MAX_OUTPUT_TOKENS; if a batch truncates at the cap,
-# shrink --batch-target rather than raising it past the transport
-# limits.
-def _study_max_output_tokens() -> int:
+# Per-call TEXT output budget for Phase 2 batch calls. Study
+# extraction is a structured task, not open-ended reasoning: a batch's
+# concepts fit comfortably in this budget, and capping it keeps
+# generation time on slow/thinking models inside BOTH this module's
+# wall timeout and the provider's non-streaming request limit
+# (Anthropic aborts ~10-minute non-streaming requests; with a 128k
+# ceiling a thinking model's batch generation blew straight through
+# it — observed live as 'Request timed out ... long-requests' on every
+# batch). Tunable via RAPTOR_STUDY_MAX_OUTPUT_TOKENS; if a batch
+# truncates at the cap, shrink --batch-target rather than raising it
+# past the transport limits.
+def _study_text_output_tokens() -> int:
     import os
     try:
         return int(os.environ.get("RAPTOR_STUDY_MAX_OUTPUT_TOKENS", "16384"))
     except ValueError:
         return 16384
+
+
+def _study_max_output_tokens(model_name: str | None = None) -> int:
+    """Request-level ``max_tokens`` for one study call.
+
+    The text budget above, plus equal thinking headroom on models
+    whose reasoning bills inside ``max_tokens`` with no per-request
+    cap (``thinking_shares_output_budget``; where thinking is off the
+    headroom goes unused and costs nothing). Both directions of this
+    threshold hurt, and both were observed live:
+
+    * Too LOW: on that tier a ceiling sized for the
+      text alone is consumed entirely by reasoning on large study
+      prompts — the turn ends at stop_reason=max_tokens with a
+      thinking-only content list, a full-price call with zero yield,
+      deterministic on retry (one run failed >90% of its study calls
+      this way for hours). The doubled ceiling gives reasoning the
+      text budget's worth of headroom while keeping the text floor.
+    * Too HIGH: generation time at the ceiling must stay inside
+      _BATCH_WALL_TIMEOUT (660s) and, on non-SSE surfaces where the
+      per-call stream opt-in degrades to plain create, the provider's
+      ~10-minute non-streaming abort. At the ~65 tok/s generation
+      rate observed on the reasoning tier, 2x16384 = 32768 tokens is
+      ~500s worst-case — inside both walls; the pre-cap 128k ceiling
+      timed out on every batch.
+
+    The env override sets the TEXT budget (it also sizes the batch
+    ceiling below); the thinking headroom scales with it.
+    """
+    text = _study_text_output_tokens()
+    if model_name:
+        try:
+            from core.llm.providers import thinking_shares_output_budget
+            if thinking_shares_output_budget(model_name):
+                return text * 2
+        except ImportError:
+            pass
+    return text
+
+
+def _client_model_name(llm_client: Any) -> str:
+    """Primary model name of *llm_client*, or '' when undeterminable.
+
+    Duplicated inline resolution collapsed here: the output-budget
+    floor and the parallelism derivation both key on the model.
+    """
+    model_name = getattr(llm_client, "model", None)
+    if not isinstance(model_name, str):
+        cfg = getattr(llm_client, "config", None)
+        pm = getattr(cfg, "primary_model", None)
+        model_name = getattr(pm, "model_name", "") if pm else ""
+    return model_name if isinstance(model_name, str) else ""
 # Must exceed the slowest per-call transport timeout (claudecode
 # fallback: 600s) or healthy-but-slow CLI calls get abandoned here
 # after their tokens were already billed.
@@ -525,8 +577,12 @@ def _phase2_batch_ceiling() -> int:
     response fits under the cap it is generated against — sized at
     call time because the budget is env-tunable.
     """
+    # TEXT budget, not the request ceiling: on always-thinking models
+    # the extra request headroom is for reasoning, and letting it
+    # admit more items per batch would grow the required TEXT output
+    # past the share actually reserved for it.
     return max(
-        1, _study_max_output_tokens() // _PHASE2_ITEM_OUTPUT_TOKENS_EST,
+        1, _study_text_output_tokens() // _PHASE2_ITEM_OUTPUT_TOKENS_EST,
     )
 
 
@@ -2816,7 +2872,8 @@ def _run_one_batch(
             result_q.put(("ok", llm_client.generate_structured(
                 prompt, _RESPONSE_SCHEMA,
                 system_prompt=_SYSTEM_PROMPT, task_type="study",
-                max_tokens=_study_max_output_tokens(),
+                max_tokens=_study_max_output_tokens(
+                    _client_model_name(llm_client)),
                 # Study batches are the canonical long structured
                 # call — per-call streaming opt-in (SSE-capable
                 # surfaces honour it, others ignore it).
@@ -3084,7 +3141,7 @@ def run_phase2(
             "Phase 2: batch_target %d exceeds the output-budget "
             "ceiling %d (%d-token response budget / ~%d tokens per "
             "item) — clamping",
-            batch_target, ceiling, _study_max_output_tokens(),
+            batch_target, ceiling, _study_text_output_tokens(),
             _PHASE2_ITEM_OUTPUT_TOKENS_EST,
         )
         batch_target = ceiling
@@ -3092,13 +3149,7 @@ def run_phase2(
     batches = _cluster_items(in_scope, deps, batch_target=batch_target)
 
     from core.llm.concurrency import derive_max_workers
-    model_name = getattr(llm_client, "model", None)
-    if not isinstance(model_name, str):
-        cfg = getattr(llm_client, "config", None)
-        pm = getattr(cfg, "primary_model", None)
-        model_name = getattr(pm, "model_name", "") if pm else ""
-    if not isinstance(model_name, str):
-        model_name = ""
+    model_name = _client_model_name(llm_client)
     max_workers = derive_max_workers(model_name) if model_name else 1
     max_workers = min(max_workers, len(batches))
 
@@ -4173,7 +4224,8 @@ def _derive_threat_frame_invariants(
             prompt, _THREAT_FRAME_SCHEMA,
             system_prompt=_THREAT_FRAME_SYSTEM_PROMPT,
             task_type="study",
-            max_tokens=_study_max_output_tokens(),
+            max_tokens=_study_max_output_tokens(
+                _client_model_name(llm_client)),
             stream=True,
         )
         from core.llm.coerce import structured_result
