@@ -220,6 +220,46 @@ _DIR_PREFIXES = (
     # contract as raptor-coord-isolation- above.
     "raptor-pdsig-",
     "raptor-hifd-",
+    # --- Derivation-swept production scratch (one block) -----------
+    # Every prefix below was found by the mechanical mkdtemp /
+    # TemporaryDirectory sweep over production call sites (the census
+    # test derives the same set and asserts coverage — a NEW
+    # uncovered prefix fails there instead of stranding scratch
+    # forever). All are cleaned on exit paths only (finally blocks,
+    # context-manager __exit__, GC): SIGKILL and OOM skip every exit
+    # path, so cross-process reclamation needs the static entry. The
+    # age floor plus the in-use probes keep live dirs safe; each name
+    # is distinctly tool-scoped, so the prefix match cannot claim an
+    # operator's own files.
+    "audit-codeql-",
+    "binmatch-precision-",
+    "codeql-sweep-",
+    "codeql-warmup-",
+    "ghsa-resolve-",
+    "hv_sandbox_",
+    "raptor-bo-edges-",
+    "raptor-bo-stream-",
+    "raptor-bq-",
+    "raptor-describe-",
+    "raptor-doctor-probe-",
+    "raptor-feas-seccomp-",
+    "raptor-gcov-",
+    "raptor-joern-uds-",
+    "raptor-ls-remote-",
+    "raptor-resolver-home-",
+    "raptor-sca-",
+    "raptor-symex-",
+    "raptor_cc_probe_",
+    "raptor_dc_",
+    "raptor_fm_",
+    "raptor_gt_",
+    "raptor_pg_",
+    "raptor_selftest_",
+    "raptor_study_probe_",
+    "recall-sarif-chunks-",
+    "sanitizer-cut-precision-",
+    "semgrep-sbx-",
+    "source_intel_rules_",
 )
 
 # Third-party scratch names carry no RAPTOR marker and end in a bare
