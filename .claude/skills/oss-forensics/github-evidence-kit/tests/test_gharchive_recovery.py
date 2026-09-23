@@ -201,6 +201,56 @@ class TestRecoverIssueThroughClient:
         names = _param_names(stub.job_configs[0])
         assert "hour" in names and "minute" in names
 
+    def test_recover_issue_matches_string_numbered_row(self, monkeypatch):
+        """Pre-2015 GH Archive rows carry numbers as JSON strings — a
+        string-numbered row silently missed the == comparison and
+        recovery reported a false "not found"."""
+        timestamp = "2025-07-13T07:52:37Z"
+        payload = {
+            "action": "opened",
+            "issue": {
+                "number": "42",
+                "state": "open",
+                "title": "Deleted issue title",
+                "body": "b",
+                "created_at": "2025-07-13T07:52:37Z",
+                "user": {"login": "reporter"},
+            },
+        }
+        row = _bq_row(
+            created_at=datetime(2025, 7, 13, 7, 52, 37, tzinfo=timezone.utc),
+            payload=payload,
+            event_type="IssuesEvent",
+            actor_login="reporter",
+        )
+        client, _ = _client_with_rows(monkeypatch, [row])
+        obs = GHArchiveCollector(client).recover_issue("owner/repo", 42, timestamp)
+        assert obs.issue_number == 42
+
+    def test_recover_commit_skips_sha_less_commit_entry(self, monkeypatch):
+        """One malformed commits[] entry (no sha) must skip that entry,
+        not abort the whole recovery with a KeyError."""
+        timestamp = "2025-07-13T07:52:37Z"
+        payload = {
+            "ref": "refs/heads/main",
+            "commits": [
+                {"message": "corrupt entry, no sha"},
+                {"sha": "a" * 40,
+                 "message": "real commit",
+                 "author": {"name": "n", "email": "e@example.org"}},
+            ],
+        }
+        row = _bq_row(
+            created_at=datetime(2025, 7, 13, 7, 52, 37, tzinfo=timezone.utc),
+            payload=payload,
+            event_type="PushEvent",
+            actor_login="reporter",
+        )
+        client, _ = _client_with_rows(monkeypatch, [row])
+        obs = GHArchiveCollector(client).recover_commit(
+            "owner/repo", "a" * 40, timestamp)
+        assert obs.sha == "a" * 40
+
     def test_recover_issue_not_found_raises(self, monkeypatch):
         client, _ = _client_with_rows(monkeypatch, [])
         with pytest.raises(ValueError, match="not found in GH Archive"):

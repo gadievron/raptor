@@ -60,20 +60,24 @@ def _try_parse_datetime(dt_str: str) -> datetime | None:
 
 
 def parse_datetime_lenient(dt_str: Any) -> datetime:
-    """Parse datetime with fallback to now.
+    """Parse a GH Archive timestamp, accepting the archive's several
+    formats.
 
-    Lenient parsing for GH Archive data where dates might be malformed.
-    Returns current UTC time if parsing fails.
+    Raises ValueError when the value is missing or unparseable: the
+    old fallback returned ``datetime.now()``, minting COLLECTION-time
+    timestamps onto forensic events from malformed rows — and the
+    fabricated time then also derived the wrong BigQuery table for
+    verification. A row whose timestamp cannot be read must fail the
+    row, never invent evidence.
     """
-    if dt_str is None:
-        return datetime.now(timezone.utc)
     if isinstance(dt_str, datetime):
         return dt_str
     if isinstance(dt_str, str):
         result = _try_parse_datetime(dt_str)
         if result:
             return result
-    return datetime.now(timezone.utc)
+    msg = f"unparseable GH Archive timestamp: {dt_str!r}"
+    raise ValueError(msg)
 
 
 def parse_datetime_strict(dt_str: str | datetime | None) -> datetime | None:

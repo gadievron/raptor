@@ -8,6 +8,7 @@ Each parser extracts structured data from raw GH Archive JSON payloads.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from .helpers import (
@@ -98,10 +99,15 @@ class _RowContext:
 
         self.repository = make_repo_from_full_name(repo_name)
 
-        # Determine table from timestamp if not provided
+        # Determine table from timestamp if not provided. Completed
+        # years use the year table; the CURRENT year's year-table is
+        # still being filled, so recent events use the month table.
+        # Derived from today's date — a hardcoded boundary year froze
+        # this decision in time and sent post-boundary events to
+        # month tables forever.
         if not table and self.when:
             year = self.when.year
-            if year < 2025:
+            if year < datetime.now(timezone.utc).year:
                 table = f"githubarchive.year.{year}"
             else:
                 month = self.when.strftime("%Y%m")

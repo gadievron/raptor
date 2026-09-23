@@ -82,6 +82,23 @@ def _parse_query_timestamp(timestamp: str) -> tuple[datetime, bool]:
     return parsed.astimezone(timezone.utc), len(ts) == 10 and ts.count("-") == 2
 
 
+def _as_int(value: object) -> int | None:
+    """GH Archive numerics are JSON numbers on modern rows, strings on
+    some pre-2015 rows — a string-numbered issue/PR row silently
+    missed the ``== number`` comparison. Mirrors the verifier's
+    coercion (verifiers/consistency._num)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value.strip())
+        except ValueError:
+            return None
+    return None
+
+
 def _timestamp_matches(timestamp: str, row_created_at: object) -> bool:
     """True when a BigQuery row's ``created_at`` falls at the caller's
     recovery timestamp.
@@ -245,9 +262,14 @@ class GHArchiveCollector:
 
             payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
             for commit in payload.get("commits", []):
-                if commit["sha"].startswith(sha) or sha.startswith(commit["sha"]):
+                # .get, not [..]: one malformed commit entry (no sha)
+                # must skip that entry, not abort the whole recovery.
+                row_sha = commit.get("sha") if isinstance(commit, dict) else None
+                if not isinstance(row_sha, str) or not row_sha:
+                    continue
+                if row_sha.startswith(sha) or sha.startswith(row_sha):
                     return CommitObservation(
-                        evidence_id=generate_evidence_id("commit-gharchive", repo, commit["sha"]),
+                        evidence_id=generate_evidence_id("commit-gharchive", repo, row_sha),
                         original_when=parse_datetime_strict(row["created_at"]),
                         original_who=make_actor(commit.get("author", {}).get("name", "")),
                         original_what=commit.get("message", "").split("\n")[0],
@@ -260,7 +282,7 @@ class GHArchiveCollector:
                             bigquery_table=f"githubarchive.day.{date}",
                             query=f"repo.name='{repo}' AND type='PushEvent' AND created_at='{timestamp}'",
                         ),
-                        sha=commit["sha"],
+                        sha=row_sha,
                         message=commit.get("message", ""),
                         author=CommitAuthor(
                             name=commit.get("author", {}).get("name", ""),
@@ -343,7 +365,7 @@ class GHArchiveCollector:
             payload = json.loads(row["payload"]) if isinstance(row["payload"], str) else row["payload"]
             item = payload.get(payload_key, {})
 
-            if item.get("number") == number and _timestamp_matches(
+            if _as_int(item.get("number")) == number and _timestamp_matches(
                 timestamp, row.get("created_at"),
             ):
                 state = item.get("state", "open")
