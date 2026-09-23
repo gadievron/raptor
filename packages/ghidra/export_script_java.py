@@ -271,16 +271,40 @@ public class ExportRaptor extends GhidraScript {
         return arr;
     }
 
-    private JsonArray exportComments(Program program) {
+    private JsonArray exportComments(Program program) throws Exception {
         JsonArray arr = new JsonArray();
         Listing listing = program.getListing();
         FunctionManager fm = program.getFunctionManager();
 
-        CommentType[] commentTypes = {
-            CommentType.EOL, CommentType.PLATE,
-            CommentType.PRE, CommentType.POST,
-        };
         String[] kindNames = {"eol", "plate", "pre", "post"};
+        // Comment API via reflection: newer Ghidra has the CommentType
+        // enum (getComment(CommentType)); older releases have int
+        // constants on CodeUnit (getComment(int)). A STATIC reference
+        // to either generation fails to COMPILE on the other, killing
+        // the whole sandboxed export while the version gate passes it
+        // — reflection compiles everywhere and binds at run time
+        // (same split the Python side handles with ImportError
+        // fallbacks in bridge/session/server_worker).
+        Object[] typeArgs = new Object[4];
+        java.lang.reflect.Method getComment;
+        try {
+            Class<?> ct = Class.forName(
+                "ghidra.program.model.listing.CommentType");
+            String[] enumNames = {"EOL", "PLATE", "PRE", "POST"};
+            for (int i = 0; i < 4; i++) {
+                typeArgs[i] = ct.getField(enumNames[i]).get(null);
+            }
+            getComment = CodeUnit.class.getMethod("getComment", ct);
+        } catch (ReflectiveOperationException e) {
+            String[] fieldNames = {"EOL_COMMENT", "PLATE_COMMENT",
+                                   "PRE_COMMENT", "POST_COMMENT"};
+            for (int i = 0; i < 4; i++) {
+                typeArgs[i] = CodeUnit.class.getField(fieldNames[i])
+                    .get(null);
+            }
+            getComment = CodeUnit.class.getMethod("getComment",
+                                                  int.class);
+        }
 
         CodeUnitIterator it = listing.getCodeUnits(true);
         while (it.hasNext() && !monitor.isCancelled()) {
@@ -289,8 +313,8 @@ public class ExportRaptor extends GhidraScript {
             Function func = fm.getFunctionContaining(addr);
             String funcName = func != null ? func.getName() : null;
 
-            for (int i = 0; i < commentTypes.length; i++) {
-                String text = cu.getComment(commentTypes[i]);
+            for (int i = 0; i < 4; i++) {
+                String text = (String) getComment.invoke(cu, typeArgs[i]);
                 if (text != null) {
                     JsonObject c = new JsonObject();
                     c.addProperty("address", addr.getOffset());
