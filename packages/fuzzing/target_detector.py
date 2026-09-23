@@ -58,6 +58,15 @@ _KNOWN_MACHO_CPU_TYPES = {
 }
 
 
+# C-family source extensions — ONE set consumed by BOTH the file-mode
+# branches and the directory walk. These were hand-copied per mode and
+# drifted: the directory set lacked .cxx/.hh/.hxx, so a pure-.cxx tree
+# detected `unknown` while any single such file detected `source-cpp`.
+_C_SOURCE_EXTS = frozenset({".c", ".h"})
+_CPP_SOURCE_EXTS = frozenset({".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx"})
+_C_FAMILY_EXTS = _C_SOURCE_EXTS | _CPP_SOURCE_EXTS
+
+
 @dataclass
 class TargetInfo:
     """What we determined about a target."""
@@ -145,7 +154,7 @@ def _detect_file(path: Path) -> TargetInfo:
             return archive
 
     # Source code by extension
-    if suffix in (".c", ".h"):
+    if suffix in _C_SOURCE_EXTS:
         return TargetInfo(
             path=path, kind="source-c",
             description="C source/header file",
@@ -155,7 +164,7 @@ def _detect_file(path: Path) -> TargetInfo:
                 "Or pass the directory containing this file to fuzz the whole library.",
             ],
         )
-    if suffix in (".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx"):
+    if suffix in _CPP_SOURCE_EXTS:
         return TargetInfo(
             path=path, kind="source-cpp",
             description="C++ source/header file",
@@ -211,7 +220,11 @@ def _looks_like_fat_macho(path: Path, magic: bytes) -> bool:
 def _detect_zip_artifact(path: Path) -> TargetInfo | None:
     try:
         with zipfile.ZipFile(path) as zf:
-            members = set(zf.namelist()[:10000])
+            # Slice the (already-parsed) infolist rather than calling
+            # namelist(), which materialises a name list for EVERY
+            # entry before the slice — a zip with millions of entries
+            # is attacker-supplied input here.
+            members = {zi.filename for zi in zf.infolist()[:10000]}
     except (OSError, zipfile.BadZipFile, RuntimeError):
         return None
     if "AndroidManifest.xml" in members and any(name.endswith(".dex") for name in members):
@@ -233,7 +246,7 @@ def _detect_zip_artifact(path: Path) -> TargetInfo | None:
     return None
 
 
-def _tree_has_extension(root: Path, extensions: set[str]) -> bool:
+def _tree_has_extension(root: Path, extensions: frozenset[str]) -> bool:
     """Single recursive walk with early exit on the first match.
 
     One ``glob('**/pat')`` per extension meant up to five COMPLETE
@@ -254,7 +267,7 @@ def _detect_directory(path: Path) -> TargetInfo:
         return _detect_rust_crate(path)
     if (path / "pyproject.toml").exists() or (path / "setup.py").exists():
         return _detect_python_pkg(path)
-    if _tree_has_extension(path, {".h", ".c", ".cc", ".cpp", ".hpp"}):
+    if _tree_has_extension(path, _C_FAMILY_EXTS):
         return TargetInfo(
             path=path, kind="source-c",
             description="Directory containing C/C++ sources",

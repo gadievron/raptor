@@ -434,3 +434,37 @@ class TestSourceTreeWithoutHeaders:
         (tmp_path / "main.c").write_text("int main(void){return 0;}\n")
         info = detect(tmp_path)
         assert info.kind == "rust-crate"
+
+
+class TestCFamilyExtensionParity(unittest.TestCase):
+    """File mode and directory mode must recognise the same C/C++
+    extension set — a pure-.cxx tree detected `unknown` while a single
+    .cxx file detected `source-cpp` (drifted hand-copies)."""
+
+    def test_pure_cxx_tree_detected_as_c_family(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "lib.cxx").write_text("int f() { return 0; }\n")
+            info = detect(root)
+            self.assertNotEqual(info.kind, "unknown")
+            self.assertTrue(info.kind.startswith("source-c"))
+
+    def test_hh_and_hxx_trees_detected(self):
+        for ext in (".hh", ".hxx"):
+            with tempfile.TemporaryDirectory() as d:
+                root = Path(d)
+                (root / f"lib{ext}").write_text("struct S;\n")
+                info = detect(root)
+                self.assertNotEqual(
+                    info.kind, "unknown",
+                    f"{ext} tree must be detected as C/C++",
+                )
+
+    def test_modes_share_one_extension_set(self):
+        """Drift oracle: both modes must consume the same frozenset."""
+        from packages.fuzzing import target_detector as td
+
+        self.assertEqual(
+            td._C_FAMILY_EXTS,
+            td._C_SOURCE_EXTS | td._CPP_SOURCE_EXTS,
+        )
