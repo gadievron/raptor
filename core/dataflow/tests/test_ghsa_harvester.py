@@ -295,7 +295,7 @@ def test_resolve_parent_argv_is_hardened(monkeypatch):
         assert "protocol.allow=never" in cmd
     assert fetch_cmd[:len(net_prefix)] == net_prefix
     assert "protocol.allow=never" not in fetch_cmd  # fetch needs a transport
-    assert fetch_cmd[-4:] == ["--depth", "2", "origin", fix]
+    assert fetch_cmd[-5:] == ["--depth", "2", "origin", "--", fix]
     for c in calls:
         # List argv only — never a shell string; sanitised env attached.
         assert isinstance(c["cmd"], list)
@@ -404,3 +404,23 @@ def test_iter_advisories_skips_oversize_files(tmp_path: Path) -> None:
     ))
     assert len(out) == 1
     assert out[0][1]["aliases"] == ["CVE-2024-1"]
+
+
+def test_default_years_reach_the_current_year(monkeypatch):
+    """The default slice must not silently stop at a hardcoded year
+    every January — it derives from today's date."""
+    import datetime
+    from core.dataflow import ghsa_harvester as gh
+    assert gh._DEFAULT_YEARS[0] == "2024"
+    assert gh._DEFAULT_YEARS[-1] == str(datetime.date.today().year)
+    years = [int(y) for y in gh._DEFAULT_YEARS]
+    assert years == list(range(2024, datetime.date.today().year + 1))
+
+
+def test_fetch_pins_hash_as_positional_refspec(monkeypatch, tmp_path):
+    """The fetch argv carries '--' before the hash (belt-and-braces on
+    top of the hex gate), matching cvefix_walk's documented form."""
+    import inspect
+    from core.dataflow import ghsa_harvester as gh
+    src = inspect.getsource(gh)
+    assert '"origin", "--", fix_hash' in src
