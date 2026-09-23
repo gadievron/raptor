@@ -472,3 +472,40 @@ class TestAgreementGate:
         )
         assert not out["agreed"]
         assert "no extracted snippets" in out["reason"]
+
+
+class TestValueAssertionStopwordGate:
+    """The value-assertion path applies the same stopword gate as the
+    fallback identifier scan: a prose word naming a same-named corpus
+    global must not become a trusted mechanical verdict."""
+
+    _GLOBALS = [
+        {"name": "size", "kind": "variable", "file": "ring.c",
+         "line": 3, "definition": "static int size = 0;"},
+        {"name": "RING_CAP", "kind": "macro", "file": "ring.c",
+         "line": 1, "definition": "#define RING_CAP 100"},
+    ]
+
+    def test_stopword_value_assertion_not_trusted(self) -> None:
+        r = spot_check_question(
+            "Does size equal 100 in the ring buffer setup?",
+            self._GLOBALS,
+        )
+        # The unrelated `size` global must not answer with a
+        # matches=False verdict against the question's 100.
+        assert r is None or r.matches is None, (
+            f"stopword global answered a value assertion: {r}"
+        )
+
+    def test_identifier_cased_assertion_still_trusted(self) -> None:
+        r = spot_check_question("Does RING_CAP equal 100?",
+                                self._GLOBALS)
+        assert r is not None
+        assert r.identifier == "RING_CAP"
+        assert r.matches is True
+
+    def test_identifier_cased_mismatch_still_flags(self) -> None:
+        r = spot_check_question("Does RING_CAP equal 200?",
+                                self._GLOBALS)
+        assert r is not None
+        assert r.matches is False
