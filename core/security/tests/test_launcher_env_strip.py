@@ -229,3 +229,102 @@ class TestExportedFunctionHardening(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("STRICT-OK", proc.stdout)
+
+
+class TestPreSweepWindow(unittest.TestCase):
+    """The launchers resolve RAPTOR_DIR BEFORE the strip fragment can
+    be sourced, and every name that window calls — `set` itself
+    (set -euo pipefail runs AFTER the sweep), `command` (a REGULAR
+    builtin that functions precede even in POSIX mode, so command -p
+    pinning alone is not protection), and the resolution helpers —
+    is shadowable by an exported function. The inline pre-sweep
+    (POSIX-mode special-builtin bootstrap + exported-function drop)
+    must be the first executable block in BOTH launchers."""
+
+    _NAMES = ("set", "command", "dirname", "readlink", "cd", "pwd",
+              "unset", "echo", "read", "declare", "test", "trap")
+
+    def _probe(self, rel_script: str, arg: str, shadows: dict) -> str:
+        proc = subprocess.run(
+            ["bash", str(REPO / rel_script), arg],
+            capture_output=True, text=True, timeout=60,
+            env={"PATH": "/usr/bin:/bin",
+                 "HOME": os.environ.get("HOME", "/tmp"),
+                 **shadows},
+        )
+        return proc.stdout + proc.stderr
+
+    def test_shadow_battery_both_launchers(self):
+        for rel, arg in (("bin/cve-diff", "--help"),
+                         ("bin/raptor", "--version")):
+            for name in self._NAMES:
+                with self.subTest(launcher=rel, shadow=name):
+                    out = self._probe(rel, arg, {
+                        f"BASH_FUNC_{name}%%":
+                            "() { /bin/echo PWNED-" + name + " >&2; exit 9; }",
+                    })
+                    self.assertNotIn("PWNED", out)
+
+    def test_simultaneous_shadows_both_launchers(self):
+        shadows = {
+            f"BASH_FUNC_{n}%%":
+                "() { /bin/echo PWNED-" + n + " >&2; exit 9; }"
+            for n in self._NAMES
+        }
+        for rel, arg in (("bin/cve-diff", "--help"),
+                         ("bin/raptor", "--version")):
+            self.assertNotIn("PWNED", self._probe(rel, arg, shadows), rel)
+
+    def test_presweep_precedes_set_and_resolution(self):
+        # Static pin: the sweep must precede `set -euo pipefail` AND
+        # the path resolution — `set` is function-shadowable, so
+        # nothing executable may come before the sweep (markers are
+        # executable lines, not comment mentions).
+        for rel in ("bin/raptor", "bin/cve-diff"):
+            text = (REPO / rel).read_text(encoding="utf-8")
+            sweep = text.index("_raptor_presweep_posix=")
+            for marker in ("\nset -euo pipefail\n", '\nSCRIPT="$0"',
+                           '\nRAPTOR_DIR="$('):
+                self.assertLess(sweep, text.index(marker),
+                                f"{rel}: {marker.strip()} precedes the pre-sweep")
+
+    def test_presweep_lines_are_errexit_safe(self):
+        # The sweep runs without -e, but every fallible line must
+        # still carry a guard so a future reorder under -e cannot
+        # abort the launcher: each `unset -f`/cleanup line ends || :.
+        for rel in ("bin/raptor", "bin/cve-diff"):
+            text = (REPO / rel).read_text(encoding="utf-8")
+            block = text[text.index("_raptor_presweep_posix="):
+                         text.index("\nset -euo pipefail\n")]
+            for line in block.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("unset ") and "POSIXLY_CORRECT" not in stripped:
+                    self.assertTrue(
+                        stripped.endswith("|| :"),
+                        f"{rel}: unguarded sweep line: {stripped!r}")
+
+    def test_clean_env_unaffected(self):
+        # Hermetic: python-side deps may be absent on a CI runner, so
+        # assert the bash window (sweep + resolution + strip) ran
+        # clean rather than demanding the python CLI succeeds.
+        proc = subprocess.run(
+            ["bash", str(REPO / "bin/cve-diff"), "--help"],
+            capture_output=True, text=True, timeout=60,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                 "HOME": os.environ.get("HOME", "/tmp")},
+        )
+        combined = proc.stdout + proc.stderr
+        self.assertNotIn("cannot find RAPTOR installation", combined)
+        self.assertNotIn("symlink hop limit", combined)
+        self.assertNotIn("bin/cve-diff: line", combined)
+
+    def test_preexisting_posix_mode_preserved(self):
+        proc = subprocess.run(
+            ["bash", "-c",
+             f'export POSIXLY_CORRECT=1; bash "{REPO}/bin/cve-diff" --help'
+             ' >/dev/null 2>&1; echo "posix=${POSIXLY_CORRECT:-unset}"'],
+            capture_output=True, text=True, timeout=60,
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                 "HOME": os.environ.get("HOME", "/tmp")},
+        )
+        self.assertIn("posix=1", proc.stdout)

@@ -5,6 +5,44 @@
 # Install: add this directory to PATH, or symlink to a directory already on PATH.
 #
 
+# ── Exported-function pre-sweep (the FIRST executable block: nothing
+# above may run a command — `set -euo pipefail` itself comes AFTER,
+# because `set` is a function-shadowable builtin too) ───────────────
+# bash imports BASH_FUNC_<name>%% env entries as functions at
+# startup, and function lookup precedes EVERY builtin — so a hostile
+# parent env can shadow any name the pre-strip window calls
+# (set, dirname, readlink, cd, pwd, [, echo — and `command` itself,
+# so `command -p` pinning alone is not protection). The dangerous-env
+# strip fragment cannot be sourced yet (RAPTOR_DIR is unresolved),
+# so the sweep half of its idiom runs inline here first, built only
+# on primitives an exported function cannot shadow: assignment and
+# expansion are SYNTAX, and once POSIXLY_CORRECT=1 is assigned,
+# POSIX command search finds special builtins (unset is one) BEFORE
+# functions. Clear the shadows on the two regular builtins the sweep
+# needs, then drop every EXPORTED function outright — in a fresh
+# launcher they can only have arrived via env import, and unset -f
+# removes both the function and its export. Runs without -e (set
+# comes after); every fallible line is || :-guarded regardless. The
+# fragment repeats this sweep idempotently after RAPTOR_DIR
+# resolution and owns the canonical copy of the idiom.
+_raptor_presweep_posix=${POSIXLY_CORRECT+set}
+POSIXLY_CORRECT=1
+unset -f unset declare read 2>/dev/null || :
+while read -r _raptor_pd _raptor_pf _raptor_pn; do
+    case $_raptor_pd:$_raptor_pf in
+        declare:*x*) unset -f "$_raptor_pn" 2>/dev/null || : ;;
+    esac
+done <<RAPTOR_PRESWEEP
+$(declare -F)
+RAPTOR_PRESWEEP
+unset _raptor_pd _raptor_pf _raptor_pn 2>/dev/null || :
+# Function table is clean now — plain builtins are trustworthy again.
+if [ "$_raptor_presweep_posix" != set ]; then
+    unset POSIXLY_CORRECT
+fi
+unset _raptor_presweep_posix 2>/dev/null || :
+
+
 set -euo pipefail
 
 # ── PATH pre-scrub (shell builtins ONLY; runs before any external
