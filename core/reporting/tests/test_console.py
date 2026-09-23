@@ -88,6 +88,16 @@ class TestRenderConsoleTable(unittest.TestCase):
         )
         self.assertIn(wide, result)
 
+    def test_hostile_title_and_footer_bounded(self):
+        # Escaping alone does not bound LENGTH — a flooded title or
+        # footer must be elided, not passed through whole.
+        result = render_console_table(
+            columns=["A"], rows=[("x",)],
+            title="T" * 1_000_000, footer="F" * 1_000_000,
+        )
+        self.assertLess(len(result), 20_000)
+        self.assertIn("[elided]", result)
+
     def test_large_table_renders_in_linear_time(self):
         # The truncation walk is O(cell length) per cell; the old
         # per-character width-of-prefix recomputation was O(N²) and

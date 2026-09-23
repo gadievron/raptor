@@ -522,3 +522,40 @@ class TestUntrustedRowShapes:
         invocation = doc["runs"][0]["invocations"][0]
         assert "toolExecutionNotifications" not in invocation
         assert invocation["executionSuccessful"] is True
+
+    def test_unhashable_rule_id_skipped_not_fatal(self):
+        # The rule-registry bookkeeping runs after a successful row
+        # build — a list-shaped rule_id must not crash the dict
+        # membership test there.
+        doc = build_enriched_sarif(
+            [self._good(), self._good(rule_id=["x"])])
+        results = [r for run in doc["runs"] for r in run["results"]]
+        assert len(results) == 2
+        rules = {
+            r["id"]
+            for run in doc["runs"]
+            for r in run["tool"]["driver"]["rules"]
+        }
+        assert "unknown" in rules
+
+    def test_unhashable_tool_value_not_fatal(self):
+        # The tool key is used for dict bookkeeping BEFORE the guarded
+        # row build — a dict-shaped tool must degrade to the default
+        # tool, not kill the export.
+        doc = build_enriched_sarif(
+            [self._good(), self._good(rule_id="r-2", tool={"a": 1})])
+        results = [r for run in doc["runs"] for r in run["results"]]
+        assert len(results) == 2
+
+    def test_skip_record_text_escaped(self):
+        poison = self._good(
+            rule_id="r-\x1b[2Jbad", analysis="not-a-dict")
+        doc = build_enriched_sarif([poison])
+        notes = [
+            n
+            for run in doc["runs"]
+            for inv in run["invocations"]
+            for n in inv.get("toolExecutionNotifications", [])
+        ]
+        assert len(notes) == 1
+        assert "\x1b" not in notes[0]["message"]["text"]

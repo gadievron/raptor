@@ -354,3 +354,31 @@ def test_import_ref_rewrite_paths_are_the_stamp_paths():
     from core.run.findings import _STAMP_PATHS
     assert _IMPORTED_REF_REWRITE_PATHS is _STAMP_PATHS
     assert "openant_findings.json" in _STAMP_PATHS
+
+
+class TestStampFileGatedRead:
+    """The stamping hook runs at run completion over files another
+    principal can populate — a planted FIFO must be skipped, not
+    hang run completion."""
+
+    def test_fifo_findings_skipped_not_hung(self, tmp_path):
+        import os as _os
+        import signal as _signal
+
+        if not hasattr(_os, "mkfifo"):
+            pytest.skip("platform lacks mkfifo")
+        _write_manifest(tmp_path)
+        _os.mkfifo(tmp_path / "findings.json")
+
+        def _on_alarm(signum, frame):
+            msg = "stamping blocked on a planted FIFO"
+            raise AssertionError(msg)
+
+        old = _signal.signal(_signal.SIGALRM, _on_alarm)
+        _signal.alarm(30)
+        try:
+            counts = stamp_findings_in_run(tmp_path)
+        finally:
+            _signal.alarm(0)
+            _signal.signal(_signal.SIGALRM, old)
+        assert counts["files_stamped"] == 0

@@ -14,9 +14,12 @@ spellings ("79" vs "CWE-79", case) canonicalise before comparison,
 and file paths match on exact equality OR a component-boundary
 suffix (absolute producer path vs repo-relative finding path). The
 matching is purely structural — no LLM judgment — driven by the
-``outcome_detail`` fields the witness producers populate; matched
-evidence is additive enrichment, so a residual mis-join steers an
-empirical mitigation map, never a suppression.
+``outcome_detail`` fields the witness producers populate. Treat
+residual mis-joins as VERDICT-RELEVANT: the matched bytes feed the
+persisted empirical mitigation map, and the validation stage that
+consumes it adjusts verdicts in both directions (softens on
+blocked-under, lifts on bug-fired-under) — which is why the suffix
+tier refuses bare-basename joins.
 
 Ranking (higher score → better match):
 
@@ -139,7 +142,13 @@ def _paths_match(a: Any, b: Any) -> bool:
     The producer side records the path it analysed (often absolute);
     the finding side is usually repo-relative — raw equality never
     joined them. A suffix match is accepted only on a whole-component
-    boundary so ``b/x.c`` never matches ``ab/x.c``.
+    boundary so ``b/x.c`` never matches ``ab/x.c``, and only when the
+    SUFFIX side carries at least two components: a bare basename
+    (``index.js``) would suffix-join any same-named file anywhere in
+    a sibling run's tree, and the matched bytes influence downstream
+    feasibility verdicts in BOTH directions — a bare-basename join is
+    the wrong-witness transplant this tier must not admit. Bare
+    basenames still join on exact equality.
     """
     if not isinstance(a, str) or not isinstance(b, str):
         return False
@@ -155,7 +164,11 @@ def _paths_match(a: Any, b: Any) -> bool:
         return False
     if na == nb:
         return True
-    return na.endswith("/" + nb) or nb.endswith("/" + na)
+    if na.endswith("/" + nb):
+        return "/" in nb
+    if nb.endswith("/" + na):
+        return "/" in na
+    return False
 
 
 def score_witness_for_finding(

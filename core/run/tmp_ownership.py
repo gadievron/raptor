@@ -91,14 +91,41 @@ def remove_owner_marker(dir_path: str | Path) -> None:
 
 
 def _owner_pid(marker: Path) -> int | None:
-    """The pid recorded in *marker*, or ``None`` when absent/invalid."""
+    """The pid recorded in *marker*, or ``None`` when absent/invalid.
+
+    Gated read on the OPEN fd — markers live in world-writable /tmp
+    (the module's stated threat model), so the type/size gate must
+    hold on the inode actually read: the old lstat-then-read pair
+    could be raced (regular file at the lstat, FIFO at the read —
+    reader blocks forever) and O_NOFOLLOW keeps the lstat semantics
+    (a symlinked marker is refused, not followed).
+    """
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    fd = -1
     try:
-        st = marker.lstat()
+        fd = os.open(str(marker), flags)
+        st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode) or st.st_size > _MARKER_MAX_BYTES:
             return None
-        data = json.loads(marker.read_bytes())
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1  # fdopen owns it now
+            raw = fh.read(_MARKER_MAX_BYTES + 1)
+        if len(raw) > _MARKER_MAX_BYTES:
+            return None
+        data = json.loads(raw)
     except (OSError, ValueError):
         return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     pid = data.get("pid") if isinstance(data, dict) else None
     if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
         return pid
