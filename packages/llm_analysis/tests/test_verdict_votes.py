@@ -205,6 +205,70 @@ class TestConsensusFinalizeAbstention:
         assert primary["consensus"] == "panel-verdict"
 
 
+class TestConsensusReadsEarliestSnapshot:
+    """A cross-family conservative override runs BEFORE consensus and
+    mutates ``is_exploitable`` in place. Consensus must read the
+    analyst's own verdict (the earliest snapshot), not the override:
+    pre-fix the checker's opinion was tallied as "the primary's vote"
+    (double-counting one model's view) and frozen into
+    ``pre_consensus_is_exploitable`` — an audit field that then lied
+    about the analyst's conclusion to the judge and the report."""
+
+    def test_tally_and_stamp_use_pre_crossfamily_vote(self):
+        primary = {
+            "is_exploitable": True,  # cross-family override
+            "pre_crossfamily_is_exploitable": False,  # analyst's own
+            "cross_family_disputed": True,
+        }
+        results = [
+            _consensus("f1", False, "m2"),
+            _consensus("f1", False, "m3"),
+        ]
+        ConsensusTask().finalize(results, {"f1": primary})
+        # Old vs new differential: pre-fix the tally read [True,
+        # False, False] → "disputed" and froze True as the analyst's
+        # verdict; the analyst and the whole panel in fact agree.
+        assert primary["pre_consensus_is_exploitable"] is False
+        assert primary["consensus"] == "agreed"
+        assert primary["is_exploitable"] is False
+
+    def test_no_snapshot_falls_back_to_raw_field(self):
+        primary = {"is_exploitable": True}
+        results = [_consensus("f1", True, "m2")]
+        ConsensusTask().finalize(results, {"f1": primary})
+        assert primary["pre_consensus_is_exploitable"] is True
+        assert primary["consensus"] == "agreed"
+
+    def test_judge_tally_label_uses_earliest_snapshot(self):
+        # The judge stage's agreed/disputed label and tally read "the
+        # primary's vote": post-override the raw field carries the
+        # cross-family/consensus opinion — feeding it double-counts
+        # the earlier panel and mislabels the dispute. A judge that
+        # agrees with the analyst's ACTUAL False must label agreed.
+        primary = {
+            "finding_id": "f1",
+            "is_exploitable": True,  # cross-family override
+            "pre_crossfamily_is_exploitable": False,
+            "cross_family_disputed": True,
+        }
+        results = [_judge("f1", False, "j1")]
+        JudgeTask().finalize(results, {"f1": primary})
+        assert primary["judge"] == "agreed"
+
+    def test_orchestrator_snapshot_prefers_earliest(self):
+        # _snapshot_verdicts runs AFTER the cross-family stage: the
+        # reliability ledgers (JUDGE_REVIEW / SELF_CONSISTENCY) must
+        # attribute the analyst's own vote, never the override.
+        from packages.llm_analysis.orchestrator import _snapshot_verdicts
+        snap = _snapshot_verdicts({
+            "f1": {"is_exploitable": True,
+                   "pre_crossfamily_is_exploitable": False},
+            "f2": {"is_exploitable": True},
+            "f3": {"error": "boom", "is_exploitable": True},
+        })
+        assert snap == {"f1": False, "f2": True}
+
+
 def _judge(fid: str, is_exploitable, model: str = "j1") -> dict:
     return {
         "finding_id": fid,
