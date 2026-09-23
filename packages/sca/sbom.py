@@ -394,7 +394,10 @@ def _build_vulnerabilities(
             # surfaces it for human review with the supporting
             # reason.
             analysis["state"] = "in_triage"
-            analysis["justification"] = "code_not_reachable"
+            # No "justification": the enum semantically pairs with
+            # not_affected only (the likely_called branch above
+            # documents the same rule) — the dead-code reasoning
+            # belongs in detail.
             analysis["detail"] = f.reachability.confidence.reason
         elif f.in_kev:
             analysis["state"] = "exploitable"

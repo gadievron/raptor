@@ -72,6 +72,21 @@ def main(argv: Sequence[str]) -> int:
     args = _parse_args(argv)
     _configure_logging(args.verbose)
 
+    if args.offline:
+        # health is a live reachability check that deliberately probes
+        # against a throwaway scratch cache (see below) — under
+        # --offline every probe misses by construction, so the flag
+        # produced a vacuous all-fail table that read like a total
+        # registry outage. Refuse loudly instead.
+        print(
+            "raptor-sca health: --offline is incompatible with a "
+            "live reachability check — probes deliberately bypass "
+            "the shared cache, so offline mode fails every probe by "
+            "construction. Run without --offline.",
+            file=sys.stderr,
+        )
+        return 2
+
     # Throwaway cache: this is a LIVE reachability check. Reading
     # the shared cache would report stale verdicts (an earlier run
     # against a blocked registry caches an empty version list, and
@@ -250,7 +265,10 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                     "any registry fails.",
     )
     p.add_argument("--offline", action="store_true",
-                   help="probe cache only (skip network)")
+                   help="refused: health is a live reachability "
+                        "check and probes deliberately bypass the "
+                        "shared cache, so offline mode would fail "
+                        "every probe by construction")
     p.add_argument("-v", "--verbose", action="count", default=0)
     return p.parse_args(argv)
 

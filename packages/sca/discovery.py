@@ -466,13 +466,17 @@ def _walk(root: Path, max_depth: int, excludes: set[str]) -> Iterator[Path]:
 
 
 def _is_composite_actions_parent(cur: Path) -> bool:
-    """True when ``cur`` is the ``.github/actions`` directory whose
-    immediate children are individual composite-action folders."""
+    """True when ``cur`` is the ``.github/actions`` directory or any
+    directory beneath it. The exclude-list exemption must hold for
+    the whole composite-actions SUBTREE (the call site's documented
+    claim): matching only the parent meant a grouped action
+    (``.github/actions/group/build/action.yml``) was pruned by the
+    generic exclude list one level down. Vendor-install names stay
+    pruned throughout — see the call site."""
     parts = cur.parts
-    return (
-        len(parts) >= 2
-        and parts[-1] == "actions"
-        and parts[-2] == ".github"
+    return any(
+        parts[i] == ".github" and parts[i + 1] == "actions"
+        for i in range(len(parts) - 1)
     )
 
 

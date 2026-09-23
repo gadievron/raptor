@@ -321,6 +321,19 @@ class TestComposeProxyHostsRepoDerived:
             hosts = compose_proxy_hosts(tmp_path)
         assert "reg.corp" not in hosts
 
+    def test_operator_registry_port_env_survives_unicode_digits(
+        self, tmp_path, monkeypatch, _stub_sources,
+    ):
+        """'²'.isdigit() is True but int('²') raises — the ValueError
+        escaped to the per-source handler and dropped the WHOLE
+        repo-host derivation source. One bad token must cost only
+        itself."""
+        from packages.sca import compose_proxy_hosts
+        monkeypatch.setenv("RAPTOR_SCA_REGISTRY_PORTS", "5000,²")
+        _stub_sources(image_hosts=["reg.corp:5000"])
+        hosts = compose_proxy_hosts(tmp_path)
+        assert "reg.corp" in hosts
+
     def test_no_target_no_repo_derived_section(self, caplog):
         """``target=None`` short-circuits before the repo-derived
         section — no added/rejected log lines."""

@@ -189,9 +189,15 @@ class TestCanonicalCveId:
             "DEBIAN-CVE-26-1234",             # 2-digit year
             "-CVE-2024-0001",                 # empty prefix
             "DEBIAN-CVE-2026-5436\uff19",    # fullwidth digit (not [0-9])
-            "DEBIAN-CVE-2026-54369\n",       # trailing newline ($ tolerates, \Z must not)
         ):
             assert canonical_cve_id(cand) is None, cand
+        # Whitespace PADDING normalises deliberately (strip-before-
+        # fold — whitespace-padded feed spellings must not lose their
+        # joins), so a trailing newline resolves. The \Z anchor still
+        # matters: it blocks non-whitespace trailers (first case
+        # above), which $ alone would only partially catch.
+        assert (canonical_cve_id("DEBIAN-CVE-2026-54369\n")
+                == "CVE-2026-54369")
 
     def test_hostile_prefix_gains_no_new_authority(self):
         """Any ``[A-Z]+`` prefix resolves — a hostile ``EVIL-CVE-*``
@@ -202,3 +208,19 @@ class TestCanonicalCveId:
         assert (
             canonical_cve_id("EVIL-CVE-2021-44228") == "CVE-2021-44228"
         )
+
+
+def test_cve_ids_strips_whitespace_bearing_spellings() -> None:
+    """Whitespace-padded feed spellings must not survive into (or be
+    dropped from) the uppercase-keyed joins: 'CVE-2021-9999\\t' was
+    admitted verbatim (failing every KEV/EPSS join) while a
+    leading-space spelling was dropped entirely."""
+    from packages.sca.models import Advisory, cve_ids
+
+    adv = Advisory(
+        osv_id="GHSA-x",
+        aliases=["CVE-2021-9999\t", "  cve-2021-0001", "CVE-2021-9999"],
+        summary="", details="", affected=[], severity=None,
+        fixed_versions=[], references=[],
+    )
+    assert cve_ids(adv) == ["CVE-2021-9999", "CVE-2021-0001"]

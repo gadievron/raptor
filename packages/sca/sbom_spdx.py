@@ -243,7 +243,12 @@ def _spdx_id_for(dep: Dependency, seen: set) -> str:
     chars replaced by ``-``, plus a collision suffix if needed.
     """
     base = f"{dep.ecosystem}-{dep.name}-{dep.version or 'unknown'}"
-    safe = "".join(c if c.isalnum() or c in ".-" else "-" for c in base)
+    # ASCII-only: the SPDX id grammar is [A-Za-z0-9.-]+ and Unicode
+    # ``isalnum`` let non-ASCII letters through (SPDXRef-...-pakét).
+    safe = "".join(
+        c if ((c.isascii() and c.isalnum()) or c in ".-") else "-"
+        for c in base
+    )
     spdx_id = f"SPDXRef-{safe}"
     if spdx_id not in seen:
         seen.add(spdx_id)

@@ -48,7 +48,14 @@ def main(argv: Sequence[str]) -> int:
             file=sys.stderr,
         )
         return 2
-    print(f"pkg:{eco_canonical.lower()}/{args.name}@{args.version}")
+    name = args.name
+    if name.startswith("@"):
+        # purl-spec: namespace segments are percent-encoded — the
+        # scope's ``@`` must be ``%40`` (pkg:npm/%40types/node@...);
+        # the raw spelling is not a canonical purl, which is this
+        # utility's whole claim.
+        name = "%40" + name[1:]
+    print(f"pkg:{eco_canonical.lower()}/{name}@{args.version}")
     return 0
 
 

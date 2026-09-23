@@ -395,7 +395,14 @@ def _manifest_role(path: Path) -> str:
         return "dev"
     if re.search(r"\btest\b", name):
         return "test"
-    if any(tok in name for tok in ("optional", "extras", "all-")):
+    # ``\ball\b`` (word-bounded) instead of the glued ``all-``
+    # spelling: ``requirements-all.txt`` never matched the token (its
+    # ``all`` is followed by ``.``), while substring matching without
+    # boundaries would over-match (``install``). Noise-direction
+    # only — misclassification here changes comparison grouping, not
+    # findings.
+    if (any(tok in name for tok in ("optional", "extras"))
+            or re.search(r"\ball\b", name)):
         return "optional"
     if name.startswith("requirements-") and name.endswith(".txt"):
         return "optional"

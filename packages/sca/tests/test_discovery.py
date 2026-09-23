@@ -246,3 +246,18 @@ def test_scan_boundary_resets_every_parser_cache(tmp_path: Path) -> None:
             assert "__stale_sentinel__" not in cache, (
                 f"{mod.__name__} cache not reset at scan boundary"
             )
+
+
+def test_composite_action_subtree_children_keep_exemption(tmp_path):
+    """The exclude-list exemption must hold INSIDE composite-action
+    directories (the call-site comment's claim), not just at the
+    .github/actions parent: an action nested one level deeper
+    (grouped actions) or a manifest under an action's build/ dir was
+    silently pruned."""
+    nested = tmp_path / ".github" / "actions" / "group" / "build"
+    nested.mkdir(parents=True)
+    (nested / "action.yml").write_text(
+        "runs:\n  using: composite\n", encoding="utf-8")
+    from packages.sca.discovery import find_manifests
+    found = {m.path for m in find_manifests(tmp_path)}
+    assert (nested / "action.yml") in found

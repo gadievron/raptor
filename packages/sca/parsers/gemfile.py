@@ -24,6 +24,12 @@ deliberately don't execute it. We regex-parse the most common forms:
 Anything that requires evaluating Ruby control flow (``if``, ``unless``,
 loops) gets ``parser_confidence=Confidence("medium", reason="Gemfile DSL
 — heuristic regex")`` because we may miss conditionally-included gems.
+More broadly: a Gemfile can construct ``gem`` declarations entirely at
+runtime (string interpolation, loops over data, ``eval``), and those
+are invisible to ANY static parse — coverage here is best-effort over
+the common literal forms, never complete. Bundler itself only knows
+the true set by executing the file, which we refuse to do on
+untrusted trees.
 
 ``Gemfile.lock`` is a structured plain-text format with a ``GEM``
 section listing resolved versions and their dependencies. We extract

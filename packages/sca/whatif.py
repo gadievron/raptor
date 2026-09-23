@@ -409,6 +409,11 @@ def _findings_clearing(
         rows = load_json_bounded(Path(findings_path), max_bytes=64 * 1024 * 1024)
     except (OSError, ValueError):
         return {}
+    if not isinstance(rows, list):
+        # A dict silently iterates its keys; a scalar crashes the
+        # arm. Hand-edited / foreign findings documents read as "no
+        # advisory map".
+        return {}
     remove_set = {r[:2] for r in removes}
     adv_to_deps: dict = {}
     for row in rows:

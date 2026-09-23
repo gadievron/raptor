@@ -113,7 +113,7 @@ class TestSaveBaseline:
 
 
 class TestCheckDrift:
-    def test_check_no_baseline_exits_zero(self, tmp_path, capsys):
+    def test_check_no_baseline_exits_two(self, tmp_path, capsys):
         if not _is_elf():
             pytest.skip("/bin/ls is not an ELF binary on this host")
         rc = fingerprint_cli.main([
@@ -121,9 +121,11 @@ class TestCheckDrift:
             "--ref", "never-seen",
             "--cache-root", str(tmp_path),
         ])
-        # No baseline → no drift signal → exit 0 (CI gate friendly:
-        # first-ever scan doesn't fail the build)
-        assert rc == 0
+        # No baseline → the gate CANNOT answer "no drift". Exit 0 here
+        # was a fail-open CI semantic: any baseline-loss path (wiped
+        # cache root, renamed ref) silently turned the drift gate
+        # green. Distinct exit 2 = "no baseline; seed with --save".
+        assert rc == 2
 
     def test_check_baseline_matches_exits_zero(
         self, tmp_path, capsys,

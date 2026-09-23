@@ -283,3 +283,16 @@ def test_write_atomically_creates_file(tmp_path: Path):
     import json
     data = json.loads((tmp_path / "sbom.spdx.json").read_text())
     assert data["spdxVersion"] == "SPDX-2.3"
+
+
+def test_spdx_id_is_ascii_only() -> None:
+    """SPDX ids must match [A-Za-z0-9.-]+ (the grammar the docstring
+    cites); Unicode isalnum let non-ASCII letters through
+    (SPDXRef-PyPI-pakét-1.0)."""
+    import re
+
+    from packages.sca.sbom_spdx import _spdx_id_for
+
+    dep = _dep(name="pakét")
+    spdx_id = _spdx_id_for(dep, set())
+    assert re.fullmatch(r"SPDXRef-[A-Za-z0-9.\-]+", spdx_id), spdx_id
