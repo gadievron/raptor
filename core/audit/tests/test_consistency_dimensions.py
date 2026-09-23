@@ -374,3 +374,32 @@ class TestCleanupCrossLeg:
         res = cleanup_verdict(cross[0])
         assert res.outcome == "inconclusive"
         assert res.reason.startswith(REASON_OWNERSHIP_UNRESOLVED)
+
+
+class TestSizeofArgWhitespaceRun:
+    def test_sizeof_whitespace_run_is_fast(self):
+        """Hostile argument text opening 'sizeof(' and ending in a
+        long whitespace run: the previous spelling stacked unbounded
+        whitespace spans around the optional star/array/paren atoms
+        and tried every split of the run between them — cubic even at
+        the anchored match call. Gating each span is linear."""
+        from core.audit.consistency_dimensions import _SIZEOF_ARG_RE
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "sizeof(x" + " " * (1 << 16) + "!"
+        with cpu_budget(1.0, what="sizeof whitespace-run scan"):
+            assert _SIZEOF_ARG_RE.match(hostile) is None
+
+    def test_sizeof_forms_still_match(self):
+        from core.audit.consistency_dimensions import _SIZEOF_ARG_RE
+
+        for text, (stars, ident, sub) in (
+            ("sizeof(buf)", (None, "buf", None)),
+            ("sizeof ( *p )", ("*", "p", None)),
+            ("sizeof(arr[0])", (None, "arr", "[0]")),
+            ("sizeof x", (None, "x", None)),
+        ):
+            m = _SIZEOF_ARG_RE.match(text)
+            assert m is not None, text
+            assert (m.group(1), m.group(2), m.group(3)) == \
+                (stars, ident, sub), text

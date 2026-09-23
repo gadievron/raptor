@@ -883,8 +883,16 @@ DIMENSION_ARGUMENT_SHAPE = "argument-shape"
 ARGSHAPE_MIN_SITES = 4
 ARGSHAPE_RATIO = 0.9
 
+# Every optional atom gates its own whitespace span: the naive
+# ``\s*\(?\s*(\**)\s*…(\[..\])?\s*\)?`` stacked unbounded whitespace
+# spans around optional atoms, and a ``sizeof``-opening argument
+# ending in a long whitespace run made the engine try every split of
+# the run between them — cubic even at the anchored match call.
+# Match set unchanged; absent stars now capture None instead of ''
+# (the consumer truth-tests the group).
 _SIZEOF_ARG_RE = re.compile(
-    r"^sizeof\s*\(?\s*(\**)\s*([A-Za-z_]\w*)\s*(\[[^\]]*\])?\s*\)?$",
+    r"^sizeof\s*(?:\(\s*)?(?:(\*+)\s*)?([A-Za-z_]\w*)"
+    r"\s*(?:(\[[^\]]*\])\s*)?\)?$",
 )
 _TYPEISH_RE = re.compile(
     r"^(?:struct|union|enum)\b|_t$|^u?int\d+_t$",
