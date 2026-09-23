@@ -217,6 +217,35 @@ class TestRunGraduatedRulesStage:
         assert len(doc["runs"][0]["results"]) == 1
         assert "failed to run" in capsys.readouterr().err
 
+    def test_all_rules_failed_refuses_to_write_clean_sarif(
+        self, tmp_path, monkeypatch, capsys,
+    ):
+        """When EVERY graduated rule failed the stage must not emit a
+        zero-finding graduated.sarif — on disk it is
+        byte-indistinguishable from a genuinely clean graduated run
+        for the SARIF merge and every later reader, silently retiring
+        every precision-gated detector (mirrors the expanded-semgrep
+        sibling's refusal)."""
+        project = tmp_path / "project"
+        out_dir = project / "run_001"
+        out_dir.mkdir(parents=True)
+        rules_dir = _mk_rules_dir(project, "rule-a", "rule-b")
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        _fake_runner(monkeypatch, {
+            "rule-a": RuntimeError("boom"),
+            "rule-b": RuntimeError("boom"),
+        })
+
+        sarifs = _scanner.run_graduated_rules_stage(
+            repo, out_dir, rules_dir=rules_dir,
+        )
+        assert sarifs == []
+        assert not (out_dir / "graduated.sarif").exists()
+        err = capsys.readouterr().err
+        assert "FAILED" in err
+        assert "no SARIF" in err
+
     def test_no_rules_dir_silently_skips(self, tmp_path, monkeypatch):
         out_dir = tmp_path / "project" / "run_001"
         out_dir.mkdir(parents=True)
