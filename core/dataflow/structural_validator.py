@@ -5,7 +5,10 @@ paths (e.g. from Semgrep Pro) by checking that:
 
 1. Each step location exists and is parseable.
 2. Consecutive steps are linked by a call site in the AST.
-3. Sanitizer/validator calls between source and sink are identified.
+3. Sanitizer-NAMED calls lying inside the path's per-file
+   source→sink line window (in the same enclosing function as a
+   step) are identified — position evidence only: nothing here
+   proves the tainted value flows through them.
 4. Branch guards enclosing each step are extracted as
    ``path_conditions`` for SMT Tier 4.
 
@@ -459,8 +462,24 @@ def validate_structurally(
 
     verifications: list[StepVerification] = []
     all_sanitizers: list[str] = []
+    seen_sanitizers: set[tuple[str, str]] = set()
     all_conditions: list[dict[str, Any]] = []
     file_cache: dict[str, tuple[str | None, str | None, FileCallGraph | None]] = {}
+
+    # Per-file source→sink line window. Sanitizer-call collection is
+    # bounded to it: a call named like a sanitizer AFTER the sink (or
+    # before the source) cannot lie between source and sink, and the
+    # downstream prompt treats the list as barrier evidence — a
+    # hostile repo planting validate_noop() anywhere in the function
+    # must not bias the judgment.
+    window: dict[str, tuple[int, int]] = {}
+    for s in steps:
+        s_file = s.get("file", "") or ""
+        s_line = s.get("line", 0) or 0
+        if not s_file or s_line < 1:
+            continue
+        lo, hi = window.get(s_file, (s_line, s_line))
+        window[s_file] = (min(lo, s_line), max(hi, s_line))
 
     for i, step in enumerate(steps):
         file_path_str = step.get("file", "")
@@ -513,12 +532,20 @@ def validate_structurally(
 
         sanitizer_calls = []
         if graph:
+            win_lo, win_hi = window.get(file_path_str, (line, line))
             calls_in_range = [
                 c for c in graph.calls
-                if c.caller == func_name
+                if c.caller == func_name and win_lo <= c.line <= win_hi
             ]
             sanitizer_calls = _identify_sanitizer_calls(calls_in_range, label)
-            all_sanitizers.extend(sanitizer_calls)
+            # Result-level list deduped: consecutive steps in the same
+            # function see the same call sites, and the prompt
+            # consumer counts entries as independent evidence.
+            for s_name in sanitizer_calls:
+                key = (cache_key, s_name)
+                if key not in seen_sanitizers:
+                    seen_sanitizers.add(key)
+                    all_sanitizers.append(s_name)
 
         guards: list[str] = []
         if lang and content:

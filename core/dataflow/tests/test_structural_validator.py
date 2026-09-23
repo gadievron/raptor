@@ -721,3 +721,47 @@ class TestAttributionDivergence:
         )
         assert name is None
         assert resolved is False
+
+
+# ── sanitizer collection: window-bounded, deduped ────────────────
+
+
+class TestSanitizerWindow:
+    APP = (
+        "def handler(req):\n"
+        '    x = req.args["q"]\n'      # line 2 = source
+        '    y = x + "!"\n'            # line 3
+        "    render(y)\n"              # line 4 = sink
+        "    if False:\n"
+        "        z = escape_html(x)\n"     # line 6 — after the sink
+        "        validate_input(z)\n"      # line 7 — untaken branch
+        "    return y\n"
+    )
+
+    def _path(self):
+        return _make_path(
+            _make_step("app.py", 2, "req.args"),
+            _make_step("app.py", 4, "render"),
+            steps=[_make_step("app.py", 3)],
+        )
+
+    def test_calls_outside_source_sink_window_not_reported(self, tmp_path):
+        """Sanitizer-NAMED calls after the sink / on untaken branches
+        are not \"between source and sink\" — reporting them (and
+        multiplying them per step) steers the downstream LLM toward
+        not-exploitable on a hostile repo's planted names."""
+        (tmp_path / "app.py").write_text(self.APP)
+        result = validate_structurally(self._path(), tmp_path,
+                                       language="python")
+        assert result.verdict == "confirmed"
+        assert result.sanitizers == []
+        assert "sanitizer" not in result.reasoning
+
+    def test_in_window_sanitizer_reported_once(self, tmp_path):
+        """Two-direction: a sanitizer call inside the window is still
+        reported — exactly once, not once per step."""
+        app = self.APP.replace('y = x + "!"', "y = escape_html(x)")
+        (tmp_path / "app.py").write_text(app)
+        result = validate_structurally(self._path(), tmp_path,
+                                       language="python")
+        assert result.sanitizers == ["escape_html"]
