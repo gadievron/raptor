@@ -166,8 +166,11 @@ def _balance_subsample(
     n_fp = min(len(fps), target - n_tp)
     n_tp = min(len(tps), target - n_fp)
     rng = random.Random(seed)
-    chosen_tps = rng.sample(tps, n_tp) if n_tp <= len(tps) else tps
-    chosen_fps = rng.sample(fps, n_fp) if n_fp <= len(fps) else fps
+    # n_tp / n_fp are min()-clamped above, so sample() can never be
+    # asked for more than the population (the old conditional's else
+    # arms were unreachable).
+    chosen_tps = rng.sample(tps, n_tp)
+    chosen_fps = rng.sample(fps, n_fp)
     chosen = chosen_tps + chosen_fps
     chosen.sort(key=lambda x: x[0].finding_id)
     return chosen
