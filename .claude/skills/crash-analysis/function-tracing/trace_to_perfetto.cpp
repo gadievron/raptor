@@ -4,6 +4,8 @@
 
 #include <iostream>
 #include <fstream>
+#include <cstdint>
+#include <cstdio>
 #include <string>
 #include <vector>
 #include <regex>
@@ -22,7 +24,13 @@ int extract_tid(const std::string& filename) {
     std::regex tid_regex(R"(trace_(\d+)\.log)");
     std::smatch match;
     if (std::regex_search(filename, match, tid_regex)) {
-        return std::stoi(match[1].str());
+        try {
+            return std::stoi(match[1].str());
+        } catch (const std::out_of_range&) {
+            // \d+ admits digit runs beyond int range; a hostile or
+            // corrupt filename must not terminate the converter.
+            return -1;
+        }
     }
     return -1;
 }
@@ -118,7 +126,17 @@ std::string escape_json(const std::string& str) {
             case '\n': result += "\\n"; break;
             case '\r': result += "\\r"; break;
             case '\t': result += "\\t"; break;
-            default: result += c;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    // Remaining C0 bytes (hostile symbol names) must
+                    // be escaped or the emitted JSON is invalid.
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x",
+                             static_cast<unsigned char>(c));
+                    result += buf;
+                } else {
+                    result += c;
+                }
         }
     }
     return result;
