@@ -77,7 +77,7 @@ GitHub Archive analysis should be your **FIRST step** in any GitHub-related secu
 
 ## Quick Start
 
-All queries go through the typed wrapper `libexec/raptor-bq-query`:
+Investigator queries go through the typed wrapper `libexec/raptor-bq-query` (the evidence-kit verifier lane queries BigQuery through its own client, which carries the same per-query billing cap):
 one read-only statement in (SELECT/WITH only — DML/DDL and
 multi-statement input are rejected), one JSON envelope out. Write the
 SQL to a file first, then invoke the wrapper.

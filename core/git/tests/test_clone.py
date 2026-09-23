@@ -89,6 +89,33 @@ def test_successful_clone_calls_sandbox(tmp_path: Path) -> None:
         assert {"github.com", "codeload.github.com"} <= proxy_hosts
 
 
+def test_mirror_clone_passes_mirror_flag(tmp_path: Path) -> None:
+    """``mirror=True`` produces ``git clone --mirror`` with no shallow
+    flags — the git-forensics shape (dangling/force-pushed history
+    needs refs a plain clone never fetches)."""
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        mock_run.side_effect = _clone_materialises
+        ok = clone_repository(
+            "https://github.com/foo/bar", tmp_path / "out.git",
+            depth=None, mirror=True,
+        )
+        assert ok is True
+        cmd = _strip_pins(mock_run.call_args.args[0])
+        assert cmd[:3] == ["git", "clone", "--mirror"]
+        assert "--depth" not in cmd
+        assert "--no-tags" not in cmd
+
+
+def test_mirror_with_depth_is_refused(tmp_path: Path) -> None:
+    """A shallow mirror would betray the forensic purpose; the
+    contradictory combination fails closed before any subprocess."""
+    with patch("core.sandbox.run_untrusted_networked") as mock_run:
+        with pytest.raises(ValueError):
+            clone_repository("https://github.com/foo/bar",
+                             tmp_path / "out.git", depth=1, mirror=True)
+        mock_run.assert_not_called()
+
+
 def test_clone_failure_raises_runtime_error(tmp_path: Path) -> None:
     with patch("core.sandbox.run_untrusted_networked") as mock_run:
         mock_run.return_value = _completed(128, stderr="fatal: not found")

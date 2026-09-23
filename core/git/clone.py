@@ -667,6 +667,7 @@ def _hostile_history_rewrite_reason(repo_dir: Path, run) -> str | None:
 
 def clone_repository(
     url: str, target: Path, depth: int | None = 1,
+    mirror: bool = False,
 ) -> bool:
     """Shallow-clone ``url`` into ``target`` via the sandboxed runner.
 
@@ -676,13 +677,21 @@ def clone_repository(
             this as the only writable path.
         depth: shallow-clone depth (default 1). Pass ``None`` to clone
             full history.
+        mirror: pass ``--mirror`` (all refs, bare repository) — the
+            git-forensics shape: dangling / force-pushed history
+            needs refs a plain clone never fetches. Mutually
+            exclusive with ``depth``.
 
     Raises:
-        ValueError: URL fails the allowlist, or ``target`` fails the
+        ValueError: URL fails the allowlist, ``target`` fails the
             writable-path check (relative, filesystem root, or
-            direct child of root — see ``_validate_writable_path``).
+            direct child of root — see ``_validate_writable_path``),
+            or ``mirror`` is combined with a ``depth``.
         RuntimeError: ``git clone`` exited non-zero.
     """
+    if mirror and depth is not None:
+        msg = "mirror clones are full history; pass depth=None"
+        raise ValueError(msg)
     if not validate_repo_url(url):
         # Security-event stream (restored from the pre-restructure
         # core/git.py emitter, commit c1af3314): record the rejection
@@ -704,7 +713,9 @@ def clone_repository(
     # transport is https, which every pin is compatible with, and the
     # pins also govern the post-transfer checkout of the untrusted tree.
     cmd = safe_git_command("clone")
-    if depth is not None:
+    if mirror:
+        cmd.append("--mirror")
+    elif depth is not None:
         cmd.extend(["--depth", str(depth), "--no-tags"])
     # "--" before the URL, same as the ls-remote path: unexploitable
     # today (validate_repo_url fullmatch-allowlists the shape) but the

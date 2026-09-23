@@ -35,13 +35,13 @@ Read and apply:
 
 ### 2. Clone Repository
 
+Clone via the sandboxed helper (never a bare `git clone` — the subject repository is hostile, and the helper applies the URL allowlist, the sandboxed git runner with hardened env and pinned egress, and the bounded timeout):
+
 ```bash
-cd {workdir}/repos
-git clone --mirror https://github.com/owner/repo.git
-cd repo.git
+libexec/raptor-clone-repo https://github.com/owner/repo.git {workdir}/repos/repo.git --mirror
 ```
 
-Use `--mirror` to get all refs including those not normally fetched.
+`--mirror` gets all refs including those not normally fetched. If the URL is rejected by the allowlist, report that to the orchestrator rather than cloning by other means.
 
 ### 3. Find Dangling Commits
 
