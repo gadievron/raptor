@@ -2749,21 +2749,75 @@ class TestPhase2TruncationRecovery:
     def test_truncation_failures_do_not_feed_the_breaker_parallel(
         self, monkeypatch,
     ):
-        """Parallel twin: seven truncating single-item batches must
-        not trip the abort event — the eighth, healthy batch (which
-        only starts after earlier ones complete) still dispatches."""
+        """Parallel twin: five truncating single-item batches (past
+        the consecutive-failure limit, under the cumulative
+        truncation cap) must not trip the abort event — the sixth,
+        healthy batch still dispatches."""
         monkeypatch.setattr(
             "core.llm.concurrency.derive_max_workers", lambda _m: 2)
         items = [StudyItem(id=f"p{k}", kind="function", name=f"fn{k}",
                            file=f"p{k}/f.c", calls=["a", "b", "c"])
-                 for k in range(7)]
+                 for k in range(5)]
         items.append(StudyItem(id="ok", kind="function", name="fn9",
                                file="ok/f.c"))
         client = self._FakeClient(
-            fits=8, poison={f"fn{k}" for k in range(7)})
+            fits=8, poison={f"fn{k}" for k in range(5)})
         client.model = "gemini-2.5-flash"
         concepts, *_ = run_phase2(items, "t/", client, batch_target=1)
         assert [c.id for c in concepts] == ["fn9"]
+
+    def test_cumulative_truncation_cap_halts_the_phase_serial(self):
+        """Truncations are exempt from the consecutive-failure abort
+        but NOT unlimited: each is a full-price call with zero yield,
+        and past _TRUNCATION_FAIL_LIMIT the cause is config-shaped
+        (output budget vs model) — the phase halts instead of buying
+        the rest of the queue (observed live pre-cap: hours of
+        identical paid failures)."""
+        import pytest
+
+        from core.concepts.study import (
+            _TRUNCATION_FAIL_LIMIT,
+            _BatchLLMError,
+        )
+        n = _TRUNCATION_FAIL_LIMIT + 3
+        items = [StudyItem(id=f"p{k}", kind="function", name=f"fn{k}",
+                           file=f"p{k}/f.c", calls=["a", "b", "c"])
+                 for k in range(n)]
+        items.append(StudyItem(id="ok", kind="function", name="fn99",
+                               file="ok/f.c"))
+        client = self._FakeClient(
+            fits=8, poison={f"fn{k}" for k in range(n)})
+        stats: dict = {}
+        with pytest.raises(_BatchLLMError) as e:
+            run_phase2(items, "t/", client, batch_target=1,
+                       phase_stats=stats)
+        # halted at the cap — the surplus poison batches (and the
+        # healthy tail batch) were never bought
+        assert stats["truncation_failures"] == _TRUNCATION_FAIL_LIMIT
+        assert stats["truncation_capped"] is True
+        # deterministic-config marker for the consumer's breaker
+        assert getattr(e.value, "config_shaped", False) is True
+
+    def test_should_stop_halts_dispatch_between_batches(self):
+        """A cooperative stop arriving mid-phase stops NEW paid calls
+        at the next batch boundary and keeps results already earned —
+        pre-fix a drain-abandoned study thread kept buying batches
+        until process exit."""
+        calls = {"n": 0}
+
+        class _CountingClient(self._FakeClient):
+            def generate_structured(inner, prompt, schema, **kw):
+                calls["n"] += 1
+                return super().generate_structured(prompt, schema, **kw)
+
+        items = self._items(4)
+        client = _CountingClient(fits=8)
+        concepts, *_ = run_phase2(
+            items, "t/", client, batch_target=1,
+            should_stop=lambda: calls["n"] >= 2,
+        )
+        assert calls["n"] == 2
+        assert len(concepts) == 2
 
 
 class TestPhase2TruncationHonesty:
