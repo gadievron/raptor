@@ -245,11 +245,19 @@ def run_autonomous_workflow(args: argparse.Namespace) -> None:
         run = runs[0]
         results = run.get("results", [])
 
-        # Analyze findings (up to max_findings across all SARIF files)
+        # Analyze findings (up to max_findings across all SARIF files).
+        # Signal-sorted, never a head slice: the shared truncator ranks
+        # SARIF results by level (error > warning > note), so a capped
+        # run keeps the strongest findings instead of whichever came
+        # first in file order.
         remaining = args.max_findings - total_analyzed
         if remaining <= 0:
             break
-        findings_to_analyze = results[:remaining]
+        from core.orchestration.skill_dispatch import (
+            truncate_findings_by_signal,
+        )
+        findings_to_analyze = truncate_findings_by_signal(
+            results, remaining, log_label="codeql analysis selection")
         logger.info("Analyzing %d findings...", len(findings_to_analyze))
 
         from core.reporting.formatting import display_rule_id

@@ -290,8 +290,13 @@ def _run_validate_postpass_unsafe(
     audit_selected: list = []
 
     def _preflight() -> str | None:
-        audit_selected.extend(
-            _load_audit_findings(audit_dir)[:_MAX_VALIDATE_FINDINGS])
+        # Signal-sorted, never a head slice: a >cap audit run must
+        # keep its highest-signal findings (and the truncator's
+        # tree-class tie-break keeps test/vendored-tree findings from
+        # evicting production ones).
+        audit_selected.extend(truncate_findings_by_signal(
+            _load_audit_findings(audit_dir), _MAX_VALIDATE_FINDINGS,
+            log_label="gap-audit selection"))
         found: list = []
         if analysis_report.exists():
             found = _select_findings_for_validate(analysis_report)
