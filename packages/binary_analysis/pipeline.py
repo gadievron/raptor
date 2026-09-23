@@ -27,6 +27,7 @@ from core.hash import sha256_file
 from core.json import load_json, save_json
 from core.security.markdown_render import md_inline
 
+from ._artifact_lock import with_run_artifacts_lock
 from ._symbols import symbol_base_name
 from .constraints import validate_constraint_file
 from .diff import diff_manifests
@@ -2089,6 +2090,7 @@ def analyse_blackbox_binary(
     return result
 
 
+@with_run_artifacts_lock
 def append_fuzz_evidence_to_run(
     binary_path: Path,
     *,
@@ -2096,6 +2098,10 @@ def append_fuzz_evidence_to_run(
     fuzz_dir: Path | None = None,
 ) -> FuzzEvidenceBundle | None:
     """Append completed fuzz evidence to an existing binary run.
+
+    Runs under the per-run artifacts lock: the load → mutate → save
+    window over binary-evidence.json / context map / checklist
+    otherwise loses a concurrent writer's records silently.
 
     The fuzz orchestrator uses this after the campaign finishes so the pre-fuzz
     static map does not need to be recomputed. If no binary manifest exists, the
@@ -2324,6 +2330,7 @@ def _channels_from_checklist(checklist: dict[str, Any]) -> list[InputChannel]:
     return channels
 
 
+@with_run_artifacts_lock
 def append_runtime_evidence_to_run(
     binary_path: Path,
     *,
@@ -2334,7 +2341,8 @@ def append_runtime_evidence_to_run(
 
     This is used by `/binary trace-parser`: it preserves the original static
     map, adds new Frida observations, refreshes parser-boundary candidates and
-    updates the graph/handoff in place.
+    updates the graph/handoff in place. Runs under the per-run
+    artifacts lock (see append_fuzz_evidence_to_run).
     """
     out_dir = Path(out_dir).resolve()
     manifest_data = load_json(out_dir / "binary-manifest.json")
