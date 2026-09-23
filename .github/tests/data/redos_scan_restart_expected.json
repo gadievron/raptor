@@ -161,7 +161,7 @@
    "digests": [
     "7bac92ef17b0"
    ],
-   "exp": 1.1,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/audit/auth_witnesses.py\u001f_KEYED_GET_RE": {
@@ -175,7 +175,7 @@
    "digests": [
     "c8f8ffc78d2c"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/binary_layer0.py\u001f_CALLEE_RE": {
@@ -210,7 +210,7 @@
    "digests": [
     "65ffe561ec4e"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/caller_lock.py\u001f\\b(?:X|X)\\w*\\s*\\(": {
@@ -308,7 +308,7 @@
    "digests": [
     "35c6628de792"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/compile_probe.py\u001f_IDENT_EXPR_RE": {
@@ -322,7 +322,7 @@
    "digests": [
     "0f64f014c82d"
    ],
-   "exp": 2.0,
+   "exp": 1.96,
    "verdict": "adjudicated"
   },
   "core/audit/compiler_sweep.py\u001f_DIAG_SUPPRESSION_RE": {
@@ -483,7 +483,7 @@
    "digests": [
     "be592db3fa7b"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001f_GO_ATOI_RE": {
@@ -596,7 +596,7 @@
    "digests": [
     "a56ab90d3d8a"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/condition_smt.py\u001fwrapper_re": {
@@ -694,14 +694,14 @@
    "digests": [
     "c7576fa032bf"
    ],
-   "exp": 1.97,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/audit/dark_verify/_resolve.py\u001f_PY_EXT_SUFFIX_GLOBS[3]": {
    "digests": [
     "9337696cf86c"
    ],
-   "exp": 2.02,
+   "exp": 1.97,
    "verdict": "adjudicated"
   },
   "core/audit/decompiler_sanitise.py\u001f_CLASS_MEMBER_RE": {
@@ -778,7 +778,7 @@
    "digests": [
     "7ebd359a4d82"
    ],
-   "exp": 0.98,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/audit/integer_truncation_checker.py\u001f_ALLOC_RE": {
@@ -975,7 +975,7 @@
    "digests": [
     "ae40fb5f77d0"
    ],
-   "exp": 1.16,
+   "exp": 0.99,
    "verdict": "linear"
   },
   "core/audit/path_feasibility.py\u001fif_patterns": {
@@ -1038,21 +1038,21 @@
    "digests": [
     "0d3f53af0a22"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}len\\w*\\s*[<>=!]+": {
    "digests": [
     "d017fec15766"
    ],
-   "exp": 1.02,
+   "exp": 0.99,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\b\\w{0,256}size\\w*\\s*[<>=!]+": {
    "digests": [
     "451711e8fcea"
    ],
-   "exp": 1.03,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/precondition_check.py\u001f\\bexecv\\w*\\s*\\(": {
@@ -1183,7 +1183,7 @@
   },
   "core/audit/protocol_state.py\u001f_FIELD_CHAIN_RE": {
    "digests": [
-    "25cb7b7098e1"
+    "5628f99021a4"
    ],
    "exp": 1.0,
    "verdict": "linear"
@@ -1199,7 +1199,7 @@
    "digests": [
     "6791b0fd26a9"
    ],
-   "exp": 0.97,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/ptr_lifecycle.py\u001f_RCU_DEREF_RE": {
@@ -1234,7 +1234,7 @@
    "digests": [
     "87a22b640da8"
    ],
-   "exp": 1.04,
+   "exp": 1.02,
    "verdict": "linear"
   },
   "core/audit/release_order.py\u001f[\\w\\*\\s]\\b([A-Za-z_]\\w*)\\s*[,)]": {
@@ -1276,7 +1276,7 @@
    "digests": [
     "a0cc73423185"
    ],
-   "exp": 1.02,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "core/audit/return_contracts.py\u001fdecl_re": {
@@ -1437,8 +1437,8 @@
    "digests": [
     "8e1c68a0973c"
    ],
-   "exp": 1.0,
-   "verdict": "linear"
+   "exp": null,
+   "verdict": "noattack"
   },
   "core/audit/sweep.py\u001f\\b([A-Za-z_][A-Za-z0-9_]*)\\s*->": {
    "digests": [
@@ -1522,7 +1522,7 @@
    "digests": [
     "a99a1964e15b"
    ],
-   "exp": 1.0,
+   "exp": 1.03,
    "verdict": "linear"
   },
   "core/binary/glibc_versions.py\u001f_SEARCH_RE": {
@@ -1564,7 +1564,7 @@
    "digests": [
     "8fe688d1a940"
    ],
-   "exp": 1.08,
+   "exp": 1.01,
    "verdict": "linear"
   },
   "core/concepts/study.py\u001f\\b(struct\\s+\\w+|[A-Za-z_]\\w{3,}_[A-Za-z_": {
@@ -1683,7 +1683,7 @@
    "digests": [
     "37de29a408f1"
    ],
-   "exp": 1.49,
+   "exp": 1.99,
    "verdict": "adjudicated"
   },
   "core/inventory/extractors.py\u001fPATTERNS[1]": {
@@ -1844,28 +1844,28 @@
    "digests": [
     "5f33a892b9ad"
    ],
-   "exp": 1.99,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[2]": {
    "digests": [
     "74f670123f14"
    ],
-   "exp": 2.03,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[3]": {
    "digests": [
     "0fb08c380bf3"
    ],
-   "exp": 2.04,
+   "exp": 2.02,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[4]": {
    "digests": [
     "70e776e25c31"
    ],
-   "exp": 2.03,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[5]": {
@@ -1879,14 +1879,14 @@
    "digests": [
     "29eb48db7b62"
    ],
-   "exp": 2.04,
+   "exp": 1.94,
    "verdict": "adjudicated"
   },
   "core/iris/specs.py\u001flines[7]": {
    "digests": [
     "8eba6201f599"
    ],
-   "exp": 2.01,
+   "exp": 2.0,
    "verdict": "adjudicated"
   },
   "core/license/detector.py\u001f(?:please\\s+)?see\\s+(?:the\\s+file\\s+)?((": {
@@ -2442,7 +2442,7 @@
    "digests": [
     "ec4f60198160"
    ],
-   "exp": 1.09,
+   "exp": 1.0,
    "verdict": "linear"
   },
   "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001f\\b(the\\s+)?attacks?\\s+(may|can|could|wil": {
@@ -2506,7 +2506,7 @@
    "digests": [
     "db21eb0cc688"
    ],
-   "exp": 2.0,
+   "exp": 2.01,
    "verdict": "adjudicated"
   },
   "packages/joern/runner.py\u001f_CALL_RE": {

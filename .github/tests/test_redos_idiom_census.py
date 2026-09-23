@@ -1630,6 +1630,40 @@ def _seq_leading_anchor(seq) -> bool:
     return False
 
 
+def _first_set(nodes, flags: int) -> set[int]:
+    """TRUE first-set of a node sequence: the chars able to start a
+    match of it.  ``_tail_verdict``'s ``first_consumable`` unions the
+    whole continuation's charset instead — good enough for poison
+    choice, but as a FILL exclusion it starves the density lane
+    (``charset − union`` came out empty for an identifier-chain
+    tail whose union contains every word char), silently minting a
+    linear pin for a quadratic member."""
+    first: set[int] = set()
+    for node in nodes:
+        op, arg = node
+        if _is_zero_width(node):
+            continue
+        if op in (sre_parse.MAX_REPEAT, sre_parse.MIN_REPEAT):
+            first |= _first_set(arg[2], flags)
+            if arg[0] > 0 and not _is_transparent(node):
+                return first
+            continue
+        if op is sre_parse.SUBPATTERN:
+            first |= _first_set(arg[3], flags)
+            if not _is_transparent(node):
+                return first
+            continue
+        if op is sre_parse.BRANCH:
+            for branch in arg[1]:
+                first |= _first_set(branch, flags)
+            if not _is_transparent(node):
+                return first
+            continue
+        first |= _charset(node, flags)
+        return first
+    return first
+
+
 def _find_scan_restart_lanes(parsed, flags: int) -> list[dict]:
     """Rule S lanes: for an unbounded repeat R on the concatenation
     spine with a REQUIRED consuming continuation after it, the site
@@ -1669,8 +1703,24 @@ def _find_scan_restart_lanes(parsed, flags: int) -> list[dict]:
                 if charset:
                     tail = _tail_verdict(list(rest), flags)
                     first = set(tail["first_consumable"])
-                    fills = [c for c in sorted(charset - first)
+                    # Fills exclude the continuation's TRUE first-set
+                    # only (the union first_consumable stays for the
+                    # poison, where over-approximation is safe).
+                    true_first = _first_set(list(rest), flags)
+                    fills = [c for c in sorted(charset - true_first)
                              if c not in (10, 13)]
+                    if tail["consuming"] and not fills \
+                            and all(ord(ch) in charset for ch in entry):
+                        # STARVED density lane: no fill avoids the
+                        # continuation's first-set, so this repeat's
+                        # restart cost cannot be pumped — the member
+                        # must not silently pin linear on the other
+                        # lanes alone.  Regeneration routes starved
+                        # members to the identity-pinned manual lane.
+                        lanes.append({
+                            "entry": entry, "fill": "",
+                            "poison": "", "starved": True,
+                        })
                     poison = next(
                         (chr(c) for c in (1, 46, 59, 88, 10, 33, 2)
                          if c not in charset and c not in first),
@@ -1734,6 +1784,8 @@ def _build_scan_restart_attack(lane: dict, n: int) -> str | None:
     full re-scan.  The trailing-span pair pump does NOT fire on
     these shapes (no adjacent overlapping pair) — this family needs
     its own synthesis."""
+    if lane.get("starved"):
+        return None
     if lane.get("once"):
         # Single-attempt ambiguity pump: one entry, then a run the
         # repeat and its continuation must SPLIT.
@@ -1856,19 +1908,32 @@ def _regen_scan_expected(workers: int = 8) -> int:
 
     def classify(item):
         key, record = item
-        _lineno, pattern, flags, _mode = record["sites"][0]
+        lineno, pattern, flags, _mode = record["sites"][0]
         exponent, synthesized = _scan_oracle_classify(pattern, flags)
-        return key, record, exponent, synthesized
+        starved = any(
+            lane.get("starved")
+            for lane in _site_scan_lanes(_Site(
+                key, lineno, pattern, flags, "search", None,
+            ))
+        )
+        return key, record, exponent, synthesized, starved
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        for key, record, exponent, synthesized in pool.map(
+        for key, record, exponent, synthesized, starved in pool.map(
                 classify, sorted(members.items())):
             if record["digests"] <= set(_SCAN_ADJUDICATED):
                 # Never-compiled table string with a documented
                 # disposition (see _SCAN_ADJUDICATED) — pinned, not
                 # refused.
                 verdict = "adjudicated"
-            elif not synthesized:
+            elif not synthesized or (
+                    starved
+                    and (exponent is None or exponent < 1.5)):
+                # No lane synthesized, or a density lane was STARVED
+                # (no fill avoids the continuation's true first-set):
+                # the remaining lanes alone must not mint a linear
+                # pin — the manual-review lane is identity-pinned, so
+                # the member surfaces loudly until adjudicated.
                 verdict = "noattack"
             elif exponent is not None and exponent >= 1.5:
                 failures.append(
@@ -2770,6 +2835,19 @@ class ScanRestartCensus(unittest.TestCase):
         exponent, _ = _scan_oracle_classify(r"(?:ab){0,32}c!", 0)
         self.assertLess(exponent if exponent is not None else 1.0,
                         _SUPERLINEAR_EXP)
+        # The identifier-chain exemplar: the continuation's UNION
+        # charset covers every word char, so a fill drawn against it
+        # starved the density lane and minted a linear pin for this
+        # quadratic shape — the TRUE first-set ({ws, -, .}) restores
+        # the lane, and the run-start-pinned fix passes.
+        chain = r"([A-Za-z_]\w*)((?:\s*(?:->|\.)\s*[A-Za-z_]\w*)+)"
+        exponent, synthesized = _scan_oracle_classify(chain, 0)
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        exponent, _ = _scan_oracle_classify(r"(?<![\w.])" + chain, 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
 
     def test_members_match_the_pinned_verdicts(self) -> None:
         """Default-tier closure: the live Rule S proposal set equals
@@ -2883,18 +2961,30 @@ class ScanRestartCensus(unittest.TestCase):
 
     def test_noattack_lane_is_exactly_the_documented_list(self) -> None:
         """The scan-restart manual-review lanes are pinned by
-        IDENTITY so they cannot grow silently.  The noattack lane is
-        empty (the synthesizer built an attack for every proposed
-        member); the adjudicated lane is exactly the documented
-        never-compiled table strings, and every documented digest
-        must still be pinned (a stale disposition is drift too)."""
+        IDENTITY so they cannot grow silently.  The adjudicated lane
+        is exactly the documented never-compiled table strings, and
+        every documented digest must still be pinned (a stale
+        disposition is drift too).
+
+        Current noattack lane, one member, manually adjudicated
+        LINEAR: struct_field_checker ``_STRUCT_FIELD_RE`` — its
+        starved-density routing is a FIRST-SET over-approximation
+        (the ``(?:\s|(?=\*))`` gate's lookahead constrains the
+        following atoms to '*', which the assert-blind first-set
+        cannot see), and by inspection no fill can pass the
+        ws-or-star gate: a word-char run costs one O(1)-per-split
+        rejection per word start, so the scan is linear.  Same
+        manual-friction class as the trailing-span lane's
+        backreference member."""
         pinned = _load_scan_expected()["members"]
         noattack = sorted(
             key.replace("\x1f", " :: ")
             for key, row in pinned.items()
             if row["verdict"] == "noattack"
         )
-        self.assertEqual(noattack, [])
+        self.assertEqual(noattack, [
+            "core/audit/struct_field_checker.py :: _STRUCT_FIELD_RE",
+        ])
         adjudicated_digests: set[str] = set()
         for row in pinned.values():
             if row["verdict"] == "adjudicated":
@@ -2918,15 +3008,21 @@ class ScanRestartNightly(unittest.TestCase):
 
         def measure(item):
             key, record = item
-            _lineno, pattern, flags, _mode = record["sites"][0]
-            return key, _scan_oracle_classify(pattern, flags)
+            lineno, pattern, flags, _mode = record["sites"][0]
+            starved = any(
+                lane.get("starved")
+                for lane in _site_scan_lanes(_Site(
+                    key, lineno, pattern, flags, "search", None,
+                ))
+            )
+            return key, starved, _scan_oracle_classify(pattern, flags)
 
         items = [
             (key, record) for key, record in sorted(live.items())
             if pinned.get("\x1f".join(key)) is not None
         ]
         with ThreadPoolExecutor(max_workers=8) as pool:
-            for key, (exponent, synthesized) in pool.map(
+            for key, starved, (exponent, synthesized) in pool.map(
                     measure, items):
                 row = pinned["\x1f".join(key)]
                 if row["verdict"] == "adjudicated":
@@ -2935,11 +3031,15 @@ class ScanRestartNightly(unittest.TestCase):
                     # identity, not by measurement.
                     continue
                 if row["verdict"] == "noattack":
-                    if synthesized:
+                    if synthesized and not starved:
                         violations.append(
                             f"{key[0]} :: {key[1]}: noattack pin but "
                             f"the synthesizer now builds an attack — "
                             f"regenerate")
+                    elif exponent is not None and exponent >= 1.9:
+                        violations.append(
+                            f"{key[0]} :: {key[1]}: manual-lane pin "
+                            f"but a lane measures exp={exponent:.2f}")
                     continue
                 # Alarm threshold sits ABOVE the census threshold
                 # (1.6) so a pinned-linear member only fails on a
