@@ -558,6 +558,20 @@ def _client_model_name(llm_client: Any) -> str:
 # after their tokens were already billed.
 _CONSECUTIVE_FAIL_LIMIT = 3  # abort run after N consecutive batch failures
 
+# Truncation-failed batches are exempt from the consecutive-failure
+# abort (content-sized, not provider health — the split ladder handles
+# them), but they are NOT free: each is a full-price call with zero
+# yield, and when they keep arriving after split-retry the cause is
+# config-shaped (output budget vs model), identical for every future
+# batch. This cap bounds how many the phase will buy before conceding.
+# Both directions hurt: too LOW and a handful of genuinely oversized
+# items kills the phase for an otherwise healthy run (the split ladder
+# already discards per-item offenders); too HIGH and a systemic budget
+# misconfiguration burns that many full-price calls before the phase
+# stops (observed live pre-cap: hours of them). Six = two full split
+# ladders' worth of terminal single-item failures.
+_TRUNCATION_FAIL_LIMIT = 6
+
 # Estimated structured-output tokens ONE focus item costs in a Phase 2
 # response (concept + invariant/contract share, with evidence quotes).
 # Divides the per-call output budget into the batch-size ceiling
@@ -3107,6 +3121,8 @@ def run_phase2(
     discard_sink: list | None = None,
     vocab_sink: list | None = None,
     batch_target: int = 80,
+    should_stop: Any = None,
+    phase_stats: dict | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3115,6 +3131,17 @@ def run_phase2(
 
     When the model's RPM allows it, batches run in parallel using
     ``derive_max_workers`` from the audit executor to cap concurrency.
+
+    ``should_stop``: zero-arg callable polled at every batch boundary;
+    True stops dispatching NEW paid calls (in-flight batches finish).
+    The audit study consumer passes its queue's stop flag here — the
+    drain path's cooperative stop previously could not reach a running
+    phase, and an abandoned daemon thread kept buying batches until
+    process exit. ``phase_stats``: caller-owned dict this phase fills
+    with failure accounting (``batches_failed``,
+    ``truncation_failures``, ``truncation_capped``) — exceptions only
+    surface the all-failed case, and the consumer's burn breaker needs
+    to see partial-failure churn too.
 
     Returns:
         (concepts, invariants, contracts, bug_patterns, struct_annotations)
@@ -3158,7 +3185,8 @@ def run_phase2(
             batches, target, source_root, llm_client,
             on_batch, reading_list, doc_context=doc_context,
             correlate=correlate, discard_sink=discard_sink,
-            vocab_sink=vocab_sink,
+            vocab_sink=vocab_sink, should_stop=should_stop,
+            phase_stats=phase_stats,
         )
 
     logger.info("Phase 2: parallel dispatch, max_workers=%d", max_workers)
@@ -3166,7 +3194,8 @@ def run_phase2(
         batches, target, source_root, llm_client,
         on_batch, reading_list, max_workers, doc_context=doc_context,
         correlate=correlate, discard_sink=discard_sink,
-        vocab_sink=vocab_sink,
+        vocab_sink=vocab_sink, should_stop=should_stop,
+        phase_stats=phase_stats,
     )
 
 
@@ -3181,6 +3210,8 @@ def _run_phase2_serial(
     correlate: list[str] | None = None,
     discard_sink: list | None = None,
     vocab_sink: list | None = None,
+    should_stop: Any = None,
+    phase_stats: dict | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3192,10 +3223,29 @@ def _run_phase2_serial(
     all_struct_annots: list[dict[str, str]] = []
     total = len(batches)
     consecutive_failures = 0
+    truncation_failures = 0
     failures = 0
     successes = 0
+    stopped = False
+
+    def _note_stats() -> None:
+        if phase_stats is not None:
+            phase_stats["batches_failed"] = failures
+            phase_stats["truncation_failures"] = truncation_failures
+            phase_stats["truncation_capped"] = (
+                truncation_failures >= _TRUNCATION_FAIL_LIMIT
+            )
 
     for idx, (focus, context) in enumerate(batches):
+        if should_stop is not None and should_stop():
+            # Cooperative stop between paid calls: results already
+            # earned are kept, nothing new is bought.
+            logger.info(
+                "Phase 2: stop requested at batch %d/%d — halting "
+                "dispatch", idx + 1, total,
+            )
+            stopped = True
+            break
         try:
             concepts, invariants, contracts, bug_patterns, struct_annots = (
                 _run_batch_splitting_on_truncation(
@@ -3237,7 +3287,21 @@ def _run_phase2_serial(
                 # retries were already exhausted — says nothing about
                 # provider health, so it never feeds the
                 # consecutive-failure abort (which exists to stop
-                # paying a downed provider).
+                # paying a downed provider). It DOES feed the
+                # cumulative cap: persistent truncation after
+                # splitting is config-shaped (output budget vs model)
+                # and every further batch re-buys it at full price.
+                truncation_failures += 1
+                if truncation_failures >= _TRUNCATION_FAIL_LIMIT:
+                    logger.error(
+                        "Phase 2: %d output-truncation batch failures "
+                        "— output budget misconfigured for this model; "
+                        "halting the phase (raise "
+                        "RAPTOR_STUDY_MAX_OUTPUT_TOKENS or shrink "
+                        "--batch-target)",
+                        truncation_failures,
+                    )
+                    break
                 continue
             consecutive_failures += 1
             if consecutive_failures >= _CONSECUTIVE_FAIL_LIMIT:
@@ -3256,16 +3320,24 @@ def _run_phase2_serial(
         all_bug_patterns.extend(bug_patterns)
         all_struct_annots.extend(struct_annots)
 
-    if total and successes == 0 and failures:
+    _note_stats()
+    if total and successes == 0 and failures and not stopped:
         # Zero successful batches with at least one LLM failure —
         # "the run never happened", not "the code contains nothing".
         # A silently-empty result would synthesise and persist an
         # empty domain model, poisoning the project-canonical model
         # and churning every journal entry's domain_model_hash.
-        raise _BatchLLMError(
+        err = _BatchLLMError(
             f"all {failures} attempted Phase 2 batch(es) failed — "
             "no study output; refusing to synthesise an empty domain "
             "model")
+        if truncation_failures >= _TRUNCATION_FAIL_LIMIT:
+            # Deterministic-config marker: the consumer disables the
+            # study lane on sight instead of counting strikes — the
+            # same configuration re-buys the same failure on every
+            # future invocation.
+            err.config_shaped = True
+        raise err
 
     return (all_concepts, all_invariants, all_contracts,
             all_bug_patterns, all_struct_annots)
@@ -3283,6 +3355,8 @@ def _run_phase2_parallel(
     correlate: list[str] | None = None,
     discard_sink: list | None = None,
     vocab_sink: list | None = None,
+    should_stop: Any = None,
+    phase_stats: dict | None = None,
 ) -> tuple[
     list[Concept], list[Invariant], list[Contract],
     list[BugPattern], list[dict[str, str]],
@@ -3295,11 +3369,17 @@ def _run_phase2_parallel(
     _abort = _threading.Event()
     _fail_lock = _threading.Lock()
     _consecutive_failures = [0]
+    _truncation_failures = [0]
 
     _successes = [0]
 
     def _do_batch(args: tuple[int, list[StudyItem], list[StudyItem]]) -> tuple:
         if _abort.is_set():
+            return ([], [], [], [], [])
+        if should_stop is not None and should_stop():
+            # Cooperative stop between paid calls — same contract as
+            # the serial loop; queued batches drain without buying.
+            _abort.set()
             return ([], [], [], [], [])
         idx, focus, ctx = args
         result = _run_batch_splitting_on_truncation(
@@ -3349,8 +3429,21 @@ def _run_phase2_parallel(
         with _fail_lock:
             _failed[0] += 1
             # Truncation is content-sized, already split-retried, and
-            # no provider-health signal — see the sequential path.
-            if not truncated:
+            # no provider-health signal — see the sequential path. It
+            # still counts toward the cumulative config-shaped cap.
+            if truncated:
+                _truncation_failures[0] += 1
+                if _truncation_failures[0] == _TRUNCATION_FAIL_LIMIT:
+                    logger.error(
+                        "Phase 2: %d output-truncation batch failures "
+                        "— output budget misconfigured for this "
+                        "model; halting the phase (raise "
+                        "RAPTOR_STUDY_MAX_OUTPUT_TOKENS or shrink "
+                        "--batch-target)",
+                        _truncation_failures[0],
+                    )
+                    _abort.set()
+            else:
                 _consecutive_failures[0] += 1
             if _consecutive_failures[0] >= _CONSECUTIVE_FAIL_LIMIT:
                 logger.error(
@@ -3373,13 +3466,26 @@ def _run_phase2_parallel(
         on_error=_on_batch_error,
     )
 
-    if items and _successes[0] == 0 and _failed[0]:
+    if phase_stats is not None:
+        with _fail_lock:
+            phase_stats["batches_failed"] = _failed[0]
+            phase_stats["truncation_failures"] = _truncation_failures[0]
+            phase_stats["truncation_capped"] = (
+                _truncation_failures[0] >= _TRUNCATION_FAIL_LIMIT
+            )
+
+    _ext_stop = should_stop is not None and should_stop()
+    if items and _successes[0] == 0 and _failed[0] and not _ext_stop:
         # Zero successful batches with at least one LLM failure — the
         # run never happened; see the sequential path's twin check.
-        raise _BatchLLMError(
+        err = _BatchLLMError(
             f"all {_failed[0]} attempted Phase 2 batch(es) failed — "
             "no study output; refusing to synthesise an empty domain "
             "model")
+        if _truncation_failures[0] >= _TRUNCATION_FAIL_LIMIT:
+            # Deterministic-config marker — see the sequential twin.
+            err.config_shaped = True
+        raise err
 
     all_concepts: list[Concept] = []
     all_invariants: list[Invariant] = []
@@ -4289,6 +4395,8 @@ def run_study(
     on_progress: Any = None,
     correlate: list[str] | None = None,
     batch_target: int = 80,
+    should_stop: Any = None,
+    phase_stats: dict | None = None,
 ) -> DomainModel:
     """Run the full study pipeline: load items → Phase 2 → Phase 3 → save.
 
@@ -4300,6 +4408,15 @@ def run_study(
         correlate: Identifier names to correlate. When set, the LLM
             is additionally asked to examine the relationship between
             these identifiers (shared callers, contract kind, invariants).
+        should_stop: Zero-arg callable polled at every paid-call
+            boundary (Phase 2 batches, threat-frame derivation);
+            True stops buying new calls while keeping results already
+            earned. The audit study consumer wires its queue's
+            cooperative-stop flag here.
+        phase_stats: Caller-owned dict Phase 2 fills with failure
+            accounting (see ``run_phase2``) — partial-failure churn
+            is invisible in the return value, and the consumer's
+            burn breaker keys on it.
 
     Returns:
         The assembled DomainModel.
@@ -4420,6 +4537,8 @@ def run_study(
         discard_sink=receipt_discards,
         vocab_sink=vocab_entries,
         batch_target=batch_target,
+        should_stop=should_stop,
+        phase_stats=phase_stats,
     )
     _record_discards(output_dir, receipt_discards)
     if receipt_discards and on_progress:
@@ -4469,12 +4588,15 @@ def run_study(
     )
     _record_discards(output_dir, phase3_discards)
 
-    try:
-        _derive_threat_frame_invariants(
-            model, llm_client, on_progress=on_progress,
-        )
-    except Exception:
-        logger.debug("threat-frame derivation skipped", exc_info=True)
+    if should_stop is None or not should_stop():
+        # One more paid structured call — honours the same stop gate
+        # as the Phase 2 batches.
+        try:
+            _derive_threat_frame_invariants(
+                model, llm_client, on_progress=on_progress,
+            )
+        except Exception:
+            logger.debug("threat-frame derivation skipped", exc_info=True)
 
     if vocab_entries:
         (
