@@ -1450,6 +1450,18 @@ def build_corpus() -> list[CutFixture]:
         "    y = esc(x)\n"
         "    render(y)\n", 7, 9))
     fixtures.append(_fx(
+        "xss_class_shadow_of_def_callable", "xss", "CWE-79",
+        "callee_shadowed_by_module_class", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "class esc:\n"
+        "    def __init__(self, s):\n"
+        "        self.s = s\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 7, 9))
+    fixtures.append(_fx(
         "xss_catalog_root_local_shadow", "xss", "CWE-79",
         "catalog_root_shadowed_by_local", LABEL_MUST_NOT_SUPPRESS,
         "class FakeHtml:\n"

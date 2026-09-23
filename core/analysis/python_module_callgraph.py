@@ -462,12 +462,20 @@ def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
     * A ``global`` declaration of the name anywhere in the module: a
       sibling function that runs at any point before the analysed
       call can rewrite the module slot.
+    * A module-scope CLASS sharing a module-scope function def's name
+      (either order — flow-insensitive): the runtime binding is
+      whichever ran last, so the name proves neither body.
     """
     # Non-def bindings at module scope: same boundary walk as
     # local_binding_names (stops at def/class bodies) but WITHOUT
     # recording the def/class names themselves — those are the defs,
     # not rebinds — and skipping harvested lambda-assign statements.
+    # def/class names are collected separately so the class ∩ def
+    # collision can join the poison set without every ordinary class
+    # poisoning its own methods.
     nondef: set[str] = set()
+    def_names: set[str] = set()
+    class_names: set[str] = set()
 
     def _add_target(t: ast.AST) -> None:
         if isinstance(t, ast.Name):
@@ -480,15 +488,22 @@ def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
 
     def _walk(node: ast.AST) -> None:
         for child in ast.iter_child_nodes(node):
-            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                  ast.ClassDef, ast.Lambda)):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                def_names.add(child.name)
+                continue
+            if isinstance(child, ast.ClassDef):
+                class_names.add(child.name)
+                continue
+            if isinstance(child, ast.Lambda):
                 continue
             if isinstance(child, ast.Assign):
                 if (len(child.targets) == 1
                         and isinstance(child.targets[0], ast.Name)
                         and isinstance(child.value, ast.Lambda)):
                     # The lambda-def shape — a function record, not a
-                    # rebind of one.
+                    # rebind of one (but it IS a def name for the
+                    # class-collision check).
+                    def_names.add(child.targets[0].id)
                     continue
                 for t in child.targets:
                     _add_target(t)
@@ -522,7 +537,7 @@ def _module_rebound_names(tree: ast.Module) -> frozenset[str]:
         if isinstance(node, ast.Global):
             global_names.update(node.names)
 
-    return frozenset(nondef | global_names)
+    return frozenset(nondef | global_names | (class_names & def_names))
 
 
 # ---------------------------------------------------------------------------
