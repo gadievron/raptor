@@ -8,8 +8,8 @@ SEMVER/ECOSYSTEM ranges into ``Advisory``).
 The parser is defensive — every field is guarded with ``isinstance``
 checks because OSV records are user-submitted advisory data and have
 been observed to ship typed-incorrectly fields in the wild. A single
-malformed field never raises; only a missing/empty ``id`` raises
-:class:`ValueError`. Skipping malformed sub-objects (a non-dict in
+malformed field never raises; only a missing/empty/non-string ``id``
+raises :class:`ValueError`. Skipping malformed sub-objects (a non-dict in
 ``references``, a non-string event value, etc.) keeps best-effort
 extraction useful even when the record is partially corrupt.
 """
@@ -32,9 +32,13 @@ from .types import (  # noqa: E402
 
 
 def parse_record(record: dict[str, Any]) -> OsvRecord:
-    """Parse one OSV vulnerability record. Raises ``ValueError`` if ``id`` is missing."""
-    osv_id = str(record.get("id") or "")
-    if not osv_id:
+    """Parse one OSV vulnerability record. Raises ``ValueError`` if
+    ``id`` is missing or not a string."""
+    osv_id = record.get("id")
+    if not isinstance(osv_id, str) or not osv_id:
+        # str()-coercion here minted junk ids like "{'a': 1}" that
+        # then keyed caches and joined findings — a malformed id is
+        # the one documented raise.
         msg = "OSV record missing id"
         raise ValueError(msg)
 
@@ -44,14 +48,22 @@ def parse_record(record: dict[str, Any]) -> OsvRecord:
         aliases=aliases,
         summary=str(record.get("summary") or ""),
         details=str(record.get("details") or ""),
-        references=_parse_references(record.get("references") or []),
-        affected=_parse_affected(record.get("affected") or []),
-        severity=_parse_severity(record.get("severity") or []),
+        references=_parse_references(_list_or_empty(record.get("references"))),
+        affected=_parse_affected(_list_or_empty(record.get("affected"))),
+        severity=_parse_severity(_list_or_empty(record.get("severity"))),
         published=_parse_iso(record.get("published")),
         modified=_parse_iso(record.get("modified")),
         raw=record,
         upstream=_string_tuple(record.get("upstream")),
     )
+
+
+def _list_or_empty(value: Any) -> list[Any]:
+    """Container-field gate: a truthy non-list (``"references": 7``)
+    survives ``value or []`` and then explodes the iteration with
+    TypeError — which is not the graceful skip the module contract
+    promises for malformed fields. Only a real list participates."""
+    return value if isinstance(value, list) else []
 
 
 def _string_tuple(value: Any) -> tuple[str, ...]:
@@ -92,7 +104,7 @@ def _parse_affected(affected_raw: list[Any]) -> tuple[OsvAffected, ...]:
             {k: str(v) for k, v in pkg.items() if isinstance(v, str)}
             if isinstance(pkg, dict) else None
         )
-        ranges = _parse_ranges(entry.get("ranges") or [])
+        ranges = _parse_ranges(_list_or_empty(entry.get("ranges")))
         versions = _string_tuple(entry.get("versions"))
         eco = entry.get("ecosystem_specific")
         db = entry.get("database_specific")
@@ -123,7 +135,7 @@ def _parse_ranges(ranges_raw: list[Any]) -> tuple[OsvRange, ...]:
             type_str = "ECOSYSTEM"
         repo = r.get("repo") if isinstance(r.get("repo"), str) else None
         events: list[dict[str, str]] = []
-        for ev in (r.get("events") or []):
+        for ev in _list_or_empty(r.get("events")):
             if not isinstance(ev, dict):
                 continue
             # JSON numbers are valid event values in the wild —

@@ -305,3 +305,44 @@ def test_numeric_introduced_zero_is_kept() -> None:
     assert rec.affected[0].ranges[0].events == (
         {"introduced": "0"}, {"fixed": "2.0"},
     )
+
+
+# --- container-typed-wrong fields (hostile / malformed feeds) -------------
+
+def test_non_list_container_fields_never_raise() -> None:
+    """OSV records are user-submitted advisory data; a truthy non-list
+    where a list belongs (``"references": 7``) must degrade to empty
+    per the module contract ("A single malformed field never raises"),
+    not TypeError out of the iteration."""
+    rec = parse_record({
+        "id": "GHSA-x",
+        "references": 7,
+        "affected": 7,
+        "severity": 7,
+    })
+    assert rec.id == "GHSA-x"
+    assert rec.references == ()
+    assert rec.affected == ()
+    assert rec.severity == ()
+
+
+def test_non_list_nested_ranges_and_events_never_raise() -> None:
+    rec = parse_record({
+        "id": "GHSA-y",
+        "affected": [
+            {"package": {"name": "foo"}, "ranges": 7},
+            {"package": {"name": "bar"},
+             "ranges": [{"type": "SEMVER", "events": 7}]},
+        ],
+    })
+    assert rec.affected[0].ranges == ()
+    assert rec.affected[1].ranges[0].events == ()
+
+
+def test_non_string_id_raises_value_error() -> None:
+    """A non-string ``id`` must hit the existing malformed-id path —
+    str()-coercion minted junk ids like "{'a': 1}" that then keyed
+    caches and joined findings."""
+    for junk in ({"a": 1}, ["GHSA-z"], 42, None, ""):
+        with pytest.raises(ValueError, match="id"):
+            parse_record({"id": junk})

@@ -98,7 +98,11 @@ class OsvClient:
             return None
         try:
             return parse_record(record)
-        except ValueError as exc:
+        except (TypeError, ValueError) as exc:
+            # TypeError belts future parser drift: the record may
+            # already be disk-cached (write precedes parse), so a
+            # parse crash class outside the catch would replay on
+            # every cached read for the TTL instead of degrading.
             log.debug("osv: skipping malformed record %s: %s", vuln_id, exc)
             return None
 
