@@ -102,10 +102,18 @@ class CachePoisoningCheck(Check):
         return findings
 
 
-@registry.register(CheckCategory.INJECTION, "V5.1.13", "Web cache deception risk")
+@registry.register(
+    CheckCategory.INJECTION, "V5.1.13", "Web cache deception risk",
+    requires_auth=True,
+)
 class CacheDeceptionCheck(Check):
     risk = "active"
     def run(self, client, target_url, session=None, discovery=None):
+        # Deception is only observable on responses that carry
+        # authenticated data — registered requires_auth so Phase 5
+        # actually hands this check a session (Phase 4 passes
+        # session=None; unauthenticated registration made this body
+        # structurally unreachable).
         if not session or not session.authenticated:
             return []
 
