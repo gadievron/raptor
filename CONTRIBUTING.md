@@ -89,8 +89,10 @@ frontmatter field pointing at the CLI entry point. The entry point goes in
 - Use `pytest`. No `jsonschema` validation — assert on actual data shapes.
 - Test against production-class object shapes, not toy stubs.
 - When testing sandbox behaviour, use the sandbox itself (don't mock it).
-- Gate slow tests (network, LLM, subprocess) with
-  `@pytest.mark.skipif` or the `RAPTOR_SLOW_TESTS` env var so the fast
+- Gate slow tests (network, LLM, subprocess) with the marker
+  doctrine: `@pytest.mark.slow` / `integration` / `corpus` (deselected
+  by default via pytest.ini, run by the nightly lanes), or
+  `@pytest.mark.skipif` for environment-dependent cases — the fast
   suite stays under a few seconds.
 
 
