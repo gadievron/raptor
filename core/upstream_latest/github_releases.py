@@ -176,6 +176,12 @@ def resolve_tag_to_sha(
     return sha
 
 
+# Page budget for the tags scan. Small on purpose: 300 tags of headroom
+# covers real nightly cadences without turning every lookup on a
+# tag-less repo into an unbounded API walk.
+_TAGS_PAGE_CAP = 3
+
+
 def latest_tag(
     repo: str,
     *,
@@ -194,22 +200,33 @@ def latest_tag(
 
     Use this when ``latest_release`` 404s (project doesn't ship
     GitHub Releases, only tags).
+
+    Scans up to :data:`_TAGS_PAGE_CAP` pages: the tags endpoint is
+    commit-date ordered, so a project that cuts nightlies buries its
+    stable tags pages deep — a single-page read concluded
+    NoStableVersionsFound after seeing 100 pre-releases.
     """
-    url = (
+    base_url = (
         f"{GITHUB_API_BASE}/repos/{_validated_slug(repo)}"
         f"/tags?per_page={per_page}"
     )
-    data = _fetch_cached_json(
-        url, http=http, cache=cache, ttl_seconds=ttl_seconds,
-        github_token=github_token,
-    )
-    if not isinstance(data, list):
-        msg = f"GitHub /tags for {repo} returned non-list"
-        raise UpstreamLookupError(msg)
-    names = [
-        entry["name"] for entry in data
-        if isinstance(entry, dict) and isinstance(entry.get("name"), str)
-    ]
+    names: list[str] = []
+    for page in range(1, _TAGS_PAGE_CAP + 1):
+        # Page 1 keeps the bare URL so existing cache keys stay valid.
+        url = base_url if page == 1 else f"{base_url}&page={page}"
+        data = _fetch_cached_json(
+            url, http=http, cache=cache, ttl_seconds=ttl_seconds,
+            github_token=github_token,
+        )
+        if not isinstance(data, list):
+            msg = f"GitHub /tags for {repo} returned non-list"
+            raise UpstreamLookupError(msg)
+        names.extend(
+            entry["name"] for entry in data
+            if isinstance(entry, dict) and isinstance(entry.get("name"), str)
+        )
+        if len(data) < per_page:
+            break  # short page = last page; no further requests
     winner = highest_stable(names)
     if winner is None:
         msg = f"no stable-semver tags found for {repo}"
