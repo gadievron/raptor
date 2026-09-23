@@ -401,7 +401,19 @@ def _classify_destination(
         if not m:
             continue
         rhs = m.group(1).strip()
-        cond = re.match(r".+\?\s*(.+?)\s*:\s*(.+)", rhs)
+        # Ternary-arm split. The true-arm group is delimited by
+        # non-whitespace-non-colon on both ends: the naive trim
+        # spelling ``\s*(.+?)\s*:`` overlaps three unbounded repeats
+        # on whitespace, and an assignment line with a ``?`` followed
+        # by a long whitespace run and no ``:`` makes the engine try
+        # every split of the run — cubic in the line length. For
+        # syntactically valid ternaries the split and both captures
+        # are unchanged; only invalid shapes (whitespace-only or
+        # colon-leading true-arm) no longer match, and those arms
+        # classified as garbage either way.
+        cond = re.match(
+            r".+\?\s*([^\s:](?:[^:\n]*[^\s:])?)\s*:\s*(.+)", rhs,
+        )
         arms = [cond.group(1), cond.group(2)] if cond else [rhs]
         for arm in arms:
             arm = arm.strip()

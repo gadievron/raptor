@@ -593,3 +593,36 @@ class TestDestinationArgument:
         assert res.outcome == "confirmed"
         undominated = [r for r in res.releases if not r["dominated"]]
         assert undominated[0]["destination"] == "fd"
+
+
+class TestTernarySplitWhitespaceRun:
+    def test_ternary_whitespace_run_is_fast(self):
+        """Hostile assignment RHS with a ``?`` followed by a long
+        whitespace run and no ``:``: the previous trim spelling
+        ``\\s*(.+?)\\s*:`` overlapped three unbounded repeats on
+        whitespace and tried every split of the run between them —
+        cubic in the line length. The \\S-delimited arm spelling is
+        linear. Both-direction bound: fast AND real ternary
+        assignments still classify."""
+        from core.audit.release_order import _classify_destination
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "out = cond ?" + " " * (1 << 16) + "x"
+        with cpu_budget(1.0, what="ternary whitespace-run classify"):
+            assert _classify_destination("out", [hostile], ("p",)) \
+                == "unresolved"
+
+    def test_ternary_arm_classification_unchanged(self):
+        from core.audit.release_order import _classify_destination
+
+        # True-arm aliases a param -> escaping vote; both arms fresh
+        # calls -> internal.
+        assert _classify_destination(
+            "out", ["out = ok ? dst : make_buf();"], ("dst",),
+        ) == "unresolved"  # mixed escaping+internal
+        assert _classify_destination(
+            "out", ["out = ok ? make_a() : make_b();"], ("p",),
+        ) == "internal"
+        assert _classify_destination(
+            "out", ["out = ok ? dst : src;"], ("dst", "src"),
+        ) == "escaping"
