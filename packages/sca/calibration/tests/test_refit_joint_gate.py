@@ -148,17 +148,20 @@ def test_joint_rejected_when_single_pass_also_failed_gate(
     assert report.proposed_values == {}
 
 
-def test_single_pass_tmp_removed_when_grid_search_raises(
+def test_single_pass_failure_leaves_corpus_untouched(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A raise inside the in-line single-pass search must not leak
-    the throwaway ``.<date>.single.tmp`` report file."""
+    """A raise inside the in-line single-pass search must leave the
+    corpus dir untouched — the metrics-only single pass never
+    receives a corpus-dir report path to leak (its historical
+    ``.<date>.single.tmp`` throwaway lived under the repo-committed
+    ``refit/`` dir)."""
     _tiny_corpus(tmp_path)
 
     def _boom(corpus_dir: Path, **kwargs: Any) -> RefitReport:
-        out: Path = kwargs["out_path"]
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text("{}")            # partial write, then die
+        # The in-line call must be metrics-only — no disk target.
+        assert kwargs.get("out_path") is None
+        assert not kwargs.get("update_snapshot")
         raise RuntimeError("mid-search failure")
 
     monkeypatch.setattr(refit_mod, "grid_search_refit", _boom)
@@ -167,5 +170,4 @@ def test_single_pass_tmp_removed_when_grid_search_raises(
             tmp_path, min_samples=1, seed=7, restarts=1,
             out_path=tmp_path / "joint.json",
         )
-    leftovers = list((tmp_path / "refit").glob(".*.single.tmp"))
-    assert leftovers == []
+    assert not (tmp_path / "refit").exists()
