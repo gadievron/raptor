@@ -102,7 +102,10 @@ def sage_evidence_row(ev: Evidence) -> str:
         raw_hash = ""
     elif re.fullmatch(r"[0-9a-fA-F]+", raw_hash):
         raw_hash = raw_hash.lower()
-    loc = f"{file}:{ev.line}" if ev.line else file
+    # `is not None`, not truthiness: line 0 is a real anchor for
+    # whole-file evidence, and dropping it desyncs the writer/parser
+    # round trip (the hash tag would re-parse with no line).
+    loc = f"{file}:{ev.line}" if ev.line is not None else file
     h_tag = f" [h={raw_hash}]" if raw_hash else ""
     return f"  Evidence ({kind}): {loc}{h_tag} — {obs}"
 

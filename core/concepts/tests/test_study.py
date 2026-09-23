@@ -3147,3 +3147,88 @@ class TestFindLocalModelsSiblingWalk:
 
         got = _find_local_models(out)
         assert got[0] == new_dir / "domain-model.json"
+
+
+class TestBatchWorkerNeverBlocksExit:
+    """A wall-timed-out batch's stray LLM call must not hold the
+    process hostage: the worker is a daemon thread (non-daemon
+    executor threads are joined at interpreter exit, so one hung API
+    call per timed-out batch blocked study process exit)."""
+
+    def test_timeout_leaves_only_daemon_worker(self, monkeypatch):
+        import threading
+        import time as _time
+
+        import pytest
+
+        from core.concepts import study as study_mod
+
+        release = threading.Event()
+        seen = {}
+
+        class _Client:
+            def generate_structured(self, *a, **kw):
+                seen["daemon"] = threading.current_thread().daemon
+                release.wait(10)
+                return {}
+
+        monkeypatch.setattr(study_mod, "_BATCH_WALL_TIMEOUT", 0.2)
+        with pytest.raises(study_mod._BatchLLMError,
+                           match="wall-timeout"):
+            study_mod._run_one_batch(
+                0, 1, [], [], "t", "", _Client(), None,
+                on_batch=None,
+            )
+        try:
+            deadline = _time.monotonic() + 5
+            while "daemon" not in seen:
+                assert _time.monotonic() < deadline
+                _time.sleep(0.01)
+            assert seen["daemon"] is True, (
+                "stray batch worker is non-daemon — a hung call "
+                "blocks interpreter exit"
+            )
+        finally:
+            release.set()
+
+    def test_worker_exception_surfaces_as_batch_error(self):
+        import pytest
+
+        from core.concepts import study as study_mod
+
+        class _Client:
+            def generate_structured(self, *a, **kw):
+                raise RuntimeError("boom")
+
+        with pytest.raises(study_mod._BatchLLMError, match="boom"):
+            study_mod._run_one_batch(
+                0, 1, [], [], "t", "", _Client(), None,
+                on_batch=None,
+            )
+
+
+class TestDerivedConfidenceDeliberatelyUncompiled:
+    def test_derived_not_a_grade_and_not_compiled(self, tmp_path):
+        """Threat-frame invariants carry confidence='derived' — kept
+        OUTSIDE CONFIDENCE_GRADES on purpose so rule compilation never
+        turns LLM inference into a mechanical checker. This pins the
+        exclusion as deliberate."""
+        from core.concepts.compiler import compile_model
+        from core.concepts.model import (
+            CONFIDENCE_GRADES,
+            DomainModel,
+        )
+
+        assert "derived" not in CONFIDENCE_GRADES
+
+        class _NeverCalled:
+            def __getattr__(self, name):
+                raise AssertionError(
+                    "derived invariant reached the compiler LLM")
+
+        model = DomainModel(invariants=[Invariant(
+            id="tf", concept="c", statement="s", negation="n",
+            confidence="derived",
+        )])
+        assert compile_model(model, tmp_path, _NeverCalled(),
+                             min_confidence="inferred") == []
