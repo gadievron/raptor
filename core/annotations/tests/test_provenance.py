@@ -289,6 +289,47 @@ class TestDetectCorroborationFacts:
         assert out.stdout.strip() == "self"
 
 
+class TestDeepChainScriptDetection:
+    def test_script_beyond_recorded_window_is_still_recorded(
+        self, tmp_path,
+    ):
+        # Stacking fork intermediaries under script(1) used to push
+        # the verdict-bearing name off the 4-deep recorded chain; the
+        # scan now continues deeper and appends it. Emulated with a
+        # wrapper FILE named 'script' (the kernel sets comm to the
+        # executed file's name), so the test needs no util-linux.
+        import stat
+        import subprocess
+        import sys as _sys
+        code = (
+            "import sys; sys.path.insert(0, %r); "
+            "from core.annotations.provenance import _detect_parent_chain; "
+            "print(_detect_parent_chain())" % str(pathlib_root)
+        )
+        pyfile = tmp_path / "leaf.py"
+        pyfile.write_text(code + "\n")
+        # Chain of 5 fork intermediaries under the 'script'-named
+        # wrapper; each hop is its own file to sidestep quoting.
+        nxt = f"{_sys.executable} {pyfile}"
+        for i in range(5):
+            hop = tmp_path / f"hop{i}.sh"
+            hop.write_text(f"#!/bin/sh\nsh {nxt}\n"
+                           if nxt.endswith(".sh") else
+                           f"#!/bin/sh\n{nxt}\n")
+            hop.chmod(hop.stat().st_mode | stat.S_IXUSR)
+            nxt = str(hop)
+        wrapper = tmp_path / "script"
+        wrapper.write_text(f"#!/bin/sh\nsh {nxt}\n")
+        wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+        out = subprocess.run(
+            [str(wrapper)], capture_output=True, text=True, check=True,
+        )
+        chain = out.stdout.strip()
+        assert "script" in chain.split(","), chain
+        # And the verdict keys on it wherever it appears.
+        assert not is_human_grade(_human_interactive(parents=chain))
+
+
 class TestValidCorroborationValues:
     def test_envm_values(self):
         for v in ("none", "claudecode", "trusted", "ssh",

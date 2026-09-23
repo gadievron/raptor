@@ -188,6 +188,11 @@ CORROBORATION_PRE_ERA = "pre-era"
 _PARENTS_VALUE_RE = re.compile(r"[A-Za-z0-9_.,-]{1,128}")
 _PARENTS_UNKNOWN = "unknown"
 _PARENT_CHAIN_DEPTH = 4
+# The walk itself goes deeper than the recorded window: a wrapper
+# that stacks fork intermediaries would otherwise push the
+# verdict-bearing ``script`` name off the recorded chain. Bounded so
+# a pathological process tree can't stall the stamp.
+_PARENT_SCAN_DEPTH = 32
 
 _STD_FDS = ("stdin", "stdout", "stderr")
 _TTY_NONE = "none"
@@ -254,16 +259,28 @@ def _detect_parent_chain() -> str:
     ancestors (nearest first), or ``unknown`` where /proc is
     unavailable. Audit-trail first: names are attacker-renameable,
     so readers only key on the stock ``script`` wrapper; the rest
-    exists so a forged stamp records the chain that produced it."""
+    exists so a forged stamp records the chain that produced it.
+
+    The scan continues past the recorded window (to
+    ``_PARENT_SCAN_DEPTH``) looking for ``script``: stacking fork
+    intermediaries under ``script -qec`` pushed the verdict-bearing
+    name off a fixed-depth record, so a deeper occurrence is
+    appended to the recorded chain."""
     if not Path("/proc/self/stat").exists():
         return _PARENTS_UNKNOWN
     names: list[str] = []
+    deep_script = False
     pid = os.getppid()
-    while pid > 1 and len(names) < _PARENT_CHAIN_DEPTH:
+    depth = 0
+    while pid > 1 and depth < _PARENT_SCAN_DEPTH:
         name = _comm(pid)
         if name is None:
             break
-        names.append(name)
+        if len(names) < _PARENT_CHAIN_DEPTH:
+            names.append(name)
+        elif name == "script":
+            deep_script = True
+        depth += 1
         try:
             stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
             # ppid is the 4th field, after the parenthesised comm
@@ -271,6 +288,8 @@ def _detect_parent_chain() -> str:
             pid = int(stat.rsplit(")", 1)[1].split()[1])
         except (OSError, ValueError, IndexError):
             break
+    if deep_script and "script" not in names:
+        names.append("script")
     return ",".join(names) if names else _PARENTS_UNKNOWN
 
 
