@@ -101,14 +101,16 @@ _DANGER_CHARS = {
     # dangerous depends on how the value is joined downstream —
     # ``join(base, name, "x")`` escapes via name=".." — which the
     # charset model cannot see, so '.' must be excluded for the
-    # verdict to be sound.  Residual, named: the WINDOWS-only ':'
-    # contexts (drive-relative ``C:evil``, NTFS alternate data
-    # streams) are not covered — adding ':' would decline the
-    # canonical separator-stripping fix shape (``re.sub(r'[/\\.]+'``)
-    # that this tier exists to certify, and no routing funnels
-    # Windows-path findings into this class the way CWE-88 funnelled
-    # argv findings into cmdi.  Revisit if a Windows-target corpus
-    # lands.
+    # verdict to be sound.  Residuals, named: (a) the
+    # WINDOWS-only ':' contexts (drive-relative ``C:evil``, NTFS
+    # alternate data streams); (b) the decode-after-validate channel
+    # ('%': a sink that URL-decodes AFTER the check turns
+    # ``%2e%2e%2f`` into ``../``). Both excluded because either char
+    # would decline the canonical separator-stripping fix shape
+    # (``re.sub(r'[/\\.]+'``) this tier exists to certify, and no
+    # routing funnels Windows-path or decode-order findings into this
+    # class the way CWE-88 funnelled argv findings into cmdi.
+    # Revisit if such a corpus lands.
     "pathtrav": ["/", "\\", "."],
     # Contexts: POSIX shell strings, cmd.exe strings.
     # Shell metachars that introduce command separation, substitution,
@@ -167,15 +169,21 @@ _DANGER_CHARS = {
     "sqli":     ["'", '"', ";", "-", " ", "\t", "\n", "\r",
                  "=", "(", ")", "`", "[", "]", "\\", "#"],
     # Contexts: element text, quoted attributes, unquoted attributes,
-    # URL-valued attributes.
+    # URL-valued attributes (incl. the entity-decoding channel).
     # XSS tag- and attribute-breakers PLUS unquoted-attribute-context
     # injectors: whitespace and '=' add new attributes without any of
     # <>"' (``x onmouseover=...``), '`' breaks IE-legacy attributes.
     # ':' / '(' / ')' cover the URL-valued attribute context (href,
     # src, formaction): ``javascript:alert(1)`` executes from a
     # QUOTED attribute using none of the tag/attribute breakers.
+    # '&' covers the ENTITY-DECODING channel inside attribute values:
+    # HTML decodes ``&#58;`` etc. before URL parsing, so
+    # ``javascript&#58;alert&#40;1&#41;`` spells the same payload from
+    # letters/digits plus '&', '#', ';' alone — and every entity needs
+    # the '&' lead, so excluding '&' closes the whole channel without
+    # also outlawing '#' and ';'.
     "xss":      ["<", ">", '"', "'", " ", "\t", "\n", "=", "`",
-                 ":", "(", ")"],
+                 ":", "(", ")", "&"],
 }
 # Structural superset: the argv context can never rule out a
 # downstream command-string join, so cmdi_argv = cmdi ∪ argv-specific.
