@@ -56,7 +56,10 @@ a single dict delete rather than a walk.
 # scorecard producer slices its persisted reasoning text
 # (`analysis_reasoning` / `this_reasoning` / `sample_reasoning` /
 # `checker_ruling` / `reason`) by this value before handing the sample
-# over. Defined once here so the producers cannot drift apart;
+# over, and the sink (`ModelScorecard._append_sample`) additionally
+# bounds EVERY string leaf by it — so sibling fields without a
+# producer slice, and forged/corrupt upstream strings, are bounded by
+# construction. Defined once here so the producers cannot drift apart;
 # `tests/test_reasoning_cap_unique.py` is the parse-time guard and its
 # PRODUCERS list must name every module that slices by the cap.
 _MAX_REASONING_CHARS = 500

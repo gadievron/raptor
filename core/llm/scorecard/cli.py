@@ -1196,8 +1196,9 @@ def cmd_mark(args: argparse.Namespace) -> int:
     sample = None
     if args.note:
         # Single-line operator note attached to the disagreement-
-        # samples log on incorrect outcomes. Bounded by
-        # ``record_event``'s caps + retain_samples gate.
+        # samples log on incorrect outcomes. Length-bounded at the
+        # sink (``_append_sample`` slices every string leaf to
+        # ``_MAX_REASONING_CHARS``) and gated by retain_samples.
         sample = {"note": args.note}
     sc.record_event(
         decision_class=args.decision_class,

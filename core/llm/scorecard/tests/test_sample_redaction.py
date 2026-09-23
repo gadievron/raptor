@@ -434,3 +434,65 @@ class TestTopLevelKeyRedaction:
             "ts", "event_type", "this_reasoning", "other_reasoning",
         }
         _assert_redacted_at_rest(sc_path)
+
+
+class TestSampleBoundedAtSink:
+    """Every string leaf in a persisted sample is length-bounded at
+    the single sink (``_append_sample``), alongside the redaction
+    walk. The per-producer ``_MAX_REASONING_CHARS`` slices remain the
+    first line, but the sink makes the package's bounding claim true
+    by construction — pre-fix, sibling fields (function_id, trigger,
+    method, the mark --note) and forged/corrupt run-report strings
+    shipped unsliced, parking multi-MB strings in the sidecar that
+    every read re-parses under the flock."""
+
+    def test_every_string_leaf_bounded(self, scorecard, sc_path):
+        from core.llm.scorecard import _MAX_REASONING_CHARS
+        big = "N" * 1_000_000
+        scorecard.record_event(
+            "dc", "m", "cheap_short_circuit", "incorrect",
+            sample={
+                "note": big,
+                "reasoning": big,
+                "nested": {"deep": [big, {"k": big}]},
+            },
+        )
+        raw = json.loads(sc_path.read_text())
+        samples = raw["models"]["m"]["dc"]["disagreement_samples"]
+
+        def _walk(v):
+            if isinstance(v, str):
+                assert len(v) <= _MAX_REASONING_CHARS
+            elif isinstance(v, dict):
+                for k, x in v.items():
+                    _walk(k)
+                    _walk(x)
+            elif isinstance(v, list):
+                for x in v:
+                    _walk(x)
+
+        _walk(samples)
+        assert len(sc_path.read_text()) < 100_000
+
+    def test_short_values_pass_unsliced(self, scorecard, sc_path):
+        scorecard.record_event(
+            "dc", "m", "cheap_short_circuit", "incorrect",
+            sample={"note": "short operator note"},
+        )
+        raw = json.loads(sc_path.read_text())
+        sample = raw["models"]["m"]["dc"]["disagreement_samples"][0]
+        assert sample["note"] == "short operator note"
+
+    def test_cli_mark_note_bounded(self, tmp_path, monkeypatch, capsys):
+        from core.llm.scorecard import _MAX_REASONING_CHARS
+        from core.llm.scorecard.cli import main
+        sidecar = tmp_path / "sc.json"
+        rc = main([
+            "--path", str(sidecar), "mark", "dc", "incorrect",
+            "--model", "m", "--note", "X" * 100_000,
+        ])
+        assert rc == 0
+        raw = json.loads(sidecar.read_text())
+        sample = raw["models"]["m"]["dc"]["disagreement_samples"][0]
+        assert len(sample["note"]) <= _MAX_REASONING_CHARS
+        capsys.readouterr()

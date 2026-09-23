@@ -365,20 +365,33 @@ def _wilson_upper_bound(successes: int, failures: int, *,
     return (centre + spread) / denom
 
 
-def _redact_tree(v: object) -> object:
-    """Secret-redact every string reachable in a sample value.
+def _bounded(s: str) -> str:
+    """Slice one persisted-sample string leaf to the canonical
+    reasoning cap. Sink-side belt-and-braces under the per-producer
+    slices: sibling fields without a producer slice (join keys,
+    triggers, method names) and forged/corrupt run-report strings
+    must not park multi-MB text in the sidecar, which every read
+    re-parses under the flock. Applied AFTER redaction so a slice
+    can never cut a secret out of pattern range first."""
+    from core.llm.scorecard import _MAX_REASONING_CHARS
+    return s[:_MAX_REASONING_CHARS]
 
-    Shape-preserving for the JSON-representable types (str redacted;
-    dict/list/tuple descended; int/float/bool/None passed through —
-    they carry no text). Anything else is str-coerced and redacted:
-    an exotic type would fail JSON serialisation anyway, and coercion
-    is the fail-safe direction — a value must never reach disk
-    unredacted just because of its type.
+
+def _redact_tree(v: object) -> object:
+    """Secret-redact AND length-bound every string reachable in a
+    sample value.
+
+    Shape-preserving for the JSON-representable types (str redacted
+    then sliced; dict/list/tuple descended; int/float/bool/None passed
+    through — they carry no text). Anything else is str-coerced and
+    redacted: an exotic type would fail JSON serialisation anyway, and
+    coercion is the fail-safe direction — a value must never reach
+    disk unredacted just because of its type.
     """
     from core.security.redaction import redact_secrets
 
     if isinstance(v, str):
-        return redact_secrets(v)
+        return _bounded(redact_secrets(v))
     if isinstance(v, dict):
         # Keys join the pass too: a secret-bearing string used as a
         # dict key (an LLM-echoed header dict riding a model-derived
@@ -387,7 +400,7 @@ def _redact_tree(v: object) -> object:
         # keys pass through: they carry no text and str-coercing
         # them would corrupt the shape on reload.
         return {
-            (redact_secrets(k) if isinstance(k, str) else k):
+            (_bounded(redact_secrets(k)) if isinstance(k, str) else k):
                 _redact_tree(x)
             for k, x in v.items()
         }
@@ -395,7 +408,7 @@ def _redact_tree(v: object) -> object:
         return [_redact_tree(x) for x in v]
     if v is None or isinstance(v, (int, float, bool)):
         return v
-    return redact_secrets(str(v))
+    return _bounded(redact_secrets(str(v)))
 
 
 def _now_iso() -> str:
@@ -715,7 +728,11 @@ class ModelScorecard:
         value); numeric/bool/None leaves carry no text and pass
         through, and any other type is str-coerced THEN redacted, so
         no value shape ever bypasses the pass. Container shapes are
-        preserved. Caller holds the lock.
+        preserved. Every string leaf (and key) is also length-bounded
+        here — the sink-side counterpart of the per-producer
+        ``_MAX_REASONING_CHARS`` slices, so a producer field without
+        its own slice (or a forged run report upstream) cannot park
+        multi-MB strings in the sidecar. Caller holds the lock.
         """
         from core.security.redaction import redact_secrets
 
@@ -727,7 +744,7 @@ class ModelScorecard:
             "ts": _now_iso(),
             "event_type": event_type,
             **{
-                (redact_secrets(k) if isinstance(k, str) else k):
+                (_bounded(redact_secrets(k)) if isinstance(k, str) else k):
                     _redact_tree(v)
                 for k, v in sample.items()
             },

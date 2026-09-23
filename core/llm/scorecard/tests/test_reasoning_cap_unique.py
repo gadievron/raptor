@@ -27,6 +27,10 @@ import unittest
 
 SCORECARD_DIR = pathlib.Path(__file__).resolve().parents[1]
 PRODUCERS = [
+    # The sink itself: ``ModelScorecard._append_sample`` bounds every
+    # persisted string leaf by the cap (belt-and-braces under the
+    # per-producer slices).
+    "scorecard.py",
     "tool_evidence.py",
     "judge.py",
     "consensus.py",
