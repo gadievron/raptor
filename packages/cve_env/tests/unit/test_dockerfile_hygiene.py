@@ -393,3 +393,49 @@ def test_sanitize_label_escaped_backslash_pair_preserved() -> None:
     the closing quote into an escaped quote and corrupts the line."""
     line = 'LABEL a="x\\\\" b="y"'
     assert sanitize_dockerfile(line) == line
+
+
+# ─── P17: privilege-escalation primitives in build steps ─────────────
+
+
+def _p17_issues(text: str) -> list[str]:
+    from cve_env.utils.dockerfile_hygiene import validate_dockerfile_semantics
+
+    return [i for i in validate_dockerfile_semantics(text) if i.startswith("P17")]
+
+
+def test_p17_rejects_symbolic_setuid_grant() -> None:
+    text = "FROM alpine:3.19\nRUN chmod u+s /usr/local/bin/helper\n"
+    assert _p17_issues(text), "chmod u+s must be rejected (P17)"
+
+
+def test_p17_rejects_numeric_setuid_mode() -> None:
+    for mode in ("4755", "2755", "6755"):
+        text = f"FROM alpine:3.19\nRUN chmod {mode} /usr/local/bin/helper\n"
+        assert _p17_issues(text), f"chmod {mode} must be rejected (P17)"
+
+
+def test_p17_rejects_sudoers_write() -> None:
+    text = (
+        "FROM alpine:3.19\n"
+        "RUN echo 'app ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers.d/app\n"
+    )
+    assert _p17_issues(text)
+
+
+def test_p17_rejects_setcap() -> None:
+    text = "FROM alpine:3.19\nRUN setcap cap_net_raw+ep /usr/bin/probe\n"
+    assert _p17_issues(text)
+
+
+def test_p17_rejects_copy_into_sudoers() -> None:
+    text = "FROM alpine:3.19\nCOPY app.sudoers /etc/sudoers.d/app\n"
+    assert _p17_issues(text)
+
+
+def test_p17_allows_ordinary_chmod() -> None:
+    text = (
+        "FROM alpine:3.19\n"
+        "RUN chmod +x /entrypoint.sh && chmod 0755 /srv && chmod 755 /app\n"
+    )
+    assert not _p17_issues(text), "plain chmod +x / 0755 must not trip P17"

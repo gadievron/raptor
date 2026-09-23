@@ -175,11 +175,44 @@ def _collect_stage_aliases(logical_lines: list[str]) -> frozenset[str]:
     return frozenset(aliases)
 
 
+# P17 (no privilege escalation): privilege-GRANT primitives inside build
+# steps. The launch side (docker_run / docker_compose_up hardening) strips
+# runtime privileges; this is the build-time half — an image must not bake
+# in setuid binaries, sudoers entries, or file capabilities that survive
+# into the hardened container. Patterns are deliberately tight (a plain
+# `chmod 0755` / `chmod +x` never matches) so ordinary builds are not
+# rejected; the trade-off accepted here is that a Dockerfile that
+# legitimately grants setuid (rare) is refused with a clear P17 reason
+# and the agent must build without it.
+_P17_RUN_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (
+        # chmod u+s / g+s / +s / a+rws — symbolic setuid/setgid grant.
+        re.compile(r"\bchmod\b[^;&|]*\s[ugoa]*\+[rwxXt]*s"),
+        "setuid/setgid bit grant (chmod +s)",
+    ),
+    (
+        # chmod 4755 / 2755 / 6755 — numeric modes whose leading digit
+        # sets suid/sgid (alone or sticky-combined). `0*` keeps
+        # `chmod 0755` (leading-zero, no special bits) out of the match.
+        re.compile(r"\bchmod\b[^;&|]*\s0*[2-7][0-7]{3}\b"),
+        "setuid/setgid numeric mode (chmod 2xxx/4xxx/6xxx)",
+    ),
+    (re.compile(r"/etc/sudoers"), "sudoers modification"),
+    (re.compile(r"\bvisudo\b"), "sudoers modification (visudo)"),
+    (re.compile(r"\bsetcap\b"), "file capability grant (setcap)"),
+)
+
+
 def _check_run_line(stripped: str) -> list[str]:
     body = stripped[3:].strip()
     if not body or body == "\\":
         return ["empty RUN command"]
-    return []
+    return [
+        f"P17: RUN contains a privilege-escalation primitive — {label}: "
+        f"{stripped[:120]!r}"
+        for pat, label in _P17_RUN_PATTERNS
+        if pat.search(stripped)
+    ]
 
 
 def _check_copy_line(stripped: str) -> list[str]:
@@ -270,6 +303,9 @@ def validate_dockerfile_semantics(text: str) -> list[str]:
       * ``FROM`` image refs are parseable, have no spaces, no path prefix,
         no forbidden tag (``:latest``, ``:stable``, etc.),
       * no empty ``RUN`` commands,
+      * P17: no privilege-escalation primitives in ``RUN`` steps (setuid/
+        setgid grants, sudoers modification, setcap) and no ``COPY``/``ADD``
+        into ``/etc/sudoers``,
       * ``COPY``/``ADD`` have both source and destination,
       * no ``# INVALID LABEL`` markers left from :func:`sanitize_dockerfile`.
 
@@ -292,6 +328,11 @@ def validate_dockerfile_semantics(text: str) -> list[str]:
             issues.extend(_check_run_line(stripped))
         elif up.startswith(("COPY ", "ADD ")):
             issues.extend(_check_copy_line(stripped))
+            if "/etc/sudoers" in stripped:
+                issues.append(
+                    "P17: COPY/ADD into /etc/sudoers is a privilege-"
+                    f"escalation primitive: {stripped[:120]!r}"
+                )
         if stripped.startswith(_EMPTY_LABEL_MARKER):
             issues.append(f"unresolved malformed LABEL: {stripped}")
 

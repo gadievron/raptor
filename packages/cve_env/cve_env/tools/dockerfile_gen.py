@@ -195,6 +195,43 @@ def _detect_dep_drift(
     return hard_issues, warnings
 
 
+# P6: at most this many apt packages per render (apt_packages entries plus
+# packages named by `apt install` invocations inside install_steps,
+# counted as distinct names). More than this per call signals the agent
+# is building a kitchen-sink image instead of the CVE-relevant set.
+_P6_MAX_APT_PACKAGES = 10
+
+
+def _count_distinct_apt_packages(
+    apt_packages: list[str], install_steps: list[str]
+) -> int:
+    """Distinct apt package names across both install lanes.
+
+    Version pins (``name=version``) count by name; flags and shell
+    operators are skipped with the same tokenization the dep-drift scan
+    uses so the two P-rules can never disagree about what a package
+    token is.
+    """
+    names: set[str] = {
+        pkg.partition("=")[0].lower()
+        for pkg in apt_packages
+        if isinstance(pkg, str) and pkg
+    }
+    for step in install_steps:
+        if not isinstance(step, str):
+            continue
+        for match in _APT_INSTALL_RE.finditer(step):
+            for token in match.group(1).split():
+                if (
+                    token.startswith("-")
+                    or token in _APT_FLAGS
+                    or token.startswith("&")
+                ):
+                    continue
+                names.add(token.partition("=")[0].lower())
+    return len(names)
+
+
 def _validate_copy_ops(copy_ops: list[dict[str, str]]) -> list[str]:
     """COPY <src> <dst> validation.
 
@@ -312,6 +349,17 @@ def render_dockerfile(
         problem = _apt_package_issue(pkg)
         if problem is not None:
             issues.append(f"apt_packages[{i}]: {pkg!r} {problem}")
+
+    # P6: hard cap on apt packages per render call (both lanes combined).
+    if isinstance(install_steps, list):
+        n_pkgs = _count_distinct_apt_packages(clean_apt, install_steps)
+        if n_pkgs > _P6_MAX_APT_PACKAGES:
+            issues.append(
+                f"P6: {n_pkgs} apt packages requested (max "
+                f"{_P6_MAX_APT_PACKAGES} per dockerfile_gen call) — trim to "
+                "the CVE-relevant set; build tooling beyond it usually "
+                "belongs in the base image"
+            )
     if issues:
         return DockerfileRenderResult(ok=False, issues=issues, warnings=drift_warnings)
 
