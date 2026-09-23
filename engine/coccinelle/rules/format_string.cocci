@@ -15,10 +15,11 @@
 //   as the binary, so translating a literal does not hand the format
 //   to an attacker;
 // - a ternary whose BOTH arms are string constants
-//   (`cond ? "a %d" : "b %d"`) — whichever way the condition goes,
-//   the format is a literal. A ternary with any non-literal arm
-//   (including a gettext arm) stays in the bug set;
-// - a local variable assigned a string constant OR a gettext-family
+//   (`cond ? "a %d" : "b %d"`), parenthesized or not — whichever way
+//   the condition goes, the format is a literal. A ternary with any
+//   non-literal arm (including a gettext arm) stays in the bug set;
+// - a local variable assigned a string constant, a literals-only
+//   ternary (parenthesized or not), OR a gettext-family
 //   translation of a string constant, and not reassigned
 //   before the call. The reassignment guard has exists-path
 //   semantics: a reassignment puts the call back in the bug set only
@@ -89,25 +90,25 @@ position p;
 @@
 
 (
-  printf@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  printf@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  vprintf@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  vprintf@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  wprintf@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  wprintf@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  warn@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  warn@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  warnx@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  warnx@p(\(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 )
 
 @safe_local_g1@
 identifier fmt;
 constant char [] C, C2;
-expression E1;
+expression E1, COND;
 position p;
 @@
 
-  fmt = \(C\|gettext(C)\|dgettext(..., C)\|dcgettext(..., C, ...)\|ngettext(C, C2, ...)\|_(C)\)
+  fmt = \(C\|gettext(C)\|dgettext(..., C)\|dcgettext(..., C, ...)\|ngettext(C, C2, ...)\|_(C)\|COND ? C : C2\|(COND ? C : C2)\)
   ... when != fmt = E1
       when != &fmt
 (
@@ -185,33 +186,33 @@ position p;
 @@
 
 (
-  fprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  fprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  vfprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  vfprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  sprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  sprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  vsprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  vsprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  dprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  dprintf@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  syslog@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  syslog@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  vsyslog@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  vsyslog@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  err@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  err@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  errx@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  errx@p(ARG1, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 )
 
 @safe_local_g2@
 identifier fmt;
 constant char [] C, C2;
-expression E1, ARG1;
+expression E1, ARG1, COND;
 position p;
 @@
 
-  fmt = \(C\|gettext(C)\|dgettext(..., C)\|dcgettext(..., C, ...)\|ngettext(C, C2, ...)\|_(C)\)
+  fmt = \(C\|gettext(C)\|dgettext(..., C)\|dcgettext(..., C, ...)\|ngettext(C, C2, ...)\|_(C)\|COND ? C : C2\|(COND ? C : C2)\)
   ... when != fmt = E1
       when != &fmt
 (
@@ -312,19 +313,19 @@ position p;
 @@
 
 (
-  snprintf@p(ARG1, ARG2, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  snprintf@p(ARG1, ARG2, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 |
-  vsnprintf@p(ARG1, ARG2, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\), ...)
+  vsnprintf@p(ARG1, ARG2, \(FMT\|gettext(FMT)\|dgettext(..., FMT)\|dcgettext(..., FMT, ...)\|ngettext(FMT, FMT2, ...)\|_(FMT)\|COND ? FMT : FMT2\|(COND ? FMT : FMT2)\), ...)
 )
 
 @safe_local_g3@
 identifier fmt;
 constant char [] C, C2;
-expression E1, ARG1, ARG2;
+expression E1, ARG1, ARG2, COND;
 position p;
 @@
 
-  fmt = \(C\|gettext(C)\|dgettext(..., C)\|dcgettext(..., C, ...)\|ngettext(C, C2, ...)\|_(C)\)
+  fmt = \(C\|gettext(C)\|dgettext(..., C)\|dcgettext(..., C, ...)\|ngettext(C, C2, ...)\|_(C)\|COND ? C : C2\|(COND ? C : C2)\)
   ... when != fmt = E1
       when != &fmt
 (
