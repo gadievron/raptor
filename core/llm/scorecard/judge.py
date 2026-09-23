@@ -96,7 +96,12 @@ def record_judge_outcomes(
             # panel on an abstained primary) or a junk shape —
             # there is no majority outcome to score anyone against.
             continue
-        primary_model = str(result.get("analysed_by") or "?")
+        # No attributable model → the primary's VOTE still counts in
+        # the tie computation below, but no event is minted (a
+        # literal "?"-keyed cell accumulates noise no producer ever
+        # revisits — cmd_tool_evidence skips no-model records for
+        # exactly this reason; this was sibling drift).
+        primary_model = str(result.get("analysed_by") or "")
         # The snapshot preserves abstention: a None entry means the
         # primary's analysis carried no verdict (errored / refused /
         # schema-nulled) — the primary cast NO vote. bool()-coercing
@@ -155,9 +160,10 @@ def record_judge_outcomes(
         if n_pos * 2 == len(votes):
             continue
 
-        # Primary's outcome — only when the primary actually voted;
-        # an abstainer never receives a JUDGE_REVIEW event.
-        if primary_vote is not None:
+        # Primary's outcome — only when the primary actually voted
+        # AND is attributable; an abstainer never receives a
+        # JUDGE_REVIEW event.
+        if primary_vote is not None and primary_model:
             primary_correct = (primary_vote == final_verdict)
             pending.append(_event(
                 decision_class=decision_class,

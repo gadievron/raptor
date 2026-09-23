@@ -1402,3 +1402,65 @@ class TestToolEvidenceReminderAccuracy:
         ev = sc.get_stat("agentic:r", "m").events[
             EventType.TOOL_EVIDENCE]
         assert (ev.correct, ev.incorrect) == (0, 1)
+
+
+class TestHumaniseAgeFutureTimestamps:
+    def test_future_timestamp_flagged_not_negative(self):
+        """A future last_seen_at only comes from clock skew or a
+        forged sidecar row — flag it instead of rendering a negative
+        age ("-42s ago")."""
+        import datetime as dt
+        future = (
+            dt.datetime.now(dt.timezone.utc) + dt.timedelta(seconds=90)
+        ).isoformat()
+        rendered = cli_mod._humanise_age(future)
+        assert "in the future" in rendered
+        assert "-" not in rendered.split("T")[0] or "ago" not in rendered
+
+    def test_past_timestamp_unchanged(self):
+        import datetime as dt
+        past = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)
+        ).isoformat()
+        assert cli_mod._humanise_age(past) == "2h ago"
+
+
+class TestCliDocstringSubcommandClosure:
+    def test_module_docstring_names_every_subcommand(self):
+        """Parse-time drift guard: the module docstring's subcommand
+        list had drifted to 6 of 12."""
+        import re as _re
+
+        import core.llm.scorecard.cli as _cli
+        source = open(_cli.__file__, encoding="utf-8").read()
+        registered = set(_re.findall(r'add_parser\(\s*"([a-z-]+)"', source))
+        assert registered, "expected add_parser registrations"
+        missing = [s for s in registered if s not in (_cli.__doc__ or "")]
+        assert missing == [], (
+            f"module docstring omits subcommands: {missing}"
+        )
+
+
+class TestSummaryCallsSingleCounted:
+    def test_usage_rollup_not_double_counted_with_real_dc_calls(
+        self, tmp_path, capsys,
+    ):
+        """``_usage`` is the per-model roll-up of every real call;
+        real-dc ``calls`` (register_uses on e.g. study_question)
+        re-count a subset of the same calls — summing both
+        over-counted "most-used"."""
+        import json as _json
+
+        sc_path = tmp_path / "sc.json"
+        sc = ModelScorecard(sc_path)
+        sc.register_uses([
+            {"model": "m", "decision_class": "_usage", "calls": 10},
+            {"model": "m", "decision_class": "study_question",
+             "calls": 10},
+        ])
+        args = _make_args(path=sc_path, json=True)
+        rc, out, _err = _capture(cli_mod.cmd_summary, args)
+        assert rc == 0
+        payload = _json.loads(out)
+        assert payload["calls_by_model"]["m"] == 10
+        assert payload["most_used"] == {"model": "m", "calls": 10}

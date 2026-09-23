@@ -2,12 +2,19 @@
 sidecar maintenance over the model scorecard.
 
 Subcommands:
-    list      — markdown table of all cells with derived columns
-    compare   — side-by-side two models on shared decision_classes
-    samples   — show disagreement-sample reasoning for a cell
-    pin       — set policy_override on a cell
-    unpin     — release a pin (set policy_override back to "auto")
-    reset     — delete cells (single, --model, --older-than, --all)
+    list          — markdown table of all cells with derived columns
+    summary       — one-shot dashboard (totals, policy, spend)
+    recommend     — cheapest trusted model for a decision_class
+    chain-closure — rank models by exploit chain-closure success
+    compare       — side-by-side two models on shared decision_classes
+    samples       — show disagreement-sample reasoning for a cell
+    pin           — set policy_override on a cell
+    unpin         — release a pin (set policy_override back to "auto")
+    reset         — delete cells (single, --model, --older-than, --all)
+    mark          — record an operator-feedback event on a cell
+    tool-evidence — back-propagate /validate outcomes onto the scorecard
+    adopt         — re-bless an unverified sidecar (stamp with this
+                    install's integrity token)
 
 Run ``raptor-llm-scorecard <subcommand> -h`` for per-subcommand
 flags.  All output is markdown so operators can paste it straight
@@ -180,6 +187,11 @@ def _humanise_age(iso_ts: str, *, now: _dt.datetime | None = None) -> str:
         ts = ts.replace(tzinfo=_dt.timezone.utc)
     delta = now - ts
     secs = delta.total_seconds()
+    if secs < 0:
+        # A future last_seen_at only comes from clock skew or a
+        # forged sidecar row — flag it instead of rendering a
+        # nonsensical negative age ("-42s ago").
+        return "in the future"
     if secs < 60:
         return f"{int(secs)}s ago"
     if secs < 3600:
@@ -606,7 +618,8 @@ def cmd_summary(args: argparse.Namespace) -> int:
     short_circuit = learning = fall_through = 0
     total_cost = 0.0
     cost_per_model: dict[str, float] = {}
-    calls_per_model: dict[str, int] = {}
+    usage_calls_by_model: dict[str, int] = {}
+    real_calls_by_model: dict[str, int] = {}
     usage_cell_by_model: dict[str, DecisionClassStats] = {}
     # Keyed by (decision_class, model) — for cheapest-trusted picking.
     sc_models_by_dc: dict[tuple[str, str], str] = {}
@@ -640,7 +653,21 @@ def cmd_summary(args: argparse.Namespace) -> int:
         if not is_subset_cell:
             total_cost += s.cost_usd
             cost_per_model[s.model] = cost_per_model.get(s.model, 0.0) + s.cost_usd
-            calls_per_model[s.model] = calls_per_model.get(s.model, 0) + s.calls
+            # Calls axis, per model: REAL decision classes carry
+            # ``calls`` too (register_uses on e.g. study_question) —
+            # those re-count calls the ``_usage`` roll-up already
+            # covers, so they are tallied separately and only used
+            # when the model has no roll-up (a sidecar written
+            # without a lifecycle flush). No real-dc COST writers
+            # exist, so the spend axis above needs no split.
+            if s.decision_class == "_usage":
+                usage_calls_by_model[s.model] = (
+                    usage_calls_by_model.get(s.model, 0) + s.calls
+                )
+            else:
+                real_calls_by_model[s.model] = (
+                    real_calls_by_model.get(s.model, 0) + s.calls
+                )
 
     # Cheapest short-circuit (lowest $/call from each cell's _usage row).
     cheapest: tuple | None = None
@@ -665,6 +692,10 @@ def cmd_summary(args: argparse.Namespace) -> int:
         except (ValueError, TypeError):
             pass
 
+    calls_per_model: dict[str, int] = {
+        m: usage_calls_by_model.get(m, real_calls_by_model.get(m, 0))
+        for m in (set(usage_calls_by_model) | set(real_calls_by_model))
+    }
     most_used = max(calls_per_model.items(), key=lambda x: x[1], default=(None, 0))
 
     if getattr(args, "json", False):

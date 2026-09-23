@@ -62,13 +62,16 @@ def record_cross_family_outcomes(
         if not checker_model:
             continue
 
-        # Derive agreed/disputed from the verdict string rather than
-        # relying on the separate top-level boolean flags — those are
-        # set by a different code path and could fall out of sync.
-        # Either way the event is a consistency observation: with one
-        # primary and one checker a dispute is an even split with no
-        # ground truth, so neither side earns a correctness
-        # attribution from it.
+        # Derive agreed/disputed from the verdict string; the
+        # separate top-level boolean flags are set by a different
+        # code path and can fall out of sync — an out-of-sync True
+        # flag must never mint ``correct`` past a present-but-unknown
+        # verdict (the flag pre-empted the grammar here once). The
+        # flag remains only as the backstop for legacy records that
+        # carry no verdict string at all. Either way the event is a
+        # consistency observation: with one primary and one checker a
+        # dispute is an even split with no ground truth, so neither
+        # side earns a correctness attribution from it.
         #
         # Prefix-anchored matching against the producer's exact
         # grammar ({"skipped — …", "disputed — conservative override",
@@ -76,7 +79,9 @@ def record_cross_family_outcomes(
         # "disagreed" verdict as agreement.
         if verdict.startswith("disputed"):
             outcome = "incorrect"
-        elif result.get("cross_family_agreed") or verdict.startswith("agreed"):
+        elif verdict.startswith("agreed"):
+            outcome = "correct"
+        elif not verdict and result.get("cross_family_agreed"):
             outcome = "correct"
         else:
             continue

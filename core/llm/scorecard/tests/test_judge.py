@@ -680,3 +680,36 @@ class TestAbstainedPrimarySnapshot:
         assert n == 3
         dc = "agentic:py/sql-injection"
         assert _stat(scorecard, dc, "claude-opus", EventType.JUDGE_REVIEW) == (0, 1)
+
+
+class TestUnattributablePrimarySkipped:
+    """A result without ``analysed_by`` cannot attribute the primary's
+    outcome — minting it on a literal "?" cell accumulates noise no
+    producer ever revisits (cmd_tool_evidence skips no-model records
+    for exactly this reason; this was sibling drift). The primary's
+    VOTE still counts toward the tie computation; only the event is
+    skipped, and the judges still grade."""
+
+    def test_no_analysed_by_skips_primary_event_keeps_judges(
+        self, tmp_path,
+    ):
+        sc = ModelScorecard(tmp_path / "sc.json")
+        results = {"f1": {
+            "rule_id": "r",
+            "judge": "disputed",
+            "is_exploitable": True,
+            "judge_analyses": [
+                {"model": "j1", "is_exploitable": True},
+                {"model": "j2", "is_exploitable": True},
+            ],
+            # no analysed_by
+        }}
+        n = record_judge_outcomes(
+            sc,
+            results_by_id=results,
+            primary_verdicts_before_judge={"f1": False},
+        )
+        # Judges grade (2 events); no "?"-keyed primary cell.
+        assert n == 2
+        assert sc.get_stat("agentic:r", "?") is None
+        assert sc.get_stat("agentic:r", "j1") is not None

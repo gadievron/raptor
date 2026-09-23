@@ -281,3 +281,43 @@ class TestMalformedVerdict:
         }
         n = record_cross_family_outcomes(sc, results_by_id=results)
         assert n == 1
+
+
+class TestVerdictStringIsAuthoritative:
+    """The verdict string is the producer's grammar; the top-level
+    boolean flags are set by a different code path and can fall out
+    of sync. An out-of-sync True flag must never mint ``correct``
+    past a present-but-unknown verdict; the flag serves only as the
+    backstop for legacy records that carry no verdict string."""
+
+    def test_unknown_verdict_with_true_flag_mints_nothing(self, tmp_path):
+        sc = ModelScorecard(tmp_path / "sc.json")
+        n = record_cross_family_outcomes(
+            sc,
+            results_by_id={"f1": {
+                "rule_id": "r",
+                "cross_family_agreed": True,  # out-of-sync flag
+                "cross_family_check": {
+                    "verdict": "someday-a-new-verdict",
+                    "checker_model": "gemini-pro",
+                },
+            }},
+        )
+        assert n == 0
+
+    def test_flag_backstops_verdictless_legacy_record(self, tmp_path):
+        sc = ModelScorecard(tmp_path / "sc.json")
+        n = record_cross_family_outcomes(
+            sc,
+            results_by_id={"f1": {
+                "rule_id": "r",
+                "cross_family_agreed": True,
+                "cross_family_check": {
+                    # legacy record: no verdict string at all
+                    "checker_model": "gemini-pro",
+                },
+            }},
+        )
+        assert n == 1
+        stat = sc.get_stat("agentic:r", "gemini-pro")
+        assert stat.events["cross_family_consistency"].correct == 1

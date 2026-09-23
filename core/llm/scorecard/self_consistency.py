@@ -56,7 +56,11 @@ def record_self_consistency_outcomes(
             continue
 
         pre_verdict = verdicts_pre_retry.get(fid)
-        if pre_verdict is None:
+        if not isinstance(pre_verdict, bool):
+            # None (the snapshot's documented abstention) or a junk
+            # shape — same isinstance guard judge.py applies at this
+            # boundary: a junk value must read as an abstention,
+            # never a bool()-coerced phantom vote.
             continue
 
         # Tri-state read: a junk shape ("yes", 1) that bypassed
@@ -67,7 +71,7 @@ def record_self_consistency_outcomes(
         if post_verdict is None:
             continue
 
-        held = bool(pre_verdict) == post_verdict
+        held = pre_verdict == post_verdict
         outcome = "correct" if held else "incorrect"
 
         rule_id = str(result.get("rule_id") or "unknown")
