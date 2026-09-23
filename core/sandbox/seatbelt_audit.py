@@ -55,6 +55,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.sandbox.escalation_signatures import is_credential_path
+from core.sandbox.tracer import _CRED_KEEP_MAX_PATHS
 from core.security.log_sanitisation import sanitise_for_terminal
 
 # Skip-budget delegated to core.sandbox.audit_budget.AuditBudget,
@@ -291,6 +292,24 @@ def _announce_credential_path_touch(path: str, pid: int) -> None:
             f"RAPTOR sandbox ALERT: credential-looking path touched: "
             f"'{sanitise_for_terminal(path)}' (pid={pid}). "
             f"See sandbox-triage.json at run end for full context.\n"
+        ).encode("ascii", errors="replace"))
+    except OSError:
+        pass
+
+
+def _announce_credential_banner_capped() -> None:
+    """One-shot stderr notice that the credential-path banner lane
+    reached its distinct-path cap — further credential-looking paths
+    get no live banner. Mirrors the Linux tracer's sibling of the
+    same name (shared cap constant) so neither platform's banner
+    lane degrades silently. Never raises."""
+    try:
+        os.write(2, (
+            f"RAPTOR sandbox NOTICE: credential-path banner lane "
+            f"reached its distinct-path cap ({_CRED_KEEP_MAX_PATHS}); "
+            f"further credential-looking paths will not be announced "
+            f"live (audit records continue in the JSONL subject to "
+            f"its own admission caps).\n"
         ).encode("ascii", errors="replace"))
     except OSError:
         pass
@@ -556,9 +575,21 @@ class LogStreamer:
         # Live-escalation dedup: paths already announced to stderr
         # this run, so a target repeatedly touching the same
         # credential-looking path doesn't spam the operator's
-        # terminal. One banner per distinct path per run — mirrors
-        # tracer.py's per-syscall-name dedup.
+        # terminal. One banner per distinct path per run, and the
+        # SET ITSELF is bounded at the Linux tracer's
+        # _CRED_KEEP_MAX_PATHS (shared constant): the dedup key is
+        # the PATH — attacker-minted, so path-dedup alone is no
+        # bound at all. A target minting credential-lookalike names
+        # (".env.0001", ".env.0002", ...) — including through the
+        # budget-exempt parse_ambiguous admission lane — must not
+        # turn the banner lane into an unbounded stderr flood
+        # (drowning the very ALERT channel the banners exist for)
+        # or unbounded parent-memory growth. Exhaustion is announced
+        # once (_announce_credential_banner_capped), never silent —
+        # both platforms' banner lanes now carry the same cap and
+        # the same one-shot notice.
         self._escalated_paths: set = set()
+        self._banner_cap_announced = False
         # Parse-ratio bookkeeping for the "parsed M of N kext lines"
         # diagnostic (kernel eventMessage format drift detector).
         # Mutated only on the reader thread; read at stop() after the
@@ -1080,6 +1111,15 @@ class LogStreamer:
                     and path not in self._escalated_paths
                     and not _audit_budget.live_escalation_disabled()
                     and is_credential_path(path)):
+                if len(self._escalated_paths) >= _CRED_KEEP_MAX_PATHS:
+                    # The dedup key is attacker-minted (the target
+                    # chose the paths), so the set is bounded at the
+                    # shared cross-platform cap; exhaustion is
+                    # announced once, never silent (see __init__).
+                    if not self._banner_cap_announced:
+                        self._banner_cap_announced = True
+                        _announce_credential_banner_capped()
+                    return
                 self._escalated_paths.add(path)
                 # .get: the never-raise-out-of-the-hot-path contract
                 # must not hinge on every record shape carrying

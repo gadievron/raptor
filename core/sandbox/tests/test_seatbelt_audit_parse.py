@@ -687,6 +687,43 @@ def test_credential_path_banner_sanitises_control_chars(
     assert b"\\x1b" in writes[0][1]
 
 
+def test_credential_banner_lane_is_capped_with_one_shot_notice(
+        tmp_path, monkeypatch):
+    """The banner dedup key is the PATH — attacker-minted (the target
+    chose what to touch, and budget-exempt parse_ambiguous records
+    reach the escalation in-scope) — so "one banner per distinct
+    path" alone is no bound at all. The set is capped at the shared
+    cross-platform _CRED_KEEP_MAX_PATHS with a one-shot exhaustion
+    notice, mirroring the Linux tracer's banner lane."""
+    banners = []
+    monkeypatch.setattr(
+        seatbelt_audit, "_announce_credential_path_touch",
+        lambda path, pid: banners.append(path))
+    notices = []
+    monkeypatch.setattr(
+        seatbelt_audit, "_announce_credential_banner_capped",
+        lambda: notices.append(True))
+    streamer = seatbelt_audit.LogStreamer(tmp_path)
+    cap = seatbelt_audit._CRED_KEEP_MAX_PATHS
+    for i in range(cap + 50):
+        streamer._maybe_escalate_credential_path({
+            "type": "read",
+            "path": f"/Users/x/.aws/credentials_{i:05d}",
+            "target_pid": 123,
+        })
+    assert len(banners) == cap
+    assert len(streamer._escalated_paths) == cap
+    assert len(notices) == 1, "exhaustion must be announced exactly once"
+
+
+def test_credential_banner_cap_matches_linux_tracer(tmp_path):
+    """Both platforms' banner lanes carry the SAME cap — the constant
+    is imported, not copied, so they cannot drift apart silently."""
+    from core.sandbox import tracer
+    assert (seatbelt_audit._CRED_KEEP_MAX_PATHS
+            is tracer._CRED_KEEP_MAX_PATHS)
+
+
 def test_credential_path_escalation_tolerates_missing_target_pid(
         tmp_path, monkeypatch):
     writes = []
