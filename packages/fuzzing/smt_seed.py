@@ -159,7 +159,13 @@ def collect_witnesses(source_dir: Path) -> tuple[list[WitnessRecord], list[dict]
         try:
             data = load_json(
                 report, strict=True, max_bytes=_MAX_ARTIFACT_BYTES,
-            ) or {}
+            )
+            if not isinstance(data, dict):
+                # List-shaped (or otherwise non-object) report: the
+                # .get() walk below would raise — record the drop like
+                # any other unreadable file.
+                msg = f"non-object JSON ({type(data).__name__})"
+                raise ValueError(msg)
             for result in data.get("results") or []:
                 if not isinstance(result, dict):
                     continue
@@ -255,14 +261,26 @@ def synthesize_seeds(
                     clamped = value > SEED_LEN_CAP
                     length = min(value, SEED_LEN_CAP)
                     name = f"smt_{idx:03d}_{token_base}_len{value}"[:120]
-                    (out_dir / name).write_bytes(_FILL_BYTE * length)
-                    seeds.append({
-                        **provenance,
-                        "seed": name,
-                        "rule": "length",
-                        "bytes": length,
-                        "clamped": clamped,
-                    })
+                    seed_path = out_dir / name
+                    if seed_path.exists():
+                        # Same exists() → skip-record guard the
+                        # magic-value path carries below: a
+                        # pre-existing file must never be silently
+                        # overwritten and then listed in the manifest.
+                        all_skipped.append({
+                            **provenance,
+                            "reason": "seed filename collision",
+                            "seed": name,
+                        })
+                    else:
+                        seed_path.write_bytes(_FILL_BYTE * length)
+                        seeds.append({
+                            **provenance,
+                            "seed": name,
+                            "rule": "length",
+                            "bytes": length,
+                            "clamped": clamped,
+                        })
             elif _is_length_like(label) and value <= 0:
                 all_skipped.append({
                     **provenance,
