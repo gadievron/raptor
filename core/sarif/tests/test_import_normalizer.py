@@ -1557,3 +1557,47 @@ class TestResolveUriBudgetRecallAndWallCap:
         # ... and a non-unique/unknown basename degrades to None.
         assert _resolve_uri("/x/y/z/nope.c", root, idx, [None],
                             scan_clock=spent) is None
+
+
+class TestSnippetSourceGating:
+    """Snippet synthesis reads files the untrusted SARIF chooses from
+    the untrusted scanned tree — non-regular files must be refused on
+    the fd (a FIFO stats as 0 bytes and blocks the import stage
+    forever at a by-name open)."""
+
+    def test_fifo_does_not_hang_snippet_synthesis(self, tmp_path):
+        # URI resolution's is_file() gate keeps a PRE-planted FIFO
+        # from being targeted through the pipeline, so the read gate
+        # is the swap-race / defence-in-depth layer — exercise the
+        # reader directly.
+        import os as _os
+        import signal as _signal
+
+        if not hasattr(_os, "mkfifo"):
+            import pytest
+            pytest.skip("platform lacks mkfifo")
+
+        from core.sarif.import_normalizer import _synthesize_snippet
+
+        _os.mkfifo(tmp_path / "trap.c")
+
+        def _on_alarm(signum, frame):
+            msg = "snippet synthesis blocked on a planted FIFO"
+            raise AssertionError(msg)
+
+        old = _signal.signal(_signal.SIGALRM, _on_alarm)
+        _signal.alarm(30)
+        try:
+            snippet = _synthesize_snippet(tmp_path, "trap.c", 1, None)
+        finally:
+            _signal.alarm(0)
+            _signal.signal(_signal.SIGALRM, old)
+        assert snippet == ""
+
+    def test_regular_file_snippet_still_synthesized(self, tmp_path):
+        (tmp_path / "ok.c").write_text("line1\nline2\nline3\n")
+        result = normalize_imported_findings(
+            [_make_finding(file="ok.c", snippet="", startLine=2)],
+            tmp_path,
+        )
+        assert "line2" in result.findings[0]["snippet"]

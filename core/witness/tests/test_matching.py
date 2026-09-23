@@ -396,3 +396,33 @@ def test_symbolic_producer_spelling_joins():
     score, _ = score_witness_for_finding(
         w, {"cwe_id": "CWE-120", "file": "src/auth.c"})
     assert score == 7
+
+
+def test_fifo_binary_path_does_not_hang_scoring(tmp_path):
+    # binary_path comes from finding JSON in run directories; a
+    # planted FIFO must be treated as unhashable, not block the
+    # scoring loop at the open.
+    import os as _os
+    import signal as _signal
+
+    import pytest
+
+    if not hasattr(_os, "mkfifo"):
+        pytest.skip("platform lacks mkfifo")
+    fifo = tmp_path / "target.bin"
+    _os.mkfifo(fifo)
+
+    def _on_alarm(signum, frame):
+        msg = "binary hashing blocked on a planted FIFO"
+        raise AssertionError(msg)
+
+    w = _make_witness({}, target_binary_hash="ab" * 32)
+    old = _signal.signal(_signal.SIGALRM, _on_alarm)
+    _signal.alarm(30)
+    try:
+        score, _ = score_witness_for_finding(
+            w, {"binary_path": str(fifo)})
+    finally:
+        _signal.alarm(0)
+        _signal.signal(_signal.SIGALRM, old)
+    assert score == 0

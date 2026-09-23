@@ -72,6 +72,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
+import stat as _stat_mod
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -262,9 +264,33 @@ def _on_disk_binary_hash(binary_path: str | None) -> str | None:
     """
     if not binary_path:
         return None
+    # Gated read on the OPEN fd: binary_path comes from finding
+    # JSON in run directories, so the size bound and the file-type
+    # gate must hold on the fd actually read — a stat-by-name gate
+    # misses a planted FIFO (stats 0 bytes, then blocks the scoring
+    # loop forever at the open) and a swap-after-stat.
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
         p = Path(binary_path)
-        st = p.stat()
+        fd = os.open(str(p), flags)
+    except OSError:
+        logger.debug(
+            "witness matching: cannot hash finding binary %s",
+            binary_path, exc_info=True,
+        )
+        return None
+    try:
+        st = os.fstat(fd)
+        if not _stat_mod.S_ISREG(st.st_mode):
+            logger.debug(
+                "witness matching: finding binary %s is not a "
+                "regular file — treating as unhashable", binary_path,
+            )
+            return None
         if st.st_size > _MAX_BINARY_HASH_BYTES:
             logger.debug(
                 "witness matching: finding binary %s exceeds the "
@@ -277,7 +303,8 @@ def _on_disk_binary_hash(binary_path: str | None) -> str | None:
         if cached:
             return cached
         h = hashlib.sha256()
-        with open(p, "rb") as f:
+        with os.fdopen(fd, "rb") as f:
+            fd = -1  # fdopen owns it now
             for chunk in iter(lambda: f.read(1 << 20), b""):
                 h.update(chunk)
         digest = h.hexdigest()
@@ -289,6 +316,12 @@ def _on_disk_binary_hash(binary_path: str | None) -> str | None:
             binary_path, exc_info=True,
         )
         return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def best_match_for_finding(
