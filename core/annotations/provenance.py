@@ -19,10 +19,10 @@ The guarantee remains **no silent forgery, not impossibility**: a
 determined local attacker with full user privileges can always fake
 a terminal, rename wrapper binaries, and curate the environment.
 What the layered stamp buys is (a) the stock laundering routes
-(``script -c``, an agent session's own pty) self-identify in the
-recorded context and demote, and (b) every human-grade grant rests
-on a recorded, operator-auditable context instead of a bare
-``isatty`` bit.
+either demote (``script -c``, an agent session's own pty) or at
+minimum leave their names / a truncation token in the recorded
+context, and (b) every human-grade grant rests on a recorded,
+operator-auditable context instead of a bare ``isatty`` bit.
 
 On-disk keys (written into the meta comment by the CLI):
 
@@ -41,10 +41,14 @@ On-disk keys (written into the meta comment by the CLI):
     in-session agent invocation carries the launcher's marker; a
     bare-shell operator run carries the trusted-dispatch marker.
   * ``parents`` — comma-joined comm names of up to 4 ancestor
-    processes (audit trail; ``unknown`` where unavailable). Readers
+    processes (audit trail; ``unknown`` where unavailable; ends with
+    the ``ancestry-truncated`` token when the bounded ancestor scan
+    exhausted its window before reaching the session root). Readers
     demote on the stock ``script`` wrapper appearing in the chain;
-    the rest of the chain is recorded for the operator's audit, not
-    pattern-matched — process names are attacker-renameable.
+    truncation and the rest of the chain are recorded for the
+    operator's audit, not pattern-matched — process names are
+    attacker-renameable, and deep-but-legitimate shell stacks exist,
+    so truncation alone never demotes (fail-open, visible).
   * ``corroboration`` — ``pre-era`` only: a durable marker a
     rewrite stamps onto sections whose interactive stamp predates
     corroboration recording (see ``CORROBORATION_ERA_START``).
@@ -191,8 +195,21 @@ _PARENT_CHAIN_DEPTH = 4
 # The walk itself goes deeper than the recorded window: a wrapper
 # that stacks fork intermediaries would otherwise push the
 # verdict-bearing ``script`` name off the recorded chain. Bounded so
-# a pathological process tree can't stall the stamp.
+# a pathological process tree can't stall the stamp. The bound is
+# FAIL-OPEN by design: a walk that exhausts its window without
+# reaching the session root does not demote (deep-but-legitimate
+# shell stacks exist) — but it must not be SILENT either, so an
+# incomplete walk appends the truncation token below and the
+# auditor sees the exhausted window instead of a clean-looking
+# four-name chain.
 _PARENT_SCAN_DEPTH = 32
+# Appended to the recorded chain when the ancestor walk ends before
+# reaching the session root (depth exhausted, or an ancestor became
+# unreadable mid-walk). Lives inside the parents value grammar and is
+# collision-free by construction: kernel comm names are at most 15
+# characters (and ``_comm`` truncates to 15), so no real process can
+# occupy this 18-character token.
+PARENTS_TRUNCATED = "ancestry-truncated"
 
 _STD_FDS = ("stdin", "stdout", "stderr")
 _TTY_NONE = "none"
@@ -265,7 +282,13 @@ def _detect_parent_chain() -> str:
     ``_PARENT_SCAN_DEPTH``) looking for ``script``: stacking fork
     intermediaries under ``script -qec`` pushed the verdict-bearing
     name off a fixed-depth record, so a deeper occurrence is
-    appended to the recorded chain."""
+    appended to the recorded chain. A walk that ends WITHOUT
+    reaching the session root — scan window exhausted, or an
+    ancestor unreadable mid-walk — appends ``PARENTS_TRUNCATED``:
+    grading stays fail-open on truncation (a deep stack alone
+    proves nothing), but the exhausted window is recorded rather
+    than silent, so a fork stack deep enough to outrun the scan
+    still leaves a visible trace in the stamp it produces."""
     if not Path("/proc/self/stat").exists():
         return _PARENTS_UNKNOWN
     names: list[str] = []
@@ -290,6 +313,9 @@ def _detect_parent_chain() -> str:
             break
     if deep_script and "script" not in names:
         names.append("script")
+    if names and pid > 1:
+        # Walk ended before the session root: record the truncation.
+        names.append(PARENTS_TRUNCATED)
     return ",".join(names) if names else _PARENTS_UNKNOWN
 
 
@@ -369,7 +395,11 @@ def _corroboration_ok(
     Demotes on: the process having been its own session leader (the
     ``script -qec`` shape — a shell never execs a command as session
     leader), an agent-session environment marker, or the stock
-    ``script`` wrapper anywhere in the recorded parent chain.
+    ``script`` wrapper anywhere in the recorded parent chain. The
+    ``ancestry-truncated`` token (bounded ancestor scan exhausted
+    before the session root) deliberately does NOT demote —
+    deep-but-legitimate shell stacks exist — the truncation is
+    recorded for the auditor instead of silently absent.
 
     Key-less stamps predate corroboration recording: grandfathered
     behind ``CORROBORATION_ERA_START`` via the caller-supplied file
