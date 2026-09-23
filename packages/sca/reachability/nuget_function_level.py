@@ -68,12 +68,28 @@ def build_nuget_symbol_map(
         dep_name = dep_key.split(":", 1)[1].split("@", 1)[0]
         qualified: list[str] = []
         for adv in r.advisories:
+            # The dash collapse (``My-Pkg`` → ``MyPkg`` / ``My.Pkg``)
+            # is a naming CONVENTION, not a language rule — so the
+            # fold is declared non-exact: folded readings are
+            # upgrade-only twins riding alongside the retained
+            # unresolved marker, and a wrong namespace guess can
+            # never pair its way into the high-confidence downgrade.
             qualified.extend(_extract_qualified(
                 adv, dep_name, dep_is_namespace_head=True,
+                head_fold=_package_id_fold, fold_is_exact=False,
             ))
         if qualified:
             out.setdefault(dep_key, []).extend(qualified)
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}
+
+
+def _package_id_fold(head: str) -> list[str]:
+    """Conventional root-namespace spellings of a dashed package id:
+    dash removed (``My-Pkg`` → ``MyPkg``) and dash-as-dot
+    (``My.Pkg``)."""
+    if "-" not in head:
+        return []
+    return [head.replace("-", ""), head.replace("-", ".")]
 
 
 # NuGet package ids commonly ARE the root namespace

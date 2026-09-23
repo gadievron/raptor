@@ -45,6 +45,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _crate_head_fold(head: str) -> list[str]:
+    """Rust module spelling of a crate name: ``-`` folds to ``_``."""
+    return [head.replace("-", "_")] if "-" in head else []
+
+
 def build_cargo_symbol_map(
     osv_results: Iterable[Any] | None,
 ) -> dict[str, list[str]]:
@@ -61,7 +66,14 @@ def build_cargo_symbol_map(
         dep_name = dep_key.split(":", 1)[1].split("@", 1)[0]
         qualified: list[str] = []
         for adv in r.advisories:
-            qualified.extend(_extract_qualified(adv, dep_name))
+            # ``-``→``_`` is a Rust LANGUAGE RULE (crate ``foo-bar``
+            # is imported as ``foo_bar``), so the fold is exact:
+            # bare symbols under hyphenated crate names bind — and
+            # honestly downgrade — through the folded module name.
+            qualified.extend(_extract_qualified(
+                adv, dep_name,
+                head_fold=_crate_head_fold, fold_is_exact=True,
+            ))
         if qualified:
             out.setdefault(dep_key, []).extend(qualified)
     return {k: list(dict.fromkeys(v)) for k, v in out.items()}

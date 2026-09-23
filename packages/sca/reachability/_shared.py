@@ -21,6 +21,7 @@ import re
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 # A name the cross-language resolver can actually bind as a
@@ -68,6 +69,8 @@ def _normalise_qualified(name: str) -> str:
 
 def extract_qualified_symbols(
     advisory: Any, dep_name: str, *, dep_is_namespace_head: bool = True,
+    head_fold: Callable[[str], list[str]] | None = None,
+    fold_is_exact: bool = False,
 ) -> list[str]:
     """Pull qualified affected-symbol names out of an OSV advisory.
 
@@ -113,6 +116,21 @@ def extract_qualified_symbols(
     dep name has the dotted-identifier shape and would not
     double-prefix an already-qualified symbol.
 
+    ``head_fold`` supplies per-ecosystem respellings tried when the
+    raw head fails the grammar (consulted for the dep head under
+    ``dep_is_namespace_head`` and for ``imports[].path`` values):
+    grammar-passing fold candidates are composed as queries.
+    ``fold_is_exact`` declares whether the fold is a LANGUAGE RULE
+    (Cargo's ``-``→``_``: crate ``foo-bar`` is imported as
+    ``foo_bar``, deterministically) or a naming CONVENTION (NuGet's
+    dash collapse). An exact fold replaces the unresolved marker
+    outright — both the upgrade and the honest-downgrade arms work
+    through it. A convention fold emits its readings as
+    UPGRADE-ONLY twins and keeps the marker: a called function binds
+    through the guessed spelling, but a wrong guess pairing
+    NOT_CALLED can never satisfy the coverage gate into the
+    high-confidence downgrade.
+
     Both ``ecosystem_specific`` and ``database_specific`` are
     consulted. Non-dict sources and non-string / empty symbols are
     skipped. Rust ``::``, Ruby ``#``, and PHP ``\\`` separators are
@@ -126,14 +144,42 @@ def extract_qualified_symbols(
         and _NAMESPACE_HEAD_RE.fullmatch(dep_head)
     )
 
+    def _folds(head: str) -> list[str]:
+        """Grammar-passing fold candidates for a head that failed
+        the grammar raw (deduped, order preserved)."""
+        if not (head_fold and head):
+            return []
+        return list(dict.fromkeys(
+            h for h in head_fold(head)
+            if h and _NAMESPACE_HEAD_RE.fullmatch(h)
+        ))
+
+    dep_folds = (
+        _folds(dep_head)
+        if dep_is_namespace_head and not prefix_ok else []
+    )
+
     def _emit(sym: str, out: list[str]) -> None:
         ns = _normalise_qualified(sym)
         if "." in ns:
             out.append(ns)
             if prefix_ok and not ns.startswith(dep_head + "."):
                 out.append(f"{dep_head}.{ns}")
+            else:
+                out.extend(
+                    f"{h}.{ns}" for h in dep_folds
+                    if not ns.startswith(h + ".")
+                )
         elif prefix_ok:
             out.append(f"{dep_head}.{ns}")
+        elif dep_folds:
+            # Folded head(s): compose the respelled queries; a
+            # convention fold additionally keeps the marker so a
+            # wrong guess can only block the downgrade, never
+            # enable it.
+            out.extend(f"{h}.{ns}" for h in dep_folds)
+            if not fold_is_exact:
+                out.append(UNRESOLVED_ENTRY)
         else:
             # A bare symbol under a non-namespace dep name has no
             # bindable spelling — minting an unbindable prefix here
@@ -168,11 +214,20 @@ def extract_qualified_symbols(
             path_ok = bool(
                 path_head and _NAMESPACE_HEAD_RE.fullmatch(path_head)
             )
+            path_folds = _folds(path_head) if not path_ok else []
             for s in symbols:
                 if not (isinstance(s, str) and s):
                     continue
                 if path_ok:
                     out.append(f"{path_head}.{_normalise_qualified(s)}")
+                elif path_folds:
+                    # The path names the package in its ecosystem
+                    # spelling — the same fold applies, with the same
+                    # exact/convention split as the dep head.
+                    ns = _normalise_qualified(s)
+                    out.extend(f"{h}.{ns}" for h in path_folds)
+                    if not fold_is_exact:
+                        out.append(UNRESOLVED_ENTRY)
                 elif path:
                     # A string path that fails the resolver's
                     # dotted-identifier grammar even after separator

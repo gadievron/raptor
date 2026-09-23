@@ -328,13 +328,16 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
         ecosystem="Cargo",
         dep_name="my-crate",   # hyphen: not a namespace head shape
         scenarios={
-            # The bare entry has no bindable spelling under a
-            # hyphenated crate name; it must block the downgrade.
+            # The bare entry under a hyphenated crate name was the
+            # historically-unbindable spelling — the exact ``-``→``_``
+            # fold now rebinds it onto the crate's module name, so
+            # the exercised entry must bind and win the upgrade.
             "mixed_unbindable_exercised": _Scenario(
                 {"affected_symbols": ["my_crate::parser::absent",
                                       "insert_many"]}, None,
-                {"parser": "my_crate.parser"}, (("parser", "spawn"),),
-                expected="imported",
+                {"my_crate": "my_crate"},
+                (("my_crate", "insert_many"),),
+                expected="likely_called",
             ),
             "all_bindable_uncalled": _Scenario(
                 {"affected_symbols": ["my_crate::parser::absent"]},
@@ -349,15 +352,16 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
                 expected="likely_called",
             ),
             # A hyphenated CRATE-NAME spelling in the path slot fails
-            # the resolver grammar — composing it mints a garbage
-            # query on a function the project genuinely calls (as
-            # ``serde_json.from_str``); the entry must be counted
-            # unresolved so the tier abstains.
+            # the resolver grammar raw — composing it verbatim minted
+            # a garbage query on a function the project genuinely
+            # calls (as ``serde_json.from_str``). The exact Rust
+            # ``-``→``_`` fold rebinds the path onto the module name,
+            # so the entry binds and wins the upgrade.
             "imports_path_unbindable_exercised": _Scenario(
                 {"imports": [{"path": "my-crate",
                               "symbols": ["from_str"]}]}, None,
                 {"my_crate": "my_crate"}, (("my_crate", "from_str"),),
-                expected="imported",
+                expected="likely_called",
             ),
         },
     ),
@@ -425,13 +429,15 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
                 expected="likely_called",
             ),
             # A hyphenated PACKAGE-ID spelling in the path slot fails
-            # the resolver grammar — counted unresolved, never
-            # composed into a garbage query.
+            # the resolver grammar raw; the convention dash-collapse
+            # fold rides as an upgrade-only twin (marker retained),
+            # so the genuinely-called entry binds through the folded
+            # namespace instead of pairing garbage.
             "imports_path_unbindable_exercised": _Scenario(
                 {"imports": [{"path": "My-Pkg",
                               "symbols": ["Widget.Run"]}]}, None,
                 {"Widget": "MyPkg.Widget"}, (("Widget", "Run"),),
-                expected="imported",
+                expected="likely_called",
             ),
         },
     ),
@@ -913,4 +919,105 @@ def test_go_bare_flat_entry_binds_via_imported_subpackage():
     )
     assert (
         _run_tier("go_function_level", borrow) == "not_function_reachable"
+    )
+
+
+def _run_named(module_name: str, dep_name: str, ecosystem: str,
+               scenario: _Scenario) -> str:
+    """Drive one tier with an explicit dep name (for dep-name
+    conventions the spec table's single spelling can't carry)."""
+    build, refine, map_kwarg = _tier_entry_points(module_name)
+    dep = _dep(dep_name, ecosystem)
+    adv = _Adv(
+        ecosystem_specific=scenario.ecosystem_specific,
+        database_specific=scenario.database_specific,
+    )
+    symbol_map = build([_OsvResult(dep_key=dep.key(), advisories=[adv])])
+    assert dep.key() in symbol_map
+    out: Dict[str, Reachability] = {dep.key(): _imported()}
+    refine(
+        [dep], out,
+        target=Path("/nonexistent-target"),
+        inventory=_inventory(scenario.imports, list(scenario.chains)),
+        **{map_kwarg: symbol_map},
+    )
+    return out[dep.key()].verdict
+
+
+def test_cargo_hyphenated_crate_fold_binds():
+    """``foo-bar`` is imported as ``foo_bar`` by Rust LANGUAGE RULE —
+    the ``-``→``_`` fold is deterministic, not a heuristic. Bare
+    advisory symbols under a hyphenated crate name used to go
+    straight to the unresolved marker (the raw head fails the
+    resolver grammar), leaving the tier vacuously off for hyphenated
+    crates: neither the called-function upgrade nor the honest
+    downgrade ever fired. The folded head is exact, so BOTH arms now
+    work."""
+    called = _Scenario(
+        {"affected_symbols": ["from_str"]}, None,
+        {"my_crate": "my_crate"}, (("my_crate", "from_str"),),
+        expected="likely_called",
+    )
+    assert (
+        _run_named("cargo_function_level", "my-crate", "Cargo", called)
+        == "likely_called"
+    )
+
+    # The exact fold re-arms the suppression lane too: a genuinely
+    # uncalled bare symbol under a hyphenated crate now downgrades
+    # (it abstained before the fold — this direction is intentional
+    # and pinned).
+    uncalled = _Scenario(
+        {"affected_symbols": ["absent"]}, None,
+        {"my_crate": "my_crate"}, (("my_crate", "from_str"),),
+        expected="not_function_reachable",
+    )
+    assert (
+        _run_named("cargo_function_level", "my-crate", "Cargo", uncalled)
+        == "not_function_reachable"
+    )
+
+    # imports[].path spelled as the hyphenated crate NAME folds the
+    # same way (the path names the crate; the fold is the same
+    # language rule).
+    via_path = _Scenario(
+        {"imports": [{"path": "my-crate", "symbols": ["from_str"]}]},
+        None,
+        {"my_crate": "my_crate"}, (("my_crate", "from_str"),),
+        expected="likely_called",
+    )
+    assert (
+        _run_named("cargo_function_level", "my-crate", "Cargo", via_path)
+        == "likely_called"
+    )
+
+
+def test_nuget_hyphenated_package_fold_is_upgrade_only():
+    """NuGet package ids commonly ARE the root namespace, but the
+    dash-collapse fold (``My-Pkg`` → ``MyPkg`` / ``My.Pkg``) is a
+    CONVENTION, not a language rule — so the folded readings are
+    emitted as upgrade twins while the unresolved marker stays: a
+    called function binds through the fold, but a wrong guess can
+    never pair its way into the high-confidence downgrade."""
+    called = _Scenario(
+        None, {"affected_symbols": ["Setup"]},
+        {"MyPkg": "MyPkg"}, (("MyPkg", "Setup"),),
+        expected="likely_called",
+    )
+    assert (
+        _run_named("nuget_function_level", "My-Pkg", "NuGet", called)
+        == "likely_called"
+    )
+
+    # Counter-direction: uncalled bare symbol under the hyphenated
+    # id still ABSTAINS — the retained marker blocks the downgrade
+    # (the fold is a guess; the real namespace may differ).
+    uncalled = _Scenario(
+        None, {"affected_symbols": ["Absent"]},
+        {"MyPkg": "MyPkg"}, (("MyPkg", "Setup"),),
+        expected="imported",
+    )
+    assert (
+        _run_named("nuget_function_level", "My-Pkg", "NuGet", uncalled)
+        == "imported"
     )
