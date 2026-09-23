@@ -110,6 +110,17 @@ _MSBUILD_PROPERTY_RE = re.compile(r"[\$@%]\([^)]+\)")
 _PROP_REF_RE = re.compile(r"\$\(([A-Za-z_][\w.\-]*)\)")
 _MAX_PROP_DEPTH = 8
 
+# Total-size budget for a resolved Version value, mirroring
+# ``nuget.py``'s ``_MAX_VERSION_SPEC_LEN``: nothing longer is a
+# pinnable version, and without a SIZE bound the depth cap alone
+# bounds LEVELS, not growth — 8 chained properties with F references
+# each yield a 10·F^8-char string, so a ~550-byte hostile props file
+# allocated hundreds of MB before any read cap could matter. The
+# budget is enforced DURING substitution (accumulated output length,
+# checked before each replacement lands) so the oversized string is
+# never materialised.
+_MAX_RESOLVED_VERSION_LEN = 256
+
 
 def _extract_properties(root) -> dict[str, str]:
     """Collect ``<PropertyGroup>`` properties (name → text) from one file.
@@ -125,20 +136,63 @@ def _extract_properties(root) -> dict[str, str]:
     return props
 
 
+def _substitute_props_once(
+    version: str, props: dict[str, str],
+) -> str | None:
+    """One ``$(Prop)`` substitution pass with the total-size budget
+    enforced incrementally. Returns the substituted string, or
+    ``None`` the moment the accumulated output would exceed
+    ``_MAX_RESOLVED_VERSION_LEN`` — the over-budget expansion is
+    abandoned before it is built, not measured afterwards."""
+    parts: list[str] = []
+    total = 0
+    pos = 0
+    for m in _PROP_REF_RE.finditer(version):
+        repl = props.get(m.group(1).lower(), m.group(0))
+        total += (m.start() - pos) + len(repl)
+        if total > _MAX_RESOLVED_VERSION_LEN:
+            return None
+        parts.append(version[pos:m.start()])
+        parts.append(repl)
+        pos = m.end()
+    total += len(version) - pos
+    if total > _MAX_RESOLVED_VERSION_LEN:
+        return None
+    parts.append(version[pos:])
+    return "".join(parts)
+
+
 def _resolve_property_version(
     version: str, props: dict[str, str], _depth: int = 0,
+    *, declared_in: Path | None = None,
 ) -> str | None:
     """Substitute ``$(Prop)`` tokens in ``version`` from same-file ``props``
-    (recursive, capped). Returns a concrete version, or ``None`` if anything
-    MSBuild-expression-shaped survives (cross-file / item / metadata) or the
-    result is a floating wildcard (``*``) — neither is a pinnable version."""
+    (recursive, capped in DEPTH and total SIZE). Returns a concrete version,
+    or ``None`` if anything MSBuild-expression-shaped survives (cross-file /
+    item / metadata) or the result is a floating wildcard (``*``) — neither
+    is a pinnable version.
+
+    A size-budget breach is an analysis gap, not a quiet skip: it is
+    warned in the canonical ``<kind> parse failed for <path>: <reason>``
+    shape so :func:`packages.sca.parsers.capture_parse_failures` lifts it
+    into the run report's structured ``parse_failures``."""
     if _depth > _MAX_PROP_DEPTH:
         return None
-    resolved = _PROP_REF_RE.sub(
-        lambda m: props.get(m.group(1).lower(), m.group(0)), version,
-    )
+    resolved = _substitute_props_once(version, props)
+    if resolved is None:
+        logger.warning(
+            "sca.parsers.directory_packages_props: property expansion "
+            "parse failed for %s: $(...) expansion exceeded the "
+            "%d-char resolved-version budget (hostile or misconfigured "
+            "property graph); version left unresolved",
+            escape_nonprintable(str(declared_in)),
+            _MAX_RESOLVED_VERSION_LEN,
+        )
+        return None
     if resolved != version and "$(" in resolved:
-        deeper = _resolve_property_version(resolved, props, _depth + 1)
+        deeper = _resolve_property_version(
+            resolved, props, _depth + 1, declared_in=declared_in,
+        )
         resolved = deeper if deeper is not None else resolved
     if resolved is None or _MSBUILD_PROPERTY_RE.search(resolved) or "*" in resolved:
         return None
@@ -363,7 +417,9 @@ def _extract_package_versions(
                 )
                 continue
             if _MSBUILD_PROPERTY_RE.search(version):
-                resolved = _resolve_property_version(version, props)
+                resolved = _resolve_property_version(
+                    version, props, declared_in=declared_in,
+                )
                 if resolved is None:
                     logger.debug(
                         "sca.parsers.directory_packages_props: %s in "
@@ -547,7 +603,9 @@ def parse_directory_build_props(path: Path) -> CPMFile | None:
             if not version:
                 continue
             if _MSBUILD_PROPERTY_RE.search(version):
-                resolved_ver = _resolve_property_version(version, props)
+                resolved_ver = _resolve_property_version(
+                    version, props, declared_in=resolved,
+                )
                 if resolved_ver is None:
                     continue
                 version = resolved_ver
