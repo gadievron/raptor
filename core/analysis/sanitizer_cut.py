@@ -59,6 +59,7 @@ from core.dataflow.sanitizer_catalog import (
     SanitizerBinding,
     match_sanitizers_in_cfg,
     nodes_of,
+    repo_shadows_module_root,
     sanitizer_callables_for_cwe,
 )
 from core.analysis.dataflow import (
@@ -1791,13 +1792,26 @@ def evaluate_finding(
         # forged an enforced drop with no binding for the walkers to
         # see). Legitimate code imports its sanitizer. ``None`` =
         # roots not computed (hand-built / non-python CFGs) — the
-        # check does not apply.
+        # check does not apply. And a SELF-IMPORT is only trustworthy
+        # when the repo does not itself ship an import-resolvable
+        # shadow for the root (``html.py`` / ``html/__init__.py`` at
+        # the scanned root — ``import html`` then resolves to the
+        # REPO's file at runtime): origin resolution, the python
+        # member of the same class as Java's classpath-origin
+        # identity checks.
         trusted_roots = getattr(graph, "trusted_import_roots", None)
         if matched_bindings and trusted_roots is not None:
+            def _root_trusted(callable_name: str) -> bool:
+                if "." not in callable_name:
+                    return True
+                root = callable_name.split(".", 1)[0]
+                if root not in trusted_roots:
+                    return False
+                return not (repo_root and repo_shadows_module_root(
+                    repo_root, root,
+                ))
             matched_bindings = frozenset(
-                b for b in matched_bindings
-                if "." not in b.callable
-                or b.callable.split(".", 1)[0] in trusted_roots
+                b for b in matched_bindings if _root_trusted(b.callable)
             )
     # Phase 14 — fold in inter-procedural synthetic bindings. A
     # finding whose enclosing function has NO direct catalog

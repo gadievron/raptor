@@ -506,6 +506,7 @@ def _resolve_from_parsed_python(
 
     inter_proc = _inter_proc_bindings_python(
         source_text, fn, cfg, parsed.cwe, summary_memo,
+        repo_root=str(target_root) if target_root is not None else None,
     )
 
     return ResolvedFinding(
@@ -530,6 +531,7 @@ def _inter_proc_bindings_python(
     cfg: PythonCFG,
     cwe: str,
     summary_memo: dict[str, Any] | None = None,
+    repo_root: str | None = None,
 ) -> frozenset:
     """Phase 14 — compute inter-procedural synthetic sanitizer
     bindings for a Python finding's enclosing function.
@@ -584,7 +586,7 @@ def _inter_proc_bindings_python(
             if summary_memo is not None and memo_key is not None:
                 summary_memo[memo_key] = summaries
         return synthetic_sanitizer_bindings(
-            cfg, fn, summaries, cwe, "python",
+            cfg, fn, summaries, cwe, "python", repo_root=repo_root,
         )
     except Exception:                                       # noqa: BLE001
         return frozenset()

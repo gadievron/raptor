@@ -70,6 +70,7 @@ import ast
 
 from core.dataflow.sanitizer_catalog import (
     SanitizerBinding,
+    repo_shadows_module_root,
     sanitizer_callables_for_cwe,
 )
 from core.analysis.python_module_callgraph import local_binding_names
@@ -216,6 +217,7 @@ def synthetic_sanitizer_bindings(
     summaries: dict[str, TaintSummary],
     cwe: str,
     language: str,
+    repo_root: str | None = None,
 ) -> frozenset[SanitizerBinding]:
     """Build synthetic sanitizer bindings for inter-procedural
     sanitization in ``cfg``'s function.
@@ -239,9 +241,21 @@ def synthetic_sanitizer_bindings(
     # resolves through repo-writable builtins at runtime.
     trusted_roots = getattr(cfg, "trusted_import_roots", None)
     if trusted_roots is not None:
+        def _root_trusted(name: str) -> bool:
+            if "." not in name:
+                return True
+            root = name.split(".", 1)[0]
+            if root not in trusted_roots:
+                return False
+            # Origin resolution: a repo shipping its own
+            # ``<root>.py`` / ``<root>/__init__.py`` makes the
+            # self-import resolve to the REPO's module — the chain
+            # identity is the repo's object.
+            return not (repo_root and repo_shadows_module_root(
+                repo_root, root,
+            ))
         sanitizer_names = {
-            n for n in sanitizer_names
-            if "." not in n or n.split(".", 1)[0] in trusted_roots
+            n for n in sanitizer_names if _root_trusted(n)
         }
     if not sanitizer_names or not summaries:
         return frozenset()
