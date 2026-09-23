@@ -13654,6 +13654,57 @@ _STUDY_MAX_RE_REVIEWS = 50
 _STUDY_RE_REVIEW_PER_CYCLE = 10
 _STUDY_MAX_STALE_BATCHES = 3
 
+# Burn breaker for the incremental study consumer. Each run_study
+# invocation is a fresh phase with fresh abort counters, so a
+# deterministic failure (output budget vs model, dead study corpus)
+# that kills every invocation was never terminal: the consumer warned,
+# marked the batch studied, and bought the next batch's failing calls
+# — observed live as hours of full-price zero-yield study calls after
+# the phase's own abort line. Three trips, all of which disable the
+# lane loudly (reviews continue without domain concepts):
+# * config-shaped (the phase says the same configuration re-buys the
+#   same failure) — disable on sight;
+# * consecutive whole-invocation failures — provider/corpus death;
+# * failure RATE over a minimum sample — a lane failing half its
+#   invocations interleaved with successes never trips a consecutive
+#   counter (observed live at ~50% failure for two hours) yet burns
+#   half its spend on nothing. Both directions hurt: trip too early
+#   and a transient provider brownout kills study for an otherwise
+#   healthy run (the consecutive limit already tolerates two); too
+#   late and the lane keeps paying for a systemic failure.
+_STUDY_RUN_CONSEC_FAIL_LIMIT = 3
+_STUDY_RUN_RATE_MIN_SAMPLE = 8
+_STUDY_RUN_RATE_LIMIT = 0.5
+
+# Lane-cumulative truncation-failure budget, independent of the
+# per-invocation cap: an invocation that partially succeeds with a
+# few truncation failures resets the consecutive counter and is
+# invisible to the rate arm (it counts as a success), so sub-cap
+# churn — a handful of full-price zero-yield calls EVERY invocation —
+# never tripped anything. The consumer accumulates
+# phase_stats["truncation_failures"] across invocations and disables
+# the lane at this budget. Both directions hurt: too LOW and a target
+# with genuinely oversized items spread across invocations loses the
+# lane while the split ladder was handling them item-by-item (each
+# discarded item is one truncation failure); too HIGH and sub-cap
+# churn buys that many zero-yield calls before the lane concedes.
+# Twice the per-invocation cap: room for two capped invocations'
+# worth of legitimate per-item discards across the whole lane.
+_STUDY_LANE_TRUNCATION_BUDGET = 12
+
+
+def _is_config_shaped_study_failure(exc: BaseException) -> bool:
+    """Chain-walked probe for the study phase's deterministic-config
+    marker (persistent output truncation past the phase cap)."""
+    try:
+        from core.llm.client import _exception_chain
+        return any(
+            getattr(e, "config_shaped", False)
+            for e in _exception_chain(exc)
+        )
+    except ImportError:
+        return bool(getattr(exc, "config_shaped", False))
+
 
 def _diff_new_concepts(
     seen_concepts: set,
@@ -15006,6 +15057,13 @@ def _study_consumer_loop(
     re_review_count = st.get("re_review_count", 0)
     stale_batches = st.get("stale_batches", 0)
     seen_concepts = st.get("seen_concepts", set())
+    # Burn-breaker accounting across run_study invocations (each
+    # invocation resets the phase's own counters — see the module
+    # constants above the consumer).
+    runstudy_ok = 0
+    runstudy_failed = 0
+    runstudy_consec_failed = 0
+    lane_truncation_failures = 0
     # Compile-probe cap is per RUN, shared across batches.
     probe_budget = st.get("probe_budget")
     if probe_budget is None:
@@ -15302,6 +15360,7 @@ def _study_consumer_loop(
                 )
                 break
         n_before = len(dm.get("concepts", [])) if dm else 0
+        phase_stats: dict = {}
         try:
             from core.concepts.study import run_study
 
@@ -15311,6 +15370,11 @@ def _study_consumer_loop(
             # is shared with concurrent review calls.
             study_client = _run_llm_client(config)
             _study_before = _client_class_cost(study_client, "study")
+            # The queue's cooperative-stop flag reaches INTO the
+            # phase: pre-fix the drain path's request_stop could not
+            # interrupt a running run_study, and an abandoned daemon
+            # thread kept buying batches until process exit.
+            _phase_stop = lambda: study_queue.stop_requested  # noqa: E731
             try:
                 if throttle is not None:
                     # Low priority: study batches yield the contended
@@ -15321,12 +15385,16 @@ def _study_consumer_loop(
                             study_list_path,
                             config.out_dir,
                             study_client,
+                            should_stop=_phase_stop,
+                            phase_stats=phase_stats,
                         )
                 else:
                     run_study(
                         study_list_path,
                         config.out_dir,
                         study_client,
+                        should_stop=_phase_stop,
+                        phase_stats=phase_stats,
                     )
             finally:
                 # The study client's spend previously vanished: the
@@ -15350,12 +15418,53 @@ def _study_consumer_loop(
                     result.cost_tracker.record_call(
                         "study", cost_usd=spent,
                     )
-        except Exception:
+        except Exception as run_exc:
             logger.warning(
                 "study-consumer: study-run failed", exc_info=True,
             )
             _mark_concepts_studied(study_queue, fresh)
+            runstudy_failed += 1
+            runstudy_consec_failed += 1
+            lane_truncation_failures += int(
+                phase_stats.get("truncation_failures") or 0)
+            total_runs = runstudy_ok + runstudy_failed
+            if _is_config_shaped_study_failure(run_exc):
+                # The phase itself concluded the failure is
+                # deterministic for this configuration — every future
+                # invocation re-buys it; no strike-counting.
+                _announce_study_disabled(
+                    "study-run failure is config-shaped (persistent "
+                    "output truncation) — the same configuration "
+                    "re-buys the same failure",
+                )
+                break
+            if lane_truncation_failures >= _STUDY_LANE_TRUNCATION_BUDGET:
+                _announce_study_disabled(
+                    f"{lane_truncation_failures} output-truncation "
+                    "failures accumulated across study-run "
+                    "invocations — sub-cap churn budget exhausted",
+                )
+                break
+            if runstudy_consec_failed >= _STUDY_RUN_CONSEC_FAIL_LIMIT:
+                _announce_study_disabled(
+                    f"{runstudy_consec_failed} consecutive study-run "
+                    "failures",
+                )
+                break
+            if (total_runs >= _STUDY_RUN_RATE_MIN_SAMPLE
+                    and runstudy_failed / total_runs
+                    >= _STUDY_RUN_RATE_LIMIT):
+                _announce_study_disabled(
+                    f"{runstudy_failed}/{total_runs} study-run "
+                    "invocations failed — burn rate at or above "
+                    f"{_STUDY_RUN_RATE_LIMIT:.0%}",
+                )
+                break
             continue
+        runstudy_ok += 1
+        runstudy_consec_failed = 0
+        lane_truncation_failures += int(
+            phase_stats.get("truncation_failures") or 0)
         study_queue.note_progress()
 
         # Reload domain model
@@ -15407,6 +15516,36 @@ def _study_consumer_loop(
                 "study-consumer: reading-list resolve failed",
                 exc_info=True,
             )
+
+        if (lane_truncation_failures >= _STUDY_LANE_TRUNCATION_BUDGET
+                and not phase_stats.get("truncation_capped")):
+            # Sub-cap churn: every invocation "succeeds" while paying
+            # for a few zero-yield truncated calls — invisible to the
+            # consecutive counter (reset on success) and the rate arm
+            # (counted as success). The lane budget is the arm that
+            # sees it. Bookkeeping above already banked this
+            # invocation's results.
+            _announce_study_disabled(
+                f"{lane_truncation_failures} output-truncation "
+                "failures accumulated across study-run invocations — "
+                "sub-cap churn budget exhausted",
+            )
+            break
+
+        if phase_stats.get("truncation_capped"):
+            # The phase salvaged some batches but hit its cumulative
+            # output-truncation cap — config-shaped like the
+            # all-failed case (the interleaved-successes variant,
+            # observed live at ~50% failure for hours): every further
+            # invocation re-buys the same per-batch burn. This
+            # invocation's results were kept and booked above.
+            _announce_study_disabled(
+                f"study phase hit the output-truncation cap "
+                f"({phase_stats.get('truncation_failures')} full-price "
+                "zero-yield calls) — output budget misconfigured for "
+                "this model",
+            )
+            break
 
         # Starvation guard
         if n_after == n_before:

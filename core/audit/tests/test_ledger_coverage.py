@@ -140,7 +140,7 @@ class TestStudySpendDelta:
 
         import core.concepts.study as _study_mod
 
-        def fake_run_study(study_list, out_dir, client):
+        def fake_run_study(study_list, out_dir, client, **kwargs):
             client._note("study", 0.5)
 
         monkeypatch.setattr(_study_mod, "run_study", fake_run_study)
