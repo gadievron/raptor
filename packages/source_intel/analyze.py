@@ -2240,9 +2240,49 @@ def _enclosing_function(file_path: str, line: int) -> str | None:
     return None
 
 
+def _sub_block_comments(
+    text: str, repl: str = "", *, cross_lines: bool = False,
+) -> str:
+    """Replace every complete ``/* ... */`` comment with ``repl``.
+
+    Performs the same replacement as the lazy ``/\\*.*?\\*/`` regex
+    (with ``cross_lines`` standing in for ``re.DOTALL``) via a linear
+    ``str.find`` walk: an unanchored regex scan re-reads the tail
+    from every ``/*`` occurrence when no closer follows — quadratic
+    on hostile source with planted openers. An unclosed trailing
+    comment is kept as-is, exactly like the regex (no match without
+    a closer); without ``cross_lines`` an opener whose first closer
+    sits past a newline is skipped, exactly like ``.`` stopping at
+    the line end.
+    """
+    out: list[str] = []
+    i = 0
+    while True:
+        start = text.find("/*", i)
+        if start == -1:
+            out.append(text[i:])
+            break
+        end = text.find("*/", start + 2)
+        if end == -1:
+            out.append(text[i:])
+            break
+        if not cross_lines:
+            newline = text.find("\n", start + 2)
+            if newline != -1 and newline < end:
+                # `.` cannot cross the newline: no match starts at
+                # this opener; keep scanning after it.
+                out.append(text[i:start + 1])
+                i = start + 1
+                continue
+        out.append(text[i:start])
+        out.append(repl)
+        i = end + 2
+    return "".join(out)
+
+
 def _strip_trailing_comments(s: str) -> str:
     """Trim ``// …`` and ``/* … */`` trailing comments + whitespace."""
-    s = re.sub(r"/\*.*?\*/", "", s)
+    s = _sub_block_comments(s)
     s = re.sub(r"/\*.*$", "", s)
     s = re.sub(r"//.*$", "", s)
     return s.rstrip()
@@ -2275,7 +2315,7 @@ def _join_until_paren_balanced(
         # now-single-line joined text — see _strip_trailing_comments
         # which is line-anchored and assumes /* without */ on same
         # line means comment-to-EOF).
-        text_clean = re.sub(r"/\*.*?\*/", "", text)
+        text_clean = _sub_block_comments(text)
         text_clean = re.sub(r"//.*$", "", text_clean)
         pieces.append(text_clean)
         for ch in text_clean:
@@ -2741,8 +2781,13 @@ def _extract_function_name_near_alias(
     ]
     joined = " ".join(filtered)
     cleaned = joined.replace(alias, " ")
-    cleaned = re.sub(r"__attribute__\s*\(\([^)]*\)\)", " ", cleaned)
-    cleaned = re.sub(r"/\*.*?\*/", " ", cleaned)
+    # The attribute body is bounded: with an unbounded span, hostile
+    # source repeating `__attribute__((` inside one close-paren-free
+    # run makes every opener re-scan the rest of the run — quadratic.
+    # Real attribute argument lists are tiny; 256 chars is generous
+    # (beyond it the decoration survives into the candidate scan).
+    cleaned = re.sub(r"__attribute__\s*\(\([^)]{0,256}\)\)", " ", cleaned)
+    cleaned = _sub_block_comments(cleaned, " ")
     cleaned = re.sub(r"//.*", " ", cleaned)
 
     # Collect ALL `<name>(` candidates first. We then prefer:
