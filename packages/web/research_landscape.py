@@ -239,6 +239,19 @@ def high_priority_theme_ids(research_landscape: dict) -> list[str]:
     ]
 
 
+# Signal collection stringifies discovery lists whole; bound how much
+# of each list feeds the token scan so a hostile crawl inflating
+# discovery state is not re-materialised here (theme keywords saturate
+# long before this many entries anyway).
+_MAX_SIGNAL_ITEMS = 500
+
+
+def _signal_text(value: object) -> str:
+    if isinstance(value, (list, tuple, set)):
+        return str(list(value)[:_MAX_SIGNAL_ITEMS])
+    return str(value)
+
+
 def _collect_signals(discovery: object, crawl_data: dict) -> set[str]:
     signal_text: list[str] = []
     if discovery:
@@ -246,11 +259,13 @@ def _collect_signals(discovery: object, crawl_data: dict) -> set[str]:
             "urls", "forms", "apis", "parameters", "fingerprint",
             "common_paths_found", "robots_disallow",
         ):
-            signal_text.append(str(getattr(discovery, attr, "")))
-    signal_text.append(str(crawl_data.get("discovered_urls", [])))
-    signal_text.append(str(crawl_data.get("visited_urls", [])))
-    signal_text.append(str(crawl_data.get("discovered_parameters", [])))
-    signal_text.append(str(crawl_data.get("discovered_forms", [])))
+            signal_text.append(_signal_text(getattr(discovery, attr, "")))
+    signal_text.append(_signal_text(crawl_data.get("discovered_urls", [])))
+    signal_text.append(_signal_text(crawl_data.get("visited_urls", [])))
+    signal_text.append(
+        _signal_text(crawl_data.get("discovered_parameters", [])),
+    )
+    signal_text.append(_signal_text(crawl_data.get("discovered_forms", [])))
     haystack = " ".join(signal_text).lower()
     tokens = set(re.findall(r"[a-z0-9_:-]+", haystack))
     tokens.update(token.replace("-", "_") for token in list(tokens))
