@@ -45,6 +45,7 @@ from pathlib import Path
 
 from .models import Dependency, Manifest
 from .naming import parent_join_key as _parent_join_key
+from .parsers._safe_read import read_bounded
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -100,9 +101,12 @@ def _parent_map_key(ecosystem: str, name: str) -> str:
 def _requirements_include_targets(path: Path) -> set[Path]:
     """Resolved ``-r``/``-c`` include targets of one requirements file."""
     targets: set[Path] = set()
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    # Bounded no-follow read: requirements files come from the scanned
+    # tree — a planted multi-hundred-MB file allocated ~2x its size
+    # here, and a symlink leaked host-file content into the include
+    # resolution.
+    text = read_bounded(path, follow_symlinks=False)
+    if text is None:
         return targets
     for raw in text.splitlines():
         line = raw.strip()
@@ -173,9 +177,8 @@ def _augment_declared_with_includes(
 
 def _is_cargo_workspace_root(cargo_toml: Path) -> bool:
     """True if *cargo_toml* declares ``[workspace]``."""
-    try:
-        text = cargo_toml.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    text = read_bounded(cargo_toml, follow_symlinks=False)
+    if text is None:
         return False
     for line in text.splitlines():
         stripped = line.strip()

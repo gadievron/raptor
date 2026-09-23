@@ -129,8 +129,9 @@ def _included_dir_has_lockfile(
     the historic unbounded behaviour.
     """
     # Bounded read: a planted multi-hundred-MB requirements file must
-    # not buy unbounded memory + scan time (same cap every other
-    # scanned-manifest read in the package uses).
+    # not buy unbounded memory + scan time (the package's scanned-tree
+    # reads route through this cap — pinned by the walker- and
+    # root-module bounded-read audits in test_walker_reads_bounded).
     text = _safe_read.read_bounded(manifest_path)
     if text is None:
         return False

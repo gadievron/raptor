@@ -1080,3 +1080,38 @@ class TestParentMapProducerClosure:
         )
         assert mapping["celery"] == ["my-app"]
         assert mapping["redis"] == ["celery", "kombu"]
+
+
+def test_requirements_include_scan_refuses_oversized_file(
+    tmp_path,
+) -> None:
+    """A planted multi-hundred-MB requirements file must be refused by
+    stat, not slurped — the include scan allocated ~2x the file size
+    before this read was bounded."""
+    import tracemalloc
+
+    from packages.sca.transitive import _requirements_include_targets
+
+    p = tmp_path / "requirements.txt"
+    with p.open("wb") as fh:
+        fh.truncate(60 * 1024 * 1024)       # sparse: cheap to create
+    tracemalloc.start()
+    try:
+        targets = _requirements_include_targets(p)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert targets == set()
+    assert peak < 10 * 1024 * 1024
+
+
+def test_cargo_workspace_probe_refuses_symlink(tmp_path) -> None:
+    """A committed ``Cargo.toml`` symlink must not be followed to a
+    host file."""
+    from packages.sca.transitive import _is_cargo_workspace_root
+
+    outside = tmp_path / "outside.toml"
+    outside.write_text("[workspace]\n", encoding="utf-8")
+    link = tmp_path / "Cargo.toml"
+    link.symlink_to(outside)
+    assert _is_cargo_workspace_root(link) is False

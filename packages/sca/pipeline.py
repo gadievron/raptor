@@ -1135,8 +1135,14 @@ def run_sca(
 
     # Re-read the rows we just wrote — SARIF emission consumes the
     # canonical row shape, including the suppression overlay.
-    import json as _json_mod
-    rows = _json_mod.loads(findings_path.read_text(encoding="utf-8"))
+    from core.json import load_json as _load_json
+
+    from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS
+    rows = _load_json(findings_path, strict=True, max_bytes=_MAX_FINDINGS)
+    if rows is None:
+        # Strict load_json soft-returns None only for a MISSING file —
+        # our own just-written findings vanishing is a hard error.
+        raise FileNotFoundError(findings_path)
     sarif_path = output_dir / "findings.sarif"
     write_sarif(sarif_path, target=target, rows=rows)
 
@@ -1595,7 +1601,6 @@ def _run_version_diff_review(client, canonical, supply_chain_findings, http, out
     Looks for a ``previous-deps.json`` in the output directory's sibling
     (project-aware) or skips gracefully.  Returns count of enriched findings.
     """
-    import json as _json_mod
 
     from .llm.version_diff_review import review_version_diff
 
@@ -1606,8 +1611,14 @@ def _run_version_diff_review(client, canonical, supply_chain_findings, http, out
 
     prev_deps: dict[tuple[str, str], str] = {}
     try:
-        rows = _json_mod.loads(prev_path.read_text(encoding="utf-8"))
-        for row in rows:
+        from core.json import load_json as _load_json
+
+        from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS
+        # Byte-budgeted: ``output_dir`` can be pointed at another
+        # run's (or any) directory, so the previous-deps read must not
+        # be an unbounded-slurp primitive.
+        rows = _load_json(prev_path, strict=True, max_bytes=_MAX_FINDINGS)
+        for row in rows or []:
             if not isinstance(row, dict):
                 continue
             # findings.json nests ecosystem/name/version under the
@@ -1836,12 +1847,14 @@ def _run_llm_inline_review(
 
     all_new: list[Dependency] = []
     for m in inline_manifests[:30]:
-        try:
-            content = m.path.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            logger.debug("sca.pipeline: inline-install manifest read "
-                         "failed for %s; skipping", m.path, exc_info=True)
-            continue
+        # Bounded no-follow read — inline manifests come from the
+        # scanned tree and this content is fed to the LLM reviewer;
+        # a bare read_text was an unbounded-memory (and prompt-size)
+        # primitive per file, up to the 30-file cap.
+        from .parsers._safe_read import read_bounded as _read_bounded
+        content = _read_bounded(m.path, follow_symlinks=False)
+        if content is None:
+            continue        # read_bounded logged the refusal
         if not content.strip():
             continue
 

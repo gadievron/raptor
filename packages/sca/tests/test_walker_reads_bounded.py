@@ -167,3 +167,67 @@ def test_no_bare_reads_in_walker_subtrees() -> None:
         "bare unbounded/symlink-following read calls found — route "
         f"through parsers._safe_read: {offenders}"
     )
+
+
+# Root-module allowlist: every entry is a JUSTIFIED bare-read site —
+# either bounded inline at the call site or reading a RAPTOR-written
+# run artifact whose size the run itself controls. Keyed on
+# (filename, distinctive line fragment) — line numbers churn.
+_ROOT_ALLOWLIST: dict[tuple[str, str], str] = {
+    ("agent.py", "with Path(p).open(encoding="):
+        "capped: fh.read(_MAX_MARKER_BYTES) bounds the read to 256 KB",
+    ("dependency_track.py", "bom_bytes = bom_path.read_bytes()"):
+        "stat size gate (_MAX_BOM_BYTES) refuses before the read",
+    ("harden.py", "patch_text = patch_path.read_text("):
+        "run-written patch artifact (this run emitted it)",
+    ("optimise.py", "atomic_write_bytes(dest, staged_file.read_bytes())"):
+        "run-staged file this run wrote into its own scratch dir",
+    ("patch_apply.py", "patch_text = patch_path.read_text("):
+        "run-written patch artifact (fix lane applies its own output)",
+    ("python_modules.py", "with zf.open(info) as member:"):
+        "declared-size gate + capped member.read(_MAX_TOP_LEVEL_BYTES+1)",
+    ("refresh_typosquat_lists.py", "and target.read_text("):
+        "repo-bundled data file, operator refresh lane (not scanned tree)",
+    ("refresh_typosquat_lists.py", "target.read_text(encoding=\"utf-8\"))"):
+        "repo-bundled data file, operator refresh lane (not scanned tree)",
+    ("update.py", "new_text = scratch_copy.read_text("):
+        "scratch copy the rewriter itself just wrote",
+}
+
+
+def test_no_unjustified_bare_reads_in_root_modules() -> None:
+    """The subtree audit above pinned only the three walker SUBTREES,
+    so root-module readers of scanned-tree files (inline manifests,
+    requirements includes, workflow files, repo-shipped policy) could
+    regrow unbounded. Every bare read in a ``packages/sca/*.py`` root
+    module must route through ``parsers._safe_read`` / a byte-budgeted
+    ``load_json`` — or carry an allowlist justification (bounded
+    inline, or a RAPTOR-written run artifact)."""
+    pkg_root = Path(__file__).resolve().parents[1]
+    offenders: list[str] = []
+    seen_keys: set[tuple[str, str]] = set()
+    for src in sorted(pkg_root.glob("*.py")):
+        for line_no, line in enumerate(
+            src.read_text(encoding="utf-8").splitlines(), start=1,
+        ):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            if not _BARE_READ_RE.search(line):
+                continue
+            key = next(
+                (k for k in _ROOT_ALLOWLIST
+                 if k[0] == src.name and k[1] in line),
+                None,
+            )
+            if key is not None:
+                seen_keys.add(key)
+                continue
+            offenders.append(f"{src.name}:{line_no}: {stripped[:80]}")
+    assert offenders == [], (
+        "bare unbounded/symlink-following read calls in root modules — "
+        "route through parsers._safe_read or a byte-budgeted "
+        f"load_json, or justify in _ROOT_ALLOWLIST: {offenders}"
+    )
+    stale = set(_ROOT_ALLOWLIST) - seen_keys
+    assert not stale, f"stale _ROOT_ALLOWLIST entries: {sorted(stale)}"

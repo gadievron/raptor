@@ -67,6 +67,7 @@ from typing import Any
 
 from .kinds import SCA_PREFIX
 from .parsers._base import PARSE_ESCAPE_ERRORS
+from .parsers._safe_read import read_bounded
 from .registries._negative_cache import should_negative_cache
 from .models import (
     Confidence,
@@ -171,10 +172,18 @@ def load_policy(target: Path) -> LicensePolicy:
             "policy file at %s, using default", path,
         )
         return DEFAULT_POLICY
+    # Bounded no-follow read: the policy file ships in the scanned
+    # tree (trust-gated by the pipeline, but the trusted path must be
+    # bounded and must not follow a committed symlink either).
+    text = read_bounded(path, follow_symlinks=False)
+    if text is None:
+        logger.warning(
+            "sca.license: failed to read %s — using default", path,
+        )
+        return DEFAULT_POLICY
     try:
-        text = path.read_text(encoding="utf-8")
         data = safe_load(text) or {}
-    except (OSError, yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
+    except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.license: failed to read %s (%s) — using default",
             path, e,

@@ -84,3 +84,9 @@ RAPTOR_CONFIG_FILENAMES = (
     ".raptor-sca-suppress.yml",
     ".raptor-sca-license-policy.yml",
 )
+
+# Byte budget for reading findings.json-class artifacts back in.
+# The rows are RAPTOR-written, but the read sites accept operator-
+# steered paths (--findings / --baseline / another run's output dir),
+# so every read pays a budget instead of trusting the location.
+MAX_FINDINGS_BYTES = 64 * 1024 * 1024
