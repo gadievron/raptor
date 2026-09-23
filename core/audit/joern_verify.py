@@ -203,7 +203,11 @@ def guard_chain_entry(cwe: str) -> dict[str, Any] | None:
     sinks = _sinks_for(norm)
     if not sinks:
         return None
-    return {"type": "joern_guard", "config": {"sinks": sinks}}
+    # The CWE rides the entry so the dispatcher can bind the
+    # refutation to the check KIND the hypothesis asserts
+    # (guard_check_kind).
+    return {"type": "joern_guard", "config": {"sinks": sinks,
+                                              "cwe": norm}}
 
 
 def flow_chain_entry(cwe: str) -> dict[str, Any] | None:
@@ -381,6 +385,69 @@ def extract_flow_endpoints(
                 return (cand, sink)
 
     return (None, None)
+
+
+# ── check-kind binding for guard-dominance refutations ──────────────
+
+# Families whose "missing check" hypotheses assert a SPECIFIC check
+# kind. The dominance query collects EVERY condition mentioning the
+# identifier, so without kind-binding a mere use dominates: verified
+# against a live joern, `while (ptr->next)` — a dereference, not a
+# null check — dominates a later `free(ptr)` and refuted "missing
+# null check on ptr before free". The web validation families keep
+# the mention-based semantics (any dominating check on the tainted
+# identifier is a plausible validation).
+_NULL_CHECK_KIND_CWES = frozenset({"CWE-476"})
+_BOUNDS_CHECK_KIND_CWES = frozenset({
+    "CWE-120", "CWE-121", "CWE-122", "CWE-125", "CWE-787",
+})
+
+
+def guard_check_kind(cwe: str) -> str | None:
+    """The check kind a "missing check" hypothesis asserts, from its
+    CWE family — ``None`` when the family has no bindable kind."""
+    norm = normalize_cwe(cwe)
+    if norm in _NULL_CHECK_KIND_CWES:
+        return "null"
+    if norm in _BOUNDS_CHECK_KIND_CWES:
+        return "bounds"
+    return None
+
+
+def _guard_matches_kind(code: str, identifier: str, kind: str) -> bool:
+    """Does a dominating condition actually PERFORM the asserted
+    check kind on *identifier*, rather than merely mentioning it?
+
+    * ``null`` — negation, (in)equality against NULL/nullptr/0, or a
+      bare truth-test of the identifier (`if (ptr)`,
+      `while (ptr && ...)`); a member/index/call use (`ptr->next`)
+      does not qualify.
+    * ``bounds`` — the identifier participates in a RELATIONAL
+      comparison; equality against zero is not a bounds check.
+    """
+    ident = re.escape(identifier)
+    if kind == "null":
+        shapes = (
+            rf"!\s*\(*\s*{ident}\b(?!\s*(?:->|\.|\[))",
+            rf"\b{ident}\b\s*[!=]=\s*\(*\s*(?:NULL|nullptr|0)\b",
+            rf"\b(?:NULL|nullptr|0)\s*[!=]=\s*\(*\s*{ident}\b",
+            # Bare truth-test conjunct: the identifier alone as a
+            # boolean operand — not followed by a member/index/call
+            # use, and not an argument of a call (a call paren is
+            # preceded by an identifier character).
+            rf"(?:^|!|&&|\|\||(?<!\w)\()\s*{ident}\s*(?:[)&|]|$)",
+        )
+    elif kind == "bounds":
+        shapes = (
+            rf"\b{ident}\b\s*(?:<=|>=|<(?!<)|>(?!>))",
+            # (?<![->])> : the > of a -> member access is not a
+            # comparison (live shape: `if (s->len)` must not count
+            # as a bounds check on len).
+            rf"(?:<=|>=|(?<!<)<|(?<![->])>)\s*\(*\s*{ident}\b",
+        )
+    else:
+        return True
+    return any(re.search(shape, code) for shape in shapes)
 
 
 # ── query builders (pure; all inputs pre-validated + escaped) ────────
@@ -834,12 +901,23 @@ def run_guard_dominance_check(
     sink_call: str,
     server: Any = None,
     timeout: int | None = None,
+    check_kind: str | None = None,
 ) -> SweepResult:
     """Guard-dominance verdict for a "missing check" hypothesis.
 
+    ``check_kind`` (``"null"`` / ``"bounds"`` / ``None``, see
+    :func:`guard_check_kind`) binds the REFUTED branch to the check
+    kind the hypothesis asserts: when set, a dominating condition
+    that merely mentions *identifier* without performing that kind
+    of check demotes the refutation to inconclusive. ``None`` keeps
+    the mention-based semantics (the release-order and propagation
+    callers ask exactly the mention-dominance question).
+
     Outcomes:
       * ``refuted`` — a condition mentioning *identifier* dominates
-        every matched sink call site (evidence: the dominator nodes).
+        every matched sink call site (evidence: the dominator nodes);
+        with a ``check_kind``, every dominator also performs that
+        kind of check.
       * ``confirmed`` — at least one matched sink call site has no
         dominating check on *identifier* (evidence: the unguarded
         sink sites).  Only reachable when both the sink and the
@@ -954,6 +1032,32 @@ def run_guard_dominance_check(
             "count — refusing to refute on capped evidence",
             details={"unguarded_total": facts["unguarded_total"]},
         )
+
+    if check_kind is not None:
+        # Kind-bind the refutation: the query collects EVERY
+        # condition mentioning the identifier, so a mere USE
+        # dominating the sink (live-verified: `while (ptr->next)`
+        # dominating `free(ptr)`) is not the check the hypothesis
+        # asserts is missing. The query reports one dominator per
+        # sink; another, kind-matched condition may also dominate —
+        # unknowable from here, so abstain rather than confirm.
+        mismatched = [
+            g for g in facts["guarded"]
+            if not _guard_matches_kind(
+                g.get("guard_code", ""), identifier, check_kind)
+        ]
+        if mismatched:
+            return _inconclusive(
+                tool_stamp, file_path, function_name,
+                f"every {sink_bare!r} site is dominated by a "
+                f"condition mentioning {identifier!r}, but a "
+                f"dominator is not a {check_kind} check "
+                f"({mismatched[0].get('guard_code', '')!r}) — "
+                "domination by an unrelated condition cannot refute "
+                f"a missing-{check_kind}-check hypothesis",
+                details={"dominators": facts["guarded"],
+                         "kind_mismatched": mismatched},
+            )
 
     # Every matched sink is dominated by a check on the identifier:
     # the "missing check" hypothesis is mechanically refuted.
