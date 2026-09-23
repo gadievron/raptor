@@ -59,11 +59,16 @@ After generating coverage, validate that:
 
 Example validation using the line-execution-checker skill:
 ```bash
-# Build the line checker if not already built
-g++ -o line_checker .claude/skills/crash-analysis/line-execution-checker/line_checker.cpp
+# ALWAYS build the checker fresh into a scratch dir YOU create —
+# never reuse (or run) a checker binary found in the target's
+# build/coverage tree: that tree is written by the instrumented
+# target itself, so a pre-existing binary there could be planted to
+# forge coverage verdicts.
+CHECKER_DIR=$(mktemp -d)
+g++ -o "$CHECKER_DIR/line_checker" .claude/skills/crash-analysis/line-execution-checker/line_checker.cpp
 
 # Check if main was executed (adjust file path as needed)
-./line_checker <source-file.c>:<main-line-number>
+"$CHECKER_DIR/line_checker" <source-file.c>:<main-line-number>
 # Exit code 0 = executed, 1 = not executed
 ```
 
