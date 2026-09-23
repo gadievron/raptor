@@ -5,6 +5,9 @@ from __future__ import annotations
 from core.security.llm_family import (
     bare_model_id,
     family_of,
+    provider_of,
+    resolve_model_shorthand,
+    routing_model_id,
     same_family,
     select_cross_family_checker,
 )
@@ -567,13 +570,13 @@ class TestBedrockRouteForm:
 
     def test_provider_and_family(self):
         from core.security.llm_family import family_of, provider_of
-        assert provider_of("bedrock/anthropic.claude-mythos-5") == "bedrock"
-        assert family_of("bedrock/anthropic.claude-mythos-5") == "anthropic"
+        assert provider_of("bedrock/anthropic.claude-fable-5") == "bedrock"
+        assert family_of("bedrock/anthropic.claude-fable-5") == "anthropic"
 
     def test_bare_model_id_fully_peels(self):
         from core.security.llm_family import bare_model_id
         assert bare_model_id(
-            "bedrock/anthropic.claude-mythos-5") == "claude-mythos-5"
+            "bedrock/anthropic.claude-fable-5") == "claude-fable-5"
         assert bare_model_id(
             "bedrock/us.anthropic.claude-opus-4-7") == "claude-opus-4-7"
 
@@ -581,10 +584,85 @@ class TestBedrockRouteForm:
         # Bedrock model ids REQUIRE the vendor-dotted segment; the
         # wire-form helper peels only the route prefix. (A fully-bared
         # name sent to the SDK 403s — observed live when a resolved
-        # bedrock/ override synthesized model_name=claude-mythos-5.)
+        # bedrock/ override synthesized model_name=claude-fable-5.)
         from core.security.llm_family import routing_model_id
         assert routing_model_id(
-            "bedrock/anthropic.claude-mythos-5") == "anthropic.claude-mythos-5"
+            "bedrock/anthropic.claude-fable-5") == "anthropic.claude-fable-5"
         assert routing_model_id(
-            "anthropic.claude-mythos-5") == "anthropic.claude-mythos-5"
+            "anthropic.claude-fable-5") == "anthropic.claude-fable-5"
         assert routing_model_id("claude-haiku-4-5") == "claude-haiku-4-5"
+
+
+# --- iterated peel convergence (regional/aggregator chains) ---
+
+
+def test_family_of_converges_on_doubled_regional_prefix():
+    # The peel loop iterates until convergence: a router that stacks
+    # regional prefixes (region-of-region re-dispatch) still resolves.
+    # Regression shape: an iteration whose ONLY progress is the
+    # regional strip must count as progress, or the loop stops one
+    # peel short and the id degrades to "unknown".
+    assert family_of("us.eu.anthropic.claude-opus-4-6") == "anthropic"
+
+
+def test_provider_of_converges_on_doubled_regional_prefix():
+    assert provider_of("us.eu.anthropic.claude-opus-4-6") == "bedrock"
+
+
+def test_provider_of_resolves_bedrock_under_four_aggregators():
+    # Deep-but-bounded chains resolve: four aggregator peels plus the
+    # regional/provider peel fit inside the loop bound.
+    assert provider_of(
+        "together/groq/openrouter/fireworks/us.anthropic.claude-opus-4-6"
+    ) == "bedrock"
+
+
+def test_provider_of_bounds_pathological_nesting_at_five_peels():
+    # The peel loop is bounded to defend against adversarially nested
+    # ids: beyond five peels the id is treated as unresolvable (empty
+    # provider) rather than looping further. Both directions with the
+    # test above.
+    assert provider_of(
+        "together/groq/openrouter/fireworks/deepinfra/"
+        "us.anthropic.claude-opus-4-6"
+    ) == ""
+
+
+# --- routing_model_id peels ALL aggregator layers, keeps provider ---
+
+
+def test_routing_model_id_peels_chained_aggregators():
+    assert routing_model_id(
+        "together/openrouter/anthropic.claude-opus-4-6"
+    ) == "anthropic.claude-opus-4-6"
+
+
+def test_routing_model_id_keeps_unprefixed_ids():
+    assert routing_model_id("gpt-5") == "gpt-5"
+
+
+# --- bare_model_id provider-head peel strips exactly one segment ---
+
+
+def test_bare_model_id_provider_head_keeps_multi_segment_rest():
+    # ollama model paths carry their own slash ("ollama/library/llama3")
+    # — the provider-head peel removes the head segment only and the
+    # remainder passes through whole.
+    assert bare_model_id("ollama/library/llama3") == "library/llama3"
+
+
+# --- resolve_model_shorthand length floor ---
+
+
+def test_shorthand_three_chars_is_resolvable():
+    # The junk-id floor is "at least 3 characters" — real tier tokens
+    # ("gpt") sit exactly at it.
+    assert resolve_model_shorthand("gpt", ["gpt-5-mini"]) == "gpt-5-mini"
+
+
+def test_shorthand_two_chars_rejected():
+    assert resolve_model_shorthand("o3", ["o3-mini"]) is None
+
+
+def test_shorthand_pure_numeric_rejected():
+    assert resolve_model_shorthand("445", ["m-445-x"]) is None
