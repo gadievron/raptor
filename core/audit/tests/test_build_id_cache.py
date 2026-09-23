@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 
 from core.audit.build_id_cache import (
@@ -350,19 +351,21 @@ class TestBridgeRoundTrip:
         binary.write_bytes(b"\x7fELF current binary")
 
         cache = BuildIDCache(cache_dir=tmp_path / "cache")
+        sha = hashlib.sha256(binary.read_bytes()).hexdigest()
         cache.put("ab12cd34", "layer0-findings", {
             "findings": [
                 {"function": "parse_header", "target": "sprintf",
                  "binary_path": str(binary)},
             ],
-        }, source_command="external-tool")
+        }, source_command="external-tool", binary_sha256=sha)
 
         out_dir = tmp_path / "out" / "run1"
         out_dir.mkdir(parents=True)
-        # Cache merges are scoped to the current run's binaries: the
-        # build-id must be named for the entry to merge. (The envelope
-        # above is legacy hash-less — readable at build-id scope when
-        # the CURRENT binary hashes.)
+        # Cache merges are scoped to the current run's binaries AND
+        # content-hash-bound: the build-id must be named and the
+        # envelope must record the current binary's hash (a hash-less
+        # envelope is mintable by any writer of the shared dir and
+        # never merges — see TestMergeScoping).
         result = load_binary_bridge(
             out_dir, build_id_cache=cache,
             current_build_ids={"ab12cd34": str(binary)},

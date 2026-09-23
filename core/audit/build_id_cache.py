@@ -433,6 +433,12 @@ def import_validate_evidence(
     payload under ``["data"]``) only when it is content-hash-bound to
     the on-disk binary at *binary_path* (see ``_hash_bound_import``);
     None otherwise.
+
+    No production consumer merges ``feasibility`` artifacts yet; when
+    one is wired it MUST come through here — a bare ``cache.get`` at
+    build-id scope accepts hash-less envelopes any writer of the
+    shared cache dir can mint (the layer0 merge in
+    ``binary_bridge._merge_from_build_cache`` is the wired exemplar).
     """
     return _hash_bound_import(cache, build_id, "feasibility", binary_path)
 
