@@ -715,3 +715,26 @@ class TestCopyFail:
         assert r.success
         assert r.engine == "coccinelle"
         assert model.invariants[0].mechanical_rule is not None
+
+
+class TestExtLanguageClosure:
+    def test_fixture_language_map_covers_exactly_the_engine_extensions(
+        self,
+    ) -> None:
+        """compiler._EXT_LANGUAGE claims alignment with the engine
+        extension sets but is a hand-copy; this closure test makes the
+        claim enforced. A new engine extension missing here silently
+        falls to the .py default in _fixture_ext/_fixture_language and
+        produces wrong-language fixtures that reject valid rules."""
+        from core.concepts.compiler import _EXT_LANGUAGE
+        from packages.checker_synthesis.languages import (
+            _COCCINELLE_EXTS,
+            _SEMGREP_EXTS,
+        )
+
+        engine_exts = _COCCINELLE_EXTS | _SEMGREP_EXTS
+        assert set(_EXT_LANGUAGE) == engine_exts, (
+            "compiler._EXT_LANGUAGE drifted from the engine extension "
+            f"sets; engine-only: {sorted(engine_exts - set(_EXT_LANGUAGE))}, "
+            f"compiler-only: {sorted(set(_EXT_LANGUAGE) - engine_exts)}"
+        )
