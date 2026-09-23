@@ -20761,11 +20761,14 @@ def _proactive_validate(
 
     confirmed_tools = []
     # Per-function dispatch record: which channels actually RAN here
-    # (and which errored). Gate resolution's covered==ran check reads
-    # these off the outcome — an installed-but-never-dispatched tool
-    # must not count as class coverage.
+    # (and which errored or were skipped). Gate resolution's
+    # covered==ran check reads these off the outcome — an
+    # installed-but-never-dispatched tool must not count as class
+    # coverage, and a channel whose silence was vacuous (the CPG
+    # never modelled the function) must be REMOVED from the record.
     ran: set = set()
     errored: set = set()
+    skipped: set = set()
 
     smt_verb = smt_verb_for_cwe(cwe) if _has_cwe_dispatch else None
     if smt_verb and "smt" not in dispatched:
@@ -20885,6 +20888,7 @@ def _proactive_validate(
                     # read vacuous silence as a covering channel that
                     # ran silent. (Same rule as the tool_chain leg.)
                     ran.discard("joern")
+                    skipped.add("joern")
                     if _cov is False:
                         # The probe ANSWERED — a healthy round trip.
                         _record_joern_outcome(config, error=False)
@@ -21016,7 +21020,17 @@ def _proactive_validate(
                 hypothesis=outcome.hypothesis or "",
                 server=joern_server,
             )
-            if xf_result is not None and xf_result.verified:
+            if xf_result is None:
+                # Inconclusive — no verifier decided anything.
+                # tool_coverage maps cross_function → joern, so
+                # leaving it in the dispatch record is phantom class
+                # coverage (the suspicious→clean demotion reads it as
+                # "covering channel ran silent").
+                ran.discard("cross_function")
+                skipped.add("cross_function")
+                if tier_counters:
+                    _increment_tier_dict(tier_counters, "joern_xf", "skipped")
+            elif xf_result.verified:
                 confirmed_tools.append(f"joern:xf:{xf_result.verifier_name}")
                 if tier_counters:
                     _increment_tier_dict(tier_counters, "joern_xf", "confirmed")
@@ -21028,7 +21042,7 @@ def _proactive_validate(
                         f"joern:xf:{xf_result.verifier_name}",
                         xf_result.evidence,
                     )
-            elif tier_counters and xf_result is not None:
+            elif tier_counters:
                 _increment_tier_dict(tier_counters, "joern_xf", "refuted")
         except Exception:
             logger.debug(
@@ -21045,6 +21059,8 @@ def _proactive_validate(
         outcome.tools_dispatched = (outcome.tools_dispatched or set()) | ran
     if errored:
         outcome.tools_errored = (outcome.tools_errored or set()) | errored
+    if skipped:
+        outcome.tools_skipped = (outcome.tools_skipped or set()) | skipped
 
     # Path feasibility: check whether flow trace conditions are jointly
     # satisfiable (strengthens or refutes the finding's reachability claim)
