@@ -1748,13 +1748,11 @@ def _value_bound_dominates(
         java_text = None
         if resolved.language == "java" and file_path:
             # The constant-definers pre-check folds over the file's
-            # AST; an unreadable file skips that check, never the gate.
-            try:
-                java_text = Path(file_path).read_text(
-                    encoding="utf-8", errors="replace",
-                )
-            except OSError:
-                java_text = None
+            # AST; an unreadable file skips that check, never the
+            # gate. Capped read: the path names scanned-repo source,
+            # and a truncated read only weakens the pre-check.
+            got = read_text_capped(file_path)
+            java_text = got[0] if got is not None else None
         result = evaluate_finding(
             resolved.cfg,
             [resolved.source_node],

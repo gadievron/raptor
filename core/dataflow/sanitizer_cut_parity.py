@@ -41,6 +41,8 @@ from typing import (
     Any,
 )
 
+from core.source import read_text_capped
+
 
 # Ground-truth label values.
 LABEL_SHOULD_SUPPRESS = "should_suppress"
@@ -197,12 +199,10 @@ def value_bound_verdict_for(finding: dict[str, Any]) -> str:
     if resolved.language == "java":
         # The constant-definers pre-check folds over the file's AST;
         # unreadable file just skips that check, never the gate.
-        try:
-            java_text = Path(str(finding.get("file_path", ""))).read_text(
-                encoding="utf-8", errors="replace",
-            )
-        except OSError:
-            java_text = None
+        # Capped read: the path names scanned-repo source, and a
+        # truncated read only weakens the pre-check.
+        got = read_text_capped(str(finding.get("file_path", "")))
+        java_text = got[0] if got is not None else None
     result = evaluate_finding(
         resolved.cfg,
         [resolved.source_node],
@@ -236,21 +236,48 @@ def append_parity_record(path: str | Path, record: ParityRecord) -> None:
         pass
 
 
+# One JSONL record is a small flat dict (well under a kilobyte); a
+# line over this budget is malformed by construction and skipped like
+# any other malformed line.
+_MAX_RECORD_LINE_CHARS = 1024 * 1024
+
+
 def read_parity_records(path: str | Path) -> list[ParityRecord]:
-    """Read all records from a JSONL file. Skips malformed lines.
-    Returns ``[]`` if the file doesn't exist."""
+    """Read all records from a JSONL file. Skips malformed lines
+    (including any line over the per-record budget). Returns ``[]``
+    if the file doesn't exist.
+
+    Streams line-by-line: the parity log is append-only and unbounded
+    across runs, so materialising it whole made the report tooling's
+    peak memory proportional to telemetry history.
+    """
     p = Path(path)
     if not p.exists():
         return []
     out: list[ParityRecord] = []
-    for line in p.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            out.append(ParityRecord.from_json(loads(line)))
-        except (ValueError, KeyError, TypeError):
-            continue
+    try:
+        with p.open("r", encoding="utf-8", errors="replace") as f:
+            while True:
+                line = f.readline(_MAX_RECORD_LINE_CHARS + 1)
+                if not line:
+                    break
+                if len(line) > _MAX_RECORD_LINE_CHARS:
+                    # Drain the rest of the oversized line in bounded
+                    # chunks, then resume at the next record.
+                    while True:
+                        chunk = f.readline(_MAX_RECORD_LINE_CHARS)
+                        if not chunk or chunk.endswith("\n"):
+                            break
+                    continue
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(ParityRecord.from_json(loads(line)))
+                except (ValueError, KeyError, TypeError):
+                    continue
+    except OSError:
+        return out
     return out
 
 

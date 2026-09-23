@@ -39,6 +39,7 @@ from core.inventory.call_graph import (
     extract_call_graph_rust,
 )
 from core.inventory.languages import detect_language
+from core.source import read_text_capped
 
 logger = logging.getLogger(__name__)
 
@@ -172,11 +173,18 @@ def _resolve_file(step: dict, repo_path: Path) -> Path | None:
 
 
 def _read_file_content(path: Path) -> str | None:
-    """Read file content, returning None on failure."""
-    try:
-        return path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    """Read file content with the shared size cap, None on failure.
+
+    Step files are SARIF-named paths into the scanned (untrusted)
+    repo — a planted multi-hundred-MB file must not be materialised
+    whole per finding.  Truncation degrades to judging the capped
+    prefix: steps whose line falls past the cap read as not-found
+    (the inconclusive direction), never as fabricated content.
+    """
+    got = read_text_capped(path)
+    if got is None:
         return None
+    return got[0]
 
 
 def _extract_graph(content: str, language: str) -> FileCallGraph | None:
