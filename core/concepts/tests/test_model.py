@@ -385,3 +385,47 @@ class TestGetContractsForQualified:
             Contract(function="init", file="b.c"),
         ])
         assert len(m.get_contracts_for("init")) == 2
+
+
+class TestDriftLoadNonDictRecords:
+    """The drift loader's degrade-never-crash contract holds for
+    non-dict records and mis-typed containers, not just missing
+    fields."""
+
+    def _load(self, tmp_path, raw):
+        import json as _json
+
+        from core.concepts.model import DomainModel
+        p = tmp_path / "domain-model.json"
+        p.write_text(_json.dumps(raw), encoding="utf-8")
+        return DomainModel.load(p)
+
+    def test_evidence_as_strings(self, tmp_path):
+        m = self._load(tmp_path, {"concepts": [
+            {"id": "c1", "description": "d",
+             "evidence": ["src/a.c:12 observation"]},
+        ]})
+        assert m.concepts[0].id == "c1"
+        assert m.concepts[0].evidence == []
+
+    def test_concept_as_string(self, tmp_path):
+        m = self._load(tmp_path, {"concepts": ["not a concept",
+                                               {"id": "c1",
+                                                "description": "d"}]})
+        assert [c.id for c in m.concepts] == ["c1"]
+
+    def test_invariant_as_string(self, tmp_path):
+        m = self._load(tmp_path, {"invariants": ["bare statement"]})
+        assert m.invariants == []
+
+    def test_concepts_as_dict_container(self, tmp_path):
+        m = self._load(tmp_path, {"concepts": {"c1": {"id": "c1"}}})
+        assert m.concepts == []
+
+    def test_security_context_as_string(self, tmp_path):
+        m = self._load(tmp_path, {"security_context": "kernel"})
+        assert m.security_context is None
+
+    def test_bug_pattern_as_number(self, tmp_path):
+        m = self._load(tmp_path, {"bug_patterns": [42]})
+        assert m.bug_patterns == []

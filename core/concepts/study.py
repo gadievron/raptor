@@ -4466,9 +4466,11 @@ def _apply_sage_prior(
     # Try to load a local domain model for skip (concept reconstruction)
     local_model = None
     for candidate in _find_local_models(output_dir):
-        # DomainModel.load handles malformed JSON itself; only an
-        # unreadable candidate file is a legitimate skip here.
-        with contextlib.suppress(OSError):
+        # DomainModel.load degrades malformed JSON and drifted records
+        # itself; the suppress covers unreadable files plus any
+        # residual record shape the drift loader has not met yet —
+        # an opportunistic sibling read must never kill the study run.
+        with contextlib.suppress(OSError, TypeError, AttributeError):
             local_model = DomainModel.load(candidate)
             break
 

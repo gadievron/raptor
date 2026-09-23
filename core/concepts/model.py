@@ -388,32 +388,47 @@ class DomainModel:
             }
             return {**defaults, **_filter_fields(dc_type, record)}
 
+        def _dict_records(container: Any) -> list[dict]:
+            """Dict-shaped records of a list-shaped container.
+
+            Non-dict records (a bare-string evidence entry — a shape
+            the study pipeline itself accepts from the LLM) and
+            non-list containers (a dict where a list was expected)
+            must degrade to skipped records / an empty list, never
+            crash the loader: sibling-run and canonical models are
+            consulted opportunistically and may carry any older
+            writer's shape.
+            """
+            if not isinstance(container, list):
+                return []
+            return [r for r in container if isinstance(r, dict)]
+
         concepts = [
             Concept(**{
                 **_drift_load(Concept, c),
                 "evidence": [
                     Evidence(**_drift_load(Evidence, e))
-                    for e in c.get("evidence", [])
+                    for e in _dict_records(c.get("evidence", []))
                 ],
             })
-            for c in raw.get("concepts", [])
+            for c in _dict_records(raw.get("concepts", []))
         ]
         invariants = [
             Invariant(**_drift_load(Invariant, i))
-            for i in raw.get("invariants", [])
+            for i in _dict_records(raw.get("invariants", []))
         ]
         contracts = [
             Contract(**_drift_load(Contract, c))
-            for c in raw.get("contracts", [])
+            for c in _dict_records(raw.get("contracts", []))
         ]
         sc_raw = raw.get("security_context")
         security_context = (
             SecurityContext(**_drift_load(SecurityContext, sc_raw))
-            if sc_raw else None
+            if isinstance(sc_raw, dict) else None
         )
         bug_patterns = [
             BugPattern(**_drift_load(BugPattern, bp))
-            for bp in raw.get("bug_patterns", [])
+            for bp in _dict_records(raw.get("bug_patterns", []))
         ]
         def _vocab_list(key: str) -> list:
             value = raw.get(key, [])
