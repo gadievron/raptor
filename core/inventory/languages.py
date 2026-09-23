@@ -162,13 +162,33 @@ _CONTENT_PROBE_BYTES = 1024
 _UTF8_BOM = b'\xef\xbb\xbf'
 
 
+def _php_leading_tag(text: str) -> bool:
+    """Shared leading-open-tag predicate for the walk probe (bytes,
+    via :func:`_php_leads`) and the ``.inc`` refine arm — one
+    definition so the two arms cannot drift back to anywhere-match.
+
+    Mirrors PHP's lexer: the ``<?php`` spelling is CASE-INSENSITIVE
+    (``<?PHP`` / ``<?Php`` are valid and occur in legacy plugin
+    ecosystems — the very file class the probe exists for) and must
+    be followed by whitespace or end-of-input (``<?phpinfo`` is not
+    an open tag). ``<?=`` needs no boundary.
+    """
+    stripped = text.lstrip()
+    if stripped.startswith('<?='):
+        return True
+    if stripped[:5].lower() != '<?php':
+        return False
+    rest = stripped[5:6]
+    return rest in ('', ' ', '\t', '\r', '\n')
+
+
 def _php_leads(head: bytes) -> bool:
     if b'\x00' in head:
         return False
     if head.startswith(_UTF8_BOM):
         head = head[len(_UTF8_BOM):]
-    stripped = head.lstrip()
-    return stripped.startswith(b'<?php') or stripped.startswith(b'<?=')
+    # latin-1 is byte-lossless, and the tag grammar is pure ASCII.
+    return _php_leading_tag(head.decode('latin-1'))
 
 
 def detect_language_from_content(filepath: str) -> str | None:
@@ -215,7 +235,6 @@ _CPP_HEADER_RE = re.compile(
     r'|\btypename\s+[A-Za-z_]'
 )
 
-_INC_PHP_RE = re.compile(r'<\?php|<\?=')
 _INC_ASM_RE = re.compile(
     r'(?m)^[^\S\n]*(?:\.(?:text|data|globl|global|section|macro|equ)\b'
     r'|%macro\b|%define\b|section\s+\.)'
@@ -258,7 +277,11 @@ def refine_language(language: str | None, filepath: str,
         return language
     if language == 'inc':
         head = content[:16 * 1024]
-        if _INC_PHP_RE.search(head):
+        # LEADING tag only, same predicate as the walk probe: a tag
+        # anywhere deeper is a document QUOTING PHP — a C fragment
+        # mentioning a PHP tag in a comment routed to the php grammar
+        # and lost every C function item.
+        if _php_leading_tag(head):
             return 'php'
         if _INC_ASM_RE.search(head):
             return 'asm'

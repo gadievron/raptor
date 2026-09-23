@@ -502,3 +502,44 @@ def test_content_probe_rejects_binary_polyglots(tmp_path):
     png = tmp_path / "logo.mod"
     png.write_bytes(b"\x89PNG\x0d\x0a\x1a\x0a\x00\x00<?php evil();")
     assert detect_language_from_content(str(png)) is None
+
+
+def test_php_open_tag_case_insensitive():
+    # PHP's lexer matches the open tag case-insensitively; <?PHP-leading
+    # legacy plugin files stayed invisible to the inventory — the exact
+    # blindness the leading-tag probe was landed to close.
+    from core.inventory.languages import _php_leads
+    assert _php_leads(b"<?php echo 1;")
+    assert _php_leads(b"<?PHP echo 1;")
+    assert _php_leads(b"<?Php\nfunction f(){}")
+    assert _php_leads(b"\xef\xbb\xbf<?PHP hi")
+
+
+def test_php_open_tag_requires_boundary():
+    # <?phpinfo is not an open tag (PHP requires whitespace/EOL/EOF
+    # after php) — the over-match minted checklist items from
+    # documents that merely start with that text.
+    from core.inventory.languages import _php_leads
+    assert not _php_leads(b"<?phpinfo();")
+    assert _php_leads(b"<?php")       # EOF boundary is valid
+    assert _php_leads(b"<?php\techo 1;")
+    assert _php_leads(b"<?=1?>")
+
+
+def test_inc_php_routing_requires_leading_tag():
+    # A C .inc fragment QUOTING a PHP tag in a comment routed to the
+    # php grammar and lost every C function item; the walk probe's
+    # leading-tag doctrine now applies to the refine arm through the
+    # same shared predicate.
+    from core.inventory.languages import refine_language
+    c_frag = (
+        "# config\n"
+        "/* example: <?php echo 1; */\n"
+        "#include <stdio.h>\n"
+        "static int frag(int a){ return a; }\n"
+    )
+    assert refine_language("inc", "f.inc", c_frag) == "c"
+    assert refine_language("inc", "f.inc", "<?php\nfunction v(){}\n") == "php"
+    assert refine_language("inc", "f.inc", "<?PHP\nfunction v(){}\n") == "php"
+    assert refine_language(
+        "inc", "f.inc", "  <?= $x ?>\n") == "php"
