@@ -273,10 +273,10 @@ class _StreamState:
     # engine throws before the terminal result lands (which is the only
     # other carrier of total_cost_usd).
     last_cost_usd: float = 0.0
-    # Token accumulator. Used to estimate cost when the SDK reports
-    # total_cost_usd=0 despite real LLM rounds (observed on max_turns_reached
-    # and certain end_turn-after-give_up paths). Outcome uses
-    # ``max(last_cost_usd, run.total_cost_usd, estimate_from_tokens)``.
+    # Token accumulators — telemetry only (surfaced on the Outcome for
+    # post-bench analysis). No token-based cost estimator exists in this
+    # package; Outcome cost comes from the accumulated per-turn cost
+    # events (``last_cost_usd``) / the engine's terminal result.
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     # B-20 productive-extension state.

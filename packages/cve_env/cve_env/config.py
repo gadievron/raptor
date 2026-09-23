@@ -1,11 +1,9 @@
 """Runtime configuration: model id, caps, paths.
 
-Cost is reported by claude-agent-sdk's ResultMessage.total_cost_usd, but on
-certain stop_reasons (max_turns_reached, end_turn after low-turn give_up)
-the SDK emits cost=0.0 even after multiple LLM rounds.
-``get_token_rates`` (shared model table) provides a token-based fallback so
-cost-loss never leaves Outcome.total_cost_usd=0 when actual LLM tokens
-were consumed. Tune caps here; everything else derives.
+Cost comes from the core engine's per-turn cost events (core_loop
+accumulates TurnCompleted.cost_usd); there is no token-based cost
+fallback in this package — the token accumulators on the loop state are
+telemetry only. Tune caps here; everything else derives.
 """
 
 from __future__ import annotations
@@ -512,8 +510,10 @@ only — safer than -a). CLI override: ``--auto-prune-images`` (cli.py)."""
 
 AUTO_STOP_COLIMA: bool = _env_bool("CVE_ENV_AUTO_STOP_COLIMA")
 """When True, post-build ``colima stop`` IFF no other cve-env
-build is running (lockfile guard at /tmp/cve-env-active.lock).
-CLI override: ``--auto-stop-colima`` (cli.py)."""
+build is running (per-uid lockfile guard —
+``<tempdir>/cve-env-locks-<uid>/cve-env-<pid>.lock``, see
+cve_env/utils/lifecycle.py). CLI override: ``--auto-stop-colima``
+(cli.py)."""
 
 # Docker resource label — the single contract between the WRITERS that tag
 # per-CVE docker resources (docker_run / docker_build / docker_compose_up) and

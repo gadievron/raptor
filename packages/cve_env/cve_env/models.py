@@ -142,8 +142,7 @@ class Outcome:
     audit_path: Path | None = None
     error: str = ""
     # Count of refusal events the RefusalScanner observed during the run
-    # (LLM refusal text matches OR SDK API Error wrappers). Surfaces the
-    # same signal bench50.sh prints as ``refusals=N@T<turn>`` so post-bench
+    # (LLM refusal text matches OR SDK API Error wrappers), so post-bench
     # JSON analysis can tally refusal rates without re-parsing bench.log
     # narrative. 0 == no refusals.
     #
@@ -186,13 +185,12 @@ def derive_build_method(tool_names_called: list[str]) -> str:
     """Best-effort label(s) for HOW the env was built/launched, derived from
     the tool trail, for the per-CVE sidecar JSON + corpus-append.
 
-    Previously absent from the sidecar: ``scripts/update_corpus.py`` only passes
-    a ``method`` key through if present, and nothing produced it. Comma-joins
-    when the run CASCADED across methods (e.g. source-build then compose).
+    Comma-joins when the run CASCADED across methods (e.g. source-build
+    then compose). Returns ``researching`` when no build/launch tool ran.
 
-    Taxonomy MIRRORS ``scripts/heartbeat_status.sh`` (method detection, ~line
-    200) — the two MUST stay in sync. Returns ``researching`` when no build/
-    launch tool ran.
+    The taxonomy originated in external bench tooling that is not
+    vendored in this tree; the sidecar consumer contract is the label
+    set produced HERE.
     """
     seq = tool_names_called or []
 

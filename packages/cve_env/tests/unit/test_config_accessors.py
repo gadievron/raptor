@@ -182,9 +182,6 @@ def test_stage_budget_valid_env_override(monkeypatch) -> None:
     assert get_stage_budget("RESEARCH") == 1.25
 
 
-# --- get_token_rates (two-var override with malformed fallback) -------------
-
-
 
 
 

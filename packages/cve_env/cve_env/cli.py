@@ -1,7 +1,7 @@
 """Command-line entry point: ``cve-env build CVE-YYYY-NNNN``.
 
 Minimal CLI that renders + runs the agent. Intended for ad-hoc build
-requests and smokes; the parallel bench runner lives in ``scripts/bench_parallel.sh``.
+requests and smokes; the bench runner lives in ``scripts/raptor-cve-env-bench``.
 """
 
 from __future__ import annotations
@@ -452,7 +452,7 @@ def _cmd_build(args: argparse.Namespace) -> int:
             "reason": outcome.reason,
             "tool_names_called": outcome.tool_names_called,
             # Derived build-method label(s) for post-bench analysis.
-            # Taxonomy mirrors scripts/heartbeat_status.sh.
+            # Taxonomy defined by derive_build_method (cve_env/models.py).
             "method": derive_build_method(outcome.tool_names_called),
             "final_text": outcome.final_text,
             "audit_path": str(outcome.audit_path) if outcome.audit_path else None,
@@ -478,9 +478,10 @@ def _cmd_build(args: argparse.Namespace) -> int:
         }
         # Write sidecar before stdout so the result survives a SIGKILL that
         # fires after build() returns but before the stdout pipe flushes.
-        # bench50.sh recovers from this file when $OUTDIR/$cve.json is empty.
+        # scripts/raptor-cve-env-bench recovers from this file when the
+        # stdout capture is empty.
         sidecar = audit_root / f"{cve.cve_id}.outcome.json"
-        # Sidecar and stdout must carry the same document: bench50.sh
+        # Sidecar and stdout must carry the same document: the bench
         # falls back to the sidecar when the stdout capture is empty.
         outcome_json = dumps_artifact(outcome_dict)
         with contextlib.suppress(OSError):
@@ -831,9 +832,9 @@ def _stage_grouped_calls(
     for call in calls:
         stage = _STAGE_BY_TOOL.get(call["tool"])
         # Skip unknown tools AND tools whose stage is outside _STAGE_ORDER
-        # ('meta' / 'give_up' map there — present in _STAGE_BY_TOOL so the
-        # cve_evidence.py + heartbeat_status.sh sibling tables stay in sync,
-        # but not part of the human pipeline report).
+        # ('meta' / 'give_up' map there — kept in _STAGE_BY_TOOL so every
+        # tool has a stage for cost attribution, but not part of the
+        # human pipeline report).
         if stage is None or stage not in out:
             continue
         ti = call["input"] if isinstance(call["input"], dict) else {}

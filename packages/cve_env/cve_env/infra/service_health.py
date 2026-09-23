@@ -9,9 +9,9 @@ For each external service the bench depends on, a fast (≤10s) probe that:
 
 Used by:
 
-* ``cve-env doctor`` CLI command — manual health check at any time
-* ``scripts/bench50.sh`` preflight — fail-fast on critical service outage,
-  warn on non-critical.
+* ``cve-env doctor`` CLI command — manual health check at any time;
+  bench preflights consume :func:`has_critical_failure` the same way
+  (fail-fast on critical service outage, warn on non-critical).
 
 Probes are deliberately small/cheap so they can run as a pre-flight without
 delaying the main work. Each probe returns within ``_TIMEOUT_S`` (10s)
