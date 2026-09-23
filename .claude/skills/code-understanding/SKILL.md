@@ -60,7 +60,7 @@ flow_format: source → transform(s) → sink
 4. When hunting variants, search the full codebase. Do not stop at the first match.
 5. When teaching, explain the mechanism, not just the name. Show the code that implements it.
 6. Produce structured output (context-map.json, flow-trace.json, variants.json) for integration with validation pipeline.
-7. **libexec scripts:** Run `libexec/` scripts exactly as shown in the prompts — do not prepend `bash`, `export` commands, absolute paths, or additional shell logic. The permission system auto-approves `libexec/raptor-*` commands only when run in this exact form.
+7. **libexec scripts:** Run `libexec/` scripts exactly as shown in the prompts — do not prepend `bash`, `export` commands, absolute paths, or additional shell logic. Pre-approved commands are enumerated in `.claude/settings.json` (not the whole `libexec/raptor-*` family) and are matched only when run in this exact form; commands off that list prompt for permission (closure: `.github/tests/test_settings_libexec_allowlist_closure.py`).
 
 ---
 
