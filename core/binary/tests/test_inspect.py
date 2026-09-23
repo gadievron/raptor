@@ -40,7 +40,7 @@ class TestInvocationShape:
                 returncode=0, stdout="OUT", stderr="")
             result = readelf(binary, "-h", timeout=5)
             args, kwargs = mock_run.call_args
-        assert args[0] == ["readelf", "-h", str(binary)]
+        assert args[0] == ["readelf", "-h", str(binary.resolve())]
         assert kwargs["block_network"] is True
         assert kwargs["target"] == str(binary.parent.resolve())
         assert kwargs["timeout"] == 5
@@ -54,7 +54,24 @@ class TestInvocationShape:
                 returncode=0, stdout="", stderr="")
             nm(binary, "-D", "-C")
             argv = mock_run.call_args[0][0]
-        assert argv == ["nm", "-D", "-C", str(binary)]
+        assert argv == ["nm", "-D", "-C", str(binary.resolve())]
+
+    def test_relative_dash_leading_name_resolved_in_argv(
+            self, tmp_path, monkeypatch):
+        """A caller-spelled relative name that starts with '-' or '@'
+        must reach the tool as an absolute path — binutils would
+        otherwise expand it as an option / response file inside the
+        sandbox."""
+        monkeypatch.chdir(tmp_path)
+        binary = tmp_path / "-dash.elf"
+        binary.write_bytes(b"\x7fELF")
+        with patch("core.sandbox.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="", stderr="")
+            readelf("-dash.elf", "-h")
+            argv = mock_run.call_args[0][0]
+        assert argv[-1] == str(binary.resolve())
+        assert not argv[-1].startswith(("-", "@"))
 
 
 class TestFailureSemantics:
