@@ -334,3 +334,53 @@ def test_lookup_class_name_matches_finding_interior_line():
     assert _lookup_class_name(inventory, "src/svc.py", "handle", 40) == "Beta"
     # line == 0 keeps the first-candidate fallback.
     assert _lookup_class_name(inventory, "src/svc.py", "handle", 0) == "Alpha"
+
+
+def test_module_derivation_miss_routes_to_not_found():
+    """A labelled row whose path derives no module must join the
+    not_found bucket — silently skipping it shrank total, coverage
+    AND the false-suppress denominator without trace."""
+    from core.analysis.reach_audit import audit_corpus
+    inv = {"files": [{"path": "bin/tool", "items": [
+        {"name": "main", "line_start": 1, "kind": "function"},
+    ], "call_graph": {"calls": [], "imports": {}}}]}
+    report = audit_corpus(
+        "/nonexistent", {("bin/tool", "main"): "live"}, inventory=inv,
+    )
+    assert report.total == 0
+    assert report.not_found == 1
+    assert ("bin/tool", "main") in report.not_found_detail
+
+
+def test_duplicated_name_scores_worst_variant():
+    """Two same-name items in one file: a live-labelled row must
+    count as false-suppress when ANY variant classifies dead —
+    last-wins line lookup measured an arbitrary variant."""
+    from unittest import mock
+
+    import core.analysis.reach_audit as ra
+    inv = {"files": [{"path": "pkg/mod.py", "items": [
+        {"name": "f", "line_start": 1, "kind": "function"},
+        {"name": "f", "line_start": 30, "kind": "function"},
+    ], "call_graph": {"calls": [], "imports": {}}}]}
+
+    def fake_classify(inventory, rel, name, line, module):
+        # First variant reads live, the OTHER reads dead.
+        return "reachable" if line == 1 else "lexical_dead"
+
+    with mock.patch.object(
+            ra, "classify_reachability", side_effect=fake_classify):
+        report = ra.audit_corpus(
+            "/nonexistent", {("pkg/mod.py", "f"): "live"},
+            inventory=inv,
+        )
+    assert report.false_suppress == 1
+    # And a dead label is caught only when EVERY variant reads dead.
+    with mock.patch.object(
+            ra, "classify_reachability", side_effect=fake_classify):
+        report = ra.audit_corpus(
+            "/nonexistent", {("pkg/mod.py", "f"): "dead"},
+            inventory=inv,
+        )
+    assert report.missed_dead == 1
+    assert report.caught_dead == 0
