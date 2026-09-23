@@ -680,11 +680,15 @@ def _extract_gha_build_push_platforms(
 
 # GitHub's macOS runner naming: ``macos-13``, ``macos-14``,
 # ``macos-15``, ``macos-latest``. The numeric form maps directly to
-# the macOS major version. ``macos-latest`` follows GitHub's policy
-# of the second-most-recent stable; track it loosely (current as of
-# 2026: latest = 14). If GitHub bumps this, the regression test
-# catches the lag; lift the constant when it does.
-_MACOS_RUNNER_LATEST = (14, 0)
+# the macOS major version. ``macos-latest`` is a floating alias with
+# no offline-verifiable value — this constant is a tracked snapshot
+# (GitHub migrated the alias to the macos-15 image in 2025), refreshed
+# by hand when GitHub announces the next migration. There is NO
+# network-free way to test the snapshot against the live fleet, so no
+# regression test claims to; the trade-off of a stale value is a
+# slightly-off acceptable-wheel window for projects that pin nothing
+# more specific than the alias.
+_MACOS_RUNNER_LATEST = (15, 0)
 
 _MACOS_RUNNER_RE = re.compile(r"^macos-(\d+)(?:\.(\d+))?$")
 

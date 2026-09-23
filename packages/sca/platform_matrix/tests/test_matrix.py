@@ -287,7 +287,9 @@ def test_discover_excludes_out_directories(tmp_path: Path) -> None:
     matrix = discover_platform_matrix(tmp_path)
     libcs = {p.libc for p in matrix}
     assert LibcVersion("glibc", (2, 36)) in libcs
-    assert LibcVersion("glibc", (2, 39)) not in libcs
+    # trixie's row (2.41) must be absent — the out/ Dockerfile was
+    # never scanned.
+    assert LibcVersion("glibc", (2, 41)) not in libcs
 
 
 # ---------------------------------------------------------------------------
