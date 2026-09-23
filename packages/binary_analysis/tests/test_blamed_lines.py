@@ -2,6 +2,7 @@
 """Tests for the blamed-line execution check."""
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import packages.binary_analysis.blamed_lines as bl
@@ -91,7 +92,7 @@ class TestCheckBlamedLines:
         ))
         with patch.object(bl, "_resolve_checker",
                           return_value=cov / "line-checker"), \
-             patch.object(bl.subprocess, "run", return_value=fake):
+             patch.object(bl, "_run_checker", return_value=fake):
             results = check_blamed_lines(
                 [("a.c", 1), ("a.c", 2), ("a.c", 3)], cov)
         assert [r.status for r in results] == [
@@ -104,7 +105,7 @@ class TestCheckBlamedLines:
             returncode=2, stderr="Error: No coverage data for b.c")
         with patch.object(bl, "_resolve_checker",
                           return_value=cov / "line-checker"), \
-             patch.object(bl.subprocess, "run", return_value=fake):
+             patch.object(bl, "_run_checker", return_value=fake):
             results = check_blamed_lines([("b.c", 9)], cov)
         assert results[0].status == "unknown"
         assert "No coverage data" in results[0].reason
@@ -114,9 +115,118 @@ class TestCheckBlamedLines:
         fake = self._fake_proc(returncode=0, stdout="a.c:1 EXECUTED (2 times)\n")
         with patch.object(bl, "_resolve_checker",
                           return_value=cov / "line-checker"), \
-             patch.object(bl.subprocess, "run", return_value=fake):
+             patch.object(bl, "_run_checker", return_value=fake):
             results = check_blamed_lines([("a.c", 1), ("a.c", 7)], cov)
         assert results[1].status == "unknown"
+
+
+class TestCheckerProvenance:
+    """The checker must never come from (or run outside the sandbox
+    over) target-writable state. The coverage dir is written by the
+    instrumented target's own build and execution, so a pre-existing
+    ``line-checker`` there is attacker-plantable — executing it is
+    host code execution plus a forgeable coverage oracle."""
+
+    def _covdir_with_planted_checker(self, tmp_path):
+        cov = tmp_path / "covdir"
+        cov.mkdir()
+        (cov / "fake.gcov").write_text("", encoding="utf-8")
+        marker = tmp_path / "PWNED-OUTSIDE-SANDBOX"
+        planted = cov / "line-checker"
+        planted.write_text(
+            "#!/bin/sh\n"
+            f"touch {marker}\n"
+            'echo "x.c:10 EXECUTED (5 times)"\n',
+            encoding="utf-8")
+        planted.chmod(0o755)
+        return cov, marker
+
+    def test_planted_coverage_dir_checker_never_executed(self, tmp_path):
+        cov, marker = self._covdir_with_planted_checker(tmp_path)
+        # raptor_dir without the skill source: with the planted binary
+        # correctly distrusted there is nothing to build, so the only
+        # honest answer is "unavailable" — never the planted verdict.
+        results = check_blamed_lines(
+            [("x.c", 10)], cov, raptor_dir=tmp_path / "empty-root")
+        assert [r.status for r in results] == ["unknown"]
+        assert "unavailable" in results[0].reason
+        assert not marker.exists(), (
+            "planted line-checker from the target-writable coverage "
+            "dir was executed")
+
+    def test_build_lands_in_raptor_owned_scratch_not_coverage_dir(
+            self, tmp_path):
+        cov, _ = self._covdir_with_planted_checker(tmp_path)
+        root = tmp_path / "raptor-root"
+        cpp = root / bl._SKILL_CPP
+        cpp.parent.mkdir(parents=True)
+        cpp.write_text("int main(){return 0;}\n", encoding="utf-8")
+        build_cmds = []
+
+        def fake_build(argv, **kwargs):
+            build_cmds.append(argv)
+            return self._fake_proc(returncode=1)  # build "fails": stop early
+
+        with patch.object(bl.subprocess, "run", side_effect=fake_build):
+            check_blamed_lines([("x.c", 10)], cov, raptor_dir=root)
+        assert build_cmds, "checker build was never attempted"
+        out_path = Path(build_cmds[0][build_cmds[0].index("-o") + 1])
+        assert cov.resolve() not in out_path.resolve().parents, (
+            "checker built into the target-writable coverage dir")
+
+    def _fake_proc(self, returncode=0, stdout="", stderr=""):
+        class _P:
+            pass
+        p = _P()
+        p.returncode = returncode
+        p.stdout = stdout
+        p.stderr = stderr
+        return p
+
+    def test_checker_execution_routes_through_full_sandbox(self, tmp_path):
+        cov = tmp_path / "covdir"
+        cov.mkdir()
+        (cov / "a.c.gcov").write_text("", encoding="utf-8")
+        checker = tmp_path / "scratch" / "line-checker"
+        checker.parent.mkdir()
+        checker.write_text("", encoding="utf-8")
+        calls = []
+
+        def fake_sandbox_run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            return self._fake_proc(returncode=0,
+                                   stdout="a.c:1 EXECUTED (2 times)\n")
+
+        import core.sandbox
+        with patch.object(bl, "_resolve_checker", return_value=checker), \
+             patch.object(core.sandbox, "run", fake_sandbox_run):
+            results = check_blamed_lines([("a.c", 1)], cov)
+        assert results[0].status == "executed"
+        assert calls, "checker did not go through core.sandbox.run"
+        argv, kwargs = calls[0]
+        assert argv[0] == str(checker)
+        assert kwargs["block_network"] is True
+        assert kwargs["target"] == str(cov)
+
+    def test_sandbox_setup_failure_degrades_to_unknown_never_unsandboxed(
+            self, tmp_path):
+        cov = tmp_path / "covdir"
+        cov.mkdir()
+        (cov / "a.c.gcov").write_text("", encoding="utf-8")
+        checker = tmp_path / "line-checker"
+        checker.write_text("", encoding="utf-8")
+
+        class _SetupBoom(BaseException):
+            pass
+
+        def raise_setup(*a, **k):
+            raise _SetupBoom("no enforcing layer")
+
+        with patch.object(bl, "_resolve_checker", return_value=checker), \
+             patch.object(bl, "_run_checker", side_effect=raise_setup):
+            results = check_blamed_lines([("a.c", 1)], cov)
+        assert results[0].status == "unknown"
+        assert "sandbox unavailable" in results[0].reason
 
 
 class TestRenderAndStamp:
