@@ -57,20 +57,33 @@ def detect_dependency_counts(target_path: Path) -> DependencyCounts:
     except Exception:  # noqa: BLE001
         return DependencyCounts()
 
+    import threading
+
     # Logger names follow __name__ in /sca's modules → fully
     # qualified as "packages.sca.discovery" / "packages.sca.parsers".
+    # Thread-scoped FILTER, not setLevel: a level clamp is
+    # process-global state — a concurrent thread running /sca for its
+    # own reasons had its INFO records silently dropped for the
+    # duration of this helper's window.
+    calling_thread = threading.get_ident()
+
+    class _ThreadScopedMinWarning(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            if threading.get_ident() != calling_thread:
+                return True
+            return record.levelno >= logging.WARNING
+
+    quiet = _ThreadScopedMinWarning()
     discovery_logger = logging.getLogger("packages.sca.discovery")
     parsers_logger = logging.getLogger("packages.sca.parsers")
-    prev_disc = discovery_logger.level
-    prev_parse = parsers_logger.level
-    discovery_logger.setLevel(logging.WARNING)
-    parsers_logger.setLevel(logging.WARNING)
-    # ONE try/except/finally spanning everything after the level
-    # clamp: any gap between the clamp and the restore (e.g. the
+    discovery_logger.addFilter(quiet)
+    parsers_logger.addFilter(quiet)
+    # ONE try/except/finally spanning everything after the filter
+    # install: any gap between the install and the removal (e.g. the
     # lockfile filter tripping over sca ManifestInfo contract drift)
-    # would both leave the sca loggers clamped process-wide AND
-    # propagate out of this best-effort helper, turning /describe
-    # into a hard crash instead of an empty deps field.
+    # would both leave the sca loggers filtered AND propagate out of
+    # this best-effort helper, turning /describe into a hard crash
+    # instead of an empty deps field.
     counts: dict[str, int] = {}
     truncated = False
     try:
@@ -95,8 +108,8 @@ def detect_dependency_counts(target_path: Path) -> DependencyCounts:
     except Exception:  # noqa: BLE001 — best-effort by contract
         return DependencyCounts()
     finally:
-        discovery_logger.setLevel(prev_disc)
-        parsers_logger.setLevel(prev_parse)
+        discovery_logger.removeFilter(quiet)
+        parsers_logger.removeFilter(quiet)
 
     return DependencyCounts(by_ecosystem=counts, truncated=truncated)
 
