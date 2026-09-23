@@ -27,6 +27,37 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+class _WarnLimiter:
+    """Rate-limit per-row normalisation warnings for ONE load.
+
+    The store is run/project-dir JSON: a hostile coverage.json is
+    millions of malformed rows, and one warning per row was its own
+    flood (a 256 MiB plant = millions of log lines through every
+    render). Mirrors the journal reader's _ROW_WARN_LIMIT idiom: the
+    first LIMIT warnings keep full detail — every genuine
+    truncated-write/corruption incident is a handful of rows — the
+    rest downgrade to debug (reachable, never dropped), and the
+    downgrade itself is announced once.
+    """
+
+    LIMIT = 20
+
+    def __init__(self, source: str) -> None:
+        self._source = source
+        self._count = 0
+
+    def warn(self, msg: str, *args: object) -> None:
+        self._count += 1
+        if self._count <= self.LIMIT:
+            logger.warning(msg, *args)
+            if self._count == self.LIMIT:
+                logger.warning(
+                    "coverage store %s: further per-row normalisation "
+                    "warnings downgraded to debug", self._source)
+        else:
+            logger.debug(msg, *args)
+
+
 def _is_int(x: Any) -> bool:
     # bool is an int subclass; a boolean interval bound / line number is
     # malformed, so reject it explicitly.
@@ -87,15 +118,16 @@ def _valid_interval(iv: Any) -> list[int] | None:
     return None
 
 
-def _normalise_tools(tools: Any, path: str, source: str) -> dict[str, list[list[int]]]:
+def _normalise_tools(tools: Any, path: str, source: str,
+                     limiter: _WarnLimiter) -> dict[str, list[list[int]]]:
     if not isinstance(tools, dict):
-        logger.warning(
+        limiter.warn(
             "coverage store %s: file %r has non-dict 'tools'; dropping", source, path)
         return {}
     out: dict[str, list[list[int]]] = {}
     for tool, ivs in tools.items():
         if not isinstance(tool, str) or not isinstance(ivs, list):
-            logger.warning(
+            limiter.warn(
                 "coverage store %s: file %r tool %r has malformed intervals; "
                 "dropping", source, path, tool)
             continue
@@ -103,7 +135,7 @@ def _normalise_tools(tools: Any, path: str, source: str) -> dict[str, list[list[
         for iv in ivs:
             v = _valid_interval(iv)
             if v is None:
-                logger.warning(
+                limiter.warn(
                     "coverage store %s: file %r tool %r dropping malformed "
                     "interval %r", source, path, tool, iv)
                 continue
@@ -113,13 +145,14 @@ def _normalise_tools(tools: Any, path: str, source: str) -> dict[str, list[list[
     return out
 
 
-def _normalise_findings(findings: Any, path: str, source: str) -> list[dict[str, Any]]:
+def _normalise_findings(findings: Any, path: str, source: str,
+                        limiter: _WarnLimiter) -> list[dict[str, Any]]:
     if not isinstance(findings, list):
         return []
     out: list[dict[str, Any]] = []
     for f in findings:
         if not isinstance(f, dict) or "id" not in f:
-            logger.warning(
+            limiter.warn(
                 "coverage store %s: file %r dropping finding without id: %r",
                 source, path, f)
             continue
@@ -132,7 +165,7 @@ def _normalise_findings(findings: Any, path: str, source: str) -> list[dict[str,
 
 
 def _normalise_provenance(
-    prov: Any, path: str, source: str,
+    prov: Any, path: str, source: str, limiter: _WarnLimiter,
 ) -> dict[str, dict[str, Any]]:
     """Per-tool provenance slots, one level down.
 
@@ -150,14 +183,14 @@ def _normalise_provenance(
     out: dict[str, dict[str, Any]] = {}
     for tool, slot in prov.items():
         if not isinstance(tool, str) or not isinstance(slot, dict):
-            logger.warning(
+            limiter.warn(
                 "coverage store %s: file %r has malformed provenance "
                 "slot %r; dropping", source, path, tool)
             continue
         clean = dict(slot)
         for key in ("version", "timestamp"):
             if key in clean and not isinstance(clean[key], str):
-                logger.warning(
+                limiter.warn(
                     "coverage store %s: file %r tool %r dropping "
                     "non-string provenance %s", source, path, tool, key)
                 del clean[key]
@@ -171,19 +204,22 @@ def _normalise_provenance(
     return out
 
 
-def _normalise_entry(path: str, entry: Any, source: str) -> dict[str, Any] | None:
+def _normalise_entry(path: str, entry: Any, source: str,
+                     limiter: _WarnLimiter) -> dict[str, Any] | None:
     if not isinstance(entry, dict):
-        logger.warning(
+        limiter.warn(
             "coverage store %s: file %r entry is not an object; dropping",
             source, path)
         return None
     return {
         "total_lines": _opt_int(entry.get("total_lines")),
         "sloc": _opt_int(entry.get("sloc")),
-        "tools": _normalise_tools(entry.get("tools", {}), path, source),
-        "findings": _normalise_findings(entry.get("findings", []), path, source),
+        "tools": _normalise_tools(entry.get("tools", {}), path, source,
+                                  limiter),
+        "findings": _normalise_findings(entry.get("findings", []), path,
+                                        source, limiter),
         "provenance": _normalise_provenance(
-            entry.get("provenance"), path, source),
+            entry.get("provenance"), path, source, limiter),
     }
 
 
@@ -200,13 +236,14 @@ def normalise_loaded_files(
             "coverage store %s: 'files' is not an object; ignoring persisted "
             "coverage", source)
         return {}
+    limiter = _WarnLimiter(source)
     out: dict[str, dict[str, Any]] = {}
     for path, entry in files.items():
         if not isinstance(path, str):
-            logger.warning(
+            limiter.warn(
                 "coverage store %s: dropping non-string file key %r", source, path)
             continue
-        norm = _normalise_entry(path, entry, source)
+        norm = _normalise_entry(path, entry, source, limiter)
         if norm is not None:
             out[path] = norm
     return out

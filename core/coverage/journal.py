@@ -16,6 +16,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import threading
 import types
 from collections.abc import Iterable
@@ -977,10 +978,28 @@ PRODUCER_VALIDATE = "validate"
 #: function-grade.
 _FINDING_GRADE_PRODUCERS = frozenset({PRODUCER_AGENTIC, PRODUCER_VALIDATE})
 
-#: run_id prefixes that identify /agentic-side producers for legacy
-#: entries written before the ``producer`` field was stamped. Matches
-#: the historical heuristic in ``core.coverage.importer``.
-_AGENTIC_RUN_PREFIXES = ("agentic", "scan")
+#: Machine-generated run-id shapes that identify /agentic-side
+#: producers for legacy entries written before the ``producer`` field
+#: was stamped: the bare tool name; the tool name followed by a
+#: separator and a digit (timestamp-first dirs, both the project-mode
+#: hyphen and standalone underscore spellings); or the standalone
+#: target-bearing shape ``command_target_YYYYMMDD_HHMMSS[...]``
+#: (core.run.output: ``{command}_{target}_{unique_run_suffix}``). A
+#: bare ``startswith`` demoted every review in a hand-named dir like
+#: ``scan-of-x`` to finding-grade; requiring a machine shape keeps
+#: the heuristic to the names the launcher actually generated.
+#: Trade-off: a legacy pre-field /agentic run under a hand-picked
+#: non-machine name now classifies audit/function-grade — narrower
+#: exposure (custom-named legacy agentic runs) than the previous
+#: blanket demotion of every scan*/agentic* operator name, and modern
+#: rows carry the explicit field either way.
+_AGENTIC_RUN_ID_RE = re.compile(
+    r"^(?:agentic|scan)"
+    r"(?:$"                                       # bare tool name
+    r"|[-_]\d.*$"                                 # timestamp-first
+    r"|_.+_\d{8}_\d{6}(?:_pid\d+)?(?:_\d+)?$"     # _target_timestamp
+    r")"
+)
 
 
 def entry_producer(entry: ReviewJournalEntry) -> str:
@@ -994,7 +1013,7 @@ def entry_producer(entry: ReviewJournalEntry) -> str:
     if entry.producer:
         return entry.producer
     run_id = entry.run_id or ""
-    if run_id.startswith(_AGENTIC_RUN_PREFIXES):
+    if _AGENTIC_RUN_ID_RE.match(run_id):
         return PRODUCER_AGENTIC
     return PRODUCER_AUDIT
 
@@ -1476,8 +1495,17 @@ def _domain_model_parent(out_dir: Path) -> Path | None:
         if pin.authoritative:
             return pin_project_dir(out_dir)
         return out_dir.parent
-    except Exception:  # noqa: BLE001 — legacy probe
-        return out_dir.parent
+    except Exception as exc:  # noqa: BLE001 — containment boundary
+        # Fail CLOSED: the parent probe is the legacy pin-less
+        # fallback, decided by the pin resolution itself (authoritative
+        # False). An internal ERROR here must not re-open the
+        # standalone-run foreign domain-model adoption the run pin
+        # exists to prevent — no parent, no import.
+        logger.warning(
+            "run-pin resolution failed for %s (%s: %s); refusing the "
+            "parent-dir domain-model probe", out_dir,
+            type(exc).__name__, exc)
+        return None
 
 
 def _find_domain_model_file(out_dir: Path) -> Path | None:

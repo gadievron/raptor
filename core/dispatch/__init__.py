@@ -5,8 +5,7 @@ Layer 2 (Broker):    ``core.dispatch.broker`` — pick and call the best
                      available model for a task shape.
 Layer 3 (Scheduler): future — priority queuing, DAG deps, concurrency.
 
-Consumers bind to the layer that matches their needs.  See
-``~/design/unified-dispatch.md`` for the full architecture.
+Consumers bind to the layer that matches their needs.
 """
 
 from .broker.hints import ModelHint, SpeedTier

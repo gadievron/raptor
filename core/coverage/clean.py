@@ -185,8 +185,13 @@ def dedup_runs(
     is independently preserved by :func:`apply_removal`'s store snapshot before
     deletion, so "duplicate" here need only mean files+findings subsumed.)
     """
-    # Oldest-first so the newest run is the representative we keep. Run dir
-    # names are timestamped, so name order is chronological.
+    # Oldest-first so the newest run is the representative we keep.
+    # Best-effort chronology: machine-generated run dir names are
+    # timestamped, so name order is chronological for them; operator
+    # ``--out``-named runs sort lexicographically instead, which only
+    # affects WHICH duplicate representative is kept — dedup stays
+    # lossless by construction either way (a run is only dropped when
+    # fully subsumed by the survivors).
     survivors = sorted((Path(d) for d in run_dirs), key=lambda p: p.name)
     # Each run's records/findings are read from disk exactly once; the
     # per-victim classification then works over the in-memory

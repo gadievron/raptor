@@ -192,3 +192,25 @@ class TestProvenanceNormalisation:
         store = CoverageStore(sp)
         assert store.provenance_summary()["models"] == []
         assert store.tool_provenance("a.c", "semgrep") == {}
+
+
+def test_per_row_warnings_rate_limited(caplog):
+    # A hostile store is millions of malformed rows; one warning per
+    # row was its own flood. First _WarnLimiter.LIMIT keep warning
+    # detail, the rest downgrade to debug, and every row is still
+    # normalised (dropped) either way.
+    import logging
+
+    from core.coverage.schema import _WarnLimiter, normalise_loaded_files
+    files = {
+        f"f{i}.c": {"tools": {"semgrep": [["bad", "iv"]]}}
+        for i in range(_WarnLimiter.LIMIT + 30)
+    }
+    with caplog.at_level(logging.WARNING, logger="core.coverage.schema"):
+        out = normalise_loaded_files(files, "<test store>")
+    warned = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(warned) <= _WarnLimiter.LIMIT + 2, (
+        f"{len(warned)} warnings for {len(files)} malformed rows"
+    )
+    assert len(out) == len(files)          # rows normalised regardless
+    assert all(not e["tools"] for e in out.values())

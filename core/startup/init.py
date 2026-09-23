@@ -621,7 +621,16 @@ def check_llm() -> tuple[list, list]:
                 provider = primary.get("provider", "unknown")
                 model = primary.get("model", primary.get("model_name", "unknown"))
                 src = _key_source(provider, primary)
-            lines.append(f"   llm: {provider}/{model} (primary, {src})")
+            # models.json values render into the terminal banner —
+            # same operator-config trust class as the env values
+            # escaped below (ANSI blanks the terminal, bidi reorders,
+            # CR/LF splits lines).
+            from core.security.log_sanitisation import (
+                escape_nonprintable as _esc_np,
+            )
+            lines.append(
+                f"   llm: {_esc_np(str(provider))}/{_esc_np(str(model))}"
+                f" (primary, {src})")
 
             if validator_available and key_status.get(provider) is False:
                 _warn_key_failure(provider)
@@ -646,7 +655,9 @@ def check_llm() -> tuple[list, list]:
                     continue
                 shown += 1
                 role = fm.get("role", "fallback")
-                lines.append(f"        {fp}/{fn} ({role}, {_key_source(fp, fm)})")
+                lines.append(
+                    f"        {_esc_np(str(fp))}/{_esc_np(str(fn))} "
+                    f"({_esc_np(str(role))}, {_key_source(fp, fm)})")
                 if validator_available and key_status.get(fp) is False:
                     _warn_key_failure(fp)
         else:
