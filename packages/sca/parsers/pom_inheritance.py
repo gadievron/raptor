@@ -705,6 +705,69 @@ def _merge_into(dst: InheritanceView, src: InheritanceView) -> None:
         dst.managed.setdefault(k, v)
 
 
+# Total-size budget for a resolved coordinate / version value. Maven
+# groupId / artifactId / version / range specs are short; 4096 is far
+# above any legitimate value while stopping reference-replication
+# amplification: one substitution pass over an attacker-sized element
+# (N ``${...}`` refs, each expanding to a property value as large as
+# the read cap allows) otherwise materialises N*L characters —
+# file-size-squared growth from a single hostile pom.xml. Enforced
+# DURING substitution so the oversized string is never built.
+_MAX_RESOLVED_VALUE_LEN = 4096
+
+# Embedded-capable property reference — same grammar as pom.py's
+# substitution pass (any ``${...}`` span, anywhere in the value).
+_PROPERTY_REF_RE = re.compile(r"\$\{([^}]+)\}")
+
+
+def _resolve_property_refs(
+    value: str,
+    properties: Mapping[str, str],
+    *,
+    origin: str = "",
+) -> tuple[str | None, bool]:
+    """Substitute every ``${prop}`` reference in ``value`` — embedded
+    forms included — against ``properties``. Returns ``(resolved,
+    fully_resolved)``; undefined references stay literal and clear the
+    ``fully_resolved`` flag.
+
+    The total-size budget is checked before each replacement lands;
+    a breach returns ``(None, False)`` and is warned in the canonical
+    ``<kind> parse failed for <origin>: <reason>`` shape so
+    :func:`packages.sca.parsers.capture_parse_failures` lifts the
+    analysis gap into the run report instead of a silent skip."""
+    def _over_budget() -> tuple[None, bool]:
+        logger.warning(
+            "sca.parsers.pom_inheritance: property expansion parse "
+            "failed for %s: ${...} substitution exceeded the %d-char "
+            "resolved-value budget (hostile or misconfigured "
+            "properties); value left unresolved",
+            origin or "<network pom>", _MAX_RESOLVED_VALUE_LEN,
+        )
+        return None, False
+
+    fully = True
+    parts: list[str] = []
+    total = 0
+    pos = 0
+    for m in _PROPERTY_REF_RE.finditer(value):
+        repl = properties.get(m.group(1))
+        if repl is None:
+            fully = False
+            repl = m.group(0)
+        total += (m.start() - pos) + len(repl)
+        if total > _MAX_RESOLVED_VALUE_LEN:
+            return _over_budget()
+        parts.append(value[pos:m.start()])
+        parts.append(repl)
+        pos = m.end()
+    total += len(value) - pos
+    if total > _MAX_RESOLVED_VALUE_LEN:
+        return _over_budget()
+    parts.append(value[pos:])
+    return "".join(parts), fully
+
+
 def _resolve_property(
     value: str | None, properties: Mapping[str, str],
 ) -> str | None:

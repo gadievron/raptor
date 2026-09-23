@@ -431,3 +431,51 @@ def test_non_pom_xml_rejected(tmp_path: Path, caplog) -> None:
         deps = parse(_write(tmp_path, body))
     assert deps == []
     assert any("not a Maven POM" in r.getMessage() for r in caplog.records)
+
+
+def test_property_replication_bomb_is_refused_and_recorded(tmp_path: Path):
+    """One substitution pass replicates a property value once per
+    ``${...}`` reference: a 64 KB property expanded through 512
+    references materialises a 33M-char "version". The shared size
+    budget abandons the expansion (dep surfaces unversioned) and the
+    breach lands in the structured parse_failures — visible, not
+    silent."""
+    from packages.sca.parsers import capture_parse_failures
+
+    body = (
+        "<project>\n"
+        "  <properties><big>" + "A" * 65536 + "</big></properties>\n"
+        "  <dependencies><dependency>\n"
+        "    <groupId>com.example</groupId>\n"
+        "    <artifactId>app</artifactId>\n"
+        "    <version>" + "${big}" * 512 + "</version>\n"
+        "  </dependency></dependencies>\n"
+        "</project>\n"
+    )
+    p = _write(tmp_path, body)
+    with capture_parse_failures() as failures:
+        deps = parse(p)
+    dep = next(d for d in deps if d.name == "com.example:app")
+    assert dep.version is None
+    assert any(
+        "substitution exceeded" in f.reason for f in failures
+    ), [f.reason for f in failures]
+
+
+def test_embedded_property_reference_still_resolves(tmp_path: Path):
+    """Two-direction guard for the budgeted resolver: the ordinary
+    embedded-reference shape keeps resolving."""
+    body = """\
+<project>
+  <properties><jackson.minor>17</jackson.minor></properties>
+  <dependencies><dependency>
+    <groupId>com.fasterxml.jackson.core</groupId>
+    <artifactId>jackson-databind</artifactId>
+    <version>2.${jackson.minor}.0</version>
+  </dependency></dependencies>
+</project>
+"""
+    p = _write(tmp_path, body)
+    deps = parse(p)
+    dep = next(d for d in deps if "jackson-databind" in d.name)
+    assert dep.version == "2.17.0"
