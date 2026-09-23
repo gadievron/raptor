@@ -6,6 +6,7 @@ generated DOT / Mermaid output well-formed for any input text.
 
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -218,6 +219,25 @@ class TestGenerateHtmlCappedRead:
         out = visualizer.generate_html(_flow(tmp_path), "f3", tmp_path)
         html = out.read_text(encoding="utf-8")
         assert "Error reading file" in html
+
+
+class TestGenerateHtmlLineGuard:
+    """SARIF regions are external input: startLine is copied
+    verbatim from the result JSON, so a malformed document can put
+    a non-integer line on a node. The guard refuses it with a
+    visible note; a valid integer line keeps rendering the normal
+    context (pinned by test_normal_file_context_renders above)."""
+
+    def test_non_int_line_refused_visibly(self, visualizer, tmp_path):
+        (tmp_path / "a.c").write_text("int a;\nint b;\n")
+        flow = _flow(tmp_path)
+        # Runtime value deliberately violates the declared type —
+        # that is the malformed-SARIF shape under test.
+        flow.source.line = cast(int, "2")
+        flow.sink.line = cast(int, "2")
+        out = visualizer.generate_html(flow, "f4", tmp_path)
+        html = out.read_text(encoding="utf-8")
+        assert "Invalid line number in dataflow node" in html
 
 
 class TestSafeJsonHtmlParserStates:

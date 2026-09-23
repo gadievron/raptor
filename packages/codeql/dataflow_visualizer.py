@@ -186,19 +186,31 @@ class DataflowVisualizer:
                         continue
                     content, truncated = got
                     lines = content.splitlines(keepends=True)
-                    if truncated and node['line'] > len(lines):
+                    # SARIF regions are external input: startLine is
+                    # copied verbatim from the result JSON, so a
+                    # malformed document can carry a non-integer
+                    # here. Refuse it explicitly instead of relying
+                    # on the arithmetic below to raise into the
+                    # broad handler.
+                    line_no = node['line']
+                    if not isinstance(line_no, int):
+                        node['code_context'] = (
+                            "Invalid line number in dataflow node"
+                        )
+                        continue
+                    if truncated and line_no > len(lines):
                         node['code_context'] = (
                             "Source beyond the capped read "
                             f"(file truncated at {len(lines)} lines)"
                         )
                         continue
 
-                    start = max(0, node['line'] - 6)
-                    end = min(len(lines), node['line'] + 5)
+                    start = max(0, line_no - 6)
+                    end = min(len(lines), line_no + 5)
 
                     context = []
                     for i in range(start, end):
-                        marker = ">>>" if i == node['line'] - 1 else "   "
+                        marker = ">>>" if i == line_no - 1 else "   "
                         context.append(f"{marker} {i + 1:4d} | {lines[i].rstrip()}")
 
                     # D3's .text() handles escaping on the client side;
