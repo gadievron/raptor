@@ -647,21 +647,39 @@ def aggregate_provenance(
             summary["unavailable"] += 1
             summary["reproducible"]["unknown"] += 1
             continue
-        sc = m.get("source_control") or {}
+        sc = m.get("source_control")
+        if not isinstance(sc, dict):
+            # tolerate malformed/imported manifests, like engines and
+            # models below — one junk marker must not AttributeError
+            # the whole /project provenance rollup.
+            sc = {}
         sha = sc.get("base_sha")
-        if sha:
+        # Non-str base_sha (a crafted list/dict) is unusable as a
+        # count key — and an unhashable one crashed the rollup with
+        # TypeError. The status/show views isinstance-gate this same
+        # field (run_framework_sha).
+        if sha and isinstance(sha, str):
             summary["shas"][sha] = summary["shas"].get(sha, 0) + 1
         if sc.get("dirty"):
             summary["dirty_runs"] += 1
         engines = m.get("engines")
         if isinstance(engines, dict):  # tolerate malformed/imported manifests
             for name, ver in engines.items():
-                engines_acc.setdefault(name, set()).add(ver or "?")
+                # Non-str versions collapse to "?": an unhashable one
+                # TypeError'd the accumulator, and a mixed-type set
+                # TypeError'd the sorted() fold below.
+                if not (ver and isinstance(ver, str)):
+                    ver = "?"
+                engines_acc.setdefault(name, set()).add(ver)
         seen = {
-            (mdl.get("resolved") or mdl.get("alias") or "?")
+            key if isinstance(
+                key := (mdl.get("resolved") or mdl.get("alias") or "?"),
+                str) else "?"
             for mdl in (m.get("models") or [])
             # tolerate malformed/imported manifests, like engines above
-            # (run_models() filters non-dicts for the same reason)
+            # (run_models() filters non-dicts for the same reason);
+            # non-str resolved/alias values collapse to "?" — an
+            # unhashable one TypeError'd the set build.
             if isinstance(mdl, dict)
         }
         for key in seen:

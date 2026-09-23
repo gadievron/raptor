@@ -77,3 +77,29 @@ def test_show_run_with_no_manifest_is_graceful(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Run: legacy-run" in out
     assert "no provenance manifest" in out
+
+
+def test_rollup_survives_junk_manifest_values():
+    """One junk marker (import-restored or child-planted) must not
+    crash /project provenance: a non-dict source_control
+    AttributeError'd the rollup, an unhashable base_sha / model /
+    engine version TypeError'd it — and main() catches neither."""
+    from core.run.provenance import (
+        aggregate_provenance,
+        format_provenance_rollup,
+    )
+    summary = aggregate_provenance([
+        {"manifest": {"source_control": "im-a-string"}},
+        {"manifest": {"source_control": {"base_sha": ["x"]}}},
+        {"manifest": {"models": [{"resolved": {"deep": 1}}],
+                      "engines": {"semgrep": {"v": 1}}}},
+        {"manifest": {"source_control": {"base_sha": "goodsha123",
+                                         "dirty": True}}},
+    ])
+    assert summary["runs"] == 4
+    assert summary["shas"] == {"goodsha123": 1}
+    assert summary["dirty_runs"] == 1
+    assert summary["models"] == {"?": 1}
+    assert summary["engines"] == {"semgrep": ["?"]}
+    text = format_provenance_rollup(summary)
+    assert "goodsha123"[:12] in text
