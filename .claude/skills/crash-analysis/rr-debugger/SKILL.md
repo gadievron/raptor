@@ -11,7 +11,7 @@ rr provides deterministic record-replay debugging with full reverse execution ca
 ## Core Workflow
 
 1. **Record**: `rr record <program> [args]`
-2. **Replay**: `rr replay` (enters gdb interface with reverse execution)
+2. **Replay**: `rr replay -- -nx -iex 'set auto-load off' -iex 'set auto-load safe-path /dev/null'` (enters gdb interface with reverse execution). The flags after `--` go to gdb and disable auto-load with no trusted directory: the recorded binary is untrusted, and a permissive gdb config (e.g. an operator `~/.gdbinit` widening `auto-load safe-path`) would otherwise execute scripts the binary or its build tree plants (.debug_gdb_scripts, *-gdb.py). Same hardening set as scripts/crash_trace.py — use it on EVERY manual replay.
 
 ## Reverse Execution Commands
 
@@ -30,7 +30,7 @@ All standard gdb commands work, plus reverse variants:
 After `rr record <crashing-program>`:
 
 ```bash
-rr replay
+rr replay -- -nx -iex 'set auto-load off' -iex 'set auto-load safe-path /dev/null'
 # In gdb:
 reverse-next 100    # Go back 100 steps (adjust N as needed)
 # Now step forward to see execution leading to crash:
@@ -44,7 +44,7 @@ next
 After `rr record <asan-program>`:
 
 ```bash
-rr replay
+rr replay -- -nx -iex 'set auto-load off' -iex 'set auto-load safe-path /dev/null'
 # In gdb:
 bt                  # View stack trace
 up                  # Issue "up" commands until last app frame (before ASAN runtime)

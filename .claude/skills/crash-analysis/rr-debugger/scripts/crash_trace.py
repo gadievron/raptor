@@ -25,9 +25,13 @@ def extract_trace(trace_dir, steps: int=100, output_format: str="source", asan: 
     # gdb sources init files or loads any objfile.  Stdin-prepended
     # `set auto-load no` runs too late for startup-time auto-load
     # (gdb sources ~/.gdbinit and performs objfile auto-load —
-    # including inlined .debug_gdb_scripts Python, which bypasses the
-    # safe-path check because it is embedded, not a file — before the
-    # first stdin command executes).
+    # including inlined .debug_gdb_scripts Python — before the first
+    # stdin command executes). Modern gdb DOES apply the safe-path
+    # check to embedded .debug_gdb_scripts (the objfile path is what
+    # is vetted), so the default config declines them; these flags
+    # matter for older gdb and for operator configs that widened
+    # auto-load safe-path (the widening gdb's own decline warning
+    # coaches users into) — belt-and-braces either way.
     gdb_hardening = [
         "-nx",                                   # no HOME/cwd init files
         "-iex", "set auto-load off",             # all auto-load kinds
