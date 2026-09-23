@@ -36,19 +36,13 @@ class TestBoundedSarifIngestion:
             }],
         }))
         # Force the canonical loader's size guard to trip without
-        # writing 100 MiB to disk.
-        real_stat = type(sarif).stat
+        # writing 100 MiB to disk. The guard fstat()s the OPEN fd (a
+        # by-name Path.stat fake never reaches it), so lower the
+        # budget under the real file's size instead.
+        import core.sarif.parser as parser_mod
 
-        class _FakeStat:
-            st_size = 101 * 1024 * 1024
-            st_mtime = 0.0
-
-        def fake_stat(self, **kwargs):
-            if self.name == "big.sarif":
-                return _FakeStat()
-            return real_stat(self, **kwargs)
-
-        monkeypatch.setattr(type(sarif), "stat", fake_stat)
+        monkeypatch.setattr(
+            parser_mod, "SARIF_MAX_BYTES", sarif.stat().st_size - 1)
         cache = SarifCache()
         ingested = sweep_mod._ingest_sarif_file(cache, sarif)
         assert ingested == 0

@@ -97,6 +97,10 @@ _DIR_PREFIXES = (
     # IRIS per-refinement CodeQL pack scratch (core/iris/codeql_runner.py);
     # rmtree'd in the runner's finally.
     "raptor-iris-codeql-",
+    # Line-checker build scratch (packages/binary_analysis/
+    # blamed_lines.py TemporaryDirectory); cleaned on exit, leaked on
+    # SIGKILL/OOM.
+    "raptor-line-checker-",
     # Historical recon-agent clone scratch (the deprecated
     # packages/recon agent, since removed, used this prefix). Kept so
     # the sweep still reclaims leftovers written by older installs.

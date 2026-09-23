@@ -107,6 +107,11 @@ class TestPrecisionGate:
         "sqli_assign_sink_constant_selection_java",
         "sqli_execute_hop_constant_selection_java",
         "java_b36_prepcall_jdk_const_siblings",
+        # The xss danger set now enumerates the URL-valued attribute
+        # context (':' joined the charset), so this fixture's folded
+        # constant '":"' reads danger-bearing — the same
+        # constant-text trade as the rows above, refusal direction.
+        "java_b42_sibling_union_tf",
     })
 
     @requires_ts("java")
