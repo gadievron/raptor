@@ -26,11 +26,20 @@ core/llm/http_pool.py) report the module as present; the simulated
 failure then surfaces at the actual import instead.
 
 Named sets:
-  * ``optional-deps`` — the provider/transport dependencies whose
-    consumers are written to degrade when they are absent. instructor
-    is currently a pinned install, but its production imports are lazy
-    and its tests guard it, so it is hidden too — coverage holds if it
-    ever moves to the optional set.
+  * ``optional-deps`` — every optional dependency whose consumers are
+    written to degrade when it is absent, derived at run time from
+    ``check_optional_dep_imports.optional_modules()`` (the commented
+    requirements pins) so a newly optional dependency is hidden
+    automatically — the same no-second-list rationale as the
+    tree-sitter set below; a hand-typed copy had gone stale in both
+    directions (9 derived optional top-levels never hidden, one
+    required pin still hidden by accident). Grammar wheels stay with
+    the tree-sitter set; dotted namespace modules (google.genai)
+    cannot be shadowed by a top-level stub and are excluded (see
+    Known limits). instructor is a deliberate extra: currently a
+    pinned install, but its production imports are lazy and its tests
+    guard it, so it stays hidden — coverage holds if it ever moves
+    back to the optional set.
   * ``tree-sitter`` — tree-sitter core + every grammar wheel, derived
     from requirements-grammars.txt at run time so a newly pinned
     grammar wheel is hidden automatically (no second list to maintain).
@@ -51,11 +60,36 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-OPTIONAL_DEP_MODULES = ("anthropic", "botocore", "instructor", "h2", "sage_sdk")
+# Deliberate extras beyond the derived optional set (rationale in the
+# module docstring's ``optional-deps`` entry).
+_OPTIONAL_EXTRAS = ("instructor",)
 
 # Importable top-level module names only: dots (submodules) and dashes
 # (distribution names) cannot be shadowed by a single stub file.
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def optional_dep_modules(repo_root: Path = REPO_ROOT) -> tuple[str, ...]:
+    """Stub-able optional top-level module names, derived from the
+    optional-dep lint's own universe (the commented requirements
+    pins) plus the documented extras.
+
+    Filtered to what a top-level stub can actually simulate: dotted
+    namespace modules (google.genai) are excluded — stubbing the
+    namespace root would hide unrelated distributions — and grammar
+    wheels belong to the ``tree-sitter`` set.
+    """
+    scripts_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        from check_optional_dep_imports import optional_modules
+    finally:
+        sys.path.remove(str(scripts_dir))
+    derived = {
+        mod for mod in optional_modules(repo_root)
+        if _NAME_RE.match(mod) and not mod.startswith("tree_sitter")
+    }
+    return tuple(sorted(derived | set(_OPTIONAL_EXTRAS)))
 
 # ``name==version`` pin at the start of a line (comments excluded).
 _PIN_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==")
@@ -80,7 +114,7 @@ def tree_sitter_modules(repo_root: Path = REPO_ROOT) -> tuple[str, ...]:
 
 
 NAMED_SETS = {
-    "optional-deps": lambda: OPTIONAL_DEP_MODULES,
+    "optional-deps": optional_dep_modules,
     "tree-sitter": tree_sitter_modules,
 }
 

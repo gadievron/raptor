@@ -106,9 +106,11 @@ class TestShadowing:
 
 class TestNamedSets:
     def test_optional_deps_set(self, hm):
-        assert hm.OPTIONAL_DEP_MODULES == (
-            "anthropic", "botocore", "instructor", "h2", "sage_sdk",
-        )
+        # Derived (see TestOptionalDepsSet); the historical hand-list
+        # members must remain covered by the derivation + extras.
+        mods = set(hm.NAMED_SETS["optional-deps"]())
+        assert {"anthropic", "botocore", "instructor", "h2",
+                "sage_sdk"} <= mods
 
     def test_tree_sitter_set_derived_from_grammar_pins(self, hm):
         names = hm.tree_sitter_modules(_REPO_ROOT)
@@ -141,7 +143,7 @@ class TestCli:
         rc = hm.main(["--dest", str(dest), "--set", "optional-deps", "extra"])
         assert rc == 0
         written = {p.stem for p in dest.iterdir()}
-        assert written == set(hm.OPTIONAL_DEP_MODULES) | {"extra"}
+        assert written == set(hm.optional_dep_modules()) | {"extra"}
         assert capsys.readouterr().out.strip() == str(dest.resolve())
 
     def test_nothing_to_hide_is_a_usage_error(self, hm, tmp_path):
@@ -153,3 +155,32 @@ class TestCli:
         with pytest.raises(SystemExit) as exc_info:
             hm.main(["--dest", str(tmp_path / "stubs"), "not-a-module"])
         assert exc_info.value.code == 2
+
+
+class TestOptionalDepsSet:
+    """The optional-deps set is DERIVED from the optional-dep lint's
+    universe (commented requirements pins) — a hand-typed copy had
+    gone stale in both directions (nine derived optional top-levels
+    never hidden; ``instructor``, by then a required pin, still
+    hidden only by accident of the old list)."""
+
+    def test_derived_set_tracks_the_lint_universe(self, hm):
+        mods = set(hm.optional_dep_modules())
+        # Floor sample: members only the derivation sees (the old
+        # hand list carried five names and none of these).
+        assert {"angr", "cvss", "frida", "jsonschema", "orjson"} <= mods
+        assert len(mods) >= 10, "derivation went vacuous"
+
+    def test_documented_extras_ride_along(self, hm):
+        # instructor is a required pin (so the derivation excludes
+        # it) hidden deliberately — lazy production imports, guarded
+        # tests; see the module docstring.
+        assert "instructor" in hm.optional_dep_modules()
+
+    def test_every_member_is_stubbable(self, hm):
+        mods = hm.optional_dep_modules()
+        assert all(hm._NAME_RE.match(m) for m in mods), mods
+        # Grammar wheels belong to the tree-sitter set; dotted
+        # namespaces cannot be shadowed by a top-level stub.
+        assert not any(m.startswith("tree_sitter") for m in mods)
+        assert not any("." in m for m in mods)

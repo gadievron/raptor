@@ -182,7 +182,9 @@ class _ImportScan(ast.NodeVisitor):
             self.visit(child)
         if catches:
             self._try_guard_depth -= 1
-        for part in (node.handlers, node.orelse, node.finalbody):
+        for handler in node.handlers:
+            self.visit(handler)
+        for part in (node.orelse, node.finalbody):
             for child in part:
                 self.visit(child)
 
