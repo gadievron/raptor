@@ -72,7 +72,15 @@ _VENDOR_SECRET_PATTERNS = (
     # (= any JSON-object first byte); strict length floors on all
     # three segments keep `a.b.c`-style dotted tokens out.
     (re.compile(
-        r"\be[wy][A-Za-z0-9_-]{7,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+        # Segment ceilings: the base64url class contains '-', so a
+    # dash-fill run makes every planted `e[wy]` head a live \b
+    # attempt that re-scans the run — quadratic in the logged
+    # text. Real JWT segments sit far below the caps (header
+    # 2048, payload/signature 4096); a segment beyond them
+    # escapes this redactor — the documented trade-off against
+    # an unbounded scan of hostile logs.
+    r"\be[wy][A-Za-z0-9_-]{7,2048}\.[A-Za-z0-9_-]{8,4096}"
+    r"\.[A-Za-z0-9_-]{8,4096}\b"),
      "[REDACTED]"),
     # Google API key: `AIza` + 35 chars.
     (re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b"), "[REDACTED]"),

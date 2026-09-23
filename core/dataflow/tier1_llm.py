@@ -280,7 +280,11 @@ def _line_invokes_library_call(
     # \b pin: unanchored, every position inside a long dotted-name
     # run starts a fresh scan of the line tail — quadratic; a
     # mid-word start is never a real callee name.
-    for m in _re.finditer(r"\b([A-Za-z_][\w.]*)\s*\(", line):
+    for m in _re.finditer(# Name run bounded: a separator fill keeps the \b live at every
+    # planted head, so an unbounded run is re-scanned per head —
+    # quadratic on a hostile line (real dotted names sit far
+    # inside 128 chars).
+    r"\b([A-Za-z_][\w.]{0,128})\s*\(", line):
         name_parts = m.group(1).split(".")
         if name_parts[-1] != tail:
             continue
