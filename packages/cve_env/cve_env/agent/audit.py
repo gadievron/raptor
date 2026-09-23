@@ -54,7 +54,14 @@ _SECRET_TOKEN_RE = re.compile(
     r"|apiKey\s*[:=]\s*[A-Za-z0-9_-]{8,}"  # NVD API key header value
     r"|ya29\.[A-Za-z0-9_-]{20,}"  # GCP OAuth access token
     r"|xox[bpras]-[A-Za-z0-9-]{10,}"  # Slack bot/user/app tokens
-    r"|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"  # JWT
+    # The lookbehind pins the JWT branch to token-run starts: the
+    # bare prefix let every ``eyJ`` planted inside one base64ish run
+    # restart the scan and re-read the run — quadratic on hostile
+    # log text. A real JWT glued directly to a preceding token char
+    # (no delimiter) is no longer redacted — accepted corner; every
+    # delimited spelling (quotes, =, :, whitespace) still matches.
+    r"|(?<![A-Za-z0-9_-])"
+    r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}"  # JWT
     r"|npm_[A-Za-z0-9]{36,}"  # npm publish tokens
     r"|pypi-[A-Za-z0-9_-]{20,}"  # PyPI API tokens
 )

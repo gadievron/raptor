@@ -899,7 +899,12 @@ def _http_get_json(url: str, *, timeout: int) -> Any:
         return None
 
 
-_LINK_NEXT_RE = re.compile(r'<([^>]+)>;\s*rel="next"')
+# The URL body excludes both angle brackets: with ``[^>]`` alone, a
+# response header repeating ``<`` inside one ``>``-free run made
+# every opener re-scan the run — quadratic. RFC 8288 URI references
+# cannot carry a raw ``<``, so valid headers match identically (a
+# malformed nested-``<`` header now yields the innermost span).
+_LINK_NEXT_RE = re.compile(r'<([^<>]+)>;\s*rel="next"')
 
 
 def _http_get_json_paginated(url: str, *, timeout: int) -> tuple[Any, str | None]:

@@ -226,7 +226,9 @@ def _cmd_ps(args: argparse.Namespace) -> int:
             continue
         token, name, ports, image, age = parts
         endpoint = None
-        m = re.search(r"(\d+\.\d+\.\d+\.\d+):(\d+)->", ports)
+        # (?<!\d) pins the scan to digit-run starts (scan-restart
+        # hardening; first-match spans unchanged).
+        m = re.search(r"(?<!\d)(\d+\.\d+\.\d+\.\d+):(\d+)->", ports)
         if m:
             endpoint = {"host": m.group(1), "port": int(m.group(2))}
         provisions.append({"down_token": token, "name": name,
