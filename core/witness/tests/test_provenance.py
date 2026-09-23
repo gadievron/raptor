@@ -491,3 +491,38 @@ class TestKeyCreationRace:
         assert prov._load_or_create_key() is None
         assert len(race_warn_calls) == 1
         assert "wrong length" in race_warn_calls[0][1]
+
+
+class TestBindingNonceRead:
+    """The .witness-binding file lives in the directory UNDER
+    VERIFICATION — exactly the surface a stager controls — so the
+    nonce read must refuse a planted FIFO on the fd instead of
+    hanging every graded verifier, and cap what it buffers."""
+
+    def test_fifo_binding_refused_not_hung(self, tmp_path):
+        import signal as _signal
+
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("platform lacks mkfifo")
+        os.mkfifo(tmp_path / ".witness-binding")
+
+        def _on_alarm(signum, frame):
+            msg = "nonce read blocked on a planted FIFO"
+            raise AssertionError(msg)
+
+        old = _signal.signal(_signal.SIGALRM, _on_alarm)
+        _signal.alarm(30)
+        try:
+            assert prov._read_run_nonce(tmp_path) is None
+        finally:
+            _signal.alarm(0)
+            _signal.signal(_signal.SIGALRM, old)
+
+    def test_oversize_binding_malformed_not_buffered(self, tmp_path):
+        (tmp_path / ".witness-binding").write_text("a" * 1_000_000)
+        assert prov._read_run_nonce(tmp_path) is None
+
+    def test_valid_nonce_roundtrip(self, tmp_path):
+        nonce = prov._load_or_create_run_nonce(tmp_path)
+        assert nonce
+        assert prov._read_run_nonce(tmp_path) == nonce

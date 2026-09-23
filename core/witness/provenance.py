@@ -251,12 +251,43 @@ def _valid_nonce(text: str) -> bool:
 
 
 def _read_run_nonce(run_dir: Path | str) -> str | None:
-    """The run's persisted binding nonce, or None (absent/malformed)."""
+    """The run's persisted binding nonce, or None (absent/malformed).
+
+    Gated read on the OPEN fd: the binding file lives in the
+    directory UNDER VERIFICATION — exactly the surface a stager
+    controls — so a planted FIFO must be refused (O_NONBLOCK +
+    S_ISREG) instead of hanging every graded verifier, and the read
+    is capped (a nonce is 32 hex characters; anything bigger is
+    malformed by construction).
+    """
+    import stat as _stat_mod
+
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
-        text = (
-            Path(run_dir) / _BINDING_FILE
-        ).read_text(encoding="utf-8").strip()
+        fd = os.open(str(Path(run_dir) / _BINDING_FILE), flags)
     except OSError:
+        return None
+    try:
+        if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1  # fdopen owns it now
+            raw = fh.read(_NONCE_HEX_LEN + 16)
+    except OSError:
+        return None
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+    try:
+        text = raw.decode("utf-8").strip()
+    except UnicodeDecodeError:
         return None
     return text if _valid_nonce(text) else None
 

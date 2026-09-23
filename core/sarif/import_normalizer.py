@@ -7,7 +7,9 @@ producing findings in the same internal dict shape that
 :func:`core.sarif.parser.parse_sarif_findings` returns.
 """
 
+import os
 import re
+import stat as _stat_mod
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -438,14 +440,37 @@ def _synthesize_snippet(
     Files larger than ``_SNIPPET_SOURCE_MAX_BYTES`` are skipped (the
     finding keeps flowing, just without a synthesized snippet).
     """
+    # Gated read on the OPEN fd: the file lives in the UNTRUSTED
+    # scanned tree and the (also untrusted) SARIF picks which path is
+    # read, so both the size gate and the file-type gate must hold on
+    # the fd actually read — a stat-by-name gate misses a FIFO
+    # planted in the tree (stats 0 bytes, then blocks the import
+    # stage forever at the open) and a swap-after-stat grow.
+    full = source_root / rel_path
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
-        full = source_root / rel_path
-        if full.stat().st_size > _SNIPPET_SOURCE_MAX_BYTES:
+        fd = os.open(str(full), flags)
+    except OSError:
+        return ""
+    try:
+        st = os.fstat(fd)
+        if not _stat_mod.S_ISREG(st.st_mode):
             # rel_path is a filename from the UNTRUSTED scanned tree
-            # (archives/git admit control bytes in names) and this
-            # WARNING reaches the operator terminal raw through the
+            # (archives/git admit control bytes in names) and these
+            # WARNINGs reach the operator terminal raw through the
             # console handler — escape at creation, like the module's
             # ImportWarning messages and parser.py's out-of-root twin.
+            logger.warning(
+                "SARIF import: skipping snippet synthesis for "
+                "non-regular file: %s",
+                escape_nonprintable(rel_path),
+            )
+            return ""
+        if st.st_size > _SNIPPET_SOURCE_MAX_BYTES:
             logger.warning(
                 "SARIF import: skipping snippet synthesis for oversized "
                 "file (>%d MiB): %s",
@@ -453,12 +478,23 @@ def _synthesize_snippet(
                 escape_nonprintable(rel_path),
             )
             return ""
-        lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
+        with os.fdopen(fd, "rb") as fh:
+            fd = -1  # fdopen owns it now
+            raw = fh.read(_SNIPPET_SOURCE_MAX_BYTES + 1)
+        if len(raw) > _SNIPPET_SOURCE_MAX_BYTES:
+            return ""  # grew past the cap during the read
+        lines = raw.decode("utf-8", errors="replace").splitlines()
         s = max(0, start_line - 1)
         e = min(len(lines), (end_line or start_line) + _SNIPPET_CONTEXT_LINES)
         return "\n".join(lines[s:e])
     except OSError:
         return ""
+    finally:
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------------------
