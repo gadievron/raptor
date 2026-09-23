@@ -546,3 +546,53 @@ class TestBinaryBridgeQualifiedNames:
         assert rec.binary_sink_edges, "sink edges dropped for Foo::bar"
         assert rec.binary_surface_category == "parser"
         assert rec.binary_parser_boundary is True
+
+
+class TestToolTierMapIsTheOneHome:
+    """Every structured entry's evidence_tier must come from
+    _TOOL_TIER_MAP — the map was a dead drift-twin of inline literals.
+    """
+
+    def test_every_minted_tier_matches_the_map(self):
+        from core.evidence import _TOOL_TIER_MAP
+
+        class FakeFlow:
+            source_method = "f"
+            source_param = "p"
+            sink_call = "system"
+            is_inter_procedural = True
+            steps = []
+
+        class FakeApprox:
+            params = ["p"]
+            dangerous_flows = {0: [("system", 0)]}
+            has_opaque_flow = False
+
+        class FakeSummary:
+            params = ("p",)
+            call_arg_taint = {("system", 0, 0)}
+
+        class FakeCms:
+            sink_type = "exec"
+            notes = "n"
+
+        rec = EvidenceRecord(file="a.c", function="f")
+        rec.taint_approx = FakeApprox()
+        rec.taint_summary = FakeSummary()
+        rec.joern_flows = [FakeFlow()]
+        rec.imported_joern_flows = [FakeFlow()]
+        rec.joern_unguarded_sinks = [{"sink": "s", "line": 1, "code": "c"}]
+        rec.joern_sink_args = [
+            {"sink": "s", "arg_index": 0, "source_param": "p"}]
+        rec.codeql_alerts = [{"rule_id": "r", "line": 1, "message": "m"}]
+        rec.semgrep_hits = [{"rule_id": "r", "line": 1}]
+        rec.context_map_sink = FakeCms()
+
+        entries = format_evidence_structured(rec)
+        minted = {e["tier"] for e in entries}
+        assert minted == set(_TOOL_TIER_MAP), (
+            "structured producers and _TOOL_TIER_MAP disagree on the "
+            f"tier vocabulary: {minted ^ set(_TOOL_TIER_MAP)}"
+        )
+        for e in entries:
+            assert e["evidence_tier"] == _TOOL_TIER_MAP[e["tier"]], e

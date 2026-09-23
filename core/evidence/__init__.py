@@ -539,6 +539,10 @@ def format_evidence_prose(
     return header + "\n".join(lines)
 
 
+#: tier -> evidence_tier for every structured-entry producer in
+#: format_evidence_structured. THE single home for the mapping — the
+#: producers below read it, so a tier cannot carry one evidence_tier
+#: in this table and a different one inline.
 _TOOL_TIER_MAP: dict[str, str] = {
     "taint_approx": "xref_backed",
     "taint_summary": "xref_backed",
@@ -572,7 +576,7 @@ def format_evidence_structured(
             for callee, arg_idx in flows:
                 entries.append({
                     "tier": "taint_approx",
-                    "evidence_tier": "xref_backed",
+                    "evidence_tier": _TOOL_TIER_MAP["taint_approx"],
                     "param": pname,
                     "param_idx": pidx,
                     "sink": callee,
@@ -587,7 +591,7 @@ def format_evidence_structured(
                 pname = ts.params[pidx] if pidx < len(ts.params) else f"param_{pidx}"
                 entries.append({
                     "tier": "taint_summary",
-                    "evidence_tier": "xref_backed",
+                    "evidence_tier": _TOOL_TIER_MAP["taint_summary"],
                     "param": pname,
                     "param_idx": pidx,
                     "sink": callee,
@@ -597,7 +601,7 @@ def format_evidence_structured(
 
     entries.extend({
             "tier": "joern",
-            "evidence_tier": "xref_backed",
+            "evidence_tier": _TOOL_TIER_MAP["joern"],
             "source_method": getattr(flow, "source_method", ""),
             "source_param": getattr(flow, "source_param", ""),
             "sink_call": getattr(flow, "sink_call", ""),
@@ -607,7 +611,7 @@ def format_evidence_structured(
 
     entries.extend({
             "tier": "joern",
-            "evidence_tier": "xref_backed",
+            "evidence_tier": _TOOL_TIER_MAP["joern"],
             "source_method": getattr(flow, "source_method", ""),
             "source_param": getattr(flow, "source_param", ""),
             "sink_call": getattr(flow, "sink_call", ""),
@@ -617,7 +621,7 @@ def format_evidence_structured(
 
     entries.extend({
             "tier": "joern_unguarded",
-            "evidence_tier": "xref_backed",
+            "evidence_tier": _TOOL_TIER_MAP["joern_unguarded"],
             "sink": ug.get("sink", ""),
             "line": ug.get("line", 0),
             "code": ug.get("code", ""),
@@ -626,7 +630,7 @@ def format_evidence_structured(
 
     entries.extend({
             "tier": "joern_sink_arg",
-            "evidence_tier": "xref_backed",
+            "evidence_tier": _TOOL_TIER_MAP["joern_sink_arg"],
             "sink": sa.get("sink", ""),
             "arg_index": sa.get("arg_index", -1),
             "source_param": sa.get("source_param", ""),
@@ -636,7 +640,7 @@ def format_evidence_structured(
     for alert in record.codeql_alerts:
         entry = {
             "tier": "codeql",
-            "evidence_tier": "xref_backed",
+            "evidence_tier": _TOOL_TIER_MAP["codeql"],
             "rule_id": alert.get("rule_id", ""),
             "line": alert.get("line", 0),
             "source": (
@@ -650,7 +654,7 @@ def format_evidence_structured(
     for hit in record.semgrep_hits:
         entry = {
             "tier": "semgrep",
-            "evidence_tier": "header_backed",
+            "evidence_tier": _TOOL_TIER_MAP["semgrep"],
             "rule_id": hit.get("rule_id", ""),
             "line": hit.get("line", 0),
             "source": (
@@ -666,7 +670,7 @@ def format_evidence_structured(
         entry: dict[str, Any] = {
             "tier": "context_map_sink",
             # LLM-derived, not mechanical — see _TOOL_TIER_MAP note.
-            "evidence_tier": "llm_claimed",
+            "evidence_tier": _TOOL_TIER_MAP["context_map_sink"],
             "sink_type": cms.sink_type,
             "source": "understand",
         }
