@@ -711,14 +711,25 @@ def _add_runner(
 ) -> None:
     """Resolve a runner label to a PlatformPair + add to matrix.
 
-    Standard GHA runners are x86_64-only today (no aarch64 hosted
-    runners in the free tier as of 2026; that may change).
+    Arm runner labels carry an ``-arm`` / ``-arm64`` SUFFIX on the
+    base image label (``ubuntu-24.04-arm``, ``windows-11-arm`` —
+    GitHub's hosted arm runners, free for public repos since early
+    2025). The suffix is parsed mechanically rather than table-listed:
+    arch comes from the suffix, libc from the base label's row (the
+    arm image ships the same distro libc). Recording these as x86_64
+    hid exactly the aarch64 wheel-gap class this subsystem exists to
+    catch for projects whose only arm signal is their CI runner.
     Windows / macOS runners get libc=None.
     """
-    libc = lookup_runner_libc(runner_ref)
+    arch = "x86_64"
+    base_ref = runner_ref
+    if runner_ref.endswith(("-arm", "-arm64")):
+        arch = "aarch64"
+        base_ref = runner_ref.rsplit("-", 1)[0]
+    libc = lookup_runner_libc(base_ref)
     if runner_ref.startswith("windows-"):
         matrix.add(PlatformPair(
-            arch="x86_64", libc=None, os="windows",
+            arch=arch, libc=None, os="windows",
             source=f"GHA runs-on: {runner_ref} in {workflow.name}",
         ))
         return
@@ -737,7 +748,7 @@ def _add_runner(
             runner_ref, workflow,
         )
     matrix.add(PlatformPair(
-        arch="x86_64", libc=libc,
+        arch=arch, libc=libc,
         # A label the runner table KNOWS is a Linux image; an
         # unrecognised (self-hosted) label stays os=None — unknown,
         # which the compat matcher treats with the legacy lenient
