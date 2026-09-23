@@ -67,6 +67,7 @@ class GhidraBridge:
         output_dir: Path,
         *,
         decompile: bool = False,
+        timeout: Optional[int] = None,
     ) -> REDatabase:
         """Import a Ghidra project into an REDatabase (trust mode).
 
@@ -77,10 +78,20 @@ class GhidraBridge:
             output_dir: Directory for output files.
             decompile: If True, decompile every function (slow).
                 Default False — import metadata only.
+            timeout: Maximum seconds for the headless subprocess.
+                Default None scales with the work requested: 300 for a
+                metadata-only export, 3600 when ``decompile`` is set —
+                decompiling every function of a large stripped binary
+                routinely needs tens of minutes, while a shorter cap is
+                what keeps a wedged JVM from stalling a metadata-only
+                attach. Ignored on the in-process (pyghidra) path,
+                which has no subprocess to bound.
 
         Returns:
             The populated REDatabase.
         """
+        if timeout is None:
+            timeout = 3600 if decompile else 300
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +113,7 @@ class GhidraBridge:
                 export_json,
                 program_name=self.program_name,
                 decompile=decompile,
+                timeout=timeout,
             )
             db = parse_export(export_json)
 
@@ -139,6 +151,7 @@ class GhidraBridge:
         output_dir: Path,
         *,
         binary_path: Optional[Path] = None,
+        timeout: Optional[int] = None,
     ) -> REDatabase:
         """Import Ghidra data and enrich with r2 analysis.
 
@@ -150,11 +163,13 @@ class GhidraBridge:
             binary_path: Path to the raw binary for r2 analysis.
                 If None, attempts to extract the path from the Ghidra
                 project metadata.
+            timeout: Maximum seconds for the headless subprocess
+                (see ``import_project``).
 
         Returns:
             The merged REDatabase.
         """
-        ghidra_db = self.import_project(output_dir)
+        ghidra_db = self.import_project(output_dir, timeout=timeout)
 
         bin_path = binary_path
         if bin_path is None and ghidra_db.binary_path:
