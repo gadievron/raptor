@@ -536,10 +536,16 @@ def derive_wrapper_summaries(
     root = tree.root_node
     types, statics = build_import_map(root)
     # Positional vouch: a local obscuring an imported catalog class
-    # must not lend its name's static identity to helper-body calls.
-    from core.analysis.cfg_builder_java import _FileLocalScopes
+    # must not lend its name's static identity to helper-body calls;
+    # same-file member types / type parameters shadow type imports
+    # the same way (JLS 6.4.1).
+    from core.analysis.cfg_builder_java import (
+        _file_type_shadow_names,
+        _FileLocalScopes,
+    )
     resolver = _NameResolver(types, statics,
-                             local_scopes=_FileLocalScopes(root))
+                             local_scopes=_FileLocalScopes(root),
+                             type_shadows=_file_type_shadow_names(root))
 
     by_name, extended = _class_inventory(root)
 

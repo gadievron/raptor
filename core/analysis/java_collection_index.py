@@ -323,9 +323,13 @@ def build_local_collection_index(
 
     idx = LocalCollectionIndex(ok=True)
     types, statics = build_import_map(tree.root_node)
-    from core.analysis.cfg_builder_java import _FileLocalScopes
+    from core.analysis.cfg_builder_java import (
+        _file_type_shadow_names,
+        _FileLocalScopes,
+    )
     idx._resolver = _NameResolver(
-        types, statics, local_scopes=_FileLocalScopes(tree.root_node))
+        types, statics, local_scopes=_FileLocalScopes(tree.root_node),
+        type_shadows=_file_type_shadow_names(tree.root_node))
     lo, hi = line_span
     consumed: set[tuple[int, int]] = set()
 
