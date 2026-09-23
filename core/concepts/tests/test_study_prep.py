@@ -2158,3 +2158,30 @@ class TestCFuncMatcherHostileAttribute:
             m = prep._C_FUNC_RE.search(src)
             assert m is not None, src
             assert m.group(1) == name, src
+
+
+class TestExtractFieldsWhitespaceRun:
+    def test_field_line_whitespace_run_is_fast(self) -> None:
+        """Hostile struct-body line: a field-shaped token followed by
+        a long whitespace run with no ';'. The previous spelling
+        stacked three unbounded whitespace spans around the optional
+        array/bitfield atoms and tried every split of the run between
+        them — cubic in the line length. Folding each span behind its
+        gating atom is linear. Both-direction bound: fast AND real
+        fields still extracted."""
+        from core.testing.wallclock import cpu_budget
+
+        block = "myfield" + " " * (1 << 16) + "x\n"
+        with cpu_budget(1.0, what="field-line whitespace-run scan"):
+            assert prep._extract_fields(block) == []
+
+    def test_field_forms_still_extracted(self) -> None:
+        block = (
+            "unsigned long flags;\n"
+            "char name[MAX_LEN];\n"
+            "u32 bits : 4;\n"
+            "int arr [ 8 ] ;\n"
+        )
+        assert prep._extract_fields(block) == [
+            "flags", "name", "bits", "arr",
+        ]
