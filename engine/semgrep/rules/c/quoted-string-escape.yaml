@@ -1,0 +1,107 @@
+# raptor: confirm-only
+# (silence from this rule never refutes: it adjudicates a sub-shape
+# narrower than the dispatched class — see run_semgrep_sweep's
+# confirm-only role handling in core/audit/sweep.py.)
+rules:
+  # CWE-116: quoted-string escape residual — a character escaper that
+  # escapes one of {double-quote, backslash} but not the other while
+  # building a quoted string. Escaping only the quote lets an input
+  # backslash neutralize the escaper's own backslash (\" survives as a
+  # literal-backslash-then-closing-quote); escaping only the backslash
+  # lets a raw quote close the string. Either residual hands the
+  # attacker the quote boundary.
+  #
+  # The context anchor is the ESCAPE EMIT: the branch body must write
+  # a literal '\\' THROUGH a pointer or into an index (`*p = '\\'`,
+  # `buf[i++] = '\\'`) — an output store. A tokenizer that merely
+  # tests == '"', or a state machine that saves '\\' into a plain
+  # variable as a marker, never output-stores a literal backslash, so
+  # neither can fire. Trade-off: an escaper that emits via a helper
+  # call or a plain-variable staging buffer is missed (FN); anchoring
+  # on any '\\' assignment would fire on state-marker stores (FP) —
+  # the output-store anchor stays.
+  #
+  # The character tests match the LITERAL anywhere in the if
+  # condition (`c == '"'`, Yoda `'"' == c`, ||-combined forms), and
+  # the completeness test is function-scoped and literal-based too:
+  # any `if` mentioning the missing character's literal anywhere in
+  # the same function silences the rule (FN-direction — a comparison
+  # does not prove correct handling, but claiming a residual while
+  # the function visibly branches on the other character would be
+  # dishonest). ||-combined conditions, else-if chains, Yoda tests,
+  # and braceless branches therefore all read as complete.
+  #
+  # Known FN modes (documented, confirm-only — CWE-116 stays out of
+  # the tool_coverage silence→clean map so misses classify dark):
+  #   - switch/case escapers: semgrep's C grammar does not bind
+  #     case-label patterns for this shape (verified against semgrep
+  #     1.172.0) — route those through the check-encoding-residual
+  #     SMT verb with LLM-extracted transfer semantics;
+  #   - table-driven escapers (lookup arrays): same route;
+  #   - escapers split across helper functions, or emitting through
+  #     append helpers instead of direct stores.
+  - id: raptor.c.quoted-string-escape.quote-not-backslash
+    languages: [c, cpp]
+    severity: MEDIUM
+    message: >
+      This escaper writes a backslash escape for the double-quote but
+      the enclosing function never tests for the backslash itself. An
+      input backslash passes through unescaped and can neutralize the
+      escape prefix of a following quote, handing the attacker the
+      quoted-string boundary. Escape the backslash as well.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              if (<... '"' ...>) { ... *$P = '\\'; ... }
+          - pattern: |
+              if (<... '"' ...>) { ... $A[$I] = '\\'; ... }
+          - pattern: |
+              if (<... '"' ...>) *$P = '\\';
+          - pattern: |
+              if (<... '"' ...>) $A[$I] = '\\';
+      - pattern-not-inside: |
+          $RT $FN(...) {
+            ...
+            if (<... '\\' ...>) { ... }
+            ...
+          }
+      - pattern-not-inside: |
+          $RT $FN(...) {
+            ...
+            if (<... '\\' ...>) $S;
+            ...
+          }
+    metadata:
+      cwe: ["CWE-116"]
+  - id: raptor.c.quoted-string-escape.backslash-not-quote
+    languages: [c, cpp]
+    severity: MEDIUM
+    message: >
+      This escaper writes a backslash escape for the backslash but the
+      enclosing function never tests for the double-quote. A raw quote
+      in the input closes the quoted string early, handing the
+      attacker the string boundary. Escape the double-quote as well.
+    patterns:
+      - pattern-either:
+          - pattern: |
+              if (<... '\\' ...>) { ... *$P = '\\'; ... }
+          - pattern: |
+              if (<... '\\' ...>) { ... $A[$I] = '\\'; ... }
+          - pattern: |
+              if (<... '\\' ...>) *$P = '\\';
+          - pattern: |
+              if (<... '\\' ...>) $A[$I] = '\\';
+      - pattern-not-inside: |
+          $RT $FN(...) {
+            ...
+            if (<... '"' ...>) { ... }
+            ...
+          }
+      - pattern-not-inside: |
+          $RT $FN(...) {
+            ...
+            if (<... '"' ...>) $S;
+            ...
+          }
+    metadata:
+      cwe: ["CWE-116"]
