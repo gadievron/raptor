@@ -37,7 +37,7 @@ from core.llm.scorecard import fast_tier_model_name, run_cheap_fp_check
 from core.llm.task_types import TaskType
 from core.logging import get_logger
 from core.paths import confine
-from core.source import read_text_capped
+from core.source import read_text_capped, split_lines
 from core.security.prompt_defense_profiles import CONSERVATIVE
 from core.security.prompt_envelope import (
     TaintedString,
@@ -644,7 +644,7 @@ class DataflowValidator:
             # tables, vendored bundles, single-file compiled JS
             # blobs) yields a context window over the truncated
             # prefix instead of loading whole into memory.
-            got = read_text_capped(resolved)
+            got = read_text_capped(resolved, newline="")
             if got is None:
                 self.logger.warning(
                     "Failed to read source context at %s", resolved)
@@ -655,7 +655,11 @@ class DataflowValidator:
                     "Source file %s exceeded the capped read; context window reflects truncated read",
                     resolved,
                 )
-            lines = content.splitlines(keepends=True)
+            # \n-model split (core.source.lines contract): *line*
+            # is CodeQL's, counting \n only — a splitlines() view
+            # put the >>> marker and the context window on the
+            # wrong lines after any in-literal form feed.
+            lines = split_lines(content)
 
             start = max(0, line - context_lines - 1)
             end = min(len(lines), line + context_lines)
