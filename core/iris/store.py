@@ -489,6 +489,23 @@ def persist_refined_specs(
                 if s.file and (resolved_target / s.file).is_file()
             }
             merged = evict_stale(merged, current_files)
+            # Same eviction for the merged assumptions: the merge above
+            # is add/upgrade-only, so deleted-file assumptions otherwise
+            # accumulate forever, feeding synthesis prompts and the
+            # per-assumption bypass pass every round. Existence-derived
+            # file set over the assumptions' own files; empty-file rows
+            # are exempt inside the evictor (nothing to be stale
+            # against).
+            from .assumptions import evict_stale_assumptions
+
+            if merged_assumptions:
+                assumption_files = {
+                    a.file for a in merged_assumptions
+                    if a.file and (resolved_target / a.file).is_file()
+                }
+                merged_assumptions = evict_stale_assumptions(
+                    merged_assumptions, assumption_files,
+                )
 
         return save_specs(
             out_dir,

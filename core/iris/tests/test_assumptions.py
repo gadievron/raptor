@@ -214,3 +214,40 @@ class TestEvictStale:
         a = _make_assumption(file="src/old.c", evidence_tier=EvidenceTier.XREF_BACKED)
         result = evict_stale_assumptions([a], {"src/auth.c"})
         assert len(result) == 1
+
+
+class TestEvictStaleAssumptions:
+    """Twin-aligned with the spec evictor: empty-file rows are exempt,
+    high tiers survive a vanished file, low-tier vanished files go."""
+
+    @staticmethod
+    def _assumption(file, tier=None):
+        from core.evidence import EvidenceTier
+        a = SafetyAssumption(
+            target="t", file=file, assumption="x",
+            category=AssumptionCategory.ORDERING,
+            enforced_by=["check"],
+        )
+        a.evidence_tier = tier or EvidenceTier.HEURISTIC
+        return a
+
+    def test_empty_file_rows_exempt(self):
+        from core.iris.assumptions import evict_stale_assumptions
+        rows = [self._assumption(""), self._assumption("gone.c")]
+        kept = evict_stale_assumptions(rows, {"live.c"})
+        assert [a.file for a in kept] == [""], (
+            "empty-file assumptions carry nothing to be stale against"
+        )
+
+    def test_vanished_file_evicted_live_kept(self):
+        from core.iris.assumptions import evict_stale_assumptions
+        rows = [self._assumption("live.c"), self._assumption("gone.c")]
+        kept = evict_stale_assumptions(rows, {"live.c"})
+        assert [a.file for a in kept] == ["live.c"]
+
+    def test_high_tier_survives_vanished_file(self):
+        from core.evidence import EvidenceTier
+        from core.iris.assumptions import evict_stale_assumptions
+        rows = [self._assumption("gone.c",
+                                 tier=EvidenceTier.XREF_BACKED)]
+        assert evict_stale_assumptions(rows, {"live.c"}) == rows

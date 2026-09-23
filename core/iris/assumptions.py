@@ -244,8 +244,20 @@ def evict_stale_assumptions(
     *,
     keep_above: EvidenceTier = EvidenceTier.XREF_BACKED,
 ) -> list[SafetyAssumption]:
-    """Remove assumptions for files no longer in the project."""
+    """Remove assumptions for files no longer in the project.
+
+    Mirrors the spec twin (``core.iris.store.evict_stale``): high-tier
+    rows survive a missing file (a rename may be a refactor), and rows
+    with an EMPTY ``file`` field (accepted at parse time when the LLM
+    omits it) carry nothing to be stale against — evicting them would
+    churn away accumulated assumptions on every persist, the exact
+    defect the spec twin's exemption records fixing.
+    """
     from core.evidence import TIER_RANK
 
-    kept = [a for a in assumptions if a.file in current_files or TIER_RANK.get(a.evidence_tier, 0) >= TIER_RANK.get(keep_above, 0)]
-    return kept
+    return [
+        a for a in assumptions
+        if (not a.file or a.file in current_files
+            or TIER_RANK.get(a.evidence_tier, 0)
+            >= TIER_RANK.get(keep_above, 0))
+    ]
