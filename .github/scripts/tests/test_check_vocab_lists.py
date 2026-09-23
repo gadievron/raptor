@@ -165,6 +165,58 @@ class TestBaselineSemantics:
         assert "WARN stale" in out
 
 
+class TestWriteBaselineRoundTrip:
+    def test_notes_survive_regeneration(self, det, tmp_path):
+        """A count refresh must round-trip review provenance: the
+        surviving key keeps its note (and any unrecognized field),
+        only kind/count regenerate, and rows that no longer fire
+        drop. The grown-count case IS the refresh invitation, so it
+        is the case pinned here."""
+        root = _tree(tmp_path, "core/foo.py", BIG_LIST)
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps({
+            "core/foo.py::_SINKS": {
+                "kind": "literal",
+                "count": 10,
+                "note": "reviewed: closed API manifest",
+                "reviewed_by": "ops",
+            },
+            "core/gone.py::_OLD": {
+                "kind": "literal", "count": 4, "note": "stale, drops",
+            },
+        }), encoding="utf-8")
+        det.write_baseline(baseline, det.scan_tree(root))
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+        row = data["core/foo.py::_SINKS"]
+        assert row["note"] == "reviewed: closed API manifest"
+        assert row["reviewed_by"] == "ops"   # unrecognized fields ride
+        assert row["count"] == 12            # the count itself refreshes
+        assert row["kind"] == "literal"
+        assert "core/gone.py::_OLD" not in data
+
+    def test_missing_baseline_writes_bare_rows(self, det, tmp_path):
+        root = _tree(tmp_path, "core/foo.py", BIG_LIST)
+        baseline = tmp_path / "baseline.json"
+        det.write_baseline(baseline, det.scan_tree(root))
+        data = json.loads(baseline.read_text(encoding="utf-8"))
+        assert data == {
+            "core/foo.py::_SINKS": {"kind": "literal", "count": 12},
+        }
+
+    def test_unparseable_baseline_refuses(self, det, tmp_path, capsys):
+        """A corrupt existing baseline must refuse the rewrite, not be
+        treated as empty — that would be the same note erasure through
+        a different door."""
+        root = _tree(tmp_path, "core/foo.py", BIG_LIST)
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text('{"broken":', encoding="utf-8")
+        with pytest.raises(SystemExit) as exc:
+            det.write_baseline(baseline, det.scan_tree(root))
+        assert exc.value.code == 2
+        assert baseline.read_text(encoding="utf-8") == '{"broken":'
+        assert "refusing" in capsys.readouterr().err
+
+
 class TestRepoBaseline:
     @pytest.mark.slow
     def test_checked_in_baseline_is_current(self, det):
