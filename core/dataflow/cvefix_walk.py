@@ -36,6 +36,7 @@ from core.git.clone import (
     safe_git_command,
     safe_git_readonly_command,
 )
+from core.sarif.parser import SARIF_MAX_BYTES
 
 # CodeQL resource tunables live in ``packages.codeql`` — the central
 # home for all CodeQL-related utilities.  We re-export the type at the
@@ -48,6 +49,12 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 DEFAULT_CODEQL_BIN = "codeql"
+
+# CodeQL SARIF over corpus code — the SARIF budget class shared with
+# core.sarif.parser.load_sarif (one constant, aliased for the local
+# call sites; the cap-parity test derives its universe from this
+# alias name).
+_MAX_SARIF_BYTES = SARIF_MAX_BYTES
 
 # Abbreviated-to-full commit hash, hex only — the same shape the GHSA
 # harvester enforces at parse time. CVEfixes-DB metadata is only
@@ -383,8 +390,7 @@ def _count_query(db: Path, query: str, out: Path, codeql_bin: str, timeout: int,
     if not _run(cmd, timeout):
         return None
     from core.json import load_json
-    # 100 MiB: canonical SARIF budget (matches core.sarif.parser).
-    data = load_json(out, max_bytes=100 * 1024 * 1024)
+    data = load_json(out, max_bytes=_MAX_SARIF_BYTES)
     if data is None:
         return None
     return sum(len(r.get("results") or []) for r in (data.get("runs") or []))
