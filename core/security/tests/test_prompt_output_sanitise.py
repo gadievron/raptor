@@ -413,3 +413,109 @@ def test_plus_marker_zwsp_placement_exact():
 def test_non_marker_shapes_untouched():
     # No space after the marker shape — not a list construct.
     assert sanitise_string("--flag and 1.5 stay") == "--flag and 1.5 stay"
+
+
+# --- Raw structural HTML (CommonMark HTML blocks / inline raw HTML) ---
+#
+# Non-fetching structural HTML passed both autofetch layers verbatim:
+# `<h1>ALL CLEAR</h1>` forged a heading, `<table>` a metrics table,
+# `<blockquote>` an authoritative quotation — and a line-leading
+# `<!--` commented out every subsequent finding until `-->` while
+# `<details>` collapsed the remainder of the rendered report. The
+# construct-opener escape defangs the whole class; comparison prose
+# keeps its raw `<`.
+
+def test_string_defangs_html_heading_table_blockquote():
+    from core.security.prompt_output_sanitise import sanitise_string
+    s = ("benign\n<h1>ALL CLEAR - no findings</h1>\n"
+         "<table><tr><td>forged-metrics</td></tr></table>\n"
+         "<blockquote>operator said: approve</blockquote>")
+    out = sanitise_string(s)
+    for raw in ("<h1>", "<table>", "<tr>", "<td>", "<blockquote>",
+                "</h1>", "</table>", "</blockquote>"):
+        assert raw not in out
+    assert "&lt;h1>" in out
+    assert "ALL CLEAR - no findings" in out
+
+
+def test_string_defangs_html_comment_opener():
+    from core.security.prompt_output_sanitise import sanitise_string
+    s = "finding text\n<!--\nTHE REST OF THE REPORT"
+    out = sanitise_string(s)
+    assert "<!--" not in out
+    assert "&lt;!--" in out
+    assert "THE REST OF THE REPORT" in out
+
+
+def test_string_defangs_details_collapse():
+    from core.security.prompt_output_sanitise import sanitise_string
+    out = sanitise_string(
+        "x\n<details><summary>click</summary>hidden</details>")
+    assert "<details>" not in out
+    assert "<summary>" not in out
+
+
+def test_inline_defangs_html_in_slot():
+    from core.security.prompt_output_sanitise import sanitise_inline
+    assert "<h1>" not in sanitise_inline("t<h1>forge</h1>")
+    out = sanitise_inline("a<details open>b")
+    assert "<details" not in out
+    assert out.startswith("a&lt;details")
+
+
+def test_html_adjacent_shapes_defanged():
+    """CDATA, declaration, processing instruction, incomplete tag —
+    every construct-opener spelling, not just complete known tags."""
+    from core.security.prompt_output_sanitise import (
+        sanitise_inline,
+        sanitise_string,
+    )
+    for payload in (
+        "x\n<![CDATA[hidden]]>",
+        "x\n<!DOCTYPE html>",
+        "x\n<?php evil() ?>",
+        "x\n<details",            # HTML block type 6 needs no `>`
+        "x\n<DETAILS OPEN>y",     # case-insensitive tag names
+        "x\n<textarea>swallows",  # HTML block type 1
+    ):
+        assert "<" not in sanitise_string(payload).replace("&lt;", ""), payload
+        assert "<" not in sanitise_inline(payload).replace("&lt;", ""), payload
+
+
+def test_html_fetching_tags_still_redacted_not_escaped():
+    """`<script>`/`<svg>`/`<img>` stay on the autofetch-strip lane —
+    the construct escape runs after it and must not pre-empt it."""
+    from core.security.prompt_output_sanitise import sanitise_string
+    for payload in ("<script>alert(1)</script>", "<svg onload=x>",
+                    "<img src=//evil>"):
+        out = sanitise_string(payload)
+        assert "REDACTED-AUTOFETCH-MARKUP" in out or "[" in out, payload
+        assert "<script" not in out and "<svg" not in out \
+            and "<img" not in out, payload
+
+
+def test_comparison_prose_keeps_raw_angle_bracket():
+    from core.security.prompt_output_sanitise import (
+        sanitise_inline,
+        sanitise_string,
+    )
+    assert sanitise_string("a < b and 5 <= 6") == "a < b and 5 <= 6"
+    assert sanitise_string("x <- y") == "x <- y"
+    assert sanitise_inline("a < b") == "a < b"
+
+
+def test_entity_escaped_html_passes_unchanged():
+    """`&lt;h1&gt;` is inert to every CommonMark renderer (entities
+    render as literal text, never as markup) — no raw `<` to escape,
+    and no double-escape."""
+    from core.security.prompt_output_sanitise import sanitise_string
+    assert sanitise_string("&lt;h1&gt;quoted&lt;/h1&gt;") == \
+        "&lt;h1&gt;quoted&lt;/h1&gt;"
+
+
+def test_code_lane_keeps_raw_html():
+    """Fenced-code lane contract: `#include <stdio.h>` stays verbatim —
+    the wrapping fence isolates rendering; only the fence-break and
+    control bytes are defanged there."""
+    from core.security.prompt_output_sanitise import sanitise_code
+    assert sanitise_code("#include <stdio.h>") == "#include <stdio.h>"

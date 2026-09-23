@@ -106,3 +106,15 @@ def test_writer_audit_still_fires_without_md_helpers():
         """
     )
     assert any(v.detail == "title" for v in audit_source(src, "snippet.py"))
+
+
+def test_md_prose_defangs_structural_html():
+    from core.security.markdown_render import md_prose
+    out = md_prose("ok\n<h1>ALL CLEAR</h1>\n<!--\nhidden findings")
+    assert "<h1>" not in out and "<!--" not in out
+    assert "hidden findings" in out
+
+
+def test_md_inline_defangs_structural_html():
+    from core.security.markdown_render import md_inline
+    assert "<h1>" not in md_inline("t<h1>forge</h1>")
