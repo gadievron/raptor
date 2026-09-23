@@ -2000,7 +2000,11 @@ class TreeSitterExtractor:
     def extract(self, filepath: str, content: str, _tree=None) -> list[FunctionInfo]:
         if _tree is None:
             try:
-                _tree = self.parser.parse(content.encode())
+                # parse_origin: a budget-abandoned parse must name
+                # this file on the run's analysis-gap trail.
+                from core.run.gaps import parse_origin
+                with parse_origin(filepath):
+                    _tree = self.parser.parse(content.encode())
             except Exception as e:  # noqa: BLE001 — caller falls back to regex
                 logger.warning("tree-sitter parse failed for %s: %s", filepath, e)
                 return []  # Caller will fall back to regex extractor
@@ -3086,7 +3090,11 @@ def extract_items(filepath: str, language: str, content: str,
     if _TS_AVAILABLE:
         try:
             extractor = TreeSitterExtractor(language)
-            tree = extractor.parser.parse(content.encode())
+            # parse_origin: a budget-abandoned parse must name this
+            # file on the run's analysis-gap trail.
+            from core.run.gaps import parse_origin
+            with parse_origin(filepath):
+                tree = extractor.parser.parse(content.encode())
             ts_parsed = True
         except Exception:
             logger.debug("tree-sitter parse failed, will use regex", exc_info=True)

@@ -419,6 +419,15 @@ def _blank_noncode_uncached(language: str, content: str) -> str | None:
     data = bytearray(content.encode("utf-8", errors="replace"))
     try:
         tree = parser.parse(bytes(data))
+    except _ts_cache.ParseBudgetExceeded as exc:
+        # Budget exhaustion is a REFUSAL, not grammar absence: None
+        # here would read as "no validated grammar" and the file
+        # silently drops out of every witness. LexicalRefusal keeps
+        # the loud path — callers already treat it as "no vouched
+        # view", and the chokepoint recorded the analysis gap.
+        raise LexicalRefusal(
+            f"{language}: {exc} — refusing to vouch a code view"
+        ) from None
     except Exception:  # noqa: BLE001 — degrade toward no witness
         logger.debug("lexical_view: %s parse failed", language,
                      exc_info=True)
