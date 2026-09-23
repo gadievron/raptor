@@ -125,7 +125,12 @@ _PIN_VIOLATION_EXIT = 121
 
 
 def _resolve_grant_pins():
-    """[(path, dev, ino), ...] from _RAPTOR_GRANT_PINS, else []."""
+    """[(path, dev, ino, btime), ...] from _RAPTOR_GRANT_PINS, else [].
+
+    ``btime`` is the birth-time identity witness (None when the
+    capturing parent could not observe one — it stamps the run
+    identity-weak on its side; this shim then enforces the remaining
+    arms only)."""
     raw = os.environ.get("_RAPTOR_GRANT_PINS")
     if not raw:
         return []
@@ -140,18 +145,26 @@ def _resolve_grant_pins():
             if (isinstance(p, dict)
                     and isinstance(p.get("path"), str)
                     and isinstance(p.get("dev"), int)
-                    and isinstance(p.get("ino"), int)):
-                out.append((p["path"], p["dev"], p["ino"]))
+                    and isinstance(p.get("ino"), int)
+                    and (p.get("btime") is None
+                         or isinstance(p.get("btime"), (int, float)))):
+                out.append((p["path"], p["dev"], p["ino"],
+                            p.get("btime")))
     return out
 
 
 def _pin_violation(pins):
     """First (path, reason) whose pinned identity no longer holds, or
-    None. One lstat decides all three tamper shapes: vanished path,
+    None. One lstat decides all four tamper shapes: vanished path,
     symlink now at the path (catches a relocate-and-link-back to the
-    original inode too), different object renamed in (dev/ino)."""
+    original inode too), different object renamed in (dev/ino), and a
+    birth-time mismatch with dev/ino EQUAL — the unlink+recreate
+    signature on a filesystem that recycles freed inode numbers. A pin
+    carrying a birth time the current stat cannot reproduce refuses
+    (fail closed); a pin with btime None skips only that arm (the
+    parent recorded the run identity-weak)."""
     import stat as _stat
-    for path, dev, ino in pins:
+    for path, dev, ino, btime in pins:
         try:
             st = os.lstat(path)
         except OSError:
@@ -160,6 +173,10 @@ def _pin_violation(pins):
             return (path, "is now a symlink")
         if (st.st_dev, st.st_ino) != (dev, ino):
             return (path, "changed identity (dev/ino)")
+        if btime is not None and \
+                getattr(st, "st_birthtime", None) != btime:
+            return (path, "changed identity (birth time; "
+                          "recycled inode number)")
     return None
 # ─── end grant-path identity pins ───────────────────────────────────
 

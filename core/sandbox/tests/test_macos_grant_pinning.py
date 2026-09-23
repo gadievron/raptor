@@ -401,3 +401,75 @@ class TestPinAuthorityAndProtocol:
         status = getattr(r, "_setup_status", None)
         assert status is not None and status[0] == "B", status
         assert "unrecognised bytes" in status[1]
+
+
+class TestBirthTimeWitness:
+    """Serialized pins cannot hold an fd across the exec into the
+    shim, so (dev, ino) alone is re-mintable on an inode-recycling
+    filesystem. The birth time is the secondary identity witness;
+    where the capture host cannot observe one, the run is stamped
+    identity-weak instead of silently claiming the full guarantee."""
+
+    def test_capture_without_birthtime_stamps_identity_weak(
+            self, tmp_path, monkeypatch):
+        """Hosts whose stat reports no st_birthtime (Linux) produce
+        identity-weak pins: the clean run must carry the degraded
+        stamp naming the pinned roots — never read as the full pin
+        guarantee."""
+        monkeypatch.setattr(_macos_spawn, "SANDBOX_EXEC",
+                            _fake_sandbox_exec(tmp_path))
+        out = tmp_path / "out"
+        out.mkdir()
+        if getattr(os.stat(out), "st_birthtime", None) is not None:
+            pytest.skip("host stat reports a birth time")
+        r = _macos_spawn.run_sandboxed(
+            ["/bin/sh", "-c", "echo ok"],
+            output=str(out),
+            env={"PATH": "/usr/bin:/bin"},
+            capture_output=True, text=True, timeout=15,
+        )
+        assert r.returncode == 0
+        assert r.sandbox_info.get("grant_pin_identity_degraded") == [
+            os.path.realpath(str(out))]
+
+    def test_pinned_birthtime_that_vanishes_fails_closed(
+            self, tmp_path, monkeypatch):
+        """A pin CARRYING the birth-time witness that later stats
+        cannot reproduce must refuse — never downgrade to
+        dev+ino-only equivalence. Staged by injecting st_birthtime
+        into the capture stat only: the parent's last-moment
+        re-verify (lstat) sees none and refuses before spawn with the
+        typed P-category error."""
+        monkeypatch.setattr(_macos_spawn, "SANDBOX_EXEC",
+                            _fake_sandbox_exec(tmp_path))
+        out = tmp_path / "out"
+        out.mkdir()
+        if getattr(os.stat(out), "st_birthtime", None) is not None:
+            pytest.skip("host stat reports a birth time (cannot stage "
+                        "the witness-vanishes shape)")
+        real_stat = os.stat
+        out_real = os.path.realpath(str(out))
+
+        class _WithBirthtime:
+            def __init__(self, st):
+                self._st = st
+                self.st_birthtime = 1700000000.0
+
+            def __getattr__(self, name):
+                return getattr(self._st, name)
+
+        def stat_with_birthtime(target, *args, **kwargs):
+            st = real_stat(target, *args, **kwargs)
+            if isinstance(target, (str, bytes)) and \
+                    os.fspath(target) == out_real:
+                return _WithBirthtime(st)
+            return st
+
+        monkeypatch.setattr(os, "stat", stat_with_birthtime)
+        with pytest.raises(SandboxSetupError, match="birth time"):
+            _macos_spawn.run_sandboxed(
+                ["/bin/sh", "-c", "echo never"],
+                output=str(out),
+                env={"PATH": "/usr/bin:/bin"},
+                capture_output=True, text=True, timeout=15,
+            )
