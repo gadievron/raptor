@@ -203,3 +203,33 @@ def test_multiple_sunset_records_per_action_match_first():
     findings = scan_dependencies(deps, sunset_map=sunset)
     assert len(findings) == 1
     assert "2022-04-01" in findings[0].detail
+
+
+def test_oversized_sunset_document_refused_before_parse(tmp_path):
+    """The curated sunset list rides the shared bounded JSON loader:
+    a document over the loader budget is refused at the stat gate
+    and degrades to {} — the previous raw read admitted anything up
+    to the generic parser read cap and parsed it wholesale."""
+    import json as _json
+    big = tmp_path / "sunset.json"
+    payload = {
+        "_pad": "x" * (9 * 1024 * 1024),
+        "some/action": [{
+            "sunset_versions": ["1"],
+            "reason": "r",
+            "ref": "ref",
+        }],
+    }
+    big.write_text(_json.dumps(payload), encoding="utf-8")
+    assert load_sunset_map(path=big) == {}
+
+
+def test_hostile_escape_classes_still_degrade(tmp_path):
+    """The hostile-input escape classes keep degrading to {} through
+    the adopted loader (a deeply-nested document raises past the
+    JSON error type; the boundary guard must survive the loader
+    swap)."""
+    deep = tmp_path / "sunset.json"
+    n = 200_000
+    deep.write_text("[" * n + "]" * n, encoding="utf-8")
+    assert load_sunset_map(path=deep) == {}
