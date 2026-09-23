@@ -45,7 +45,7 @@
    "digests": [
     "d67aa42f0712"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "rules": [
     "C",
     "R"
@@ -117,7 +117,7 @@
    "digests": [
     "0fe99021dce5"
    ],
-   "exp": 1.03,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -160,16 +160,6 @@
    "exp": 1.0,
    "rules": [
     "R"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/callsite_consistency.py\u001f_CALL_IN_LINE_RE": {
-   "digests": [
-    "3c6564c8c3f5"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
    ],
    "verdict": "linear"
   },
@@ -317,7 +307,7 @@
    "digests": [
     "2e6dcb3c34bb"
    ],
-   "exp": 1.04,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -368,7 +358,7 @@
    "digests": [
     "1f06bec0b08b"
    ],
-   "exp": 1.01,
+   "exp": 1.03,
    "rules": [
     "R"
    ],
@@ -468,7 +458,7 @@
    "digests": [
     "97f695d2c879"
    ],
-   "exp": 1.02,
+   "exp": 1.04,
    "rules": [
     "R"
    ],
@@ -498,7 +488,7 @@
    "digests": [
     "a0034e018212"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "rules": [
     "R"
    ],
@@ -569,7 +559,7 @@
    "digests": [
     "775438c2881b"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "rules": [
     "R"
    ],
@@ -639,7 +629,7 @@
    "digests": [
     "89ce5ff19ff3"
    ],
-   "exp": 1.04,
+   "exp": 1.09,
    "rules": [
     "C",
     "R"
@@ -696,16 +686,6 @@
    ],
    "verdict": "linear"
   },
-  "core/audit/transform_sequence.py\u001f_CALL_RE": {
-   "digests": [
-    "3c6564c8c3f5"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "core/audit/transform_sequence.py\u001f_FUNC_HEADER_BRACE_RE": {
    "digests": [
     "900e5e8a5b05"
@@ -720,7 +700,7 @@
    "digests": [
     "6a6d0cb6dc1e"
    ],
-   "exp": 0.98,
+   "exp": 1.01,
    "rules": [
     "R"
    ],
@@ -750,7 +730,7 @@
    "digests": [
     "33219fa48672"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "rules": [
     "R"
    ],
@@ -760,7 +740,7 @@
    "digests": [
     "2824456e461d"
    ],
-   "exp": 1.03,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -800,7 +780,7 @@
    "digests": [
     "607297954932"
    ],
-   "exp": 1.0,
+   "exp": 1.03,
    "rules": [
     "C",
     "R"
@@ -821,7 +801,7 @@
    "digests": [
     "ad99fa8e9551"
    ],
-   "exp": 1.02,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -1092,7 +1072,7 @@
    "digests": [
     "595152230065"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "rules": [
     "R"
    ],
@@ -1132,7 +1112,7 @@
    "digests": [
     "2bd308c671e8"
    ],
-   "exp": 1.02,
+   "exp": 1.09,
    "rules": [
     "C",
     "R"
@@ -1173,7 +1153,7 @@
    "digests": [
     "f2dabacbe954"
    ],
-   "exp": 1.49,
+   "exp": 1.0,
    "rules": [
     "C",
     "R"
@@ -1184,7 +1164,7 @@
    "digests": [
     "b079fac4217e"
    ],
-   "exp": 1.06,
+   "exp": 1.0,
    "rules": [
     "C",
     "R"
@@ -1261,34 +1241,14 @@
    ],
    "verdict": "linear"
   },
-  "libexec/raptor-study-prep\u001f_ALLOC_THEN_CHECK_PATTERN": {
-   "digests": [
-    "e1aaf0662117"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "libexec/raptor-study-prep\u001f_C_FUNC_RE": {
    "digests": [
     "cdcb599248ab"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "rules": [
     "C",
     "R"
-   ],
-   "verdict": "linear"
-  },
-  "libexec/raptor-study-prep\u001f_NULL_GUARD_PATTERN": {
-   "digests": [
-    "30c7523c9545"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
    ],
    "verdict": "linear"
   },
@@ -1296,7 +1256,7 @@
    "digests": [
     "9c365960943b"
    ],
-   "exp": 1.0,
+   "exp": 1.02,
    "rules": [
     "R"
    ],
@@ -1316,7 +1276,7 @@
    "digests": [
     "e19a435256ca"
    ],
-   "exp": 0.99,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -1326,7 +1286,7 @@
    "digests": [
     "40f0d3b291e3"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -1563,7 +1523,7 @@
    "digests": [
     "a62c622ba9b0"
    ],
-   "exp": 1.0,
+   "exp": 1.06,
    "rules": [
     "R"
    ],
@@ -1583,7 +1543,7 @@
    "digests": [
     "f14dc063185a"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -1653,7 +1613,7 @@
    "digests": [
     "a5f9b31d6d1e"
    ],
-   "exp": 1.0,
+   "exp": 0.99,
    "rules": [
     "R"
    ],
@@ -1663,7 +1623,7 @@
    "digests": [
     "7e4d1743def4"
    ],
-   "exp": 1.18,
+   "exp": 1.06,
    "rules": [
     "R"
    ],
@@ -1683,7 +1643,7 @@
    "digests": [
     "7b32d4f318c5"
    ],
-   "exp": 1.02,
+   "exp": 1.03,
    "rules": [
     "R"
    ],
@@ -1696,16 +1656,6 @@
    "exp": 1.0,
    "rules": [
     "R"
-   ],
-   "verdict": "linear"
-  },
-  "packages/sca/refresh_typosquat_lists.py\u001f\\b[a-z0-9]+([_.-][a-z0-9]+)*/[a-z0-9]+((": {
-   "digests": [
-    "a7c81f9b5f4c"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
    ],
    "verdict": "linear"
   },
@@ -1999,7 +1949,7 @@
    "digests": [
     "dd47682bd39f"
    ],
-   "exp": 0.94,
+   "exp": 1.02,
    "rules": [
     "R"
    ],
@@ -2019,7 +1969,7 @@
    "digests": [
     "b6399964e99b"
    ],
-   "exp": 1.02,
+   "exp": 0.99,
    "rules": [
     "R"
    ],

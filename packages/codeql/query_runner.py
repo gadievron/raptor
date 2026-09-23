@@ -298,7 +298,9 @@ class QueryRunner:
                 env=RaptorConfig.get_safe_env(),
             )
             if result.returncode == 0:
-                m = re.search(r'\d+(?:\.\d+){1,3}', result.stdout, re.ASCII)
+                # (?<!\d) pins the scan to digit-run starts — same note as
+                # database_manager's version probe.
+                m = re.search(r'(?<!\d)\d+(?:\.\d+){1,3}', result.stdout, re.ASCII)
                 if m:
                     version = m.group(0)
         except Exception as e:  # noqa: BLE001 — best-effort probe

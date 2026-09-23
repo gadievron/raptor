@@ -43,7 +43,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -165,19 +164,35 @@ Example (for "find all strcpy calls"):
 """
 
 
-_RULE_FENCE_RE = re.compile(
-    r"```cocci\s*\n(.*?)```",
-    re.DOTALL | re.IGNORECASE,
-)
-
-
 def _strip_fences(text: str) -> str:
     """Pull the rule text out of ```cocci ... ``` fences. If the model
-    returned plain text without fences, take the whole thing."""
-    m = _RULE_FENCE_RE.search(text)
-    if m:
-        return m.group(1).strip()
-    return text.strip()
+    returned plain text without fences, take the whole thing.
+
+    Find-based walk, match-identical to the lazy-DOTALL fence regex
+    it replaces (case-insensitive opener, whitespace run ending in a
+    newline, body up to the first later triple-backtick): the regex
+    re-scanned to end-of-text from every planted opener when the
+    closer was withheld — quadratic on model-produced text."""
+    lowered = text.lower()
+    pos = 0
+    while True:
+        opener = lowered.find("```cocci", pos)
+        if opener == -1:
+            return text.strip()
+        run_start = opener + len("```cocci")
+        run_end = run_start
+        while run_end < len(text) and text[run_end].isspace():
+            run_end += 1
+        newline = text.rfind("\n", run_start, run_end)
+        if newline == -1:
+            # No newline after the marker: not a fence opener.
+            pos = opener + 1
+            continue
+        close = text.find("```", newline + 1)
+        if close == -1:
+            # No closer anywhere later: no opener can match either.
+            return text.strip()
+        return text[newline + 1:close].strip()
 
 
 def translate_pattern_to_cocci_rule(

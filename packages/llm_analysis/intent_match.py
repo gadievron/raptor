@@ -195,7 +195,11 @@ def _cwe_command_injection_shape(exploit_code: str) -> bool:
         return False
     # Shell metachars in single/double-quoted literals.
     if re.search(
-        r"""['"][^'"]*[;&|][^'"]*['"]""", exploit_code,
+        # The first span excludes the metachars (anchors on the FIRST
+        # one — same quoted strings flagged, identical spans): with
+        # them inside it, a metachar storm between quotes made every
+        # split explorable, quadratic in the payload.
+        r"""['"][^'";&|]*[;&|][^'"]*['"]""", exploit_code,
     ):
         # Filter false positives: bitwise / boolean ops in strings of
         # *non-shell* code (Python boolean strings, etc.) are rare;

@@ -1004,8 +1004,12 @@ _FUNC_HEADER_RE = re.compile(
 
 # \b keeps the unanchored scan from restarting inside an identifier
 # run (quadratic); earliest-start matches and captures unchanged.
+# The dotted chain is bounded: a ".a"-unit storm makes every
+# component start re-walk the run when no call paren follows —
+# quadratic in the line.  Real call chains sit far inside 32
+# links (beyond it, the match binds the last 32 components).
 _CALL_IN_LINE_RE = re.compile(
-    r"\b(\w+(?:\.\w+)*)\s*\(",
+    r"\b(\w+(?:\.\w+){0,32})\s*\(",
 )
 
 # C/C++-style function definition or prototype: type token(s), then

@@ -298,7 +298,11 @@ _NAME_GRAMMARS: dict[str, re.Pattern[str]] = {
     # \b keeps the unanchored scan from restarting inside a name
     # run (quadratic); earliest-start matches unchanged.
     "Packagist": re.compile(
-        r"\b[a-z0-9]+([_.-][a-z0-9]+)*/[a-z0-9]+(([_.]|-{1,2})[a-z0-9]+)*"),
+        # Segment chains bounded by the 214-char name cap (<=107
+        # separators): unbounded, a dotted-run feed row makes every
+        # segment start re-walk the run — quadratic per row.
+        r"\b[a-z0-9]+([_.-][a-z0-9]+){0,107}"
+        r"/[a-z0-9]+(([_.]|-{1,2})[a-z0-9]+){0,107}"),
 }
 
 # Churn guard: refuse an update that would replace more than this
