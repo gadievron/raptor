@@ -364,6 +364,67 @@ class TestCrossFile:
         assert collection_guard_reason(src, 5, "x", "CWE-79") is None
 
 
+class TestLoopCarriedRetaint:
+    """Byte order is not execution order under a back edge: a writer
+    textually AFTER the sink but inside a loop enclosing it executes
+    BEFORE the sink on iteration >= 2, so the guard vouches for a
+    value the sink never sees."""
+
+    def test_enclosed_form_loop_writer_after_sink_refuses(self):
+        src = _src(_ALLOWED
+                   + "        if (allowed.contains(x)) {\n"
+                   + "            while (out.checkError()) {\n"
+                   + "                out.println(x);\n"
+                   + "                x = getNext();\n"
+                   + "            }\n"
+                   + "        }\n")
+        assert collection_guard_reason(src, 6, "x", "CWE-79") is None
+
+    def test_negated_form_loop_writer_after_sink_refuses(self):
+        src = _src(_ALLOWED
+                   + "        if (!allowed.contains(x)) { return; }\n"
+                   + "        while (out.checkError()) {\n"
+                   + "            out.println(x);\n"
+                   + "            x = getNext();\n"
+                   + "        }\n")
+        assert collection_guard_reason(src, 6, "x", "CWE-79") is None
+
+    def test_do_while_between_guard_and_sink_refuses(self):
+        # Sibling loop form: the do-while's body runs before its
+        # condition — same loop-carried hazard.
+        src = _src(_ALLOWED
+                   + "        if (!allowed.contains(x)) { return; }\n"
+                   + "        do {\n"
+                   + "            out.println(x);\n"
+                   + "            x = getNext();\n"
+                   + "        } while (out.checkError());\n")
+        assert collection_guard_reason(src, 6, "x", "CWE-79") is None
+
+    def test_guard_inside_same_loop_still_binds(self):
+        # Control: guard and sink in the SAME loop — the guard
+        # re-tests x each iteration before the sink, so the
+        # loop-carried write is re-vouched (no refusal).
+        src = _src(_ALLOWED
+                   + "        while (out.checkError()) {\n"
+                   + "            if (allowed.contains(x)) {\n"
+                   + "                out.println(x);\n"
+                   + "            }\n"
+                   + "            x = getNext();\n"
+                   + "        }\n")
+        assert collection_guard_reason(src, 6, "x", "CWE-79") is not None
+
+    def test_loop_after_sink_not_enclosing_it_still_binds(self):
+        # Control: a loop AFTER the sink (not enclosing it) writes x
+        # only after the sink ran — no back edge into the sink.
+        src = _src(_ALLOWED
+                   + "        if (!allowed.contains(x)) { return; }\n"
+                   + "        out.println(x);\n"
+                   + "        while (out.checkError()) {\n"
+                   + "            x = getNext();\n"
+                   + "        }\n")
+        assert collection_guard_reason(src, 5, "x", "CWE-79") is not None
+
+
 class TestInvisibleBindingWriters:
     """Binding forms beyond assignment shapes are writers too.
 
