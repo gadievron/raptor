@@ -777,3 +777,75 @@ class TestProbeRestartDecoupling:
             joern_server=_Server(covers=None), skipped_types=set(),
         )
         assert cfg.joern_health.errors == ["coverage probe unanswerable"]
+
+
+class TestOracleDegenerateEchoShapes:
+    """The probe's unparseable-echo branch, pinned at BOTH layers.
+
+    Shape (a) — transport raises — was the only unanswerable shape the
+    oracle exercised: a mutation flipping the unparseable-echo branch
+    (answer None → True) survived the whole suite, i.e. exactly one of
+    the fix's two probe-degradation directions was pinned. Shape (b)
+    is echo-format drift: the transport ANSWERS but the echo carries
+    neither `<nonce>:true` nor `<nonce>:false` — the very drift the
+    runner's transport-tolerance notes document. If that branch ever
+    reads as \"covered\", every silent live query books
+    refutation-grade \"looked and found nothing\" again while the
+    oracle stays green.
+    """
+
+    class _EchoServer:
+        """Transport answers; the echo is scripted verbatim."""
+
+        def __init__(self, raw: object):
+            self._raw_value = raw
+            self.queries: list[str] = []
+
+        def run_taint_queries_batch(self, pairs, timeout=0,
+                                    errors_out=None, **kwargs):
+            return []
+
+        def query(self, query: str, timeout: int = 0,
+                  check_length: bool = False,
+                  no_restart: bool = False) -> object:
+            self.queries.append(query)
+            if isinstance(self._raw_value, str) or self._raw_value is None:
+                return _QueryResult(self._raw_value)
+            return self._raw_value  # arbitrary non-result shape
+
+    def test_garbage_echo_without_nonce_is_none(self):
+        srv = self._EchoServer('res0: String = "no nonce here"')
+        errors: list = []
+        assert joern_function_in_cpg(srv, "f", errors_out=errors) is None
+        assert errors == ["unparseable probe echo"]
+
+    def test_empty_echo_is_none(self):
+        assert joern_function_in_cpg(self._EchoServer(""), "f") is None
+
+    def test_none_raw_output_is_none(self):
+        assert joern_function_in_cpg(self._EchoServer(None), "f") is None
+
+    def test_result_without_raw_output_attr_is_none(self):
+        # A non-result shape (dict) has no raw_output attribute — the
+        # probe must degrade to "did not look", never crash or cover.
+        assert joern_function_in_cpg(self._EchoServer({}), "f") is None
+
+    def test_garbage_echo_gate_skips_and_books_channel_error(self, tmp_path):
+        cfg = _Cfg(tmp_path)
+        cfg.joern_health = _Health()
+        _write_tree(tmp_path)
+        tiers = {"joern": TierCounters()}
+        skipped: set = set()
+        _run_tool_chain(
+            [{"type": "joern", "config": {"sinks": ["memcpy"]}}],
+            config=cfg, file_path="src/a.c", function_name="f",
+            source="int f(void){}", hypothesis="taint reaches memcpy",
+            line_start=1, tier_counters=tiers,
+            joern_server=self._EchoServer('res0: String = "drifted"'),
+            skipped_types=skipped,
+        )
+        assert tiers["joern"].refuted == 0
+        assert tiers["joern"].skipped == 1
+        assert "joern" in skipped
+        assert cfg.joern_health.errors == ["coverage probe unanswerable"]
+        assert cfg.joern_health.successes == 0
