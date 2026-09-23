@@ -241,14 +241,23 @@ def check_guard_coverage(
     entry_node = cfg.entry_node if hasattr(cfg, "entry_node") else cfg.entry
     condition_edges = extract_conditions_from_cfg(cfg)
 
-    guard_lines: set[int] = set()
+    # TRUE-polarity edges of matching guards, keyed src_line ->
+    # {dst_line}. Line MEMBERSHIP can never distinguish branches —
+    # the condition node's line lies on both branch paths by
+    # construction, so an else-branch read and a post-merge read both
+    # counted as "guard on every path". Coverage demands the path to
+    # TRAVERSE the guard's true edge (consecutive line pair); a path
+    # arriving via the false edge answers "not covered", and the
+    # consumer keeps its missing-guard finding (refusal direction).
+    guard_true_edges: dict[int, set[int]] = {}
     for edge in condition_edges:
-        if edge.condition is None:
+        if edge.condition is None or not edge.condition.polarity:
             continue
         if edge.condition.text.strip().lower() == required_guard_text.strip().lower():
-            guard_lines.add(edge.src_line)
+            guard_true_edges.setdefault(
+                edge.src_line, set()).add(edge.dst_line)
 
-    if not guard_lines:
+    if not guard_true_edges:
         return False
 
     paths, complete = _enumerate_paths(cfg, entry_node, read_node)
@@ -264,7 +273,12 @@ def check_guard_coverage(
         return complete
 
     for path in paths:
-        if not any(line in guard_lines for line in path):
+        traversed_true_edge = any(
+            path[i] in guard_true_edges
+            and path[i + 1] in guard_true_edges[path[i]]
+            for i in range(len(path) - 1)
+        )
+        if not traversed_true_edge:
             return False
 
     # Every ENUMERATED path carries the guard — but when the DFS was
