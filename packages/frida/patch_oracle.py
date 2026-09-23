@@ -102,14 +102,42 @@ def _run_side(binary: Path, script_path: Path, side_dir: Path,
     # frida spawn inherits the controller's stdio, so the PoC input
     # reaches the target by feeding it to the CLI process.
     stdin_ctx = open(poc, "rb") if poc is not None else None  # noqa: SIM115
+    # Capture to temp FILES, never an in-memory buffer: the spawned
+    # target inherits the CLI's stdio and can flood it without limit
+    # — only a bounded tail is ever needed for the failure message.
+    import tempfile
     try:
-        proc = subprocess.run(
-            cmd,
-            stdin=stdin_ctx if stdin_ctx is not None else subprocess.DEVNULL,
-            capture_output=True, text=True,
-            timeout=duration + _SIDE_TIMEOUT_SLACK,
-            env=env,
-        )
+        with tempfile.TemporaryFile() as out_fh, \
+                tempfile.TemporaryFile() as err_fh:
+            proc = subprocess.run(
+                cmd,
+                stdin=(stdin_ctx if stdin_ctx is not None
+                       else subprocess.DEVNULL),
+                stdout=out_fh, stderr=err_fh,
+                timeout=duration + _SIDE_TIMEOUT_SLACK,
+                env=env,
+            )
+            if proc.returncode != 0:
+                raw_tail = b""
+                for fh in (err_fh, out_fh):
+                    size = fh.seek(0, os.SEEK_END)
+                    fh.seek(max(0, size - 4096))
+                    raw_tail = fh.read()
+                    if raw_tail.strip():
+                        break
+                # The captured streams carry hostile-target bytes (the
+                # spawned target inherits the frida CLI's stdio) —
+                # escape before the tail rides the exception onto the
+                # operator terminal. Escape FIRST, then slice: escape
+                # expansion of a control-char flood would otherwise
+                # eat the whole budget and truncate away the trailing
+                # (informative) part of the tail.
+                tail = _sft(
+                    raw_tail.decode(errors="replace").strip(),
+                    max_len=4 * 4096 + 64,
+                )[-400:]
+                msg = f"frida session against {binary} failed: {tail}"
+                raise RuntimeError(msg)
     except subprocess.TimeoutExpired as e:
         # An infrastructure hang must surface as an error, never leak
         # out as a verdict-bearing exit code. The exception text quotes
@@ -119,14 +147,6 @@ def _run_side(binary: Path, script_path: Path, side_dir: Path,
     finally:
         if stdin_ctx is not None:
             stdin_ctx.close()
-    if proc.returncode != 0:
-        # The captured streams carry hostile-target bytes (the spawned
-        # target inherits the frida CLI's stdio) — escape before the
-        # tail rides the exception onto the operator terminal.
-        tail = _sft((proc.stderr or proc.stdout or "").strip()[-400:],
-                    max_len=500)
-        msg = f"frida session against {binary} failed: {tail}"
-        raise RuntimeError(msg)
 
 
 def _judge_side(side_dir: Path, binary: Path, sinks: Sequence[str],

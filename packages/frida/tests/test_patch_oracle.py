@@ -341,8 +341,10 @@ class TestTerminalEscapeScrub:
             "RAPTOR_DIR", str(Path(__file__).resolve().parents[3]))
 
         def fake_run(cmd, **kwargs):
-            return sp.CompletedProcess(
-                cmd, 1, stdout="", stderr="boom \x1b[2J\x9bpwned")
+            # Capture is file-redirected (bounded tail read-back) —
+            # emit hostile bytes the way the target would.
+            kwargs["stderr"].write(b"boom \x1b[2J\x9bpwned")
+            return sp.CompletedProcess(cmd, 1)
 
         monkeypatch.setattr(patch_oracle.subprocess, "run", fake_run)
         binary = tmp_path / "vuln"
@@ -379,3 +381,60 @@ class TestTerminalEscapeScrub:
         assert "\x1b" not in err
         assert "\x9b" not in err
         assert "\x07" not in err
+
+
+class TestRunSideBoundedCapture:
+    """The spawned target inherits the frida CLI's stdio — capture
+    must not buffer unbounded in memory (the E24 active.py class);
+    only a bounded tail is ever needed for the failure message."""
+
+    def _invoke(self, tmp_path, monkeypatch, *, rc: int, flood: bytes):
+        import subprocess as sp
+
+        from packages.frida import patch_oracle as po
+
+        seen = {}
+
+        def fake_run(cmd, **kwargs):
+            seen["kwargs"] = kwargs
+            assert not kwargs.get("capture_output"), (
+                "unbounded in-memory capture of target-inherited stdio"
+            )
+            err = kwargs.get("stderr")
+            assert err is not None and hasattr(err, "write"), (
+                "stderr must be file-redirected"
+            )
+            err.write(flood)
+            return sp.CompletedProcess(cmd, rc)
+
+        monkeypatch.setattr(po.subprocess, "run", fake_run)
+        monkeypatch.setattr(po, "_frida_python", lambda: "/usr/bin/env")
+        binary = tmp_path / "target"
+        binary.write_bytes(b"\x7fELF")
+        script = tmp_path / "hook.js"
+        script.write_text("// hook\n")
+        side = tmp_path / "side"
+        side.mkdir()
+        return po, binary, script, side
+
+    def test_failure_tail_is_bounded_and_escaped(
+        self, tmp_path, monkeypatch,
+    ):
+        import pytest as _pytest
+
+        flood = b"\x1b[31mX" * 200_000 + b" FINAL-ERROR"
+        po, binary, script, side = self._invoke(
+            tmp_path, monkeypatch, rc=1, flood=flood,
+        )
+        with _pytest.raises(RuntimeError) as exc:
+            po._run_side(binary, script, side, None, duration=1.0)
+        msg = str(exc.value)
+        assert "FINAL-ERROR" in msg
+        assert "\x1b" not in msg
+        assert len(msg) < 2000
+
+    def test_success_ignores_flood(self, tmp_path, monkeypatch):
+        po, binary, script, side = self._invoke(
+            tmp_path, monkeypatch, rc=0, flood=b"y" * 100_000,
+        )
+        po._run_side(binary, script, side, None, duration=1.0)
