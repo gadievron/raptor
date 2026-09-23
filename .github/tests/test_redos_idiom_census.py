@@ -2698,7 +2698,28 @@ class TrailingSpanCensus(unittest.TestCase):
         pattern, and a whitespace-prefixed search) are pinned as
         non-members of THESE arms.  Rule S now owns that family: the
         same shapes must be PROPOSED by it (the coverage handshake
-        below), so the boundary is a routing statement, not a gap."""
+        below), so the boundary is a routing statement, not a gap.
+
+        Named constructed-only oracle blind spots (universe-swept,
+        no live superlinear member — named so a future member is a
+        known gap, not a surprise):
+
+        * Positive-lookbehind guard derivation: the guard-breaking
+          fill lane derives fills only from NEGATIVE-lookbehind
+          classes; a positive-lookbehind-headed member (``(?<=x)…``)
+          is pumped without its required predecessor and may
+          under-measure density (universe at this cut: 4
+          pos-lb-headed members, each oracle-pinned linear).
+        * Zero-width-bodied required repeat: ``_first_set`` treats
+          ``(?:\b)+q`` as consuming and returns the empty set,
+          missing the continuation's true first char (universe at
+          this cut: zero members; empty fills route LOUD to the
+          manual lane rather than minting a pin).
+
+        Accepted over-census: a member mixing closer-anchored dot
+        companions with arrow chains can census one row twice —
+        benign direction (a duplicate row can only ADD a census
+        member, never hide one)."""
         for pattern, flags in (
             # nested-quantifier ambiguity: the classic exponential
             # ((?:a+)+ tail) has NO adjacent pair — Rule C is blind
