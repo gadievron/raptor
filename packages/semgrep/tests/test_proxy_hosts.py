@@ -1,4 +1,4 @@
-"""Tests for ``packages.static_analysis._proxy_hosts``.
+"""Tests for ``packages.semgrep._proxy_hosts``.
 
 Three-layer resolution: operator override → calibrated profile →
 static default. Same shape as the cc_dispatch / codeql / SCA
@@ -14,10 +14,7 @@ from unittest import mock
 
 import pytest
 
-# Imported via the static-analysis package path (which exists as a
-# directory; underscore-resilient import).
-import importlib
-mod = importlib.import_module("packages.static-analysis._proxy_hosts")
+from packages.semgrep import _proxy_hosts as mod
 
 
 def _has_host(hosts: list, name: str) -> bool:
@@ -298,7 +295,7 @@ def test_scanner_imports_proxy_hosts_for_semgrep():
     import to avoid heavy load at module-import time)."""
     scanner_path = (
         __import__("pathlib").Path(__file__).resolve()
-        .parent.parent / "scanner.py"
+        .parents[2] / "static-analysis" / "scanner.py"
     )
     text = scanner_path.read_text(encoding="utf-8")
     assert "proxy_hosts_for_semgrep" in text
@@ -309,7 +306,7 @@ def test_scanner_no_longer_hardcodes_semgrep_hosts():
     a hardcoded list, this test catches it."""
     scanner_path = (
         __import__("pathlib").Path(__file__).resolve()
-        .parent.parent / "scanner.py"
+        .parents[2] / "static-analysis" / "scanner.py"
     )
     text = scanner_path.read_text(encoding="utf-8")
     # The historical hardcoded list shape — looking for a literal

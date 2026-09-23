@@ -43,7 +43,7 @@ def _sites() -> list[_Site]:
               "proxy_hosts", "ghcr.io", "_resolve_codeql_bin"),
         _Site("packages.sca.resolvers._proxy_hosts", "proxy_hosts_for_pip",
               "pip", "pypi.org", "_resolve_bin"),
-        _Site("packages.static-analysis._proxy_hosts", "proxy_hosts_for_semgrep",
+        _Site("packages.semgrep._proxy_hosts", "proxy_hosts_for_semgrep",
               "hosts", "semgrep.dev", "_resolve_semgrep_bin"),
     ]
 
@@ -178,7 +178,7 @@ def test_registry_sees_the_known_providers():
     for site in ("core/llm/cc_proxy_hosts.py",
                  "packages/codeql/codeql_proxy_hosts.py",
                  "packages/sca/resolvers/_proxy_hosts.py",
-                 "packages/static-analysis/_proxy_hosts.py",
+                 "packages/semgrep/_proxy_hosts.py",
                  "core/git/_proxy_hosts.py"):
         assert site in rels, f"scan lost a known provider: {site}"
 
