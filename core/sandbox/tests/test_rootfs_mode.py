@@ -244,25 +244,36 @@ class TestSubidRangeParser(unittest.TestCase):
         from core.sandbox._spawn import _subid_range
         self._write("alice:100000:65536\nbob:200000:65536\n")
         self.assertEqual(_subid_range(self.path, "bob", "1001"),
-                         (200000, 65536))
+                         (200000, 65535))
 
     def test_match_by_numeric_id(self):
         from core.sandbox._spawn import _subid_range
         self._write("1001:300000:65536\n")
         self.assertEqual(_subid_range(self.path, "bob", "1001"),
-                         (300000, 65536))
+                         (300000, 65535))
 
     def test_first_entry_wins(self):
         from core.sandbox._spawn import _subid_range
         self._write("bob:100000:65536\nbob:900000:65536\n")
         self.assertEqual(_subid_range(self.path, "bob", "1001"),
-                         (100000, 65536))
+                         (100000, 65535))
 
     def test_count_capped(self):
         from core.sandbox._spawn import _subid_range
         self._write("bob:100000:10000000\n")
         self.assertEqual(_subid_range(self.path, "bob", "1001"),
-                         (100000, 65536))
+                         (100000, 65535))
+
+    def test_count_below_cap_untouched(self):
+        # Two-direction pin for the churn-prone cap: values under it
+        # must pass through unclamped, and the cap value itself must
+        # equal the rootfs consumer's clamp (one 2^16 child id space
+        # including the root mapping) — see _subid_range's docstring
+        # for the both-directions trade-off.
+        from core.sandbox._spawn import _subid_range
+        self._write("bob:100000:65535\n")
+        self.assertEqual(_subid_range(self.path, "bob", "1001"),
+                         (100000, 65535))
 
     def test_malformed_lines_skipped(self):
         from core.sandbox._spawn import _subid_range

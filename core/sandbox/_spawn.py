@@ -1095,12 +1095,23 @@ def _pin_bind_sources(
 def _subid_range(path: str, user: str, numeric_id: str) -> tuple[int, int] | None:
     """First /etc/subuid|/etc/subgid entry for the user (matched by name
     or numeric id), as ``(start, count)``. None when absent/unreadable —
-    the caller degrades to the single-id mapping with a warning."""
+    the caller degrades to the single-id mapping with a warning.
+
+    Count is capped at 65535: the consumer maps the range at child id
+    1 with id 0 taken by the mapped host id, so 65535 keeps the whole
+    child id space within the conventional 2^16 container range. The
+    consumer clamps to the same value (belt-and-braces); the producer
+    previously capped one higher (65536), a silent off-by-one between
+    the two sites. Raising either cap buys nothing (no image
+    entrypoint needs ids above the 2^16 convention) while a lower one
+    breaks images that chown to high ids — change both together or
+    neither.
+    """
     try:
         for line in Path(path).read_text(encoding="utf-8").splitlines():
             parts = line.strip().split(":")
             if len(parts) == 3 and parts[0] in (user, numeric_id):
-                return int(parts[1]), min(int(parts[2]), 65536)
+                return int(parts[1]), min(int(parts[2]), 65535)
     except (OSError, ValueError):
         return None
     return None

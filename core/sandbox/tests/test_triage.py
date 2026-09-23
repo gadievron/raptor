@@ -1166,3 +1166,29 @@ class TestHostileArtifactReads:
         ])
         result = triage_mod.triage_run(tmp_path)
         assert result["inputs"]["sandbox_summary_present"] is False
+
+
+class TestCapEvidenceEscapesStructurally:
+    """_cap_evidence is the one chokepoint every signal's evidence
+    list passes through — target-derived bytes (the Landlock-lane
+    child-append residual lets a hostile child forge whole denial
+    records) must never reach sandbox-triage.json with raw control
+    bytes, whatever today's consumers happen to print."""
+
+    def test_control_bytes_escaped(self):
+        out = triage_mod._cap_evidence(["evil\x1b]0;pwned\x07name"])
+        assert len(out) == 1
+        assert "\x1b" not in out[0]
+        assert "\x07" not in out[0]
+        assert "\\x1b" in out[0]
+
+    def test_length_bound_holds_on_escaped_output(self):
+        # Escaping expands (1 control byte -> 4 chars); the cap must
+        # bound what is EMITTED, not the pre-escape input.
+        raw = "\x1b" * (triage_mod._MAX_EVIDENCE_ITEM_LEN)
+        out = triage_mod._cap_evidence([raw])
+        assert len(out[0]) <= triage_mod._MAX_EVIDENCE_ITEM_LEN + 32
+
+    def test_plain_items_untouched(self):
+        items = ["socket", "connect"]
+        assert triage_mod._cap_evidence(items) == items
