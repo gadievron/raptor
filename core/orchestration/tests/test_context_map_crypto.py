@@ -255,3 +255,60 @@ class TestChecklistPathContainment:
             cm, checklist=checklist, target_path=root)
         assert n >= 1
         assert cm["crypto_inventory"][0]["file"] == "ok.c"
+
+
+class TestSiteCaps:
+    """_MAX_FILES/_MAX_FILE_BYTES bound the scan; the site caps bound
+    the EMISSION — a dense-match file from an untrusted repo must not
+    mint one dict per regex hit unbounded."""
+
+    def test_dense_file_bounded_at_per_file_cap(self, tmp_path):
+        import tracemalloc
+
+        from core.orchestration import context_map_crypto as cmc
+
+        root = tmp_path / "root"
+        root.mkdir()
+        # 100 matches per line x 30 lines = 3000 matches, well under
+        # the 2MB per-file byte cap that previously was the only bound.
+        (root / "dense.c").write_text(("rand();" * 100 + "\n") * 30)
+        cm: dict = {}
+        checklist = {"files": [{"path": "dense.c", "items": []}]}
+        tracemalloc.start()
+        n = enrich_with_crypto_inventory(
+            cm, checklist=checklist, target_path=root)
+        _cur, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        assert n == cmc._MAX_FILE_SITES
+        assert len(cm["crypto_inventory"]) == cmc._MAX_FILE_SITES
+        assert peak < 16 * 1024 * 1024, f"peak {peak/1e6:.1f}MB"
+
+    def test_total_cap_across_files(self, tmp_path, monkeypatch):
+        from core.orchestration import context_map_crypto as cmc
+
+        monkeypatch.setattr(cmc, "_MAX_SITES", 25)
+        monkeypatch.setattr(cmc, "_MAX_FILE_SITES", 10)
+        root = tmp_path / "root"
+        root.mkdir()
+        files = []
+        for i in range(5):
+            name = f"f{i}.c"
+            (root / name).write_text("rand();rand();\n" * 10)
+            files.append({"path": name, "items": []})
+        cm: dict = {}
+        n = enrich_with_crypto_inventory(
+            cm, checklist={"files": files}, target_path=root)
+        assert n == 25
+
+    def test_under_cap_scan_unchanged(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "small.c").write_text(
+            "int f(){ srand(1); return rand(); }\n")
+        cm: dict = {}
+        n = enrich_with_crypto_inventory(
+            cm, checklist={"files": [{"path": "small.c", "items": []}]},
+            target_path=root)
+        assert n == 2
+        assert {s["fn"] for s in cm["crypto_inventory"]} == {
+            "srand", "rand"}
