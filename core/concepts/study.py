@@ -4374,8 +4374,18 @@ _SAGE_EVIDENCE_RE = re.compile(
     r"Evidence\s+\((\w+)\):\s+(.+?)(?::(\d+))?"
     r"(?:\s+\[h=([a-f0-9]+)\])?\s+[-–—]\s+(.*)"
 )
+# The statement group is \S-delimited and carries its trailing
+# whitespace inside the optional group, and the negation group is
+# \S-headed: the naive trim spelling \s+(.*?)\s*\( overlaps three
+# unbounded repeats on horizontal whitespace, and an 'Invariant [x]:'
+# line ending in a long whitespace run with no '(negation:' makes
+# the engine try every split of the run between them — cubic in the
+# recall-line length. Match set unchanged (statement trimmed exactly
+# as before; an all-whitespace statement now captures None instead
+# of '' and the consumer normalises).
 _SAGE_INVARIANT_RE = re.compile(
-    r"Invariant\s+\[([^\]]+)\]:\s+(.*?)\s*\(negation:\s*(.*)\)"
+    r"Invariant\s+\[([^\]]+)\]:\s+(?:(\S(?:.*\S)?)\s*)?"
+    r"\(negation:\s*((?:\S.*)?)\)"
 )
 _SAGE_CONTRACT_RE = re.compile(r"Contract\s+\[([^\]]+)\]")
 _SAGE_CWE_RE = re.compile(r"CWEs:\s+(.*)")
@@ -4431,7 +4441,7 @@ def _reconstruct_from_sage(
             invariants.append(Invariant(
                 id=inv_m.group(1),
                 concept=concept_id,
-                statement=inv_m.group(2).strip(),
+                statement=(inv_m.group(2) or "").strip(),
                 negation=inv_m.group(3).strip(),
                 confidence="traced",
             ))
