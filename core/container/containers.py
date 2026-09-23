@@ -304,15 +304,20 @@ def launch_container(
     """
     # Reject env keys containing '=' — a caller-controlled key like
     # "FOO=BAR" would produce `-e FOO=BAR=value`, creating misnamed env
-    # var "FOO" with value "BAR=value" inside the container.
+    # var "FOO" with value "BAR=value" inside the container — and
+    # flag-shaped keys ('-privileged') which the emit loop used to
+    # silently `continue` past: same invalid-input class, and a
+    # silent drop means the caller's env silently isn't set (a config
+    # the operator asked for vanishing with zero signal). Both refuse
+    # loudly with the same reason.
     if env:
-        bad_keys = [k for k in env if "=" in k]
+        bad_keys = [k for k in env if "=" in k or k.startswith("-")]
         if bad_keys:
             return LaunchResult(
                 ok=False,
                 reason="invalid_env_key",
                 reason_class="unknown",
-                stderr=f"env key(s) contain '=': {bad_keys!r}",
+                stderr=f"env key(s) '='-bearing or flag-shaped: {bad_keys!r}",
             )
     if network is not None and not _NETWORK_NAME_RE.fullmatch(network):
         return LaunchResult(
@@ -353,8 +358,7 @@ def launch_container(
     if platform:
         cmd.extend(["--platform", platform])
     for k, v in (env or {}).items():
-        if k.startswith("-"):
-            continue  # reject flag-shaped keys
+        # flag-shaped / '='-bearing keys were refused loudly above.
         cmd.extend(["-e", f"{k}={v}"])
     if pull_always is None:
         pull_always = is_external_image(image, local_prefixes=local_prefixes)

@@ -78,14 +78,24 @@ def test_launch_rejects_env_key_with_equals() -> None:
     assert not r.ok and r.reason == "invalid_env_key"
 
 
-def test_launch_drops_flag_shaped_env_keys() -> None:
+def test_launch_rejects_flag_shaped_env_keys_loudly() -> None:
+    """Flag-shaped keys used to be silently dropped from the emit
+    loop while '='-bearing keys refused loudly — the same invalid
+    class, and a silent drop means a caller-requested env var
+    vanishes with zero signal. Both refuse with invalid_env_key."""
+    r = cc.launch_container(image="x:1", container_port=80,
+                            env={"-e": "v", "GOOD": "1"})
+    assert not r.ok and r.reason == "invalid_env_key"
+    assert "-e" in r.stderr
+
+
+def test_launch_accepts_plain_env_keys() -> None:
     captured: list[list[str]] = []
     with patch.object(cc, "run_cli", side_effect=_fake_run(captured)):
         cc.launch_container(image="x:1", container_port=80,
-                            env={"-e": "v", "GOOD": "1"})
+                            env={"GOOD": "1"})
     run_cmd = next(c for c in captured if c[:3] == ["docker", "run", "-d"])
     assert "GOOD=1" in run_cmd
-    assert "-e=v" not in " ".join(run_cmd)
 
 
 def test_stalled_pull_fails_fast_without_retry() -> None:
