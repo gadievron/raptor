@@ -1464,3 +1464,34 @@ class TestConventionCountsPerPattern:
         assert len(auth) == 1
         assert auth[0].pattern == r"require_role"
         assert auth[0].occurrences == 4
+
+
+class TestTrailingSpanBounds:
+    """Two regexes carried unbounded trailing spans (the escalated
+    rvw6 class, two members the recorded lists missed): the union
+    type-punning pattern's `[^}]*` runs span newlines to the next
+    `}` anywhere in the text, and _RECURSIVE_CALL's DOTALL `.*?`
+    backreference pairs a def with a same-named call arbitrarily far
+    away. Both are bounded to their plausible construct sizes."""
+
+    def test_union_pattern_bounded(self):
+        import re as _re
+
+        from core.audit import negative_space as ns
+        pattern = next(
+            p for p, _title, cwe in ns._UB_PATTERNS
+            if "union" in p.pattern
+        )
+        near = "union u { int x; float y; }"
+        assert pattern.search(near)
+        far = "union u {" + ("a" * 500) + "\nint x;" + ("b" * 500) + "}"
+        assert not pattern.search(far)
+        assert _re.search(r"\[\^}\]\{", pattern.pattern), \
+            "trailing [^}] runs must be bounded"
+
+    def test_recursive_call_bounded(self):
+        from core.audit import negative_space as ns
+        near = "def walk(n):\n    return walk(n.child)\n"
+        assert ns._RECURSIVE_CALL.search(near)
+        far = "def walk(n):\n    pass\n" + ("x = 1\n" * 1200) + "walk(2)\n"
+        assert not ns._RECURSIVE_CALL.search(far)

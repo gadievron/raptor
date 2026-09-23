@@ -97,8 +97,11 @@ _SEED_LOCK_PAIRS = (
 )
 
 # Naming-stem pairing for project locks (foo_lock → foo_unlock):
-# detection grade only.
-_STEM_LOCK_RE = re.compile(r"\A(\w*?)_?(?<!un)lock\Z")
+# detection grade only. The stem separator is MANDATORY — an optional
+# `_?` let common words (clock, block, flock) register as stem
+# acquires whose pair never resolves, misattributing pair-unresolved
+# inconclusives after a cross-file rescan.
+_STEM_LOCK_RE = re.compile(r"\A(\w+)_lock\Z")
 
 # Hypothesis shapes asserting callback-invocation-under-lock (§5.5).
 _LOCK_REGION_HYPOTHESIS_RE = re.compile(
@@ -448,15 +451,33 @@ def _in_region_invocations(
     invocations: list[dict[str, Any]] = []
     cancels: list[dict[str, Any]] = []
     cancel_set = set(_cancel_names(vocab))
-    lo = region.acquire_line - start_line + 1
+    lo = region.acquire_line - start_line
     hi = region.release_line - start_line
 
     def _code(offset: int) -> str:
         show = raw_segment if raw_segment is not None else segment
         return show[offset].strip()[:200]
 
-    for offset in range(max(lo, 0), min(hi, len(segment))):
+    def _clipped(offset: int) -> str:
+        """Region-clipped view of one line: the acquire line counts
+        only AFTER the acquire call, the release line only BEFORE the
+        release call. Excluding both LINES wholesale produced false
+        affirmative refutations ("release precedes every
+        callback-shaped invocation") whenever an invocation shared
+        the acquire or release line."""
         text = segment[offset]
+        if offset == hi:
+            m = re.search(rf"\b{re.escape(region.release)}\s*\(", text)
+            if m:
+                text = text[:m.start()]
+        if offset == lo:
+            m = re.search(rf"\b{re.escape(region.acquire)}\s*\(", text)
+            if m:
+                text = text[m.end():]
+        return text
+
+    for offset in range(max(lo, 0), min(hi + 1, len(segment))):
+        text = _clipped(offset)
         for m in _INDIRECT_CALL_RE.finditer(text):
             base = m.group(1) or m.group(3)
             member = m.group(2) or m.group(4)
