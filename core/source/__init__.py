@@ -35,6 +35,7 @@ from core.source.lines import (
     read_lines,
     slice_lines,
     slice_text,
+    split_lines,
 )
 from core.source.strip import (
     C_FAMILY_SUFFIXES,
@@ -60,6 +61,7 @@ __all__ = [
     "read_text_gated",
     "slice_lines",
     "slice_text",
+    "split_lines",
     "strip_c_comments",
     "strip_comments",
     "strip_python_comments",
