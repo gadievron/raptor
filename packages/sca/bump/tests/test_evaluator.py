@@ -780,6 +780,51 @@ def test_install_hook_compounded_with_recent_publish_blocks() -> None:
     assert verdict == _VERDICT_BLOCK
 
 
+def test_pypi_legacy_naive_upload_time_parses_as_utc() -> None:
+    """PyPI's legacy ``upload_time`` field (the fallback when
+    ``upload_time_iso_8601`` is absent) is naive-UTC. Pre-fix the
+    naive result crashed the aware-vs-naive age subtraction with
+    TypeError, and the orchestrator floored the whole candidate at
+    Review with an exception string — every bump-tier detector
+    skipped."""
+    now = datetime(2026, 9, 21, tzinfo=timezone.utc)
+    pypi = _StubPyPIClient({
+        "x": {"releases": {
+            "2.0.0": [{"upload_time": "2026-09-20T12:00:00"}],
+        }},
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="PyPI", name="x",
+        current_version="1.0.0", target_version="2.0.0",
+        pypi_client=pypi, npm_client=None, now=now,
+    )
+    kinds = [f.kind for f in findings]
+    assert "recent_publish" in kinds
+
+
+def test_pypi_mixed_aware_and_naive_upload_times() -> None:
+    """One release with both timestamp shapes must compare cleanly
+    inside the earliest-file scan (pre-fix: TypeError on the
+    ``parsed < earliest`` comparison)."""
+    now = datetime(2026, 5, 11, tzinfo=timezone.utc)
+    pypi = _StubPyPIClient({
+        "x": {"releases": {
+            "2.0.0": [
+                {"upload_time_iso_8601": "2026-03-12T00:00:00Z"},
+                {"upload_time": "2026-05-01T00:00:00"},
+            ],
+        }},
+    })
+    findings = evaluate_bump_supply_chain(
+        ecosystem="PyPI", name="x",
+        current_version="1.0.0", target_version="2.0.0",
+        pypi_client=pypi, npm_client=None, now=now,
+    )
+    # Earliest (2026-03-12) is outside the 30-day window — no
+    # recent_publish, and crucially no TypeError.
+    assert all(f.kind != "recent_publish" for f in findings)
+
+
 def test_pypi_chooses_earliest_upload_time_across_files() -> None:
     """A PyPI release can have multiple distribution files (.whl
     for each platform + .tar.gz source). The earliest upload

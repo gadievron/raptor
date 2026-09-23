@@ -367,12 +367,24 @@ def _npm_version_publish(
 
 def _parse_iso(ts: str) -> datetime | None:
     """ISO-8601 parser that tolerates trailing ``Z`` and missing
-    fractional seconds (covers both PyPI and npm shapes)."""
+    fractional seconds (covers both PyPI and npm shapes).
+
+    Always returns an AWARE datetime: PyPI's legacy ``upload_time``
+    field is naive-UTC (``2026-09-20T12:00:00``, no offset — the
+    only shape the ``upload_time_iso_8601``-missing fallback ever
+    sees in the wild), and a naive result poisons every downstream
+    comparison against aware ``now`` / sibling timestamps with
+    TypeError — killing the whole supply-chain evaluation for the
+    candidate.
+    """
     cleaned = ts.replace("Z", "+00:00")
     try:
-        return datetime.fromisoformat(cleaned)
+        parsed = datetime.fromisoformat(cleaned)
     except ValueError:
         return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 
 # ---------------------------------------------------------------------------
