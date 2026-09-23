@@ -79,12 +79,19 @@ _PIP_FLAGS_WITH_VALUE = {
     "--prefix", "--root",
     "--cache-dir",
     "--retries",
-    # Every remaining value-taking pip flag. A value-taking flag not
-    # listed here makes its VALUE parse as a positional — ``pip
-    # install --progress-bar off foo`` emitted a phantom package
-    # ``off``. (Boolean flags need no entry; their next token really
-    # is a package.)
+    # Value-taking pip flags, curated from pip's own install options —
+    # a value-taking flag missing here makes its VALUE parse as a
+    # positional (``pip install --progress-bar off foo`` emitted a
+    # phantom package ``off``; ``--root-user-action ignore`` and
+    # ``--group dev`` did the same until listed). The universe is
+    # hand-maintained because pip's option table isn't importable
+    # here, so no totality is claimed: the error direction of a miss
+    # is a phantom package (false positive), never a lost real dep.
+    # Boolean flags need no entry; their next token really is a
+    # package.
     "--progress-bar",
+    "--root-user-action",
+    "--group",
     "--proxy",
     "--timeout",
     "--exists-action",
