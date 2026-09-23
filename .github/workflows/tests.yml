@@ -156,6 +156,7 @@ jobs:
       sandbox: ${{ steps.scope.outputs.sandbox }}
       exploit_feasibility: ${{ steps.scope.outputs.exploit_feasibility }}
       prompt_audit: ${{ steps.scope.outputs.prompt_audit }}
+      redos_census: ${{ steps.scope.outputs.redos_census }}
       ci_lint: ${{ steps.scope.outputs.ci_lint }}
       codeql: ${{ steps.scope.outputs.codeql }}
       llm_analysis: ${{ steps.scope.outputs.llm_analysis }}
@@ -1164,6 +1165,38 @@ jobs:
           # `python -m pytest` so `from core.security...` resolves
           # without needing the repo on PYTHONPATH.
           python -m pytest core/security/tests/test_prompt_envelope_audit.py -q
+
+  # ReDoS idiom census over runtime source, dispatched by the
+  # redos_census tier when core/, packages/, engine/, or libexec/
+  # change — the change class that can add a census member never
+  # touches .github, so the ci_lint tier (owner of .github edits)
+  # cannot carry this; see TIERS["redos_census"] in test_scope.py.
+  # One test file, stdlib + pytest, a few seconds.
+  redos-census:
+    needs: [pre_check, changes]
+    if: |
+      needs.pre_check.outputs.should_skip != 'true' &&
+      needs.changes.outputs.redos_census == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install pytest
+        # grep + pip install keeps requirements-dev.txt the single
+        # source of truth for the pytest pin (lint.yml's ruff idiom).
+        run: pip install "$(grep -E '^pytest==' requirements-dev.txt)"
+
+      - name: Run ReDoS idiom census
+        run: python -m pytest .github/tests/test_redos_idiom_census.py -q
 
   # CI lint / filter-coverage tests. Validates that compute_filters.py's
   # globs cover the actual import dependencies of subsystem-scoped jobs.

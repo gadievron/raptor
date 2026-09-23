@@ -151,6 +151,30 @@ TIERS: dict[str, dict] = {
         ],
         "outside_graph": True,
     },
+    "redos_census": {
+        # The ReDoS idiom census (.github/tests) asserts an invariant
+        # OVER runtime source: no blank-run-quadratic regex member
+        # under core/, packages/, engine/, libexec/. The change class
+        # that can ADD a member is therefore a runtime-source change —
+        # which never touches .github and so never fired ci_lint: a PR
+        # introducing a member merged green and the census fired at
+        # the next force_full event or unrelated .github change,
+        # misattributed and late. This tier routes the census's OWN
+        # universe to it (one test file, a few seconds) WITHOUT
+        # widening ci_lint to core/ — dragging the whole .github suite
+        # in for every runtime edit is exactly the scope erosion the
+        # ci_lint comment below forbids.
+        #
+        # Two-direction pin: the census itself asserts this trigger
+        # set covers every file its universe walk yields and carries
+        # no dead entry (test_dispatch_triggers_cover_the_universe),
+        # so a widened census universe fails CI until the triggers
+        # follow — the trigger set stays derived from the universe
+        # definition, never hand-drifted.
+        "test_files": [".github/tests/test_redos_idiom_census.py"],
+        "extra_triggers": ["core", "packages", "engine", "libexec"],
+        "outside_graph": True,
+    },
     "ci_lint": {
         "test_dirs": [".github/tests", ".github/scripts/tests"],
         # .github/tests asserts workflow CONTENT (lint.yml step shapes,
