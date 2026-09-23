@@ -25,7 +25,10 @@ Resolver contract (every refusal is named and counted):
   resource, and ``recv.getProperty(...)`` reads; anything else —
   aliasing, call arguments, returns, field stores — refuses
   (``receiver_escapes``);
-* the load must precede the read (``load_after_get``);
+* the load must precede the read on a STRICTLY earlier row
+  (``load_after_get``) and execute unconditionally — a load under a
+  conditional / loop / try / lambda cannot prove the file value was
+  loaded before the get (``conditional_load``);
 * the resource literal's basename must end ``.properties`` and match
   at most ``_CANDIDATE_CAP`` files under the search root; the key must
   appear exactly once across every matching file (``file_ambiguous``,
@@ -37,7 +40,8 @@ Resolver contract (every refusal is named and counted):
 Refusal taxonomy: ``parser_unavailable``, ``not_getproperty``,
 ``dynamic_key``, ``default_present``, ``no_receiver``,
 ``receiver_not_local``, ``multiple_loads``, ``load_not_found``,
-``load_after_get``, ``receiver_escapes``, ``dynamic_resource``,
+``load_after_get``, ``conditional_load``, ``receiver_escapes``,
+``dynamic_resource``,
 ``not_properties_file``, ``candidate_cap``, ``file_not_found``,
 ``file_ambiguous``, ``key_missing``, ``key_duplicated``,
 ``grammar_unsupported``, ``no_enclosing_method``.
@@ -208,6 +212,39 @@ def _string_literals_within(node) -> list[str]:
     return out
 
 
+# Ancestor node types under which a statement's execution is NOT
+# guaranteed on every path to a later read: conditionals, loops
+# (zero iterations), try (the load may throw with the failure
+# swallowed by a handler), lambdas (deferred). A load under any of
+# these cannot prove "the file value was loaded before the get" —
+# the runtime get then returns null on the not-loaded path, and
+# resolving the file value would prune the live null-handling branch
+# downstream. synchronized blocks execute unconditionally and are
+# not members.
+def _non_dominating_ancestors() -> frozenset[str]:
+    from core.analysis.cfg_node_tables import JAVA_TABLES
+    # Loop types come from the grammar-validated table (a loop body
+    # may run zero times); the remainder are the conditional /
+    # exception / deferred constructs.
+    return JAVA_TABLES.loops | frozenset({
+        "if_statement", "switch_expression", "switch_statement",
+        "try_statement", "try_with_resources_statement",
+        "ternary_expression", "catch_clause", "lambda_expression",
+    })
+
+
+_NON_DOMINATING_ANCESTORS = _non_dominating_ancestors()
+
+
+def _under_non_dominating_ancestor(node) -> bool:
+    cur = node.parent
+    while cur is not None:
+        if cur.type in _NON_DOMINATING_ANCESTORS:
+            return True
+        cur = cur.parent
+    return False
+
+
 def _receiver_discipline(method_node, receiver: str,
                          get_row: int) -> tuple[str | None, str]:
     """(resource_basename, refusal). Walks the enclosing method once:
@@ -218,6 +255,7 @@ def _receiver_discipline(method_node, receiver: str,
     resource: str | None = None
     dynamic_resource = False
     other_appearance = False
+    conditional_load = False
 
     stack = [method_node]
     claimed: set = set()
@@ -244,6 +282,8 @@ def _receiver_discipline(method_node, receiver: str,
                 mname = _text(meth)
                 if mname == "load":
                     load_rows.append(n.start_point[0] + 1)
+                    if _under_non_dominating_ancestor(n):
+                        conditional_load = True
                     literals = _string_literals_within(n)
                     if len(literals) == 1:
                         resource = literals[0]
@@ -275,7 +315,12 @@ def _receiver_discipline(method_node, receiver: str,
         return None, "receiver_escapes"
     if dynamic_resource or resource is None:
         return None, "dynamic_resource"
-    if load_rows[0] > get_row:
+    if conditional_load:
+        return None, "conditional_load"
+    # >=: a load sharing the get's row could execute AFTER it (the
+    # one-liner 'get(...); load(...)' spelling) — row order cannot
+    # prove load-before-read there, refuse.
+    if load_rows[0] >= get_row:
         return None, "load_after_get"
     basename = resource.rsplit("/", 1)[-1]
     if not basename.endswith(".properties"):

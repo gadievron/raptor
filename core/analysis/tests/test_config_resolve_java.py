@@ -172,3 +172,84 @@ class TestFoldHook:
         r2 = _resolver(tmp_path, src2)
         assert r2.fold_hook(_get_call(src2), 1) is REFUSE
         assert r2.stats["default_present"] == 1
+
+
+_SRC_COND = """\
+import java.util.Properties;
+public class T {
+    public void handle() throws Exception {
+        Properties props = new Properties();
+        if (cond()) {
+            props.load(getClass().getClassLoader()
+                .getResourceAsStream("@RES@"));
+        }
+        String alg = props.getProperty(@ARGS@);
+        use(alg);
+    }
+}
+"""
+
+_SRC_TRY = """\
+import java.util.Properties;
+public class T {
+    public void handle() {
+        Properties props = new Properties();
+        try {
+            props.load(getClass().getClassLoader()
+                .getResourceAsStream("@RES@"));
+        } catch (Exception e) { }
+        String alg = props.getProperty(@ARGS@);
+        use(alg);
+    }
+}
+"""
+
+_SRC_SAME_ROW = """\
+import java.util.Properties;
+public class T {
+    public void handle() throws Exception {
+        Properties props = new Properties();
+        String alg = props.getProperty(@ARGS@); props.load(getClass().getClassLoader().getResourceAsStream("@RES@"));
+        use(alg);
+    }
+}
+"""
+
+
+class TestLoadMustExecuteDiscipline:
+    """'Load precedes read' was textual: a load under an if (or a
+    try whose failure a catch swallows) still resolved the FILE
+    value, while at runtime the get returns null on the not-loaded
+    path — downstream 'v == null' then folds False and the live
+    null-handling branch is pruned as dead."""
+
+    def test_conditional_load_refuses(self, tmp_path):
+        (tmp_path / "app.properties").write_text("alg=SHA-256\n")
+        src = _src("app.properties", '"alg"', template=_SRC_COND)
+        res = _resolver(tmp_path, src).resolve_call(_get_call(src))
+        assert not res.resolved
+        assert res.refusal == "conditional_load"
+
+    def test_try_guarded_load_refuses(self, tmp_path):
+        (tmp_path / "app.properties").write_text("alg=SHA-256\n")
+        src = _src("app.properties", '"alg"', template=_SRC_TRY)
+        res = _resolver(tmp_path, src).resolve_call(_get_call(src))
+        assert not res.resolved
+        assert res.refusal == "conditional_load"
+
+    def test_same_row_get_before_load_refuses(self, tmp_path):
+        # 'load_rows[0] > get_row' passed when the get textually
+        # precedes the load on ONE line — at runtime the get ran
+        # before the load.
+        (tmp_path / "app.properties").write_text("alg=SHA-256\n")
+        src = _src("app.properties", '"alg"', template=_SRC_SAME_ROW)
+        res = _resolver(tmp_path, src).resolve_call(_get_call(src))
+        assert not res.resolved
+        assert res.refusal == "load_after_get"
+
+    def test_unconditional_load_still_resolves(self, tmp_path):
+        # Control: the straight-line template keeps resolving.
+        (tmp_path / "app.properties").write_text("alg=SHA-256\n")
+        src = _src("app.properties", '"alg"')
+        res = _resolver(tmp_path, src).resolve_call(_get_call(src))
+        assert res.resolved and res.value == "SHA-256"
