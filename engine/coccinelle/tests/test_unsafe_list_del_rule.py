@@ -67,8 +67,67 @@ class TestPositives:
         """)
         assert len(results) == 1
 
+    def test_address_of_field_head_fires(self, tmp_path):
+        # The dominant kernel spelling passes the head as an address
+        # expression (&dev->items); an identifier-bound head never
+        # matched it, leaving the rule dark on most real call sites.
+        results = _run_rule(tmp_path, """\
+            void prune(struct dev *d, int x)
+            {
+                struct entry *e;
+                list_for_each_entry(e, &d->items, node) {
+                    if (e->id == x)
+                        list_del(&e->node);
+                }
+            }
+        """)
+        assert len(results) == 1
+        assert results[0]["rule"] == "unsafe_list_del"
+
+    def test_address_of_global_head_fires(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            static struct list_head alist;
+            void drain(void)
+            {
+                struct entry *e;
+                list_for_each_entry(e, &alist, node) {
+                    list_del(&e->node);
+                }
+            }
+        """)
+        assert len(results) == 1
+
+    def test_hlist_address_head_fires(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            void prune(struct bucket *b, int x)
+            {
+                struct entry *e;
+                hlist_for_each_entry(e, &b->chain, node) {
+                    if (e->id == x)
+                        hlist_del(&e->node);
+                }
+            }
+        """)
+        assert len(results) == 1
+
 
 class TestNegatives:
+    def test_non_cursor_delete_does_not_fire(self, tmp_path):
+        # Deleting a DIFFERENT node does not invalidate the cursor's
+        # ->next — only cursor deletion corrupts this traversal. Pins
+        # the cursor anchoring of the delete arms (an un-anchored
+        # list_del(...) arm would flag this).
+        results = _run_rule(tmp_path, """\
+            void prune(struct dev *d, struct entry *victim)
+            {
+                struct entry *e;
+                list_for_each_entry(e, &d->items, node) {
+                    if (e->id == victim->id)
+                        list_del(&victim->node);
+                }
+            }
+        """)
+        assert results == []
     def test_safe_iterator_does_not_fire(self, tmp_path):
         results = _run_rule(tmp_path, """\
             void prune(struct list_head *lh, int x)
