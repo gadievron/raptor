@@ -1162,3 +1162,59 @@ class TestContentKeyedCache:
         before = _scan_cached.cache_info().hits
         _check(str(tmp_path))
         assert _scan_cached.cache_info().hits == before + 1
+
+
+class TestEnvNameRespelling:
+    """Consumers normalise more axes than case: npm honours the '-'
+    spelling of every npm_config_* key, so a one-character respelling
+    of an exec-redirect member bypassed the exact-name match. All
+    candidates now flow through fold_env_candidate (case + '-'→'_')."""
+
+    @staticmethod
+    def _scan_env(tmp_path, env):
+        claude = tmp_path / ".claude"
+        claude.mkdir(exist_ok=True)
+        (claude / "settings.json").write_text(json.dumps({"env": env}))
+        return _check(str(tmp_path))
+
+    @pytest.mark.parametrize("key", [
+        "npm_config_script-shell",   # npm dash spelling of SCRIPT_SHELL
+        "npm_config_node-gyp",       # npm dash spelling of NODE_GYP
+        "NPM_CONFIG_SCRIPT-SHELL",   # mixed axis: upper + dash
+        "ld-preload".upper().replace("_", "-"),  # dash respelling of a core member
+    ])
+    def test_dash_respelled_dangerous_env_blocks(self, tmp_path, key):
+        assert self._scan_env(tmp_path, {key: "/repo/evil"}) is True
+
+    def test_dash_respelled_credential_shape_blocks(self, tmp_path):
+        # Shape belt must see the folded name too: X-API-TOKEN has no
+        # underscore segments before folding.
+        assert self._scan_env(tmp_path, {"my-api-token": "v"}) is True
+
+    def test_underscore_spelling_still_blocks(self, tmp_path):
+        assert self._scan_env(
+            tmp_path, {"NPM_CONFIG_SCRIPT_SHELL": "/repo/evil"}) is True
+
+    def test_legitimate_env_keys_still_pass(self, tmp_path):
+        assert self._scan_env(tmp_path, {
+            "NODE_ENV": "production",
+            "TZ": "UTC",
+            "MY-APP-MODE": "ci",          # dash-bearing but benign
+            "APP-LOG-LEVEL": "debug",  # dash-bearing but benign
+        }) is False
+
+    @pytest.mark.skipif(
+        __import__("shutil").which("npm") is None,
+        reason="npm not installed — live consumer probe unavailable",
+    )
+    def test_npm_honours_dash_spelling_live(self, tmp_path):
+        """The factual basis for the fold: npm resolves the dash
+        spelling to the same config key."""
+        import subprocess
+        env = {k: v for k, v in os.environ.items()}
+        env["npm_config_script-shell"] = "/bin/echo-dash-spelling"
+        proc = subprocess.run(
+            ["npm", "config", "get", "script-shell"],
+            capture_output=True, text=True, env=env, timeout=60,
+        )
+        assert proc.stdout.strip() == "/bin/echo-dash-spelling"

@@ -261,8 +261,11 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
             "redirect — inert without one, documented out with that class. "
             "NODE_OPTIONS / NODE_PATH: Node runtime-injection family, "
             "homed in DANGEROUS_ENV_VARS. pnpm reads the npm_config_* "
-            "names — covered by the npm members (consumers match "
-            "case-folded)."
+            "names — covered by the npm members. npm normalises TWO "
+            "axes in the config-key portion: case AND '-' vs '_' "
+            "(npm_config_script-shell is honoured as script-shell), so "
+            "hostile-lane consumers must match via fold_env_candidate, "
+            "never by case-fold alone."
         ),
     ),
     BuildEcosystemEnvSurface(
@@ -1175,3 +1178,24 @@ def is_model_traffic_redirect_shaped(name: str) -> bool:
     if upper.startswith("AWS_ENDPOINT_URL"):
         return True
     return upper.startswith("CLAUDE_CODE_SKIP_")
+
+
+def fold_env_candidate(name: str) -> str:
+    """Normalise a HOSTILE-LANE env-name candidate before matching.
+
+    Case-fold AND fold ``-`` to ``_``. Consumers normalise more axes
+    than case alone: npm treats ``-`` and ``_`` as interchangeable in
+    the config-key portion of ``npm_config_<key>`` names (live-
+    verified: ``npm_config_script-shell=/x npm config get script-shell``
+    → ``/x``), so ``npm_config_script-shell`` is the same exec-redirect
+    member as ``NPM_CONFIG_SCRIPT_SHELL`` to the consumer while being
+    invisible to an exact-name match. No declared family member is
+    dash-bearing, so folding candidates onto the underscore spelling
+    is loss-free for the vocabulary and closes the whole dash-
+    respelling axis at one chokepoint instead of per-member.
+
+    Hostile-input lanes only (repo-supplied settings env keys):
+    general child-env sweeps match the exact names their consumers
+    read and must not widen.
+    """
+    return name.upper().replace("-", "_")
