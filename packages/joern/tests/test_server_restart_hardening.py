@@ -413,3 +413,38 @@ class TestRetryWaitBounds:
             assert len(calls) == 1
         finally:
             srv._restarting.clear()
+
+
+class TestCpgLoadEpoch:
+    """Every successful CPG load bumps ``cpg_load_epoch`` — the memo
+    key consumers use to discard per-graph caches across the
+    ``restart()`` re-import (which never passes through lane start)."""
+
+    def test_import_cpg_bumps_epoch(self, tmp_path):
+        srv = JoernServer()
+        cpg = tmp_path / "c.bin"
+        cpg.write_bytes(b"x")
+        assert srv.cpg_load_epoch == 0
+        with patch.object(srv, "_post_sync",
+                          return_value={"success": True}), \
+             patch.object(srv, "_verify_cpg_binding", return_value=True), \
+             patch.object(srv, "_warmup_dataflow"):
+            assert srv.import_cpg(cpg, timeout=5)
+        assert srv.cpg_load_epoch == 1
+
+    def test_failed_import_does_not_bump(self, tmp_path):
+        srv = JoernServer()
+        cpg = tmp_path / "c.bin"
+        cpg.write_bytes(b"x")
+        with patch.object(srv, "_post_sync",
+                          return_value={"success": False, "stderr": "x"}):
+            assert not srv.import_cpg(cpg, timeout=5)
+        assert srv.cpg_load_epoch == 0
+
+    def test_import_code_bumps_epoch(self, tmp_path):
+        srv = JoernServer()
+        with patch.object(srv, "_post_sync",
+                          return_value={"success": True}), \
+             patch.object(srv, "_verify_cpg_binding", return_value=True):
+            assert srv.import_code(tmp_path, timeout=5)
+        assert srv.cpg_load_epoch == 1
