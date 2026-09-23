@@ -25,9 +25,11 @@ class _StubBigQueryClient:
     def __init__(self, rows):
         self.rows = rows
         self.queries: list[str] = []
+        self.job_configs: list = []
 
     def query(self, query, job_config=None):
         self.queries.append(query)
+        self.job_configs.append(job_config)
         return list(self.rows)
 
 
@@ -49,6 +51,20 @@ def _push_row(minute: int) -> dict:
         "payload": json.dumps({"ref": "refs/heads/main", "before": "b" * 40,
                                "size": 1, "commits": []}),
     }
+
+
+class TestQueryEventsBillingCap:
+    def test_query_carries_maximum_bytes_billed(self):
+        """Every query_events call must cap billed bytes, mirroring
+        the typed wrapper's default: the verify_all lane runs one
+        whole-day scan per evidence item through this client
+        DIRECTLY, so an uncapped job config here billed unbounded
+        bytes per verification leg."""
+        client, stub = _client_with_rows([])
+        client.query_events(repo="owner/repo", from_date="20250713")
+        cfg = stub.job_configs[0]
+        assert cfg is not None
+        assert getattr(cfg, "maximum_bytes_billed", None) == 200 * 1000**3
 
 
 class TestQueryEventsLimit:

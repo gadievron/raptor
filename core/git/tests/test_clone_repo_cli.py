@@ -30,6 +30,29 @@ def _run(args: list[str], tmp_home: Path) -> subprocess.CompletedProcess:
     )
 
 
+class TestMirrorExclusivity:
+    def test_mirror_with_depth_rejected(self, tmp_path: Path) -> None:
+        res = _run(
+            ["https://github.com/org/repo.git", str(tmp_path / "dst"),
+             "--mirror", "--depth", "1"],
+            tmp_path,
+        )
+        assert res.returncode == 2
+        assert "mutually exclusive" in res.stderr
+
+    def test_mirror_alone_accepted(self, tmp_path: Path) -> None:
+        # Non-allowlisted URL fails inside clone_repository (no
+        # network touched): reaching "clone failed" proves --mirror
+        # parsed cleanly.
+        res = _run(
+            ["https://evil.example/repo.git", str(tmp_path / "dst"),
+             "--mirror"],
+            tmp_path,
+        )
+        assert res.returncode == 1
+        assert "clone failed" in res.stderr
+
+
 class TestDepthFullExclusivity:
     def test_both_flags_rejected(self, tmp_path: Path) -> None:
         res = _run(

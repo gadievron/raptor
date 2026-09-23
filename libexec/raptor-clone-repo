@@ -3,7 +3,7 @@
 # (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
 """Deterministic repository clone step for agent workflows.
 
-Usage: raptor-clone-repo <url> <target-dir> [--depth N | --full]
+Usage: raptor-clone-repo <url> <target-dir> [--depth N | --full | --mirror]
 
 Routes the clone through ``core.git.clone.clone_repository`` so an
 agent-driven pipeline (e.g. /crash-analysis) never runs a bare
@@ -13,7 +13,9 @@ pinned to the git hosts, landlocked writes, hardened env), and the
 bounded clone timeout.
 
 Default is a full-history clone (crash analysis bisects and inspects
-history); pass ``--depth N`` for a shallow clone.
+history); pass ``--depth N`` for a shallow clone, or ``--mirror`` for
+a bare all-refs mirror (git forensics: dangling / force-pushed
+history needs refs a plain clone never fetches).
 
 Exit codes: 0 success, 1 clone/validation failure, 2 usage error.
 """
@@ -44,6 +46,15 @@ def main() -> int:
     full = "--full" in args
     if full:
         args.remove("--full")
+    mirror = "--mirror" in args
+    if mirror:
+        args.remove("--mirror")
+    if mirror and "--depth" in args:
+        # A mirror is by definition complete; a shallow mirror would
+        # betray the forensic purpose, so refuse the combination.
+        print("--depth and --mirror are mutually exclusive",
+              file=sys.stderr)
+        return 2
     if "--depth" in args:
         # --full asks for complete history while --depth asks for a
         # shallow clone; honouring one silently would betray the other,
@@ -64,14 +75,16 @@ def main() -> int:
             return 2
 
     if len(args) != 2:
-        print(f"Usage: {sys.argv[0]} <url> <target-dir> [--depth N | --full]",
+        print(f"Usage: {sys.argv[0]} <url> <target-dir> "
+              "[--depth N | --full | --mirror]",
               file=sys.stderr)
         return 2
 
     url, target = args
     from core.git.clone import clone_repository
     try:
-        clone_repository(url, Path(target).resolve(), depth=depth)
+        clone_repository(url, Path(target).resolve(), depth=depth,
+                         mirror=mirror)
     except (ValueError, RuntimeError) as e:
         print(f"clone failed: {e}", file=sys.stderr)
         return 1

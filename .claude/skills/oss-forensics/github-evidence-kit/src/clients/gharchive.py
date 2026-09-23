@@ -13,6 +13,14 @@ from google.oauth2 import service_account
 
 from ..schema.common import EvidenceSource
 
+# Per-query billing cap, mirroring the typed wrapper's default
+# (core/forensics/bq_query.py DEFAULT_MAX_BYTES_BILLED = 200 GB).
+# Verification runs one whole-day GH Archive scan per evidence item
+# and calls this client DIRECTLY (not through the wrapper), so the
+# cap must live here too — without it a mis-scoped query bills
+# unbounded bytes.
+_MAX_BYTES_BILLED = 200 * 1000**3
+
 
 class GHArchiveClient:  # nosemgrep: generic.secrets.security.detected-google-gcm-service-account.detected-google-gcm-service-account
     """Client for GH Archive BigQuery queries.
@@ -168,6 +176,9 @@ class GHArchiveClient:  # nosemgrep: generic.secrets.security.detected-google-gc
         LIMIT {limit}
         """
 
-        job_config = bigquery.QueryJobConfig(query_parameters=params)
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=params,
+            maximum_bytes_billed=_MAX_BYTES_BILLED,
+        )
         results = client.query(query, job_config=job_config)
         return [dict(row) for row in results]
