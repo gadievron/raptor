@@ -13,8 +13,6 @@ Deliberately NOT swept (do not add them here):
 * ``core/sarif/`` — keeps its own percent-decoding normalisation by
   design (the only layer that ``unquote``\\ s; see core/paths
   docstring).
-* ``core/audit/sweep.py`` — owned by the concurrent dedup-wave1
-  series at sweep time.
 """
 
 from __future__ import annotations
@@ -31,6 +29,7 @@ if str(REPO_ROOT) not in sys.path:
 
 # Modules that must delegate file:// stripping to core.paths.
 _STRIP_ADOPTERS = [
+    "core/audit/sweep.py",
     "core/dataflow/cvefix_bridge.py",
     "packages/semgrep/nosemgrep.py",
     "packages/exploitability_validation/orchestrator.py",
