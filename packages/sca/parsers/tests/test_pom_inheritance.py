@@ -1794,3 +1794,51 @@ def test_inherited_embedded_unresolvable_ref_is_refused(tmp_path: Path):
     dep = _find(deps, ":ctrl")
     assert dep.version is None
     assert "${" not in (dep.purl or "")
+
+
+def test_failed_parent_load_is_retried_as_bom_import(tmp_path: Path):
+    """A coordinate whose PARENT-chain load failed (404) must stay
+    retryable: marking it visited before the load left a later BOM
+    import of the same coordinate silently skipped."""
+    child = _write(tmp_path, "pom.xml", '''\
+<project>
+  <parent><groupId>corp</groupId><artifactId>platform</artifactId>
+    <version>1.0</version><relativePath/></parent>
+  <groupId>corp</groupId><artifactId>app</artifactId><version>1</version>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>corp</groupId><artifactId>platform</artifactId>
+      <version>1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>corp</groupId><artifactId>lib</artifactId></dependency>
+  </dependencies>
+</project>
+''')
+    platform_xml = '''\
+<project>
+  <groupId>corp</groupId><artifactId>platform</artifactId><version>1.0</version>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>corp</groupId><artifactId>lib</artifactId>
+      <version>4.4.4</version></dependency>
+  </dependencies></dependencyManagement>
+</project>
+'''
+
+    class _FlakyClient(_StubMavenClient):
+        """404s the FIRST fetch of the coordinate (the parent walk),
+        serves it afterwards (the BOM import)."""
+
+        def __init__(self, poms):
+            super().__init__(poms)
+            self._failed_once = False
+
+        def get_pom(self, coord, version):
+            if not self._failed_once and coord == "corp:platform":
+                self._failed_once = True
+                self.fetch_calls.append(f"{coord}:{version}")
+                return None
+            return super().get_pom(coord, version)
+
+    client = _FlakyClient({"corp:platform:1.0": platform_xml})
+    deps = _parse_with_resolver(child, client)
+    assert _find(deps, ":lib").version == "4.4.4"

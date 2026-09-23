@@ -10,11 +10,12 @@ substitution because the vast majority of real POMs use it. Anything we
 can't resolve drops to ``parser_confidence: medium`` and ``pin_style:
 unknown`` — the user sees the ambiguity rather than a guessed version.
 
-Inheritance from a parent POM is *not* resolved here. A managed
-dependency whose version comes only from its parent will surface as
-``version=None``; that's fine for SCA's matcher (no version → no match,
-explicitly logged), and a follow-up task can resolve parents when we
-have a Maven local cache to consult.
+Parent-POM inheritance IS resolved when the pipeline has installed a
+:mod:`pom_inheritance` resolver (``set_inheritance_resolver``): step 6
+of :func:`parse` fills managed versions from the merged parent-chain +
+BOM view. Without a resolver (default, tests, ``--offline``) such
+dependencies surface as ``version=None`` — no version, no match,
+explicitly logged.
 
 XML safety: defusedxml's ``ElementTree.fromstring`` rejects DTDs and
 entity declarations by default, blocking billion-laughs and external-
