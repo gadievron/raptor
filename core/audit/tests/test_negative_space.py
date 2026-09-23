@@ -1466,35 +1466,63 @@ class TestConventionCountsPerPattern:
         assert auth[0].occurrences == 4
 
 
-class TestTrailingSpanBounds:
-    """Two regexes carried unbounded trailing spans (the escalated
-    rvw6 class, two members the recorded lists missed): the union
-    type-punning pattern's `[^}]*` runs span newlines to the next
-    `}` anywhere in the text, and _RECURSIVE_CALL's DOTALL `.*?`
-    backreference pairs a def with a same-named call arbitrarily far
-    away. Both are bounded to their plausible construct sizes."""
+class TestOrderedWalkMembers:
+    """Two checks used to carry unbounded regex spans, quadratic on
+    hostile source (the union type-punning pattern's `[^}]*` runs and
+    the recursion pattern's DOTALL `.*?` backreference span — and the
+    recursion spelling's `[^)]*` parameter body re-scanned the tail
+    from every planted `def name(`). Both are ordered walks now:
+    linear on hostile input while keeping the ORIGINAL gap-exact
+    language, so a construct larger than any fixed window is still
+    detected instead of silently sliding past a bound."""
 
-    def test_union_pattern_bounded(self):
-        import re as _re
-
+    def test_union_walk_matches_near_and_large_bodies(self):
         from core.audit import negative_space as ns
-        pattern = next(
-            p for p, _title, cwe in ns._UB_PATTERNS
-            if "union" in p.pattern
+        check = next(
+            entry for entry, _title, _cwe in ns._UB_PATTERNS
+            if isinstance(entry, ns._OrderedTokenCheck)
         )
         near = "union u { int x; float y; }"
-        assert pattern.search(near)
-        far = "union u {" + ("a" * 500) + "\nint x;" + ("b" * 500) + "}"
-        assert not pattern.search(far)
-        assert _re.search(r"\[\^}\]\{", pattern.pattern), \
-            "trailing [^}] runs must be bounded"
+        assert check.search(near)
+        # Gap-exact original language: a large multi-line union body
+        # still matches (a window bound would drop it), while a `}`
+        # inside the gap correctly breaks the construct.
+        big = "union u {" + ("a" * 500) + "\nint x;" + ("b" * 500) + "}"
+        assert check.search(big)
+        broken = "union u {}" + ("a" * 500) + " int x; }"
+        assert not check.search(broken)
 
-    def test_recursive_call_bounded(self):
+    def test_union_walk_is_fast_on_hostile_source(self):
+        from core.audit import negative_space as ns
+        from core.testing.wallclock import cpu_budget
+        check = next(
+            entry for entry, _title, _cwe in ns._UB_PATTERNS
+            if isinstance(entry, ns._OrderedTokenCheck)
+        )
+        hostile = "union u {" * 4000 + "int" * 4000
+        with cpu_budget(1.0, what="union ordered-token walk"):
+            check.search(hostile)
+
+    def test_recursive_call_walk(self):
         from core.audit import negative_space as ns
         near = "def walk(n):\n    return walk(n.child)\n"
-        assert ns._RECURSIVE_CALL.search(near)
+        assert ns._has_recursive_call(near)
+        # Original language preserved: a later same-named call still
+        # pairs with the def wherever it sits (the walk fixes the
+        # scan cost, not the match set).
         far = "def walk(n):\n    pass\n" + ("x = 1\n" * 1200) + "walk(2)\n"
-        assert not ns._RECURSIVE_CALL.search(far)
+        assert ns._has_recursive_call(far)
+        # The name only reappearing before the parameter list closes
+        # is not a recursive call.
+        params_only = "def walk(walk):\n    pass\n"
+        assert not ns._has_recursive_call(params_only)
+
+    def test_recursive_call_walk_is_fast_on_hostile_source(self):
+        from core.audit import negative_space as ns
+        from core.testing.wallclock import cpu_budget
+        hostile = "def a(" * 3000 + "\n" + "a " * 3000
+        with cpu_budget(1.0, what="recursive-call walk"):
+            ns._has_recursive_call(hostile)
 
 
 class TestMemcpyOverlapWhitespaceRun:
