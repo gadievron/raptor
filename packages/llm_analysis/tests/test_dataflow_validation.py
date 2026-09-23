@@ -259,6 +259,39 @@ class TestDbFreshness:
         (db / "codeql-database.yml").write_text("")
         assert _db_is_stale(db, repo) is False
 
+    def test_skip_dirs_are_pruned_not_visited(self, tmp_path, monkeypatch):
+        """The docstring promises a bounded walk: skip dirs must be
+        PRUNED (never descended into), not merely filtered after a
+        full visit — pre-fix, rglob('*') lstat-walked every entry of
+        a packfile-heavy .git or giant node_modules before 200
+        countable files were found."""
+        import os as _os
+
+        import packages.llm_analysis.dataflow_validation as dv
+
+        db = tmp_path / "db"
+        db.mkdir()
+        (db / "codeql-database.yml").write_text("")
+        repo = tmp_path / "repo"
+        (repo / "node_modules" / "dep").mkdir(parents=True)
+        for i in range(50):
+            (repo / "node_modules" / "dep" / f"m{i}.js").write_text("x")
+        (repo / "src").mkdir()
+        (repo / "src" / "a.py").write_text("# src")
+
+        visited: list[str] = []
+        real_walk = _os.walk
+
+        def spy_walk(top, *a, **k):
+            for dirpath, dirnames, filenames in real_walk(top, *a, **k):
+                visited.append(str(dirpath))
+                yield dirpath, dirnames, filenames
+
+        monkeypatch.setattr(dv.os, "walk", spy_walk)
+        dv._db_is_stale(db, repo)
+        assert visited, "walk never ran"
+        assert not any("node_modules" in v for v in visited)
+
     def test_db_older_than_source_is_stale(self, tmp_path):
         # Create DB first, then touch source
         db = tmp_path / "db"
