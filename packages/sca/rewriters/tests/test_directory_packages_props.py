@@ -253,3 +253,45 @@ def test_duplicate_rows_mixed_values_partial_reason(tmp_path: Path):
     body = p.read_text()
     assert 'Version="2.0.0"' in body
     assert 'Version="0.9.0"' in body
+
+
+def test_attr_pattern_repeated_open_tags_without_close_is_fast():
+    """A hostile text of repeated ``<PackageVersion `` openers with no
+    ``>`` anywhere: the shared attr-pattern builder's unbounded tag
+    spans scanned to EOF per anchor — quadratic (measured 4x per size
+    doubling). The bounded span keeps each anchor's scan O(1); wall
+    bound follows the suite's <5s convention. Scoped to the shared
+    builder on purpose — the per-file child-element patterns carry
+    the same shape but belong to the escalated trailing-span class."""
+    import time
+
+    from packages.sca.rewriters import build_element_attr_version_pattern
+
+    pat = build_element_attr_version_pattern(
+        ("PackageVersion", "GlobalPackageReference"),
+        "Include", "Newtonsoft.Json", "Version",
+    )
+    text = "<PackageVersion " * 40000
+    start = time.monotonic()
+    assert list(pat.finditer(text)) == []
+    assert time.monotonic() - start < 5.0
+
+
+def test_attribute_heavy_open_tag_still_rewrites(tmp_path: Path):
+    """Two-direction guard for the 4096-char tag-span bound: a
+    legitimately attribute-heavy row (long Condition and padding,
+    well under the cap) still matches and bumps."""
+    padding = 'Condition=" \'$(TargetFramework)\' == \'net8.0\' "' + " " * 700
+    p = _write(tmp_path, f"""\
+<Project>
+  <ItemGroup>
+    <PackageVersion Include="Newtonsoft.Json" {padding} Version="13.0.1" />
+  </ItemGroup>
+</Project>
+""")
+    results = rewrite_directory_packages_props(p, [RewriteEdit(
+        locator="Newtonsoft.Json",
+        old_value="13.0.1", new_value="13.0.3",
+    )])
+    assert results[0].applied is True
+    assert 'Version="13.0.3"' in p.read_text()

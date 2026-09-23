@@ -426,6 +426,18 @@ def build_element_attr_version_pattern(
     to it. ``\\b`` fences both attribute names so ``VersionOverride``
     or a hypothetical ``DataVersion`` never satisfies a ``Version``
     match. Quote style is per-attribute consistent via backreference.
+
+    The tag span is bounded at ``{0,4096}``: the unbounded ``[^>]*``
+    spans scanned to EOF for every ``<Elem`` anchor with no closing
+    ``>`` ahead, so a hostile file of repeated open tags cost
+    quadratic time per edit (the trailing-span-behind-required-token
+    shape, shared by all three MSBuild rewriters through this
+    builder). Trade-off, both directions: raising the cap re-widens
+    the per-anchor scan window on hostile repeats; lowering it
+    refuses legitimately attribute-heavy open tags. 4096 is an order
+    of magnitude above real PackageVersion / PackageReference rows
+    (Condition attributes included), and an over-cap tag fails
+    CLOSED — ``not_found``, a loud refusal, never a wrong edit.
     """
     elem = "|".join(re.escape(e) for e in element_names)
     val = re.escape(name_value)
@@ -433,8 +445,8 @@ def build_element_attr_version_pattern(
     ver = re.escape(version_attr)
     return re.compile(
         rf"""<(?:{elem})\b"""
-        rf"""(?=[^>]*\b{attr}\s*=\s*(?P<nq>['"]){val}(?P=nq))"""
-        rf"""[^>]*?\b{ver}\s*=\s*(?P<vq>['"])"""
+        rf"""(?=[^>]{{0,4096}}\b{attr}\s*=\s*(?P<nq>['"]){val}(?P=nq))"""
+        rf"""[^>]{{0,4096}}?\b{ver}\s*=\s*(?P<vq>['"])"""
         r"""(?P<version>[^'"]*)"""
         r"""(?P=vq)""",
         re.IGNORECASE,
