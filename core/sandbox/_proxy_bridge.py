@@ -69,7 +69,7 @@ def _run_forwarder(listen_port, unix_socket_path, death_r) -> None:
     _run_bridges(((listen_port, unix_socket_path),), death_r)
 
 
-def _run_bridges(bridges, death_r) -> None:
+def _run_bridges(bridges, death_r, ready_cb=None) -> None:
     """Relay TCP connections on 127.0.0.1:<port> to each bridge's
     Unix socket.
 
@@ -80,6 +80,14 @@ def _run_bridges(bridges, death_r) -> None:
     drain are torn down but the loop keeps serving new connections
     until death_r fires. Designed to run post-fork before
     Landlock/seccomp — the forwarder itself is unrestricted.
+
+    ``ready_cb`` (optional) is invoked once, after every listener is
+    bound and listening, with ``[(bound_port, unix_socket_path), ...]``
+    — a ``listen_port`` of 0 binds an ephemeral port and reports the
+    real one. In-thread callers key readiness (and port discovery) on
+    this instead of a bind/close/rebind probe, which is both a TOCTOU
+    (another process can take the probed port between close and
+    rebind) and a sleep-shaped readiness race.
 
     Never blocks on a single peer: writes go through per-fd bounded
     pending buffers drained via the select loop's writability set,
@@ -105,6 +113,12 @@ def _run_bridges(bridges, death_r) -> None:
         listener.listen(128)
         listener.setblocking(False)
         listeners[listener.fileno()] = (listener, unix_socket_path)
+
+    if ready_cb is not None:
+        ready_cb([
+            (sock.getsockname()[1], path)
+            for sock, path in listeners.values()
+        ])
 
     # pairs maps every relay fd -> its partner fd.
     pairs: dict[int, int] = {}

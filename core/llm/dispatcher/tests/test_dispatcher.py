@@ -1153,17 +1153,26 @@ class TestChildPlaneSocket:
             rec = d._tokens[token]
             original_expiry = rec.expires_at
 
-            probe = socket.socket()
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
-            probe.close()
+            # The bridge binds port 0 itself and reports the real port
+            # through ready_cb — no bind/close/rebind probe (TOCTOU:
+            # another process can take the probed port in the gap) and
+            # no fixed readiness sleep.
+            ready = threading.Event()
+            bound: list[int] = []
+
+            def _on_ready(listeners: list[tuple[int, str]]) -> None:
+                bound.append(listeners[0][0])
+                ready.set()
+
             death_r, death_w = os.pipe()
             threading.Thread(
                 target=_run_bridges,
-                args=([(port, str(d.child_socket_path))], death_r),
+                args=([(0, str(d.child_socket_path))], death_r),
+                kwargs={"ready_cb": _on_ready},
                 daemon=True,
             ).start()
-            time.sleep(0.3)
+            assert ready.wait(timeout=10), "bridge never reported ready"
+            port = bound[0]
 
             with httpx.Client(timeout=5.0) as c:
                 r = c.post(
