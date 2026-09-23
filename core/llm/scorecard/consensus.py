@@ -41,6 +41,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from core.run.finding_status import read_verdict
+
 from . import _MAX_REASONING_CHARS
 from ._batch import record_event_batch
 from .scorecard import EventType, ModelScorecard
@@ -103,20 +105,24 @@ def record_consensus_outcomes(
 
         verdicts: dict[str, bool] = {}
         for model, mr in per_model.items():
-            v = mr.get("is_exploitable")
+            # Tri-state read: a result missing the verdict, an
+            # explicit None (handler error / schema failure), or a
+            # junk shape ("false", "no", 1) that bypassed response
+            # validation is an ABSTENTION — the model cast no vote.
+            # bool()-coercing junk minted phantom True votes that
+            # both flipped the panel majority and marked the honest
+            # dissenter ``incorrect``. Same abstention rule as
+            # ``tally_verdict_votes`` in
+            # packages/llm_analysis/correlation.py — kept local
+            # deliberately (a core/llm producer importing
+            # packages.llm_analysis would invert the layering,
+            # and per-model attribution needs the verdict map,
+            # not just counts); do NOT "unify" this onto the
+            # shared tally without solving both.
+            v = read_verdict(mr, "is_exploitable")
             if v is None:
-                # Result missing the verdict (handler error / schema
-                # failure); can't classify against majority, skip
-                # this model for this finding. Same abstention rule
-                # as ``tally_verdict_votes`` in
-                # packages/llm_analysis/correlation.py — kept local
-                # deliberately (a core/llm producer importing
-                # packages.llm_analysis would invert the layering,
-                # and per-model attribution needs the verdict map,
-                # not just counts); do NOT "unify" this onto the
-                # shared tally without solving both.
                 continue
-            verdicts[str(model)] = bool(v)
+            verdicts[str(model)] = v
         if len(verdicts) < 2:
             # Need at least two models with verdicts to define a
             # majority direction. ``confidence == "disputed"`` should
