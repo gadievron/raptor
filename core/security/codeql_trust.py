@@ -97,7 +97,104 @@ try:
 except ImportError:  # pragma: no cover — yaml is a hard dep elsewhere
     yaml = None
 
+try:
+    # Shared hostile-YAML mechanisms (one home, not re-derived here):
+    # the quote-blind flow-depth pre-bound refuses loader-stack
+    # overflow BEFORE the parser sees the text, and
+    # PARSE_ESCAPE_ERRORS names the exception classes that escape
+    # PyYAML's own error type on hostile input (RecursionError from
+    # deep nesting, ValueError from CPython digit limits).
+    from packages.sca._yaml_fast import MAX_FLOW_DEPTH as _MAX_FLOW_DEPTH
+    from packages.sca._yaml_fast import _flow_depth_exceeded
+    from packages.sca.parsers._base import PARSE_ESCAPE_ERRORS as _YAML_ESCAPE_ERRORS
+except ImportError:  # pragma: no cover — packages/ ships beside core/
+    # Partial install: the load sites fail CLOSED (uninspectable →
+    # blocking finding), never open and never a crash.
+    _MAX_FLOW_DEPTH = 0
+    _flow_depth_exceeded = None  # type: ignore[assignment]
+    _YAML_ESCAPE_ERRORS = (RecursionError, ValueError)
+
 _logger = logging.getLogger(__name__)
+
+
+if yaml is not None:
+    class _AliasRefusingSafeLoader(yaml.SafeLoader):
+        """SafeLoader that refuses aliases (and with them merge keys).
+
+        Pack files have no legitimate use for anchors/aliases, and an
+        alias chain (``aN: &aN [*a(N-1),*a(N-1)]``) amplifies a
+        ~600-byte file into a 2^depth-node graph: ``safe_load`` shares
+        the aliased nodes cheaply, and the scanner's later ``str()``
+        on an aliased value materialises the full expansion —
+        OOM-killing the trust gate in the operator's process BEFORE
+        the verdict the gate exists to produce. Refusal surfaces as a
+        ``YAMLError``, which the load sites already treat as the
+        malformed-YAML blocking finding (fail closed, loud reason).
+
+        Pure-Python ``SafeLoader`` base deliberately: ``CSafeLoader``
+        composes in C where this hook never runs, and the pure loader
+        turns deep-nesting stack abuse into a catchable
+        ``RecursionError`` instead of a native stack overflow.
+        """
+
+        def compose_node(self, parent, index):  # type: ignore[no-untyped-def]
+            if self.check_event(yaml.events.AliasEvent):
+                raise yaml.YAMLError(
+                    "YAML alias refused (anchor/alias amplification — "
+                    "pack files have no legitimate use for aliases)"
+                )
+            return super().compose_node(parent, index)
+
+
+def _load_untrusted_yaml(raw: bytes):  # type: ignore[no-untyped-def]
+    """Bounded ``safe_load`` for attacker-supplied pack/config YAML.
+
+    Returns the loaded document; raises ``yaml.YAMLError`` on every
+    refusal (flow depth, aliases) so call sites keep their single
+    malformed-YAML fail-closed path. Callers must also catch
+    ``_YAML_ESCAPE_ERRORS`` — deep-nesting shapes below the pre-bound
+    can still surface as ``RecursionError`` from the pure-Python
+    loader.
+    """
+    if _flow_depth_exceeded is None:  # pragma: no cover — partial install
+        raise yaml.YAMLError(
+            "yaml hostile-input guards unavailable (partial install) — "
+            "refusing to inspect"
+        )
+    # Pre-scan on a lenient decode; the PARSE feed stays the original
+    # bytes so encoding strictness (ReaderError on bad UTF-8 → the
+    # blocking malformed-YAML path) is unchanged.
+    if _flow_depth_exceeded(raw.decode("utf-8", errors="replace")):
+        raise yaml.YAMLError(
+            f"flow nesting deeper than {_MAX_FLOW_DEPTH} — refusing to "
+            "load (deep flow nesting overflows the YAML loader stack)"
+        )
+    return yaml.load(raw, Loader=_AliasRefusingSafeLoader)
+
+
+def _scalar_or_shape_finding(
+    fs: FileScan, label: str, val: object,
+) -> str | None:
+    """Type gate before any ``str()`` on an attacker-chosen value.
+
+    Returns the value as ``str`` when it is a plain scalar; otherwise
+    appends a blocking ``(unrecognised shape)`` finding WITHOUT
+    stringifying the container (belt beside the alias refusal: no
+    code path materialises an attacker-shaped graph into a string)
+    and returns None.
+    """
+    if val is None:
+        # A null slot (``codeql/cpp-all:`` — dep with no version) is a
+        # legitimate scalar absence, not an attacker container.
+        return ""
+    if isinstance(val, (str, int, float, bool)):
+        return str(val)
+    fs.findings.append(Finding(
+        f"{label} (unrecognised shape)",
+        f"({type(val).__name__} value)",
+        True,
+    ))
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -290,8 +387,8 @@ def _scan_pack_file(path: Path) -> FileScan:
         )
         return fs
     try:
-        doc = yaml.safe_load(raw)
-    except yaml.YAMLError as e:
+        doc = _load_untrusted_yaml(raw)
+    except (yaml.YAMLError, *_YAML_ESCAPE_ERRORS) as e:
         fs.findings.append(
             Finding("malformed YAML", _truncate(str(e), 120), True)
         )
@@ -307,9 +404,11 @@ def _scan_pack_file(path: Path) -> FileScan:
     # an attacker-supplied repo could point it anywhere inside the
     # source root.
     if doc.get("extractor"):
-        fs.findings.append(
-            Finding("extractor", _mask(str(doc["extractor"])), True)
-        )
+        extractor = _scalar_or_shape_finding(fs, "extractor", doc["extractor"])
+        if extractor is not None:
+            fs.findings.append(
+                Finding("extractor", _mask(extractor), True)
+            )
 
     # dependencies: only the canonical ``codeql/`` namespace is allowed
     # without manual review. Third-party packs may bring their own
@@ -322,12 +421,21 @@ def _scan_pack_file(path: Path) -> FileScan:
     # walk every entry. An attacker who can write the pack chooses the
     # form, so we have to inspect both.
     deps = doc.get("dependencies")
+    dep_specs: list[tuple[str, str]] = []
     if isinstance(deps, dict):
-        dep_specs = [(str(n), str(v)) for n, v in deps.items()]
+        for n, v in deps.items():
+            name = _scalar_or_shape_finding(fs, "dependency name", n)
+            if name is None:
+                continue
+            ver = _scalar_or_shape_finding(fs, f"dependency {_truncate(name, 60)}", v)
+            dep_specs.append((name, ver if ver is not None else ""))
     elif isinstance(deps, list):
-        dep_specs = [(str(item), "") for item in deps]
-    else:
-        dep_specs = []
+        for item in deps:
+            name = _scalar_or_shape_finding(fs, "dependency entry", item)
+            if name is not None:
+                dep_specs.append((name, ""))
+    elif deps not in (None, {}, []):
+        _scalar_or_shape_finding(fs, "dependencies", deps)
     for n, v in dep_specs:
         if not _is_canonical_pack_ref(n):
             label = f"{n}: {v}" if v else n
@@ -342,8 +450,8 @@ def _scan_pack_file(path: Path) -> FileScan:
     # via ``../`` could also reference suites outside the pack.
     suite = doc.get("defaultSuiteFile")
     if suite:
-        s = str(suite)
-        if ".." in s or s.startswith("/"):
+        s = _scalar_or_shape_finding(fs, "defaultSuiteFile", suite)
+        if s is not None and (".." in s or s.startswith("/")):
             fs.findings.append(
                 Finding("defaultSuiteFile (escapes pack)",
                         _truncate(s, 120), True)
@@ -356,9 +464,9 @@ def _scan_pack_file(path: Path) -> FileScan:
     for key in ("buildCommand", "setup",
                 "preCompileScript", "postCompileScript"):
         if doc.get(key):
-            fs.findings.append(
-                Finding(key, _mask(str(doc[key])), True)
-            )
+            val = _scalar_or_shape_finding(fs, key, doc[key])
+            if val is not None:
+                fs.findings.append(Finding(key, _mask(val), True))
 
     return fs
 
@@ -378,8 +486,8 @@ def _scan_codeql_config(path: Path) -> FileScan:
         )
         return fs
     try:
-        doc = yaml.safe_load(raw)
-    except yaml.YAMLError as e:
+        doc = _load_untrusted_yaml(raw)
+    except (yaml.YAMLError, *_YAML_ESCAPE_ERRORS) as e:
         fs.findings.append(
             Finding("malformed YAML", _truncate(str(e), 120), True)
         )
@@ -416,7 +524,10 @@ def _scan_codeql_config(path: Path) -> FileScan:
     if queries:
         entries = queries if isinstance(queries, list) else [queries]
         for e in entries:
-            uses = str(e.get("uses", "")) if isinstance(e, dict) else str(e)
+            raw_uses = e.get("uses", "") if isinstance(e, dict) else e
+            uses = _scalar_or_shape_finding(fs, "queries entry", raw_uses)
+            if uses is None:
+                continue
             # External: any path containing ``/`` that isn't a relative
             # local reference (``./`` or ``../``).
             if "/" in uses and not uses.startswith(("./", "../")):
@@ -427,9 +538,9 @@ def _scan_codeql_config(path: Path) -> FileScan:
     # manualBuildSteps / setup — subprocess invocation directives.
     for key in ("manualBuildSteps", "setup"):
         if doc.get(key):
-            fs.findings.append(
-                Finding(key, _mask(str(doc[key])), True)
-            )
+            val = _scalar_or_shape_finding(fs, key, doc[key])
+            if val is not None:
+                fs.findings.append(Finding(key, _mask(val), True))
 
     # pack-cache: redirects codeql's pack download cache to a custom
     # location. Used legitimately for offline / air-gapped builds, but
@@ -438,9 +549,11 @@ def _scan_codeql_config(path: Path) -> FileScan:
     # "downloads" (i.e. reads) packs from there. Block any value —
     # operator must opt in via --trust-repo if they need it.
     if doc.get("pack-cache"):
-        fs.findings.append(
-            Finding("pack-cache", _truncate(str(doc["pack-cache"]), 120), True)
-        )
+        val = _scalar_or_shape_finding(fs, "pack-cache", doc["pack-cache"])
+        if val is not None:
+            fs.findings.append(
+                Finding("pack-cache", _truncate(val, 120), True)
+            )
 
     return fs
 
