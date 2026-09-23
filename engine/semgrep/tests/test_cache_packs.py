@@ -234,3 +234,42 @@ def test_default_packs_match_every_pack_source() -> None:
     assert mod.parse_pack_ids(",".join(mod.DEFAULT_PACKS)) == list(
         mod.DEFAULT_PACKS,
     )
+
+
+# --- YAML→JSON normalisation stays inside the per-pack contract -------------
+
+
+def test_fetch_pack_yaml_date_scalar_normalised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """yaml.safe_load turns unquoted ISO dates (routine in semgrep rule
+    metadata:) into datetime.date; the JSON normalisation must render
+    them as strings — the shape a JSON registry response carries —
+    instead of letting a serialisation TypeError escape fetch_pack and
+    abort the whole fetch/update on pack 1 of N."""
+    pytest.importorskip("yaml")
+    mod = _load_tool()
+    payload = (
+        b"rules:\n- id: r1\n  metadata:\n    updated: 2024-01-01\n"
+    )
+    monkeypatch.setattr(
+        mod, "urlopen", lambda req, timeout: _FakeResponse(payload),
+    )
+    out = mod.fetch_pack("security-audit")
+    assert b'"updated":"2024-01-01"' in out
+
+
+def test_fetch_pack_unserialisable_yaml_fails_per_pack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A YAML shape json.dumps cannot serialise even with default=str
+    (a non-string mapping KEY) is that one pack's failure — the FAILED
+    line, never an escaping traceback (per-pack contract)."""
+    pytest.importorskip("yaml")
+    mod = _load_tool()
+    payload = b"rules:\n- id: r1\n  metadata:\n    2024-01-01: seen\n"
+    monkeypatch.setattr(
+        mod, "urlopen", lambda req, timeout: _FakeResponse(payload),
+    )
+    with pytest.raises(SystemExit, match=r"FAILED: security-audit"):
+        mod.fetch_pack("security-audit")
