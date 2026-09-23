@@ -1590,21 +1590,20 @@ def _merge_attack_surface(
     if surface_path.exists():
         _raw_surf = load_json(surface_path)
         existing = _raw_surf if isinstance(_raw_surf, dict) else {}
-        merged_sources = _merge_list_by_key(
+        merged_sources, sources_changed = _merge_list_by_key(
             _list_at(existing, "sources"), new_sources, key="entry"
         )
-        merged_sinks = _merge_list_by_key(
+        merged_sinks, sinks_changed = _merge_list_by_key(
             _list_at(existing, "sinks"), new_sinks, key="location"
         )
-        merged_boundaries = _merge_list_by_key(
+        merged_boundaries, boundaries_changed = _merge_list_by_key(
             _list_at(existing, "trust_boundaries"), new_boundaries,
             key="boundary"
         )
-        # Only rewrite if the merge added something
-        changed = (len(merged_sources) != len(_list_at(existing, "sources"))
-                   or len(merged_sinks) != len(_list_at(existing, "sinks"))
-                   or len(merged_boundaries) != len(
-                       _list_at(existing, "trust_boundaries")))
+        # Rewrite when the merge added an entry OR updated fields on
+        # an existing one (content-derived, not a length delta —
+        # update-only re-runs must persist too).
+        changed = sources_changed or sinks_changed or boundaries_changed
     else:
         merged_sources = new_sources
         merged_sinks = new_sinks
@@ -2147,27 +2146,43 @@ def _validate_path_profile(profile: Any, source: str) -> str | None:
 
 def _merge_list_by_key(
     existing: list[dict], incoming: list[dict], key: str
-) -> list[dict]:
-    #Merge two lists of dicts, de-duplicating on a string key field.
+) -> tuple[list[dict], bool]:
+    """Merge two lists of dicts, de-duplicating on a string key field.
 
-    existing_keys = {
-        item.get(key, "")
-        for item in existing
-        if isinstance(item, dict) and item.get(key)
-    }
+    A key collision UPDATES the existing entry with the incoming
+    fields (incoming wins per field; existing-only fields survive) —
+    re-runs recompute per-entry enrichment like ``has_taint_flow`` and
+    ``gaps`` on already-known entries, and dropping the incoming twin
+    silently discarded those updates. Returns ``(merged, changed)``
+    where ``changed`` is CONTENT-derived: true when an entry was added
+    or any collision update altered a field (a pure length delta
+    missed update-only re-runs, so they were never persisted).
+    """
+    by_key: dict[str, dict] = {}
+    for item in existing:
+        if isinstance(item, dict) and item.get(key):
+            by_key[item[key]] = item
 
     result = list(existing)
+    changed = False
     for item in incoming:
         if not isinstance(item, dict):
             continue
         item_key = item.get(key, "")
-        if item_key and item_key in existing_keys:
+        if item_key and item_key in by_key:
+            target = by_key[item_key]
+            updates = {k: v for k, v in item.items()
+                       if k not in target or target[k] != v}
+            if updates:
+                target.update(updates)
+                changed = True
             continue
         result.append(item)
+        changed = True
         if item_key:
-            existing_keys.add(item_key)
+            by_key[item_key] = item
 
-    return result
+    return result, changed
 
 
 def _boundary_matches(boundary: dict[str, Any], detail: dict[str, Any]) -> bool:

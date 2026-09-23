@@ -273,3 +273,65 @@ class TestGraphContextMapWriteStamps(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMergeAttackSurfaceFieldUpdates(unittest.TestCase):
+    """Re-runs persist FIELD-level updates on dedup-merged entries —
+    the previous length-delta change detection dropped update-only
+    merges (recomputed has_taint_flow / gaps never landed on disk)."""
+
+    def test_update_only_rerun_persists(self):
+        with TemporaryDirectory() as tmp:
+            validate_dir = Path(tmp)
+            context_map = {
+                "sources": [{"type": "http", "entry": "POST /x"}],
+                "sinks": [], "trust_boundaries": [],
+            }
+            ub._merge_attack_surface(context_map, validate_dir,
+                                     validate_dir)
+            # Same entry key, new enrichment field: no length change.
+            context_map = {
+                "sources": [{"type": "http", "entry": "POST /x",
+                             "has_taint_flow": True}],
+                "sinks": [], "trust_boundaries": [],
+            }
+            ub._merge_attack_surface(context_map, validate_dir,
+                                     validate_dir)
+            surface = load_json(validate_dir / "attack-surface.json")
+            self.assertTrue(surface["sources"][0]["has_taint_flow"])
+
+    def test_no_change_rerun_does_not_rewrite(self):
+        import os
+        with TemporaryDirectory() as tmp:
+            validate_dir = Path(tmp)
+            context_map = {
+                "sources": [{"type": "http", "entry": "POST /x"}],
+                "sinks": [], "trust_boundaries": [],
+            }
+            ub._merge_attack_surface(context_map, validate_dir,
+                                     validate_dir)
+            surface_path = validate_dir / "attack-surface.json"
+            before = os.stat(surface_path).st_mtime_ns
+            ub._merge_attack_surface(
+                {"sources": [{"type": "http", "entry": "POST /x"}],
+                 "sinks": [], "trust_boundaries": []},
+                validate_dir, validate_dir)
+            self.assertEqual(os.stat(surface_path).st_mtime_ns, before)
+
+    def test_existing_only_fields_survive_update(self):
+        with TemporaryDirectory() as tmp:
+            validate_dir = Path(tmp)
+            save_json(validate_dir / "attack-surface.json", {
+                "sources": [{"type": "http", "entry": "POST /x",
+                             "stage_b_note": "keep me"}],
+                "sinks": [], "trust_boundaries": [],
+            })
+            ub._merge_attack_surface(
+                {"sources": [{"type": "http", "entry": "POST /x",
+                              "has_taint_flow": True}],
+                 "sinks": [], "trust_boundaries": []},
+                validate_dir, validate_dir)
+            surface = load_json(validate_dir / "attack-surface.json")
+            src = surface["sources"][0]
+            self.assertEqual(src["stage_b_note"], "keep me")
+            self.assertTrue(src["has_taint_flow"])
