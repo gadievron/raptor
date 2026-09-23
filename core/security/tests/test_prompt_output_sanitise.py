@@ -534,3 +534,21 @@ def test_report_supplement_layer_is_pinned():
         out = fn("x <mglyph src=//e> y")
         assert "mglyph" not in out, fn.__name__
         assert "[REDACTED-AUTOFETCH-MARKUP]" in out, fn.__name__
+
+
+def test_html_hiding_adversarial_shapes():
+    """Adversarial-pass pins: autolinks, indented type-6 openers,
+    control-byte-split tags, and double-encoded entities must leave
+    no live construct opener; whitespace-after-< prose (never a tag
+    to any parser) keeps its raw bracket."""
+    from core.security.prompt_output_sanitise import sanitise_string
+    for payload in (
+        "x\n<https://evil.example/hide>",   # markdown autolink
+        "x\n   <details open>rest",          # 0-3 space indent, block type 6
+        "x\n<\x00details>rest",              # control-byte split
+        "<?XML version=1?>",
+        "<![cdata[hidden]]>",
+    ):
+        out = sanitise_string(payload)
+        assert "<" not in out.replace("&lt;", ""), (payload, out)
+    assert sanitise_string("a < b and x <\ty") == "a < b and x <\ty"

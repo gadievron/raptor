@@ -935,3 +935,22 @@ class TestHostileYamlBounded:
         fs = _scan_pack_file(p)
         assert [f.label for f in fs.findings] == ["extractor"]
         assert fs.has_blocking()
+
+
+class TestYamlAnchorsTwoDirection:
+    def test_anchor_without_alias_loads_fine(self, tmp_path):
+        # Anchors alone are legal noise some emitters produce; only
+        # ALIASES (the amplification primitive) are refused.
+        from core.security.codeql_trust import _scan_pack_file
+        p = tmp_path / "qlpack.yml"
+        p.write_text("name: p\nversion: &v 1.0.0\n"
+                     "dependencies:\n  codeql/cpp-all: '*'\n")
+        assert _scan_pack_file(p).findings == []
+
+    def test_merge_key_alias_refused(self, tmp_path):
+        from core.security.codeql_trust import _scan_pack_file
+        p = tmp_path / "qlpack.yml"
+        p.write_text("base: &b {a: 1}\nx:\n  <<: *b\nextractor: cpp\n")
+        fs = _scan_pack_file(p)
+        assert fs.has_blocking()
+        assert any("alias" in f.value for f in fs.findings)
