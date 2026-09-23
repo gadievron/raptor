@@ -172,3 +172,36 @@ def test_allowlist_is_a_ratchet():
                 f"allowlist entry so the gate enforces it"
             )
     assert not stale, "stale allowlist entries:\n  " + "\n  ".join(stale)
+
+
+def test_undeterminable_roles_are_condemned(tmp_path):
+    """Condemn-toward-visibility unit pins: a rule whose role cannot
+    be determined fails the derivation loudly instead of silently
+    defaulting out of the universe."""
+    import pytest
+
+    no_directive = tmp_path / "no_directive.cocci"
+    no_directive.write_text("// a rule\n@r@\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="no // @role: directive"):
+        _declared_role(no_directive)
+
+    typo = tmp_path / "typo.cocci"
+    typo.write_text("// @role: verificaton\n@r@\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="unknown @role token"):
+        _declared_role(typo)
+
+    conflict = tmp_path / "conflict.cocci"
+    conflict.write_text(
+        "// @role: verification\n// @role: detection\n@r@\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(AssertionError, match="conflicting @role"):
+        _declared_role(conflict)
+
+    # An INDENTED directive is not the canonical spelling — neither
+    # the runtime reader nor this scan honours it, and the loud
+    # failure here is what keeps that consistent divergence visible.
+    indented = tmp_path / "indented.cocci"
+    indented.write_text("  // @role: verification\n@r@\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="no // @role: directive"):
+        _declared_role(indented)

@@ -458,3 +458,23 @@ class TestAsprintfFamily:
             }
         """)
         assert results == []
+
+
+class TestKnownResiduals:
+    """FP-direction residuals witnessed, NOT endorsed: these assert
+    current behaviour so a future safe-arm extension flips them
+    consciously. A THREE-arm literals-only ternary (one arm nests
+    another ternary) is still safe code that fires — the safe arms
+    enumerate one ternary level, and covering nesting multiplies
+    every alternation by the nest-position x paren combinations.
+    Remove this class together with the new safe arms if that ever
+    lands."""
+
+    def test_nested_literals_only_ternary_still_fires(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            void probe(int x, int y, int n)
+            {
+                printf(x ? "a %d" : (y ? "b %d" : "c %d"), n);
+            }
+        """)
+        assert len(results) == 1
