@@ -179,9 +179,12 @@ class TestCodeqlMembershipReceipt:
         _stub_analyze(monkeypatch, results=[])
         _membership(monkeypatch, None)
         res = _codeql(tmp_path, db)
-        # Fail-open keeps the historic refutation; the receipt makes
-        # the degraded evidence auditable instead of silent.
-        assert res.outcome == "refuted"
+        # Fail-open still DISPATCHES (confirmations must land), but an
+        # unwitnessed zero-row result no longer claims refutation-grade
+        # silence — it caps at inconclusive, and the receipt keeps the
+        # degraded evidence auditable instead of silent.
+        assert res.outcome == "inconclusive"
+        assert any("cannot refute" in e for e in res.errors)
         assert res.details["substrate"]["covered"] == "unknown"
         assert "fail-open" in res.details["substrate"]["reason"]
 
