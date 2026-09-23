@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import stat as _stat_mod
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -475,17 +476,48 @@ def _metadata_lock(meta_path: Path):
     process may already hold an fd to the old inode while a third
     creates a fresh file at the path, splitting lockers across two
     inodes and silently breaking mutual exclusion.
+
+    The lock path lives inside the run dir — inside a sandboxed
+    child's write grant (the metadata FILE is masked from the child
+    by the mount namespace; its ``.lock`` sibling is not), so the
+    open must not trust what it finds there: O_NOFOLLOW keeps a
+    planted symlink from making this (unsandboxed) process create an
+    attacker-chosen path and flock an aliased inode; O_NONBLOCK plus
+    the fstat S_ISREG refusal keeps a planted FIFO from wedging every
+    lifecycle finaliser (complete/fail/interrupt/resume block forever
+    on a bare FIFO open). Same discipline as the coverage journal's
+    append open one package over.
     """
     if not _HAS_FCNTL:
         yield
         return
     path = Path(meta_path)
     lock_path = path.with_suffix(path.suffix + ".lock")
+    fd = None
     try:
-        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
-    except OSError:
-        # Lock file uncreatable (read-only dir mid-teardown, ENOSPC) —
-        # proceed unserialised rather than failing the lifecycle.
+        fd = os.open(
+            str(lock_path),
+            os.O_WRONLY | os.O_CREAT | os.O_NONBLOCK
+            | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(
+                f"lock path {lock_path} is not a regular file")
+    except OSError as exc:
+        # Lock file uncreatable (read-only dir mid-teardown, ENOSPC) or
+        # tamper-shaped (symlink → ELOOP, FIFO → ENXIO / S_ISREG
+        # refusal) — proceed unserialised rather than failing the
+        # lifecycle, but LOUDLY: a silent unlocked degrade turned an
+        # injected error into invisible lost-update windows.
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        logger.warning(
+            "metadata lock unavailable for %s (%s) — proceeding "
+            "UNSERIALISED; concurrent status updates may be lost",
+            path.name, exc,
+        )
         yield
         return
     try:
