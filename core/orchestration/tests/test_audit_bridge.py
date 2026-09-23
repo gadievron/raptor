@@ -499,3 +499,18 @@ class TestInjectDarkAsHypotheses:
         surface_path = tmp_path / "attack-surface.json"
         surface_path.write_text(json.dumps({"hypotheses": []}))
         assert inject_dark_as_hypotheses([], surface_path) == 0
+
+
+class TestLoadSummariesKeyVocabulary:
+    def test_list_format_keys_join_function_key(self, tmp_path):
+        """The loader's keys must come from the shared function_key
+        constructor — enrich_with_summaries joins on it, and a
+        hand-built spelling on one side is how joins go silently
+        inert when the grammar moves."""
+        from core.analysis.taint_approx import function_key
+        data = [{"file": "src/a.c", "function": "parse",
+                 "taint_rules": []}]
+        (tmp_path / "summaries.json").write_text(
+            json.dumps(data), encoding="utf-8")
+        result = load_summaries(tmp_path)
+        assert set(result) == {function_key("src/a.c", "parse")}

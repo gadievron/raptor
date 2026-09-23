@@ -405,8 +405,12 @@ def load_summaries(audit_dir: Path) -> dict[str, Any]:
 
     data = load_json(path, max_bytes=_MAX_AUDIT_ARTIFACT_BYTES)
     if isinstance(data, list):
+        # function_key like every other join site in this module — a
+        # hand-built f-string here is byte-identical today but is the
+        # one-sided-drift shape the constructor exists to kill
+        # (enrich_with_summaries joins on function_key).
         return {
-            f"{s.get('file', '')}:{s.get('function', '')}": s
+            function_key(s.get("file", ""), s.get("function", "")): s
             for s in data if isinstance(s, dict)
         }
     if isinstance(data, dict):
