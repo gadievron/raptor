@@ -159,35 +159,59 @@ class _KeywordChain:
         # and reads as the quadratic chain this matcher replaces.
         self.pattern = ".*".join(stages)
         # per_line mirrors a chain whose regex spelling had no DOTALL:
-        # its gaps could not cross newlines, so the chain must
-        # complete within one line.
+        # only the GAPS between stages could not cross a newline — a
+        # stage's own `\s+` atoms could and did span one, so the walk
+        # runs over the WHOLE content and bounds the gaps, never the
+        # stage matches (splitting the content on newlines instead
+        # silently dropped every stage that wrapped one — an
+        # under-warn on a defence surface).
         self.per_line = per_line
 
     def finditer(self, content: str) -> Iterator[_ChainMatch]:
-        if self.per_line:
-            # Split on \n only: an un-DOTALLed `.` excludes exactly
-            # \n, so every other separator stays inside the segment.
-            offset = 0
-            for line in content.split("\n"):
-                yield from self._walk(line, offset)
-                offset += len(line) + 1
-            return
         yield from self._walk(content, 0)
 
     def _walk(self, content: str, offset: int) -> Iterator[_ChainMatch]:
+        # Per-stage last-match memo: search positions only ever
+        # advance, so a cached match starting at-or-after the current
+        # position is still the earliest one — without the memo, a
+        # hostile run of heads whose chains all fail the gap check
+        # would re-scan the tail once per head (the quadratic this
+        # walk exists to remove).
+        memo: list[re.Match[str] | None] = [None] * len(self.stages)
+        next_newline = -1  # same monotonic memo for the gap check
         pos = 0
         while True:
             first = self.stages[0].search(content, pos)
             if first is None:
                 return
             end = first.end()
-            for stage in self.stages[1:]:
-                nxt = stage.search(content, end)
+            completed = True
+            for index, stage in enumerate(self.stages[1:], start=1):
+                nxt = memo[index]
+                if nxt is None or nxt.start() < end:
+                    nxt = stage.search(content, end)
+                    memo[index] = nxt
                 if nxt is None:
+                    # Stage absent from the rest of the content: no
+                    # later head can complete either.
                     return
+                if self.per_line and next_newline < end:
+                    next_newline = content.find("\n", end)
+                    if next_newline == -1:
+                        next_newline = len(content)
+                if self.per_line and next_newline < nxt.start():
+                    # Newline-free gaps only: any later occurrence of
+                    # this stage sits past the same newline, so THIS
+                    # head can never complete — but a head beyond the
+                    # newline still can; retry from the next head.
+                    completed = False
+                    break
                 end = nxt.end()
-            yield _ChainMatch(offset + first.start(), offset + end)
-            pos = end
+            if completed:
+                yield _ChainMatch(offset + first.start(), offset + end)
+                pos = end
+            else:
+                pos = first.start() + 1
 
 
 _INJECTION_PATTERNS: list[re.Pattern[str] | _KeywordChain] = [
