@@ -89,16 +89,20 @@ def _extract_target(args: list) -> str | None:
     the target path for project resolution.
     """
     for flag in ("--repo", "--binary", "--url"):
-        # `--flag value` form.
-        if flag in args:
-            idx = args.index(flag)
-            if idx + 1 < len(args):
-                return args[idx + 1]
-        # `--flag=value` form.
+        # Both spellings scanned in ONE positional pass, keeping the
+        # LAST occurrence — argparse resolves a repeated flag to its
+        # last value, and lifecycle records/gates must key to the
+        # same tree the run actually analyses (first-occurrence keyed
+        # them to the overridden value on `--repo a --repo b`).
         prefix = f"{flag}="
-        for arg in args:
-            if arg.startswith(prefix):
-                return arg[len(prefix):]
+        value = None
+        for idx, arg in enumerate(args):
+            if arg == flag and idx + 1 < len(args):
+                value = args[idx + 1]
+            elif arg.startswith(prefix):
+                value = arg[len(prefix):]
+        if value is not None:
+            return value
     return None
 
 

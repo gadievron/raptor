@@ -87,3 +87,32 @@ class TestResolveTargetForCommand:
         )
         assert err is None
         assert target == "/bin/app"
+
+
+class TestExtractTargetLastOccurrence:
+    """_extract_target keys lifecycle records to the tree the run
+    actually analyses: argparse resolves a repeated flag to its LAST
+    value, so first-occurrence extraction keyed records/gates to the
+    overridden path."""
+
+    def test_repeated_repo_takes_last(self):
+        raptor = _import_raptor()
+        assert raptor._extract_target(
+            ["--repo", "a", "--repo", "b"]) == "b"
+
+    def test_mixed_spellings_take_last(self):
+        raptor = _import_raptor()
+        assert raptor._extract_target(
+            ["--repo=a", "--verbose", "--repo", "b"]) == "b"
+        assert raptor._extract_target(
+            ["--repo", "a", "--repo=b"]) == "b"
+
+    def test_single_occurrence_both_forms(self):
+        raptor = _import_raptor()
+        assert raptor._extract_target(["--repo", "a"]) == "a"
+        assert raptor._extract_target(["--url=https://x"]) == "https://x"
+
+    def test_repo_priority_over_binary(self):
+        raptor = _import_raptor()
+        assert raptor._extract_target(
+            ["--binary", "/bin/x", "--repo", "/src"]) == "/src"
