@@ -1234,3 +1234,23 @@ class TestNamedVolumeDiscriminator:
     def test_named_volume_still_named(self, tmp_path: Path) -> None:
         kept = cco._filter_volumes(["pgdata:/var/lib/postgresql"], tmp_path)
         assert kept == ["pgdata:/var/lib/postgresql"]
+
+
+class TestStagingEntryBudget:
+    """Bytes alone miss the inode axis: millions of zero-byte files
+    pass any byte cap while copytree exhausts tmpfs inodes."""
+
+    def test_entry_flood_refused(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(cco, "_STAGING_MAX_ENTRIES", 10)
+        src = tmp_path / "ctx"
+        src.mkdir()
+        for i in range(12):
+            (src / f"z{i}").touch()  # zero bytes each
+        with pytest.raises(cco.ComposeError, match="entry staging budget"):
+            cco._require_stageable_size(src)
+
+    def test_small_tree_passes(self, tmp_path: Path) -> None:
+        src = tmp_path / "ctx"
+        (src / "sub").mkdir(parents=True)
+        (src / "sub" / "f").write_text("x")
+        cco._require_stageable_size(src)  # no raise

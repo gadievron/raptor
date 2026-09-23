@@ -248,17 +248,35 @@ def rewrite_for_localhost(
 #: copytree. The gate runs BEFORE any byte is copied.
 _STAGING_MAX_BYTES = 2 << 30
 
+#: Entry-count twin of the byte budget (files + dirs). Mirrors the
+#: export path's DEFAULT_MAX_ROOTFS_ENTRIES: a compose build context
+#: is the same order of artifact, and 400k entries is far above any
+#: legitimate context while well under tmpfs inode defaults.
+_STAGING_MAX_ENTRIES = 400_000
+
 
 def _require_stageable_size(source_dir: Path) -> None:
     """Refuse staging when ``source_dir`` exceeds the copy budget.
 
-    Sums ``lstat`` sizes (symlinks never followed — the copy itself is
-    ``symlinks=True``) and stops walking as soon as the budget is
-    exceeded, so a huge hostile tree costs a bounded scan, not a full
-    disk accounting.
+    Two budgets, because bytes alone miss the inode axis: a hostile
+    tree of millions of zero-byte files passes any byte cap while
+    ``copytree`` exhausts the staging tmpfs's inodes (the export path
+    already carries an entry bound for the same reason). Sums
+    ``lstat`` sizes (symlinks never followed — the copy itself is
+    ``symlinks=True``) and counts entries (files + dirs) in the same
+    walk, stopping as soon as either budget is exceeded, so a huge
+    hostile tree costs a bounded scan, not a full disk accounting.
     """
     total = 0
-    for dirpath, _dirnames, filenames in os.walk(source_dir, followlinks=False):
+    entries = 0
+    for dirpath, dirnames, filenames in os.walk(source_dir, followlinks=False):
+        entries += len(dirnames) + len(filenames)
+        if entries > _STAGING_MAX_ENTRIES:
+            raise ComposeError(
+                f"compose source dir {source_dir} exceeds the "
+                f"{_STAGING_MAX_ENTRIES}-entry staging budget — refusing "
+                "to copy it to the staging tmpdir (inode exhaustion)"
+            )
         for name in filenames:
             try:
                 total += os.lstat(os.path.join(dirpath, name)).st_size
