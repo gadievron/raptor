@@ -213,7 +213,7 @@ rules:
       root); negative parses wrap to huge unsigned values. Range-check the
       parsed value against the destination type's bounds first.
     languages: [go]
-    severity: WARNING
+    severity: MEDIUM
     patterns:
       - pattern-either:
           - pattern: uint32($V)

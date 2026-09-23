@@ -121,7 +121,7 @@ rules:
       and path-based authorization can be bypassed. Validate the value for
       delimiter characters (or percent-encode it) before composing.
     languages: [python]
-    severity: WARNING
+    severity: MEDIUM
     patterns:
       - pattern-regex: 'f["''][^"'']*://\{[^}]*header[^}]*\}'
     metadata:

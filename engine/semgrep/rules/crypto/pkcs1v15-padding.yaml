@@ -65,7 +65,7 @@ rules:
       PKCS#1 v1.5 signature generation is a legacy scheme. Prefer rsa.SignPSS
       for new signatures; keep v1.5 only where interoperability requires it.
     languages: [go]
-    severity: LOW
+    severity: MEDIUM
     pattern: rsa.SignPKCS1v15(...)
     metadata:
       cwe: ["CWE-327"]

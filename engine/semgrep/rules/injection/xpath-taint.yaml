@@ -8,7 +8,7 @@ rules:
       XPath (XPathVariableResolver) or escape the value before
       concatenating it into the expression.
     languages: [java]
-    severity: ERROR
+    severity: CRITICAL
     mode: taint
     pattern-sources:
       - pattern-either:
