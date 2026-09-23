@@ -12,11 +12,17 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
 from core.json import append_jsonl, load_jsonl
+
+# Read budgets for the decisions trail. Rows are a few hundred bytes;
+# even chatty runs stay well under a MiB. The trail lives in the run
+# output directory, so its size is as untrusted as its content.
+_MAX_TRAIL_BYTES = 16 * 1024 * 1024
+_MAX_LINE_BYTES = 64 * 1024
 
 
 @dataclass
@@ -108,9 +114,30 @@ class DecisionLog:
         trail reads as empty and malformed lines are skipped. Non-dict
         lines (a foreign writer's arrays/scalars) are skipped too —
         they can't build a :class:`DecisionRecord`.
+
+        Tolerant per row, mechanically: unknown keys are filtered
+        through ``dataclasses.fields`` (a NEWER writer's additive
+        field — the forward-compat case the journal reader tolerates
+        — or a planted row raised ``TypeError`` out of the WHOLE
+        read), and any remaining constructor failure skips just its
+        row. Trail and line byte budgets bound the read (the trail is
+        run-dir-writable).
         """
-        return [
-            DecisionRecord(**d)
-            for d in load_jsonl(self._path)
-            if isinstance(d, dict)
-        ]
+        known = {f.name for f in fields(DecisionRecord)}
+        records: list[DecisionRecord] = []
+        for d in load_jsonl(
+            self._path,
+            max_total_bytes=_MAX_TRAIL_BYTES,
+            max_line_bytes=_MAX_LINE_BYTES,
+        ):
+            if not isinstance(d, dict):
+                continue
+            try:
+                records.append(DecisionRecord(
+                    **{k: v for k, v in d.items() if k in known}))
+            except (TypeError, ValueError):
+                # Missing required fields / wrong shapes: skip the
+                # row, keep the rest — the documented best-effort
+                # policy.
+                continue
+        return records

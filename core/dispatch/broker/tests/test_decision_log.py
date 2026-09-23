@@ -164,3 +164,42 @@ class TestDecisionLog:
         ))
         s = log.stats()
         assert s["total_cost_usd"] == 0.0
+
+
+class TestReadAllTolerance:
+    """read_all's docstring promises malformed lines are skipped —
+    pre-fix one unknown-key row (a newer writer's additive field, or
+    a planted line) raised TypeError out of the WHOLE read, and the
+    trail was read with no byte budget."""
+
+    def test_unknown_key_row_skipped_not_fatal(self, tmp_path):
+        path = tmp_path / "decisions.jsonl"
+        log = DecisionLog(path)
+        log.record(DecisionRecord(selected_model="m1", reason="a"))
+        with path.open("a") as fh:
+            fh.write(json.dumps({
+                "selected_model": "m2", "reason": "b",
+                "EXTRA_FUTURE_FIELD": 1,
+            }) + "\n")
+        log.record(DecisionRecord(selected_model="m3", reason="c"))
+        got = [r.selected_model for r in log.read_all()]
+        # The additive-field row still loads (unknown key filtered),
+        # neighbours untouched.
+        assert got == ["m1", "m2", "m3"]
+
+    def test_row_missing_required_fields_skipped(self, tmp_path):
+        path = tmp_path / "decisions.jsonl"
+        log = DecisionLog(path)
+        log.record(DecisionRecord(selected_model="m1", reason="a"))
+        with path.open("a") as fh:
+            fh.write(json.dumps({"reason": "no model"}) + "\n")
+        assert [r.selected_model for r in log.read_all()] == ["m1"]
+
+    def test_oversize_trail_reads_as_empty(self, tmp_path):
+        from core.dispatch.broker.decision_log import _MAX_TRAIL_BYTES
+        path = tmp_path / "decisions.jsonl"
+        row = json.dumps({"selected_model": "m", "reason": "r"}) + "\n"
+        with path.open("w") as fh:
+            for _ in range(_MAX_TRAIL_BYTES // len(row) + 2):
+                fh.write(row)
+        assert DecisionLog(path).read_all() == []
