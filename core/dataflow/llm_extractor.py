@@ -33,6 +33,7 @@ from core.dataflow.sanitizer_evidence import (
     CandidateValidator,
 )
 from core.inventory.languages import detect_language
+from core.paths import confine
 from core.security.prompt_defense_profiles import CONSERVATIVE, get_profile_for
 from core.security.prompt_envelope import (
     PromptBundle,
@@ -361,8 +362,10 @@ def extract_from_files(
     all_errors: list[str] = []
 
     for rel in file_paths:
-        full = (repo_root / rel).resolve()
-        if not full.is_relative_to(repo_root.resolve()):
+        # Shared containment chokepoint (future hardening reaches
+        # this site too); paths originate in finding/config records.
+        full = confine(repo_root, rel)
+        if full is None:
             all_errors.append(f"{rel}: path escapes repo root")
             continue
         try:
