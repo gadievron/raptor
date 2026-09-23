@@ -1644,6 +1644,23 @@ def test_try_tier0_z3_unavailable_degrades(monkeypatch, tmp_path: Path):
     ("cmdi_argv", "A-Za-z0-9_ ",    False),  # space alone breaks it
     ("cmdi_argv", 'A-Za-z0-9_"',    False),  # quote alone breaks it
     ("cmdi_argv", "A-Za-z0-9_.",    True),   # clean of both contexts
+    # sqli quoted-identifier context: `pin` / [pin] tautologies use no
+    # quote/space/comparison char at all.
+    ("sqli", "a-z0-9`",   False),
+    ("sqli", "a-z0-9\\[\\]", False),
+    # sqli backslash-escaping dialects: a value ending in '\' escapes
+    # the closing quote; '#' comments out the statement tail.
+    ("sqli", "a-z0-9\\\\", False),
+    ("sqli", "a-z0-9#",   False),
+    ("sqli", "a-z0-9_",   True),    # identifier-ish, all contexts clean
+    # xss URL-valued attribute context: javascript:alert(1) uses none
+    # of the tag/attribute breakers.
+    ("xss", "a-z0-9:()",  False),
+    ("xss", "a-z0-9_.",   True),
+    # cmdi cmd.exe expansion context: %VAR% / !VAR! splice variable
+    # content into the command string with no POSIX metachar.
+    ("cmdi", "A-Za-z0-9_%", False),
+    ("cmdi", "A-Za-z0-9_!", False),
 ])
 def test_prove_table_per_sink_class(sink_class, charset, expect_sound):
     spec = sb.ValidatorSpec("charset", "x", charset, "+...", 0)

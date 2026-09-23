@@ -87,56 +87,103 @@ from core.source import read_text_capped
 # (missing danger chars) is unsound; too wide just defers more cases to
 # Tier 2.
 # --------------------------------------------------------------------------
+# Per-class derivation rule: a danger set must name every character
+# that is load-bearing in ANY interpolation context the sink class can
+# put the value in — the charset model cannot see which context a
+# given finding actually uses, so the union of the class's contexts is
+# the sound set.  Each entry's comment enumerates the contexts it
+# covers; a new attack context for a class means new chars here, never
+# a caveat elsewhere.
 _DANGER_CHARS = {
+    # Contexts: POSIX path segments, downstream joins.
     # Path separators are the load-bearing chars for traversal, and '.'
     # builds '..' segments.  Whether a bare '..' (no separator) is
     # dangerous depends on how the value is joined downstream —
     # ``join(base, name, "x")`` escapes via name=".." — which the
     # charset model cannot see, so '.' must be excluded for the
-    # verdict to be sound.
+    # verdict to be sound.  Residual, named: the WINDOWS-only ':'
+    # contexts (drive-relative ``C:evil``, NTFS alternate data
+    # streams) are not covered — adding ':' would decline the
+    # canonical separator-stripping fix shape (``re.sub(r'[/\\.]+'``)
+    # that this tier exists to certify, and no routing funnels
+    # Windows-path findings into this class the way CWE-88 funnelled
+    # argv findings into cmdi.  Revisit if a Windows-target corpus
+    # lands.
     "pathtrav": ["/", "\\", "."],
+    # Contexts: POSIX shell strings, cmd.exe strings.
     # Shell metachars that introduce command separation, substitution,
     # backgrounding, or redirection.  Newlines included because they
     # terminate a command in most shell contexts; '<' / '>' because
-    # redirects need no separator (``foo>x`` clobbers x).  This class
-    # covers the SHELL-string context only; findings whose sink is an
-    # argv element (CWE-88, the command-LINE-injection rule families)
-    # are routed to ``cmdi_argv`` below — shell metachars cover none
-    # of that channel.
-    "cmdi":     [";", "|", "&", "$", "`", "\n", "<", ">"],
+    # redirects need no separator (``foo>x`` clobbers x); '%' and '!'
+    # because cmd.exe expands ``%VAR%`` (and ``!VAR!`` under delayed
+    # expansion) inside plain strings — the expansion splices variable
+    # content, metachars included, with none of the POSIX chars
+    # present in the value itself.  This class covers the
+    # command-STRING contexts only; findings whose sink is an argv
+    # element (CWE-88, the command-LINE-injection rule families) are
+    # routed to ``cmdi_argv`` below — string metachars cover none of
+    # that channel.
+    "cmdi":     [";", "|", "&", "$", "`", "\n", "<", ">", "%", "!"],
+    # Contexts: argv elements (option parsing, tokenizer splits,
+    # re-join quoting) UNION the command-string contexts.
     # Argument-position command sinks (Runtime.exec / ProcessBuilder /
     # execFile argv elements — CWE-88 and the ``*-command-line-
-    # injection`` rule families).  Derived per context, superset of
-    # ``cmdi``:
+    # injection`` rule families).  Extends ``cmdi`` (composed below —
+    # the superset invariant is structural, not a parallel list to
+    # hand-sync):
     #   * '-' — option injection (``-rf``, ``--upload-file x``).  The
     #     charset model cannot see string position, so ANY dash must
     #     count, not just a leading one.
-    #   * whitespace (space/tab/CR/LF) — tokenizing sinks split one
-    #     value into several argv elements (``Runtime.exec(String)``
-    #     tokenizes on whitespace; wrapper relaunches re-split).
+    #   * whitespace (space/tab/CR — LF rides in from cmdi) —
+    #     tokenizing sinks split one value into several argv elements
+    #     (``Runtime.exec(String)`` tokenizes on whitespace; wrapper
+    #     relaunches re-split).
     #   * quote chars — platforms that re-JOIN argv into a command
     #     line and re-parse it (Windows CreateProcess) let a quote
     #     break out of the element.
-    #   * the full ``cmdi`` shell set rides along because the model
-    #     cannot see whether the argv element later reaches a shell
+    #   * the ``cmdi`` string set rides along because the model cannot
+    #     see whether the argv element later reaches a shell
     #     (``ProcessBuilder("sh", "-c", x)``, cmd.exe wrappers) —
-    #     excluding them only when provably shell-free would need
+    #     excluding it only when provably shell-free would need
     #     command-target knowledge a charset has no access to.
-    "cmdi_argv": [";", "|", "&", "$", "`", "\n", "<", ">",
-                  " ", "\t", "\r", "-", "'", '"'],
+    "cmdi_argv": [" ", "\t", "\r", "-", "'", '"'],
+    # Contexts: quoted string literals, UNQUOTED (numeric) positions,
+    # quoted identifiers, backslash-escaping dialects, comment
+    # truncation.
     # SQL quote / comment / statement-terminator chars PLUS the chars
     # that suffice in an UNQUOTED (numeric) context, where no quote is
     # needed to change the query: whitespace and grouping/comparison
     # chars (``1 OR 1``, ``1)--``).  The charset model cannot see the
-    # interpolation context, so both contexts must be covered for the
-    # verdict to be sound.  Digits-only charsets remain provably safe.
+    # interpolation context, so every context must be covered for the
+    # verdict to be sound.  Identifier-quote chars ('`' MySQL, '['/']'
+    # T-SQL) cover the quoted-IDENTIFIER context: ``ORDER BY `pin```
+    # is a no-quote-chars tautology injection when the value lands in
+    # an identifier position.  '\\' covers backslash-escaping dialects
+    # (MySQL et al.): a value ENDING in '\\' escapes the closing quote
+    # and splices the next literal into the statement.  '#' is the
+    # MySQL comment lead — ``1#`` truncates the statement tail from an
+    # unquoted position with no other danger char.  Digits-only
+    # charsets remain provably safe.
     "sqli":     ["'", '"', ";", "-", " ", "\t", "\n", "\r",
-                 "=", "(", ")"],
+                 "=", "(", ")", "`", "[", "]", "\\", "#"],
+    # Contexts: element text, quoted attributes, unquoted attributes,
+    # URL-valued attributes.
     # XSS tag- and attribute-breakers PLUS unquoted-attribute-context
     # injectors: whitespace and '=' add new attributes without any of
     # <>"' (``x onmouseover=...``), '`' breaks IE-legacy attributes.
-    "xss":      ["<", ">", '"', "'", " ", "\t", "\n", "=", "`"],
+    # ':' / '(' / ')' cover the URL-valued attribute context (href,
+    # src, formaction): ``javascript:alert(1)`` executes from a
+    # QUOTED attribute using none of the tag/attribute breakers.
+    "xss":      ["<", ">", '"', "'", " ", "\t", "\n", "=", "`",
+                 ":", "(", ")"],
 }
+# Structural superset: the argv context can never rule out a
+# downstream command-string join, so cmdi_argv = cmdi ∪ argv-specific.
+_DANGER_CHARS["cmdi_argv"] = (
+    _DANGER_CHARS["cmdi"]
+    + [c for c in _DANGER_CHARS["cmdi_argv"]
+       if c not in _DANGER_CHARS["cmdi"]]
+)
 
 
 def danger_chars_for(sink_class: str):
