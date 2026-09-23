@@ -21,10 +21,10 @@ The posterior mean — `α / (α + β)` — is the point estimate, and the
 total `α + β` is "evidence strength" (higher = more concentrated
 distribution). No MCMC, no integrals; the conjugate update is exact.
 
-This module is standalone. No callers in `runner.py` yet — wiring is
-deliberately deferred until the math is exercised against real
-evidence. Use it directly from a `ValidationResult.evidence` list
-when you need a probability instead of a discrete verdict.
+Not wired into `runner.py`; the audit orchestrator adopted
+`verdict_from_posterior` for its chain-outcome scoring. Use it
+directly from a `ValidationResult.evidence` list when you need a
+probability instead of a discrete verdict.
 """
 
 import math
