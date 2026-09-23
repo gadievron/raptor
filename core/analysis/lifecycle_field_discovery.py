@@ -50,8 +50,13 @@ _C_FIELD_RE = re.compile(
     r"(\w[\w\s*]{0,256}?)\s{1,256}(?:\*\s*)?(\w+)\s*(?:\[.*?\]\s*)?;",
 )
 
+# \b pins the name group to the full word (identical capture — the
+# lazy tail accepted any split) and the trailing gap is horizontal:
+# the naive ``(\w+).*?:\s*$`` overlapped the name and the lazy tail
+# on word chars and let the tail's whitespace span cross newlines —
+# quadratic on class-shaped lines with no colon.
 _PY_CLASS_RE = re.compile(
-    r"^class\s+(\w+).*?:\s*$",
+    r"^class\s+(\w+)\b.*?:[^\S\n]*$",
     re.MULTILINE,
 )
 # Horizontal-only indent — the MULTILINE ^\s+ idiom is quadratic
@@ -64,9 +69,13 @@ _PY_ATTR_ASSIGN_RE = re.compile(
 _JAVA_CLASS_RE = re.compile(
     r"(?:class|interface)\s+(\w+)",
 )
+# Bounded type window and separator (same discipline as _C_FIELD_RE
+# above): the unbounded lazy window chained overlapping
+# whitespace-capable spans — quadratic on modifier-led token runs
+# with no terminator.
 _JAVA_FIELD_RE = re.compile(
     r"(?:private|public|protected)\s+(?:static\s+)?(?:final\s+)?"
-    r"(\w[\w<>,\s]*?)\s+(\w+)\s*[;=]",
+    r"(\w[\w<>,\s]{0,256}?)\s{1,256}(\w+)\s*[;=]",
 )
 
 

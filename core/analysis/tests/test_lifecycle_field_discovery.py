@@ -440,3 +440,36 @@ class TestCFieldWhitespaceRun:
             m = _C_FIELD_RE.search(decl)
             assert m is not None, decl
             assert m.group(2) == name, (decl, m.groups())
+
+
+class TestQuadraticRunFixtures:
+    def test_class_line_and_java_field_runs_are_fast(self):
+        """Hostile shapes for the remaining discovery patterns: a
+        'class'-opening line with a long word run and no colon, and a
+        modifier-led token run with no terminator. Both quadratic
+        with the previous spellings; linear now."""
+        from core.analysis.lifecycle_field_discovery import (
+            _JAVA_FIELD_RE,
+            _PY_CLASS_RE,
+        )
+        from core.testing.wallclock import cpu_budget
+
+        with cpu_budget(1.0, what="class-line word run"):
+            assert _PY_CLASS_RE.search(
+                "class A" + "a" * 200000,
+            ) is None
+        with cpu_budget(1.0, what="java-field token run"):
+            assert _JAVA_FIELD_RE.search(
+                "private x" + " " * (1 << 16) + "!",
+            ) is None
+
+    def test_discovery_forms_still_match(self):
+        from core.analysis.lifecycle_field_discovery import (
+            _JAVA_FIELD_RE,
+            _PY_CLASS_RE,
+        )
+
+        m = _PY_CLASS_RE.search("class Conn(Base):  \nx = 1\n")
+        assert m is not None and m.group(1) == "Conn"
+        m = _JAVA_FIELD_RE.search("private static final Map<K, V> cache;")
+        assert m is not None and m.group(2) == "cache"
