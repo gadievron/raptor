@@ -21,6 +21,7 @@ exhausted, the helper is a no-op.
 
 import functools
 import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -2695,8 +2696,10 @@ def _db_is_stale(db_path: Path, repo_path: Path) -> bool:
     """True when the DB is older than recent source changes.
 
     Compares the DB's mtime to the most recent mtime of any tracked
-    source file under repo_path. Recursive walk is bounded — we sample
-    enough files to make a confident call without scanning huge trees.
+    source file under repo_path. The walk is bounded in VISITED
+    entries, not just sampled files: skip dirs are pruned in place so
+    they are never descended into, and the walk stops at the sample
+    cap.
 
     Conservative: returns False when we can't get reliable timestamps,
     because false-positive staleness warnings cause operator fatigue.
@@ -2714,25 +2717,32 @@ def _db_is_stale(db_path: Path, repo_path: Path) -> bool:
     # touched by any git operation (fetch, gc, status refreshing the
     # index) after the DB build, so an unfiltered first-200 sample
     # minted false staleness warnings while deep-tree source edits
-    # were never sampled at all.
+    # were never sampled at all. Pruning (dirnames[:]) rather than
+    # filtering matters for cost too: rglob('*') still VISITED every
+    # entry under a skip dir before discarding it, so a packfile-heavy
+    # .git or million-entry node_modules paid a full lstat walk for a
+    # warn-only freshness check.
     skip_dirs = {".git", ".hg", ".svn", "node_modules", "__pycache__",
                  "build", "dist", ".venv", "venv"}
     newest_source = 0.0
     sampled = 0
     sample_cap = 200
-    for child in repo_path.rglob("*"):
-        if sampled >= sample_cap:
-            break
-        rel_parts = child.relative_to(repo_path).parts
-        if any(part in skip_dirs for part in rel_parts[:-1]):
-            continue
-        if child.is_file():
+    for dirpath, dirnames, filenames in os.walk(repo_path):
+        dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+        for name in filenames:
+            child = Path(dirpath) / name
             try:
+                if not child.is_file():
+                    continue
                 st = child.stat().st_mtime
             except OSError:
                 continue
             newest_source = max(newest_source, st)
             sampled += 1
+            if sampled >= sample_cap:
+                break
+        if sampled >= sample_cap:
+            break
 
     return newest_source > db_mtime + _DB_STALE_GRACE_SECONDS
 
