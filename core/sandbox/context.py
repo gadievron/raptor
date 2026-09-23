@@ -8064,6 +8064,128 @@ def _reopen_write_only(fd: int, flags: int) -> "int | None":
     return None
 
 
+def _untrusted_stdio_write_only(kwargs: dict, caller: str) -> "list[int]":
+    """fd 1/2 pass-through guard shared by EVERY ``run_untrusted*``
+    entry point — mutates *kwargs* in place, returns the reopened fds
+    the caller must close once the dispatched run returns.
+
+    The stdin/setsid defences plug fd 0 and /dev/tty, but when the
+    caller doesn't capture, the child inherits the operator's fd 1/2
+    with whatever access mode the PARENT opened them — and read rights
+    ride the descriptor past every path-based layer. Two readable
+    shapes exist:
+
+    * a PTY slave is opened O_RDWR, which setsid() does NOT revoke —
+      a target that read()s its OWN stdout/stderr taps the operator's
+      keystrokes;
+    * a non-tty O_RDWR descriptor (regular file opened rw, a socket,
+      an rw FIFO) hands the child read access to content the sandbox
+      policy never granted.
+
+    Hand the child a WRITE-ONLY reopen instead (output identical;
+    reads fail EBADF). ttys reopen via ttyname; other reopenable
+    objects (regular files, FIFOs) via the fd's /proc//dev magic link
+    with the original O_APPEND preserved. Sockets have no write-only
+    reopen — plug with DEVNULL and tell the operator to capture
+    instead (discarding output is strictly safer than granting a read
+    channel to the operator's socket peer). Write-only pass-throughs
+    (the normal shell-redirect shape) are untouched.
+
+    One shared function, not per-entry copies: the guard first landed
+    inline in ``run_untrusted`` only, and the networked sibling
+    shipped without it — an untrusted networked child could read the
+    operator's keystrokes off its own stdout while every other
+    defence held. Any future untrusted entry point calls this helper
+    (the entry-point sweep test enforces it mechanically).
+    """
+    wo_fds: list[int] = []
+    if kwargs.get("capture_output"):
+        return wo_fds
+    import fcntl as _fcntl
+    import stat as _stat
+    for _name, _fd in (("stdout", 1), ("stderr", 2)):
+        if _name in kwargs:
+            continue
+        try:
+            _is_tty = os.isatty(_fd)
+            if not _is_tty:
+                _mode = os.fstat(_fd).st_mode
+                try:
+                    _acc = _fcntl.fcntl(
+                        _fd, _fcntl.F_GETFL) & os.O_ACCMODE
+                except OSError:
+                    _acc = os.O_RDWR  # unknown → treat as readable
+                if _acc == os.O_WRONLY:
+                    continue  # not readable — safe to inherit
+                if _stat.S_ISSOCK(_mode):
+                    logger.warning(
+                        "%s: %s is a readable socket "
+                        "descriptor — plugging with /dev/null "
+                        "(no write-only reopen exists for "
+                        "sockets). Pass capture_output=True or "
+                        "an explicit %s= pipe to keep the "
+                        "output.", caller, _name, _name,
+                    )
+                    kwargs[_name] = subprocess.DEVNULL
+                    continue
+                _flags = os.O_WRONLY | os.O_NOCTTY
+                try:
+                    if _fcntl.fcntl(_fd, _fcntl.F_GETFL) \
+                            & os.O_APPEND:
+                        _flags |= os.O_APPEND
+                except OSError:
+                    pass
+                _wfd_opt = _reopen_write_only(_fd, _flags)
+                if _wfd_opt is None:
+                    logger.warning(
+                        "%s: %s has no verified "
+                        "write-only reopen on this platform — "
+                        "plugging with /dev/null. Pass "
+                        "capture_output=True or an explicit "
+                        "%s= pipe to keep the output.",
+                        caller, _name, _name,
+                    )
+                    kwargs[_name] = subprocess.DEVNULL
+                    continue
+                _wfd = _wfd_opt
+                if _stat.S_ISREG(_mode) and not (
+                        _flags & os.O_APPEND):
+                    # A fresh open starts at offset 0; carry the
+                    # inherited stream position so the child
+                    # appends after prior parent output instead
+                    # of clobbering it.
+                    try:
+                        os.lseek(_wfd,
+                                 os.lseek(_fd, 0, os.SEEK_CUR),
+                                 os.SEEK_SET)
+                    except OSError:
+                        pass
+            else:
+                _wfd = os.open(os.ttyname(_fd),
+                               os.O_WRONLY | os.O_NOCTTY)
+        except OSError as _tty_exc:
+            # Fail CLOSED like the socket / no-reopen branches
+            # above: inheriting the descriptor here would hand the
+            # untrusted child the readable handle (an O_RDWR pty
+            # slave taps the operator's keystrokes) that this whole
+            # guard exists to revoke. Discarding output is strictly
+            # safer than granting the read channel.
+            logger.warning(
+                "%s: could not reopen the %s "
+                "descriptor write-only for the child (%s) — "
+                "plugging with /dev/null (the inherited "
+                "descriptor may be readable). Pass "
+                "capture_output=True or an explicit %s= pipe to "
+                "keep the output.",
+                caller, _name, _tty_exc, _name,
+            )
+            kwargs[_name] = subprocess.DEVNULL
+            continue
+        kwargs[_name] = _wfd
+        wo_fds.append(_wfd)
+    return wo_fds
+
+
 def _fresh_procfs_override_hint(
         literal_contract: "bool | None" = None) -> str:
     """The override sentence for a fresh-procfs refusal, told honestly.
@@ -8536,110 +8658,12 @@ def run_untrusted(cmd: list[str], *, target: str | None = None, output: str | No
     # explicitly.
     if sys.platform == "darwin" and "exclude_tmp_baseline" not in kwargs:
         kwargs["exclude_tmp_baseline"] = True
-    # fd 1/2 pass-through: the stdin/setsid defences above plug fd 0
-    # and /dev/tty, but when the caller doesn't capture, the child
-    # inherits the operator's fd 1/2 with whatever access mode the
-    # PARENT opened them — and read rights ride the descriptor past
-    # every path-based layer. Two readable shapes exist:
-    #   * a PTY slave is opened O_RDWR, which setsid() does NOT
-    #     revoke — a target that read()s its OWN stdout/stderr taps
-    #     the operator's keystrokes;
-    #   * a non-tty O_RDWR descriptor (regular file opened rw, a
-    #     socket, an rw FIFO) hands the child read access to content
-    #     the sandbox policy never granted.
-    # Hand the child a WRITE-ONLY reopen instead (output identical;
-    # reads fail EBADF). ttys reopen via ttyname; other reopenable
-    # objects (regular files, FIFOs) via the fd's /proc//dev magic
-    # link with the original O_APPEND preserved. Sockets have no
-    # write-only reopen — plug with DEVNULL and tell the operator to
-    # capture instead (discarding output is strictly safer than
-    # granting a read channel to the operator's socket peer).
-    # Write-only pass-throughs (the normal shell-redirect shape) are
-    # untouched.
-    _wo_fds: list = []
-    if not kwargs.get("capture_output"):
-        import fcntl as _fcntl
-        import stat as _stat
-        for _name, _fd in (("stdout", 1), ("stderr", 2)):
-            if _name in kwargs:
-                continue
-            try:
-                _is_tty = os.isatty(_fd)
-                if not _is_tty:
-                    _mode = os.fstat(_fd).st_mode
-                    try:
-                        _acc = _fcntl.fcntl(
-                            _fd, _fcntl.F_GETFL) & os.O_ACCMODE
-                    except OSError:
-                        _acc = os.O_RDWR  # unknown → treat as readable
-                    if _acc == os.O_WRONLY:
-                        continue  # not readable — safe to inherit
-                    if _stat.S_ISSOCK(_mode):
-                        logger.warning(
-                            "run_untrusted: %s is a readable socket "
-                            "descriptor — plugging with /dev/null "
-                            "(no write-only reopen exists for "
-                            "sockets). Pass capture_output=True or "
-                            "an explicit %s= pipe to keep the "
-                            "output.", _name, _name,
-                        )
-                        kwargs[_name] = subprocess.DEVNULL
-                        continue
-                    _flags = os.O_WRONLY | os.O_NOCTTY
-                    try:
-                        if _fcntl.fcntl(_fd, _fcntl.F_GETFL) \
-                                & os.O_APPEND:
-                            _flags |= os.O_APPEND
-                    except OSError:
-                        pass
-                    _wfd_opt = _reopen_write_only(_fd, _flags)
-                    if _wfd_opt is None:
-                        logger.warning(
-                            "run_untrusted: %s has no verified "
-                            "write-only reopen on this platform — "
-                            "plugging with /dev/null. Pass "
-                            "capture_output=True or an explicit "
-                            "%s= pipe to keep the output.",
-                            _name, _name,
-                        )
-                        kwargs[_name] = subprocess.DEVNULL
-                        continue
-                    _wfd = _wfd_opt
-                    if _stat.S_ISREG(_mode) and not (
-                            _flags & os.O_APPEND):
-                        # A fresh open starts at offset 0; carry the
-                        # inherited stream position so the child
-                        # appends after prior parent output instead
-                        # of clobbering it.
-                        try:
-                            os.lseek(_wfd,
-                                     os.lseek(_fd, 0, os.SEEK_CUR),
-                                     os.SEEK_SET)
-                        except OSError:
-                            pass
-                else:
-                    _wfd = os.open(os.ttyname(_fd),
-                                   os.O_WRONLY | os.O_NOCTTY)
-            except OSError as _tty_exc:
-                # Fail CLOSED like the socket / no-reopen branches
-                # above: inheriting the descriptor here would hand the
-                # untrusted child the readable handle (an O_RDWR pty
-                # slave taps the operator's keystrokes) that this whole
-                # block exists to revoke. Discarding output is strictly
-                # safer than granting the read channel.
-                logger.warning(
-                    "run_untrusted: could not reopen the %s "
-                    "descriptor write-only for the child (%s) — "
-                    "plugging with /dev/null (the inherited "
-                    "descriptor may be readable). Pass "
-                    "capture_output=True or an explicit %s= pipe to "
-                    "keep the output.",
-                    _name, _tty_exc, _name,
-                )
-                kwargs[_name] = subprocess.DEVNULL
-                continue
-            kwargs[_name] = _wfd
-            _wo_fds.append(_wfd)
+    # fd 1/2 pass-through guard — shared with every other
+    # run_untrusted* entry point (see _untrusted_stdio_write_only for
+    # the full rationale: an inherited O_RDWR pty slave or rw
+    # descriptor hands the untrusted child read rights no path-based
+    # layer can revoke).
+    _wo_fds = _untrusted_stdio_write_only(kwargs, "run_untrusted")
     # Waived-contract degradations warn per call at the dispatch site
     # that actually delivers the reduced lane (the consented-degrade
     # branch of run()'s containment-floor check).
@@ -8807,40 +8831,55 @@ def run_untrusted_networked(
             base_env = RaptorConfig.get_safe_env()
         kwargs["env"] = dict(base_env)
         kwargs["keep_trust_markers_for_dispatch"] = True
+    # fd 1/2 pass-through guard — the same write-only reopen
+    # run_untrusted mints (see _untrusted_stdio_write_only): without
+    # it an uncaptured networked child inherits the operator's O_RDWR
+    # pty slave on fd 1/2 and can read keystrokes off its own stdout.
+    # (_NETWORKED_ALLOWED_KWARGS refuses stdout=/stderr=, so the
+    # helper's caller-supplied-slot skip never fires here.)
+    _wo_fds = _untrusted_stdio_write_only(
+        kwargs, "run_untrusted_networked")
     # Waived-contract degradations warn per call at the dispatch site
     # that actually delivers the reduced lane (the consented-degrade
     # branch of run()'s containment-floor check).
-    return run(
-        cmd,
-        block_network=False,
-        target=target, output=output,
-        limits=limits,
-        restrict_reads=restrict_reads,
-        readable_paths=readable_paths,
-        writable_paths=writable_paths,
-        fake_home=fake_home,
-        use_egress_proxy=True,
-        require_proxy_netns=True,
-        proxy_hosts=list(proxy_hosts),
-        # The docstring contract is "the listed hosts on port 443".
-        # allowed_tcp_ports is consumed by the LOCAL pin (and replaced
-        # by the lane port on the TCP tier); the proxy-side lane port
-        # allowlist is what actually bounds the DESTINATION port of a
-        # CONNECT — without it any 1-65535 port on an allowlisted
-        # host was reachable.
-        allowed_tcp_ports=[443],
-        proxy_allowed_ports=[443],
-        omit_proc_reads=_degraded_no_pidns,
-        strict_env=True,
-        strip_trust_markers=not keep_trust_markers,
-        _untrusted_workload=True,
-        # Same untrusted contract as run_untrusted(): mandatory
-        # fresh-procfs mount unless the operator accepted the
-        # degraded posture. Applies to the keep-trust dispatch lane
-        # too — dispatch children are trusted, but the pid-ns/procfs
-        # posture is about what the SANDBOXED TREE can read, and the
-        # dispatch tree runs target-influenced tools.
-        require_fresh_procfs=untrusted_fresh_procfs_required(),
-        loopback_unix_bridges=loopback_unix_bridges,
-        **kwargs,
-    )
+    try:
+        return run(
+            cmd,
+            block_network=False,
+            target=target, output=output,
+            limits=limits,
+            restrict_reads=restrict_reads,
+            readable_paths=readable_paths,
+            writable_paths=writable_paths,
+            fake_home=fake_home,
+            use_egress_proxy=True,
+            require_proxy_netns=True,
+            proxy_hosts=list(proxy_hosts),
+            # The docstring contract is "the listed hosts on port 443".
+            # allowed_tcp_ports is consumed by the LOCAL pin (and replaced
+            # by the lane port on the TCP tier); the proxy-side lane port
+            # allowlist is what actually bounds the DESTINATION port of a
+            # CONNECT — without it any 1-65535 port on an allowlisted
+            # host was reachable.
+            allowed_tcp_ports=[443],
+            proxy_allowed_ports=[443],
+            omit_proc_reads=_degraded_no_pidns,
+            strict_env=True,
+            strip_trust_markers=not keep_trust_markers,
+            _untrusted_workload=True,
+            # Same untrusted contract as run_untrusted(): mandatory
+            # fresh-procfs mount unless the operator accepted the
+            # degraded posture. Applies to the keep-trust dispatch lane
+            # too — dispatch children are trusted, but the pid-ns/procfs
+            # posture is about what the SANDBOXED TREE can read, and the
+            # dispatch tree runs target-influenced tools.
+            require_fresh_procfs=untrusted_fresh_procfs_required(),
+            loopback_unix_bridges=loopback_unix_bridges,
+            **kwargs,
+        )
+    finally:
+        for _wfd in _wo_fds:
+            try:
+                os.close(_wfd)
+            except OSError:
+                pass
