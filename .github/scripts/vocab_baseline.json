@@ -936,10 +936,6 @@
     "count": 11,
     "kind": "alternation"
   },
-  "core/audit/transform_sequence.py::_FUNC_HEADER_RE": {
-    "count": 23,
-    "kind": "alternation"
-  },
   "core/audit/transform_sequence.py::_SECURITY_TRANSFORM_RE": {
     "count": 23,
     "kind": "alternation"
