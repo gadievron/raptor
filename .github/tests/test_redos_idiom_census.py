@@ -20,11 +20,12 @@ member set mechanically — every regex in runtime source, parsed
 structurally — and asserts the set is exactly the allowlist below, so
 the next member fails CI instead of waiting for the next audit.
 
-Scope: runtime source (``core/``, ``packages/``, ``engine/`` and the
-``libexec/`` launchers), plus the pattern DATA files the runtime
-loads and compiles with MULTILINE-class flags (derived from the
-loader, not a hardcoded file list).  Tests and dev scripts are out of
-scope — they never receive attacker-controlled file content.
+Scope: runtime source — the shared ``runtime_file_universe()``
+derivation (runtime roots incl. plugins/ hooks and the repo-root
+entry modules) — plus the pattern DATA files the runtime loads and
+compiles with MULTILINE-class flags (derived from the loader, not a
+hardcoded file list).  Tests and dev scripts are out of scope — they
+never receive attacker-controlled file content.
 
 Detection is structural, not textual: patterns are resolved from the
 AST (constants, module-level constant names, f-string/concat parts)
@@ -43,6 +44,7 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 import unicodedata
 import unittest
 from pathlib import Path
@@ -52,12 +54,11 @@ try:  # Python 3.11+
 except ImportError:  # pragma: no cover - older interpreters
     import sre_parse  # type: ignore[no-redef]
 
-_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-# Runtime source roots. Tests dirs under them are excluded below.
-_SCAN_ROOTS = ("core", "packages", "engine", "libexec")
+from runtime_universe import repo_root, runtime_file_universe  # noqa: E402
 
-_EXCLUDED_PARTS = {"tests", "test", "scripts", "__pycache__"}
+_REPO = repo_root()
 
 # (posix-relative path, pattern variable/first-40-chars key) -> justification.
 # Empty on purpose: every historic member was fixed, not allowlisted.
@@ -100,21 +101,13 @@ _MULTILINE_SOURCE_GATE = re.compile(
 
 
 def _iter_python_files() -> list[Path]:
-    out: list[Path] = []
-    for root in _SCAN_ROOTS:
-        base = _REPO / root
-        if not base.is_dir():
-            continue
-        if root == "libexec":
-            candidates = [p for p in base.iterdir() if p.is_file()]
-        else:
-            candidates = list(base.rglob("*.py"))
-        for path in candidates:
-            rel = path.relative_to(_REPO)
-            if _EXCLUDED_PARTS.intersection(rel.parts):
-                continue
-            out.append(path)
-    return sorted(out)
+    # The shared runtime-source derivation (runtime_universe module
+    # docstring documents roots and exclusions). Versus this census's
+    # previous private walk it adds plugins/ hook scripts and the
+    # repo-root entry modules — both receive scanned-repo content and
+    # belong to the invariant — and drops the bash launchers the old
+    # candidate list carried only for the AST parse to reject.
+    return runtime_file_universe(_REPO)
 
 
 def _const_str_parts(node: ast.AST, consts: dict[str, str]) -> str | None:
