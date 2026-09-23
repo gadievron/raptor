@@ -45,17 +45,29 @@ _HEADER_EXTENSIONS = frozenset({".h", ".hpp", ".hxx", ".hh", ".h++"})
 # branch anchoring its own line, and multi-line declarations still
 # match because the qualifier/type group's interior `\s+` separators
 # cross line breaks.
+# Bounded loops and windows on every unbounded-reach span (same
+# discipline as the C-declaration matchers): the qualifier/type loop,
+# attribute chains and their interiors, and the parameter window let
+# every anchor re-scan the remaining text on planted
+# declaration-shaped runs — quadratic. Bounds sit far above real
+# headers (trade-off both directions: larger keeps absurd
+# declarations matching but raises per-anchor reach, smaller drops
+# them); the trailing attribute chain also carries the final
+# whitespace inside its loop iteration so no two spans are adjacent,
+# and the pointer span is stars-only (\**) — a star-space mix is
+# already a qualifier-loop token, so the old horizontal-whitespace
+# span only duplicated the loop's separator and split against it.
 _DECL_RE = re.compile(
     r"(?a)"
     r"(?:^|;|\})[^\S\n]*"
-    r"(?:__attribute__\s*\(\([^()]*(?:\([^()]*\)[^()]*)*\)\)\s+)*"
-    r"(?:__declspec\s*\([^)]*\)\s+)*"
-    r"(?:(?:\w+|\*)\s+)*?"
-    r"[* \t\r\f\v]*"
+    r"(?:__attribute__\s*\(\([^()]{0,1024}(?:\([^()]{0,1024}\)[^()]{0,1024}){0,8}\)\)\s+){0,8}"
+    r"(?:__declspec\s*\([^)]{0,1024}\)\s+){0,4}"
+    r"(?:(?:\w+|\*)\s+){0,24}?"
+    r"\**"
     r"(\w+)"                       # capture: function name
-    r"\s*\([^)]*\)"                # parameter list
-    r"\s*(?:__attribute__\s*\(\([^()]*(?:\([^()]*\)[^()]*)*\)\)\s*)*"
-    r"\s*;",                       # ends with `;`
+    r"\s*\([^)]{0,4096}\)"         # parameter list
+    r"\s*(?:__attribute__\s*\(\([^()]{0,1024}(?:\([^()]{0,1024}\)[^()]{0,1024}){0,8}\)\)\s*){0,8}"
+    r";",                          # ends with `;`
     re.MULTILINE,
 )
 
