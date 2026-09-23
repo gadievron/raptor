@@ -680,6 +680,158 @@ class TestFunctionNameEdgeWhitespace:
 # ---------------------------------------------------------------------------
 
 
+class TestOutOfSectionPreservation:
+    """The format is advertised as operator-editable markdown, so
+    hand-added file-level prose (outside ``##`` sections) is invited
+    input. Every rewrite used to re-render from sections only and
+    silently destroy it; it must round-trip instead."""
+
+    def _seed_with_preamble(self, tmp_path, prose):
+        write_annotation(tmp_path, Annotation(
+            file="src/foo.py", function="existing_fn", body="note",
+            metadata={"source": "human"},
+        ))
+        path = annotation_path(tmp_path, "src/foo.py")
+        lines = path.read_text().splitlines(keepends=True)
+        lines.insert(2, prose + "\n")
+        path.write_text("".join(lines))
+        return path
+
+    def test_preamble_survives_sibling_add(self, tmp_path):
+        prose = "OPERATOR FILE-LEVEL NOTE: pentested; do not re-scan."
+        path = self._seed_with_preamble(tmp_path, prose)
+        write_annotation(tmp_path, Annotation(
+            file="src/foo.py", function="other_fn", body="agent note",
+            metadata={"source": "agent"},
+        ))
+        text = path.read_text()
+        assert prose in text
+        assert "## existing_fn" in text and "## other_fn" in text
+        # Round-trip is stable: another rewrite neither drops nor
+        # duplicates the preserved prose.
+        write_annotation(tmp_path, Annotation(
+            file="src/foo.py", function="third_fn", body="x",
+        ))
+        assert path.read_text().count(prose) == 1
+
+    def test_multiline_preamble_with_blanks_round_trips(self, tmp_path):
+        write_annotation(tmp_path, Annotation(
+            file="src/foo.py", function="f", body="note",
+        ))
+        path = annotation_path(tmp_path, "src/foo.py")
+        lines = path.read_text().splitlines(keepends=True)
+        lines[3:3] = ["para one\n", "\n", "para two\n", "\n"]
+        path.write_text("".join(lines))
+        write_annotation(tmp_path, Annotation(
+            file="src/foo.py", function="g", body="x",
+        ))
+        text = path.read_text()
+        assert "para one\n\npara two" in text
+
+    def test_preamble_survives_remove(self, tmp_path):
+        prose = "file-level operator paragraph"
+        path = self._seed_with_preamble(tmp_path, prose)
+        write_annotation(tmp_path, Annotation(
+            file="src/foo.py", function="other_fn", body="x",
+        ))
+        assert remove_annotation(tmp_path, "src/foo.py", "other_fn")
+        assert prose in path.read_text()
+
+    def test_remove_last_annotation_keeps_preserved_prose(self, tmp_path):
+        prose = "keep me"
+        path = self._seed_with_preamble(tmp_path, prose)
+        assert remove_annotation(tmp_path, "src/foo.py", "existing_fn")
+        assert path.exists()
+        text = path.read_text()
+        assert prose in text
+        assert "## " not in text
+        # No circularity: the marker-bearing section-less file takes
+        # a subsequent add, still preserving the prose.
+        assert write_annotation(tmp_path, Annotation(
+            file="src/foo.py", function="fresh", body="y",
+        )) is not None
+        text = path.read_text()
+        assert prose in text and "## fresh" in text
+
+    def test_remove_last_annotation_without_prose_still_unlinks(
+        self, tmp_path,
+    ):
+        write_annotation(tmp_path, Annotation(
+            file="src/foo.py", function="f", body="x",
+        ))
+        path = annotation_path(tmp_path, "src/foo.py")
+        assert remove_annotation(tmp_path, "src/foo.py", "f")
+        assert not path.exists()
+
+    def test_comment_between_sections_survives_as_body(self, tmp_path):
+        path = annotation_path(tmp_path, "d.py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "<!-- annotations-version: 1 -->\n# d.py\n\n"
+            "## a\n\nbody a\n\n<!-- operator: checked -->\n\n"
+            "## b\n\nbody b\n\ntrailing operator paragraph\n",
+        )
+        write_annotation(tmp_path, Annotation(
+            file="d.py", function="c", body="x",
+        ))
+        text = path.read_text()
+        assert "<!-- operator: checked -->" in text
+        assert "trailing operator paragraph" in text
+
+    def test_crlf_file_with_preamble_round_trips(self, tmp_path):
+        path = annotation_path(tmp_path, "e.py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(
+            b"<!-- annotations-version: 1 -->\r\n# e.py\r\n\r\n"
+            b"preamble prose\r\n\r\n## f\r\n\r\nthe body\r\n",
+        )
+        write_annotation(tmp_path, Annotation(
+            file="e.py", function="g", body="y",
+        ))
+        text = path.read_text()
+        assert "preamble prose" in text
+        assert "the body" in text
+
+    def test_zero_section_marker_bearing_file_content_preserved(
+        self, tmp_path,
+    ):
+        # A marker attests writer ownership (a remove-last rewrite
+        # leaves exactly this shape), so the content is preamble and
+        # round-trips instead of refusing.
+        path = annotation_path(tmp_path, "f.py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "<!-- annotations-version: 1 -->\n# f.py\n\n"
+            "hand-written operator prose\n",
+        )
+        assert write_annotation(tmp_path, Annotation(
+            file="f.py", function="fn", body="x",
+        )) is not None
+        text = path.read_text()
+        assert "hand-written operator prose" in text
+        assert "## fn" in text
+
+    def test_zero_section_hash_prose_file_refuses(self, tmp_path):
+        """Arm B: '# '-prefixed prose used to be skipped by the
+        accounting gate (any '# ' line counted as the label), so the
+        file was judged empty and REPLACED. Only the exact
+        '# <source_file>' label is renderer-owned; anything else in
+        an unmarked zero-section file is unattributable."""
+        from core.annotations import AnnotationFileError
+        path = annotation_path(tmp_path, "src/bar.py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        content = (
+            "# review notes for src/bar.py\n"
+            "# check the auth flow again\n"
+        )
+        path.write_text(content)
+        with pytest.raises(AnnotationFileError):
+            write_annotation(tmp_path, Annotation(
+                file="src/bar.py", function="fn", body="x",
+            ))
+        assert path.read_text() == content
+
+
 class TestCorruptFileWritesFailClosed:
     """A corrupt/unreadable annotation file used to read as EMPTY
     inside the read-modify-write cycle, so the next add re-rendered
