@@ -709,3 +709,27 @@ class TestCorrelateToleratesSparseAnalysisRecords:
         assert c["confidence_signals"]["f1"] == "disputed"
         # No attributable minority reasoning → no insights, no crash.
         assert c["unique_insights"] == []
+
+
+class TestMergeNeverMutatesRawInputs:
+    """types.py promises per_model_raw holds the RAW outputs. The
+    default select_primary returns a dict-copy, but the method is
+    consumer-overridable — an override returning the winning dict
+    itself let merge() write multi_model_analyses INTO the raw
+    per-model record. The copy belongs in merge(), not in every
+    override's contract."""
+
+    def test_override_returning_raw_dict_is_copied(self):
+        class FirstWinsRaw(FindingAdapter):
+            def select_primary(self, model_results):
+                return model_results[0]  # raw, not a copy
+
+        adapter = FirstWinsRaw()
+        raw_a = {"finding_id": "f1", "is_exploitable": True}
+        raw_b = {"finding_id": "f1", "is_exploitable": False}
+        per_model = {"model-a": [raw_a], "model-b": [raw_b]}
+        merged = adapter.merge(per_model)
+        assert "multi_model_analyses" in merged[0]
+        # The raw inputs stay raw.
+        assert "multi_model_analyses" not in raw_a
+        assert "multi_model_analyses" not in raw_b

@@ -75,6 +75,10 @@ from core.run.finding_status import read_verdict
 FLIP_TO_EXPLOITABLE = "to_exploitable"
 FLIP_TO_NOT_EXPLOITABLE = "to_not_exploitable"
 NO_FLIP = "no_flip"
+# The recorded pipeline never concluded on this finding (verdict
+# missing / nulled) — there is nothing to flip FROM. Bucketed
+# separately: counting these as NO_FLIP silently deflated flip_rate.
+NO_RECORDED_VERDICT = "no_recorded_verdict"
 
 
 # ---------------------------------------------------------------------------
@@ -117,10 +121,17 @@ class ReplayReport:
     findings: list[FindingComparison]
     class_summaries: list[ClassSummary]
     # Aggregate metrics — the headline numbers an operator scans first.
+    # Flip rates are computed over findings WITH a recorded verdict
+    # (the comparable set) — abstained findings are counted separately
+    # below, never as silent NO_FLIPs deflating the headline number.
     flip_rate: float
     flip_to_exploitable_rate: float
     flip_to_not_exploitable_rate: float
     posterior_distribution: dict[str, float]  # bin -> count
+    # Findings whose recorded pipeline never concluded (verdict
+    # missing / nulled). Additive field — JSON consumers tolerate
+    # extra keys.
+    n_no_recorded_verdict: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +189,7 @@ def _recorded_verdict_index(
 
 def _flip_tag(recorded: bool | None, posterior: float) -> str:
     if recorded is None:
-        return NO_FLIP  # nothing to flip from
+        return NO_RECORDED_VERDICT  # nothing to flip from
     posterior_says_exploitable = posterior > 0.5
     if recorded == posterior_says_exploitable:
         return NO_FLIP
@@ -293,9 +304,14 @@ def replay(
         ))
 
     total_findings = len(findings)
-    n_flips = sum(1 for f in findings if f.flip != NO_FLIP)
+    n_no_recorded = sum(
+        1 for f in findings if f.flip == NO_RECORDED_VERDICT
+    )
+    # Comparable set: findings with a recorded verdict to flip from.
+    n_comparable = total_findings - n_no_recorded
     n_flips_pos = sum(1 for f in findings if f.flip == FLIP_TO_EXPLOITABLE)
     n_flips_neg = sum(1 for f in findings if f.flip == FLIP_TO_NOT_EXPLOITABLE)
+    n_flips = n_flips_pos + n_flips_neg
 
     distinct_models = sorted({r.model for r in panel_records})
     distinct_classes = sorted({r.decision_class for r in panel_records})
@@ -308,10 +324,11 @@ def replay(
         distinct_decision_classes=distinct_classes,
         findings=findings,
         class_summaries=class_summaries,
-        flip_rate=(n_flips / total_findings) if total_findings else 0.0,
-        flip_to_exploitable_rate=(n_flips_pos / total_findings) if total_findings else 0.0,
-        flip_to_not_exploitable_rate=(n_flips_neg / total_findings) if total_findings else 0.0,
+        flip_rate=(n_flips / n_comparable) if n_comparable else 0.0,
+        flip_to_exploitable_rate=(n_flips_pos / n_comparable) if n_comparable else 0.0,
+        flip_to_not_exploitable_rate=(n_flips_neg / n_comparable) if n_comparable else 0.0,
         posterior_distribution=_bin_posteriors([f.posterior_true_positive for f in findings]),
+        n_no_recorded_verdict=n_no_recorded,
     )
 
 
@@ -354,6 +371,11 @@ def render_markdown(report: ReplayReport) -> str:
                  f"(D–S posterior > 0.5 disagrees with recorded `is_exploitable`)")
     lines.append(f"- **Flips to exploitable:** {report.flip_to_exploitable_rate:.1%}")
     lines.append(f"- **Flips to NOT exploitable:** {report.flip_to_not_exploitable_rate:.1%}")
+    if report.n_no_recorded_verdict:
+        lines.append(
+            f"- **Findings with no recorded verdict (excluded from "
+            f"flip rates):** {report.n_no_recorded_verdict}"
+        )
     lines.append("")
     if report.total_findings_with_panel:
         lines.append("## Posterior distribution")
