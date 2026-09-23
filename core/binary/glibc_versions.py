@@ -135,8 +135,34 @@ def resolve_greatest_leq(
     return best
 
 
+def float_encoding_to_tuple(version: float) -> tuple[int, int]:
+    """Decode the legacy ``major + minor/100`` float encoding to
+    ``(major, minor)``.
+
+    Several consumers persist glibc versions in a float encoding
+    (glibc 2.38 → ``2.38``, glibc 2.4 → ``2.04``). ORDER COMPARISONS
+    on that encoding are unsound at some boundaries: the computed
+    ``2 + 47/100.0`` is ``2.4699999999999998``, strictly BELOW a
+    literal ``2.47`` — a threshold at minor 47, 72, or 97 would
+    silently never fire for a target at exactly that version.
+    Decoding both comparands to integer tuples makes the ordering
+    exact for every minor 0..99: ``round()`` absorbs the ~1e-15
+    representation error, six orders of magnitude below the 0.005
+    decision boundary.
+
+    Values outside the encoding's domain degrade safely: 0.0 (the
+    "unknown" sentinel several report fields default to) decodes to
+    ``(0, 0)``, which orders below every real threshold exactly as
+    the raw float did.
+    """
+    major = int(version)
+    minor = round((version - major) * 100)
+    return (major, minor)
+
+
 __all__ = [
     "compare_versions",
+    "float_encoding_to_tuple",
     "parse_major_minor",
     "parse_version",
     "resolve_greatest_leq",
