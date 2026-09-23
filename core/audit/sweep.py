@@ -3237,6 +3237,11 @@ def run_codeql_sweep(
                     outcome="inconclusive",
                     errors=[capped_reason],
                     rule_id=query_path,
+                    # The capped verdict keeps the membership receipt:
+                    # the degraded evidence stays auditable in
+                    # details/journal/memo exactly like the refuted
+                    # lane it replaced.
+                    details={"substrate": _member_cov.as_receipt()},
                 )
 
         outcome = "confirmed" if in_function else "refuted"
