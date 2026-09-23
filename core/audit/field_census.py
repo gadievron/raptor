@@ -323,9 +323,21 @@ _WRITE_RE = re.compile(r"\b(\w+)\s*->\s*(\w+)\s*=(?![=>])")
 _ACCESS_RE = re.compile(r"\b(\w+)\s*->\s*(\w+)\b")
 _LOCAL_ALIAS_RE = re.compile(r"\b(\w+)\s*=\s*(\w+)\s*->\s*(\w+)\s*;")
 _CALL_AFTER_RE = re.compile(r"\A\s*\(")
+# Bounded windows on the newline-crossing spans. The head class and
+# the params class both cross newlines BY DESIGN (kernel-style
+# ``static void\nname(...)`` declarations and multi-line parameter
+# lists must keep matching), but the unbounded spelling made every
+# MULTILINE ``^`` restart re-scan the remaining text: a planted file
+# of prototype-shaped word lines with no ``(``/``)`` costs O(lines x
+# tail) — quadratic. Bound trade-off, both directions: larger keeps
+# pathological declarations matching but raises the per-anchor
+# re-scan ceiling; smaller is faster but a real head/params longer
+# than the bound stops matching. 256 head chars / 4096 params chars
+# sit far above real C (a dozen qualifiers / a hundred parameters)
+# while capping per-anchor work at a constant.
 _FUNC_DEF_RE = re.compile(
-    r"^(?P<head>[A-Za-z_][\w\s\*]*?)\b(?P<name>[A-Za-z_]\w*)\s*"
-    r"\((?P<params>[^;{)]*)\)\s*\{",
+    r"^(?P<head>[A-Za-z_][\w\s\*]{0,256}?)\b(?P<name>[A-Za-z_]\w*)\s*"
+    r"\((?P<params>[^;{)]{0,4096})\)\s*\{",
     re.MULTILINE,
 )
 _C_KEYWORDS = frozenset({

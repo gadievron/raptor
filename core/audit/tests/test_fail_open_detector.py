@@ -669,3 +669,34 @@ class TestExceptHeaderWhitespaceRun:
             assert _EXCEPT_HEADER_RE.match(header), header
         for non_header in ("except ValueError", "exception:", "raise x:"):
             assert _EXCEPT_HEADER_RE.match(non_header) is None, non_header
+
+
+class TestCFuncExtractionHostileRuns:
+    def test_qualifier_word_run_is_fast(self):
+        """Hostile inputs for the regex-fallback C function matcher:
+        a single-line qualifier-word run (the keyword and type loops
+        overlap on every word — split ambiguity) and a file of
+        declaration-shaped word lines (every MULTILINE ^ restart
+        re-scanned the tail). Both quadratic with unbounded loops;
+        the bounded loops are linear."""
+        from core.audit.fail_open_detector import _C_FUNC_RE
+        from core.testing.wallclock import cpu_budget
+
+        with cpu_budget(1.0, what="qualifier-run scan"):
+            assert _C_FUNC_RE.search("static " * 40000) is None
+        hostile = "static int foo bar baz qux quux corge\n" * 4000
+        with cpu_budget(1.0, what="declaration-word-line scan"):
+            assert _C_FUNC_RE.search(hostile) is None
+
+    def test_declaration_forms_still_match(self):
+        from core.audit.fail_open_detector import _C_FUNC_RE
+
+        for src, name in (
+            ("static int walk_tree(node_t *root) {", "walk_tree"),
+            ("void\nspread(struct s *x,\n  int v)\n{", "spread"),
+            ("func (r *Recv) DoThing(x int) {", "DoThing"),
+            ("static inline const char* pick(int i) {", "pick"),
+        ):
+            m = _C_FUNC_RE.search(src)
+            assert m is not None, src
+            assert m.group(1) == name, src

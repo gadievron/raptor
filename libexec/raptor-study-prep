@@ -537,7 +537,16 @@ def _extract_fields(block: str) -> list[str]:
         line = line.strip()
         if line.startswith(("//", "/*", "*")):
             continue
-        fm = re.search(r"(\w+)\s*(?:\[[\w\s]*\])?\s*(?::\s*\d+)?\s*;", line)
+        # Each optional tail atom (array suffix, bitfield width)
+        # carries its own trailing whitespace span: the naive
+        # ``\s*(?:\[...\])?\s*(?::\s*\d+)?\s*;`` stacks three
+        # unbounded whitespace spans around optional atoms, and a
+        # field-shaped line ending in a long whitespace run with no
+        # ``;`` makes the engine try every split of the run between
+        # them — cubic in the line length. Match set unchanged.
+        fm = re.search(
+            r"(\w+)\s*(?:\[[\w\s]*\]\s*)?(?::\s*\d+\s*)?;", line,
+        )
         if fm:
             fields.append(fm.group(1))
     return fields
