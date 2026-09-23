@@ -77,14 +77,17 @@ _CWE_TOOL_MAP: dict[str, frozenset[str]] = {
     "CWE-1333": frozenset({"prefilter"}),                         # ReDoS
     "CWE-1336": frozenset({"prefilter"}),                         # prompt injection
 
-    # The PHP web-audit families (CWE-93/470/88/116/327/338 dispatch
+    # The web-audit families (CWE-93/470/88/116/327/338 dispatch
     # entries in cwe_dispatch) are DELIBERATELY absent from this map:
     # every one of their rules adjudicates a narrow sub-shape (socket
-    # writes but not header()/mail() response splitting for CWE-93;
-    # membership checks with invisible haystack/polarity for CWE-470;
-    # the attribute-encoding residual for CWE-116; name-anchored PRNG
-    # stores for CWE-338), so rule silence must keep the class dark
-    # for human review — the race-condition/CWE-367 precedent above.
+    # writes but not header()/mail() response splitting for CWE-93,
+    # and on C targets the trailing-CRLF format template but not
+    # strcat assembly; membership checks with invisible
+    # haystack/polarity for CWE-470; the attribute-encoding residual
+    # for CWE-116 on PHP and the if-idiom quoted-string escape
+    # residual on C, but not switch/table-driven escapers), so rule
+    # silence must keep the class dark for human review — the
+    # race-condition/CWE-367 precedent above.
     # Confirmed matches still stamp promotion-grade semgrep receipts
     # through the chain; only the silence→clean direction is withheld.
     # Re-earning coverage here means keying on the SPECIFIC rule
@@ -149,12 +152,22 @@ _MECHANISM_CWE_MAP: dict[str, list[str]] = {
     "llm injection":       ["CWE-1336"],
     # Naming-only emissions (the CWE-480/481 pattern above): CWE-470
     # is absent from _CWE_TOOL_MAP, so these keep the class named in
-    # coverage records while it classifies dark. No "crlf injection"
-    # or "header injection" row: reviews canonically tag header()/
-    # mail() response splitting as CWE-93 too, and naming it here buys
-    # nothing while the class is unmapped.
+    # coverage records while it classifies dark.
     "unsafe reflection":   ["CWE-470"],
     "variable function":   ["CWE-470"],
+    # Encoding families — naming-only too: CWE-93/116 stay out of
+    # _CWE_TOOL_MAP (their curated rules adjudicate narrow
+    # sub-shapes), so these rows feed coverage records while the
+    # classes classify dark, never clean-when-silent. "crlf
+    # injection" dual-maps honestly: CWE-93 is the canonical
+    # CRLF-neutralization class, CWE-116 the parent improper-encoding
+    # lens — reviews use both. Still no "header injection" row:
+    # response splitting has no dispatched rule on any language, so
+    # naming a class for it would put an untested name in records.
+    "improper encoding":   ["CWE-116"],
+    "output encoding":     ["CWE-116"],
+    "missing escaping":    ["CWE-116"],
+    "crlf injection":      ["CWE-93", "CWE-116"],
     # CWE-480/481 are DELIBERATELY absent from _CWE_TOOL_MAP: no
     # mechanical channel (cocci rule, semgrep rule, CodeQL query) in
     # this repo detects operator confusion, so these classes must
