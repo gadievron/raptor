@@ -134,7 +134,7 @@ class TestCoverageProbe:
         srv = _Server(covers=None)
         setattr(srv, _FN_COVERAGE_CACHE_ATTR, {})
         assert joern_function_in_cpg(srv, "f") is None
-        assert getattr(srv, _FN_COVERAGE_CACHE_ATTR) == {"f": None}
+        assert getattr(srv, _FN_COVERAGE_CACHE_ATTR) == {("f", None): None}
         assert joern_function_in_cpg(srv, "f") is None
         assert len(srv.queries) == 1
 
@@ -382,3 +382,91 @@ class TestUnqueryableNames:
         assert "joern_guard" in skipped
         assert srv.queries == []
         assert cfg.joern_health.errors == []
+class TestCoverageProbeAnchoring:
+    """Pins the probe's two stated defenses.
+
+    Nonce anchoring is the probe's forgery defense — nothing pinned
+    it, so a refactor to bare ``":true"``/``":false"`` substring
+    checks survived the whole battery. And the coverage query must
+    exclude EXTERNAL method stubs: Joern mints a stub ``method`` node
+    for every called-but-undefined name, so an unfiltered nameExact
+    probe answers true off a mere call site in the parsed tree —
+    exactly the gate's target cases (parse-failed file, exclude_dirs
+    drop, language sliver). Verified against a live joern: a
+    call-site-only name satisfies ``nameExact(...).nonEmpty`` and
+    fails ``.filterNot(_.isExternal).nonEmpty``; a defined function
+    passes both.
+    """
+
+    class _Scripted:
+        """Server double echoing a scripted raw_output built from the
+        probe's own nonce."""
+
+        def __init__(self, raw_factory):
+            self._raw = raw_factory
+            self.queries: list[str] = []
+
+        def query(self, query: str, timeout: int = 0,
+                  check_length: bool = False) -> _QueryResult:
+            self.queries.append(query)
+            last = query.strip().rsplit("\n", 1)[-1]
+            nonce = last.split('"')[1]  # '<nonce>:'
+            return _QueryResult(self._raw(nonce))
+
+    def test_bare_true_in_noise_never_forges_coverage(self):
+        # Noise carrying a bare ':true' while the anchored answer is
+        # false: an un-anchored substring check reads the noise.
+        srv = self._Scripted(
+            lambda n: 'warning: :true is not a member here\n'
+                      f'res0: String = "{n}false"'
+        )
+        assert joern_function_in_cpg(srv, "f") is False
+
+    def test_wrong_nonce_answer_is_unparseable(self):
+        # An answer stamped with a DIFFERENT nonce is not this
+        # probe's answer — None (did not look), never a verdict.
+        srv = self._Scripted(
+            lambda n: 'res0: String = "deadbeefdead:true"'
+        )
+        assert joern_function_in_cpg(srv, "f") is None
+
+    def test_probe_query_excludes_external_stubs(self):
+        srv = _Server(covers=True)
+        assert joern_function_in_cpg(srv, "f") is True
+        q = srv.queries[0]
+        assert ".filterNot(_.isExternal)" in q
+        # Declared prototypes are isExternal=false with an empty
+        # body — the body filter is what excludes them
+        # (live-verified alongside the stub filter).
+        assert ".filter(_.block.astChildren.nonEmpty)" in q
+        # The filters must sit between the name match and the
+        # emptiness check — filtering the right traversal.
+        assert (q.index('nameExact("f")')
+                < q.index(".filterNot(_.isExternal)")
+                < q.index(".filter(_.block.astChildren.nonEmpty)")
+                < q.index(".nonEmpty"))
+
+    def test_file_bound_probe_pins_filename_binding(self):
+        srv = _Server(covers=True)
+        assert joern_function_in_cpg(
+            srv, "f", file_path="src/a.c") is True
+        q = srv.queries[0]
+        # Exact-or-suffix compare: relative- and absolute-rooted CPG
+        # imports both bind; anything else answers otherfile → False.
+        assert 'm.filename == "src/a.c"' in q
+        assert 'm.filename.endsWith("/src/a.c")' in q
+
+    def test_same_named_definition_elsewhere_is_not_coverage(self):
+        # Live-verified answer shape: a body-bearing definition in a
+        # DIFFERENT file echoes "otherfile" — not coverage of this
+        # item, so False (the caller skips, never refutes).
+        srv = self._Scripted(lambda n: f'res0: String = "{n}otherfile"')
+        assert joern_function_in_cpg(
+            srv, "f", file_path="src/a.c") is False
+
+    def test_cache_keyed_per_file_anchor(self):
+        srv = _Server(covers=True)
+        setattr(srv, _FN_COVERAGE_CACHE_ATTR, {})
+        assert joern_function_in_cpg(srv, "f", file_path="a.c") is True
+        assert joern_function_in_cpg(srv, "f", file_path="b.c") is True
+        assert len(srv.queries) == 2  # distinct anchors, distinct memo
