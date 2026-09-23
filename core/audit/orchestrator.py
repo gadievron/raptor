@@ -4501,6 +4501,69 @@ def _resolve_max_workers(config: OrchestratorConfig) -> int:
     return derive_max_workers(config.models[0] if config.models else "default")
 
 
+class EmptyInventoryError(RuntimeError):
+    """The run's checklist holds ZERO reviewable items.
+
+    Raised by :func:`_compute_audit_prep` so ``run_orchestrator`` can
+    refuse at startup instead of running an empty review loop to a
+    clean "complete" conclusion — a silent no-op whose "0 findings"
+    summary is indistinguishable from a genuine clean bill of health.
+    Distinct from the missing-checklist ``None`` return (the file
+    exists but describes nothing) and from a genuinely-full-coverage
+    run (items exist, ``compute_gaps`` legitimately returns zero
+    gaps — that run still completes as before).
+    """
+
+
+def _reviewable_item_count(
+    checklist: dict[str, Any],
+    include_kinds: set | None = None,
+) -> int:
+    """Count the checklist items the review loop could dispatch.
+
+    Counted directly from ``files[].items`` (with the legacy
+    ``functions`` key fallback) rather than trusting the top-level
+    ``total_items`` field, which is builder-stamped and can be absent
+    or stale on inherited/edited checklists.
+
+    Kind-filtered through the review loop's own vocabulary
+    (:func:`core.audit.gaps._resolve_reviewable_kinds`, honouring the
+    run's ``--include-kinds``), so extraction-artifact kinds the loop
+    never dispatches under this configuration — ``declaration`` and
+    ``constant_macro`` by default — cannot make an inventory look
+    non-empty (a checklist of only those would still no-op silently).
+    A positive ``--include-kinds`` entry naming them counts them
+    again, exactly as the loop would then dispatch them.
+
+    Deliberate over-count (fail-open toward PROCEEDING, both
+    directions documented): ``interstitial`` items are counted
+    whenever their lane is enabled — the per-item script-handler
+    content gate is a source read this cheap pre-check must not
+    replicate, and refusing a checklist whose interstitials WOULD
+    dispatch is the worse error. The residual under-refusal (yaml
+    workflow ``job:`` items and content-rejected interstitials can
+    still hold the count above zero) is accepted and documented.
+    """
+    from .gaps import (
+        _resolve_reviewable_kinds,
+        _script_interstitials_enabled,
+    )
+    kinds = _resolve_reviewable_kinds(include_kinds)
+    interstitials = _script_interstitials_enabled(include_kinds)
+    count = 0
+    for file_entry in checklist.get("files") or []:
+        if not isinstance(file_entry, dict):
+            continue
+        items = file_entry.get("items", file_entry.get("functions")) or []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            kind = item.get("kind", "")
+            if kind in kinds or (kind == "interstitial" and interstitials):
+                count += 1
+    return count
+
+
 def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
                         presweep_future=None, presweep_activity=None,
                         presweep_abort=None, cost_ledger=None):
@@ -4582,6 +4645,39 @@ def _compute_audit_prep(config, *, joern_server=None, on_progress=None,
             pass
         except Exception:
             logger.debug("macro-function recovery failed", exc_info=True)
+
+    # Empty-inventory refusal. Checked AFTER macro recovery (it can
+    # only ADD items, so a generator-macro-only file set it rescues
+    # still proceeds). Zero items means every downstream stage is
+    # vacuous: compute_gaps returns zero gaps for the wrong reason
+    # (nothing to review, not everything reviewed) and the run would
+    # conclude "complete, 0 findings" — a silent no-op. Genuinely-full
+    # coverage is the OTHER zero-gaps case (items > 0, all covered)
+    # and is untouched by this guard.
+    _item_count = _reviewable_item_count(
+        checklist, getattr(config, "include_kinds", None),
+    )
+    if _item_count == 0:
+        _cl_path = config.out_dir / "checklist.json"
+        _raw_count = sum(
+            sum(1 for it in (fe.get("items", fe.get("functions")) or [])
+                if isinstance(it, dict))
+            for fe in checklist.get("files") or []
+            if isinstance(fe, dict)
+        )
+        raise EmptyInventoryError(
+            f"empty inventory: {_cl_path} holds {_item_count} reviewable "
+            f"items ({_raw_count} raw items, none dispatchable under "
+            f"this run's --include-kinds; recorded target_path: "
+            f"{checklist.get('target_path') or '<none recorded>'}) — "
+            "refusing to run a review loop that would complete as a "
+            "silent no-op. Likely causes: wrong target kind (e.g. a "
+            "binary or generated tree inventoried as source), a binary "
+            "target with no RE database attached, or a stale checklist "
+            "inherited from a different target. Rebuild with: "
+            "libexec/raptor-build-checklist <target> <out_dir>, or "
+            "re-run against the intended target."
+        )
 
     _phase("prep_context_map")
     context_map = load_context_map(config.out_dir)
@@ -7329,6 +7425,7 @@ def _run_audit_body(
                 logger.info("ensemble prep: reusing cached prep (waited)")
 
     if _prep is None:
+        _empty_inventory = False
         try:
             _prep = _compute_audit_prep(
                 config, joern_server=joern_server, on_progress=on_progress,
@@ -7337,6 +7434,13 @@ def _run_audit_body(
                 presweep_abort=joern_presweep_abort,
                 cost_ledger=result.cost_tracker,
             )
+        except EmptyInventoryError as exc:
+            # Startup refusal, not a crash: mirror the missing-checklist
+            # early return (same presweep cleanup) under its own stop
+            # reason so the CLI can fail the lifecycle and exit nonzero
+            # instead of stamping a completed "0 findings" run.
+            logger.error("%s", exc)
+            _empty_inventory = True
         finally:
             if _prep_event is not None:
                 if _prep is not None:
@@ -7344,7 +7448,9 @@ def _run_audit_body(
                     prep_cache["_ready"] = True
                 _prep_event.set()
         if _prep is None:
-            result.terminated_by = "no_checklist"
+            result.terminated_by = (
+                "empty_inventory" if _empty_inventory else "no_checklist"
+            )
             _discard_presweep_future(
                 joern_presweep_future, abort_event=joern_presweep_abort,
             )
