@@ -1669,3 +1669,36 @@ class TestLlmMajorApprovalGate:
         assert args.llm_approve_major is False
         args = optimise._parse_args(["/x", "--llm-approve-major"])
         assert args.llm_approve_major is True
+
+
+class TestSectionHeaderWhitespaceRun:
+    def _plan(self):
+        return _PlanEntry(
+            ecosystem="PyPI", name="flask",
+            installed="2.3.0", target="2.3.0",
+            manifest=Path("/p/pyproject.toml"), advisory_ids=[],
+        )
+
+    def test_header_whitespace_run_is_fast(self):
+        """Hostile pyproject line opening '[' with a long interior
+        whitespace run and no ']': the previous trim spelling
+        overlapped three unbounded repeats on whitespace — cubic in
+        the line length. The \\S-delimited section name is linear."""
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "[x" + " " * (1 << 16) + "y\n"
+        with cpu_budget(2.0, what="section-header whitespace run"):
+            _new, applied, _why = optimise._pin_bare_pyproject(
+                hostile, self._plan(),
+            )
+        # No dependency array in the hostile text: nothing pinned
+        # (same refusal as before the respelling), just fast now.
+        assert not applied
+
+    def test_padded_header_still_recognised(self):
+        text = ('[ project ]\ndependencies = [\n  "flask",\n]\n')
+        new, applied, _ = optimise._pin_bare_pyproject(
+            text, self._plan(),
+        )
+        assert applied
+        assert '"flask==2.3.0"' in new
