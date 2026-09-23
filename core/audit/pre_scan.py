@@ -14,6 +14,7 @@ the same runner the sweep engine and negative-control checks use.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any
@@ -45,8 +46,17 @@ def _scan_targets(
             logger.warning("pre-scan: scope %r escapes target — skipped", entry)
             continue
         if candidate.exists():
-            label = str(entry).replace("/", "_").strip("_") or "root"
-            targets.append((label, candidate))
+            slug = str(entry).replace("/", "_").strip("_") or "root"
+            if "/" in str(entry).strip("/"):
+                # The slug is lossy (scopes `a/b` and `a_b` collide
+                # on one SARIF filename, last write wins) — append a
+                # short digest of the ORIGINAL scope to keep labels
+                # readable and collision-free.
+                digest = hashlib.sha256(
+                    str(entry).encode("utf-8"),
+                ).hexdigest()[:8]
+                slug = f"{slug}-{digest}"
+            targets.append((slug, candidate))
     return targets or [("root", target_resolved)]
 
 

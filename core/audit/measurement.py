@@ -155,7 +155,12 @@ def evaluate_run(
     """
     findings = _load_findings(out_dir)
     result = EvaluationResult(
-        total_findings=len(findings),
+        # Verdict rows only: the graded file carries clean/dormant
+        # rows too, and counting them deflated fp_rate's denominator.
+        total_findings=sum(
+            1 for f in findings
+            if f.get("status", "") in ("finding", "suspicious")
+        ),
         total_ground_truth=len(ground_truth),
     )
 
@@ -253,8 +258,9 @@ def format_evaluation(result: EvaluationResult) -> str:
     if result.false_positives:
         lines.append("")
         lines.append(f"### False positives ({len(result.false_positives)})")
+        # `or` — a present-but-null hypothesis raised on the slice.
         lines.extend(f"- {fp.get('file', '?')}:{fp.get('function', '?')} "
-                f"({fp.get('hypothesis', '?')[:60]})" for fp in result.false_positives[:10])
+                f"({(fp.get('hypothesis') or '?')[:60]})" for fp in result.false_positives[:10])
         if len(result.false_positives) > 10:
             lines.append(f"  ... and {len(result.false_positives) - 10} more")
 
@@ -293,7 +299,10 @@ def _load_findings(out_dir: Path) -> list[dict[str, Any]]:
         data = load_json(graded_path, strict=True, max_bytes=256 * 1024 * 1024)
         if data is None:  # vanished between exists() and the read
             raise FileNotFoundError(graded_path)
-        return data.get("findings", [])
+        if isinstance(data, list):
+            return data
+        rows = data.get("findings", [])
+        return rows if isinstance(rows, list) else []
 
     standard_path = out_dir / "findings.json"
     if standard_path.exists():
@@ -302,6 +311,7 @@ def _load_findings(out_dir: Path) -> list[dict[str, Any]]:
             raise FileNotFoundError(standard_path)
         if isinstance(data, list):
             return data
-        return data.get("findings", [])
+        rows = data.get("findings", [])
+        return rows if isinstance(rows, list) else []
 
     return []
