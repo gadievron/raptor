@@ -45,23 +45,57 @@ _STAGE2_BOOSTS: frozenset[str] = frozenset({"confirmed", "agreed"})
 _STAGE2_DEMOTES: frozenset[str] = frozenset({"rejected", "bypass_failed"})
 
 
+def _coerce_str(value) -> str:
+    """Coerce an untrusted OpenAnt output field to ``str``.
+
+    Scalars are stringified, everything else (dict, list, None)
+    becomes ``""`` — pipeline_output.json is produced by an
+    UNPINNED-by-consent external scanner over a hostile repo, so
+    shape drift in any field is an expected input, never a crash."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return ""
+
+
 def translate_pipeline_output(pipeline_output: dict) -> list[dict]:
     """Convert OpenAnt pipeline_output.json findings to Raptor finding schema.
 
-    Returns empty list on empty or malformed input; never raises.
-    OpenAnt reports repo-relative paths, so no repo root is needed here
+    Returns empty list on empty input; shape drift never raises — a
+    non-dict document or non-list ``findings`` warns and yields ``[]``,
+    non-dict finding entries are skipped WITH a counted warning (same
+    posture as the unknown-verdict counter: drifted output must stay
+    visible, and under /agentic a raising translator silently zeroed a
+    paid run's findings behind a blanket-except log line). OpenAnt
+    reports repo-relative paths, so no repo root is needed here
     — path relativisation happens at the dedup join
     (``deduplicate_with_sarif``), where absolute SARIF URIs enter.
     """
     if not pipeline_output:
         return []
+    if not isinstance(pipeline_output, dict):
+        logger.warning(
+            "OpenAnt pipeline output is %s, not a dict — treating as "
+            "empty (schema drift?)", type(pipeline_output).__name__)
+        return []
     findings = pipeline_output.get("findings") or []
     if not findings:
         return []
+    if not isinstance(findings, list):
+        logger.warning(
+            "OpenAnt pipeline output 'findings' is %s, not a list — "
+            "treating as empty (schema drift?)",
+            type(findings).__name__)
+        return []
     result = []
     unknown_verdicts: dict[str, int] = {}
+    skipped_malformed = 0
     for idx, finding in enumerate(findings):
-        verdict = (finding.get("stage1_verdict") or "").lower()
+        if not isinstance(finding, dict):
+            skipped_malformed += 1
+            continue
+        verdict = _coerce_str(finding.get("stage1_verdict")).lower()
         if verdict not in _VERDICT_TO_LEVEL:
             unknown_verdicts[verdict or "<missing>"] = (
                 unknown_verdicts.get(verdict or "<missing>", 0) + 1
@@ -69,6 +103,11 @@ def translate_pipeline_output(pipeline_output: dict) -> list[dict]:
         translated = _translate_finding(finding, idx)
         if translated is not None:
             result.append(translated)
+    if skipped_malformed:
+        logger.warning(
+            "OpenAnt schema drift? %d non-dict finding entrie(s) "
+            "skipped — re-verify the checkout against the pinned "
+            "commit", skipped_malformed)
     if unknown_verdicts:
         logger.warning(
             "OpenAnt schema drift? %d finding(s) carry unknown "
@@ -85,21 +124,23 @@ def _translate_finding(
     index: int,
 ) -> Optional[dict]:
     # OpenAnt uses "stage1_verdict" in pipeline_output.json
-    verdict = (finding.get("stage1_verdict") or "").lower()
+    verdict = _coerce_str(finding.get("stage1_verdict")).lower()
     level = _compute_level(verdict, finding)
     if level is None:
         return None
 
-    location = finding.get("location") or {}
+    location = finding.get("location")
+    if not isinstance(location, dict):
+        location = {}
     cwe_id_raw = finding.get("cwe_id")
     cwe_str = _canonical_cwe(cwe_id_raw)
 
-    file_rel = location.get("file") or ""
-    route_key = location.get("function") or finding.get("id") or ""
-    snippet = finding.get("vulnerable_code") or ""
-    message = finding.get("description") or finding.get("impact") or ""
-    stage2_verdict = (finding.get("stage2_verdict") or "").lower()
-    finding_name = finding.get("name") or finding.get("cwe_name") or ""
+    file_rel = _coerce_str(location.get("file"))
+    route_key = _coerce_str(location.get("function")) or _coerce_str(finding.get("id"))
+    snippet = _coerce_str(finding.get("vulnerable_code"))
+    message = _coerce_str(finding.get("description")) or _coerce_str(finding.get("impact"))
+    stage2_verdict = _coerce_str(finding.get("stage2_verdict")).lower()
+    finding_name = _coerce_str(finding.get("name")) or _coerce_str(finding.get("cwe_name"))
 
     return {
         "finding_id": _make_finding_id(finding, file_rel, cwe_str, index),
@@ -115,10 +156,10 @@ def _translate_finding(
         "has_dataflow": False,
         "metadata": {
             "function": route_key,
-            "attack_vector": finding.get("impact") or "",
+            "attack_vector": _coerce_str(finding.get("impact")),
             "stage1_verdict": verdict,
             "stage2_verdict": stage2_verdict,
-            "openant_id": finding.get("id") or f"VULN-{index+1:03d}",
+            "openant_id": _coerce_str(finding.get("id")) or f"VULN-{index+1:03d}",
             "route_key": route_key,
             "vuln_name": finding_name,
         },
@@ -133,7 +174,7 @@ def _compute_level(verdict: str, finding: dict) -> Optional[str]:
     else:
         base = _UNKNOWN_VERDICT_LEVEL
 
-    stage2 = (finding.get("stage2_verdict") or "").lower()
+    stage2 = _coerce_str(finding.get("stage2_verdict")).lower()
 
     if stage2 in _STAGE2_BOOSTS:
         return "error"
@@ -166,7 +207,7 @@ def _make_finding_id(
     cwe: Optional[str],
     index: int,
 ) -> str:
-    openant_id = finding.get("id")
+    openant_id = _coerce_str(finding.get("id"))
     if openant_id:
         return f"openant:{openant_id}"
     if file_rel:
