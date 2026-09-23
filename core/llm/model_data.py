@@ -364,12 +364,17 @@ _DATED_ALIAS_RE = _re.compile(r"-\d{8}$")
 
 def _resolve_model_entry(table: dict, model: str) -> dict | None:
     """Canonical table lookup: exact → dated alias → bedrock strip →
-    both. EVERY consumer of ``MODEL_COSTS`` / ``MODEL_LIMITS`` must
-    resolve through this chain (or the helpers below) — two independent
-    two-step lookups have now each caused a production failure for
-    Bedrock-form ids (``anthropic.claude-…``): $0 cost booking with
-    unenforced budget caps, and a 4096-token completion ceiling that
-    truncated every thinking-model structured response.
+    both. EVERY consumer of ``MODEL_COSTS`` / ``MODEL_LIMITS`` that
+    resolves an id from config or user input must route through this
+    chain (or the helpers below); a direct ``table.get`` is legal only
+    for a literal catalog key. Hand-rolled partial ladders have now
+    caused three production-grade failures for Bedrock-form ids
+    (``anthropic.claude-…``): $0 cost booking with unenforced budget
+    caps, a 4096-token completion ceiling that truncated every
+    thinking-model structured response, and a dated+prefixed id
+    (``us.anthropic.claude-x-<date>``) missing every single-strip
+    probe and running a 128K/1M catalog model at the 8K/32K fallback
+    limits.
     """
     return (
         table.get(model)
