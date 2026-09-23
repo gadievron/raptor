@@ -1082,3 +1082,101 @@ class TestShadowedCalleeJoinRefused:
         )
         s = summaries["handle"]
         assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+
+
+class TestReboundModuleIdentityPoisoned:
+    """A def whose module-scope name is rebound by a non-def
+    assignment, declared ``global`` in a sibling, or wrapped by a
+    decorator no longer proves which body its name runs. Certifying
+    the body would let name-keyed joins mint clean-sanitizer wrappers
+    for callables the runtime name does not point at — the summary
+    must degrade to unknown."""
+
+    def test_module_level_rebind_poisons_summary(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "esc = str\n"
+        )
+        s = summaries["esc"]
+        assert s.summary_unknown
+        assert "rebind" in s.summary_unknown_reason
+
+    def test_module_rebind_before_def_also_poisons(self):
+        # Flow-insensitive: either order leaves the identity
+        # unprovable to the name-keyed consumer.
+        _, summaries = _summaries(
+            "import html\n"
+            "esc = str\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+        )
+        assert summaries["esc"].summary_unknown
+
+    def test_global_declaration_in_sibling_poisons_summary(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def evil():\n"
+            "    global esc\n"
+            "    esc = str\n"
+        )
+        assert summaries["esc"].summary_unknown
+
+    def test_decorator_poisons_summary(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def nullify(f):\n"
+            "    return str\n"
+            "@nullify\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+        )
+        s = summaries["esc"]
+        assert s.summary_unknown
+        assert "decorated" in s.summary_unknown_reason
+
+    def test_semantics_preserving_decorators_exempt(self):
+        _, summaries = _summaries(
+            "import functools\n"
+            "import html\n"
+            "@functools.lru_cache(maxsize=None)\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+        )
+        s = summaries["esc"]
+        assert not s.summary_unknown
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+
+    def test_class_rebind_poisons_method_summaries(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "class C:\n"
+            "    def esc(self, s):\n"
+            "        return html.escape(s)\n"
+            "C = object\n"
+        )
+        assert summaries["C.esc"].summary_unknown
+
+    def test_lambda_def_is_not_a_rebind_of_itself(self):
+        # ``esc = lambda …`` IS the def the callgraph harvests — it
+        # must not read as a REBIND. (Lambdas are independently
+        # unsummarised — "not a function def" — a pre-existing Phase
+        # 13 limitation this pin distinguishes from the poison.)
+        _, summaries = _summaries(
+            "import html\n"
+            "esc = lambda s: html.escape(s)\n"
+        )
+        s = summaries["esc"]
+        assert "rebind" not in s.summary_unknown_reason
+
+    def test_unrelated_module_assign_does_not_poison(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "LIMIT = 10\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+        )
+        assert not summaries["esc"].summary_unknown

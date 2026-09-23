@@ -302,6 +302,34 @@ def _detect_summary_unknown(fn_ast: ast.AST) -> str | None:
     return None
 
 
+# Decorators that provably preserve the decorated function's
+# call/return semantics for the taint questions the summary answers.
+# EVERY other decorator replaces the module-table binding with an
+# arbitrary wrapper object (``@nullify`` returning ``str`` swaps a
+# clean sanitizer for a raw pass-through at import time), so a
+# decorated def's summary must degrade to unknown — the name-keyed
+# joins would otherwise certify the BODY of a function the runtime
+# name no longer points at. Seed set only; kept deliberately small
+# because an over-wide allowlist reopens the forge.
+_SEMANTICS_PRESERVING_DECORATORS = frozenset({
+    "staticmethod", "classmethod", "property",
+    "abstractmethod", "abc.abstractmethod",
+    "functools.wraps", "functools.lru_cache", "functools.cache",
+    "override", "typing.override",
+})
+
+
+def _poisoning_decorator(fn_ast: ast.AST) -> str | None:
+    """Name of the first decorator that voids the summary's identity
+    premise, or None when every decorator is semantics-preserving."""
+    for dec in getattr(fn_ast, "decorator_list", ()) or ():
+        target = dec.func if isinstance(dec, ast.Call) else dec
+        name = _attribute_chain_str(target)
+        if name is None or name not in _SEMANTICS_PRESERVING_DECORATORS:
+            return name or "<complex decorator>"
+    return None
+
+
 def _inside_nested_function(
     target: ast.AST, root: ast.AST,
 ) -> bool:
@@ -899,6 +927,23 @@ def _compute_one_summary(
                 " — behaviour is variant-dependent"
             ),
         )
+    # Rebound module identity: a non-def module-scope assignment to
+    # this name's root (``esc = str`` beside ``def esc``), or a
+    # ``global`` declaration of it anywhere in the module, means the
+    # runtime binding may not be this body at all. The name-keyed
+    # joins would certify a body the call provably may not reach —
+    # degrade to unknown (refusal direction).
+    root = qualified_name.split(".", 1)[0]
+    if root in cg.rebound_names:
+        return TaintSummary(
+            function=qualified_name,
+            params=node.params,
+            summary_unknown=True,
+            summary_unknown_reason=(
+                f"module-scope rebind of {root!r} — runtime identity "
+                "unprovable"
+            ),
+        )
     fn_ast = cg.function_ast(qualified_name)
     if fn_ast is None:
         return TaintSummary(
@@ -906,6 +951,21 @@ def _compute_one_summary(
             params=node.params,
             summary_unknown=True,
             summary_unknown_reason="no AST available",
+        )
+    # Decorated def: the decorator replaces the module binding with
+    # an arbitrary wrapper at import time — certifying the BODY would
+    # forge a clean-sanitizer wrapper for a callable the name no
+    # longer points at. Semantics-preserving decorators are exempt.
+    poisoning = _poisoning_decorator(fn_ast)
+    if poisoning is not None:
+        return TaintSummary(
+            function=qualified_name,
+            params=node.params,
+            summary_unknown=True,
+            summary_unknown_reason=(
+                f"decorated with @{poisoning} — runtime identity "
+                "unprovable"
+            ),
         )
 
     # Dynamic-dispatch check is one-shot per AST — re-checking each
