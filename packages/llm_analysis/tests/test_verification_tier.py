@@ -110,6 +110,49 @@ class TestDeriveVerificationTier:
         )
         assert derive_verification_tier(f) == "tool_backed"
 
+    def test_llm_authored_template_verdict_stays_llm_only(self):
+        # Tier 2/3/fallback verdicts run through CodeQL, but the QUERY
+        # is LLM-written from finding context — the honest producer
+        # stamp is codeql-iris-llm, which is not a mechanical receipt.
+        f = _finding(
+            analysis={
+                "dataflow_validation": {
+                    "verdict": "refuted",
+                    "method": "codeql-iris-llm",
+                    "tier": "template",
+                },
+            },
+        )
+        assert derive_verification_tier(f) == "llm_only"
+
+    def test_llm_authored_tier_overrides_mechanical_method(self):
+        # Belt-and-braces: even if a producer miswires the method
+        # stamp, an LLM-authored tier label must block tool_backed.
+        for tier in ("template", "retry", "template-failed", "fallback"):
+            f = _finding(
+                analysis={
+                    "dataflow_validation": {
+                        "verdict": "refuted",
+                        "method": "codeql-iris",
+                        "tier": tier,
+                    },
+                },
+            )
+            assert derive_verification_tier(f) == "llm_only", tier
+
+    def test_prebuilt_tier_still_grades_tool_backed(self):
+        # Two-direction: the mechanical prebuilt lane keeps its grade.
+        f = _finding(
+            analysis={
+                "dataflow_validation": {
+                    "verdict": "refuted",
+                    "method": "codeql-iris",
+                    "tier": "prebuilt",
+                },
+            },
+        )
+        assert derive_verification_tier(f) == "tool_backed"
+
     def test_llm_deep_validation_dict_does_not_count(self):
         # agent.validate_dataflow's LLM-produced dict carries neither
         # ``method`` nor ``tier`` — an LLM opinion is not a receipt.

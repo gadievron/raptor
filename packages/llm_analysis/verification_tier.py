@@ -34,7 +34,11 @@ actually carries; tier assignment is pure dict inspection, no LLM):
   (``fail_open`` outcome ``confirmed``/``refuted`` without the
   ``-naming`` detection-variant rule id). A mechanical
   ``refuted`` also earns ``tool_backed`` — the tier grades the
-  evidence, not the verdict's sign.
+  evidence, not the verdict's sign. Deep-validation verdicts whose
+  QUERY was LLM-authored (Tier 2 template predicates, Tier 3 retry,
+  the legacy fallback) are NOT mechanical even though CodeQL executed
+  them — they carry ``method: codeql-iris-llm`` plus an
+  LLM-authored ``tier`` label and stay ``llm_only``.
 * ``llm_only`` — the LLM affirmed (or denied) and nothing mechanical
   corroborates.
 
@@ -58,10 +62,24 @@ _DYNAMIC_OUTCOMES = frozenset({
 })
 
 # ``dataflow_validation.method`` values produced by mechanical
-# validators (packages.llm_analysis.dataflow_validation._attach_result).
-# The LLM-backed deep-validation dict carries neither ``method`` nor
-# ``tier`` and therefore never qualifies here.
+# validators (packages.llm_analysis.dataflow_validation._attach_result
+# stamps ``method`` from the tier that actually produced the verdict).
+# ``codeql-iris`` means a prebuilt pack-resident query; LLM-authored
+# queries stamp ``codeql-iris-llm`` and never qualify. agent.py's
+# ``validate_dataflow`` LLM dict carries neither ``method`` nor
+# ``tier`` and likewise never qualifies here.
 _MECHANICAL_METHODS = frozenset({"codeql-iris", "structural-treesitter"})
+
+# ``dataflow_validation.tier`` labels whose CodeQL query text is
+# LLM-AUTHORED (Tier 2 template predicates, Tier 3 compile-retry, the
+# legacy free-form fallback). CodeQL executing the query is mechanical;
+# the QUERY is not. Shared with the producer (_attach_result derives
+# the honest ``method`` stamp from this set) and consumed here as a
+# belt-and-braces veto so a miswired method stamp can never launder an
+# LLM-shaped verdict into ``tool_backed``.
+LLM_AUTHORED_DV_TIERS = frozenset({
+    "template", "retry", "template-failed", "fallback",
+})
 
 _TIER_ORDER = {
     VerificationTier.CONFIRMED.value: 0,
@@ -123,11 +141,13 @@ def derive_verification_tier(finding: dict[str, Any]) -> str:
         or finding.get("dataflow_validation")
         or {}
     )
-    if isinstance(dv, dict) and dv.get("verdict") in ("confirmed", "refuted") and (
-        dv.get("method") in _MECHANICAL_METHODS
-        or dv.get("tier") == "iris_tier1"
-    ):
-        return VerificationTier.TOOL_BACKED.value
+    if isinstance(dv, dict) and dv.get("verdict") in ("confirmed", "refuted"):
+        dv_tier = dv.get("tier")
+        if dv_tier not in LLM_AUTHORED_DV_TIERS and (
+            dv.get("method") in _MECHANICAL_METHODS
+            or dv_tier == "iris_tier1"
+        ):
+            return VerificationTier.TOOL_BACKED.value
 
     return VerificationTier.LLM_ONLY.value
 

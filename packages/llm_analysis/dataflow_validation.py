@@ -43,6 +43,7 @@ from .dataflow_query_builder import (
     infer_cwe_from_rule_id,
     supported_languages_for_template,
 )
+from .verification_tier import LLM_AUTHORED_DV_TIERS
 
 logger = logging.getLogger(__name__)
 
@@ -603,7 +604,7 @@ def validate_dataflow_claims(
     # Re-running them through the LLM costs 2× and yields nothing new.
     # Cache scope is the call only — cross-run caching is a future feature
     # (would need a persistent store keyed on the project + revision).
-    cache: dict[str, Any] = {}
+    cache: dict[str, tuple[Any, str]] = {}
 
     for finding in findings:
         fid = finding.get("finding_id")
@@ -677,7 +678,7 @@ def validate_dataflow_claims(
             # that skipped it would leave the duplicate finding
             # without its witness.
             metrics["n_cache_hits"] += 1
-            result = cached
+            result, tier_used = cached
         else:
             if progress_callback:
                 progress_callback(f"Validating dataflow for {fid}")
@@ -748,7 +749,9 @@ def validate_dataflow_claims(
                     metrics["path_conditions_by_cwe"].get(cwe, 0) + 1
                 )
 
-            cache[cache_key] = result
+            # Tier label rides the cache so a duplicate-claim finding
+            # gets the same honest method stamp as the first.
+            cache[cache_key] = (result, tier_used)
             metrics["n_validated"] += 1
 
         # ----- Tier 4: SMT path-feasibility refinement -----
@@ -778,7 +781,7 @@ def validate_dataflow_claims(
             elif smt_outcome == "smt_disagree":
                 metrics["n_tier4_smt_disagree"] += 1
 
-        _attach_result(analysis, result)
+        _attach_result(analysis, result, tier=tier_used)
         if analysis.get("dataflow_validation", {}).get("recommends_downgrade"):
             metrics["n_recommended_downgrades"] += 1
 
@@ -2704,7 +2707,8 @@ def _attach_result(
     analysis: dict,
     result,
     *,
-    method: str = "codeql-iris",
+    method: str | None = None,
+    tier: str | None = None,
 ) -> None:
     """Record the validation outcome on the analysis dict — NON-DESTRUCTIVE.
 
@@ -2720,8 +2724,17 @@ def _attach_result(
     would see a pre-judged finding instead of the original analysis,
     undermining their independence.
 
-    ``method`` labels the validator that produced the result:
-    ``"codeql-iris"`` (default) or ``"structural-treesitter"``.
+    ``method`` MUST reflect the actual producer of the verdict —
+    ``verification_tier`` grants ``tool_backed`` weight to mechanical
+    methods only, so a dishonest stamp would launder an LLM-shaped
+    verdict into "mechanically corroborated". When ``method`` is not
+    given it is derived from ``tier`` (the tier label returned by
+    `_validate_one_hypothesis`): LLM-authored tiers (Tier 2 template
+    predicates, Tier 3 retry, legacy fallback — the LLM wrote the
+    query) stamp ``"codeql-iris-llm"``; everything else (prebuilt
+    pack-resident queries) keeps ``"codeql-iris"``. The structural
+    lane passes ``method="structural-treesitter"`` explicitly. ``tier``
+    is persisted alongside so consumers can audit the stamp.
     """
     evidence = []
     for e in result.evidence:
@@ -2734,7 +2747,12 @@ def _attach_result(
     recommends_downgrade = (
         result.refuted and read_verdict(analysis, "is_exploitable") is True
     )
-    analysis["dataflow_validation"] = {
+    if method is None:
+        method = (
+            "codeql-iris-llm" if tier in LLM_AUTHORED_DV_TIERS
+            else "codeql-iris"
+        )
+    block: dict[str, Any] = {
         "verdict": result.verdict,
         "reasoning": result.reasoning,
         "evidence": evidence,
@@ -2742,6 +2760,9 @@ def _attach_result(
         "recommends_downgrade": recommends_downgrade,
         "method": method,
     }
+    if tier is not None:
+        block["tier"] = tier
+    analysis["dataflow_validation"] = block
 
 
 def run_validation_pass(
