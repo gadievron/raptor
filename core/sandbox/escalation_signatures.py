@@ -56,18 +56,40 @@ DEFAULT_HOST_RECON_THRESHOLD = 5
 # ---- syscall-argument decoding (socket / ioctl) -----------------------
 #
 # socket() and ioctl() denials are argument-filtered by seccomp
-# (core/sandbox/seccomp.py blocks specific families / cmd numbers),
-# but the audit record historically carried only the raw uint64 args —
-# so triage could not distinguish a TIOCSTI tty-injection attempt from
-# an ordinary blocked AF_UNIX connect. These tables decode exactly the
-# argument values seccomp filters on. Constants are the asm-generic
-# values shared by x86_64 and aarch64 — the only arches the tracer
-# supports (seccomp.py documents the same constraint for its filter).
+# (core/sandbox/seccomp.py), but the audit record historically carried
+# only the raw uint64 args — so triage could not distinguish a TIOCSTI
+# tty-injection attempt from an ordinary blocked AF_UNIX connect.
+# The socket filter is deny-by-default on BOTH the family and type
+# axes, so no finite table can decode "exactly what it filters on";
+# these tables name the population that actually appears in denial
+# records — the workhorse values, the families the pre-inversion
+# denylist enumerated, and the kernel-internal transports the
+# inversion was landed to catch — and unknown values fall through as
+# numerics. Constants are the asm-generic values shared by x86_64 and
+# aarch64 — the only arches the tracer supports (seccomp.py documents
+# the same constraint for its filter).
 
 SOCKET_FAMILY_NAMES = {
     1: "AF_UNIX",
+    2: "AF_INET",
+    5: "AF_APPLETALK",
+    10: "AF_INET6",
+    15: "AF_KEY",
     16: "AF_NETLINK",
     17: "AF_PACKET",
+    21: "AF_RDS",
+    24: "AF_PPPOX",
+    30: "AF_TIPC",
+    31: "AF_BLUETOOTH",
+    33: "AF_RXRPC",
+    38: "AF_ALG",
+    39: "AF_NFC",
+    40: "AF_VSOCK",
+    41: "AF_KCM",
+    42: "AF_QIPCRTR",
+    43: "AF_SMC",
+    44: "AF_XDP",
+    45: "AF_MCTP",
 }
 
 # Kernel masks the type argument with SOCK_TYPE_MASK (0xf) before the
@@ -77,6 +99,10 @@ SOCKET_TYPE_NAMES = {
     1: "SOCK_STREAM",
     2: "SOCK_DGRAM",
     3: "SOCK_RAW",
+    4: "SOCK_RDM",
+    5: "SOCK_SEQPACKET",
+    6: "SOCK_DCCP",
+    10: "SOCK_PACKET",
 }
 
 IOCTL_CMD_NAMES = {
@@ -88,10 +114,18 @@ IOCTL_CMD_NAMES = {
 
 # Decoded argument values that are themselves escape/recon primitives,
 # beyond the generic "blocked syscall" signal: every blocked ioctl cmd
-# is a tty-hijack primitive; AF_PACKET and SOCK_RAW are sniff/spoof
-# primitives. AF_UNIX / AF_NETLINK / SOCK_DGRAM denials stay ordinary
+# is a tty-hijack primitive; AF_PACKET / SOCK_RAW / SOCK_PACKET are
+# sniff/spoof primitives (SOCK_PACKET is the legacy spelling the
+# kernel remaps to AF_PACKET even behind an allowlisted family);
+# AF_SMC and AF_RXRPC are the kernel-internal transports that shipped
+# past the pre-inversion controls (TCP clcsock past Landlock's
+# TCP-only connect hook; datagram transport past the caller-created-
+# DGRAM UDP block) — a denial naming them is targeted probing, not
+# tool noise. AF_UNIX / AF_NETLINK / SOCK_DGRAM denials stay ordinary
 # noise (dbus clients, `ip`-style tools trip them constantly).
-HOSTILE_SOCKET_ARGS = frozenset({"AF_PACKET", "SOCK_RAW"})
+HOSTILE_SOCKET_ARGS = frozenset({
+    "AF_PACKET", "SOCK_RAW", "SOCK_PACKET", "AF_SMC", "AF_RXRPC",
+})
 HOSTILE_IOCTL_CMDS = frozenset({
     "TIOCSTI", "TIOCCONS", "TIOCSCTTY", "TIOCLINUX",
 })

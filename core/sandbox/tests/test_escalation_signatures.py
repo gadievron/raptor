@@ -143,3 +143,45 @@ class TestSyscallArgDecoding:
                 == frozenset(seccomp_mod._BLOCKED_IOCTL_CMDS))
         assert sigs.HOSTILE_IOCTL_CMDS == frozenset(
             sigs.IOCTL_CMD_NAMES.values())
+
+
+class TestDecodeTablesTrackTheInvertedFilter:
+    """Drift pins: the socket filter is deny-by-default on both axes,
+    and the decode tables must at least name (a) every value the
+    filter's own allowlists admit, and (b) the escape-adjacent values
+    whose denials are targeted probing — the kernel-internal
+    transports the inversion was landed to catch decoded as unnamed
+    numeric noise and never fired the hostile-arg escalation."""
+
+    def test_type_table_covers_the_seccomp_type_axis(self):
+        from core.sandbox import seccomp
+        assert set(seccomp._SOCKET_TYPE_ALLOWLIST) <= set(
+            sigs.SOCKET_TYPE_NAMES)
+        # Assigned kernel type values (SOCK_STREAM..SOCK_DCCP,
+        # SOCK_PACKET) must all decode by name — the complement of
+        # the allowlist within them is exactly the interesting-deny
+        # population.
+        assert set(sigs.SOCKET_TYPE_NAMES) == set(range(1, 7)) | {10}
+
+    def test_family_table_covers_the_family_allowlists(self):
+        from core.sandbox import seccomp
+        for fam in (*seccomp._SOCKET_FAMILY_ALLOWLIST_BASE,
+                    *seccomp._SOCKETPAIR_FAMILY_ALLOWLIST):
+            assert fam in sigs.SOCKET_FAMILY_NAMES, fam
+
+    def test_kernel_internal_transports_decode_and_escalate(self):
+        # AF_SMC / AF_RXRPC: the families that shipped kernel-internal
+        # transports past the pre-inversion controls.
+        for fam, name in ((43, "AF_SMC"), (33, "AF_RXRPC")):
+            decoded = sigs.decode_syscall_args(
+                "socket", [fam, 1, 0])
+            assert decoded["socket_family"] == name
+            assert sigs.hostile_arg_label("socket", [fam, 1, 0]), name
+
+    def test_sock_packet_decodes_and_escalates(self):
+        # The AF_INET+SOCK_PACKET remap spelling: family allowlisted,
+        # type is the packet-capture primitive.
+        decoded = sigs.decode_syscall_args("socket", [2, 10, 0x300])
+        assert decoded["socket_family"] == "AF_INET"
+        assert decoded["socket_type"] == "SOCK_PACKET"
+        assert sigs.hostile_arg_label("socket", [2, 10, 0x300])
