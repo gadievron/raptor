@@ -571,6 +571,7 @@ def run_rule(
         if proc.returncode == 0:
             files_examined = _collect_files_examined(
                 target, {m.file for m in matches}, tree_files=tree_files,
+                no_includes=no_includes,
             )
         else:
             files_examined = sorted({m.file for m in matches})
@@ -942,6 +943,7 @@ def run_rules_batched(
         if proc.returncode == 0:
             batch_examined = _collect_files_examined(
                 target, {m.file for m in all_matches},
+                no_includes=no_includes,
             )
         else:
             # Died mid-tree: nothing beyond the actual matches is
@@ -1031,11 +1033,14 @@ def _dedup_matches(matches: list[SpatchMatch]) -> list[SpatchMatch]:
 
 
 def _walk_c_h(target: Path) -> set[str]:
-    """One recursive enumeration of the target's C/C++ source surface.
+    """One recursive enumeration of the target's C source surface.
 
-    Both .c and .h — spatch examines preprocessed translation units
-    which include headers via #include expansion. Operators tracking
-    "did the rule examine this header?" need .h in the list.
+    Both .c and .h — with includes enabled, spatch examines
+    preprocessed translation units which pull headers in via
+    #include expansion, and operators tracking "did the rule examine
+    this header?" need .h in the list. Under ``--no-includes`` the
+    headers are NEVER parsed; ``_collect_files_examined`` filters
+    them back out so the claim tracks what spatch actually saw.
     """
     return (
         {str(f) for f in target.rglob("*.c")}
@@ -1048,16 +1053,20 @@ def _collect_files_examined(
     match_files: set,
     *,
     tree_files: set[str] | None = None,
+    no_includes: bool = False,
 ) -> list[str]:
     """Build files_examined from the target path plus any match files.
 
-    spatch has no machine-readable log of which files it processed, so we
-    approximate: for a single file target we know exactly; for a directory
-    we enumerate *.c AND *.h (spatch examines headers too — pre-fix
-    only `.c` was counted, so the files_examined report under-
-    counted by ~50% on typical C projects, and any rule that
-    matched in a header silently failed to surface in
-    files_examined even though it WAS examined).
+    spatch has no machine-readable log of which files it processed,
+    so we approximate: for a single file target we know exactly; for
+    a directory we enumerate *.c, plus *.h only when includes are
+    enabled (header coverage is then approximate — only headers a
+    scanned TU actually #includes were seen). Under ``no_includes``
+    — exactly what the prereqs sweep and the untrusted-target
+    recommendation use — spatch never opens a header, so listing
+    ``*.h`` claimed verified silence for files the run was
+    structurally blind to, and ``to_coverage_record`` propagated the
+    over-claim into coverage-coccinelle.json.
 
     ``tree_files``: pre-enumerated directory walk to reuse. The walk is
     loop-invariant across the rules of one run, so multi-rule callers
@@ -1068,6 +1077,8 @@ def _collect_files_examined(
         examined = {str(target)} | match_files
     elif target.is_dir():
         walked = tree_files if tree_files is not None else _walk_c_h(target)
+        if no_includes:
+            walked = {f for f in walked if not f.endswith(".h")}
         examined = walked | match_files
     else:
         examined = set(match_files)

@@ -2353,3 +2353,48 @@ class TestTimeoutElapsedMs:
                 target, rules, timeout=1, subprocess_runner=fake_runner,
             )
         assert all(r.elapsed_ms > 0 for r in out.values())
+
+
+class TestFilesExaminedNoIncludes:
+    """files_examined claims verified silence for every listed file —
+    under --no-includes spatch never opens a header, so *.h must not
+    be claimed (the probe shape: a never-included header was
+    reported examined)."""
+
+    def test_collect_excludes_headers_under_no_includes(self, tmp_path):
+        (tmp_path / "a.c").write_text("")
+        (tmp_path / "never_included.h").write_text("")
+        result = _collect_files_examined(tmp_path, set(), no_includes=True)
+        assert any(f.endswith("a.c") for f in result)
+        assert not any(f.endswith(".h") for f in result)
+
+    def test_collect_keeps_headers_with_includes(self, tmp_path):
+        # Two-direction pin: includes enabled keeps the approximate
+        # header coverage claim.
+        (tmp_path / "a.c").write_text("")
+        (tmp_path / "u.h").write_text("")
+        result = _collect_files_examined(tmp_path, set(), no_includes=False)
+        assert any(f.endswith("u.h") for f in result)
+
+    def test_match_files_survive_the_filter(self, tmp_path):
+        (tmp_path / "a.c").write_text("")
+        result = _collect_files_examined(
+            tmp_path, {"evidence.h"}, no_includes=True,
+        )
+        assert "evidence.h" in result
+
+    @pytest.mark.skipif(not is_available(), reason="spatch not installed")
+    def test_run_rule_no_includes_omits_header(self, tmp_path):
+        target = tmp_path / "src"
+        target.mkdir()
+        (target / "a.c").write_text("int f(void) { return 0; }\n")
+        (target / "never_included.h").write_text("#define X 1\n")
+        rule = tmp_path / "r.cocci"
+        rule.write_text("@r@\n@@\n- return 0;\n+ return 1;\n",
+                        encoding="utf-8")
+        result = run_rule(target, rule, no_includes=True)
+        assert result.returncode == 0
+        assert not any(
+            f.endswith("never_included.h") for f in result.files_examined
+        )
+        assert any(f.endswith("a.c") for f in result.files_examined)
