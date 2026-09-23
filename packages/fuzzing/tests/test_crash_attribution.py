@@ -386,3 +386,70 @@ class TestDuplicateCrashIds:
         summary = attribute_crashes([_crash(f) for f in files], manifest)
         assert sorted(summary.attributed) == ["000000", "000001"]
         assert summary.unattributed == 0
+
+
+class TestInstanceNameValidation:
+    def test_dotdot_instance_name_rejected(self, tmp_path):
+        """A crash filename can smuggle exactly one path hop
+        (`,instance:..` — a filename cannot contain '/'), which joins
+        the queue walk one level ABOVE the AFL out dir. Instance
+        names are RAPTOR-chosen (main / secondaryN) — validate the
+        parsed token so no join can ever leave the out dir."""
+        from packages.fuzzing.crash_attribution import _instance_for_crash
+
+        merged = tmp_path / "afl_out" / "merged_crashes"
+        merged.mkdir(parents=True)
+        crash = merged / "id:000000,sig:11,src:000000,instance:.."
+        crash.write_bytes(b"x")
+        assert _instance_for_crash(crash) is None
+
+    def test_normal_instance_names_still_parse(self, tmp_path):
+        from packages.fuzzing.crash_attribution import _instance_for_crash
+
+        merged = tmp_path / "afl_out" / "merged_crashes"
+        merged.mkdir(parents=True)
+        for inst in ("main", "secondary1", "sec-2"):
+            crash = merged / f"id:000000,sig:11,instance:{inst}"
+            crash.write_bytes(b"x")
+            located = _instance_for_crash(crash)
+            assert located is not None and located[0] == inst
+
+
+class TestSeedProvenanceShapes:
+    def test_list_shaped_manifest_returns_empty(self, tmp_path):
+        from packages.fuzzing.crash_attribution import load_seed_provenance
+
+        manifest = tmp_path / "smt-seeds-manifest.json"
+        manifest.write_text('["junk"]', encoding="utf-8")
+        assert load_seed_provenance(manifest) == {}
+
+
+def test_hostile_sync_token_breaks_chain_never_misroots():
+    """A queue entry's sync token rides the same target-writable
+    filename channel — an out-of-alphabet source instance must break
+    the chain (unattributed), never resolve against a guessed queue."""
+    from packages.fuzzing.crash_attribution import _root_orig_seeds
+
+    indexes = {
+        "main": {
+            "000001": "id:000001,sync:..,src:000002",
+        },
+        "..": {
+            "000002": "id:000002,orig:planted-root",
+        },
+    }
+    requested: list[str] = []
+
+    def index_for(inst: str) -> dict:
+        requested.append(inst)
+        return indexes.get(inst, {})
+
+    roots = _root_orig_seeds(
+        "id:000000,sig:11,src:000001",
+        "main",
+        index_for,
+    )
+    assert roots is None
+    assert ".." not in requested, (
+        "hostile sync token was path-joined into a queue lookup"
+    )

@@ -51,7 +51,13 @@ _MAX_VISITED = 256
 _ID_RE = re.compile(r"(?:^|,)id:(\d+)")
 _SRC_RE = re.compile(r"(?:^|,)src:([\d+]+)")
 _ORIG_RE = re.compile(r"(?:^|,)orig:([^,]+)")
-_INSTANCE_RE = re.compile(r",instance:([^,]+)$")
+# Instance names are RAPTOR-chosen (main / secondaryN) — pin the
+# accepted alphabet. The name is path-joined into the queue walk, and
+# a crash FILENAME can smuggle exactly one hop (",instance:.." — a
+# filename cannot contain "/"), which would read directory names one
+# level above the AFL out dir into the lineage index.
+_INSTANCE_NAME_RE = re.compile(r"\A[A-Za-z0-9_-]+\Z")
+_INSTANCE_RE = re.compile(r",instance:([A-Za-z0-9_-]+)$")
 # Cross-instance import: afl-fuzz names imported queue entries
 # ``id:%06u,sync:%s,src:%06u`` — the src id belongs to the NAMED
 # source instance's queue, not the importing instance's.
@@ -166,7 +172,16 @@ def _root_orig_seeds(
             if not parents:
                 return None
             sync = _SYNC_RE.search(entry_name)
-            parent_inst = sync.group(1) if sync else inst
+            if sync:
+                parent_inst = sync.group(1)
+                # Queue entry names live in the target-writable AFL
+                # dir; a hostile sync token is one path hop like the
+                # instance token above. An unparseable source
+                # instance breaks the chain (never a wrong root).
+                if _INSTANCE_NAME_RE.fullmatch(parent_inst) is None:
+                    return None
+            else:
+                parent_inst = inst
             next_frontier.extend((parent_inst, p) for p in parents)
         frontier = next_frontier
     return roots or None
@@ -182,7 +197,16 @@ def load_seed_provenance(manifest_path: Path) -> dict[str, dict]:
         logger.warning("SMT seed manifest unreadable (%s): %s", manifest_path, exc)
         return {}
     out: dict[str, dict] = {}
-    for entry in data.get("seeds") or []:
+    if not isinstance(data, dict):
+        # A list-shaped (or otherwise non-object) manifest must
+        # degrade like an unreadable one, not raise out of .get().
+        logger.warning(
+            "SMT seed manifest has a non-object shape (%s): %s",
+            type(data).__name__, manifest_path,
+        )
+        return out
+    seeds = data.get("seeds")
+    for entry in seeds if isinstance(seeds, list) else []:
         if isinstance(entry, dict) and entry.get("seed"):
             out[str(entry["seed"])] = entry
     return out
