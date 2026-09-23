@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import logging
 
+from pathlib import Path
+
 from core.llm.task_types import TaskType
 from . import (
     StageResult,
@@ -21,17 +23,23 @@ from . import (
     UntrustedBlock,
     run_stage,
 )
+from ..parsers._safe_read import read_bounded, scan_root_context
 from .prompts import BINARY_IN_TESTS_SYSTEM
 from .schemas import BinaryInTestsVerdict
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..models import SupplyChainFinding
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 _MAX_CONTEXT_CHARS = 50_000
+
+# Per-file read budget for surrounding test code. The prompt keeps
+# at most a 10K-char slice per file, so anything past a megabyte is
+# never useful — but pre-bound, a planted 64 MB "test file" was
+# fully buffered before the slice.
+_MAX_TEST_FILE_BYTES = 1 * 1024 * 1024
 
 
 def review_binary_in_tests(
@@ -128,38 +136,89 @@ def _review_one(
 
 
 def _gather_test_context(target: Path, binary_path: str) -> str:
-    """Read nearby test files that might reference the binary."""
+    """Read nearby test files that might reference the binary.
+
+    ``binary_path`` is finding evidence derived from an UNTRUSTED
+    repo, and everything read here lands verbatim in the LLM prompt
+    (off-host). Containment is therefore non-negotiable:
+
+      * the evidence path must resolve INSIDE ``target`` — an
+        absolute or traversal-shaped path degrades to "no context"
+        instead of steering the directory walk out of the repo;
+      * each surrounding test file is read through the package's
+        bounded no-follow chokepoint (``_safe_read.read_bounded``)
+        under ``scan_root_context(target)``, so a repo-planted
+        symlink to a host file is refused while legitimate in-root
+        symlinks (monorepo layouts) keep working;
+      * reads are size-bounded — the prompt keeps a 10K-char slice,
+        so a planted multi-GB "test file" must not be buffered.
+    """
     if not binary_path:
         return ""
 
-    binary = target / binary_path
-    if not binary.exists():
+    try:
+        root = target.resolve()
+        rel = Path(binary_path)
+        if rel.is_absolute():
+            logger.warning(
+                "sca.llm.binary_in_tests: refusing absolute evidence "
+                "path %s (must be repo-relative)", binary_path,
+            )
+            return ""
+        binary = target / rel
+        # Resolve the PARENT (the directory we're about to glob):
+        # a ``tests -> /etc`` directory symlink or a ``..`` segment
+        # in the evidence path must not walk host directories.
+        parent = binary.parent.resolve()
+        if parent != root and not parent.is_relative_to(root):
+            logger.warning(
+                "sca.llm.binary_in_tests: refusing evidence path %s "
+                "(resolves outside the scan root)", binary_path,
+            )
+            return ""
+        if not binary.exists():
+            return ""
+    except OSError as e:
+        logger.debug(
+            "sca.llm.binary_in_tests: cannot resolve context dir "
+            "for %s: %s", binary_path, e,
+        )
         return ""
 
-    parent = binary.parent
     binary_name = binary.name
     chunks: list[str] = []
     total = 0
 
-    for test_file in sorted(parent.glob("*.py")) + sorted(parent.glob("*.js")) + sorted(parent.glob("*.ts")):
-        if test_file == binary:
-            continue
-        try:
-            text = test_file.read_text(encoding="utf-8", errors="replace")
-        except Exception:  # noqa: BLE001
-            continue
-        if binary_name not in text:
-            continue
-        header = f"--- {test_file.relative_to(target)} ---\n"
-        idx = text.find(binary_name)
-        if idx <= 10_000:
-            chunk = header + text[:10_000]
-        else:
-            start = max(0, idx - 5_000)
-            chunk = header + text[start:start + 10_000]
-        if total + len(chunk) > _MAX_CONTEXT_CHARS:
-            break
-        chunks.append(chunk)
-        total += len(chunk)
+    with scan_root_context(target):
+        for test_file in (
+            sorted(parent.glob("*.py"))
+            + sorted(parent.glob("*.js"))
+            + sorted(parent.glob("*.ts"))
+        ):
+            if test_file.name == binary_name:
+                continue
+            text = read_bounded(
+                test_file, max_bytes=_MAX_TEST_FILE_BYTES,
+                follow_symlinks=False,
+            )
+            if text is None:
+                continue
+            if binary_name not in text:
+                continue
+            try:
+                shown = test_file.relative_to(root)
+            except ValueError:
+                shown = Path(test_file.name)
+            header = f"--- {shown} ---\n"
+            idx = text.find(binary_name)
+            if idx <= 10_000:
+                chunk = header + text[:10_000]
+            else:
+                start = max(0, idx - 5_000)
+                chunk = header + text[start:start + 10_000]
+            if total + len(chunk) > _MAX_CONTEXT_CHARS:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
 
     return "\n".join(chunks)
