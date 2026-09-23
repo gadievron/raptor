@@ -22,6 +22,11 @@ signal(..., handler)
 
 @unsafe_in_signal depends on handler_signal@
 identifier handler_signal.handler;
+// Allocators only, deliberately: learned DEALLOCATORS (project free
+// wrappers) are equally async-signal-unsafe, but the renderer splices
+// exactly one bucket per marked construct, and a second marked list
+// would need its own rule + report pair per handler shape. Accepted
+// FN; seed free/longjmp/etc. stay in the literal list below.
 // @vocab: allocators
 identifier unsafe_fn = {malloc, calloc, realloc, free, printf, fprintf, sprintf, snprintf, vprintf, vfprintf, vsprintf, vsnprintf, syslog, exit, longjmp, siglongjmp};
 position p_call;
@@ -58,6 +63,11 @@ SA.sa_handler = handler;
 
 @unsafe_sa_handler depends on handler_sa_handler@
 identifier handler_sa_handler.handler;
+// Allocators only, deliberately: learned DEALLOCATORS (project free
+// wrappers) are equally async-signal-unsafe, but the renderer splices
+// exactly one bucket per marked construct, and a second marked list
+// would need its own rule + report pair per handler shape. Accepted
+// FN; seed free/longjmp/etc. stay in the literal list below.
 // @vocab: allocators
 identifier unsafe_fn = {malloc, calloc, realloc, free, printf, fprintf, sprintf, snprintf, vprintf, vfprintf, vsprintf, vsnprintf, syslog, exit, longjmp, siglongjmp};
 position p_call;
@@ -94,6 +104,11 @@ SA.sa_sigaction = handler;
 
 @unsafe_sa_sigaction depends on handler_sa_sigaction@
 identifier handler_sa_sigaction.handler;
+// Allocators only, deliberately: learned DEALLOCATORS (project free
+// wrappers) are equally async-signal-unsafe, but the renderer splices
+// exactly one bucket per marked construct, and a second marked list
+// would need its own rule + report pair per handler shape. Accepted
+// FN; seed free/longjmp/etc. stay in the literal list below.
 // @vocab: allocators
 identifier unsafe_fn = {malloc, calloc, realloc, free, printf, fprintf, sprintf, snprintf, vprintf, vfprintf, vsprintf, vsnprintf, syslog, exit, longjmp, siglongjmp};
 position p_call;
