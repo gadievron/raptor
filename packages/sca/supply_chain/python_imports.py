@@ -68,6 +68,14 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Extraction version for the per-file record cache: the class-body /
+# decorator / default-arg / guard-provenance semantics change what a
+# file's record set contains, so pre-change cache entries must miss
+# rather than replay the old (blind) results. Bump on any _compute
+# semantics change. (v2 was previously spelled inline in the cache
+# label; the axis now lives in the shared helper's key.)
+_EXTRACTION_VERSION = 2
+
 
 # Canonical skip set + this walker's extras. Drift-free: a new entry
 # in discovery.EXCLUDED_DIR_NAMES propagates to every walker.
@@ -201,12 +209,9 @@ def scan_target(
                 } for f in _scan_module(tree, path, target, manifests_list)]
             return recs
 
-        # Cache label carries a schema rev: the class-body / decorator
-        # / default-arg / guard-provenance semantics change what a
-        # file's record set contains, so pre-change cache entries must
-        # miss rather than replay the old (blind) results.
         recs = cached_per_file(
-            cache, "supply_chain:py-imports:v2", text, _compute,
+            cache, "supply_chain:py-imports", text, _compute,
+            version=_EXTRACTION_VERSION,
         )
         host_dep = _project_host_dep(manifests_list, path, target)
         out.extend(ImportTimeFinding(

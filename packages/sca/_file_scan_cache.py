@@ -50,14 +50,26 @@ def cached_per_file(
     consumer: str,
     text: str,
     compute: Callable[[], Any],
+    *,
+    version: int,
 ) -> Any:
-    """Cache a per-file scan result keyed by SHA-256 of file content.
+    """Cache a per-file scan result keyed by SHA-256 of file content
+    plus the consumer's extraction version.
 
     Cache miss → call ``compute()``, persist its return value under
-    ``sca:<consumer>:<sha256>``, return it.
+    ``sca:<consumer>:v<version>:<sha256>``, return it.
     Cache hit  → return the deserialised cached value (no compute).
     No cache (``cache is None``) → just call ``compute()`` (legacy
     behaviour preserved for callers that opt out of caching).
+
+    ``version`` is REQUIRED: entries live at ``TTL_FOREVER``, so a
+    content-hash-only key pinned pre-fix extraction results per file
+    forever — an extractor fix silently did not apply to any
+    previously-scanned unchanged file, machine-wide. Each consumer
+    declares a module-level extraction-version constant and bumps it
+    whenever its compute() semantics change (the ``dockerfile_from``
+    ``_SBOM_EXTRACTION_VERSION`` shape, owned here so no consumer can
+    forget the axis).
 
     The result must be JSON-serialisable (lists/dicts/ints/strs).
     Consumers caching dataclass-shaped findings are responsible for
@@ -71,7 +83,7 @@ def cached_per_file(
     # Falling through to compute is the safe legacy behaviour.
     if not hasattr(cache, "get") or not hasattr(cache, "put"):
         return compute()
-    key = f"{SCA_PREFIX}{consumer}:{file_sha256(text)}"
+    key = f"{SCA_PREFIX}{consumer}:v{version}:{file_sha256(text)}"
     cached = cache.get(key, ttl_seconds=TTL_FOREVER)
     if cached is not None:
         return cached
