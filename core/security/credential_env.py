@@ -635,8 +635,15 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
                      "$(VAR) reference, so they are outside the "
                      "reference-derived universe; the unit suite's "
                      "env option-injection arm probes every "
-                     "database-defined name behaviorally and asserts "
-                     "the injectors are members; cmake envvar manual "
+                     "universe name (dot-prefixed specials included "
+                     "— make imports the whole environ) behaviorally "
+                     "under a no-makefile startup, a recipe-bearing "
+                     "dry run (recipe-argv construction expands "
+                     "names startup never touches — IFS, "
+                     ".SHELLFLAGS), and a library-prerequisite dry "
+                     "run (-l search expands .LIBPATTERNS) and "
+                     "asserts the injectors are members; "
+                     "cmake envvar manual "
                      "full walk; `go help environment` cgo block"),
         tool_override=frozenset({
             # The full executed-program catalog of make's implicit
@@ -697,6 +704,59 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
             # covers it behaviorally.
             "GNUMAKEFLAGS",
             "MFLAGS",
+            # Expansion-exec class (probe-verified on GNU make 4.4):
+            # make EXPANDS these env-origin values when it consumes
+            # them, and expansion runs functions — an environment
+            # `VPATH=$(shell <cmd>)` executes at STARTUP, before any
+            # rule. MAKEOVERRIDES is additionally spliced into
+            # MAKEFLAGS handling, so `MAKEOVERRIDES=CC=<prog>` rides
+            # the same program-override primitive as MAKEFLAGS (it is
+            # also absent from the `make -p` database dump, which is
+            # why the reference oracle could never see it — the
+            # binary-token universe of the option-injection arm
+            # does). VPATH / GPATH were previously adjudicated out as
+            # search-path knobs with "no direct exec primitive"; the
+            # expansion probe refuted that.
+            "MAKEOVERRIDES",
+            "VPATH",
+            "GPATH",
+            # Recipe-context member of the same expansion-exec class
+            # (probe-verified on GNU make 4.4): make expands the
+            # env-origin IFS value while CONSTRUCTING each recipe's
+            # command argv (deciding shell vs fast path), so
+            # `IFS=$(shell <cmd>)` executes as soon as any target has
+            # a recipe — INCLUDING under `-n`, which dry-run lanes
+            # assume is parse-only; `IFS=$(file >…)` writes files
+            # with no shell at all. Startup-context probes (no
+            # makefile, no recipe) never see it: the behavioral
+            # oracle arm probes both contexts. Also independently
+            # homed in the DANGEROUS_ENV_VARS blocklists (shell
+            # word-splitting injection) — membership here puts the
+            # make-expansion power on the same belt as VPATH/GPATH
+            # rather than leaving it to a coincidental second home.
+            "IFS",
+            # Dot-prefixed make specials in the same expansion-exec
+            # class (probe-verified on GNU make 4.4). GNU make
+            # imports the ENTIRE environ, dot-named keys included —
+            # POSIX shells cannot export such names, but env dicts
+            # (the repo-metadata lanes these belts guard) can carry
+            # any key. Each expands its env-origin value in its own
+            # context:
+            #   .EXTRA_PREREQS — expanded per TARGET (make >= 4.3);
+            #     `$(shell <cmd>)` executes even under `-n`, no
+            #     special makefile shape needed.
+            #   .LIBPATTERNS — expanded during `-l` prerequisite
+            #     search; `$(shell <cmd>)` executes under `-n` when
+            #     any target names a `-lfoo` prerequisite.
+            #   .SHELLFLAGS — expanded while building each recipe's
+            #     shell argv; the bare `$(shell)` spelling
+            #     self-recurses and crashes make (DoS spelling of the
+            #     same member), the `$(eval .SHELLFLAGS:=-c)` reassign
+            #     bypass executes `$(shell <cmd>)` on a real recipe
+            #     run.
+            ".EXTRA_PREREQS",
+            ".LIBPATTERNS",
+            ".SHELLFLAGS",
             "ARFLAGS", "ASFLAGS", "CFLAGS", "COFLAGS", "CPPFLAGS",
             "CXXFLAGS", "DEFFLAGS", "FFLAGS", "GFLAGS", "LDFLAGS",
             "LDLIBS", "LFLAGS", "LINTFLAGS", "M2FLAGS",
@@ -772,10 +832,34 @@ BUILD_ECOSYSTEM_ENV_SURFACES: tuple[BuildEcosystemEnvSurface, ...] = (
             "AC_PROG_F77 honours F77 when a repo's configure selects "
             "Fortran 77, but a repo-authored configure already "
             "executes arbitrary code inside the sandbox). "
-            "CMAKE_INCLUDE_PATH / CMAKE_LIBRARY_PATH / CMAKE_GENERATOR "
-            "and the make manual's non-program knobs (VPATH, SHELL is "
-            "make-internal, GPATH): search-path / generator-selection "
-            "class, no direct exec primitive, documented out. meson "
+            "CMAKE_INCLUDE_PATH / CMAKE_LIBRARY_PATH / CMAKE_GENERATOR: "
+            "search-path / generator-selection class, no direct exec "
+            "primitive, documented out. SHELL: make ignores its "
+            "environment origin (probe-verified). MAKE_TMPDIR: "
+            "consumed as a RAW path string, never expanded "
+            "(probe-verified — make echoes an invalid value verbatim "
+            "and falls back to the default temp dir). VPATH / GPATH / "
+            "MAKEOVERRIDES were documented out here as non-program "
+            "knobs until the expansion probe showed make expands "
+            "their env values (functions run — `$(shell …)` executes "
+            "at startup); they are flags_injection members now. "
+            "Recipe-context expansion class: names expanded only "
+            "while make constructs a recipe's command argv are "
+            "INVISIBLE to a no-makefile startup probe — IFS and "
+            ".SHELLFLAGS are the members (both expand under `-n` / "
+            "recipe construction), belted above. Dot-prefixed "
+            "specials are env surface too: make imports the whole "
+            "environ, and env dicts can carry dot-named keys POSIX "
+            "shells cannot export — .EXTRA_PREREQS / .LIBPATTERNS / "
+            ".SHELLFLAGS are the probe-verified expanders, belted "
+            "above; .RECIPEPREFIX / .DEFAULT_GOAL / .ONESHELL / "
+            ".INCLUDE_DIRS probed inert from the environment (no "
+            "expansion observed — value consumed raw or ignored). "
+            "The oracle arm's universe admits dot-shaped names and "
+            "probes startup, recipe-construction, and library-"
+            "prerequisite-search contexts, so a make release adding "
+            "an expander in any of those contexts fails the sweep "
+            "instead of escaping it. meson "
             "consumes the same CC/CXX/*FLAGS/PKG_CONFIG convention — no "
             "meson-specific exec-grade env documented beyond it. "
             "RAPTOR lanes that deliberately inject CFLAGS/RUSTFLAGS "
