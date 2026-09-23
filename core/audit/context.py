@@ -21,6 +21,7 @@ from typing import Any
 
 from core.json import load_json
 from core.paths import confine
+from core.source.lines import split_lines
 from core.security.prompt_envelope import neutralize_tag_forgery, wrap_untrusted
 
 from .run_memo import BoundedMemo
@@ -2555,7 +2556,7 @@ def _read_source(
     text = _read_target_text(full_path)
     if text is None:
         return "(read error)"
-    lines = text.splitlines()
+    lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
 
     start = max(0, line_start - 1)
     end = line_end if line_end is not None else min(start + 50, len(lines))
@@ -2757,7 +2758,7 @@ def _enrich_callers_with_call_sites(
         text = _read_target_text(full_path)
         if text is None:
             continue
-        lines = text.splitlines()
+        lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
 
         caller_line = caller.get("line_start", 0)
         search_start = max(0, caller_line - 1) if caller_line else 0
@@ -2931,7 +2932,7 @@ def _extract_type_definition(
     content: str, type_name: str,
 ) -> dict[str, Any] | None:
     """Extract a struct/typedef/enum definition from file content."""
-    lines = content.splitlines()
+    lines = split_lines(content)  # \n model: shared with the extractors' coordinates
 
     # Per-line patterns (no DOTALL needed).
     line_patterns = [
@@ -3070,7 +3071,7 @@ def _enrich_callees_with_source(
         text = _read_target_text(full_path)
         if text is None:
             continue
-        lines = text.splitlines()
+        lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
 
         start = max(0, line_start - 1) if line_start else 0
         end = line_end or min(start + max_lines, len(lines))
@@ -4594,7 +4595,7 @@ def _read_flow_node_source(
     text = _read_target_text(full_path)
     if text is None:
         return ""
-    lines = text.splitlines()
+    lines = split_lines(text)  # \n model: line ranges come from inventory/SARIF
 
     start = max(0, node_line - 1) if node_line else 0
     end = line_end or min(start + max_lines, len(lines))
