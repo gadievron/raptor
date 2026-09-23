@@ -81,6 +81,21 @@ def test_classify_is_read_only_then_apply_mutates(tmp_path):
     assert s.function_verdict("a.c", 30, 60) == "found_then_lost"
 
 
+def test_mixed_lost_and_held_findings_get_per_finding_flags(tmp_path):
+    # One victim holds a survivor-held finding AND a sole-source one:
+    # the batched retained/lost import must flag each independently
+    # (F1 stays open, F2 flips found_then_lost).
+    s = _store(tmp_path)
+    shared = {"id": "F1", "file": "a.c", "line": 10}    # in f1
+    unique = {"id": "F2", "file": "a.c", "line": 42}    # in f2
+    victim = _run(tmp_path, "old", ["a.c"], findings=[shared, unique])
+    survivor = _run(tmp_path, "new", ["a.c"], findings=[shared])
+    c = clean_run(s, victim, [survivor], _CHECKLIST)
+    assert len(c.findings_lost) == 1
+    assert s.function_verdict("a.c", 0, 20) == "open"
+    assert s.function_verdict("a.c", 30, 60) == "found_then_lost"
+
+
 def test_finding_also_in_survivor_stays_open(tmp_path):
     s = _store(tmp_path)
     finding = [{"id": "F1", "file": "a.c", "line": 42}]

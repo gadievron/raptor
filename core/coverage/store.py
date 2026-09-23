@@ -31,6 +31,7 @@ always intervals.
 
 from __future__ import annotations
 
+import bisect
 import contextlib
 import os
 from datetime import datetime, timezone
@@ -328,6 +329,19 @@ class CoverageStore:
         self.content_id: str | None = None
         self.version = SCHEMA_VERSION
         self._files: dict[str, dict[str, Any]] = {}
+        # Per-file finding lookups, built lazily and kept in sync by
+        # link_finding (the only findings mutator — see its
+        # invariant note). _finding_index: id -> list position, so a
+        # re-link is O(1) instead of a linear scan per insert (an
+        # import of one big findings.json was quadratic, and it runs
+        # under the cross-process coverage_store_lock at every run
+        # completion — one large or hostile findings.json stalled
+        # every sibling run's snapshot). _line_index: sorted finding
+        # lines (all / retained) per file, so function_verdict is a
+        # bisect instead of a full findings scan per inventory
+        # function per render.
+        self._finding_index: dict[str, dict[str, int]] = {}
+        self._line_index: dict[str, tuple[list[int], list[int]]] = {}
         if self.path.exists():
             # A corrupt / unreadable store must not crash every coverage
             # consumer — degrade to empty (the store is largely reconstructible
@@ -482,12 +496,28 @@ class CoverageStore:
         line = _opt_int(line)
         finding_id = str(finding_id)
         entry = self._entry(file)
-        for f in entry["findings"]:
-            if f["id"] == finding_id:
-                if line is not None:
-                    f["line"] = line
-                f["retained"] = retained
-                return
+        # O(1) dedup via the per-file id index (built lazily from the
+        # loaded list). Invariant: this method is the ONLY mutator of
+        # entry["findings"] after load — readers (_findings,
+        # finding_ids, summaries) never mutate — so an existing index
+        # stays in sync through appends here. first-occurrence
+        # setdefault preserves the pre-index update semantics for
+        # legacy stores carrying duplicate ids.
+        index = self._finding_index.get(file)
+        if index is None:
+            index = {}
+            for i, f in enumerate(entry["findings"]):
+                index.setdefault(f["id"], i)
+            self._finding_index[file] = index
+        pos = index.get(finding_id)
+        self._line_index.pop(file, None)   # lines/retained may change
+        if pos is not None:
+            f = entry["findings"][pos]
+            if line is not None:
+                f["line"] = line
+            f["retained"] = retained
+            return
+        index[finding_id] = len(entry["findings"])
         entry["findings"].append(
             {"id": finding_id, "line": line, "retained": retained}
         )
@@ -573,6 +603,35 @@ class CoverageStore:
     def _findings(self, file: str) -> list[dict[str, Any]]:
         entry = self._files.get(file)
         return entry["findings"] if entry else []
+
+    def _finding_lines(self, file: str) -> tuple[list[int], list[int]]:
+        """Sorted finding lines for ``file``: ``(all, retained)``.
+
+        Built lazily per file and invalidated by link_finding, so a
+        render's per-inventory-function verdict walk is a bisect per
+        query instead of a scan of every finding in the file per
+        function (quadratic on finding-heavy files). The int guard
+        mirrors link_finding's intake normalisation for stores
+        written before it existed.
+        """
+        cached = self._line_index.get(file)
+        if cached is None:
+            all_lines: list[int] = []
+            retained_lines: list[int] = []
+            for f in self._findings(file):
+                ln = f.get("line")
+                # Inline _is_int (bool is an int subclass) — spelled
+                # with isinstance so the type checker narrows too.
+                if not isinstance(ln, int) or isinstance(ln, bool):
+                    continue
+                all_lines.append(ln)
+                if f.get("retained", True):
+                    retained_lines.append(ln)
+            all_lines.sort()
+            retained_lines.sort()
+            cached = (all_lines, retained_lines)
+            self._line_index[file] = cached
+        return cached
 
     def files(self) -> list[str]:
         return sorted(self._files)
@@ -678,14 +737,14 @@ class CoverageStore:
             # is the re-review gap, never a crash or a clean verdict.
             return "unexamined"
         lo, hi = lo_i, hi_i
-        in_range = [
-            f for f in self._findings(file)
-            # The int guard mirrors link_finding's intake
-            # normalisation for stores written before it existed.
-            if _is_int(f.get("line")) and lo <= f["line"] <= hi
-        ]
-        if in_range:
-            if any(f.get("retained", True) for f in in_range):
+        all_lines, retained_lines = self._finding_lines(file)
+
+        def _any_in(lines: list[int]) -> bool:
+            i = bisect.bisect_left(lines, lo)
+            return i < len(lines) and lines[i] <= hi
+
+        if _any_in(all_lines):
+            if _any_in(retained_lines):
                 return "open"
             return "found_then_lost"
         if not self.tool_coverage_of_range(file, lo, hi):
