@@ -298,6 +298,36 @@ class TestMaxFindingsArtifactHonesty(unittest.TestCase):
             self.assertIn("positive integer", proc.stderr)
 
 
+class TestConsentRouteRecorded(unittest.TestCase):
+    """A consented run's report records the GATE's provenance (consent
+    route included), and the flag path warns once, not twice."""
+
+    def test_report_carries_gate_record_and_single_warning(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            src = _make_repo(base)
+            core = _make_fake_core(src, _FAKE_MAIN_CLEAN)
+            out_dir = base / "out"
+            proc = _run(
+                [sys.executable, str(_REPO_ROOT / "raptor_openant.py"),
+                 "--repo", str(src), "--out", str(out_dir),
+                 "--openant-core", str(core),
+                 "--openant-core-unpinned"],
+                {},
+            )
+            self.assertEqual(proc.returncode, 0,
+                             f"stdout={proc.stdout}\nstderr={proc.stderr}")
+            report = json.loads(
+                (out_dir / "raptor_openant_report.json").read_text())
+            prov = report["config"]["core_provenance"]
+            self.assertEqual(prov["consent"], "operator-flag")
+            # The fake core is the unverifiable non-git shape: exactly
+            # ONE loud warning (the gate's) — the scan-side re-run
+            # used to emit a second.
+            self.assertEqual(proc.stderr.count("UNVERIFIABLE"), 1,
+                             proc.stderr)
+
+
 class TestScannerResultShape(unittest.TestCase):
     """The scanner's skipped result carries the structured hard_error
     distinction consumers key off."""
