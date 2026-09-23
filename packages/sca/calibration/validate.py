@@ -82,19 +82,33 @@ def validate_corpus(
     corpus_dir: Path,
     *,
     out_path: Path | None = None,
+    update_snapshot: bool = False,
     threshold_top_20: float = 0.5,
     threshold_spearman: float = 0.4,
 ) -> ValidationReport:
-    """Compute metrics + emit a validation report.
+    """Compute metrics + return a validation report.
 
     ``corpus_dir`` is the calibration data directory containing
     ``kev_signals.json`` / ``exploitdb_signals.json`` /
     ``metasploit_signals.json`` plus a ``project_samples/`` tree.
 
+    Report emission is caller-directed: ``out_path`` writes the
+    report to an explicit file; ``update_snapshot=True`` writes the
+    dated snapshot under ``<corpus_dir>/validation/`` AND prunes
+    that directory to its retention window — that dir is
+    repo-committed, so only the refresh workflow (whose job is to
+    commit a new snapshot) passes it. With neither, no file is
+    written: the natural "verify the committed report reproduces"
+    invocation must not overwrite the committed same-day snapshot
+    or prune committed history as a side effect of reading metrics.
+
     Thresholds: top-20 precision ≥ 0.5 (half of top-20 findings
     have exploit evidence) AND Spearman ρ ≥ 0.4 (moderate positive
     correlation). Below either ⇒ verdict = ``needs_retune``.
     """
+    if out_path is not None and update_snapshot:
+        msg = "out_path and update_snapshot are mutually exclusive"
+        raise ValueError(msg)
     snapshot = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     signals = _load_ground_truth(corpus_dir)
     samples = _load_project_samples(corpus_dir / "project_samples")
@@ -180,18 +194,29 @@ def validate_corpus(
     )
 
     prune_dir: Path | None = None
-    if out_path is None:
+    if update_snapshot:
         validation_dir = corpus_dir / "validation"
         validation_dir.mkdir(parents=True, exist_ok=True)
         out_path = validation_dir / f"{snapshot}.json"
         prune_dir = validation_dir
+    elif out_path is None:
+        # Metrics-only run — report returned, nothing written.
+        logger.info(
+            "sca.calibration.validate: metrics-only run (no out_path; "
+            "pass update_snapshot=True to write the committed dated "
+            "snapshot)",
+        )
+        return report
     else:
         out_path.parent.mkdir(parents=True, exist_ok=True)
     save_json(out_path, report.to_dict(), sort_keys=True)
     if prune_dir is not None:
         # Retention: the dated snapshots accumulate one file per run
         # with no other pruning mechanism; keep the consumer-visible
-        # window (~6 months of weekly history) bounded.
+        # window (~6 months of weekly history) bounded. Pruning only
+        # runs on the explicit snapshot-update path — it deletes
+        # committed history, so it must never ride along on a local
+        # verification run.
         from ._snapshots import VALIDATION_KEEP, prune_dated_snapshots
         prune_dated_snapshots(prune_dir, keep=VALIDATION_KEEP)
     return report

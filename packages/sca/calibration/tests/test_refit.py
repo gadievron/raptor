@@ -243,15 +243,38 @@ def test_refit_no_samples_at_all(tmp_path: Path):
     assert report.sample_count == 0
 
 
-def test_refit_writes_report_to_default_location(tmp_path: Path):
-    """Without --out, the report lands at refit/<date>.json."""
+def test_refit_default_is_metrics_only(tmp_path: Path):
+    """Without out_path / update_snapshot, nothing is written — the
+    default refit/ dir is repo-committed, and a local verification
+    run must not overwrite or prune committed snapshots."""
     _write_signals(tmp_path, [])
     _write_sample(tmp_path, "PyPI", "p", [_make_finding(cve="CVE-X")])
-    grid_search_refit(tmp_path, min_samples=1)
+    report = grid_search_refit(tmp_path, min_samples=1)
+    assert report.status is not None
+    assert not (tmp_path / "refit").exists()
+
+
+def test_refit_update_snapshot_writes_dated_report(tmp_path: Path):
+    """update_snapshot=True is the explicit opt-in that writes the
+    dated refit/<date>.json snapshot (the refit workflow's mode)."""
+    _write_signals(tmp_path, [])
+    _write_sample(tmp_path, "PyPI", "p", [_make_finding(cve="CVE-X")])
+    grid_search_refit(tmp_path, min_samples=1, update_snapshot=True)
     refit_dir = tmp_path / "refit"
     assert refit_dir.is_dir()
     files = list(refit_dir.glob("*.json"))
     assert len(files) == 1
+
+
+def test_refit_out_path_and_update_snapshot_conflict(tmp_path: Path):
+    import pytest
+    _write_signals(tmp_path, [])
+    _write_sample(tmp_path, "PyPI", "p", [_make_finding(cve="CVE-X")])
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        grid_search_refit(
+            tmp_path, min_samples=1,
+            out_path=tmp_path / "r.json", update_snapshot=True,
+        )
 
 
 def test_refit_writes_report_to_custom_out(tmp_path: Path):

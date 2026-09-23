@@ -197,6 +197,7 @@ def grid_search_refit(
     improvement_threshold: float = DEFAULT_IMPROVEMENT_THRESHOLD,
     min_samples: int = MIN_SAMPLES_FOR_REFIT,
     out_path: Path | None = None,
+    update_snapshot: bool = False,
     ecosystem_filter: str | None = None,
 ) -> RefitReport:
     """Run the per-constant grid search and emit a refit report.
@@ -204,8 +205,15 @@ def grid_search_refit(
     ``corpus_dir`` is the calibration data root containing
     ``kev_signals.json`` etc. + ``project_samples/<eco>/<name>.json``.
 
-    Writes the report to ``corpus_dir/refit/<date>.json`` (or
-    ``out_path`` when explicitly supplied).
+    Report emission is caller-directed (mirrors
+    ``validate.validate_corpus``): ``out_path`` writes to an
+    explicit file; ``update_snapshot=True`` writes the dated
+    snapshot under ``corpus_dir/refit/`` AND prunes that
+    repo-committed directory to its retention window — only the
+    refit workflow (which commits the report) passes it. With
+    neither, the report is returned without touching disk, so a
+    local verification run can't clobber or prune committed
+    snapshots.
 
     ``ecosystem_filter``: when set, drops findings outside the
     named ecosystem before fitting. Useful for "what would
@@ -243,7 +251,7 @@ def grid_search_refit(
                     f"{corpus_dir}/project_samples/",
                 ],
             ),
-            corpus_dir, out_path,
+            corpus_dir, out_path, update_snapshot=update_snapshot,
         )
 
     if len(samples) < min_samples:
@@ -262,7 +270,7 @@ def grid_search_refit(
                     f"need ≥ {min_samples} for refit",
                 ],
             ),
-            corpus_dir, out_path,
+            corpus_dir, out_path, update_snapshot=update_snapshot,
         )
 
     from packages.sca.risk import (
@@ -429,7 +437,7 @@ def grid_search_refit(
             per_constant=per_constant,
             notes=notes,
         ),
-        corpus_dir, out_path,
+        corpus_dir, out_path, update_snapshot=update_snapshot,
     )
 
 
@@ -576,12 +584,16 @@ def joint_grid_search_refit(
     max_passes: int = _MAX_JOINT_PASSES,
     seed: int | None = None,
     out_path: Path | None = None,
+    update_snapshot: bool = False,
     ecosystem_filter: str | None = None,
 ) -> JointRefitReport:
     """Multi-pass coordinate descent with random restarts.
 
     Find inter-constant interactions the per-constant search misses.
     See the section header above for the algorithm + safety bounds.
+    ``out_path`` / ``update_snapshot`` direct report emission exactly
+    as in :func:`grid_search_refit` (the joint snapshot name is
+    ``<date>.joint.json``); with neither, nothing is written.
 
     ``seed`` makes the random-restart sampling deterministic — same
     seed produces the same restart trajectories, so refits run from
@@ -622,7 +634,7 @@ def joint_grid_search_refit(
                 max_delta=max_delta,
                 notes=[why],
             ),
-            corpus_dir, out_path,
+            corpus_dir, out_path, update_snapshot=update_snapshot,
         )
 
     from packages.sca.risk import (
@@ -869,23 +881,33 @@ def joint_grid_search_refit(
             single_pass_metric=single_pass_metric,
             joint_winning_metric=joint_metric,
         ),
-        corpus_dir, out_path,
+        corpus_dir, out_path, update_snapshot=update_snapshot,
     )
 
 
 def _emit_joint_report(
     report: JointRefitReport, corpus_dir: Path,
-    out_path: Path | None,
+    out_path: Path | None, *, update_snapshot: bool = False,
 ) -> JointRefitReport:
-    """Mirror of ``_emit_report`` for the joint variant. Writes to
-    ``<corpus_dir>/refit/<date>.joint.json`` by default so a joint
-    refit doesn't overwrite a same-day single-pass refit."""
+    """Mirror of ``_emit_report`` for the joint variant. The
+    snapshot path is ``<corpus_dir>/refit/<date>.joint.json`` so a
+    joint refit doesn't overwrite a same-day single-pass refit."""
+    if out_path is not None and update_snapshot:
+        msg = "out_path and update_snapshot are mutually exclusive"
+        raise ValueError(msg)
     prune_dir: Path | None = None
-    if out_path is None:
+    if update_snapshot:
         refit_dir = corpus_dir / "refit"
         refit_dir.mkdir(parents=True, exist_ok=True)
         out_path = refit_dir / f"{report.snapshot_date}.joint.json"
         prune_dir = refit_dir
+    elif out_path is None:
+        logger.info(
+            "sca.calibration.refit: metrics-only run (no out_path; "
+            "pass update_snapshot=True to write the committed dated "
+            "snapshot)",
+        )
+        return report
     else:
         out_path.parent.mkdir(parents=True, exist_ok=True)
     save_json(out_path, report.to_dict(), sort_keys=True)
@@ -897,22 +919,35 @@ def _emit_joint_report(
 
 def _emit_report(
     report: RefitReport, corpus_dir: Path, out_path: Path | None,
+    *, update_snapshot: bool = False,
 ) -> RefitReport:
-    """Write the report to disk + return it. The CLI gates on
-    return-value status; tests bypass the write by stubbing
-    out_path to a tmp file."""
+    """Emit the report per the caller's direction + return it. The
+    CLI gates on return-value status. With neither ``out_path`` nor
+    ``update_snapshot`` the report is returned without a write —
+    the default must not mutate the repo-committed ``refit/`` dir."""
+    if out_path is not None and update_snapshot:
+        msg = "out_path and update_snapshot are mutually exclusive"
+        raise ValueError(msg)
     prune_dir: Path | None = None
-    if out_path is None:
+    if update_snapshot:
         refit_dir = corpus_dir / "refit"
         refit_dir.mkdir(parents=True, exist_ok=True)
         out_path = refit_dir / f"{report.snapshot_date}.json"
         prune_dir = refit_dir
+    elif out_path is None:
+        logger.info(
+            "sca.calibration.refit: metrics-only run (no out_path; "
+            "pass update_snapshot=True to write the committed dated "
+            "snapshot)",
+        )
+        return report
     else:
         out_path.parent.mkdir(parents=True, exist_ok=True)
     save_json(out_path, report.to_dict(), sort_keys=True)
     if prune_dir is not None:
         # Retention: dated refit reports accumulate one per run with
-        # no other pruning mechanism.
+        # no other pruning mechanism. Prune only on the explicit
+        # snapshot-update path — it deletes committed history.
         from ._snapshots import REFIT_KEEP, prune_dated_snapshots
         prune_dated_snapshots(prune_dir, keep=REFIT_KEEP)
     return report

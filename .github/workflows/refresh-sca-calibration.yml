@@ -111,9 +111,14 @@ jobs:
         # enough samples yet for a verdict. Either way we want the
         # PR to land carrying the report, so we don't gate on the
         # exit. Operators read the report directly.
+        # --update-snapshot: this workflow's whole job is to commit
+        # the refreshed corpus + its dated validation snapshot, so it
+        # is the one caller that writes (and retention-prunes) the
+        # committed validation/ dir. Local verification runs omit the
+        # flag and stay metrics-only.
         run: |
           set +e
-          packages/sca/scripts/raptor-sca-validate-corpus
+          packages/sca/scripts/raptor-sca-validate-corpus --update-snapshot
           echo "validate exit: $?"
 
       - name: Diff?

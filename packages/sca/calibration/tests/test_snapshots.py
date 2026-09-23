@@ -57,7 +57,9 @@ def test_keep_must_be_positive(tmp_path: Path) -> None:
 def test_validate_corpus_prunes_validation_dir(
     tmp_path: Path, monkeypatch,
 ) -> None:
-    """The validate writer applies retention on its default path."""
+    """The validate writer applies retention on the explicit
+    snapshot-update path (and only there — the plain default is
+    metrics-only and must not prune committed history)."""
     import json as _json
     from packages.sca.calibration import _snapshots
     from packages.sca.calibration.validate import validate_corpus
@@ -73,7 +75,7 @@ def test_validate_corpus_prunes_validation_dir(
     }))
     _mk(corpus_dir / "validation",
         ["2020-01-01.json", "2020-01-02.json", "2020-01-03.json"])
-    validate_corpus(corpus_dir)
+    validate_corpus(corpus_dir, update_snapshot=True)
     names = sorted(
         p.name for p in (corpus_dir / "validation").iterdir()
     )

@@ -84,10 +84,15 @@ jobs:
         id: validate
         env:
           _RAPTOR_TRUSTED: '1'
+        # Metrics-only by design: the gate below reads the verdict
+        # from the committed weekly snapshot (same corpus state this
+        # run fetched, so the fresh metrics are identical), and this
+        # workflow must not write into the committed validation/ dir
+        # it doesn't commit.
         run: |
           set +e
           packages/sca/scripts/raptor-sca-validate-corpus
-          # Re-read the report to extract the verdict for gating.
+          # Re-read the committed report to extract the verdict for gating.
           python <<'EOF' >> "$GITHUB_OUTPUT"
           import json, glob, os, sys
           paths = sorted(
@@ -149,7 +154,7 @@ jobs:
         # the report still ships.
         run: |
           set +e
-          packages/sca/scripts/refit-calibration --apply
+          packages/sca/scripts/refit-calibration --apply --update-snapshot
           rc=$?
           echo "refit exit: $rc"
           # Only exit 3 (genuine error) should fail the workflow.
