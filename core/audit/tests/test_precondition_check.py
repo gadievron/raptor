@@ -584,3 +584,47 @@ class TestReachesSinkAbsenceTransitivity:
         )
         assert r.verdict == "inconclusive"
         assert "DOES reach" in r.evidence
+
+
+class TestTruncatedEdgeListDegrades:
+    """A capped call_edges list (call_edges_truncated marker from the
+    context-map callgraph enricher) is the same epistemic state as a
+    truncated walk: paths may exist past what the map records, so
+    no-path outcomes degrade to inconclusive, never contradicted."""
+
+    def test_truncated_edges_no_path_is_inconclusive(self):
+        ctx = {"entry_points": ["main"],
+               "call_edges": [
+                   {"caller": "orphan", "callee": "helper"},
+                   {"caller": "main", "callee": "unrelated"},
+               ],
+               "call_edges_truncated": True}
+        result = _check_attacker_control(
+            "", "f.c", "helper", "", expect_absent=False,
+            context_map=ctx,
+        )
+        assert result.verdict == "inconclusive"
+
+    def test_truncated_edges_cannot_support_unreachability(self):
+        ctx = {"entry_points": ["main"],
+               "call_edges": [
+                   {"caller": "orphan", "callee": "helper"},
+               ],
+               "call_edges_truncated": True}
+        result = _check_attacker_control(
+            "", "f.c", "helper", "", expect_absent=True,
+            context_map=ctx,
+        )
+        assert result.verdict == "inconclusive"
+
+    def test_positive_reach_still_wins_over_truncation(self):
+        ctx = {"entry_points": ["main"],
+               "call_edges": [
+                   {"caller": "main", "callee": "helper"},
+               ],
+               "call_edges_truncated": True}
+        result = _check_attacker_control(
+            "", "f.c", "helper", "", expect_absent=False,
+            context_map=ctx,
+        )
+        assert result.verdict == "supported"

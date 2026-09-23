@@ -283,3 +283,38 @@ def test_call_edges_no_checklist():
     n = enrich_with_call_edges(cmap)
     assert n == 0
     assert "call_edges" not in cmap
+
+
+class TestCallEdgeCap:
+    """Emission is bounded and truncation is marked on the map, so
+    negative reachability consumers can degrade instead of reading a
+    capped list as unreachability."""
+
+    @staticmethod
+    def _big_checklist(n_calls: int) -> dict:
+        return {"files": [{
+            "path": "src/a.c",
+            "items": [{"name": "f0"}],
+            "call_graph": {"calls": [
+                {"caller": f"f{i}", "chain": [f"g{i}", f"h{i}"]}
+                for i in range(n_calls)
+            ]},
+        }]}
+
+    def test_cap_truncates_and_marks(self, monkeypatch):
+        from core.orchestration import context_map_callgraph as cmc
+        monkeypatch.setattr(cmc, "_MAX_CALL_EDGES", 10)
+        cm: dict = {}
+        n = cmc.enrich_with_call_edges(
+            cm, checklist=self._big_checklist(20))
+        assert n == 10
+        assert len(cm["call_edges"]) == 10
+        assert cm["call_edges_truncated"] is True
+
+    def test_under_cap_unmarked_and_rebuild_clears_stale_marker(self):
+        from core.orchestration import context_map_callgraph as cmc
+        cm: dict = {"call_edges_truncated": True}
+        n = cmc.enrich_with_call_edges(
+            cm, checklist=self._big_checklist(3))
+        assert n == 6
+        assert "call_edges_truncated" not in cm

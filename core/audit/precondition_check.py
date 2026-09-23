@@ -627,7 +627,11 @@ def _check_attacker_control(
         start_keys.add(f"{file}:{func}")
 
     reachable = is_entry
-    reach_truncated = False
+    # A capped EDGE LIST (context_map_callgraph hit its emission cap)
+    # is the same epistemic state as a truncated walk: paths may exist
+    # beyond what the map records, so a no-path outcome degrades to
+    # inconclusive, never to contradicted/supported-unreachable.
+    reach_truncated = bool(context_map.get("call_edges_truncated"))
     if not reachable:
         seen = set(start_keys)
         frontier = list(start_keys)
