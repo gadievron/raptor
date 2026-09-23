@@ -57,10 +57,16 @@ def wrap_model_output(
         ValueError: If model_name is empty or not a string; if purpose is
             empty or not a string; or if purpose contains characters that
             can't be normalized into [A-Z_]+ after uppercasing (digits,
-            unicode letters, punctuation other than hyphen/space/dot).
-        TypeError: If content is not str/dict/list/scalar, or if content
+            punctuation other than hyphen/space/dot, and unicode letters
+            whose uppercase form falls outside A-Z — case-fold-expanding
+            letters like "ß"→"SS" or "ﬁ"→"FI" are accepted, since their
+            normalized form is already tag-safe ASCII).
+        TypeError: If content is not str/dict/list/scalar, if content
             contains values that aren't JSON-native (Path, datetime, UUID,
-            arbitrary objects). Strict — pre-serialize exotic values.
+            arbitrary objects), or if it carries non-finite floats
+            (NaN/Infinity — legal for json.dumps by default but not
+            strict JSON, so a downstream re-parse of the promised-strict
+            block would break). Strict — pre-serialize exotic values.
 
     The function is pure and thread-safe. Multiple consumers can call it
     concurrently without coordination.
@@ -79,7 +85,13 @@ def wrap_model_output(
         # consumer must pre-serialize. Silent str() coercion would lose
         # structure ({"path": Path("/x")} → {"path": "/x"} hides the type).
         try:
-            rendered = json.dumps(content, sort_keys=True, indent=2)
+            # allow_nan=False: the docstring promises STRICT JSON, and
+            # the default emits literal NaN/Infinity tokens that break
+            # any downstream json.loads of the block. The ValueError
+            # it raises folds into the existing TypeError path.
+            rendered = json.dumps(
+                content, sort_keys=True, indent=2, allow_nan=False,
+            )
         except (TypeError, ValueError) as exc:
             msg = (
                 f"wrap_model_output could not serialize content: {exc}. "
@@ -111,6 +123,11 @@ def _normalize_kind(purpose: str) -> str:
     match ^[A-Z_]+$ after uppercasing. Other tag styles tolerate broader
     input but still HTML-escape it. Normalizing here makes the helper
     safe to use under any defense profile.
+
+    Acceptance is judged on the UPPERCASED form: unicode letters whose
+    uppercase expansion lands inside A-Z ("straße" → "STRASSE",
+    "ﬁle" → "FILE") pass — the output is tag-safe ASCII either way —
+    while letters that don't fold into A-Z raise ValueError.
     """
     if not isinstance(purpose, str) or not purpose:
         msg = "purpose must be a non-empty string"
