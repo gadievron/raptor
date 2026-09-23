@@ -231,6 +231,16 @@ class TestSanitiseFindingsEvidence:
         assert stats["final_status_demoted"] == 1
         assert f["is_exploitable"] is None
 
+    def test_absent_exploitable_stays_absent_on_demotion(self, tmp_path):
+        # No is_exploitable key at all: the demotion clamps
+        # final_status but never materialises the key — absence and
+        # the explicit None are both abstentions, and the chokepoint
+        # only rewrites a value that is already present.
+        f = _finding(final_status="likely_exploitable")
+        stats = prov.sanitise_findings_evidence({"findings": [f]}, tmp_path)
+        assert stats["final_status_demoted"] == 1
+        assert "is_exploitable" not in f
+
     def test_non_dict_shapes_tolerated(self, tmp_path):
         assert prov.sanitise_findings_evidence(None, tmp_path) == {
             "witness_stripped": 0, "feasibility_demoted": 0,
