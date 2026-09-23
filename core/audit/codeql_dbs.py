@@ -49,6 +49,7 @@ CODEQL_EXT_LANGUAGE = {
     ".rb": "ruby", ".erb": "ruby",
     ".cs": "csharp",
     ".swift": "swift",
+    ".rs": "rust",
 }
 
 #: The real CodeQL extractor languages — the values a file extension
@@ -81,6 +82,20 @@ def database_language(db_path: Path) -> str | None:
     """Read a database's language: ``codeql-database.yml``
     ``primaryLanguage`` first, the DatabaseManager dir-name convention
     (``<lang>-db`` / ``codeql-db-<lang>`` / ``<lang>``) as fallback."""
+    return _database_language_source(db_path)[0]
+
+
+def _database_language_source(db_path: Path) -> tuple[str | None, str]:
+    """(language, source) — source is ``"yml"`` when the language came
+    from the database's own ``primaryLanguage`` (an authoritative
+    claim CodeQL wrote at create time), ``"dirname"`` when it was
+    manufactured from the directory-name convention, ``"none"`` when
+    neither yielded anything. The router's sole-database gate keys on
+    the source: a yml-sourced language is ALWAYS a real extractor
+    language, so the wildcard escape for label-guess artifacts must
+    never apply to it — a yml language missing from the extension
+    table (the pre-fix rust hole) fails closed to honest skips
+    instead of dispatching every foreign file."""
     db_path = Path(db_path)
     marker = db_path / "codeql-database.yml"
     try:
@@ -93,13 +108,14 @@ def database_language(db_path: Path) -> str | None:
             value = line.split(":", 1)[1].strip().strip("\"'")
             lang = normalise_language(value)
             if lang:
-                return lang
+                return lang, "yml"
     name = db_path.name.lower()
     if name.endswith("-db"):
         name = name[:-3]
     elif name.startswith("codeql-db-"):
         name = name[len("codeql-db-"):]
-    return normalise_language(name) if name else None
+    lang = normalise_language(name) if name else None
+    return lang, ("dirname" if lang else "none")
 
 
 #: Source-archive membership indexes: ``src.zip`` path → (stat
@@ -224,10 +240,12 @@ class CodeqlDbRouter:
     def __init__(self, paths) -> None:
         self.paths: list[str] = [str(p) for p in (paths or []) if p]
         self._path_langs: list[str | None] = []
+        self._path_lang_sources: list[str] = []
         self._by_lang: dict[str, str] = {}
         for p in self.paths:
-            lang = database_language(Path(p))
+            lang, source = _database_language_source(Path(p))
             self._path_langs.append(lang)
+            self._path_lang_sources.append(source)
             if lang is None:
                 logger.warning(
                     "codeql db router: could not determine language of "
@@ -284,11 +302,24 @@ class CodeqlDbRouter:
             # those queries were unanswerable for the graph anyway —
             # they came back as errors or as zero rows that read like
             # refutation-grade silence downstream. Wildcard survives
-            # only while the database's language is not a real CodeQL
-            # extractor language (yml-less stand-ins, where the
-            # dir-name fallback manufactures a label): there a match
-            # is undecidable and lenient dispatch is the lesser harm.
+            # only for yml-less stand-ins, where the dir-name
+            # fallback MANUFACTURES a label: there a match is
+            # undecidable and lenient dispatch is the lesser harm.
+            # A yml-sourced language is an authoritative extractor
+            # claim regardless of whether the extension table knows
+            # it — deriving the gate from the label's PROVENANCE
+            # (not from membership in the hand-picked table) means a
+            # language missing a table row fails closed to honest
+            # skips instead of wildcarding every foreign file (the
+            # pre-fix rust hole: genuine `primaryLanguage: rust`
+            # fell outside the derived set and the gate was inert).
             sole_lang = self._path_langs[0] if self._path_langs else None
+            sole_source = (
+                self._path_lang_sources[0]
+                if self._path_lang_sources else "none"
+            )
+            if sole_source == "yml":
+                return self.paths[0] if lang == sole_lang else None
             if sole_lang not in _CODEQL_LANGUAGES:
                 return self.paths[0]
             return self.paths[0] if lang == sole_lang else None
