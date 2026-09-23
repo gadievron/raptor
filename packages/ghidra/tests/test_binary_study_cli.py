@@ -262,3 +262,55 @@ class TestPersistEnrichedDb:
         assert mod._persist_enriched_db(redb, data) is True
         from core.json import load_json
         assert load_json(redb, max_bytes=mod._MAX_DB_BYTES) == data
+
+
+class TestRunChildBound:
+    """_run must bound its children like raptor-study-loop does.
+
+    The prep/loop children scan a decompilation tree derived from the
+    analysed binary — fully attacker-shaped input — so an unbounded
+    child turns one pathological file into an indefinite hang of the
+    whole run.
+    """
+
+    def test_timeout_kills_child_and_records_gap(self, monkeypatch,
+                                                 tmp_path):
+        import sys as _sys
+
+        from core.testing.wallclock import wall_deadline
+
+        mod = _load_cli(monkeypatch)
+        monkeypatch.setattr(mod, "_CHILD_TIMEOUT_S", 1)
+        cmd = [_sys.executable, "-c", "import time; time.sleep(30)"]
+        with wall_deadline(10.0, code_bound_s=30.0,
+                           what="bounded binary-study child"):
+            rc = mod._run(cmd, False, gap_dir=tmp_path)
+        assert rc == 1
+
+        gaps_path = tmp_path / "analysis-gaps.jsonl"
+        assert gaps_path.is_file()
+        records = [json.loads(line) for line in
+                   gaps_path.read_text().splitlines()]
+        assert len(records) == 1
+        assert records[0]["event"] == "analysis-gap"
+        assert records[0]["reason"] == "child-timeout"
+        assert records[0]["tool"] == "-c"
+        assert "missing or incomplete" in records[0]["detail"]
+
+    def test_prompt_child_passes_through(self, monkeypatch, tmp_path):
+        import sys as _sys
+
+        mod = _load_cli(monkeypatch)
+        rc = mod._run([_sys.executable, "-c", "raise SystemExit(3)"],
+                      False, gap_dir=tmp_path)
+        assert rc == 3
+        assert not (tmp_path / "analysis-gaps.jsonl").exists()
+
+    def test_gap_append_failure_never_masks(self, monkeypatch,
+                                            tmp_path):
+        mod = _load_cli(monkeypatch)
+        # A gap_dir that cannot be appended to (it's a file) must not
+        # raise out of the timeout path.
+        blocker = tmp_path / "not-a-dir"
+        blocker.write_text("x")
+        mod._record_analysis_gap(blocker, "tool", "detail")
