@@ -82,6 +82,46 @@ _OPENANT_LLM_PHASES = (
 # pinned CLI resolves).
 _XDG_STAGE_DIRNAME = "openant-xdg"
 
+# ---------------------------------------------------------------------------
+# Dispatcher gateway (keyless hosts)
+# ---------------------------------------------------------------------------
+# When the operator has NO direct Anthropic credential to hand the
+# child (no $ANTHROPIC_API_KEY, no key-bearing anthropic provider in
+# their OpenAnt config.json) but this process runs under the RAPTOR
+# LLM dispatcher (RAPTOR_LLM_SOCKET), the scan routes the child
+# through the dispatcher's loopback TCP plane instead of failing at
+# the child's startup probe: a scoped child token is minted for the
+# run and staged as a RAPTOR-owned provider entry the raptor-<model>
+# profile binds. Precedence: the DIRECT credential posture always
+# wins — the gateway is the fallback for hosts where the child would
+# otherwise have nothing, never a replacement for an operator-
+# configured key or custom provider.
+
+# RAPTOR-owned provider-entry key in the staged config. Like the
+# raptor-<model> profile key, this name is reserved: an operator
+# entry of the same name in the merged config is overwritten in the
+# RUN-LOCAL staged copy only (their file is never touched).
+_GATEWAY_PROVIDER_NAME = "raptor-gateway"
+# Per-scan USD ceiling on the minted token. Not a cost estimate — a
+# containment bound on what one child process can spend through the
+# operator's key. Too low and a large repo's scan dies mid-run with
+# an upstream 402 (the honest failure: the child reports the budget
+# error and the run records hard_error); too high and a compromised
+# or runaway child can burn that much before the TTL/revocation
+# lands. Sized generously for a single-repo scan (the per-function
+# analyze/enhance calls are prompt-bounded) while staying far under
+# what an unbounded key exposes.
+_GATEWAY_BUDGET_USD = 25.0
+# Anti-runaway request cap (the USD budget above is the operative
+# spend bound). OpenAnt makes a few LLM calls per analysed function,
+# so scans legitimately clear the dispatcher's CC-child default of
+# 1000; this cap only exists to kill a tight retry loop.
+_GATEWAY_REQUEST_BUDGET = 10_000
+# TTL slack past the subprocess timeout, covering spawn + teardown —
+# same shape as the CC skill-pass mint (timeout + slack). The token
+# is revoked explicitly at scan exit; the TTL is the backstop.
+_GATEWAY_TTL_SLACK_S = 600
+
 from .config import OPENANT_PINNED_COMMIT, OPENANT_UPSTREAM_URL, OpenAntConfig
 
 logger = get_logger()
@@ -782,12 +822,51 @@ def _run_subprocess(
     (the working directory) resolves to openant-core rather than Raptor's repo
     root — which also contains a `core/` package and would otherwise shadow it.
     """
-    env = _build_subprocess_env(config)
-    # Model selection: the child resolves `--llm-config raptor-<model>`
-    # from $XDG_CONFIG_HOME/openant/config.json — point it at the
-    # run-local staged copy (see _stage_llm_config for why not the
-    # operator's real ~/.config file).
-    env["XDG_CONFIG_HOME"] = str(_stage_llm_config(out_dir, config.model))
+    # Credential posture, decided ONCE and threaded through env build
+    # and staging: direct wins; the gateway serves the keyless-with-
+    # dispatcher shape; keyless WITHOUT a dispatcher keeps the
+    # pre-gateway behavior (the child's own startup probe reports the
+    # missing credential).
+    gateway: dict[str, Any] | None = None
+    if not _operator_has_direct_credential():
+        try:
+            gateway = _mint_gateway_credentials(config)
+        except RuntimeError as e:
+            # Dispatcher present but the gateway could not be armed —
+            # fail the scan with the dispatcher's error instead of
+            # paying to spawn a child that dies at its auth probe
+            # with a misleading message.
+            return _empty_result(
+                f"OpenAnt dispatcher gateway unavailable: {e}",
+                hard_error=True,
+            )
+    try:
+        env = _build_subprocess_env(config, gateway_active=gateway is not None)
+        # Model selection: the child resolves `--llm-config raptor-<model>`
+        # from $XDG_CONFIG_HOME/openant/config.json — point it at the
+        # run-local staged copy (see _stage_llm_config for why not the
+        # operator's real ~/.config file).
+        env["XDG_CONFIG_HOME"] = str(
+            _stage_llm_config(out_dir, config.model, gateway=gateway))
+        return _spawn_and_collect(repo_path, out_dir, config, env)
+    finally:
+        # Both halves of the credential teardown, on EVERY exit path
+        # (success, timeout, launch failure, staging failure): the
+        # scrub removes the on-disk token/keys, the settlement revokes
+        # the gateway token server-side.
+        _scrub_stage(out_dir)
+        if gateway is not None:
+            _settle_gateway(gateway, out_dir)
+
+
+def _spawn_and_collect(
+    repo_path: Path,
+    out_dir: Path,
+    config: OpenAntConfig,
+    env: dict[str, str],
+) -> dict[str, Any]:
+    """The sandboxed spawn + output collection half of
+    :func:`_run_subprocess` (credential setup/teardown lives there)."""
     cmd = _build_command(repo_path, out_dir, config)
 
     logger.info(f"Running OpenAnt: {' '.join(str(c) for c in cmd)}")
@@ -833,11 +912,6 @@ def _run_subprocess(
         )
     except Exception as exc:  # noqa: BLE001
         return _empty_result(f"OpenAnt launch failed: {exc}", hard_error=True)
-    finally:
-        # The staged config has served its purpose the moment the
-        # child exits (every path: success, timeout, launch failure) —
-        # see _scrub_stage for why it must not outlive the run.
-        _scrub_stage(out_dir)
 
     # Persist BOTH streams so debugging isn't capped at the truncated
     # snippet we surface to the caller (long warnings can push the
@@ -1018,6 +1092,140 @@ def _llm_profile_name(model: str) -> str:
     return f"raptor-{_normalized_model(model)}"
 
 
+def _operator_has_direct_credential() -> bool:
+    """Whether the CHILD can authenticate to Anthropic without the
+    gateway.
+
+    Direct surfaces, in the order the pinned upstream consumes them:
+    ``$ANTHROPIC_API_KEY`` in this process's env (forwarded to the
+    child; the SDK reads it when the provider entry carries no key),
+    a key-bearing ``anthropic`` provider entry in the operator's
+    config.json (the raptor-<model> profile binds provider
+    ``"anthropic"``), or the legacy v1 top-level ``api_key`` (which
+    upstream's parser projects into that same provider). A keyless
+    ``anthropic`` entry (``api_key: null``) is NOT direct — the SDK
+    falls back to the absent env var and dies at the startup probe,
+    which is exactly the shape the gateway exists to serve.
+    """
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    src = _operator_config_path()
+    if not src.exists():
+        return False
+    data = load_json(src, max_bytes=_OUTPUT_MAX_BYTES)
+    if not isinstance(data, dict):
+        return False
+    if data.get("api_key"):
+        return True
+    providers = data.get("llm_providers")
+    if isinstance(providers, dict):
+        entry = providers.get("anthropic")
+        if isinstance(entry, dict) and entry.get("api_key"):
+            return True
+    return False
+
+
+def _mint_gateway_credentials(config: OpenAntConfig) -> dict[str, Any] | None:
+    """Mint the run's scoped gateway credential + loopback route.
+
+    Returns ``None`` when no dispatcher route exists in this process
+    (``RAPTOR_LLM_SOCKET`` unset — direct ``raptor_openant.py``
+    invocations, or the launcher's env-direct fallback). Raises
+    ``RuntimeError`` when the dispatcher is present but the loopback
+    enable or the mint is refused: with no direct credential the
+    child is doomed anyway, and the dispatcher's own error beats the
+    misleading auth failure the child would report.
+
+    The token is scoped to THIS scan: model allowlist pinned to the
+    run's model id, TTL sized to the subprocess timeout plus slack,
+    USD budget and request cap per the constants above. The returned
+    dict carries the secret ``token`` (staged-config-only — never log
+    it), the loggable ``token_id``, the granted ``budget_usd``, and
+    the ``base_url`` the pinned anthropic adapter dials (the SDK
+    appends ``/v1/messages``, so the dispatcher's ``/anthropic``
+    provider prefix rides the base URL path).
+    """
+    if not os.environ.get("RAPTOR_LLM_SOCKET"):
+        return None
+    from core.llm.dispatcher.client import (
+        enable_child_loopback,
+        mint_child_token,
+    )
+    port = enable_child_loopback()
+    model_id = _OPENANT_MODEL_IDS[_normalized_model(config.model)]
+    minted = mint_child_token(
+        budget_usd=_GATEWAY_BUDGET_USD,
+        models=[model_id],
+        ttl_s=int(config.timeout_seconds) + _GATEWAY_TTL_SLACK_S,
+        request_budget=_GATEWAY_REQUEST_BUDGET,
+        label="openant",
+    )
+    logger.info(
+        "openant: no direct Anthropic credential — routing the child "
+        "through the dispatcher gateway (token %s, budget $%.2f)",
+        minted["token_id"], float(minted.get("budget_usd") or 0.0),
+    )
+    return {
+        "token": minted["token"],
+        "token_id": minted["token_id"],
+        "budget_usd": float(minted.get("budget_usd") or _GATEWAY_BUDGET_USD),
+        "base_url": f"http://127.0.0.1:{port}/anthropic",
+    }
+
+
+def _settle_gateway(gateway: dict[str, Any], out_dir: Path) -> None:
+    """Post-run settlement for the gateway credential: read the
+    dispatcher-booked spend, REVOKE the token server-side (the staged
+    config scrub removes the on-disk copy; this kills the authority
+    itself — a token that only died on disk could still be replayed
+    by anything that read the stage while the child ran), log the
+    ledger line, and persist the spend record for the operator.
+
+    Best-effort by design — the scan outcome is already decided; a
+    settlement failure warns and never masks it. The record carries
+    the public token_id only, never the token value.
+    """
+    from core.llm.dispatcher.client import (
+        child_token_spend,
+        revoke_child_token,
+    )
+    spend: dict[str, Any] = {}
+    try:
+        spend = child_token_spend(gateway["token_id"])
+    except (RuntimeError, OSError) as e:
+        logger.warning("openant: gateway spend read failed: %s", e)
+    try:
+        revoke_child_token(gateway["token_id"])
+    except (RuntimeError, OSError) as e:
+        logger.warning(
+            "openant: gateway token revoke failed (token %s expires by "
+            "TTL): %s", gateway["token_id"], e,
+        )
+    logger.info(
+        "openant: gateway spend $%.4f of $%.2f budget (%s requests, "
+        "token %s)",
+        spend.get("spent_usd") or 0.0, gateway["budget_usd"],
+        spend.get("requests_made", "?"), gateway["token_id"],
+    )
+    try:
+        from core.json import save_json
+        # save_json is atomic (tempfile + rename) — a child-planted
+        # symlink at this name is replaced, never followed.
+        save_json(out_dir / "openant-gateway-spend.json", {
+            "token_id": gateway["token_id"],
+            "budget_usd": gateway["budget_usd"],
+            "dispatcher_spent_usd": spend.get("spent_usd", 0.0),
+            "requests_made": spend.get("requests_made", 0),
+            "unpriced_requests": spend.get("unpriced_requests", 0),
+            "last_model": spend.get("last_model"),
+            "status": spend.get("status"),
+        })
+    except OSError as e:
+        logger.warning(
+            "openant: openant-gateway-spend.json write failed: %s", e,
+        )
+
+
 def _operator_config_path() -> Path:
     """The config.json the pinned CLI would resolve in THIS process's
     environment — mirrors upstream ``registry.default_config_path()``
@@ -1028,7 +1236,11 @@ def _operator_config_path() -> Path:
     return base / "openant" / "config.json"
 
 
-def _stage_llm_config(out_dir: Path, model: str) -> Path:
+def _stage_llm_config(
+    out_dir: Path,
+    model: str,
+    gateway: dict[str, Any] | None = None,
+) -> Path:
     """Stage a run-local OpenAnt config.json carrying RAPTOR's profile.
 
     The pinned CLI selects models via ``--llm-config <profile>`` read
@@ -1049,12 +1261,22 @@ def _stage_llm_config(out_dir: Path, model: str) -> Path:
     The operator's existing config is MERGED, not shadowed: providers
     and foreign llm-config profiles are copied verbatim so a custom
     ``anthropic`` provider entry (base_url, thinking policy) still
-    applies; only the RAPTOR-owned ``raptor-<model>`` profile key is
-    written. No credential is invented — the profile references
-    provider ``"anthropic"``, which upstream synthesises from
-    ``$ANTHROPIC_API_KEY`` when config.json defines no such provider.
-    The staged copy may carry operator-authored provider api_keys, so
-    the directory is created 0700 and the file written 0600.
+    applies; only the RAPTOR-owned keys are written — the
+    ``raptor-<model>`` profile, plus (gateway posture only) the
+    ``raptor-gateway`` provider entry. No credential is invented —
+    in the direct posture the profile references provider
+    ``"anthropic"``, which upstream synthesises from
+    ``$ANTHROPIC_API_KEY`` when config.json defines no such provider;
+    in the gateway posture the entry's api_key is the run's minted
+    child token and its base_url the dispatcher's loopback plane
+    (with the ``/anthropic`` provider prefix on the path — the SDK
+    appends ``/v1/messages`` under it), so the profile binds
+    ``raptor-gateway`` instead. The staged copy may carry
+    operator-authored provider api_keys and/or the scoped token, so
+    the directory is created 0700 and the file written 0600 — and the
+    whole stage is scrubbed the moment the child exits
+    (:func:`_scrub_stage`), with the token ALSO revoked server-side
+    (:func:`_settle_gateway`).
 
     Returns the staged XDG_CONFIG_HOME directory.
     """
@@ -1084,8 +1306,28 @@ def _stage_llm_config(out_dir: Path, model: str) -> Path:
         configs = {}
         raw["llm_configs"] = configs
     model = _normalized_model(model)
+    provider_name = "anthropic"
+    if gateway is not None:
+        provider_name = _GATEWAY_PROVIDER_NAME
+        providers = raw.get("llm_providers")
+        if not isinstance(providers, dict):
+            providers = {}
+            raw["llm_providers"] = providers
+        if _GATEWAY_PROVIDER_NAME in providers:
+            # RAPTOR-owned namespace, like the raptor-<model> profile
+            # key — replaced in the run-local copy only.
+            logger.warning(
+                "OpenAnt config defines provider %r — replacing it in "
+                "the run-local staged copy (the name is RAPTOR-owned; "
+                "the operator file is untouched)", _GATEWAY_PROVIDER_NAME,
+            )
+        providers[_GATEWAY_PROVIDER_NAME] = {
+            "type": "anthropic",
+            "api_key": gateway["token"],
+            "base_url": gateway["base_url"],
+        }
     configs[_llm_profile_name(model)] = {
-        phase: {"provider": "anthropic", "model": _OPENANT_MODEL_IDS[model]}
+        phase: {"provider": provider_name, "model": _OPENANT_MODEL_IDS[model]}
         for phase in _OPENANT_LLM_PHASES
     }
 
@@ -1233,19 +1475,32 @@ def _build_command(
     return cmd
 
 
-def _build_subprocess_env(config: OpenAntConfig) -> dict[str, str]:
-    # preserve_proxy: this child's entire purpose is provider-API
-    # egress (OpenAnt calls the Anthropic API directly), so it gets
-    # the operator's launch-time proxy route — same adjudication as
-    # the dispatcher's own worker spawn, and unlike sandboxed TARGET
-    # children (which get the default strip because they must not
-    # learn the egress topology). Without it, a mandatory-egress-proxy
-    # host resolves the profile, builds the adapter, and dies at the
-    # first connection. A future dispatcher-fronted credential path
-    # (loopback gateway) would need no proxy; this serves the
-    # direct-API-key posture.
-    safe = RaptorConfig.get_safe_env(preserve_proxy=True)
-    safe["ANTHROPIC_API_KEY"] = os.environ.get("ANTHROPIC_API_KEY", "")
+def _build_subprocess_env(
+    config: OpenAntConfig,
+    *,
+    gateway_active: bool = False,
+) -> dict[str, str]:
+    if gateway_active:
+        # Gateway posture: the child's only egress is the dispatcher's
+        # loopback plane, so it gets NEITHER the proxy route (an
+        # http_proxy var would steer the SDK's http://127.0.0.1 dial
+        # into the egress proxy, which cannot reach this host's
+        # loopback — and the child has no business learning the
+        # egress topology it doesn't use) NOR a provider credential
+        # env var (its credential is the scoped token inside the
+        # staged config; the dispatcher holds the real key).
+        safe = RaptorConfig.get_safe_env()
+    else:
+        # preserve_proxy: this child's entire purpose is provider-API
+        # egress (OpenAnt calls the Anthropic API directly), so it gets
+        # the operator's launch-time proxy route — same adjudication as
+        # the dispatcher's own worker spawn, and unlike sandboxed TARGET
+        # children (which get the default strip because they must not
+        # learn the egress topology). Without it, a mandatory-egress-proxy
+        # host resolves the profile, builds the adapter, and dies at the
+        # first connection.
+        safe = RaptorConfig.get_safe_env(preserve_proxy=True)
+        safe["ANTHROPIC_API_KEY"] = os.environ.get("ANTHROPIC_API_KEY", "")
     # Resolve to absolute path so .. / symlinks / relative components cannot be
     # used to redirect Python's import resolution to an attacker-controlled dir
     # if OPENANT_CORE is set to an untrusted value.
