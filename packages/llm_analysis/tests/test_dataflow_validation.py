@@ -1919,6 +1919,40 @@ class TestAttachResult:
         assert v["verdict"] == "inconclusive"
         assert v["recommends_downgrade"] is False
 
+    def test_llm_authored_tiers_stamp_llm_method(self):
+        # The method stamp must reflect the actual query author: Tier 2
+        # template, Tier 3 retry, and the legacy fallback all run
+        # LLM-WRITTEN queries through CodeQL — verification_tier must
+        # not read them as mechanically corroborated.
+        for tier in ("template", "retry", "template-failed", "fallback"):
+            analysis = {"is_exploitable": True}
+            _attach_result(
+                analysis, FakeValidationResult("refuted"), tier=tier,
+            )
+            v = analysis["dataflow_validation"]
+            assert v["method"] == "codeql-iris-llm", tier
+            assert v["tier"] == tier
+
+    def test_prebuilt_tier_stamps_mechanical_method(self):
+        for tier in ("prebuilt", "prebuilt-inconclusive", "skipped-deep"):
+            analysis = {"is_exploitable": True}
+            _attach_result(
+                analysis, FakeValidationResult("refuted"), tier=tier,
+            )
+            v = analysis["dataflow_validation"]
+            assert v["method"] == "codeql-iris", tier
+            assert v["tier"] == tier
+
+    def test_explicit_method_wins_over_tier_derivation(self):
+        analysis = {"is_exploitable": True}
+        _attach_result(
+            analysis, FakeValidationResult("refuted"),
+            method="structural-treesitter",
+        )
+        assert analysis["dataflow_validation"]["method"] == (
+            "structural-treesitter"
+        )
+
 
 class TestReconcileDataflowValidation:
     """reconcile_dataflow_validation() applies recommended downgrades after
