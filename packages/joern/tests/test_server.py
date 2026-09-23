@@ -1153,3 +1153,55 @@ class TestHasScalaError:
         assert not _has_scala_error(
             'res1: String = "handler for error: timeout"'
         )
+
+
+class TestTieredSweepSinkEscaping:
+    def test_profile_sinks_escaped_into_the_list_literal(self):
+        from types import SimpleNamespace
+
+        from packages.joern.models import JoernResult
+        srv = JoernServer()
+        srv._cpg_loaded = True
+        captured: dict = {}
+        profile = SimpleNamespace(
+            sinks=('bad"sink',), max_call_depth=2,
+            max_args_to_allow=8, max_output_args_expansion=4,
+        )
+        with patch.object(
+            srv, "_submit_query",
+            side_effect=lambda content, **kw: captured.update(
+                content=content) or JoernResult(query="q"),
+        ):
+            srv.run_tiered_sweep(lang_profile=profile)
+        assert '"bad\\"sink"' in captured["content"]
+        assert 'bad"sink' not in captured["content"].replace(
+            'bad\\"sink', "")
+
+
+class TestTaintExistsErrorsChannel:
+    def test_degraded_query_reports_errors(self):
+        from packages.joern.models import JoernResult
+        srv = JoernServer()
+        srv._cpg_loaded = True
+        errors: list = []
+        with patch.object(
+            srv, "query",
+            return_value=JoernResult(query="q", errors=["query failed: x"]),
+        ):
+            assert srv.run_taint_exists_query(
+                "src_fn", "sink_fn", errors_out=errors) is False
+        assert errors == ["query failed: x"]
+
+    def test_true_flow_stays_true_with_channel(self):
+        from packages.joern.models import JoernResult
+        srv = JoernServer()
+        srv._cpg_loaded = True
+        errors: list = []
+        with patch.object(
+            srv, "query",
+            return_value=JoernResult(query="q",
+                                     raw_output="JOERN_EXISTS:true"),
+        ):
+            assert srv.run_taint_exists_query(
+                "src_fn", "sink_fn", errors_out=errors) is True
+        assert errors == []

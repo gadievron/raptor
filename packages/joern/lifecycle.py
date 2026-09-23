@@ -313,6 +313,13 @@ def joern_acquire(tunables: JoernTunables | None = None) -> JoernServer | None:
 
         if state is not None:
             started_at = state.get("started_at", 0)
+            # Wall clock on purpose: started_at must be comparable
+            # across PROCESSES and reboots (monotonic clocks are
+            # per-boot). The cost is clock-step sensitivity — a
+            # backward step delays recycling, a forward step can
+            # recycle early — but only ever for an UNREFERENCED
+            # server (the refcount guard below bounds the damage to
+            # re-paying one JVM boot).
             if time.time() - started_at > _STALE_THRESHOLD_S:
                 # Staleness recycle only at refcount zero. A live
                 # refcount means another session acquired this server

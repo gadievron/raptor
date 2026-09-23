@@ -2195,11 +2195,20 @@ class JoernServer:
         *,
         timeout: int | None = None,
         max_call_depth: int = 2,
+        errors_out: list | None = None,
     ) -> bool:
         """Check if a taint flow exists without full path reconstruction.
 
         Uses reachableBy (existence) instead of reachableByFlows (path
         reconstruction). Cheaper for callers that only need a yes/no answer.
+
+        ``errors_out``: optional list receiving the underlying query
+        errors (same contract as ``run_taint_query``). A bare False is
+        AMBIGUOUS without it — "no flow exists" and "the query never
+        ran" are indistinguishable, so a refutation-direction caller
+        would book a degraded query as evidence of absence. Today's
+        consumers are promotion-direction only; the channel exists so
+        the next caller does not have to widen the return type.
         """
         if timeout is None:
             timeout = self._query_timeout_s
@@ -2223,6 +2232,8 @@ class JoernServer:
             lambda: self.query(query, timeout=timeout, validate=True),
             max_wait_s=timeout,
         )
+        if errors_out is not None and result.errors:
+            errors_out.extend(result.errors)
         if not result.ok:
             return False
         return "JOERN_EXISTS:true" in (result.raw_output or "")
@@ -2393,7 +2404,12 @@ class JoernServer:
 
         content = script_path.read_text(encoding="utf-8")
 
-        sink_items = ", ".join(f'"{s}"' for s in lang_profile.sinks)
+        # Escaped per element: profiles ship static curated sinks, but
+        # this render point takes ANY lang_profile — convention is not
+        # a contract (same rule as lang_config.scala_string_list).
+        sink_items = ", ".join(
+            f'"{_escape_scala_string(s)}"' for s in lang_profile.sinks
+        )
         content = content.replace("__DANGEROUS_SINKS__", f"List({sink_items})")
         content = content.replace(
             "__EFFECTIVE_DEPTH__", str(lang_profile.max_call_depth),

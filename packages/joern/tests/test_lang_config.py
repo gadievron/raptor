@@ -225,3 +225,20 @@ class TestSupportedSourceExtensions:
             lang = {".kt": "kotlin", ".kts": "kotlin",
                     ".cs": "csharp", ".swift": "swift"}[ext]
             assert profile_for(lang).joern_parse_language == frontend
+
+
+class TestScalaStringListEscaping:
+    """The render chokepoint escapes every element — convention (static
+    curated tuples) is not a contract."""
+
+    def test_quote_bearing_name_cannot_splice(self):
+        from packages.joern.lang_config import scala_string_list
+        rendered = scala_string_list(('bad"sink', "ok"))
+        assert '"bad\\"sink"' in rendered
+        assert '"ok"' in rendered
+
+    def test_newline_flattened(self):
+        from packages.joern.lang_config import scala_string_list
+        rendered = scala_string_list(("a\nb",))
+        assert "\n" not in rendered
+        assert '"a\\nb"' in rendered

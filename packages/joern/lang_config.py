@@ -233,8 +233,16 @@ STANDARD_SWEEP_SINKS: tuple[str, ...] = (
 
 
 def scala_string_list(names: tuple[str, ...]) -> str:
-    """Render a name tuple as the body of a Scala List(...) literal."""
-    return ", ".join(f'"{n}"' for n in names)
+    """Render a name tuple as the body of a Scala List(...) literal.
+
+    Every name is escaped for the string-literal context. Today's
+    callers feed static curated tuples, but this is a render
+    chokepoint and convention is not a contract — one future dynamic
+    caller with a quote-bearing name would otherwise splice arbitrary
+    Scala into the query it lands in.
+    """
+    from .runner import _escape_scala_string
+    return ", ".join(f'"{_escape_scala_string(n)}"' for n in names)
 
 
 def profile_for(language: str) -> LangProfile:
