@@ -32,7 +32,9 @@ val callerLines = callSites.map { c =>
   // can bisect an injected \" and leave a dangling backslash.
   val code = jsonEsc(c.code.take(200))
   s"""JOERN_CALLER:{"caller":"$callerFn","file":"$callerFile","line":$line,"code":"$code"}"""
-}.l
+// .take(500) BEFORE .l — graph-bounded but hostile-CPG sized;
+// same materialisation cap as the flow emitters.
+}.take(500).l
 
 callerLines.foreach(println)
 callerLines.mkString("\n")

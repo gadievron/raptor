@@ -205,6 +205,16 @@ def _reap_in_background(proc) -> None:
     ).start()
 
 
+# Byte ceiling for one query-sync response body, shared by all three
+# transports. The query emitters carry per-traversal .take caps, but
+# the echo SIZE is ultimately hostile-CPG-influenced (method lists,
+# code snippets scale with the analysed input) — the same class
+# health_check already caps at 1 MiB for its tiny reply. 64 MiB is
+# far above any legitimate flow batch; an over-limit response is
+# refused (None + classification) without materialising the rest.
+_MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
+
 # Bounded wait for the surviving-members escalation in
 # ``_ensure_group_dead``: long enough for a TERM-honouring member to
 # exit, short enough that a wedged JVM (TERM caught, shutdown hook
@@ -1774,7 +1784,16 @@ class JoernServer:
                 headers["Content-Type"] = "application/json"
             conn.request(method, path, body=body, headers=headers)
             resp = conn.getresponse()
-            return json.loads(resp.read().decode("utf-8"))
+            raw = resp.read(_MAX_RESPONSE_BYTES + 1)
+            if len(raw) > _MAX_RESPONSE_BYTES:
+                self._last_post_error = (
+                    f"response exceeds {_MAX_RESPONSE_BYTES} bytes"
+                )
+                logger.warning("query (unix socket) response over the "
+                               "%d-byte ceiling — refused",
+                               _MAX_RESPONSE_BYTES)
+                return None
+            return json.loads(raw.decode("utf-8"))
         except (OSError, HTTPException, json.JSONDecodeError,
                 ValueError) as e:
             if isinstance(e, TimeoutError) or "timed out" in str(e).lower():
@@ -1804,8 +1823,24 @@ class JoernServer:
             trust_env=False,
         )
         try:
-            resp = client.post(url, json=payload, headers=self._auth_headers())
-            return resp.json()
+            with client.stream("POST", url, json=payload,
+                               headers=self._auth_headers()) as resp:
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in resp.iter_bytes():
+                    total += len(chunk)
+                    if total > _MAX_RESPONSE_BYTES:
+                        self._last_post_error = (
+                            f"response exceeds {_MAX_RESPONSE_BYTES} bytes"
+                        )
+                        logger.warning(
+                            "query-sync (httpx) response over the "
+                            "%d-byte ceiling — refused",
+                            _MAX_RESPONSE_BYTES,
+                        )
+                        return None
+                    chunks.append(chunk)
+            return json.loads(b"".join(chunks).decode("utf-8"))
         except Exception as e:  # noqa: BLE001 — classified below by message
             if "timed out" in str(e).lower() or "timeout" in type(e).__name__.lower():
                 self._last_post_error = f"query timed out after {timeout}s"
@@ -1834,7 +1869,17 @@ class JoernServer:
         )
         try:
             with _NO_PROXY_OPENER.open(req, timeout=timeout) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                raw = resp.read(_MAX_RESPONSE_BYTES + 1)
+                if len(raw) > _MAX_RESPONSE_BYTES:
+                    self._last_post_error = (
+                        f"response exceeds {_MAX_RESPONSE_BYTES} bytes"
+                    )
+                    logger.warning(
+                        "query-sync (urllib) response over the "
+                        "%d-byte ceiling — refused", _MAX_RESPONSE_BYTES,
+                    )
+                    return None
+                return json.loads(raw.decode("utf-8"))
         except (URLError, OSError, json.JSONDecodeError, TimeoutError) as e:
             if isinstance(e, TimeoutError) or "timed out" in str(e).lower():
                 self._last_post_error = f"query timed out after {timeout}s"
