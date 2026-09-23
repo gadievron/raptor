@@ -122,6 +122,97 @@ class TestLearnedSources:
         assert ev.grade == GRADE_DETECTION
 
 
+class TestPerLookupReloadMemo:
+    """Both learned contract sources were re-read and re-parsed on
+    EVERY callee lookup — per-row-reload class. The stat-stamped
+    caches serve unchanged files and reload on edit."""
+
+    def test_iris_specs_parsed_once_across_lookups(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.audit.iris_specs as iris_specs
+        import core.audit.return_contracts as rc
+
+        out = tmp_path / "out"
+        out.mkdir()
+        (out / "iris-taint-specs.json").write_text(json.dumps([{
+            "function": "sanitize_path", "file": "",
+            "role": "sanitiser", "evidence_tier": "xref_backed",
+        }]))
+        rc._IRIS_SPEC_CACHE.clear()
+        calls = {"n": 0}
+        real = iris_specs.specs_from_json
+
+        def counting(text):
+            calls["n"] += 1
+            return real(text)
+
+        monkeypatch.setattr(iris_specs, "specs_from_json", counting)
+        ctx = RoleContext(out_dir=out)
+        for _ in range(3):
+            ev = bind_return_contract(
+                "sanitize_path", language="c", context=ctx)
+            assert ev is not None
+        assert calls["n"] == 1
+
+    def test_iris_spec_edit_reloads(self, tmp_path):
+        import core.audit.return_contracts as rc
+
+        out = tmp_path / "out"
+        out.mkdir()
+        spec = out / "iris-taint-specs.json"
+        spec.write_text(json.dumps([{
+            "function": "sanitize_path", "file": "",
+            "role": "sanitiser", "evidence_tier": "xref_backed",
+        }]))
+        rc._IRIS_SPEC_CACHE.clear()
+        ctx = RoleContext(out_dir=out)
+        assert bind_return_contract(
+            "sanitize_path", language="c", context=ctx) is not None
+        # Rewrite naming a different function: the old parse must not
+        # be served (stamp changes with size/mtime).
+        spec.write_text(json.dumps([{
+            "function": "other_fn", "file": "",
+            "role": "sanitiser", "evidence_tier": "xref_backed",
+        }]))
+        import os as _os
+        _os.utime(spec, ns=(1, 1))
+        ev = bind_return_contract(
+            "sanitize_path", language="c", context=ctx)
+        assert ev is None or ev.source != "iris_spec"
+
+    def test_annotation_scan_parsed_once_across_lookups(
+        self, tmp_path, monkeypatch,
+    ):
+        import core.annotations.storage as storage
+        import core.audit.return_contracts as rc
+        from core.annotations.models import Annotation
+        from core.annotations.storage import write_annotation
+
+        base = tmp_path / "annotations"
+        write_annotation(base, Annotation(
+            file="src/db.c", function="db_reserve",
+            body="Returns -1 on failure; must be checked.",
+            metadata={"status": "suspicious", "source": "human",
+                      "provenance": "interactive-tty"},
+        ))
+        rc._ANNOTATION_SCAN_CACHE.clear()
+        calls = {"n": 0}
+        real = storage.iter_all_annotations
+
+        def counting(b):
+            calls["n"] += 1
+            return real(b)
+
+        monkeypatch.setattr(storage, "iter_all_annotations", counting)
+        ctx = RoleContext(annotations_dir=base)
+        for _ in range(3):
+            ev = bind_return_contract(
+                "db_reserve", language="c", context=ctx)
+            assert ev is not None
+        assert calls["n"] == 1
+
+
 class TestTierA:
     def test_setuid_binds_from_shared_registry(self):
         ev = bind_return_contract("setuid", language="c")

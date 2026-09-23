@@ -140,7 +140,9 @@ def validate_findings(
         "count": len(selected),
         "dark_selected": len(selected_dark),
         "dark_deferred": dark_deferred,
-        "path": str(path),
+        # Empty selection emits no file — record that as "", not the
+        # string "None".
+        "path": str(path) if path is not None else "",
     })
 
     if path is None:

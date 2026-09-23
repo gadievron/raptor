@@ -756,10 +756,14 @@ def extract_transform_sequences(
             continue
 
         for seq in seqs:
+            # Method-chain steps carry ".method"-shaped call names —
+            # match the extra (learned) names against the bare tail
+            # too, or the whole extra-names arm is dead for chains.
             security_count = sum(
                 1 for s in seq.steps
                 if (_SECURITY_TRANSFORM_RE.search(s.call_name)
-                    or s.call_name in extra)
+                    or s.call_name in extra
+                    or s.call_name.rpartition(".")[2] in extra)
             )
             if security_count >= 2:
                 all_seqs.append(seq)

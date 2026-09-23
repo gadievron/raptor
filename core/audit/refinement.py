@@ -440,7 +440,7 @@ def dispatch_suggestion(
     try:
         from .hypothesis_mapping import (
             hypothesis_to_cocci_check,
-            hypothesis_to_semgrep_rule,
+            hypothesis_to_semgrep_rule_keyed,
             hypothesis_to_smt_verb,
         )
 
@@ -465,13 +465,15 @@ def dispatch_suggestion(
         if any(kw in suggestion_lower for kw in (
             "semgrep", "pattern", "rule", "regex",
         )):
-            rule_path = hypothesis_to_semgrep_rule(
+            keyed = hypothesis_to_semgrep_rule_keyed(
                 suggestion, ctx.get("file", ""),
             )
-            if rule_path:
+            if keyed:
+                rule_path, rule_keyword = keyed
                 try:
                     result = _dispatch_semgrep(
                         rule_path, outcome, ctx, config,
+                        rule_keyword=rule_keyword,
                     )
                     if result:
                         results.append(result)
@@ -562,11 +564,20 @@ def _dispatch_coccinelle(
 
 def _dispatch_semgrep(
     rule_path: str,
-    _outcome: Any,
+    outcome: Any,
     ctx: dict[str, Any],
     config: Any,
+    *,
+    rule_keyword: str = "",
 ) -> dict[str, str] | None:
-    """Run a Semgrep rule based on the suggestion."""
+    """Run a Semgrep rule based on the suggestion.
+
+    ``rule_keyword`` and the outcome's hypothesis thread the sweep's
+    per-rule caps: without them the negative-control (presence
+    detector) and identifier-window checks keyed on them were
+    disarmed for every refinement dispatch — a dynamic rule that also
+    matches the guarded fixture could 'confirm' here.
+    """
     try:
         from pathlib import Path
 
@@ -588,6 +599,8 @@ def _dispatch_semgrep(
             function_name=func_name,
             line_start=line_start,
             line_end=line_end,
+            hypothesis=getattr(outcome, "hypothesis", "") or "",
+            rule_keyword=rule_keyword,
         )
         if result:
             return {

@@ -356,6 +356,42 @@ class TestCollectToolResults:
         assert "cpp/injection" in results[0]["result"]
 
 
+class TestSemgrepDispatchCaps:
+    def test_dispatch_threads_hypothesis_and_keyword(self, monkeypatch):
+        # Without hypothesis/rule_keyword the sweep's per-rule caps
+        # (negative-control presence check, identifier window) were
+        # disarmed for every refinement dispatch.
+        import core.audit.sweep as sweep_mod
+        from core.audit.refinement import _dispatch_semgrep
+
+        seen: dict = {}
+
+        def fake_sweep(**kwargs):
+            seen.update(kwargs)
+
+            class R:
+                outcome = "confirmed"
+                matches: ClassVar[list] = [{"m": 1}]
+
+            return R()
+
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        monkeypatch.setattr(sweep_mod, "run_semgrep_sweep", fake_sweep)
+        outcome = FakeOutcome(hypothesis="if len unchecked, CWE-787")
+        config = SimpleNamespace(target_path=Path("/t"))
+        ctx = {"file": "a.c", "function": "f",
+               "line_start": 1, "line_end": 9}
+        result = _dispatch_semgrep(
+            "rule.yaml", outcome, ctx, config,
+            rule_keyword="buffer overflow",
+        )
+        assert result is not None
+        assert seen["rule_keyword"] == "buffer overflow"
+        assert seen["hypothesis"] == "if len unchecked, CWE-787"
+
+
 class TestDescribeToolResultHonesty:
     """Tool-result rows must reflect the outcome's actual evidence —
     never a hardcoded negative that contradicts the confirming

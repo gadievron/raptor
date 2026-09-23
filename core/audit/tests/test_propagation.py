@@ -86,12 +86,12 @@ class TestScoreCaller:
         assert "passthrough" in result.reasons
         assert result.score >= 4
 
-    def test_no_source_file(self):
+    def test_no_source_file(self, tmp_path: Path):
         c = _constraint()
         result = score_caller(
             "nonexistent.c", "fn", 1, c,
             entry_points=set(),
-            target_path=Path("/tmp/empty"),
+            target_path=tmp_path / "empty",
         )
         assert result.score == 0
 
