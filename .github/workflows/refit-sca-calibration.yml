@@ -205,6 +205,17 @@ jobs:
           if joint top-20 precision improvement clears 5 percentage
           points. See packages/sca/data/calibration/refit/<date>.json
           for per-constant deltas."
+          # Replay the refit commit onto current main before opening
+          # the PR — a branch cut from the dispatch-time checkout can
+          # be stale when auto-PR workflows run back-to-back, and a
+          # stale base turns any file overlap into a PR merge
+          # conflict. This workflow writes packages/sca/risk.py, a
+          # human-edited CODE file — the most conflict-prone write in
+          # the auto-PR family — so a genuine overlap must fail HERE,
+          # loudly, instead of opening a conflicted PR. Same block as
+          # the five sibling publish workflows.
+          git fetch origin main
+          git rebase origin/main
           # --force-with-lease (not --force): refuses the push if the
           # remote branch moved since our fetch — e.g. an operator amended
           # the open auto-PR — rather than clobbering it. Fetch first to
