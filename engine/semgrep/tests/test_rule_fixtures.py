@@ -61,6 +61,10 @@ _CASES = {
         ["deser_python_pos.py"],
         ["deser_python_neg.py"],
     ),
+    "deserialisation/unsafe-deserialize.yaml": (
+        ["deser_noloader_pos.py"],
+        ["deser_noloader_neg.py"],
+    ),
     "web/prototype-pollution-implementation.yaml": (
         ["protopoll_impl_pos.js"],
         ["protopoll_impl_neg.js"],
