@@ -304,6 +304,32 @@ class TestSummarizeAndWrite:
         assert result is not None
         assert result["inode_mismatch"] is True
 
+    def test_inode_swap_flag_survives_run_dir_spelling_drift(
+            self, tmp_path, monkeypatch):
+        """The finalizer's evidence-handle match must resolve() both
+        sides like every other run-dir key in the module: with a
+        symlink-spelled run_dir the unresolved compare skipped the
+        close-and-verify here, and the later set_active_run_dir close
+        discarded the verdict — a swapped evidence file's
+        inode_mismatch flag was silently lost for that run."""
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+        real = tmp_path / "run"
+        real.mkdir()
+        alias = tmp_path / "alias"
+        alias.symlink_to(real, target_is_directory=True)
+        summary_mod.set_active_run_dir(real)
+        summary_mod.record_denial("real", 1, "network")
+        jsonl = _denials_path(real)
+        content = jsonl.read_bytes()
+        jsonl.unlink()
+        jsonl.write_bytes(content)  # same bytes, NEW inode
+        result = summary_mod.summarize_and_write(alias)
+        assert result is not None
+        assert result["inode_mismatch"] is True, (
+            "spelling drift (symlinked run dir) lost the "
+            "inode_mismatch tamper flag"
+        )
+
     def test_planted_fifo_does_not_hang_and_flags_summary(self, tmp_path):
         """The legacy denials location is target-writable; a planted
         FIFO used to block summarize_and_write's plain open() forever

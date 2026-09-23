@@ -835,8 +835,16 @@ def summarize_and_write(run_dir: Path) -> dict[str, Any] | None:
     # the swap into integrity=verified.
     inode_mismatch = False
     with _lock:
+        # resolve() BOTH sides, like every other run-dir key in this
+        # module: an unresolved Path compare misses spelling drift
+        # (symlinked project dir, trailing slash, relative caller) —
+        # the handle then stayed open past its run's finalisation and
+        # the later set_active_run_dir close DISCARDED the verify
+        # verdict, losing a swapped evidence file's inode_mismatch
+        # flag for that run.
         if (_evidence_handle is not None
-                and _evidence_handle.path.parent.parent == run_dir):
+                and _evidence_handle.path.parent.parent.resolve()
+                == run_dir.resolve()):
             inode_mismatch = not _evidence_handle.close()
             _evidence_handle = None
     # New (.audit/) location preferred; legacy <run_dir>/ location
