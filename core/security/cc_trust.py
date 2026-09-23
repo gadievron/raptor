@@ -128,11 +128,33 @@ class FileScan:
         return any(f.blocking for f in self.findings)
 
 
+# Commands CC executes to obtain/refresh credentials — the same
+# transcription discipline as the credential_env ecosystem surfaces
+# (every hand-picked universe carries source/transcribed/completeness
+# so drift is a dated claim, not a guess):
+#
+# source= Claude Code settings docs, "Available settings" full key
+#   walk (helper-executing keys: apiKeyHelper, awsAuthRefresh,
+#   awsCredentialExport, gcpAuthRefresh, proxyAuthHelper,
+#   otelHeadersHelper). `awsAuthHelper` (an earlier guess) does not
+#   exist — the executed-script key is `awsCredentialExport`;
+#   `proxyAuthHelper` produces proxy auth headers the same way.
+# transcribed= 2026-09-22; settings-doc key walk re-run against the
+#   docs current at that date. Re-walk on CC settings-doc updates —
+#   every past miss in this family (otelHeadersHelper, statusLine,
+#   permissions-widening) was a documented key the list lacked until
+#   someone noticed.
+# completeness= hooks / statusLine / permissions / env have their own
+#   scan arms below; `model`, output/style knobs and other documented
+#   inert-VALUE keys are deliberately out (unknown top-level keys are
+#   allow-by-default, pinned by test_non_helper_top_level_key_is_inert
+#   — flipping that posture is a separate adjudication). Repo-level
+#   plugin-configuration keys (marketplaces / enabled-plugins — the
+#   plugin spelling of hooks/commands/MCP) are NOT yet adjudicated:
+#   whether current CC honours them from a repo settings.json without
+#   a trust prompt needs a CC-version oracle; adjudicate on next
+#   transcription walk.
 _CREDENTIAL_HELPER_KEYS = (
-    # Commands CC executes to obtain/refresh credentials. These are
-    # the keys CC actually honours: `awsAuthHelper` (an earlier guess)
-    # does not exist — the executed-script key is `awsCredentialExport`
-    # — and `proxyAuthHelper` produces proxy auth headers the same way.
     "apiKeyHelper", "awsAuthRefresh", "awsCredentialExport",
     "gcpAuthRefresh", "proxyAuthHelper",
     # otelHeadersHelper is a command CC executes to produce telemetry
