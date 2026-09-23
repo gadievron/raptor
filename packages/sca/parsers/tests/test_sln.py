@@ -204,3 +204,40 @@ def test_discovery_picks_up_sln_referenced_csproj(tmp_path: Path):
         "src/AppA/AppA.csproj",
         "src/Shared/Shared.csproj",
     }
+
+
+def test_symlink_laundered_dotdot_escape_rejected(tmp_path: Path) -> None:
+    """A project path that wanders OUTSIDE the bound and re-enters
+    through an out-of-tree symlink resolves inside the bound — the
+    post-resolve check alone accepted it, routing resolution through
+    attacker-reachable territory. The up-front LEXICAL fold rejects
+    the wander itself."""
+    root = tmp_path / "repo"
+    (root / "sub").mkdir(parents=True)
+    (root / "App.csproj").write_text("<Project/>", encoding="utf-8")
+    # Out-of-tree symlink pointing back INTO the root.
+    (tmp_path / "out").symlink_to(root)
+    sln = root / "sub" / "app.sln"
+    sln.write_text(
+        'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = '
+        '"App", "..\\..\\out\\App.csproj", "{DEAD}"\nEndProject\n',
+        encoding="utf-8",
+    )
+    assert find_sln_referenced_csprojs(sln, repo_root=root) == []
+
+
+def test_inbound_dotdot_reference_still_resolves(tmp_path: Path) -> None:
+    """Two-direction guard: the routine sibling-project reference
+    (``..\\shared\\lib.csproj``) inside the bound keeps working."""
+    root = tmp_path / "repo"
+    (root / "shared").mkdir(parents=True)
+    (root / "sol").mkdir()
+    lib = root / "shared" / "Lib.csproj"
+    lib.write_text("<Project/>", encoding="utf-8")
+    sln = root / "sol" / "app.sln"
+    sln.write_text(
+        'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = '
+        '"Lib", "..\\shared\\Lib.csproj", "{BEEF}"\nEndProject\n',
+        encoding="utf-8",
+    )
+    assert find_sln_referenced_csprojs(sln, repo_root=root) == [lib]
