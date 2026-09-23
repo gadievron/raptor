@@ -104,6 +104,32 @@ def _llm_truncation_error(msg: str) -> RuntimeError:
     return err
 
 
+def _attach_billed_usage(
+    err: BaseException,
+    *,
+    cost_usd: float,
+    tokens_in: int,
+    tokens_out: int,
+) -> None:
+    """Stamp what a FAILED attempt already paid onto the exception.
+
+    A response the shape guards reject (empty content, thinking-only,
+    output truncation) is still a completed, billed generation. The
+    provider ledger books that money (``track_usage`` at the guard),
+    but per-attempt ATTRIBUTION — which call class, which telemetry
+    row — only travels on the exception: the client's attempt-failure
+    handler reads these attributes to put the paid token counts and
+    cost on the ``attempt_failed`` record. Without them a burn loop
+    (every call failing the same way) is invisible in the per-call
+    ledger: each row reads $0 while the run bleeds full-price calls.
+    Attribute names are read chain-walked, so wrappers that re-raise
+    ``from`` the original keep the attribution.
+    """
+    err.billed_cost_usd = float(cost_usd or 0.0)  # type: ignore[attr-defined]
+    err.billed_tokens_in = int(tokens_in or 0)  # type: ignore[attr-defined]
+    err.billed_tokens_out = int(tokens_out or 0)  # type: ignore[attr-defined]
+
+
 def _instructor_truncation_stop(exc: Exception) -> str | None:
     """Stop reason when an instructor failure is really output truncation.
 
@@ -225,6 +251,45 @@ def supports_temperature(model_name: str) -> bool:
     major = int(m.group(1))
     minor = int(m.group(2)) if m.group(2) is not None else 0
     return (major, minor) < _TEMPERATURE_DEPRECATED_FROM
+
+
+# Same version boundary as the temperature deprecation: 4.7 is where
+# the reasoning tier's request surface changed (verified empirically
+# for temperature; the thinking-parameter removal shipped in the same
+# generation per the provider's migration notes).
+_THINKING_SHARES_OUTPUT_FROM = (4, 7)
+
+
+def thinking_shares_output_budget(model_name: str) -> bool:
+    """Whether ``model_name`` bills thinking inside ``max_tokens``
+    with no way to cap it per request.
+
+    The operative contract from the 4.7 reasoning tier onward: the
+    fixed thinking-budget request parameter is rejected, and whenever
+    the model DOES think (always on the 5 family; whenever thinking is
+    enabled on 4.7/4.8), those tokens count against the response's
+    ``max_tokens`` — so a caller cannot reserve text room by capping
+    thinking. The only lever left is a larger shared ceiling: a
+    ``max_tokens`` sized for the TEXT alone can be consumed entirely
+    by reasoning, ending the turn at ``stop_reason=max_tokens`` with a
+    thinking-only (or empty) content list — a full-price call with
+    zero yield, deterministic on identical retry. Callers that cap
+    structured output below the model's ceiling (the study lane)
+    consult this to add thinking headroom on top of their text budget;
+    where thinking is off the extra headroom is harmless (billing is
+    per generated token — an unused ceiling costs nothing).
+
+    Same identifier parsing as :func:`supports_temperature` (Bedrock
+    prefixes, bare ids, dated snapshots; the 5-family's single-number
+    versions gate as (5, 0)). Non-claude / unparseable names return
+    False — an unknown model keeps the caller's plain text budget.
+    """
+    m = _CLAUDE_VERSION_RE.search(model_name or "")
+    if not m:
+        return False
+    major = int(m.group(1))
+    minor = int(m.group(2)) if m.group(2) is not None else 0
+    return (major, minor) >= _THINKING_SHARES_OUTPUT_FROM
 
 
 def _safe_float(value: Any, *, default: float) -> float:
@@ -925,6 +990,13 @@ class LLMProvider(ABC):
                 input_tokens + output_tokens, cost,
                 input_tokens, output_tokens, duration,
             )
+            # Per-attempt attribution for the telemetry row — the
+            # ledger booking above is aggregate-only and cannot say
+            # WHICH call class paid (see _attach_billed_usage).
+            _attach_billed_usage(
+                exc, cost_usd=cost, tokens_in=input_tokens,
+                tokens_out=output_tokens,
+            )
         except Exception as book_exc:  # noqa: BLE001 — best-effort booking
             logger.debug(
                 "instructor failure usage booking skipped: %s", book_exc,
@@ -979,7 +1051,20 @@ class LLMProvider(ABC):
                 "Response truncated (output token limit reached, "
                 f"finish_reason={response.finish_reason})"
             )
-            raise _llm_truncation_error(msg)
+            err = _llm_truncation_error(msg)
+            # generate() completed and already booked this call on the
+            # provider ledger — no re-track here; the stamp only
+            # carries per-attempt attribution to the telemetry row.
+            _attach_billed_usage(
+                err,
+                cost_usd=getattr(response, "cost", 0.0),
+                tokens_in=getattr(response, "input_tokens", 0),
+                tokens_out=(
+                    (getattr(response, "output_tokens", 0) or 0)
+                    + (getattr(response, "thinking_tokens", 0) or 0)
+                ),
+            )
+            raise err
         try:
             # Strip markdown fences via the shared hardened helper.
             # It prefers the LAST fenced JSON block, defeating
@@ -2846,6 +2931,57 @@ class AnthropicProvider(LLMProvider):
                 response = self.client.messages.create(**create_kwargs)
             duration = time.monotonic() - t_start
 
+            # Usage/cost first, THEN the shape guards: a response the
+            # guards reject (empty content, thinking-only) is still a
+            # completed, billed generation. Booking before raising
+            # keeps the provider ledger — the budget-enforcement floor
+            # (``max(total_cost, provider_spend_usd)``) — honest for
+            # failed attempts; pre-fix a class-wide shape failure
+            # (thinking consuming the whole shared output budget on a
+            # reasoning-tier model) burned full-price calls that
+            # reached neither ledger nor telemetry.
+            input_tokens = 0
+            output_tokens = 0
+            thinking_tokens = 0
+            cache_read_tokens = 0
+            cache_write_tokens = 0
+            if response.usage:
+                input_tokens = response.usage.input_tokens or 0
+                output_tokens = response.usage.output_tokens or 0
+                thinking_tokens = getattr(response.usage, 'thinking_tokens', 0) or 0
+                cache_read_tokens = getattr(response.usage, 'cache_read_input_tokens', 0) or 0
+                cache_write_tokens = getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
+            tokens_used = input_tokens + output_tokens + thinking_tokens
+            cost = self._calculate_cost_split(
+                input_tokens, output_tokens, thinking_tokens,
+                cache_read_tokens=cache_read_tokens,
+                cache_write_tokens=cache_write_tokens,
+            )
+
+            def _raise_paid(err: BaseException) -> None:
+                """Book the rejected response's spend, stamp the
+                attribution attributes, raise. Booking is best-effort
+                (same never-raises contract as the instructor booking
+                twin) — a ledger exception must not replace the shape
+                error the caller's classifiers key on."""
+                try:
+                    self.track_usage(
+                        tokens_used, cost, input_tokens, output_tokens,
+                        duration,
+                        cache_read_tokens=cache_read_tokens,
+                        cache_write_tokens=cache_write_tokens,
+                    )
+                except Exception:  # noqa: BLE001 — booking must not mask the shape error
+                    logger.debug(
+                        "shape-guard spend booking failed",
+                        exc_info=True,
+                    )
+                _attach_billed_usage(
+                    err, cost_usd=cost, tokens_in=input_tokens,
+                    tokens_out=output_tokens + thinking_tokens,
+                )
+                raise err
+
             # Extract text from response (guard against empty/non-text
             # content). Reasoning-tier models prepend thinking blocks —
             # the text block is not necessarily first, so take the
@@ -2871,7 +3007,7 @@ class AnthropicProvider(LLMProvider):
                         "Anthropic model refused request "
                         "(stop_reason=refusal, empty content)"
                     )
-                    raise RuntimeError(msg)
+                    _raise_paid(RuntimeError(msg))
                 if stop == "max_tokens":
                     msg = (
                         "Anthropic returned empty content with "
@@ -2880,12 +3016,12 @@ class AnthropicProvider(LLMProvider):
                         "(on reasoning-tier models thinking can "
                         "consume the entire budget)"
                     )
-                    raise _llm_truncation_error(msg)
+                    _raise_paid(_llm_truncation_error(msg))
                 msg = (
                     f"Anthropic returned empty content "
                     f"(stop_reason={stop})"
                 )
-                raise RuntimeError(msg)
+                _raise_paid(RuntimeError(msg))
             text_block = next(
                 (b for b in response.content if hasattr(b, 'text')), None,
             )
@@ -2906,27 +3042,20 @@ class AnthropicProvider(LLMProvider):
                     f"(got: {block_types}; stop_reason="
                     f"{response.stop_reason or 'unknown'})"
                 )
-                raise RuntimeError(msg)
+                if (response.stop_reason or "") == "max_tokens":
+                    # Thinking-only content ended by the output cap is
+                    # the same condition as the empty-content
+                    # max_tokens guard above — reasoning consumed the
+                    # whole shared budget before the first text block —
+                    # so it must carry the same typed truncation
+                    # marker. Pre-fix it raised untyped: the study
+                    # lane's split-retry/classification saw a generic
+                    # provider failure, and one live run re-bought the
+                    # identical full-price failure for hours.
+                    _raise_paid(_llm_truncation_error(msg))
+                _raise_paid(RuntimeError(msg))
             content = text_block.text
             finish_reason = response.stop_reason or "complete"
-
-            input_tokens = 0
-            output_tokens = 0
-            thinking_tokens = 0
-            cache_read_tokens = 0
-            cache_write_tokens = 0
-            if response.usage:
-                input_tokens = response.usage.input_tokens or 0
-                output_tokens = response.usage.output_tokens or 0
-                thinking_tokens = getattr(response.usage, 'thinking_tokens', 0) or 0
-                cache_read_tokens = getattr(response.usage, 'cache_read_input_tokens', 0) or 0
-                cache_write_tokens = getattr(response.usage, 'cache_creation_input_tokens', 0) or 0
-            tokens_used = input_tokens + output_tokens + thinking_tokens
-            cost = self._calculate_cost_split(
-                input_tokens, output_tokens, thinking_tokens,
-                cache_read_tokens=cache_read_tokens,
-                cache_write_tokens=cache_write_tokens,
-            )
 
             self.track_usage(
                 tokens_used, cost, input_tokens, output_tokens, duration,
