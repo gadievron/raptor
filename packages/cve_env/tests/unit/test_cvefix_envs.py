@@ -265,3 +265,64 @@ class TestMainLoop:
         assert mod.main(["--specs", str(specs_dir),
                          "--out", str(tmp_path / "out"),
                          "--dry-run"]) == 0
+
+
+class TestResolveParentChokepoints:
+    def test_rev_parse_runs_through_the_safe_git_chokepoint(
+            self, mod, tmp_path, monkeypatch):
+        """The clone is an untrusted working tree: the rev-parse must
+        carry safe_git_command's config-isolation overrides and the
+        sanitised git env — a bare ["git", ...] invocation honours the
+        clone's own config (the CVE-2024-32002 family)."""
+        from core.git import get_safe_git_env
+        from core.git.clone import safe_git_command
+        from core.recall.cvefix_manifest import CvefixSpec
+
+        clone = tmp_path / "clone"
+        (clone / ".git").mkdir(parents=True)
+        spec = CvefixSpec.from_dict(
+            dict(_spec_dict(tmp_path), local_clone=str(clone)))
+        captured: dict = {}
+
+        def fake_run(argv, **kw):
+            captured["argv"] = argv
+            captured["env"] = kw.get("env")
+
+            class R:
+                returncode = 0
+                stdout = "b" * 40
+                stderr = ""
+            return R()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+        assert mod.resolve_parent(spec) == "b" * 40
+        expected = safe_git_command(
+            "-C", str(clone), "rev-parse", f"{FIX}^")
+        assert captured["argv"] == expected
+        assert len(expected) > 5, "safety overrides present in argv"
+        assert captured["env"] == get_safe_git_env()
+
+    def test_api_fallback_is_bounded_core_http(self, mod, tmp_path,
+                                               monkeypatch):
+        """The GitHub fallback must use core.http with a response-size
+        cap, never an unbounded json.load over raw urllib."""
+        from core.http import urllib_backend
+        from core.recall.cvefix_manifest import CvefixSpec
+
+        spec = CvefixSpec.from_dict(_spec_dict(tmp_path))  # clone absent
+        captured: dict = {}
+
+        class FakeClient:
+            def __init__(self, *a, **kw):
+                pass
+
+            def get_json(self, url, **kw):
+                captured["url"] = url
+                captured["kwargs"] = kw
+                return {"parents": [{"sha": "c" * 40}]}
+
+        monkeypatch.setattr(urllib_backend, "UrllibClient", FakeClient)
+        assert mod.resolve_parent(spec) == "c" * 40
+        assert captured["url"].startswith(
+            "https://api.github.com/repos/drupal/drupal/commits/")
+        assert captured["kwargs"].get("max_bytes"), "response-size cap required"
