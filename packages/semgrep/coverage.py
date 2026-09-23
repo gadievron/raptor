@@ -52,7 +52,13 @@ def to_coverage_record(
         # accounted for above, otherwise one underlying error produces
         # two files_failed records and inflates failure counts.
         for err in r.errors:
-            if any(reason and reason in err for reason in failed_reasons):
+            # Identity, not substring: the rendered engine error is
+            # "<type>: <message>" and the per-file reason is exactly
+            # <message> — a per-file reason that merely SUBSTRINGed an
+            # unrelated engine error used to drop the engine-error
+            # row silently. Compare the message part exactly.
+            err_msg = err.split(": ", 1)[1] if ": " in err else err
+            if err_msg in failed_reasons:
                 continue
             # Every entry is path-bearing (sibling-builder contract:
             # consumers key and dedupe on ``path``); no per-file

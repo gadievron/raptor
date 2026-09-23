@@ -90,10 +90,13 @@ def extract_nosemgrep(
     if found, ``None`` otherwise.
     """
     if _lines is None:
-        try:
-            _lines = Path(file_path).read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
+        # Same capped read as the annotate_sarif path's _FileCache —
+        # the standalone entry point read files unbounded, the
+        # uncapped-read shape the shared reader exists to close.
+        got = read_text_capped(file_path)
+        if got is None:
             return None
+        _lines = got[0].splitlines()
 
     for offset in (0, -1):
         idx = line - 1 + offset  # 1-indexed → 0-indexed

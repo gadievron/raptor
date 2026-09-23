@@ -358,3 +358,32 @@ class TestAnnotateSarifMalformedShapes:
         sarif = _make_sarif_data([bad, good])
         assert annotate_sarif(sarif, str(tmp_path)) == 1
         assert bad["properties"] == "already-a-string"
+
+
+class TestStandaloneReadIsCapped:
+    def test_extract_nosemgrep_routes_through_the_capped_reader(
+        self, tmp_path, monkeypatch,
+    ):
+        """The standalone path (no _lines) must use the same capped
+        read as annotate_sarif's _FileCache — it read files
+        unbounded."""
+        import packages.semgrep.nosemgrep as ns
+
+        f = tmp_path / "a.py"
+        f.write_text("x = 1  # nosemgrep: rule1\n")
+        calls = {"n": 0}
+        real = ns.read_text_capped
+
+        def counting(path, *a, **kw):
+            calls["n"] += 1
+            return real(path, *a, **kw)
+
+        monkeypatch.setattr(ns, "read_text_capped", counting)
+
+        def _no_unbounded(self, *a, **kw):  # pragma: no cover
+            raise AssertionError("unbounded Path.read_text used")
+
+        monkeypatch.setattr(Path, "read_text", _no_unbounded)
+        got = extract_nosemgrep(f, 1)
+        assert got is not None and got["suppressed"] is True
+        assert calls["n"] == 1

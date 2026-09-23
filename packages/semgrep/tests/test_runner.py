@@ -664,3 +664,30 @@ class TestOutputBudget:
         )
         assert not result.ok
         assert result.sarif == ""  # oversized text never retained
+
+
+class TestBudgetMeasuresBytes:
+    def test_non_ascii_payload_over_byte_budget_is_refused(
+        self, tmp_path, monkeypatch,
+    ):
+        """The budget is declared in bytes; len(str) counts
+        characters and UTF-8 encodes up to 4 bytes per char — a
+        non-ASCII payload could weigh 4x the budget while passing a
+        character-count gate."""
+        import packages.semgrep.runner as runner_mod
+
+        target = tmp_path / "src"
+        target.mkdir()
+        # 100 chars, 200 bytes in UTF-8.
+        payload = "é" * 100
+        monkeypatch.setattr(runner_mod, "_MAX_TOOL_OUTPUT_BYTES", 150)
+        with patch("packages.semgrep.runner.is_available",
+                   return_value=True), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(
+                stdout=payload, stderr="", returncode=0,
+            )
+            result = run_rule(target, "p/x", unsandboxed=True)
+        assert not result.ok
+        assert any("budget" in e and "bytes" in e for e in result.errors)
+        assert result.sarif == ""
