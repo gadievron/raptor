@@ -552,37 +552,149 @@ def _parse_section(
 
 class AnnotationFileError(ValueError):
     """An existing annotation file could not be read faithfully
-    (unreadable, undecodable, future-format, or content the parser
-    cannot account for).
+    (unreadable, undecodable, future-format, or unattributable
+    zero-section content).
 
     Raised only by strict reads — the read-modify-write cycle inside
     ``write_annotation`` / ``remove_annotation``. A write path that
     treated such a file as empty would render only the new record and
     atomically replace the file, silently destroying every prior
     operator note; failing the write loudly leaves the original bytes
-    untouched for the operator to inspect or repair. Subclasses
-    ``ValueError`` so existing callers that surface write-validation
-    errors report this one the same way."""
+    untouched for the operator to inspect or repair. (Content outside
+    ``##`` sections in an otherwise-parseable file is NOT an error:
+    the writer round-trips it verbatim — see ``_FileState.extra``.)
+    Subclasses ``ValueError`` so existing callers that surface
+    write-validation errors report this one the same way."""
 
 
-def _unaccounted_content(text: str) -> bool:
-    """Whether *text* carries content the section parser would drop.
+@dataclasses.dataclass(frozen=True)
+class _FileState:
+    """Everything a rewrite must faithfully re-render for one file.
 
-    A file our own writer produced always has at least one ``##``
-    section (the last removal deletes the file), so a non-empty file
-    that parses to zero sections is truncated, hand-mangled, or
-    foreign. Blank lines, the version marker, and ``# <label>`` lines
-    are the only shapes the renderer emits outside sections."""
-    for line in text.splitlines():
+    ``extra`` is the out-of-section content the section parser does
+    not own: the preamble lines between the renderer's own header
+    (version marker + ``# <label>`` line) and the first ``##``
+    heading — operators hand-add file-level prose there, the format
+    being advertised as operator-editable markdown. When no sections
+    parse, the whole file is preamble. The writer preserves ``extra``
+    verbatim (edge blank lines normalised) on every rewrite; a
+    rewrite that dropped it would silently destroy operator notes.
+    """
+
+    exists: bool
+    has_marker: bool
+    extra: str
+    annotations: list[Annotation]
+
+
+def _preamble_extra(preamble: str, source_file: str) -> str:
+    """The preamble lines the renderer does NOT own.
+
+    The renderer's own header is exactly: the version-marker line,
+    one ``# <source_file>`` label line, and blank separation. Those
+    are dropped (matched at most once each, header-position only);
+    every other line is preserved verbatim. Edge blank lines are
+    trimmed — the renderer re-adds separation."""
+    out: list[str] = []
+    marker_seen = False
+    label_seen = False
+    for line in preamble.splitlines():
         stripped = line.strip()
-        if not stripped:
-            continue
-        if _VERSION_MARKER_RE.match(stripped):
-            continue
-        if stripped.startswith("# "):
-            continue
-        return True
-    return False
+        if not out:
+            if not marker_seen and _VERSION_MARKER_RE.match(stripped):
+                marker_seen = True
+                continue
+            if not label_seen and stripped == f"# {source_file}":
+                label_seen = True
+                continue
+            if not stripped:
+                continue
+        out.append(line)
+    while out and not out[-1].strip():
+        out.pop()
+    return "\n".join(out)
+
+
+def _load_file_state(
+    base_dir: Path, source_file: str, *, strict: bool = False,
+) -> _FileState:
+    """Load one annotation file's full rewrite state (out-of-section
+    content + parsed sections). See :func:`read_file_annotations`
+    for the strict/tolerant contract."""
+    path = annotation_path(base_dir, source_file)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        # Genuinely absent — the legitimate new-file path.
+        return _FileState(False, False, "", [])
+    except (OSError, UnicodeDecodeError) as e:
+        if strict:
+            msg = (
+                f"annotation file {path} is unreadable ({e}); refusing "
+                f"to rewrite it — inspect or repair the file (it may "
+                f"hold operator notes), then retry"
+            )
+            raise AnnotationFileError(msg) from e
+        logger.warning(
+            "annotation file %s unreadable (%s) — treating as empty",
+            path, e,
+        )
+        return _FileState(False, False, "", [])
+    # Detect format version. Files without a marker are legacy v1 —
+    # parse permissively. Files with a future version emit a warning
+    # but still try (partial-results-better-than-nothing). In strict
+    # mode a future version refuses instead: rewriting it with this
+    # version's renderer would destroy structure this parser cannot
+    # see.
+    version_match = _VERSION_MARKER_RE.search(text)
+    if version_match:
+        try:
+            version = int(version_match.group(1))
+        except ValueError:
+            # Reachable despite the (\d+) capture: CPython caps
+            # int(str) conversion length, so an absurdly long digit
+            # run raises — treat it as the current version and let
+            # the sections still parse.
+            version = CURRENT_VERSION
+        if version > CURRENT_VERSION:
+            if strict:
+                msg = (
+                    f"annotation file {path} declares format version "
+                    f"{version} (writer supports up to "
+                    f"{CURRENT_VERSION}); refusing to rewrite it"
+                )
+                raise AnnotationFileError(msg)
+            logger.warning(
+                "annotation file %s declares version %s (reader supports up to %s); attempting to parse anyway", path, version, CURRENT_VERSION
+            )
+    sections = _split_sections(text)
+    preamble = text[: sections[0][1]] if sections else text
+    extra = _preamble_extra(preamble, source_file)
+    has_marker = version_match is not None
+    if strict and not sections and extra and not has_marker:
+        # Zero sections AND no version marker: not a file this writer
+        # produced (a rewrite always emits the marker, and preserved
+        # preamble rides under it), so the content is unattributable
+        # — truncated, or a foreign markdown file. Refuse rather than
+        # guess; marker-bearing files round-trip their content as
+        # preamble instead.
+        msg = (
+            f"annotation file {path} is non-empty but no ## sections "
+            f"parse and no format marker is present (truncated or "
+            f"foreign?); refusing to rewrite it — inspect or repair "
+            f"the file, then retry"
+        )
+        raise AnnotationFileError(msg)
+    out: list[Annotation] = []
+    for name, start, end in sections:
+        meta, body = _parse_section(text, name, start, end)
+        out.append(Annotation(
+            file=source_file,
+            function=name,
+            body=body,
+            metadata=meta,
+        ))
+    return _FileState(True, has_marker, extra, out)
 
 
 def read_file_annotations(
@@ -598,72 +710,14 @@ def read_file_annotations(
 
     ``strict=True`` (the write paths' read-modify-write cycle):
     the same conditions raise :class:`AnnotationFileError` instead.
-    Fail-closed rationale: the writer re-renders the whole file from
-    what this function returns, so any content it cannot faithfully
-    account for — unreadable bytes, a future format version, or
-    non-empty text yielding zero sections — would be silently
-    destroyed by the subsequent atomic replace.
+    Fail-closed rationale: the writer re-renders the whole file, so
+    anything it cannot faithfully re-render — unreadable bytes, a
+    future format version, or unattributable zero-section content —
+    must refuse the rewrite. Out-of-section content in a parseable
+    file is not an error: the writer preserves it verbatim (see
+    ``_FileState.extra``).
     """
-    path = annotation_path(base_dir, source_file)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        # Genuinely absent — the legitimate new-file path.
-        return []
-    except (OSError, UnicodeDecodeError) as e:
-        if strict:
-            msg = (
-                f"annotation file {path} is unreadable ({e}); refusing "
-                f"to rewrite it — inspect or repair the file (it may "
-                f"hold operator notes), then retry"
-            )
-            raise AnnotationFileError(msg) from e
-        logger.warning(
-            "annotation file %s unreadable (%s) — treating as empty",
-            path, e,
-        )
-        return []
-    # Detect format version. Files without a marker are legacy v1 —
-    # parse permissively. Files with a future version emit a warning
-    # but still try (partial-results-better-than-nothing). In strict
-    # mode a future version refuses instead: rewriting it with this
-    # version's renderer would destroy structure this parser cannot
-    # see.
-    version_match = _VERSION_MARKER_RE.search(text)
-    if version_match:
-        try:
-            version = int(version_match.group(1))
-        except ValueError:
-            version = CURRENT_VERSION
-        if version > CURRENT_VERSION:
-            if strict:
-                msg = (
-                    f"annotation file {path} declares format version "
-                    f"{version} (writer supports up to "
-                    f"{CURRENT_VERSION}); refusing to rewrite it"
-                )
-                raise AnnotationFileError(msg)
-            logger.warning(
-                "annotation file %s declares version %s (reader supports up to %s); attempting to parse anyway", path, version, CURRENT_VERSION
-            )
-    sections = _split_sections(text)
-    if strict and not sections and _unaccounted_content(text):
-        msg = (
-            f"annotation file {path} is non-empty but no ## sections "
-            f"parse (truncated or hand-mangled?); refusing to rewrite "
-            f"it — inspect or repair the file, then retry"
-        )
-        raise AnnotationFileError(msg)
-    out: list[Annotation] = []
-    for name, start, end in sections:
-        meta, body = _parse_section(text, name, start, end)
-        out.append(Annotation(
-            file=source_file,
-            function=name,
-            body=body,
-            metadata=meta,
-        ))
-    return out
+    return _load_file_state(base_dir, source_file, strict=strict).annotations
 
 
 def read_annotation(
@@ -745,6 +799,10 @@ def write_annotation(
     Atomic via tempfile + rename — concurrent readers see either the
     pre-write or post-write content, never a partial rewrite.
 
+    Content outside ``##`` sections (hand-added file-level operator
+    prose — the format is operator-editable markdown) is preserved
+    verbatim across the rewrite; see ``_FileState.extra``.
+
     Raises :class:`AnnotationFileError` (a ``ValueError``) when an
     existing annotation file for ``ann.file`` cannot be read
     faithfully — the write is refused so the rewrite can't silently
@@ -781,10 +839,11 @@ def write_annotation(
         # with just the new record, silently destroying every prior
         # note (respect-manual included: a prior human note it cannot
         # read is one it must not clobber).
-        existing = read_file_annotations(base_dir, ann.file, strict=True)
+        state = _load_file_state(base_dir, ann.file, strict=True)
         pre_mtime = annotation_file_mtime(base_dir, ann.file)
         existing = [
-            _materialise_era_markers(a, pre_mtime) for a in existing
+            _materialise_era_markers(a, pre_mtime)
+            for a in state.annotations
         ]
         if overwrite == "respect-manual":
             prior = next(
@@ -795,7 +854,9 @@ def write_annotation(
 
         by_name = {a.function: a for a in existing}
         by_name[ann.function] = ann
-        rendered = _render_file(ann.file, by_name.values())
+        rendered = _render_file(
+            ann.file, by_name.values(), extra=state.extra,
+        )
 
         # Atomic write: each save operation is a per-function annotation
         # an operator relies on; a torn write on interrupt would lose
@@ -814,14 +875,17 @@ def remove_annotation(
     actually removed; False if the function had no annotation.
 
     Removes the file entirely when the last annotation is deleted —
-    keeps the annotation tree from accumulating empty .md files.
+    keeps the annotation tree from accumulating empty .md files —
+    unless the file carries preserved out-of-section operator prose,
+    which keeps the (section-less, marker-bearing) file alive.
     """
     path = annotation_path(base_dir, source_file)
     with _file_lock(path):
         # Strict read — same fail-closed contract as write_annotation:
         # a corrupt file must not be re-rendered (or unlinked) from a
         # partial parse.
-        existing = read_file_annotations(base_dir, source_file, strict=True)
+        state = _load_file_state(base_dir, source_file, strict=True)
+        existing = state.annotations
         if not any(a.function == function for a in existing):
             return False
         pre_mtime = annotation_file_mtime(base_dir, source_file)
@@ -829,13 +893,15 @@ def remove_annotation(
             _materialise_era_markers(a, pre_mtime)
             for a in existing if a.function != function
         ]
-        if not remaining:
+        if not remaining and not state.extra:
             try:
                 path.unlink()
             except OSError:
                 pass
             return True
-        rendered = _render_file(source_file, remaining)
+        # Preserved out-of-section prose keeps the file alive past
+        # the last section's removal — unlinking would destroy it.
+        rendered = _render_file(source_file, remaining, extra=state.extra)
         # Atomic write: same reasoning as write_annotation above — the
         # remove path also rewrites the on-disk file, and a torn write
         # would lose the survivor annotations.
@@ -880,10 +946,12 @@ def compute_function_hash(
     return hash_span(source_path, start_line, end_line)
 
 
-def _render_file(source_file: str, anns) -> str:
+def _render_file(source_file: str, anns, extra: str = "") -> str:
     """Render an annotation file from a sequence of Annotation
     objects. Sections are sorted by function name for stable output
-    (diff-friendly under git)."""
+    (diff-friendly under git). ``extra`` — preserved out-of-section
+    content (see ``_FileState.extra``) — is re-emitted verbatim
+    between the header and the first section."""
     sorted_anns = sorted(anns, key=lambda a: a.function)
     lines: list[str] = []
     # Format version marker — first line. Reader uses this to detect
@@ -891,6 +959,9 @@ def _render_file(source_file: str, anns) -> str:
     lines.append(f"<!-- annotations-version: {CURRENT_VERSION} -->")
     lines.append(f"# {source_file}")
     lines.append("")
+    if extra:
+        lines.extend(extra.splitlines())
+        lines.append("")
     for ann in sorted_anns:
         lines.append(f"## {ann.function}")
         if ann.metadata:

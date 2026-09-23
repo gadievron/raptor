@@ -522,6 +522,38 @@ class TestEdit:
                  "--base", str(tmp_path), env=env)
         assert r.returncode != 0
 
+    def test_edit_preserves_just_typed_file_level_prose(self, tmp_path):
+        """The sanctioned edit flow invites free-form editing of the
+        .md; a file-level paragraph typed in the editor used to be
+        destroyed by the post-editor re-stamp rewrite — inside the
+        very command that printed ``saved``."""
+        r = _run("add", "src/a.py", "f", "--base", str(tmp_path),
+                 "-m", "note")
+        assert r.returncode == 0, r.stderr
+        # An "editor" that inserts a file-level paragraph after the
+        # label line and snapshots what it saved.
+        editor = tmp_path / "fake_editor.sh"
+        snapshot = tmp_path / "snapshot.md"
+        editor.write_text(
+            "#!/bin/sh\n"
+            "f=\"$1\"\n"
+            "awk 'NR==3{print \"OPERATOR PARAGRAPH typed in editor\"; "
+            "print \"\"}1' \"$f\" > \"$f.tmp\" && mv \"$f.tmp\" \"$f\"\n"
+            f"cp \"$f\" {snapshot}\n",
+        )
+        editor.chmod(0o755)
+        r = _run("edit", "src/a.py", "f", "--base", str(tmp_path),
+                 env={"EDITOR": str(editor)})
+        assert r.returncode == 0, r.stderr
+        assert "saved" in r.stdout
+        # The paragraph WAS on disk when the editor exited...
+        assert "OPERATOR PARAGRAPH" in snapshot.read_text()
+        # ...and must still be there after the re-stamp rewrite the
+        # ``saved`` message reports on.
+        after = (tmp_path / "src" / "a.py.md").read_text()
+        assert "OPERATOR PARAGRAPH" in after
+        assert "## f" in after
+
 
 # ---------------------------------------------------------------------------
 # stale
