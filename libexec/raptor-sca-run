@@ -20,10 +20,11 @@ the rest of RAPTOR consumes). The sub-commands run as-is and write
 their outputs to whatever ``--out`` the operator supplies.
 
 Target resolution for scan (per CLAUDE.md DEFAULT TARGET DIRECTORY):
-  1. Explicit positional argument
-  2. Active project's target (resolved by ``get_output_dir``)
-  3. $RAPTOR_CALLER_DIR (launcher saves the user's cwd before chdir)
-  4. fail with exit code 2
+  1. Explicit positional argument (always bypasses the volatile gate)
+  2. Mechanical default chain (``core.run.output.resolve_default_target``):
+     active project's target, then $RAPTOR_CALLER_DIR — both layers
+     behind the volatile-target sanity gate
+  3. fail with exit code 2
 """
 
 from __future__ import annotations
@@ -152,11 +153,21 @@ def _parse_analyse(argv):
 
 
 def _resolve_target(explicit):
+    """Explicit path, else the mechanical CLAUDE.md default chain.
+
+    ``resolve_default_target`` supplies the active-project layer AND
+    the volatile-target sanity gate (it refuses /tmp-class defaults
+    with its own loud banner) — a hand-rolled RAPTOR_CALLER_DIR
+    fallback here bypassed both, so a bare ``raptor-sca`` scanned
+    whatever scratch directory the shell happened to be in. Explicit
+    paths bypass the gate by contract.
+    """
     if explicit:
         return Path(explicit).resolve()
-    caller = os.environ.get("RAPTOR_CALLER_DIR")
-    if caller:
-        return Path(caller).resolve()
+    from core.run.output import resolve_default_target
+    default = resolve_default_target()
+    if default:
+        return Path(default).resolve()
     return None
 
 
@@ -171,9 +182,11 @@ def _run_analyse(argv):
 
     target = _resolve_target(args.target)
     if target is None:
+        # Covers both "no default signal at all" and a volatile
+        # default the gate refused (its banner already printed).
         print(
-            "raptor-sca: no target specified and $RAPTOR_CALLER_DIR is unset; "
-            "either pass a path or set up an active project.",
+            "raptor-sca: no usable target — pass a path explicitly, "
+            "or set up an active project / $RAPTOR_CALLER_DIR.",
             file=sys.stderr,
         )
         return 2

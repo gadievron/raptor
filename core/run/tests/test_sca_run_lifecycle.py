@@ -120,3 +120,59 @@ class TestThresholdGateStatusAgreement:
             _argv(env, "--fail-on-severity", "high"))
         assert rc == 0
         assert _status(env["out"]) == "completed"
+
+
+class TestDefaultTargetDoctrine:
+    """No-path scans use the mechanical CLAUDE.md default chain.
+
+    A hand-rolled RAPTOR_CALLER_DIR fallback bypassed the active
+    project layer AND the volatile-target sanity gate — a bare
+    ``raptor-sca`` from a scratch shell scanned /tmp.
+    """
+
+    def test_no_path_routes_through_mechanical_default(
+            self, env, monkeypatch):
+        import core.run.output as run_output
+        mod = env["mod"]
+        calls: list[bool] = []
+
+        def fake_default():
+            calls.append(True)
+            return str(env["target"])
+
+        monkeypatch.setattr(
+            run_output, "resolve_default_target", fake_default)
+        assert mod._resolve_target(None) == env["target"].resolve()
+        assert calls == [True]
+
+    def test_volatile_caller_dir_is_refused(self, env, monkeypatch,
+                                            capsys):
+        import tempfile
+
+        import core.run.output as run_output
+        mod = env["mod"]
+        monkeypatch.setattr(
+            run_output, "_resolve_active_project", lambda: None)
+        monkeypatch.setenv("RAPTOR_CALLER_DIR", tempfile.gettempdir())
+        assert mod._resolve_target(None) is None
+        assert "REFUSING default target" in capsys.readouterr().err
+
+    def test_explicit_path_bypasses_the_gate(self, env):
+        import tempfile
+        mod = env["mod"]
+        scratch = tempfile.gettempdir()
+        assert mod._resolve_target(scratch) == Path(scratch).resolve()
+
+    def test_no_path_scan_refuses_with_exit_2(self, env, monkeypatch,
+                                              capsys):
+        import tempfile
+
+        import core.run.output as run_output
+        mod = env["mod"]
+        monkeypatch.setattr(
+            run_output, "_resolve_active_project", lambda: None)
+        monkeypatch.setenv("RAPTOR_CALLER_DIR", tempfile.gettempdir())
+        rc = mod._run_analyse([])
+        assert rc == 2
+        err = capsys.readouterr().err
+        assert "no usable target" in err
