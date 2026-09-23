@@ -165,6 +165,17 @@ class _KeywordChain:
         # stage matches (splitting the content on newlines instead
         # silently dropped every stage that wrapped one — an
         # under-warn on a defence surface).
+        if per_line and len(self.stages) != 2:
+            # The greedy earliest-occurrence walk is only COMPLETE
+            # for two-stage gap-bounded chains: with three or more
+            # stages, a later newline-SPANNING occurrence of a MIDDLE
+            # stage can satisfy the regex where the earliest one
+            # fails the gap check — the walk would silently
+            # under-warn.  Refuse at construction so a future chain
+            # cannot ship that shape unnoticed.
+            raise ValueError(
+                "per_line keyword chains support exactly two stages"
+            )
         self.per_line = per_line
 
     def finditer(self, content: str) -> Iterator[_ChainMatch]:
