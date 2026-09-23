@@ -419,6 +419,22 @@ def format_block_context(plan: BlockReviewPlan) -> str:
     is triggered. Tells the LLM exactly which blocks to focus on and
     what the taint state is at each.
     """
+    from core.security.prompt_envelope import wrap_untrusted
+
+    from .prompt_defence import sanitise_for_prompt
+
+    def _ident(value: str) -> str:
+        # Repo-derived labels / variable / callee names are line-shaped
+        # fields inside the trusted skeleton: identifier-grade defence
+        # flattens newlines (a forged-heading primitive) and bounds
+        # length, exactly like edge_review's heading fields. Backticks
+        # are additionally rewritten — every use below renders inside
+        # a `…` code span, and a content backtick would close it and
+        # put repo text on the trusted skeleton line.
+        return sanitise_for_prompt(
+            value, "identifier", plan.file,
+        ).replace("`", "'")
+
     parts = [
         f"\n### Block-level analysis (CC={plan.profile.cyclomatic_complexity}, "
         f"{plan.profile.total_nodes} CFG nodes / "
@@ -431,37 +447,63 @@ def format_block_context(plan: BlockReviewPlan) -> str:
         "data is sanitized, passed through, or reaches a dangerous call.",
     ]
 
-    for block in plan.blocks:
-        parts.append(
+    # Total-output budget UNDER the downstream defence cap:
+    # defend_repo_text re-sanitises the assembled block context with a
+    # 50k source cap, and a longer assembly would be truncated THERE —
+    # cutting the last envelope's close tag and leaving an unclosed
+    # untrusted region as the section's visible tail. The invariant is
+    # that the ASSEMBLED context can never reach the downstream cap:
+    # each block is assembled into a local list first — identifier
+    # lists clamped (unbounded variable COUNTS were the third size
+    # dimension: ~320 tainted-at-entry names pushed one block past
+    # the cap with the count/snippet dimensions both inside budget) —
+    # and admitted ATOMICALLY, join separators included, only when the
+    # whole block fits. The truncation note renders OUTSIDE any
+    # envelope. Worst-case admitted output = _BUDGET + one truncation
+    # note, pinned against the 50k cap by the battery.
+    _BUDGET = 40_000
+    _LIST_CAP = 40
+
+    def _ident_list(names: list[str]) -> str:
+        shown = ", ".join(f"`{_ident(v)}`" for v in names[:_LIST_CAP])
+        if len(names) > _LIST_CAP:
+            shown += f", … (+{len(names) - _LIST_CAP} more)"
+        return shown
+
+    # +1 per part accounts the "\n".join separator (over-counts the
+    # joint total by one byte — safe direction).
+    used = sum(len(p) + 1 for p in parts)
+    for idx, block in enumerate(plan.blocks):
+        block_parts: list[str] = [
             f"\n**Block {block.block_id}** (line {block.lineno}): "
-            f"`{block.label}`"
-        )
+            f"`{_ident(block.label)}`"
+        ]
 
         if block.tainted_at_entry:
-            parts.append(
+            block_parts.append(
                 "  Tainted at entry: "
-                + ", ".join(f"`{v}`" for v in block.tainted_at_entry)
+                + _ident_list(block.tainted_at_entry)
             )
 
         if block.calls_dangerous:
-            parts.append(
+            block_parts.append(
                 "  DANGEROUS CALLS: "
-                + ", ".join(f"`{c}`" for c in block.calls_dangerous)
+                + _ident_list(block.calls_dangerous)
             )
 
         if block.calls_sanitizer:
-            parts.append(
+            block_parts.append(
                 "  Sanitizer calls: "
-                + ", ".join(f"`{c}`" for c in block.calls_sanitizer)
+                + _ident_list(block.calls_sanitizer)
             )
 
         if block.is_branch:
             if block.branch_involves_tainted:
-                parts.append(
+                block_parts.append(
                     "  BRANCH on tainted variable — check both paths"
                 )
             else:
-                parts.append("  Branch point (not taint-dependent)")
+                block_parts.append("  Branch point (not taint-dependent)")
 
         if plan.source_lines and block.lineno > 0:
             start = max(0, block.lineno - 1)
@@ -470,8 +512,43 @@ def format_block_context(plan: BlockReviewPlan) -> str:
                 f"    {i + 1:4d}  {plan.source_lines[i]}"
                 for i in range(start, end)
             )
+            # Per-snippet bound BEFORE wrapping: a single minified
+            # 60k source line would otherwise blow the block budget
+            # on its own. Truncate-then-wrap keeps the close tag
+            # intact.
+            if len(snippet) > 4_000:
+                snippet = snippet[:4_000] + "\n    … (snippet truncated)"
             if snippet.strip():
-                parts.append(f"  ```\n{snippet}\n  ```")
+                # Source bodies get the nonce-tagged envelope, not
+                # bare ``` fences: a fence is forgeable from the
+                # content side (a ``` inside the snippet closes the
+                # block and everything after it renders as
+                # trusted-shaped prose in this priority-0 section),
+                # while the envelope's per-call random nonce cannot be
+                # closed by target bytes — the same construction as
+                # edge_review's caller/callee bodies and the
+                # function-review source injection. defend_repo_text
+                # still covers the RAPTOR-authored skeleton downstream
+                # (control-char strip preserves the envelope tags).
+                block_parts.append(wrap_untrusted(
+                    sanitise_for_prompt(snippet, "source", plan.file),
+                    kind="source-code",
+                    origin=(
+                        f"{plan.file}:{plan.function} "
+                        f"block {block.block_id}"
+                    ),
+                ))
+
+        block_len = sum(len(p) + 1 for p in block_parts)
+        if used + block_len > _BUDGET:
+            parts.append(
+                f"\n  … block-level analysis truncated: "
+                f"{len(plan.blocks) - idx} more block(s) not shown "
+                "(size budget)"
+            )
+            break
+        parts.extend(block_parts)
+        used += block_len
 
     return "\n".join(parts)
 
