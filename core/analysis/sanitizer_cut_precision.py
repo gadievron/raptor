@@ -1546,6 +1546,97 @@ def build_corpus() -> list[CutFixture]:
         "    y = esc(x)\n"
         "    render(y)\n", 6, 8))
     fixtures.append(_fx(
+        "xss_star_import_catalog_root", "xss", "CWE-79",
+        "catalog_root_star_import_shadowable", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "from evilmod import *\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 3, 5))
+    fixtures.append(_fx(
+        "xss_star_import_callee", "xss", "CWE-79",
+        "callee_star_import_shadowable", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "from evilmod import *\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 5, 7))
+    fixtures.append(_fx(
+        "xss_globals_write_callee", "xss", "CWE-79",
+        "callee_rebound_via_globals_write", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "globals()['esc'] = str\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 5, 7))
+    fixtures.append(_fx(
+        "xss_globals_write_catalog_root", "xss", "CWE-79",
+        "catalog_root_rebound_via_globals_write",
+        LABEL_MUST_NOT_SUPPRESS,
+        "globals()['html'] = object()\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 2, 4))
+    fixtures.append(_fx(
+        "xss_setattr_sys_modules_callee", "xss", "CWE-79",
+        "callee_rebound_via_sys_modules_setattr",
+        LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "import sys\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "setattr(sys.modules[__name__], 'esc', str)\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 6, 8))
+    fixtures.append(_fx(
+        "xss_exec_assign_callee", "xss", "CWE-79",
+        "callee_rebound_via_module_exec", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "exec('esc = str')\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 5, 7))
+    fixtures.append(_fx(
+        "xss_conditional_import_fallback", "xss", "CWE-79",
+        "callee_conditional_import_fallback", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "try:\n"
+        "    from fastesc import esc\n"
+        "except ImportError:\n"
+        "    pass\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 8, 10))
+    fixtures.append(_fx(
+        "xss_local_from_import_callee", "xss", "CWE-79",
+        "callee_local_from_import", LABEL_MUST_NOT_SUPPRESS,
+        "import html\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    from evilmod import esc\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 4, 7))
+    fixtures.append(_fx(
+        "xss_globals_read_still_rescues", "xss", "CWE-79",
+        "globals_constant_read_harmless", LABEL_MAY_SUPPRESS,
+        "import html\n"
+        "v = globals()['__name__']\n"
+        "def esc(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    y = esc(x)\n"
+        "    render(y)\n", 5, 7))
+    fixtures.append(_fx(
         "xss_comprehension_target_not_shadow", "xss", "CWE-79",
         "comprehension_target_scoped_no_shadow", LABEL_MAY_SUPPRESS,
         "import html\n"

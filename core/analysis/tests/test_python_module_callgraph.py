@@ -561,3 +561,87 @@ class TestModuleDistrustedRoots:
         assert m["lru_cache"] == "functools.lru_cache"
         assert m["k"] == "m.n"
         assert m["rel"].startswith("<relative>")
+
+
+class TestModuleDynamicNamespace:
+    def _dyn(self, src):
+        import ast
+
+        from core.analysis.python_module_callgraph import (
+            module_dynamic_namespace,
+        )
+        return module_dynamic_namespace(ast.parse(src))
+
+    def test_star_import_poisons_whole_module(self):
+        whole, _names = self._dyn("from evilmod import *\n")
+        assert whole
+
+    def test_module_scope_exec_poisons_whole_module(self):
+        whole, _names = self._dyn("exec('esc = str')\n")
+        assert whole
+
+    def test_function_exec_with_globals_arg_poisons(self):
+        whole, _names = self._dyn(
+            "def f():\n    exec('esc = str', globals())\n")
+        assert whole
+
+    def test_plain_function_exec_does_not_poison_module(self):
+        # A bare exec in a function cannot rebind module names (its
+        # stores land in the throwaway locals copy); the containing
+        # function's own summary is poisoned separately.
+        whole, names = self._dyn("def f(c):\n    exec(c)\n")
+        assert not whole
+        assert not names
+
+    def test_sys_modules_reference_poisons_whole_module(self):
+        whole, _names = self._dyn(
+            "import sys\n"
+            "setattr(sys.modules[__name__], 'esc', str)\n")
+        assert whole
+
+    def test_aliased_sys_modules_poisons(self):
+        whole, _names = self._dyn(
+            "import sys as s\n"
+            "m = s.modules['x']\n")
+        assert whole
+
+    def test_from_import_modules_poisons(self):
+        whole, _names = self._dyn(
+            "from sys import modules\n"
+            "m = modules['x']\n")
+        assert whole
+
+    def test_constant_key_globals_write_poisons_that_name(self):
+        whole, names = self._dyn("globals()['esc'] = str\n")
+        assert not whole
+        assert names == frozenset({"esc"})
+
+    def test_constant_key_globals_delete_poisons_that_name(self):
+        whole, names = self._dyn("del globals()['esc']\n")
+        assert not whole
+        assert names == frozenset({"esc"})
+
+    def test_computed_key_globals_write_poisons_whole_module(self):
+        whole, _names = self._dyn("globals()[k] = str\n")
+        assert whole
+
+    def test_escaping_globals_dict_poisons_whole_module(self):
+        whole, _names = self._dyn("g = globals()\n")
+        assert whole
+
+    def test_globals_update_poisons_whole_module(self):
+        whole, _names = self._dyn("globals().update(d)\n")
+        assert whole
+
+    def test_constant_key_globals_read_is_harmless(self):
+        whole, names = self._dyn("v = globals()['esc']\n")
+        assert not whole
+        assert not names
+
+    def test_plain_module_has_no_dynamic_poison(self):
+        whole, names = self._dyn(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n")
+        assert not whole
+        assert not names

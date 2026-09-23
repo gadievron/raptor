@@ -218,6 +218,11 @@ class PythonCFG:
     # object, not the catalog identity the spelling suggests. Empty
     # for hand-built CFGs (consumers treat absence as no distrust).
     shadowed_roots: frozenset[str] = frozenset()
+    # True when a dynamic route (star-import, exec/eval, sys.modules,
+    # escaping globals()/vars()) makes the WHOLE module's name
+    # resolution unprovable — the catalog guard refuses every written
+    # identity in the function (suppression can only be lost).
+    namespace_unprovable: bool = False
 
     @property
     def entry(self) -> PyCFGNode:
@@ -1169,14 +1174,18 @@ def build_python_cfg(
     # non-Python callers.
     from core.analysis.python_module_callgraph import (
         local_binding_names,
+        module_dynamic_namespace,
         module_shadowed_identity_roots,
     )
+    dyn_whole, dyn_names = module_dynamic_namespace(tree)
     return replace(
         cfg,
         shadowed_roots=(
             local_binding_names(func)
             | module_shadowed_identity_roots(tree)
+            | dyn_names
         ),
+        namespace_unprovable=dyn_whole,
     )
 
 

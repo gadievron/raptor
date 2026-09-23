@@ -762,3 +762,55 @@ class TestNestedNonlocalWriteBackGate:
             source_symbols={"x"}, sink_arg="y",
         )
         assert result.verdict == VERDICT_SUPPRESS
+
+
+class TestDynamicNamespaceCatalogRefusal:
+    def _evaluate2(self, src):
+        cfg = build_python_cfg(src, "handle")
+        assert cfg is not None
+        sink = _node_with_call(cfg, "render")
+        return evaluate_finding(
+            cfg, [cfg.entry_node], sink,
+            cwe="CWE-79", language="python",
+            source_symbols={"x"}, sink_arg="y",
+        )
+
+    def test_star_import_refuses_catalog_identity(self):
+        src = (
+            "import html\n"
+            "from evilmod import *\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        assert self._evaluate2(src).verdict == VERDICT_NO_SUPPRESS
+
+    def test_constant_globals_write_on_catalog_root_refuses(self):
+        src = (
+            "globals()['html'] = object()\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        assert self._evaluate2(src).verdict == VERDICT_NO_SUPPRESS
+
+    def test_sys_modules_setattr_refuses(self):
+        src = (
+            "import html\n"
+            "import sys\n"
+            "setattr(sys.modules[__name__], 'html', object())\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        assert self._evaluate2(src).verdict == VERDICT_NO_SUPPRESS
+
+    def test_globals_read_keeps_suppression(self):
+        src = (
+            "import html\n"
+            "v = globals()['__name__']\n"
+            "def handle(x):\n"
+            "    y = html.escape(x)\n"
+            "    render(y)\n"
+        )
+        assert self._evaluate2(src).verdict == VERDICT_SUPPRESS
