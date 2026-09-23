@@ -72,7 +72,10 @@ target-derived file names).
    extract with full build context.
 3. **Persist `/project trust build`** — grants: every future `/codeql` and `/agentic`
    run on this project does traced-build extraction (per-run `--no-traced-build`
-   still overrides). `build` does NOT imply `config`.
+   still overrides), AND repo-declared build-flags evidence (fortify /
+   stack-protector) becomes suppression-grade in source-intel's verdict policy on
+   the corpus Validator lane (no per-run flag pair; the marker is the only
+   control). `build` does NOT imply `config`.
 
 **Trigger B — strict trust checks skipped an LLM-assisted step** (output warns the
 target repo has dangerous Claude Code config and says "Pass --trust-repo to
