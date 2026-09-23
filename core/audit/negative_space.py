@@ -1124,7 +1124,16 @@ _UB_PATTERNS = [
         "CWE-682",
     ),
     (
-        re.compile(r"memcpy\s*\([^,]+,\s*[^,]+\s*(?:\+|-)\s*\w+\s*,"),
+        # The second argument is \S-delimited: the naive
+        # ``,\s*[^,]+\s*(?:\+|-)`` overlapped three unbounded repeats
+        # on whitespace, so a ``memcpy(``-opening line with a long
+        # whitespace run and no operator cost every split of the run
+        # — cubic in the line length. The dropped corner is a
+        # whitespace-only second argument, not real C.
+        re.compile(
+            r"memcpy\s*\([^,]+,\s*[^,\s](?:[^,]*?[^,\s])?"
+            r"\s*(?:\+|-)\s*\w+\s*,",
+        ),
         "memcpy with overlapping regions risk (should use memmove)",
         "CWE-120",
     ),
