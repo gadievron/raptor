@@ -909,3 +909,68 @@ class TestVarargPositionalBinding:
         s = summaries["outer"]
         # Keyword binding to a kwonly param is index-correct.
         assert ("html.escape", 0) in s.return_sanitizers_for_param(1)
+
+
+class TestSameLineRebindCollision:
+    """Two writes to one name on ONE physical line collide on the
+    assignment map's ``(lineno, name)`` key. A first-match map
+    resolved BOTH CFG defs to the first RHS, losing the killing raw
+    rebind's direct-return atom — the enforced sanitizer-cut then
+    consumed the minted clean-sanitizer wrapper and dropped a real
+    finding from the SARIF. Direction pins: the direct atom must
+    SURVIVE the collision (refusal), and the semantically identical
+    multi-line forms must keep their existing behaviour."""
+
+    def test_same_line_rebind_keeps_direct_return_atom(self):
+        _, summaries = _summaries(
+            "def _clean(s):\n"
+            "    t = html.escape(s); t = s\n"
+            "    return t\n"
+        )
+        s = summaries["_clean"]
+        # The raw pass-through survives: direct-return atom present.
+        assert (0, "", -1) in s.return_effects
+
+    def test_same_line_augassign_keeps_direct_return_atom(self):
+        _, summaries = _summaries(
+            "def _clean(s):\n"
+            "    t = html.escape(s); t += s\n"
+            "    return t\n"
+        )
+        s = summaries["_clean"]
+        assert (0, "", -1) in s.return_effects
+
+    def test_multiline_rebind_unchanged(self):
+        # Control: distinct linenos never collided; behaviour pinned.
+        _, summaries = _summaries(
+            "def _clean(s):\n"
+            "    t = html.escape(s)\n"
+            "    t = s\n"
+            "    return t\n"
+        )
+        s = summaries["_clean"]
+        assert (0, "", -1) in s.return_effects
+
+    def test_clean_wrapper_still_certifies(self):
+        # Control: a genuinely clean one-line wrapper keeps its
+        # rescue — the collision handling must not over-refuse.
+        _, summaries = _summaries(
+            "def _clean(s):\n"
+            "    t = html.escape(s)\n"
+            "    return t\n"
+        )
+        s = summaries["_clean"]
+        assert (0, "", -1) not in s.return_effects
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)
+
+    def test_same_line_distinct_names_do_not_collide(self):
+        # ``a = escape(s); b = s`` — different names on one line keep
+        # their own bindings (no spurious cross-name merge).
+        _, summaries = _summaries(
+            "def _clean(s):\n"
+            "    a = html.escape(s); b = 1\n"
+            "    return a\n"
+        )
+        s = summaries["_clean"]
+        assert (0, "", -1) not in s.return_effects
+        assert ("html.escape", 0) in s.return_sanitizers_for_param(0)

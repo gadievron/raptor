@@ -775,18 +775,29 @@ def _find_assignment_value_at(
 
 def _build_assignment_value_map(
     fn_ast: ast.AST,
-) -> dict[tuple[int, str], tuple[ast.AST, bool]]:
-    """One-shot ``(lineno, target_name) → (value_expr, is_augmented)``
-    map over the whole function AST.
+) -> dict[tuple[int, str], list[tuple[ast.AST, bool]]]:
+    """One-shot ``(lineno, target_name) → [(value_expr, is_augmented),
+    …]`` map over the whole function AST, EVERY match in
+    ``ast.walk`` order.
 
-    Same node shapes and same first-match-in-``ast.walk``-order
-    semantics as :func:`_find_assignment_value_at` (``setdefault``
-    keeps the first hit), but built ONCE — the per-function taint
-    fixed-point queries an assignment per (node, symbol) per
+    Same node shapes as :func:`_find_assignment_value_at` (which
+    returns the first match only), but built ONCE — the per-function
+    taint fixed-point queries an assignment per (node, symbol) per
     iteration, and a full ``ast.walk`` per query made the loop
     O(iterations × nodes × defs × AST-size).
+
+    ALL matches are kept, not just the first: two writes to one name
+    on ONE physical line (``t = html.escape(s); t = s``, ``t =
+    html.escape(s); t += s``) collide on the ``(lineno, name)`` key,
+    and a first-match map resolved BOTH CFG defs to the first RHS —
+    the killing raw rebind became invisible, the direct-return atom
+    never entered ``return_effects``, and the enforced sanitizer-cut
+    consumed the minted clean-sanitizer wrapper to drop a real
+    finding from the SARIF. The consumer merges every colliding
+    candidate conservatively (see :func:`_compute_one_summary`) so an
+    ambiguous binding can only LOSE suppression power, never gain it.
     """
-    out: dict[tuple[int, str], tuple[ast.AST, bool]] = {}
+    out: dict[tuple[int, str], list[tuple[ast.AST, bool]]] = {}
     for node in ast.walk(fn_ast):
         lineno = getattr(node, "lineno", None)
         if lineno is None:
@@ -794,21 +805,23 @@ def _build_assignment_value_map(
         if isinstance(node, ast.Assign):
             for tgt in node.targets:
                 if isinstance(tgt, ast.Name):
-                    out.setdefault((lineno, tgt.id), (node.value, False))
+                    out.setdefault((lineno, tgt.id), []).append(
+                        (node.value, False),
+                    )
         elif isinstance(node, ast.AugAssign):
             if isinstance(node.target, ast.Name):
-                out.setdefault(
-                    (lineno, node.target.id), (node.value, True),
+                out.setdefault((lineno, node.target.id), []).append(
+                    (node.value, True),
                 )
         elif isinstance(node, ast.AnnAssign):
             if isinstance(node.target, ast.Name) and node.value is not None:
-                out.setdefault(
-                    (lineno, node.target.id), (node.value, False),
+                out.setdefault((lineno, node.target.id), []).append(
+                    (node.value, False),
                 )
         elif (isinstance(node, ast.NamedExpr)
                 and isinstance(node.target, ast.Name)):
-            out.setdefault(
-                (lineno, node.target.id), (node.value, False),
+            out.setdefault((lineno, node.target.id), []).append(
+                (node.value, False),
             )
     return out
 
@@ -932,17 +945,30 @@ def _compute_one_summary(
             for sym in n.defs:
                 found = _assign_map.get((n.lineno, sym))
                 if found is not None:
-                    value_ast, is_augmented = found
-                    new_state = _expr_taint(
-                        value_ast, n, _in_state_for, summaries_so_far,
-                    )
-                    if is_augmented:
-                        # ``q += rhs`` is ``q = q ⊕ rhs`` — the
-                        # target's pre-assignment state carries into
-                        # the result alongside the RHS taint.
-                        new_state = _merge_states(
-                            new_state, _in_state_for(n, sym),
+                    # EVERY assignment to ``sym`` at this line
+                    # contributes. When the line carries more than one
+                    # (``t = html.escape(s); t = s``), the CFG def
+                    # cannot be matched to its own RHS — merge every
+                    # candidate's taint conservatively instead of
+                    # letting the first RHS stand in for all of them.
+                    # ``_merge_states`` keeps the direct-return atom
+                    # absorbing, so the raw rebind's empty chain
+                    # survives the union and the consumer refuses the
+                    # clean-sanitizer certification (an ambiguous
+                    # binding can only lose suppression power).
+                    new_state = _empty_state()
+                    for value_ast, is_augmented in found:
+                        rhs_state = _expr_taint(
+                            value_ast, n, _in_state_for, summaries_so_far,
                         )
+                        if is_augmented:
+                            # ``q += rhs`` is ``q = q ⊕ rhs`` — the
+                            # target's pre-assignment state carries
+                            # into the result alongside the RHS taint.
+                            rhs_state = _merge_states(
+                                rhs_state, _in_state_for(n, sym),
+                            )
+                        new_state = _merge_states(new_state, rhs_state)
                 else:
                     # No explicit assignment AST found — fall back to
                     # merging the uses' states. Covers cases like
