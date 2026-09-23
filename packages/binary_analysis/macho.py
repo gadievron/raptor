@@ -342,6 +342,33 @@ def inspect_app_bundle(path: Path, binary_sha256: str) -> tuple[AppBundleMetadat
     return metadata, [record]
 
 
+# An explicitly requested arch is taken literally: 'arm' is the
+# canonical name of the 32-bit arm slice (cpu_type 12), so remapping
+# it to arm64 would make the 32-bit slice unselectable.
+_ARCH_ALIASES = {
+    "aarch64": "arm64",
+    "amd64": "x86_64",
+    "x64": "x86_64",
+    "i386": "x86",
+    "armv7": "arm",
+}
+
+
+def resolve_requested_slice(
+    slices: list[MachOSlice],
+    requested_arch: str,
+) -> MachOSlice | None:
+    """The slice matching an explicitly requested arch, or ``None``
+    when the binary carries no such slice (alias-normalised). The one
+    shared resolution both the manifest and the r2 flag derivation
+    consume — they must never disagree about which ISA is analysed."""
+    wanted = _ARCH_ALIASES.get(str(requested_arch), str(requested_arch))
+    for item in slices:
+        if item.arch == wanted:
+            return item
+    return None
+
+
 def select_slice(
     slices: list[MachOSlice],
     requested_arch: str | None,
@@ -350,25 +377,27 @@ def select_slice(
 ) -> MachOSlice | None:
     if not slices:
         return None
-    # An explicitly requested arch is taken literally: 'arm' is the
-    # canonical name of the 32-bit arm slice (cpu_type 12), so remapping
-    # it to arm64 would make the 32-bit slice unselectable.
-    aliases = {
-        "aarch64": "arm64",
-        "amd64": "x86_64",
-        "x64": "x86_64",
-        "i386": "x86",
-        "armv7": "arm",
-    }
     if requested_arch:
-        wanted = aliases.get(str(requested_arch), str(requested_arch))
-    else:
-        # Fallback arch names come from coarse analyser output where
-        # 'arm'/'x86' cover both widths and bits carries the split
-        # (e.g. arm64 reported as arch='arm', bits=64).
-        wanted = aliases.get(str(host_arch or ""), str(host_arch or ""))
-        if host_bits == 64:
-            wanted = {"arm": "arm64", "x86": "x86_64"}.get(wanted, wanted)
+        resolved = resolve_requested_slice(slices, requested_arch)
+        if resolved is None:
+            # Never fall back on an EXPLICIT request: the r2 lane maps
+            # the requested arch to -a/-b unconditionally, so a silent
+            # slices[0] here made r2 decode slice-0 bytes as the wrong
+            # ISA (functions/sinks/xrefs all garbage) while the
+            # manifest reported slice-0's arch as analysed.
+            available = sorted({item.arch for item in slices})
+            msg = (
+                f"requested slice arch {requested_arch!r} matches no "
+                f"slice in this binary (available: {available})"
+            )
+            raise ValueError(msg)
+        return resolved
+    # Fallback arch names come from coarse analyser output where
+    # 'arm'/'x86' cover both widths and bits carries the split
+    # (e.g. arm64 reported as arch='arm', bits=64).
+    wanted = _ARCH_ALIASES.get(str(host_arch or ""), str(host_arch or ""))
+    if host_bits == 64:
+        wanted = {"arm": "arm64", "x86": "x86_64"}.get(wanted, wanted)
     for item in slices:
         if item.arch == wanted:
             return item
@@ -380,5 +409,6 @@ __all__ = [
     "MachOSlice",
     "inspect_app_bundle",
     "inspect_macho_slices",
+    "resolve_requested_slice",
     "select_slice",
 ]
