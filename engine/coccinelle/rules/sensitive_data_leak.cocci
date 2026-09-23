@@ -17,7 +17,10 @@
 // finding. Bare `priv`/`*_priv` never matches now; only the explicit
 // private-key spellings do. A small deny-set in the report script
 // drops full English words that legitimately start with an anchored
-// component (keyboard, passthrough, ...).
+// component (keyboard, passthrough, ...), applied per
+// underscore-separated component so compounds (keyboard_state) are
+// absorbed while a real secret component beside a benign one
+// (keyboard_master_key) still reports.
 // @role: detection
 
 @sensitive_free@
@@ -43,11 +46,21 @@ V << sensitive_free.V;
 import json
 # English words that start with an anchored component but carry no
 # secret: the regex cannot express "key but not keyboard" (no word
-# boundaries in this syntax), so the residue is dropped here.
-_benign = {"keyboard", "keycode", "keymap", "keypad", "keysym",
+# boundaries in this syntax), so the residue is dropped here —
+# per underscore-component, so compounds (keyboard_state,
+# usb_keyboard, keyframes) are absorbed too, and prefix-matched so
+# plurals are covered. A name is benign only when EVERY component
+# that carries a secret anchor is a benign word; the explicit
+# privkey spellings match the rule regex without any anchored
+# component and never consult this set.
+_benign = ("keyboard", "keycode", "keymap", "keypad", "keysym",
            "keyword", "keyframe", "keyval", "passthrough", "passthru",
-           "tokenizer", "tokenize"}
-if str(V).lower() not in _benign:
+           "tokenizer", "tokenize")
+_secret = ("key", "pass", "secret", "token", "cred", "master")
+_carriers = [c for c in str(V).lower().split("_")
+             if c.startswith(_secret)]
+if not (_carriers and all(any(c.startswith(b) for b in _benign)
+                          for c in _carriers)):
     msg = {
       "rule":  "sensitive_data_leak",
       "file":  p[0].file,

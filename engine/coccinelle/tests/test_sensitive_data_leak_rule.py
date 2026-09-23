@@ -105,3 +105,31 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+    def test_benign_word_compounds_do_not_fire(self, tmp_path):
+        # The benign set must absorb per-component: keyboard_state and
+        # usb_keyboard carry the benign word, not a secret — an
+        # exact-match set only covered the bare spelling.
+        results = _run_rule(tmp_path, """\
+            void teardown(char *keyboard_state, char *usb_keyboard,
+                          char *keyframes)
+            {
+                kfree(keyboard_state);
+                kfree(usb_keyboard);
+                kfree(keyframes);
+            }
+        """)
+        assert results == []
+
+    def test_secret_component_beside_benign_still_fires(self, tmp_path):
+        # Recall guards: a real secret component is not laundered by a
+        # benign neighbour, and the explicit privkey spelling never
+        # consults the benign set.
+        results = _run_rule(tmp_path, """\
+            void bad(char *keyboard_master_key, char *privkey)
+            {
+                kfree(keyboard_master_key);
+                kfree(privkey);
+            }
+        """)
+        assert sorted(r["line"] for r in results) == [3, 4]
