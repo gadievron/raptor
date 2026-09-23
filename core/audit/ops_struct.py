@@ -8,10 +8,19 @@ identifies them so the reachability gate does not suppress findings.
 
 import re
 
+#: Declaration line; the opening `{` may sit on the NEXT line
+#: (`= \n {`), so it is optional here and tracked as pending.
 _STRUCT_INIT_RE = re.compile(
-    r"(?:static\s+)?(?:const\s+)?struct\s+(\w+)\s+\w+\s*=\s*\{"
+    r"(?:static\s+)?(?:const\s+)?struct\s+(\w+)\s+\w+\s*=\s*(\{)?\s*$"
+    r"|(?:static\s+)?(?:const\s+)?struct\s+(\w+)\s+\w+\s*=\s*\{"
 )
-_FIELD_ASSIGN_RE = re.compile(r"\.\s*(\w+)\s*=\s*(\w+)\s*,?\s*$")
+#: One designated member. Deliberately NOT end-anchored and scanned
+#: with finditer: the `$`-anchored single-member form missed `&func`
+#: references, several members on one line, trailing comments, and
+#: any member sharing the initialiser's closing line — each miss
+#: silently dropped an indirect entry point from the reachability
+#: exemption.
+_FIELD_ASSIGN_RE = re.compile(r"\.\s*(\w+)\s*=\s*&?\s*([A-Za-z_]\w*)")
 
 _NON_FUNC_VALUES = frozenset({
     "NULL", "0", "1", "true", "false", "TRUE", "FALSE",
@@ -29,41 +38,67 @@ def extract_ops_registrations(
     registrations: list[dict[str, str]] = []
     in_initialiser = False
     struct_type = ""
+    pending_type = ""
     depth = 0
+
+    def _scan_members(text: str) -> None:
+        for fm in _FIELD_ASSIGN_RE.finditer(text):
+            value = fm.group(2)
+            if value in _NON_FUNC_VALUES:
+                continue
+            if value.isupper() and "_" in value:
+                continue
+            registrations.append({
+                "struct_type": struct_type,
+                "field": fm.group(1),
+                "function": value,
+                "file": file_path,
+            })
 
     for line in source.splitlines():
         stripped = line.strip()
 
         if not in_initialiser:
+            if pending_type:
+                if stripped.startswith("{"):
+                    in_initialiser = True
+                    struct_type = pending_type
+                    pending_type = ""
+                    depth = stripped.count("{") - stripped.count("}")
+                    _scan_members(stripped)
+                    if depth <= 0:
+                        in_initialiser = False
+                        struct_type = ""
+                    continue
+                if stripped:
+                    pending_type = ""
             m = _STRUCT_INIT_RE.match(stripped)
             if m:
-                in_initialiser = True
-                struct_type = m.group(1)
-                depth = stripped.count("{") - stripped.count("}")
+                stype = m.group(1) or m.group(3) or ""
+                if m.group(2) or m.group(3):
+                    # `= {` on the declaration line (possibly with
+                    # members, possibly closed on the same line).
+                    in_initialiser = True
+                    struct_type = stype
+                    depth = stripped.count("{") - stripped.count("}")
+                    _scan_members(stripped)
+                    if depth <= 0:
+                        in_initialiser = False
+                        struct_type = ""
+                else:
+                    pending_type = stype
                 continue
         else:
+            # Scan BEFORE the depth update so a member on the
+            # initialiser's closing line (`.last = final_fn };`) is
+            # not skipped. Lines entered above depth 1 (inside a
+            # nested initialiser spanning lines) stay skipped.
+            if depth == 1:
+                _scan_members(stripped)
             depth += stripped.count("{") - stripped.count("}")
             if depth <= 0:
                 in_initialiser = False
                 struct_type = ""
-                continue
-
-            if depth > 1:
-                continue
-
-            m = _FIELD_ASSIGN_RE.match(stripped)
-            if m:
-                value = m.group(2)
-                if value in _NON_FUNC_VALUES:
-                    continue
-                if value.isupper() and "_" in value:
-                    continue
-                registrations.append({
-                    "struct_type": struct_type,
-                    "field": m.group(1),
-                    "function": value,
-                    "file": file_path,
-                })
 
     return registrations
 

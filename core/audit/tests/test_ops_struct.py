@@ -171,3 +171,50 @@ class TestOpsStructReceiptRouting:
             [{"file": "a.c", "name": "f"}], set(), mf,
         ) == 0
         assert mf == {}
+
+
+class TestRegistrationGrammarBreadth:
+    """The hand-written grammar missed most of the C idioms the
+    module exists for: `&func` references, several members on one
+    line, trailing comments, next-line braces, and a member on the
+    initialiser's closing line — every miss silently dropped an
+    indirect entry point from the reachability exemption (the
+    demotion consumer is live)."""
+
+    _KERNEL_IDIOM = (
+        "static struct net_ops ops = {\n"
+        "    .open = do_open,\n"
+        "    .output = esp_output_head, /* xfrm */\n"
+        "    .ndo_open = &ef100_open,\n"
+        "    .close = do_close, .destroy = esp_destroy,\n"
+        "    .last = final_fn };\n"
+    )
+
+    def test_all_six_members_extracted(self):
+        regs = extract_ops_registrations(self._KERNEL_IDIOM, "a.c")
+        assert [r["function"] for r in regs] == [
+            "do_open", "esp_output_head", "ef100_open",
+            "do_close", "esp_destroy", "final_fn",
+        ]
+
+    def test_next_line_brace_form(self):
+        src = "static struct foo_ops ops =\n{\n    .open = do_open,\n};\n"
+        regs = extract_ops_registrations(src, "a.c")
+        assert [r["function"] for r in regs] == ["do_open"]
+
+    def test_one_line_initialiser(self):
+        src = "static struct foo_ops ops = { .open = do_open };\n"
+        regs = extract_ops_registrations(src, "a.c")
+        assert [r["function"] for r in regs] == ["do_open"]
+
+    def test_non_function_values_still_filtered(self):
+        src = (
+            "static struct foo_ops ops = {\n"
+            "    .flags = SOME_FLAG,\n"
+            "    .count = 0,\n"
+            "    .name = NULL,\n"
+            "    .open = do_open,\n"
+            "};\n"
+        )
+        regs = extract_ops_registrations(src, "a.c")
+        assert [r["function"] for r in regs] == ["do_open"]
