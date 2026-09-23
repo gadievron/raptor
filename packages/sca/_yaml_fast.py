@@ -68,14 +68,62 @@ def _require_yaml() -> Any:
     return _yaml
 
 
+# Flow-nesting depth bound, checked BEFORE the loader sees the text.
+# Deeply nested flow collections (``x: `` + ``[`` * 50000) overflow
+# the loader's stack: on current CPython the C-stack guard converts
+# that into a RecursionError, but on interpreters without the guard
+# (inside the supported >=3.10 floor) libyaml dies in a native stack
+# overflow — a hard crash no except clause can catch. The pre-scan is
+# linear and deliberately QUOTE-BLIND: modelling YAML string syntax
+# here would have to be exactly right in both directions, and an
+# unmatched quote in a plain scalar must never swallow a later
+# bracket run the loader still sees. Counting every bracket can only
+# over-estimate depth, and over-estimation is safe — refusal is the
+# bounded path (an ordinary YAMLError). Trade-off, both directions:
+# lower rejects legitimate documents whose string content carries
+# many net-unclosed openers; higher readmits the stack-overflow
+# window on unguarded interpreters (default recursion headroom is
+# ~1000 frames and the composer spends several per level). A
+# legitimate manifest needing >1000 net-unclosed brackets — even
+# counting every quoted one — is not a shape observed anywhere.
+MAX_FLOW_DEPTH = 1000
+
+
+def _flow_depth_exceeded(text: str, limit: int = MAX_FLOW_DEPTH) -> bool:
+    """True when raw flow-bracket depth in *text* exceeds *limit*
+    (quote-blind by design — see the bound's comment)."""
+    depth = 0
+    for ch in text:
+        if ch in "[{":
+            depth += 1
+            if depth > limit:
+                return True
+        elif ch in "]}":
+            if depth:
+                depth -= 1
+    return False
+
+
+def _check_depth(stream: Any) -> None:
+    if isinstance(stream, str) and _flow_depth_exceeded(stream):
+        raise _yaml.YAMLError(
+            f"flow nesting deeper than {MAX_FLOW_DEPTH} — refusing to "
+            "load (deep flow nesting overflows the YAML loader stack)"
+        )
+
+
 def safe_load(stream: Any) -> Any:
     """``yaml.safe_load`` using ``CSafeLoader`` when available."""
-    return _require_yaml().load(stream, Loader=_Loader)
+    yaml_mod = _require_yaml()
+    _check_depth(stream)
+    return yaml_mod.load(stream, Loader=_Loader)
 
 
 def safe_load_all(stream: Any) -> Iterator[Any]:
     """``yaml.safe_load_all`` using ``CSafeLoader`` when available."""
-    return _require_yaml().load_all(stream, Loader=_Loader)
+    yaml_mod = _require_yaml()
+    _check_depth(stream)
+    return yaml_mod.load_all(stream, Loader=_Loader)
 
 
 __all__ = ["safe_load", "safe_load_all"]

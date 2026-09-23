@@ -57,6 +57,7 @@ from urllib.parse import urlparse
 
 from ..models import Confidence, Dependency, PinStyle
 from . import _safe_read, register
+from ._base import PARSE_ESCAPE_ERRORS
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def parse(path: Path) -> list[Dependency]:
         return []
     try:
         data = safe_load(text)
-    except yaml.YAMLError as e:
+    except (yaml.YAMLError, *PARSE_ESCAPE_ERRORS) as e:  # hostile-input escape classes
         logger.warning(
             "sca.parsers.precommit: YAML parse failed for %s: %s",
             path, e,
