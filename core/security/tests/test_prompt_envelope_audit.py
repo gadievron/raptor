@@ -573,3 +573,56 @@ def test_render_allowlist_carries_existing_notes_and_emits_todo(tmp_path):
     out = render_allowlist([known, new], allowlist=allow)
     assert "markdown for disk, not LLM prompt" in out
     assert "TODO: audit_note required" in out
+
+
+class TestDictReadIdioms:
+    """RAPTOR findings are predominantly dicts: the dominant repo
+    idiom (finding["message"], finding.get("message")) and positional
+    .format() args evaded the lint entirely — a registered
+    dict-consuming builder passed the CI closure arm vacuously."""
+
+    @staticmethod
+    def _audit_snippet(tmp_path, body):
+        from core.security.prompt_envelope_audit import audit_file
+        src = tmp_path / "snippet.py"
+        src.write_text(body)
+        return audit_file(src)
+
+    def test_dict_subscript_read_flagged(self, tmp_path):
+        vs = self._audit_snippet(
+            tmp_path, 'prompt = f"analyse: {finding[\'message\']}"\n')
+        assert [v.attr for v in vs] == ["message"]
+
+    def test_dict_get_read_flagged(self, tmp_path):
+        vs = self._audit_snippet(
+            tmp_path, 'prompt = f"analyse: {finding.get(\'message\')}"\n')
+        assert [v.attr for v in vs] == ["message"]
+
+    def test_getattr_read_flagged(self, tmp_path):
+        vs = self._audit_snippet(
+            tmp_path,
+            'prompt = f"analyse: {getattr(finding, \'message\')}"\n')
+        assert [v.attr for v in vs] == ["message"]
+
+    def test_format_positional_args_flagged(self, tmp_path):
+        vs = self._audit_snippet(
+            tmp_path,
+            'prompt = "{} {}".format(finding.message, finding.snippet)\n')
+        assert sorted(v.attr for v in vs) == ["message", "snippet"]
+
+    def test_subscript_get_of_benign_key_not_flagged(self, tmp_path):
+        vs = self._audit_snippet(
+            tmp_path,
+            'prompt = f"{finding[\'severity_rank\']} {finding.get(\'id\')}"\n')
+        assert vs == []
+
+    def test_sanitised_dict_read_not_flagged(self, tmp_path):
+        vs = self._audit_snippet(
+            tmp_path,
+            'prompt = f"{neutralize_tag_forgery(finding[\'message\'])}"\n')
+        assert vs == []
+
+    def test_nonconstant_subscript_keeps_receiver_walk(self, tmp_path):
+        vs = self._audit_snippet(
+            tmp_path, 'prompt = f"{items[0].message}"\n')
+        assert [v.attr for v in vs] == ["message"]
