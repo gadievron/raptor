@@ -1425,7 +1425,7 @@ class CrossFamilyCheckTask(AnalysisTask):
         return selected
 
     def finalize(self, results, prior_results):
-        from core.security.llm_family import same_family
+        from core.security.llm_family import family_of, same_family
 
         for r in results:
             fid = r.get("finding_id")
@@ -1449,6 +1449,28 @@ class CrossFamilyCheckTask(AnalysisTask):
                     "intended_model": self.checker_model.model_name,
                     "trigger": trigger,
                     "verdict": "skipped — checker fell back to same family",
+                }
+                continue
+
+            # The guard above is VOID when either family is unknown:
+            # same_family returns False for any comparison involving
+            # "unknown", so two rebadged same-lineage ids sail past it
+            # and adjudicate. Unprovable is not cross-family
+            # (llm_family doctrine) — the resolver already refuses
+            # unknown producers, this is the belt for direct task
+            # construction. Record the check, don't adjudicate.
+            if (family_of(primary_model) == "unknown"
+                    or family_of(actual_model) == "unknown"):
+                unproven = ("primary" if family_of(primary_model)
+                            == "unknown" else "checker")
+                prior_results[fid]["cross_family_check"] = {
+                    "checker_model": actual_model,
+                    "intended_model": self.checker_model.model_name,
+                    "trigger": trigger,
+                    "verdict": (
+                        "skipped — cross-family not provable "
+                        f"({unproven} model family unknown)"
+                    ),
                 }
                 continue
 
