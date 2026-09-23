@@ -157,8 +157,12 @@ _PY_STRICT_MATCH = _re.compile(
     r"\s*,\s*[A-Za-z_][A-Za-z0-9_]*\s*\)"
 )
 
+# \b pins the assignment target to a word start: unanchored, every
+# position inside a long identifier run starts a fresh scan of the
+# rest of the line — quadratic on hostile text; a mid-word start is
+# never a real assignment target.
 _PY_STRICT_SUB = _re.compile(
-    r"[A-Za-z_][A-Za-z0-9_]*\s*=\s*re\.sub\s*\(\s*"
+    r"\b[A-Za-z_][A-Za-z0-9_]*\s*=\s*re\.sub\s*\(\s*"
     rf"{_STR_LITERAL}"
     r"\s*,\s*(?:''|\"\")\s*,\s*[A-Za-z_][A-Za-z0-9_]*\s*\)"
 )

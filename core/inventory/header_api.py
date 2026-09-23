@@ -72,8 +72,11 @@ _DECL_RE = re.compile(
 )
 
 # zlib-style OF((...)) macro: `ZEXTERN int ZEXPORT inflate OF((args));`
+# \b pins the name to a word start: unanchored, every position in a
+# long identifier run starts a fresh scan — quadratic on hostile
+# headers; a mid-word start is never a real declaration name.
 _OF_DECL_RE = re.compile(
-    r"(?a)(\w+)\s+OF\s*\(\(",
+    r"(?a)\b(\w+)\s+OF\s*\(\(",
     re.MULTILINE,
 )
 
@@ -82,8 +85,15 @@ _OF_DECL_RE = re.compile(
 # Examples:
 #   PNG_EXPORT(1, png_uint_32, png_access_version_number, (void));
 #   MY_API_EXPORT(int, my_function, (int x));
+# Macro-name runs and the argument gap are BOUNDED: unbounded, a
+# hostile header planting EXPORT inside one long macro-name run (or
+# `EXPORT(` heads inside the gap) re-scans the tail per occurrence —
+# quadratic. Real export macro names/prefixes sit far inside 256
+# chars and the pre-name arguments inside 1000; longer spans stop
+# matching (the declaration is skipped) instead of scanning without
+# bound.
 _EXPORT_MACRO_RE = re.compile(
-    r"(?a)\b[A-Z_]*EXPORT[A-Z_]*\s*\(.*?,\s*(\w+)\s*,\s*\(",
+    r"(?a)\b[A-Z_]{0,256}EXPORT[A-Z_]{0,256}\s*\(.{0,1000}?,\s*(\w+)\s*,\s*\(",
     re.MULTILINE,
 )
 

@@ -277,7 +277,10 @@ def _line_invokes_library_call(
     """
     tail = library_call.rsplit(".", maxsplit=1)[-1]
     lib_parts = library_call.split(".")
-    for m in _re.finditer(r"([A-Za-z_][\w.]*)\s*\(", line):
+    # \b pin: unanchored, every position inside a long dotted-name
+    # run starts a fresh scan of the line tail — quadratic; a
+    # mid-word start is never a real callee name.
+    for m in _re.finditer(r"\b([A-Za-z_][\w.]*)\s*\(", line):
         name_parts = m.group(1).split(".")
         if name_parts[-1] != tail:
             continue

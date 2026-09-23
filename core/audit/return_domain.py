@@ -594,10 +594,10 @@ def _constants_for_root(
         return _CONSTANTS_CACHE[cache_key]
     try:
         from core.inventory.macro_resolve import (
-            _ENUM_BLOCK_RE,
             _ENUMERATOR_NAME_RE,
             _MACRO_DEF_RE,
             _SKIP_IDENTS_C,
+            _iter_enum_bodies,
             _parse_enumerator_value,
         )
 
@@ -630,11 +630,10 @@ def _constants_for_root(
             value = _try_evaluate(m.group(3).strip())
             if value is not None:
                 defs.setdefault(name, []).append(value)
-        for em in _ENUM_BLOCK_RE.finditer(text):
-            line = text[:em.start()].count("\n") + 1
+        for block_start, body in _iter_enum_bodies(text):
+            line = text[:block_start].count("\n") + 1
             if depths.get(line, 0) != 0:
                 continue
-            body = em.group(1)
             for ev in _ENUMERATOR_NAME_RE.finditer(body):
                 name = ev.group(1).strip()
                 if name in _SKIP_IDENTS_C:

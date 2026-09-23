@@ -3715,7 +3715,7 @@ class TestGuardPatternWhitespaceRuns:
     def test_guard_forms_still_match(self):
         from core.dataflow.smt_barrier import (
             _JS_GUARD_TEST,
-            _RUBY_GUARD_UNLESS,
+            _ruby_guard_search,
         )
 
         m = _JS_GUARD_TEST.search(
@@ -3726,7 +3726,9 @@ class TestGuardPatternWhitespaceRuns:
             "if (!/^[a-z]+$/.test(id)) throw new Error();",
         )
         assert m is not None
-        m = _RUBY_GUARD_UNLESS.search(
+        found = _ruby_guard_search(
             "return :bad unless name =~ /\\A[a-z]+\\z/",
         )
-        assert m is not None and m.group("var") == "name"
+        assert found is not None
+        m, head_start = found
+        assert m.group("var") == "name" and head_start == 0

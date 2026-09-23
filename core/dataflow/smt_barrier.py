@@ -272,11 +272,17 @@ class Tier0Result:
 # silently truncated the captured pattern — see Gerapy CVE-2020-7698
 # fix whose pattern contains ``\"`` and ``\'`` inside a single-quoted
 # Python string.
+# The literal body is BOUNDED: with an unbounded body, a hostile line
+# that plants the call head inside an unterminated quote makes every
+# head occurrence re-scan the rest of the line — quadratic in line
+# length. Real validator pattern literals are tens of chars; 1000 is
+# generous (a longer literal stops matching and the spec-lift is
+# declined, versus an unbounded scan on hostile text).
 _STR_LITERAL = (
     r"r?(?:"
-    r"'(?:[^'\\]|\\.)+'"     # 'body' with escaped chars allowed
+    r"'(?:[^'\\]|\\.){1,1000}'"     # 'body' with escaped chars allowed
     r"|"
-    r"\"(?:[^\"\\]|\\.)+\""  # "body" with escaped chars allowed
+    r"\"(?:[^\"\\]|\\.){1,1000}\""  # "body" with escaped chars allowed
     r")"
 )
 
@@ -339,8 +345,12 @@ _FULLMATCH_CHARSET = _re.compile(r"^\[((?:[^\]\\]|\\.)+)\][+*]$")
 #      forbidden char removed" claim breaks), and flags change the
 #      pattern semantics.  Same suffix-blindness hazard as
 #      _RE_MATCH_CALL above.
+# The \b pins the variable to a word start: unanchored, every
+# position inside a long identifier-shaped run starts a fresh scan of
+# the rest of the line — quadratic on hostile text. A mid-word start
+# is never a real assignment target.
 _RE_SUB_REBIND = _re.compile(
-    r"(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"\b(?P<var>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
     r"re\.sub\s*\(\s*"
     rf"(?P<pat>{_STR_LITERAL})"
     r"\s*,\s*"
@@ -382,15 +392,20 @@ _SUB_CHARSET = _re.compile(r"^\[((?:[^\]\\]|\\.)+)\][+*]?$")
 # guard shapes ((?:\{\s*)?): the naive ``\{?\s*`` pair put two
 # whitespace spans around it — quadratic on a guard-opening line
 # ending in a whitespace run.
+# The chars-class body is BOUNDED in all five guard shapes: with an
+# unbounded ``[^\]]+``, a hostile line that plants the guard head
+# inside an unterminated class makes every head occurrence re-scan
+# the rest of the line — quadratic. Real allowlist classes are tens
+# of chars; 1000 is generous (a longer class declines the spec-lift).
 _JS_GUARD_TEST = _re.compile(
-    r"if\s*\(\s*!\s*/\^\[(?P<chars>[^\]]+)\][+*]\$/\s*\.test\s*\(\s*"
+    r"if\s*\(\s*!\s*/\^\[(?P<chars>[^\]]{1,1000})\][+*]\$/\s*\.test\s*\(\s*"
     r"(?P<var>[A-Za-z_$][A-Za-z_$0-9]*)\s*\)\s*\)\s*"
     r"(?:\{\s*)?(?:return|throw)\b"
 )
 # JS/TS — `if (!<var>.match(/^[chars]+$/)) return|throw …`
 _JS_GUARD_MATCH = _re.compile(
     r"if\s*\(\s*!\s*(?P<var>[A-Za-z_$][A-Za-z_$0-9]*)\s*\.match\s*\(\s*"
-    r"/\^\[(?P<chars>[^\]]+)\][+*]\$/\s*\)\s*\)\s*"
+    r"/\^\[(?P<chars>[^\]]{1,1000})\][+*]\$/\s*\)\s*\)\s*"
     r"(?:\{\s*)?(?:return|throw)\b"
 )
 
@@ -400,7 +415,7 @@ _JS_GUARD_MATCH = _re.compile(
 # permitted (no-op) but not required.
 _JAVA_GUARD = _re.compile(
     r'if\s*\(\s*!\s*(?P<var>[A-Za-z_$][A-Za-z_$0-9]*)\s*\.matches\s*\(\s*'
-    r'"\^?\[(?P<chars>[^\]]+)\][+*]\$?"\s*\)\s*\)\s*'
+    r'"\^?\[(?P<chars>[^\]]{1,1000})\][+*]\$?"\s*\)\s*\)\s*'
     r'(?:\{\s*)?(?:return|throw)\b'
 )
 
@@ -417,20 +432,35 @@ _JAVA_GUARD = _re.compile(
 # outside the modeled set; none of Onigmo's flags are modeled, so any
 # flagged literal declines the spec-lift (same suffix-blindness
 # doctrine as _RE_MATCH_CALL).
-# The statement filler either ends non-whitespace or is empty
-# ((?:[^\n]*?[^\s\n])?): the naive ``[^\n]*?\s+`` overlapped the
-# lazy filler and the whitespace run — quadratic on a
-# return-opening line ending in a whitespace run with no keyword.
-# Same language (the run's head chars belonged to either side).
-_RUBY_GUARD_UNLESS = _re.compile(
-    r"(?:return|raise)\b(?:[^\n]*?[^\s\n])?\s+unless\s+(?P<var>[a-z_][a-z_0-9]*)\s*=~\s*"
-    r"/\\A\[(?P<chars>[^\]]+)\][+*]\\z/(?![a-zA-Z])"
+# The guard is matched in TWO steps — statement head, then the
+# ``unless``/``if`` tail searched from the head's end — instead of a
+# single regex with an unbounded statement filler between them: the
+# filler made every planted head re-scan the line tail (quadratic,
+# cubic through the chars class). Two anchored searches are linear
+# and accept the same lines: head anywhere before a whitespace-
+# preceded tail is exactly the old ``head (filler?) \s+ tail``.
+_RUBY_STMT_HEAD_RE = _re.compile(r"\b(?:return|raise)\b")
+_RUBY_GUARD_UNLESS_TAIL = _re.compile(
+    r"(?<=\s)unless\s+(?P<var>[a-z_][a-z_0-9]*)\s*=~\s*"
+    r"/\\A\[(?P<chars>[^\]]{1,200})\][+*]\\z/(?![a-zA-Z])"
 )
 # Ruby — `return|raise … if <var> !~ /\A[chars]+\z/`
-_RUBY_GUARD_IF_NOT_MATCH = _re.compile(
-    r"(?:return|raise)\b(?:[^\n]*?[^\s\n])?\s+if\s+(?P<var>[a-z_][a-z_0-9]*)\s*!~\s*"
-    r"/\\A\[(?P<chars>[^\]]+)\][+*]\\z/(?![a-zA-Z])"
+_RUBY_GUARD_IF_NOT_TAIL = _re.compile(
+    r"(?<=\s)if\s+(?P<var>[a-z_][a-z_0-9]*)\s*!~\s*"
+    r"/\\A\[(?P<chars>[^\]]{1,200})\][+*]\\z/(?![a-zA-Z])"
 )
+
+
+def _ruby_guard_search(line: str):
+    """(tail match, head start) for the Ruby guard shapes, or None."""
+    head = _RUBY_STMT_HEAD_RE.search(line)
+    if head is None:
+        return None
+    m = (_RUBY_GUARD_UNLESS_TAIL.search(line, head.end())
+         or _RUBY_GUARD_IF_NOT_TAIL.search(line, head.end()))
+    if m is None:
+        return None
+    return m, head.start()
 
 
 def _string_escape_decode(body: str) -> str:
@@ -672,8 +702,11 @@ def _try_ruby_validator(
     are line anchors, so a line-anchored guard does not bound the whole
     string (see the anchor note on the guard regexes above).
     """
-    m = _RUBY_GUARD_UNLESS.search(line) or _RUBY_GUARD_IF_NOT_MATCH.search(line)
-    if m is None or not _span_is_code(view, m.start()):
+    found = _ruby_guard_search(line)
+    if found is None:
+        return None
+    m, head_start = found
+    if not _span_is_code(view, head_start):
         return None
     if not _charset_body_is_safe(m.group("chars")):
         return None
@@ -2038,7 +2071,10 @@ _JSTS_METHOD_MODIFIERS = (
     r"|public\s+|private\s+|protected\s+|readonly\s+)*"
 )
 # Optional generator marker — ``function* name()`` / ``*method()``.
-_JSTS_GENERATOR = r"\*?\s*"
+# The whitespace is gated on the literal ``*`` ((?:\*\s*)?): the
+# naive ``\*?\s*`` put a second unbounded whitespace span adjacent
+# to the surrounding ones — quadratic on an indentation-run line.
+_JSTS_GENERATOR = r"(?:\*\s*)?"
 
 _FUNCTION_BOUNDARY_PATTERNS = {
     # JS / TS:
@@ -2046,15 +2082,21 @@ _FUNCTION_BOUNDARY_PATTERNS = {
     #   `=> {` arrow function declaration at end of line
     #   `<modifier*> [*] name(args) {` ES6 method or TS class method —
     #     with a negative lookahead so `if (x) {` etc. don't match
+    # ``function`` head: the generator star and the name each own
+    # their trailing whitespace ((?:\*\s*)? / (?:\w+\s*)?) — the
+    # naive ``\s*\*?\s*\w*\s*\(`` chained unbounded whitespace
+    # spans through optional atoms, quadratic on a whitespace run
+    # after the keyword. Same language: the merged runs land in the
+    # first span.
     "javascript": _re.compile(
-        rf"\bfunction\s*{_JSTS_GENERATOR}\w*\s*\("
+        rf"\bfunction\s*(?:\*\s*)?(?:\w+\s*)?\("
         r"|=>\s*(?:\{\s*)?$"
         rf"|^\s*{_JSTS_METHOD_MODIFIERS}{_JSTS_GENERATOR}"
         rf"(?!{_JS_NOT_FUNC}\b)"
         r"[A-Za-z_$][\w$]*\s*\([^)]{0,4096}\)\s*\{",
     ),
     "typescript": _re.compile(
-        rf"\bfunction\s*{_JSTS_GENERATOR}\w*\s*\("
+        rf"\bfunction\s*(?:\*\s*)?(?:\w+\s*)?\("
         r"|=>\s*(?:\{\s*)?$"
         rf"|^\s*{_JSTS_METHOD_MODIFIERS}{_JSTS_GENERATOR}"
         rf"(?!{_JS_NOT_FUNC}\b)"
@@ -2073,12 +2115,23 @@ _FUNCTION_BOUNDARY_PATTERNS = {
         # gated optional brace tails ((?:\{\s*)?$) — the
         # ``\{?\s*$`` pairs were quadratic on signature lines
         # ending in whitespace runs
+        # signature spans BOUNDED and paren-deterministic: the
+        # pre-parameter run stops at '(' (with a bounded allowance
+        # for up to two parenthesized annotation groups), parameter/
+        # throws/generic spans carry generous bounds. Unbounded (or
+        # '('-crossing) spans let a hostile line planting the
+        # modifier keyword re-scan the line tail per occurrence —
+        # quadratic, and worse through the nested parameter span.
+        # Real one-line signatures sit far inside these bounds; a
+        # longer line stops matching (the boundary check misses it)
+        # instead of scanning without bound.
         r"\b(?:public|private|protected|static|final|abstract|synchronized)\b"
-        r"[^{};]*\([^)]*\)\s*(?:throws[^{]*)?(?:\{\s*)?$"
+        r"(?:[^{};(]{0,400}\([^){};]{0,200}\)){0,2}[^{};(]{0,400}"
+        r"\([^)]{0,2000}\)\s*(?:throws[^{]{0,2000})?(?:\{\s*)?$"
         rf"|^\s*(?!{_JAVA_NOT_FUNC}\b)"
         r"(?:(?:void|boolean|byte|char|short|int|long|float|double)"
-        r"|[A-Z]\w*(?:<[^>]*>)?(?:\[\])?)\s+"
-        r"\w+\s*\([^)]*\)\s*(?:throws[^{]*)?(?:\{\s*)?$",
+        r"|[A-Z]\w*(?:<[^>]{0,1000}>)?(?:\[\])?)\s+"
+        r"\w+\s*\([^)]{0,2000}\)\s*(?:throws[^{]{0,2000})?(?:\{\s*)?$",
     ),
     # Ruby: ``def name`` (instance) or ``def self.name`` (class method)
     # at line start (any indentation level for nested methods / class

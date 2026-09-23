@@ -63,8 +63,33 @@ _table_cache: OrderedDict[str, dict[str, tuple[str, str]]] = OrderedDict()
 # Anonymous and named enum enumerator extraction:
 #   enum { FOO = 1, BAR = 2 };
 #   enum limits { MAX_BUF = 256 };
-_ENUM_BLOCK_RE = re.compile(r"\benum\s*(?:\w+\s*)?\{([^}]+)\}", re.DOTALL)
-_ENUMERATOR_NAME_RE = re.compile(r"(\w+)\s*=\s*")
+# Split head-regex + str.find body scan: a single ``[^}]+`` body
+# regex re-scans the text tail from every planted ``enum{`` head —
+# quadratic on a hostile header. The head's tag name is bounded
+# (real enum tags are far shorter than 256 chars; a longer token is
+# not a real tag) so a head probe costs O(1), and the body is
+# located with one linear ``str.find``.
+_ENUM_HEAD_RE = re.compile(r"\benum\s*(?:\w{1,256}\s*)?\{")
+_ENUMERATOR_NAME_RE = re.compile(r"\b(\w+)\s*=\s*")
+
+
+def _iter_enum_bodies(text: str):
+    """Yield ``(block_start, body)`` per enum block, matching the old
+    single-regex semantics (body = shortest non-empty run to the next
+    ``}``, scan resumes after the block) at linear cost."""
+    pos = 0
+    while True:
+        head = _ENUM_HEAD_RE.search(text, pos)
+        if head is None:
+            return
+        close = text.find("}", head.end())
+        if close == -1:
+            return  # no closing brace anywhere: nothing can match
+        if close == head.end():  # empty body: not a block, move on
+            pos = head.start() + 1
+            continue
+        yield head.start(), text[head.end():close]
+        pos = close + 1
 
 
 def _parse_enumerator_value(text: str, start: int) -> str:
@@ -229,8 +254,7 @@ def build_macro_table(target_path: Path) -> dict[str, tuple[str, str]]:
                         "macro %s redefined in %s (keeping first definition)",
                         name, p,
                     )
-            for em in _ENUM_BLOCK_RE.finditer(text):
-                body = em.group(1)
+            for _block_start, body in _iter_enum_bodies(text):
                 for ev in _ENUMERATOR_NAME_RE.finditer(body):
                     ename = ev.group(1).strip()
                     evalue = _parse_enumerator_value(body, ev.end())
