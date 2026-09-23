@@ -281,7 +281,18 @@ class TestRunDirReadBudgetClosure:
     reader set mechanically instead: every ``load_json`` call in
     core/coverage + core/run runtime code must pass ``max_bytes`` or
     carry an allowlist entry with a rationale. A new uncapped reader
-    fails here until classified."""
+    fails here until classified.
+
+    Aliased imports are resolved (``from core.json import load_json
+    as _lj`` then ``_lj(...)`` is a member — the bare name-keyed walk
+    was mutation-tested blind to that spelling; same single-walk
+    alias mechanism as the redos idiom census). Documented bounds:
+    the oracle sees the ``load_json`` callable under any local name
+    and any attribute spelling, NOT other read idioms (``read_text``,
+    ``load_jsonl``, ``open().read`` — those are individual budget
+    members here and candidates for a read-idiom census on the
+    capped-by-default loader track), and not calls through further
+    reassignment (``f = load_json; f(...)``)."""
 
     #: (relpath, enclosing function) → why an unbounded read is OK.
     ALLOWLIST: dict = {
@@ -317,15 +328,29 @@ class TestRunDirReadBudgetClosure:
                     return best
 
                 rel = str(p.relative_to(repo))
+                # ONE walk collects the local names ``load_json`` is
+                # bound to (import-from aliases, module-level or
+                # function-local) AND the candidate calls; calls are
+                # judged against the COMPLETE alias set afterwards,
+                # so an import later in walk order than a call site
+                # still counts (redos-census alias mechanism).
+                local_names = {"load_json"}
+                calls = []
                 for node in ast.walk(tree):
-                    if not isinstance(node, ast.Call):
-                        continue
-                    name = ""
+                    if isinstance(node, ast.ImportFrom):
+                        for alias in node.names:
+                            if alias.name == "load_json":
+                                local_names.add(
+                                    alias.asname or alias.name)
+                    elif isinstance(node, ast.Call):
+                        calls.append(node)
+                for node in calls:
+                    is_member = False
                     if isinstance(node.func, ast.Name):
-                        name = node.func.id
+                        is_member = node.func.id in local_names
                     elif isinstance(node.func, ast.Attribute):
-                        name = node.func.attr
-                    if name != "load_json":
+                        is_member = node.func.attr == "load_json"
+                    if not is_member:
                         continue
                     if any(k.arg == "max_bytes" for k in node.keywords):
                         continue

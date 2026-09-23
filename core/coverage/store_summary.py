@@ -14,6 +14,7 @@ shown alongside.
 
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
@@ -27,6 +28,13 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
 _CATEGORIES = ("static", "llm", "runtime")
+
+# Byte budget for the coverage-progress trail read. One row per
+# completed run (~200 bytes) — even thousand-run projects stay under
+# a MiB; the ceiling only exists so a planted/imported trail cannot
+# grow the render's read unbounded (the trail sits in the writable
+# project dir and ships in project archives).
+_MAX_PROGRESS_BYTES = 64 * 1024 * 1024
 # Kinds an LLM reviews unit-by-unit. The LLM-review gap is scoped to these:
 # globals/macros/typedefs/classes are whole-file-scanner territory and
 # interstitial is glue — listing them overstates "unreviewed".
@@ -196,16 +204,34 @@ def format_progress_trend(store_path) -> str | None:
     if not store_path:
         return None
     progress = Path(store_path).parent / "coverage-progress.jsonl"
-    if not progress.is_file():
+    rows: deque[dict[str, Any]] = deque(maxlen=2)
+    row_count = 0
+    # fd-discipline open + running byte budget: the trail sits in the
+    # writable project dir (and ships in project archives), this line
+    # renders on EVERY coverage report, and the pre-fix reader
+    # retained every row and iterated unbounded lines — one planted
+    # multi-MB trail added hundreds of MB of peak RSS to every
+    # render. Only the LAST TWO rows are ever needed (current +
+    # previous), so retention is a two-slot deque; the budgeted
+    # readline keeps one capped chunk the worst case (journal-reader
+    # idiom).
+    from core.source import open_regular
+    f = open_regular(progress, "rb")
+    if f is None:
         return None
-    rows = []
     try:
-        # Raw bytes, decoded per line by the parser: text-mode
-        # iteration decodes DURING the for-loop, so one undecodable
-        # byte raised outside the per-line quarantine below (the same
-        # pre-parse class the journal reader contains).
-        with Path(progress).open("rb") as f:
-            for line in f:
+        with f:
+            budget = _MAX_PROGRESS_BYTES
+            while True:
+                line = f.readline(budget + 1)
+                if not line:
+                    break
+                budget -= len(line)
+                if budget < 0:
+                    # Over-budget trail: the tail (the rows that
+                    # matter) is beyond the cap — no trustworthy
+                    # trend to report.
+                    return None
                 line = line.strip()
                 if not line:
                     continue
@@ -214,15 +240,14 @@ def format_progress_trend(store_path) -> str | None:
                 except Exception:  # noqa: BLE001 — row containment boundary
                     # Any parse failure (malformed JSON, nesting bomb
                     # raising RecursionError on the stdlib backend)
-                    # quarantines this line — the trail sits in the
-                    # writable project dir, and this line renders on
-                    # every coverage report.
+                    # quarantines this line.
                     continue
                 # Valid JSON that isn't an object (a bare ``null`` /
                 # number / string line) would AttributeError on
                 # ``.get`` below — skip like a malformed line.
                 if isinstance(row, dict):
                     rows.append(row)
+                    row_count += 1
     except OSError:
         return None
     if not rows:
@@ -237,7 +262,7 @@ def format_progress_trend(store_path) -> str | None:
     last = rows[-1]
     reviewed = _count(last, "llm_reviewed")
     reviewable = _count(last, "llm_reviewable")
-    if len(rows) == 1:
+    if row_count == 1:
         return (f"  Progress: {reviewed}/{reviewable} reviewed "
                 f"after {last.get('run', '?')} (1 run recorded)")
     prev = rows[-2]
@@ -245,7 +270,7 @@ def format_progress_trend(store_path) -> str | None:
     sign = "+" if delta >= 0 else ""
     return (f"  Progress: {reviewed}/{reviewable} reviewed "
             f"({sign}{delta} in {last.get('run', '?')}; "
-            f"{len(rows)} runs recorded)")
+            f"{row_count} runs recorded)")
 
 
 def render_coverage(
