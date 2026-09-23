@@ -264,6 +264,29 @@ class TestBudget:
         assert stats["examined"] == 0
         assert not (out / "suppressions.jsonl").exists()
 
+    @requires_ts("java")
+    def test_budget_expiry_inside_candidate_loop_skips_finding(
+            self, tmp_path, monkeypatch):
+        """The wall budget is consulted PER CANDIDATE too: a finding
+        whose evaluation is in flight when the budget runs out is
+        skipped (never suppressed on partial candidate verdicts).
+        Clock: 0 at start and the finding-level check, expired from
+        the first candidate check on."""
+        import core.analysis.sanitizer_cut_postpass as scp
+        repo, _, sarif_path, out = _write(tmp_path, _SAFE_JAVA)
+        ticks = iter([0.0, 0.0])
+
+        def fake_monotonic():
+            return next(ticks, 1e9)
+
+        monkeypatch.setattr(scp.time, "monotonic", fake_monotonic)
+        stats = run_postpass([sarif_path], repo, out,
+                             budget_seconds=180.0)
+        assert stats["budget_exhausted_skips"] == 1
+        assert stats["recorded_suppress"] == 0
+        assert stats["enforced"] == 0
+        assert not (out / "suppressions.jsonl").exists()
+
 
 class TestScannerWiring:
     def test_flag_and_gate_present(self):

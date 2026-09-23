@@ -564,6 +564,11 @@ def run_postpass(
     source_cache: dict[Path, list[tuple] | None] = {}
     text_cache: dict[Path, str] = {}
     grammar_cache: dict[str, bool] = {}
+    # Per-run Phase 12+13 memo (sha256(text) → taint summaries): the
+    # resolver otherwise rebuilds the module callgraph + summary
+    # fixed point once per finding × source candidate on the SAME
+    # file — up to four rebuilds per finding.
+    summary_memo: dict[str, Any] = {}
     repo_root = Path(repo_root).resolve()
 
     findings: list[dict[str, Any]] = []
@@ -687,6 +692,15 @@ def run_postpass(
         native = None
         evaluated: list[tuple[dict, Any]] = []
         for source_line in source_lines:
+            # Wall budget INSIDE the candidate loop too: the
+            # top-of-loop check bounds findings, but one finding's
+            # all-must-suppress candidate fan-out (× a hostile file's
+            # summary build) could run unbounded past the budget.
+            # Partial candidate verdicts must not decide — the
+            # finding is skipped, never suppressed.
+            if time.monotonic() - started > budget_seconds:
+                verdicts = ["budget-exhausted"]
+                break
             native = {
                 "cwe": cwe,
                 "file_path": str(resolved_path),
@@ -705,7 +719,10 @@ def run_postpass(
                 # repo_root confines the resolver's own read too —
                 # belt-and-braces behind the pre-check above (which a
                 # later refactor could bypass).
-                resolved = resolve_finding(native, target_root=repo_root)
+                resolved = resolve_finding(
+                    native, target_root=repo_root,
+                    summary_memo=summary_memo,
+                )
                 if not isinstance(resolved, ResolvedFinding):
                     verdicts = ["resolver-refused"]
                     break
@@ -762,6 +779,9 @@ def run_postpass(
             verdicts.append(result.verdict)
             evaluated.append((native, result))
 
+        if verdicts == ["budget-exhausted"]:
+            stats.budget_exhausted_skips += 1
+            continue
         if verdicts == ["resolver-refused"]:
             stats.refuse("resolver-refused")
             continue

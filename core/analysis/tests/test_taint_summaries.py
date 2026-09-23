@@ -1180,3 +1180,55 @@ class TestReboundModuleIdentityPoisoned:
             "    return html.escape(s)\n"
         )
         assert not summaries["esc"].summary_unknown
+
+
+class TestWorklistFixedPoint:
+    """The outer fixed point is a reverse-dependency worklist: a
+    function recomputes only when a summary it joins changed. Pins:
+    deep chains converge with linear work; budget exhaustion
+    degrades EVERY non-unknown summary (a stale summary can be
+    missing exactly the direct-return atom whose absence certifies a
+    clean wrapper)."""
+
+    @staticmethod
+    def _chain_src(n: int) -> str:
+        # f0 wraps the sanitizer; each f_i returns f_{i-1}(x). Listed
+        # in REVERSED order so naive seeding needs propagation.
+        lines = []
+        for i in range(n - 1, 0, -1):
+            lines.append(f"def f{i}(x):\n    return f{i-1}(x)\n")
+        lines.append("def f0(x):\n    return html.escape(x)\n")
+        return "".join(lines)
+
+    def test_deep_chain_converges_and_propagates(self):
+        n = 40
+        _, summaries = _summaries(self._chain_src(n))
+        top = summaries[f"f{n-1}"]
+        assert not top.summary_unconverged
+        assert ("html.escape", 0) in top.return_sanitizers_for_param(0)
+
+    def test_budget_exhaustion_degrades_all_summaries(self, monkeypatch):
+        import core.analysis.taint_summaries as ts_mod
+        monkeypatch.setattr(
+            ts_mod, "_TAINT_SUMMARY_OUTER_ITER_FLOOR", 1)
+        monkeypatch.setattr(
+            ts_mod, "_TAINT_SUMMARY_OUTER_ITER_PER_FN", 0)
+        _, summaries = _summaries(self._chain_src(8))
+        # Pop budget = N + 1 < the pops the chain needs — every
+        # non-unknown summary must degrade, not only the queued ones.
+        assert all(
+            s.summary_unconverged for s in summaries.values()
+            if not s.summary_unknown
+        )
+
+    def test_unknown_summaries_stay_unknown_not_unconverged(
+            self, monkeypatch):
+        import core.analysis.taint_summaries as ts_mod
+        monkeypatch.setattr(
+            ts_mod, "_TAINT_SUMMARY_OUTER_ITER_FLOOR", 1)
+        monkeypatch.setattr(
+            ts_mod, "_TAINT_SUMMARY_OUTER_ITER_PER_FN", 0)
+        src = self._chain_src(8) + "def dyn(x):\n    return eval(x)\n"
+        _, summaries = _summaries(src)
+        assert summaries["dyn"].summary_unknown
+        assert not summaries["dyn"].summary_unconverged

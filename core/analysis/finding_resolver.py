@@ -152,6 +152,7 @@ def resolve_finding(
     finding: Mapping[str, Any],
     *,
     target_root: str | Path | None = None,
+    summary_memo: dict[str, Any] | None = None,
 ) -> Resolution:
     """Resolve a finding (any supported format) to a
     :class:`ResolvedFinding` ready for ``evaluate_finding``, or
@@ -172,11 +173,21 @@ def resolve_finding(
     Callers with the scanned root in scope should pass it; ``None``
     keeps the legacy contract (lexical ``..`` refusal only, absolute
     paths pass through) for call sites that predate the parameter.
+
+    ``summary_memo``, when provided, caches the per-source-text
+    module callgraph + taint summaries across calls (keyed by the
+    text's SHA-256). The scan postpass resolves the same file once
+    per finding × source candidate — up to four full Phase 12+13
+    rebuilds per finding without the memo. Callers own the dict's
+    lifetime (one per run); ``None`` keeps the build-per-call
+    behaviour.
     """
     parsed = _parse_input_format(finding)
     if isinstance(parsed, ResolutionFailure):
         return parsed
-    return _resolve_from_parsed(parsed, target_root=target_root)
+    return _resolve_from_parsed(
+        parsed, target_root=target_root, summary_memo=summary_memo,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -413,9 +424,12 @@ def _read_finding_source(
 def _resolve_from_parsed(
     parsed: _ParsedFinding,
     target_root: str | Path | None = None,
+    summary_memo: dict[str, Any] | None = None,
 ) -> Resolution:
     if parsed.language == "python":
-        return _resolve_from_parsed_python(parsed, target_root)
+        return _resolve_from_parsed_python(
+            parsed, target_root, summary_memo,
+        )
     if parsed.language in ("c", "cpp"):
         return _resolve_from_parsed_cpp(parsed, target_root)
     if parsed.language == "java":
@@ -432,6 +446,7 @@ def _resolve_from_parsed(
 def _resolve_from_parsed_python(
     parsed: _ParsedFinding,
     target_root: str | Path | None = None,
+    summary_memo: dict[str, Any] | None = None,
 ) -> Resolution:
     source_text = _read_finding_source(parsed.file, target_root)
     if isinstance(source_text, ResolutionFailure):
@@ -490,7 +505,7 @@ def _resolve_from_parsed_python(
         )
 
     inter_proc = _inter_proc_bindings_python(
-        source_text, fn, cfg, parsed.cwe,
+        source_text, fn, cfg, parsed.cwe, summary_memo,
     )
 
     return ResolvedFinding(
@@ -514,6 +529,7 @@ def _inter_proc_bindings_python(
     fn: ast.FunctionDef | ast.AsyncFunctionDef,
     cfg: PythonCFG,
     cwe: str,
+    summary_memo: dict[str, Any] | None = None,
 ) -> frozenset:
     """Phase 14 — compute inter-procedural synthetic sanitizer
     bindings for a Python finding's enclosing function.
@@ -525,7 +541,13 @@ def _inter_proc_bindings_python(
     sanitizes. Returns an empty frozenset on any failure (best-effort
     — the intra-procedural verdict still stands). Imports are local
     so the Phase 12-14 modules aren't loaded for callers that never
-    resolve a Python finding."""
+    resolve a Python finding.
+
+    ``summary_memo`` caches ``sha256(source_text) → summaries`` so a
+    caller resolving many findings against the same file pays the
+    Phase 12+13 build once per file per run. Only successful builds
+    are cached; the per-finding binding synthesis (CWE-dependent)
+    always runs."""
     try:
         from core.analysis.python_module_callgraph import (
             build_python_module_callgraph,
@@ -545,10 +567,22 @@ def _inter_proc_bindings_python(
     # gate evaluation instead of degrading to the intra-procedural
     # verdict.
     try:
-        cg = build_python_module_callgraph(source_text)
-        if cg is None:
-            return frozenset()
-        summaries = build_taint_summaries(cg, source_text)
+        summaries = None
+        memo_key = None
+        if summary_memo is not None:
+            import hashlib
+
+            memo_key = hashlib.sha256(
+                source_text.encode("utf-8", errors="replace"),
+            ).hexdigest()
+            summaries = summary_memo.get(memo_key)
+        if summaries is None:
+            cg = build_python_module_callgraph(source_text)
+            if cg is None:
+                return frozenset()
+            summaries = build_taint_summaries(cg, source_text)
+            if summary_memo is not None and memo_key is not None:
+                summary_memo[memo_key] = summaries
         return synthetic_sanitizer_bindings(
             cfg, fn, summaries, cwe, "python",
         )
