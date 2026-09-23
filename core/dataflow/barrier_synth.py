@@ -144,6 +144,19 @@ _LANG_PACK = {
     "go": "codeql/go-all",
 }
 
+# Per-language sink-class tables, for early CLI validation: the java
+# table deliberately omits codeinjection (no generic Java
+# CodeInjectionSink), so validating --sink-class against the Python
+# table alone let an unsupported combination pass argparse and fail
+# deep in the loop.
+_SINK_TABLE_BY_LANG = {
+    "python": _CUSTOMIZATIONS,
+    "javascript": _JS_CUSTOMIZATIONS,
+    "ruby": _RB_CUSTOMIZATIONS,
+    "java": _JAVA_SINKS,
+    "go": _GO_CUSTOMIZATIONS,
+}
+
 
 @dataclass(frozen=True)
 class BarrierProposal:
@@ -1313,6 +1326,12 @@ def main(argv: list | None = None) -> int:
     p.add_argument("--max-attempts", type=int, default=3)
     p.add_argument("--work-dir", type=Path, default=None)
     args = p.parse_args(argv)
+    if args.sink_class not in _SINK_TABLE_BY_LANG[args.language]:
+        p.error(
+            f"sink-class {args.sink_class!r} is not available for "
+            f"--language {args.language} "
+            f"(known: {sorted(_SINK_TABLE_BY_LANG[args.language])})"
+        )
 
     # Caller-supplied --work-dir is never deleted; otherwise a scratch
     # dir (auto-registered with the tmp reaper) is removed on exit.

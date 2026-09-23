@@ -888,3 +888,22 @@ class TestPromptEnvelopeAndIdHygiene:
         (wd,) = seen
         assert wd.parent == tmp_path
         assert wd.name == "___escape"
+
+
+def test_cli_refuses_sink_class_unsupported_for_language(tmp_path):
+    """--language java --sink-class codeinjection used to pass
+    argparse (choices came from the Python table) and fail deep in
+    the loop; it must refuse at parse time."""
+    from core.dataflow import barrier_synth as bs
+    before = tmp_path / "b"
+    after = tmp_path / "a"
+    before.mkdir()
+    after.mkdir()
+    src = tmp_path / "src.py"
+    src.write_text("x = 1\n")
+    argv = [str(before), str(after), "--sink-class", "codeinjection",
+            "--language", "java", "--finding-id", "f1", "--sink", "s",
+            "--source-file", str(src)]
+    with pytest.raises(SystemExit) as exc:
+        bs.main(argv)
+    assert exc.value.code == 2
