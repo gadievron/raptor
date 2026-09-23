@@ -1144,10 +1144,6 @@
     "count": 14,
     "kind": "alternation"
   },
-  "core/dataflow/structural_validator.py::_CONDITION_NODE_TYPES": {
-    "count": 12,
-    "kind": "literal"
-  },
   "core/dataflow/structural_validator.py::_EXTRACTORS": {
     "count": 10,
     "kind": "literal"
