@@ -32,6 +32,9 @@ a pattern built at runtime (variable, f-string) is outside the
 census, as is a hand-rolled ``os.listdir`` + ``endswith`` walk.
 Both are un-idiomatic for these trees today; if one appears, the
 suffix logic belongs in a shared helper, not a fourth spelling.
+Formatting is NOT a boundary: the Python arm matches whole file
+text, so a formatter-wrapped call (``.glob(`` + newline + pattern)
+is judged identically to the single-line spelling.
 """
 
 from __future__ import annotations
@@ -70,25 +73,43 @@ def _python_census_files() -> list[Path]:
     return files
 
 
+def _python_glob_offenders(text: str, rel: str) -> tuple[list[str], int]:
+    """(offender rows, compliant count) for one file's text.
+
+    Matched over the WHOLE text, not per line: ruff/format wraps a
+    long call as ``.glob(`` + newline + ``"*.yml")`` and a per-line
+    scan never saw the pattern — a formatting-shaped escape from the
+    census (the call regex's whitespace class already crosses
+    newlines). Line
+    numbers are recovered from match offsets.
+    """
+    offenders: list[str] = []
+    compliant = 0
+    for m in _GLOB_CALL_RE.finditer(text):
+        pattern = m.group(1)
+        if not _YML_FAMILY_RE.search(pattern):
+            continue
+        if _IDIOM_RE.search(pattern):
+            compliant += 1
+            continue
+        key = f"{rel}::{pattern}"
+        if key in _ALLOWLISTED_SITES:
+            continue
+        line = text.count("\n", 0, m.start()) + 1
+        offenders.append(f"{rel}:{line}: glob({pattern!r})")
+    return offenders, compliant
+
+
 def test_python_workflow_globs_use_both_extension_idiom() -> None:
     offenders: list[str] = []
     compliant = 0
     for path in _python_census_files():
         rel = path.relative_to(REPO).as_posix()
-        for i, line in enumerate(
-            path.read_text(encoding="utf-8").splitlines(), start=1
-        ):
-            for m in _GLOB_CALL_RE.finditer(line):
-                pattern = m.group(1)
-                if not _YML_FAMILY_RE.search(pattern):
-                    continue
-                if _IDIOM_RE.search(pattern):
-                    compliant += 1
-                    continue
-                key = f"{rel}::{pattern}"
-                if key in _ALLOWLISTED_SITES:
-                    continue
-                offenders.append(f"{rel}:{i}: glob({pattern!r})")
+        file_offenders, file_compliant = _python_glob_offenders(
+            path.read_text(encoding="utf-8"), rel,
+        )
+        offenders.extend(file_offenders)
+        compliant += file_compliant
     # Vacuousness guard: the compliant sites this census was derived
     # from (test_ci_controls_docs.py x3, test_test_scope.py) must be
     # visible to it — zero means the extraction regressed, not that
@@ -137,6 +158,25 @@ def test_workflow_trigger_globs_use_both_extension_idiom() -> None:
         "re-fire these workflows; spell the suffix *.y*ml:\n"
         + "\n".join(offenders)
     )
+
+
+def test_census_sees_wrapped_glob_calls() -> None:
+    """Self-check for the formatting escape: the wrapped spelling a
+    formatter produces must be judged exactly like the single-line
+    one (it silently escaped a per-line scan before), and the
+    blessed idiom stays compliant in both layouts."""
+    # Plants are spliced ('.gl' + 'ob') so this census file's own
+    # text never carries a matchable non-idiom call site.
+    wrapped = 'x = d.gl' + 'ob(\n    "*.yml",\n)\n'
+    offenders, _ = _python_glob_offenders(wrapped, "probe.py")
+    assert offenders == ["probe.py:1: glob('*.yml')"]
+    single = 'x = d.gl' + 'ob("*.yml")\n'
+    offenders, _ = _python_glob_offenders(single, "probe.py")
+    assert offenders == ["probe.py:1: glob('*.yml')"]
+    good_wrapped = 'x = d.rgl' + 'ob(\n    "*.y*ml",\n)\n'
+    offenders, compliant = _python_glob_offenders(good_wrapped, "probe.py")
+    assert not offenders
+    assert compliant == 1
 
 
 def test_allowlist_rows_are_live() -> None:
