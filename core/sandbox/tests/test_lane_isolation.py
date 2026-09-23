@@ -204,6 +204,33 @@ class TestUnixLanePeerGate:
         finally:
             proxy.stop()
 
+    def test_add_peer_root_tcp_lane_refused_as_unenforceable(
+            self, reset_proxy):
+        """API honesty: the peer-root ancestry gate is enforced only
+        at the unix-lane SO_PEERCRED accept path. A TCP-lane key used
+        to be ACCEPTED (registry populated, True returned) while no
+        TCP code path ever consulted it — a caller believed it bought
+        the cross-context-refusal property the unix lane documents.
+        The registration is now refused so "gate stays closed"
+        semantics apply."""
+        proxy = proxy_mod.EgressProxy(allowed_hosts={"allowed.example"})
+        try:
+            port = proxy.bind_tcp_lane(label="tcp-ctx")
+            assert proxy.add_lane_peer_root(port, 1) is False, (
+                "TCP-lane peer-root registration must be refused — "
+                "nothing enforces it"
+            )
+            with proxy._lanes_lock:
+                lane = proxy._tcp_lanes[port]
+                assert not lane.allowed_peer_roots, (
+                    "refused registration must not populate the "
+                    "(unenforced) TCP-lane registry"
+                )
+            # Idempotent no-op, never raises.
+            proxy.discard_lane_peer_root(port, 1)
+        finally:
+            proxy.stop()
+
 
 class TestLaneSocketPlacement:
     """The lane socket must not live in the shared output dir."""

@@ -1678,22 +1678,34 @@ class EgressProxy:
         unix socket for the duration of a run.
 
         Called by the spawn layer right after forking the sandbox
-        setup child. Returns False when no such lane exists (callers
-        treat that as "gate stays closed", mirroring set_lane_audit).
+        setup child. Returns False when no such lane exists OR when
+        *key* names a TCP lane (callers treat False as "gate stays
+        closed", mirroring set_lane_audit).
+
+        UNIX lanes only, by honest refusal: the peer-root ancestry
+        gate is enforced with SO_PEERCRED at the unix-lane accept
+        path; TCP lanes have no equivalent enforcement point (their
+        controls are the same-UID loopback gate and the
+        Landlock/SBPL port pin), so accepting a TCP-lane
+        registration and returning True sold a cross-context-refusal
+        property nothing delivered — silently dead policy.
         """
+        if not isinstance(key, str):
+            return False
         with self._lanes_lock:
-            lane = (self._unix_lanes.get(key) if isinstance(key, str)
-                    else self._tcp_lanes.get(key))
+            lane = self._unix_lanes.get(key)
             if lane is None:
                 return False
             lane.allowed_peer_roots.add(int(pid))
         return True
 
     def discard_lane_peer_root(self, key: "str | int", pid: int) -> None:
-        """Withdraw a per-run peer-root authorisation. Idempotent."""
+        """Withdraw a per-run peer-root authorisation. Idempotent (a
+        TCP-lane key was never registrable — nothing to discard)."""
+        if not isinstance(key, str):
+            return
         with self._lanes_lock:
-            lane = (self._unix_lanes.get(key) if isinstance(key, str)
-                    else self._tcp_lanes.get(key))
+            lane = self._unix_lanes.get(key)
             if lane is not None:
                 lane.allowed_peer_roots.discard(int(pid))
 
