@@ -3,6 +3,7 @@
 import unittest
 
 from core.security.log_sanitisation import (
+    _escape_char,
     escape_nonprintable,
     has_nonprintable,
     sanitise_for_terminal,
@@ -103,6 +104,62 @@ class TestEscapeNonprintable(unittest.TestCase):
         self.assertEqual(escape_nonprintable(""), "")
 
 
+class TestPreserveNewlines(unittest.TestCase):
+    """`preserve_newlines=True` keeps EXACTLY \\n and \\t; printable text
+    passes through untouched and every other control is still escaped."""
+
+    def test_printables_and_structural_whitespace_untouched(self):
+        # Both sides of the keep-condition matter: printable chars pass
+        # because they are printable (not because they are whitespace),
+        # and \n/\t pass because they are structural whitespace (they
+        # are NOT printable). A regression in either arm mangles one.
+        s = "line one\n\tindented line two\n"
+        self.assertEqual(escape_nonprintable(s, preserve_newlines=True), s)
+
+    def test_other_controls_still_escaped_in_preserve_mode(self):
+        self.assertEqual(
+            escape_nonprintable("a\x1b[31m\nb\r", preserve_newlines=True),
+            "a\\x1b[31m\nb\\x0d",
+        )
+
+    def test_carriage_return_is_not_structural(self):
+        # \r alone re-renders the current line (the log-forgery channel)
+        # — only \n and \t are structural.
+        self.assertEqual(
+            escape_nonprintable("x\ry", preserve_newlines=True), "x\\x0dy",
+        )
+
+
+class TestEscapeCharFormatBoundaries(unittest.TestCase):
+    r"""The escape form is chosen by codepoint width: \xHH through
+    U+00FF, \uHHHH through U+FFFF, \UHHHHHHHH beyond the BMP. Reviewers
+    grep logs for these exact spellings; a shifted boundary silently
+    changes the rendered evidence."""
+
+    def test_x_form_ceiling_is_u00ff(self):
+        self.assertEqual(_escape_char("\xff"), "\\xff")
+
+    def test_u_form_floor_is_u0100(self):
+        self.assertEqual(_escape_char("Ā"), "\\u0100")
+
+    def test_u_form_ceiling_is_uffff(self):
+        self.assertEqual(_escape_char("￿"), "\\uffff")
+
+    def test_wide_form_floor_is_u10000(self):
+        self.assertEqual(_escape_char("\U00010000"), "\\U00010000")
+
+    def test_astral_nonprintables_escape_via_public_api(self):
+        # Astral-plane format characters are REAL attack input: the
+        # Unicode tag block (U+E0000..U+E007F, category Cf) is the
+        # canonical ASCII-smuggling channel for hiding instructions in
+        # text an operator (or a harness LLM) will read. U+FFFF (Cn)
+        # and U+10FFFF (Cn) pin both BMP and astral noncharacters.
+        self.assertEqual(escape_nonprintable("hi\U000E0041there"),
+                         "hi\\U000e0041there")
+        self.assertEqual(escape_nonprintable("￿"), "\\uffff")
+        self.assertEqual(escape_nonprintable("\U0010FFFF"), "\\U0010ffff")
+
+
 class TestHasNonprintable(unittest.TestCase):
     def test_clean_string_false(self):
         self.assertFalse(has_nonprintable("Sandbox: gcc -c src/main.c"))
@@ -161,6 +218,21 @@ class SanitiseForTerminalTests(unittest.TestCase):
         out = sanitise_for_terminal("\x1b" * 1000, max_len=100)
         self.assertLessEqual(len(out), 100 + len("...[+3900 chars]"))
         self.assertNotIn("\x1b", out)
+
+    def test_default_bound_is_256(self):
+        # The default cap is part of the operator-facing contract: every
+        # call site that omits max_len relies on hostile banners being
+        # cut at exactly this point.
+        out = sanitise_for_terminal("a" * 300)
+        self.assertEqual(out, "a" * 256 + "...[+44 chars]")
+
+    def test_exactly_at_bound_is_not_truncated(self):
+        # ==max_len passes untouched — the elision marker only appears
+        # when characters were actually dropped (a "+0 chars" marker
+        # would be a forged-truncation signal).
+        self.assertEqual(sanitise_for_terminal("b" * 256), "b" * 256)
+        self.assertEqual(sanitise_for_terminal("b" * 100, max_len=100),
+                         "b" * 100)
 
 
 if __name__ == "__main__":
