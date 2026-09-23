@@ -44,9 +44,11 @@ class RefitApplyError(RuntimeError):
     """Raised when a refit can't be applied cleanly."""
 
 
+# Anchored to column 0: module-level constant assignments only. An
+# indented lookalike (a doc example, a nested assignment) must never
+# absorb the update meant for the real constant.
 _CONSTANT_LINE_RE = re.compile(
-    r"^(?P<indent>\s*)"
-    r"(?P<name>_[A-Z][A-Z0-9_]*)"
+    r"^(?P<name>_[A-Z][A-Z0-9_]*)"
     r"\s*=\s*"
     r"(?P<value>[+-]?\d+(?:\.\d+)?)"
     r"(?P<rest>.*)$"
@@ -68,6 +70,19 @@ def apply_refit_to_risk_py(
     """
     if not proposed_values:
         return 0
+    # Membership gate: the refit report is this function's INPUT
+    # (a corrupted or hand-edited report reaches here unchecked in
+    # the auto-PR workflow) — without it, any _SHOUTY name in the
+    # dict turns the patcher into an arbitrary-constant rewriter of
+    # production scoring source.
+    from packages.sca.risk import TUNABLE_CONSTANTS
+    strays = set(proposed_values) - set(TUNABLE_CONSTANTS)
+    if strays:
+        msg = (
+            f"proposed constants not in TUNABLE_CONSTANTS: "
+            f"{sorted(strays)}"
+        )
+        raise RefitApplyError(msg)
     if not risk_py_path.is_file():
         msg = f"risk.py not found at {risk_py_path}"
         raise RefitApplyError(msg)
@@ -78,7 +93,18 @@ def apply_refit_to_risk_py(
     for i, line in enumerate(lines):
         m = _CONSTANT_LINE_RE.match(line)
         if m and m.group("name") in proposed_values:
-            found[m.group("name")] = i
+            name = m.group("name")
+            if name in found:
+                # Refuse rather than guess: patching the LAST match
+                # silently left the real constant unchanged when a
+                # duplicate-named line appeared later in the file.
+                msg = (
+                    f"duplicate assignment lines for {name} in "
+                    f"{risk_py_path} (lines {found[name] + 1} and "
+                    f"{i + 1}) — refusing to guess which to patch"
+                )
+                raise RefitApplyError(msg)
+            found[name] = i
 
     missing = set(proposed_values) - set(found)
     if missing:
@@ -98,7 +124,7 @@ def apply_refit_to_risk_py(
             continue
         formatted = _format_value(new_value)
         new_line = (
-            f"{m.group('indent')}{m.group('name')} = "
+            f"{m.group('name')} = "
             f"{formatted}{m.group('rest')}"
         )
         # Preserve trailing newline shape.
@@ -116,14 +142,22 @@ def apply_refit_to_risk_py(
 
 
 def _format_value(v: float) -> str:
-    """Render a float with at most 4 decimal places. Integer
-    values stay integer-shaped; ``1.20`` formats as ``1.2``."""
+    """Render a float with at most 4 decimal places, always in
+    fixed-point notation. Integer values stay integer-shaped;
+    ``1.20`` formats as ``1.2``.
+
+    ``%g`` is deliberately avoided: it switches large non-integers
+    to scientific notation (``1234567.5`` → ``1.23457e+06``), which
+    the constant-line regex then SILENTLY mis-splits into
+    value=``1.23457`` / rest=``e+06`` on a later re-apply —
+    corrupting the constant instead of erroring.
+    """
     # Round to 4 decimals so refits don't introduce float-noise
     # like 1.0800000000000001.
     rounded = round(v, 4)
     if rounded == int(rounded):
         return f"{int(rounded)}.0"
-    return f"{rounded:g}"
+    return f"{rounded:.4f}".rstrip("0")
 
 
 __all__ = ["RefitApplyError", "apply_refit_to_risk_py"]
