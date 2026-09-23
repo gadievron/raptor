@@ -194,6 +194,38 @@ _TOJSON_SECRETS_RE = re.compile(
     r"\$\{\{\s*toJSON\s*\(\s*secrets\s*\)\s*\}\}",
     re.IGNORECASE,
 )
+# Expression interiors + the unanchored reference grammars used to
+# scan INSIDE them. format()/join()/fromJSON() are first-class GHA
+# expression functions any workflow author can write, so anchoring
+# ``secrets.`` to sit immediately after ``${{`` (the literal regexes
+# above) silently missed every wrapped reference at the two
+# highest-severity sinks — ``${{ format('{0}', secrets.X) }}`` was
+# a complete evasion. The taint-laundering path (_value_is_tainted)
+# always had the permissive grammar; the sinks now share it, scoped
+# to ``${{ … }}`` interiors so prose mentioning ``secrets.FOO``
+# outside an expression can't false-positive.
+_EXPR_RE = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
+_SECRETS_NAME_RE = re.compile(r"\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)")
+_TOJSON_SECRETS_INNER_RE = re.compile(
+    r"\btoJSON\s*\(\s*secrets\s*\)", re.IGNORECASE,
+)
+
+
+def _expression_secret_refs(text: str) -> list[str]:
+    """Secret names referenced anywhere inside ``${{ … }}``
+    expressions in ``text``; a ``toJSON(secrets)`` whole-context
+    reference is reported as ``"*"`` (all secrets)."""
+    out: list[str] = []
+    for m in _EXPR_RE.finditer(text):
+        inner = m.group(1)
+        out.extend(
+            nm.group(1) for nm in _SECRETS_NAME_RE.finditer(inner)
+        )
+        if _TOJSON_SECRETS_INNER_RE.search(inner):
+            out.append("*")
+    return out
+
+
 _TOJSON_ENV_RE = re.compile(
     r"\$\{\{\s*toJSON\s*\(\s*env\s*\)\s*\}\}",
     re.IGNORECASE,
@@ -993,8 +1025,11 @@ def _scan_one_step(
             for in_name, in_val in with_inputs.items():
                 if not isinstance(in_val, str):
                     continue
-                if (_SECRETS_LITERAL_RE.search(in_val)
-                        or _TOJSON_SECRETS_RE.search(in_val)):
+                # Expression-scoped unanchored grammar: catches the
+                # plain ``${{ secrets.X }}`` / ``${{ toJSON(secrets)
+                # }}`` spellings AND expression-function wraps
+                # (``${{ format('{0}', secrets.X) }}``).
+                if _expression_secret_refs(in_val):
                     tainted_inputs.append(str(in_name))
                     continue
                 # env.X referenced + X is secret-bound in this job
@@ -1174,15 +1209,14 @@ def _scan_one_step(
         # could silence the detector for a secret by adding a mask
         # line for it.)
         ref_scan_body = _MASK_RE.sub("", scan_body)
-        # Check whether the body references a secret literal,
-        # a secret-tainted env var, or a tainted prior-step output.
+        # Check whether the body references a secret literal (plain
+        # or wrapped in an expression function — the unanchored
+        # grammar scoped to ``${{ … }}`` interiors), a
+        # secret-tainted env var, or a tainted prior-step output.
         secret_refs_in_body: list[str] = []
-        for m in _SECRETS_LITERAL_RE.finditer(ref_scan_body):
-            name_match = re.search(
-                r"secrets\.([A-Za-z_][A-Za-z0-9_]*)", m.group(0),
-            )
-            if name_match:
-                secret_refs_in_body.append(name_match.group(1))
+        secret_refs_in_body.extend(
+            _expression_secret_refs(ref_scan_body),
+        )
         for m in _ENV_SHELL_RE.finditer(ref_scan_body):
             var = m.group(1)
             if var in job_ctx.secret_bound_env:
