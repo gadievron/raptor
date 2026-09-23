@@ -54,8 +54,11 @@ class TestIsTimeoutError:
 
     def test_quota_error_is_not_timeout(self):
         # 429s carry their own retry policy — never classify as timeout,
-        # even when the message also mentions a retry window.
+        # even when the message also mentions a retry window. Quota
+        # classification requires transport corroboration, so the
+        # fixture carries a status_code like a real SDK 429.
         err = RuntimeError("429 rate limit exceeded; timeout in 60s")
+        err.status_code = 429  # type: ignore[attr-defined]
         assert is_timeout_error(err) is False
 
     def test_unrelated_error_is_not_timeout(self):

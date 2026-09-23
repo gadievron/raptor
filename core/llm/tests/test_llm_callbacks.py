@@ -192,21 +192,31 @@ class TestIsQuotaError:
         except (ImportError, TypeError):
             pytest.skip("anthropic SDK not installed or constructor incompatible")
 
+    # The string-based arms require transport corroboration (see
+    # test_transport_gated_classifiers.py), so message fixtures carry
+    # a transport module root like a real SDK/httpx exception.
+    class _TransportError(Exception):
+        __module__ = "httpx"
+
     def test_detects_string_based_429(self):
         """Detect 429 status code in error message."""
-        assert _is_quota_error(Exception("Error 429: Too Many Requests")) is True
+        assert _is_quota_error(
+            self._TransportError("Error 429: Too Many Requests")) is True
 
     def test_detects_string_based_quota_exceeded(self):
         """Detect 'quota exceeded' in error message."""
-        assert _is_quota_error(Exception("quota exceeded for this billing period")) is True
+        assert _is_quota_error(self._TransportError(
+            "quota exceeded for this billing period")) is True
 
     def test_detects_string_based_rate_limit(self):
         """Detect 'rate limit' in error message."""
-        assert _is_quota_error(Exception("rate limit reached, try again later")) is True
+        assert _is_quota_error(self._TransportError(
+            "rate limit reached, try again later")) is True
 
     def test_detects_gemini_free_tier(self):
         """Detect Gemini-specific free tier quota error."""
-        assert _is_quota_error(Exception("generate_content_free_tier limit hit")) is True
+        assert _is_quota_error(self._TransportError(
+            "generate_content_free_tier limit hit")) is True
 
     def test_non_quota_error_returns_false(self):
         """Non-quota errors should return False."""

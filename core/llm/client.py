@@ -730,12 +730,33 @@ def _is_quota_error(error: Exception) -> bool:
     # hopeless calls and mislabelling telemetry dispositions.
     from core.llm.structured_call import RATE_LIMIT_KEYWORDS_RE
     error_str = str(error).lower()
-    return any((
+    matched = any((
         bool(RATE_LIMIT_KEYWORDS_RE.search(error_str)),
         "quota exceeded" in error_str,
         "quota" in error_str and "exceeded" in error_str,
         "generate_content_free_tier" in error_str,  # Gemini-specific
     ))
+    if not matched:
+        return False
+    # The word-shaped arms above need transport corroboration: quota
+    # exhaustion is a statement the PROVIDER makes via its error
+    # envelope (typed SDK exception, status_code), never something
+    # model output can assert. Validation/shape exceptions quote raw
+    # model output — e.g. the strict schema floor's
+    # SchemaUnknownFieldError quotes MODEL-CHOSEN field names — so an
+    # ungated match lets one hostile key in a response steer retry
+    # policy and (via _is_daily_quota_error) latch the model out of
+    # the whole session. Content-level matches without transport
+    # corroboration are inert: logged, never classified.
+    from core.llm.providers import is_api_transport_exception
+    if not is_api_transport_exception(error):
+        logger.debug(
+            "Quota vocabulary in non-transport %s ignored "
+            "(content-level match without transport corroboration)",
+            type(error).__name__,
+        )
+        return False
+    return True
 
 
 def _is_daily_quota_error(error: Exception) -> bool:
@@ -743,6 +764,11 @@ def _is_daily_quota_error(error: Exception) -> bool:
 
     Daily quotas (e.g. Gemini's per_day limit) won't clear for hours.
     Retrying wastes API calls and wall-clock time.
+
+    This verdict arms the session-wide ``_daily_quota_exhausted`` latch
+    (the model is skipped for the remainder of the run), so it inherits
+    ``_is_quota_error``'s transport gate: a non-transport exception —
+    however quota-shaped its message — never latches.
     """
     error_str = str(error).lower()
     return _is_quota_error(error) and any(

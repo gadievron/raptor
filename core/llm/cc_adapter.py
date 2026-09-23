@@ -1241,6 +1241,23 @@ def extract_session_id(stdout: str) -> str | None:
     return None
 
 
+class CCTransportError(RuntimeError):
+    """A claude-CLI transport boundary failure (nonzero exit, timeout).
+
+    The message relays the CLI's OWN error envelope — stderr or the
+    stream-json result event's ``error`` field — never model output,
+    which rides stdout stream-json content blocks. ``is_api_transport``
+    marks the exception transport-corroborated for the message-sniffing
+    classifiers (``core.llm.providers.is_api_transport_exception``):
+    quota/billing vocabulary in the relayed envelope is provider truth
+    on this transport, exactly like a ``status_code`` on an SDK
+    exception. Raise it ONLY for CLI process/envelope failures — never
+    for errors whose message embeds model-generated content.
+    """
+
+    is_api_transport = True
+
+
 @dataclass
 class StreamJsonResult:
     """Parsed result from ``--output-format stream-json --verbose``."""

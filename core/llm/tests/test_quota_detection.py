@@ -3,10 +3,23 @@
 Unit tests for quota/rate limit error detection and guidance.
 
 Related: Gemini quota exhaustion issue (Dec 2025)
+
+Fixtures are transport-shaped: the message arms of ``_is_quota_error``
+require transport corroboration (a typed SDK error, ``status_code``, or
+a transport module root — see
+``core.llm.providers.is_api_transport_exception``), so the vocabulary
+and anchoring pins here ride a transport-rooted exception type. The
+gate itself (content-level matches are inert) is pinned in
+``test_transport_gated_classifiers.py``.
 """
 
 import pytest
 from core.llm.client import _is_quota_error, _get_quota_guidance
+
+
+class _TransportError(Exception):
+    """Stand-in for an SDK/HTTP transport exception."""
+    __module__ = "httpx"
 
 
 class TestQuotaErrorDetection:
@@ -14,22 +27,22 @@ class TestQuotaErrorDetection:
 
     def test_detects_http_429_error(self):
         """Should detect HTTP 429 (Rate Limit) status code."""
-        error = Exception("HTTP error 429: Too Many Requests")
+        error = _TransportError("HTTP error 429: Too Many Requests")
         assert _is_quota_error(error) is True
 
     def test_detects_quota_exceeded_message(self):
         """Should detect 'quota exceeded' in error message."""
-        error = Exception("API quota exceeded for this month")
+        error = _TransportError("API quota exceeded for this month")
         assert _is_quota_error(error) is True
 
     def test_detects_rate_limit_message(self):
         """Should detect 'rate limit' in error message."""
-        error = Exception("Rate limit reached, please try again later")
+        error = _TransportError("Rate limit reached, please try again later")
         assert _is_quota_error(error) is True
 
     def test_detects_gemini_free_tier_quota(self):
         """Should detect Gemini-specific free tier quota error."""
-        error = Exception(
+        error = _TransportError(
             "You exceeded your current quota, please check your plan and billing details. "
             "Quota exceeded for: generate_content_free_tier_input_token_count"
         )
@@ -37,9 +50,9 @@ class TestQuotaErrorDetection:
 
     def test_case_insensitive_detection(self):
         """Should detect quota errors regardless of case."""
-        error1 = Exception("QUOTA EXCEEDED")
-        error2 = Exception("quota exceeded")
-        error3 = Exception("Quota Exceeded")
+        error1 = _TransportError("QUOTA EXCEEDED")
+        error2 = _TransportError("quota exceeded")
+        error3 = _TransportError("Quota Exceeded")
 
         assert _is_quota_error(error1) is True
         assert _is_quota_error(error2) is True
@@ -47,17 +60,17 @@ class TestQuotaErrorDetection:
 
     def test_detects_quota_and_exceeded_separately(self):
         """Should detect when 'quota' and 'exceeded' appear separately."""
-        error = Exception("Your quota has been exceeded")
+        error = _TransportError("Your quota has been exceeded")
         assert _is_quota_error(error) is True
 
     def test_non_quota_error_returns_false(self):
         """Should return False for non-quota errors."""
         errors = [
-            Exception("Connection timeout"),
-            Exception("Invalid API key"),
-            Exception("Model not found"),
-            Exception("Internal server error"),
-            Exception("Network unreachable"),
+            _TransportError("Connection timeout"),
+            _TransportError("Invalid API key"),
+            _TransportError("Model not found"),
+            _TransportError("Internal server error"),
+            _TransportError("Network unreachable"),
         ]
 
         for error in errors:
@@ -69,10 +82,10 @@ class TestQuotaErrorDetection:
         quota (retryable), or a fatal error burns the full retry
         budget and corrupts the telemetry disposition."""
         errors = [
-            Exception('File "worker.py", line 429, in dispatch'),
-            Exception("HTTP 4290 is not a real status"),
-            Exception("invalid byte at offset 429 in response"),
-            Exception("request id req-429-abc failed schema validation"),
+            _TransportError('File "worker.py", line 429, in dispatch'),
+            _TransportError("HTTP 4290 is not a real status"),
+            _TransportError("invalid byte at offset 429 in response"),
+            _TransportError("request id req-429-abc failed schema validation"),
         ]
         for error in errors:
             assert _is_quota_error(error) is False, (
@@ -82,16 +95,16 @@ class TestQuotaErrorDetection:
     def test_context_anchored_429_still_detected(self):
         """Genuine 429 shapes keep classifying after the anchoring."""
         errors = [
-            Exception("Error code: 429 - rate limited"),
-            Exception("429 Too Many Requests"),
-            Exception("HTTP error 429: Too Many Requests"),
-            Exception("status 429 returned by upstream"),
-            Exception("rate_limit_error: slow down"),
+            _TransportError("Error code: 429 - rate limited"),
+            _TransportError("429 Too Many Requests"),
+            _TransportError("HTTP error 429: Too Many Requests"),
+            _TransportError("status 429 returned by upstream"),
+            _TransportError("rate_limit_error: slow down"),
             # Provider phrasings the first anchored cut missed.
-            Exception("API Error: 429"),
-            Exception("rate limiting in effect, retry later"),
-            Exception("you have exceeded your rate limits"),
-            Exception("upstream rate-limited the request"),
+            _TransportError("API Error: 429"),
+            _TransportError("rate limiting in effect, retry later"),
+            _TransportError("you have exceeded your rate limits"),
+            _TransportError("upstream rate-limited the request"),
         ]
         for error in errors:
             assert _is_quota_error(error) is True, (
@@ -184,7 +197,7 @@ class TestQuotaDetectionIntegration:
     def test_quota_detection_with_real_gemini_error_message(self):
         """Should detect real Gemini quota error from production."""
         # Real error message from Gemini API
-        real_error = Exception(
+        real_error = _TransportError(
             '{"code": 429, "message": "You exceeded your current quota, '
             'please check your plan and billing details", "details": '
             '"Quota exceeded for: generate_content_free_tier_input_token_count, '
@@ -199,7 +212,7 @@ class TestQuotaDetectionIntegration:
     def test_quota_detection_with_real_openai_error_message(self):
         """Should detect real OpenAI rate limit error from production."""
         # Real error message from OpenAI API
-        real_error = Exception(
+        real_error = _TransportError(
             "Error code: 429 - {'error': {'message': 'Rate limit reached for "
             "gpt-5.2 in organization org-xxx on tokens per min (TPM)', 'type': "
             "'tokens', 'param': null, 'code': 'rate_limit_exceeded'}}"
@@ -214,9 +227,9 @@ class TestQuotaDetectionIntegration:
         """Should not falsely detect quota errors in unrelated error messages."""
         # Real error messages that mention "limit" but aren't quota errors
         non_quota_errors = [
-            Exception("Connection timeout limit exceeded"),
-            Exception("Maximum retries limit reached"),
-            Exception("Token limit in prompt exceeded (reduce prompt size)"),
+            _TransportError("Connection timeout limit exceeded"),
+            _TransportError("Maximum retries limit reached"),
+            _TransportError("Token limit in prompt exceeded (reduce prompt size)"),
         ]
 
         for error in non_quota_errors:
