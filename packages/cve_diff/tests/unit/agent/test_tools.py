@@ -755,3 +755,29 @@ def test_deterministic_hints_keeps_dotted_repo_slug(monkeypatch) -> None:
     assert out["hints"] == [{
         "slug": "socketio/socket.io", "sha": sha, "source": "osv_affected_fixed",
     }]
+
+
+# ── OSV id shape gate (module rule: shape-validate before interpolation) ──
+
+
+def test_osv_raw_rejects_non_id_shapes(monkeypatch) -> None:
+    """Model-supplied ids interpolate into the api.osv.dev URL path;
+    anything outside the OSV id charset is refused BEFORE interpolation
+    (path/query steering within the fixed host) — no HTTP call is made."""
+    def _no_client():
+        raise AssertionError("HTTP client must not be constructed for a bad id")
+
+    monkeypatch.setattr(tools_mod, "_http_client", _no_client)
+    for bad in ("CVE-2024-1/..%2f..", "id?x=1", "a b", "x" * 65, "id#frag"):
+        out = json.loads(tools_mod._osv_raw_impl(bad))
+        assert "error" in out, bad
+        out = json.loads(tools_mod._osv_expand_aliases_impl(bad))
+        assert "error" in out, bad
+
+
+def test_osv_id_shapes_accepted() -> None:
+    """Real OSV id families all satisfy the gate."""
+    for good in ("CVE-2023-38545", "GHSA-abcd-1234-wxyz", "DSA-5678-1",
+                 "USN-6123-1", "PYSEC-2021-123", "RUSTSEC-2021-0001",
+                 "GO-2022-0189"):
+        assert tools_mod._OSV_ID_RE.fullmatch(good), good
