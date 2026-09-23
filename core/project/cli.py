@@ -3251,10 +3251,19 @@ def _do_merge(project, merge_type, yes) -> None:
     # re-anchors the Path join and lets two planted markers steer the
     # merge (and the source-run rmtree) outside the project — and
     # keep raw bytes off the terminal.
+    # Leading "." / "_" are unsafe too: the merged dir would be named
+    # ".x-<ts>", which _list_run_dirs skips FOREVER while the source
+    # runs are rmtree'd on success — merged data invisible to
+    # status/findings/report/export. Length-capped so an
+    # over-NAME_MAX or NUL-bearing cmd_type refuses here instead of
+    # escaping as an uncaught OSError from the mkdir.
     unsafe = {
         k for k in groups
         if not k or os.sep in k or (os.altsep and os.altsep in k)
         or k in (".", "..")
+        or k.startswith((".", "_"))
+        or "\x00" in k
+        or len(k) > 64
     }
     for k in sorted(unsafe):
         shown = sanitise_for_terminal(k, max_len=120)
