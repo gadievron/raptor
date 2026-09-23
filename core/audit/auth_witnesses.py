@@ -34,8 +34,11 @@ logger = logging.getLogger(__name__)
 
 _SYNC_RE = re.compile(r"^\s*synchronized\s*[({]")
 # record binding from a keyed collection inside the block
+# \b-pinned to a word start: unanchored, a bare `\w+` re-scans a
+# hostile identifier run from every offset (quadratic); dropped
+# matches are mid-word suffix false tokens only.
 _KEYED_GET_RE = re.compile(
-    r"(?P<var>\w+)\s*=\s*[\w.]+\.get\(",
+    r"\b(?P<var>\w+)\s*=\s*[\w.]+\.get\(",
 )
 # post-block mutation: a method call on the record that is not an
 # obvious read accessor.
@@ -43,14 +46,29 @@ _READ_PREFIXES = ("get", "is", "has", "size", "toString", "equals",
                   "hashCode")
 
 # nullable String getter declarations
+# The modifier/type token list is count-bounded: unbounded, hostile
+# text repeating "abstract " inside one token run makes every
+# occurrence re-scan the run — quadratic. Real declarations carry a
+# handful of tokens before String.
 _ABSTRACT_GETTER_RE = re.compile(
-    r"abstract\s+(?:[\w<>\[\]]+\s+)*String\s+(?P<name>\w+)\s*\(",
+    r"abstract\s+(?:[\w<>\[\]]+\s+){0,8}String\s+(?P<name>\w+)\s*\(",
 )
+# When no access keyword is present the leading whitespace run is
+# pinned to its start ((?<!\s) branch): unanchored, a bare `\s*`
+# prefix re-consumes a hostile whitespace run from every position —
+# quadratic. The earliest match always starts at the run start, so
+# the match set is unchanged. The parameter window is bounded (a
+# real parameter list sits far under 1024 chars).
 _GETTER_DECL_RE = re.compile(
-    r"(?:public|protected|private)?\s*(?:static\s+)?String\s+"
-    r"(?P<name>\w+)\s*\([^)]*\)\s*\{",
+    r"(?:(?:public|protected|private)|(?<!\s))\s*(?:static\s+)?String\s+"
+    r"(?P<name>\w+)\s*\([^)]{0,1024}\)\s*\{",
 )
-_DIGESTY_CALL_RE = re.compile(r"\b\w*(?:digest|Digest|hash|Hash|hmac|Hmac)\w*\s*\(")
+# The name prefix is bounded: unbounded `\w*` before the keyword
+# costs every split of a hostile word run per word start. Real
+# function names sit far under 256 chars.
+_DIGESTY_CALL_RE = re.compile(
+    r"\b\w{0,256}(?:digest|Digest|hash|Hash|hmac|Hmac)\w*\s*\(",
+)
 
 
 @dataclass
@@ -153,14 +171,18 @@ def scan_null_concat(
             # ``=\s*[^=\n]*`` overlapped two unbounded spans —
             # quadratic on an assignment line ending in a long
             # whitespace run with no concatenation.
+            # The variable is \b-pinned and the pre-concat window
+            # bounded: unbounded, both re-scan a hostile run from
+            # every position — quadratic. A real assignment RHS up
+            # to the concatenation sits far under 300 chars.
             m = re.search(
-                r"(?:(?P<var>\w+)\s*=)?[^=\n]*\+\s*" + re.escape(g)
+                r"(?:\b(?P<var>\w+)\s*=)?[^=\n]{0,300}\+\s*" + re.escape(g)
                 + r"\s*\(",
                 line,
             )
             if m is None:
                 continue
-            if re.search(re.escape(g) + r"\s*\([^)]*\)\s*[!=]=\s*null", source) or \
+            if re.search(re.escape(g) + r"\s*\([^)]{0,256}\)\s*[!=]=\s*null", source) or \
                re.search(r"null\s*[!=]=\s*" + re.escape(g), source):
                 continue  # result is null-checked somewhere in the body
             var = m.group("var")

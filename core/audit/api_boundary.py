@@ -407,8 +407,10 @@ def _param_names_from_list(params_text: str) -> list[str]:
         if not param or param in ("void", "..."):
             continue
         # Drop array suffixes / function-pointer noise, keep the last
-        # identifier as the name.
-        param = re.sub(r"\[[^\]]*\]", "", param)
+        # identifier as the name. The suffix window is bounded: an
+        # unbounded `[^\]]*` re-scans a hostile bracket run from
+        # every '[' — quadratic; a real array suffix is tiny.
+        param = re.sub(r"\[[^\]]{0,256}\]", "", param)
         idents = re.findall(_IDENT, param)
         if idents:
             names.append(idents[-1])
@@ -690,10 +692,20 @@ _STMT_KEYWORDS = (
 
 def _looks_like_decl_or_def(line: str, function_name: str) -> bool:
     """Filter out prototypes/definitions when scanning for call sites."""
+    # Linear respelling of the type-prefix span, same language:
+    # ``[A-Za-z_][\w\s\*]*[\s\*]`` folds the old leading identifier
+    # into the wide class (its word-run overlapped the class — every
+    # split of a hostile run was explored) and drops the trailing
+    # ``\s*`` (whitespace is inside both neighbouring classes, so the
+    # extra span matched nothing new).  The qualifier loop is
+    # bounded: each loop-exit point re-scans the type span, so a
+    # planted keyword run made one anchored attempt quadratic in the
+    # line; real declarations carry a handful of qualifiers (a
+    # longer run stops matching).
     return bool(re.match(
-        rf"\s*(?:static\s+|extern\s+|inline\s+|const\s+)*"
+        rf"\s*(?:static\s+|extern\s+|inline\s+|const\s+){{0,8}}"
         rf"(?!(?:{_STMT_KEYWORDS})\b)"
-        rf"(?:{_IDENT}[\w\s\*]*[\s\*])\s*{re.escape(function_name)}\s*\(",
+        rf"(?:[A-Za-z_][\w\s\*]*[\s\*]){re.escape(function_name)}\s*\(",
         line,
     )) or bool(re.match(rf"\s*#\s*define\s+{re.escape(function_name)}\b", line))
 
@@ -1042,8 +1054,13 @@ def _check_site(
             )
             return check
         if base:
+            # Condition window bounded: an unbounded `[^)]*` costs
+            # every split of a paren-free hostile run from every
+            # `if (` — quadratic. Real conditions sit far under 400
+            # chars; past the bound the guard is not seen, which
+            # only widens the finding.
             guard = re.search(
-                rf"(?:if|while)\s*\([^)]*(?:!\s*{re.escape(base)}\b"
+                rf"(?:if|while)\s*\([^)]{{0,400}}(?:!\s*{re.escape(base)}\b"
                 rf"|{re.escape(base)}\s*[!=]=\s*NULL"
                 rf"|NULL\s*[!=]=\s*{re.escape(base)}\b"
                 rf"|\b{re.escape(base)}\b\s*(?:&&|\)))",
@@ -1078,8 +1095,9 @@ def _check_site(
             check.evidence = "unsigned-valued argument"
             return check
         if base:
+            # Bounded condition window (see the NULL-guard scan).
             guard = re.search(
-                rf"(?:if|while)\s*\([^)]*{re.escape(base)}\s*"
+                rf"(?:if|while)\s*\([^)]{{0,400}}{re.escape(base)}\s*"
                 rf"(?:<\s*0|<=\s*0|>=\s*0|>\s*0)",
                 window,
             )
@@ -1124,9 +1142,10 @@ def _check_site(
             )
             return check
         if base:
+            # Bounded condition window (see the NULL-guard scan).
             guard = re.search(
-                rf"(?:if|while|assert\w*|BUG_ON|ASSERT|CHECK)\s*\("
-                rf"[^;)]*\b{re.escape(base)}\b\s*(?:<=?|>=?|==)",
+                rf"\b(?:if|while|assert\w{{0,64}}|BUG_ON|ASSERT|CHECK)\s*\("
+                rf"[^;)]{{0,400}}\b{re.escape(base)}\b\s*(?:<=?|>=?|==)",
                 window,
             )
             if guard:
@@ -1161,7 +1180,10 @@ _BRANCH_TOKEN_RE = re.compile(
 # callee may not return (exit/abort/longjmp) or may change the
 # argument's state — a "literal double invocation" separated by
 # another call is not literal.
-_INTERVENING_CALL_RE = re.compile(r"[A-Za-z_]\w*\s*\(")
+# \b-pinned to a word start: unanchored, the identifier scan
+# re-reads a hostile word run from every offset (quadratic);
+# dropped matches are mid-word suffix false tokens only.
+_INTERVENING_CALL_RE = re.compile(r"\b[A-Za-z_]\w*\s*\(")
 
 # A type-shaped token directly preceding an identifier: parameter or
 # local declaration.  Deliberately keyword/`_t`/pointer-star based —
@@ -1233,7 +1255,12 @@ def _single_call_precall_risk(
             f"address of {base} taken before the call — aliases may "
             "exist"
         )
-    if re.search(rf"(?<![=!<>])=(?!=)[^;\n]*?(?<![\w.>&]){b}\b", before):
+    # RHS window bounded: unbounded, every '=' in a hostile
+    # separator-free run re-scans the rest of the run — quadratic.
+    # A real assignment RHS up to the alias mention sits far under
+    # 160 chars; past the bound the alias is not seen, which only
+    # widens the finding.
+    if re.search(rf"(?<![=!<>])=(?!=)[^;\n]{{0,160}}?(?<![\w.>&]){b}\b", before):
         return (
             f"{base} assigned to another lvalue before the call — "
             "aliases may exist"
