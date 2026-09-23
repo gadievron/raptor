@@ -312,26 +312,44 @@ def _compiled_is_member(pattern: re.Pattern[str]) -> bool:
 
 def _data_file_members() -> list[tuple[str, str]]:
     """Census over pattern DATA FILES: every pattern the repo compiles
-    from a data file with MULTILINE-class flags, taken from the loader
-    itself — the preflight loader globs its corpus directory and
-    decides per-file which flags apply, so a new corpus file, a new
-    pattern line, or a flag change is picked up here automatically
-    (never a hardcoded file list).  AST resolution cannot see these
-    patterns (the compile call's operand is a loop variable), which is
-    exactly how a data-file member outlived the source census."""
+    from a data file with MULTILINE-class flags, taken from each loader
+    itself, so a new corpus file, a new pattern line, or a flag change
+    is picked up here automatically (never a hardcoded file list).
+    AST resolution cannot see these patterns (each compile call's
+    operand is a loop variable), which is exactly how a data-file
+    member outlived the source census.
+
+    Universe: every data-file regex loader in the runtime tree —
+
+      * the preflight injection-pattern corpora (the loader globs its
+        corpus directory and decides per-file which flags apply);
+      * the SCA exfil-destination rules (operator-extensible JSON;
+        entries compile flag-less at load, so only an inline ``(?m)``
+        group makes one a member — which is precisely the spelling an
+        operator extension would smuggle past the source census).
+    """
     import sys
 
     sys.path.insert(0, str(_REPO))
     try:
         from core.security.prompt_input_preflight import _load_patterns
+        from packages.sca.supply_chain import (
+            exfil_destinations as _exfil,
+        )
     finally:
         sys.path.remove(str(_REPO))
-    return [
+    members = [
         (stem, compiled.pattern)
         for stem, patterns in sorted(_load_patterns().items())
         for compiled in patterns
         if _compiled_is_member(compiled)
     ]
+    members.extend(
+        ("exfil_destinations", rule.pattern.pattern)
+        for rule in _exfil._load_rules()
+        if rule.pattern is not None and _compiled_is_member(rule.pattern)
+    )
+    return members
 
 
 def _census_key(path: Path, pattern: str,
@@ -593,6 +611,50 @@ class RedosIdiomCensus(unittest.TestCase):
         self.assertEqual(
             members,
             [("english_multiline", "^\\s*planted_member\\b")],
+        )
+
+    def test_data_file_arm_detects_a_planted_exfil_member(self) -> None:
+        """Self-check for the exfil-rules arm: plant an inline-(?m)
+        member in a scratch copy of the JSON and point the loader at
+        it — the arm must flag the plant. Today's shipped entries
+        compile flag-less (not census-class), so an operator-extended
+        entry with an inline ``(?m)`` was invisible to BOTH census
+        arms before this arm existed."""
+        import json as _json
+        import sys
+        import tempfile
+
+        sys.path.insert(0, str(_REPO))
+        try:
+            from packages.sca.supply_chain import (
+                exfil_destinations as _exfil,
+            )
+        finally:
+            sys.path.remove(str(_REPO))
+
+        planted = r"(?m)^\s*evil\.example\b"
+        with tempfile.TemporaryDirectory() as td:
+            scratch = Path(td) / "exfil_destinations.json"
+            data = _json.loads(
+                _exfil._DATA_FILE.read_text(encoding="utf-8"))
+            data["entries"].append({
+                "category": "test", "severity": "high",
+                "reason": "planted census member", "pattern": planted,
+            })
+            scratch.write_text(_json.dumps(data), encoding="utf-8")
+            original_file = _exfil._DATA_FILE
+            original_cache = _exfil._RULES_CACHE
+            _exfil._DATA_FILE = scratch
+            _exfil._RULES_CACHE = None
+            try:
+                members = _data_file_members()
+            finally:
+                _exfil._DATA_FILE = original_file
+                _exfil._RULES_CACHE = original_cache
+        # The plant — and ONLY the plant — on the shipped rule set.
+        self.assertEqual(
+            [m for m in members if m[0] == "exfil_destinations"],
+            [("exfil_destinations", planted)],
         )
 
 
