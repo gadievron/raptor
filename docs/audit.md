@@ -207,6 +207,7 @@ channels.
 | `check-null-deref` | CWE-476 | Null dereference reachability |
 | `check-overflow-to-oob` | CWE-680 | Overflow feeding a buffer index |
 | `check-negative-bypass` | CWE-839 | Signed comparison bypass with negative values |
+| `check-encoding-residual` | CWE-116 | Encoder completeness: can a target-grammar forbidden byte survive the emitter's supplied transfer semantics unescaped |
 | `validate-path` | Various | Branch condition satisfiability along a dataflow path |
 
 
