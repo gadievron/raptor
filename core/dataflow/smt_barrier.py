@@ -517,7 +517,32 @@ def code_view_lines(source_text: str, language: str) -> list[str]:
     (newlines are preserved by the scanner, so indices map 1:1)."""
     from core.audit.source_view import sanitized_view
 
-    return sanitized_view(source_text, language=language).splitlines()
+    return split_source_lines(
+        sanitized_view(source_text, language=language),
+    )
+
+
+
+def split_source_lines(text: str) -> list[str]:
+    r"""Split target-controlled text into lines by ``\n`` ONLY.
+
+    Every producer whose line numbers this stack consumes (CodeQL
+    SARIF locations, git diffs, SARIF snippets) counts lines by
+    ``\n``; ``str.splitlines()`` additionally breaks on U+2028/U+2029,
+    U+000B, U+000C, U+0085 — one exotic terminator planted early in a
+    target file shifts every line-keyed judgment after it (observed
+    direction: refusal — a real guard becomes unfindable; the
+    suppression direction is blocked by the var-reach and dominance
+    gates, which shift consistently with the sink text).  One shared
+    helper so producer and consumer line arithmetic cannot diverge
+    again; ``\r`` tails from CRLF files survive on the line and are
+    tolerated by the strip()/regex matching at every consumer.
+
+    A trailing newline yields one final empty element ("phantom
+    line"); consumers bounds-check indices and skip blank lines, so
+    it is inert.
+    """
+    return text.split("\n")
 
 
 def _span_is_code(view: str | None, start: int) -> bool:
@@ -710,7 +735,7 @@ def extract_validator(fix_diff: str, language: str = "python") -> ValidatorSpec 
         return None
     if language not in _LANG_EXTRACTORS:
         return None
-    for raw in fix_diff.splitlines():
+    for raw in split_source_lines(fix_diff):
         if not raw.startswith("+") or raw.startswith("+++"):
             continue
         spec = extract_validator_from_line(raw[1:], language)
@@ -1233,7 +1258,7 @@ def _lexical_validator_in_branch(
     lands on the guard line: the branch-wrap snapshot is taken at the
     START of the validator line so a same-line close cannot hide them.
     """
-    lines = source_text.splitlines()
+    lines = split_source_lines(source_text)
     if not (0 < validator_line <= len(lines) and 0 < sink_line <= len(lines)):
         return True
     view = code_view_lines(source_text, language)
@@ -1363,7 +1388,7 @@ def find_validator_line(
     dominance check without a second read.
     """
     needle = spec.source_line
-    lines = source_text.splitlines()
+    lines = split_source_lines(source_text)
     view = code_view_lines(source_text, language)
     candidates: list[int] = []
     for idx, ln in enumerate(lines):
@@ -2051,7 +2076,7 @@ def _crosses_function_boundary(
     pat = _FUNCTION_BOUNDARY_PATTERNS.get(language)
     if pat is None:
         return False
-    lines = source_text.splitlines()
+    lines = split_source_lines(source_text)
     # lines is 0-indexed; validator/sink are 1-indexed lines.
     return any(pat.search(ln) for ln in lines[validator_line:sink_line - 1])
 
@@ -2536,7 +2561,7 @@ def _lexical_var_reaches_sink(
     """
     if not _re.search(rf"\b{_re.escape(var)}\b", sink_line_text):
         return False
-    lines = source_text.splitlines()
+    lines = split_source_lines(source_text)
     assign_re = _re.compile(rf"\b{_re.escape(var)}\b\s*=(?!=)")
     compound_re = _re.compile(
         rf"\b{_re.escape(var)}\b\s*"
@@ -3031,7 +3056,7 @@ def try_tier0(
     # "var must appear at sink line" check — conservative direction
     # but loses pass-through cases.  Both still catch the original
     # Bug 15 scenario (validator for x, unrelated sink for y).
-    source_lines = source_text.splitlines()
+    source_lines = split_source_lines(source_text)
     if sink_line - 1 < len(source_lines):
         sink_line_text = source_lines[sink_line - 1]
     else:
