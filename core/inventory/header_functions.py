@@ -31,11 +31,17 @@ _HEADER_EXTENSIONS = frozenset({".h", ".hh", ".hpp", ".hxx"})
 # The parameter list tolerates one level of nested parentheses (same
 # sub-pattern the __attribute__ clause uses) so function-pointer
 # parameters don't hide the definition.
+# Bounded loops and windows on every unbounded-reach span (same
+# discipline as the header_api declaration matcher): unbounded
+# attribute chains, type loops and parameter windows let every line
+# anchor re-scan the remaining text on planted declaration-shaped
+# runs — quadratic. Bounds sit far above real definitions
+# (trade-offs as in header_api).
 _FUNC_DEF_RE = re.compile(
     r"^[ \t]*"
-    r"(?:__attribute__\s*\(\([^()]*(?:\([^()]*\)[^()]*)*\)\)\s+)*"
-    r"(?:\w+\s+)*?"
-    r"(\w+)\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*\{",
+    r"(?:__attribute__\s*\(\([^()]{0,1024}(?:\([^()]{0,1024}\)[^()]{0,1024}){0,8}\)\)\s+){0,8}"
+    r"(?:\w+\s+){0,24}?"
+    r"(\w+)\s*\([^()]{0,4096}(?:\([^()]{0,1024}\)[^()]{0,4096}){0,16}\)\s*\{",
     re.MULTILINE,
 )
 

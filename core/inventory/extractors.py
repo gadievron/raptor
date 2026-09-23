@@ -514,8 +514,12 @@ class CExtractor:
     # Type-only previous line (for split type + name decls):
     # `static char *`, `struct page *`, `static __always_inline u64`.
     # Anchored: must start with a word, end without `(`, `)`, `;`, `:`.
+    # The word repeat is subsumed by the following class
+    # ([A-Za-z_0-9*&\s] is a superset) — the two adjacent repeats
+    # overlapped on word chars, quadratic on an identifier run even
+    # at the anchored match call. Same language.
     TYPE_ONLY_LINE = re.compile(
-        r'(?a)^\s*[A-Za-z_][A-Za-z_0-9]*[A-Za-z_0-9*&\s]*$'
+        r'(?a)^\s*[A-Za-z_][A-Za-z_0-9*&\s]*$'
     )
 
     C_TYPE_HINTS = frozenset({
