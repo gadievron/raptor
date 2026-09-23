@@ -1691,9 +1691,24 @@ class ProjectManager:
             # completion chokepoint infers the project from the run's
             # parent via checklist.json/coverage.json, which a
             # freshly retro-created project does not have yet.
+            # IMPORTED runs skip both projection lanes: import
+            # quarantined their trust-bearing artifacts, and adopting
+            # the run must not re-mint archive-supplied journal or
+            # coverage state as locally-earned (the chokepoint guard
+            # in project_run_projections is the shared refusal; the
+            # direct merge here mirrors it so the two lanes cannot
+            # drift).
+            try:
+                from core.project.findings_utils import run_is_imported
+                _imported = run_is_imported(dest)
+            except Exception:  # noqa: BLE001 — predicate is an aid, never a crash
+                _imported = False
+                logger.debug("adopt: imported-run check failed for %s",
+                             dest, exc_info=True)
             try:
                 from core.coverage.journal import merge_run_into_index
-                merged = merge_run_into_index(dest_base, dest)
+                merged = 0 if _imported else \
+                    merge_run_into_index(dest_base, dest)
                 if merged:
                     logger.info(
                         "adopt: %d journal entries merged into the "
