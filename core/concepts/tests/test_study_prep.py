@@ -2103,3 +2103,58 @@ class TestPromoteToProjectConcepts:
         src.write_text(json.dumps({"patterns": {}}), encoding="utf-8")
         prep._promote_to_project_concepts(src, out)
         assert not (tmp_path / "concepts").exists()
+
+
+# ------------------------------------------------------------------
+# Hostile-input complexity pins for the C declaration matcher
+# ------------------------------------------------------------------
+
+class TestCFuncMatcherHostileAttribute:
+    """The __attribute__ body must match with a single-character base.
+
+    A starred base inside the repeated attribute group ((?:[^()]*|...)*)
+    is the ambiguous (a*)* shape: an unterminated "__attribute__(("
+    line makes the engine try every split of the body between the two
+    stars — exponential in the token count, so ~100 bytes of scanned
+    content pin a CPU for hours. The single-character spelling matches
+    the same strings with one parse per input.
+    """
+
+    # 102 bytes, the observed run-killer shape: an UNTERMINATED
+    # attribute line (30 body tokens) followed by a real function.
+    HOSTILE = (
+        "__attribute__((" + " a" * 30 + "\n"
+        "int f(void) { return 0; }\n"
+    )
+
+    def test_unterminated_attribute_scan_is_linear(self) -> None:
+        from core.testing.wallclock import cpu_budget
+
+        # Growth-shaped pin first (12 tokens ≈ 10s CPU on the
+        # ambiguous spelling — fails the budget without hanging the
+        # run); then the full hostile file at 30 tokens, which only a
+        # linear matcher survives.
+        with cpu_budget(1.0, what="12-token unterminated attribute"):
+            list(prep._C_FUNC_RE.finditer(
+                "__attribute__((" + " a" * 12 + "\nx\n"))
+        with cpu_budget(1.0, what="102-byte hostile C file"):
+            results = prep._extract_functions(self.HOSTILE, "evil.c")
+        # The hostile line must not block extraction of the code
+        # after it.
+        assert any(f["name"] == "f" for f in results)
+
+    def test_attribute_forms_still_match(self) -> None:
+        for src, name in (
+            ('__attribute__((visibility("default"))) int f(void) {\n', "f"),
+            ("__attribute__((format(printf, 1, 2))) static int "
+             "log2f(const char *fmt, ...) {\n", "log2f"),
+            ("__attribute__((noreturn)) __attribute__((cold)) "
+             "void die(int c) {\n", "die"),
+            ("__attribute__((aligned(16), packed)) struct x *mk(void) {\n",
+             "mk"),
+            ("__declspec(dllexport) unsigned long g(int x) {\n", "g"),
+            ("extern int h(void);\n", "h"),
+        ):
+            m = prep._C_FUNC_RE.search(src)
+            assert m is not None, src
+            assert m.group(1) == name, src

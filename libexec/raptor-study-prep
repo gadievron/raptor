@@ -613,8 +613,18 @@ def _extract_doc_comment(source: str, pos: int) -> str:
 # Attribute/declspec prefix: handles __attribute__((visibility("default"))),
 # __attribute__((format(printf, 1, 2))), __declspec(dllexport), extern, etc.
 # Two-level paren matching covers all common attribute forms.
+#
+# The attribute body uses a SINGLE-CHARACTER base ([^()] — never
+# [^()]*) inside the repeated group: a starred base under an outer
+# star is the ambiguous (a*)* shape, and an unterminated
+# "__attribute__((" line makes the engine try every split of the
+# body between the two stars — exponential backtracking on ~100
+# bytes of hostile scanned content. The single-character spelling
+# denotes the same language (runs of non-paren characters and
+# one-level paren groups) with exactly one parse per input, so
+# matching stays linear. Keep it that way.
 _ATTR_PREFIX = (
-    r"(?:__attribute__\s*\(\((?:[^()]*|\([^()]*\))*\)\)\s*)*"
+    r"(?:__attribute__\s*\(\((?:[^()]|\([^()]*\))*\)\)\s*)*"
     r"(?:__declspec\s*\([^()]*\)\s*)?"
     r"(?:extern\s+)?"
 )
