@@ -31,7 +31,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from core.json import dumps_artifact
-from core.security.log_sanitisation import sanitise_for_terminal
+from core.llm.scorecard._render import scrub_cell
 from core.llm.scorecard.paths import default_scorecard_path
 from core.llm.scorecard.scorecard import (
     ALL_EVENT_TYPES,
@@ -392,10 +392,13 @@ def render_markdown(report: AuditReport) -> str:
     event_type / decision_class / schema_version are read from the
     sidecar WITHOUT HMAC verification (`_load_raw` bypasses
     ModelScorecard on purpose) — a same-user forger picks those bytes,
-    so each is escaped and bounded before it reaches the terminal.
+    so each is escaped and bounded before it reaches the terminal,
+    and in-slot markdown structure (pipes, backticks) is entity-
+    escaped so a forged cell cannot mint table columns in the pasted
+    report (the shared ``scrub_cell`` discipline).
     """
     def _cell(value: object) -> str:
-        return sanitise_for_terminal(str(value), max_len=64)
+        return scrub_cell(value)
 
     lines: list[str] = []
     lines.append(f"# Scorecard audit — `{report.scorecard_path}`")
