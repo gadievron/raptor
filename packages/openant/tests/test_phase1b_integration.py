@@ -716,6 +716,237 @@ class TestOpenantCoreConsentGate(unittest.TestCase):
                              "from the hostile clone")
 
 
+class TestConsentGateObjectStoreForgery(unittest.TestCase):
+    """The object store of an attacker-shipped clone is NOT in the
+    trust base: git serves a content-substituted loose object without
+    re-hashing it on read, so a tree LISTING is forgeable even when
+    the commit id matches the pin. The survey must self-hash every
+    object on the pin's reachability path (commit, every tree, every
+    worktree blob) before trusting it — no attacker-shipped byte
+    participates in the verification chain unverified."""
+
+    _pinned_repo = staticmethod(
+        TestOpenantCoreConsentGate.__dict__["_pinned_repo"].__func__)
+
+    @staticmethod
+    def _git(repo: Path, *args: str, data: bytes | None = None) -> str:
+        import subprocess
+        proc = subprocess.run(
+            ["git", "-C", str(repo), *args], input=data,
+            capture_output=True, check=True)
+        return proc.stdout.decode().strip()
+
+    def _substitute_object(self, repo: Path, victim_oid: str,
+                           forged_oid: str) -> None:
+        """Overwrite the loose object stored under ``victim_oid`` with
+        the CONTENT of ``forged_oid`` — the exact shape git's read
+        path serves without complaint and ``git fsck`` flags as a
+        hash-path mismatch."""
+        import shutil
+        objects = repo / ".git" / "objects"
+        src = objects / forged_oid[:2] / forged_oid[2:]
+        dst = objects / victim_oid[:2] / victim_oid[2:]
+        dst.chmod(0o644)
+        shutil.copyfile(src, dst)
+
+    def _forge_listing(self, repo: Path, filename: str,
+                       hostile: bytes) -> str:
+        """Write a forged single-entry tree object (``filename`` →
+        blob of ``hostile``) into the store; return its oid."""
+        blob = self._git(repo, "hash-object", "-w", "--stdin",
+                         data=hostile)
+        return self._git(
+            repo, "mktree",
+            data=f"100644 blob {blob}\t{filename}\n".encode())
+
+    def test_forged_subtree_object_refuses(self):
+        """THE bypass shape: a genuine pinned commit with ONE
+        substituted subtree object whose forged listing matches the
+        hostile on-disk files. ls-tree serves the forgery (exit 0);
+        the verified walk must fail it closed and the gate must
+        refuse unconsented."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            hostile = b"hostile = True\n"
+            victim = self._git(repo, "rev-parse",
+                               "HEAD:libs/openant-core/core")
+            forged = self._forge_listing(repo, "scanner.py", hostile)
+            self._substitute_object(repo, victim, forged)
+            (core / "core" / "scanner.py").write_bytes(hostile)
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                dev = scanner._pinned_tree_deviations(core)
+                # The forged listing must never present as clean.
+                self.assertNotEqual(dev, {"modified": 0, "untracked": 0})
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+
+    def test_forged_root_tree_object_refuses(self):
+        """Same mechanism one level up: the commit's ROOT tree object
+        substituted with a forged listing."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            hostile = b"hostile = True\n"
+            victim = self._git(repo, "rev-parse", "HEAD^{tree}")
+            forged = self._forge_listing(repo, "evil.py", hostile)
+            self._substitute_object(repo, victim, forged)
+            (repo / "evil.py").write_bytes(hostile)
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                dev = scanner._pinned_tree_deviations(core)
+                self.assertNotEqual(dev, {"modified": 0, "untracked": 0})
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+
+    def test_forged_commit_object_refuses(self):
+        """Negative control (fail-closed at BASE too): a substituted
+        COMMIT object is caught — git verifies commits on parse, and
+        the walk additionally self-hashes the payload against the
+        pin."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            # A second, hostile commit provides the forged content.
+            (core / "core" / "scanner.py").write_bytes(b"hostile = True\n")
+            self._git(repo, "add", "-A")
+            self._git(repo, "-c", "user.name=t", "-c", "user.email=t@t",
+                      "commit", "-qm", "evil")
+            evil = self._git(repo, "rev-parse", "HEAD")
+            self._git(repo, "reset", "-q", "--hard", head)
+            (core / "core" / "scanner.py").write_bytes(b"hostile = True\n")
+            self._substitute_object(repo, head, evil)
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                dev = scanner._pinned_tree_deviations(core)
+                self.assertNotEqual(dev, {"modified": 0, "untracked": 0})
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+
+    def test_replace_ref_cannot_redirect_survey(self):
+        """``git replace`` ships in the core: a hostile
+        ``refs/replace/<pin>`` must not steer the survey at hostile
+        content (``core.useReplaceRefs=false`` is pinned in the
+        safe-git overrides, and the self-hash would catch redirected
+        payloads regardless)."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            (core / "core" / "scanner.py").write_bytes(b"hostile = True\n")
+            self._git(repo, "add", "-A")
+            self._git(repo, "-c", "user.name=t", "-c", "user.email=t@t",
+                      "commit", "-qm", "evil")
+            evil = self._git(repo, "rev-parse", "HEAD")
+            self._git(repo, "update-ref", "HEAD", head)
+            self._git(repo, "replace", "-f", head, evil)
+            # Disk carries the hostile content the replacement lists.
+            (core / "core" / "scanner.py").write_bytes(b"hostile = True\n")
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                dev = scanner._pinned_tree_deviations(core)
+                self.assertNotEqual(dev, {"modified": 0, "untracked": 0})
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+
+    def test_alternates_supplied_forged_object_refuses(self):
+        """``.git/objects/info/alternates`` ships in the core too: an
+        alternate store serving forged content under a genuine name
+        must fail the self-hash, never the gate."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            hostile = b"hostile = True\n"
+            victim = self._git(repo, "rev-parse",
+                               "HEAD:libs/openant-core/core")
+            forged = self._forge_listing(repo, "scanner.py", hostile)
+            objects = repo / ".git" / "objects"
+            alt = Path(td) / "altstore"
+            (alt / victim[:2]).mkdir(parents=True)
+            import shutil
+            shutil.copyfile(objects / forged[:2] / forged[2:],
+                            alt / victim[:2] / victim[2:])
+            # Remove the genuine object so the alternate serves it.
+            (objects / victim[:2] / victim[2:]).chmod(0o644)
+            (objects / victim[:2] / victim[2:]).unlink()
+            (objects / "info").mkdir(exist_ok=True)
+            (objects / "info" / "alternates").write_text(f"{alt}\n")
+            (core / "core" / "scanner.py").write_bytes(hostile)
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                dev = scanner._pinned_tree_deviations(core)
+                self.assertNotEqual(dev, {"modified": 0, "untracked": 0})
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+
+    def test_forged_loose_beside_pack_is_inert_or_caught(self):
+        """Pin of an observed git behavior: with the genuine object
+        PACKED, a forged loose object under the same name is not
+        preferred by the read path — and even if a future git
+        preferred it, the self-hash catches it. Either way the gate
+        must refuse this hostile-disk shape."""
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            hostile = b"hostile = True\n"
+            victim = self._git(repo, "rev-parse",
+                               "HEAD:libs/openant-core/core")
+            self._git(repo, "repack", "-a", "-d", "-q")
+            forged = self._forge_listing(repo, "scanner.py", hostile)
+            objects = repo / ".git" / "objects"
+            (objects / victim[:2]).mkdir(exist_ok=True)
+            import shutil
+            shutil.copyfile(objects / forged[:2] / forged[2:],
+                            objects / victim[:2] / victim[2:])
+            (core / "core" / "scanner.py").write_bytes(hostile)
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                with self.assertRaises(scanner.OpenAntCoreConsentError):
+                    with self.assertLogs("raptor", level="WARNING"):
+                        scanner.enforce_core_consent(
+                            core, consented=False, target_path=td)
+
+    def test_clean_pinned_clone_with_structure_passes(self):
+        """Regression direction: the verified walk accepts a genuine
+        clean checkout exercising nested trees, an executable bit and
+        a symlink."""
+        import os
+        import subprocess
+        from unittest import mock
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core, head = self._pinned_repo(Path(td))
+            (repo / "bin").mkdir()
+            tool = repo / "bin" / "tool.sh"
+            tool.write_text("#!/bin/sh\n")
+            tool.chmod(0o755)
+            os.symlink("bin/tool.sh", repo / "tool-link")
+            env = {**os.environ,
+                   "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+            for cmd in (["git", "add", "-A"],
+                        ["git", "commit", "-qm", "structure"]):
+                subprocess.run(cmd, cwd=repo, env=env, check=True,
+                               capture_output=True)
+            head2 = self._git(repo, "rev-parse", "HEAD")
+            with mock.patch.object(scanner, "OPENANT_PINNED_COMMIT", head2):
+                self.assertEqual(scanner._pinned_tree_deviations(core),
+                                 {"modified": 0, "untracked": 0})
+                prov = scanner.enforce_core_consent(
+                    core, consented=False, target_path=td)
+            self.assertIs(prov["worktree_clean"], True)
+
+
 class TestAgenticOpenantHardFailure(unittest.TestCase):
     """Phase 1b distinguishes an attempted-and-failed OpenAnt scan
     (hard_error) from a not-configured skip, and a hard failure of the
