@@ -482,7 +482,44 @@ def _common_target(files: set) -> Path | None:
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+def value_flags() -> frozenset[str]:
+    """Option strings of every ``fix --cve-only`` flag that CONSUMES a
+    value — derived from the parser itself so the fix CLI's positional
+    translation can never drift when a flag lands here (a hand-typed
+    copy silently omitted ``--exclude``, so its glob was mistaken for
+    the positional target or swallowed outright).
+
+    ``nargs != 0`` is argparse's own consumption marker: store_true /
+    count / help actions carry ``nargs=0``; plain store actions carry
+    ``None`` (one operand).
+    """
+    parser = _build_parser()
+    return frozenset(
+        opt
+        for action in parser._actions      # noqa: SLF001 — own parser
+        if action.nargs != 0
+        for opt in action.option_strings
+    )
+
+
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
+    p = _build_parser()
+    args = p.parse_args(argv)
+    # ``--allow-cascade`` shells out to npm/pip/go which all need
+    # network to query their registries (the sandbox routes them
+    # through the egress proxy with a per-ecosystem allowlist).
+    # ``--offline`` says "no network at the SCA level". Combining
+    # them is operator confusion: the cascade resolver would always
+    # fail to reach its registry. Reject up-front.
+    if args.offline and args.allow_cascade:
+        p.error("--offline and --allow-cascade are mutually exclusive: "
+                "the cascade resolver shells out to npm/pip/go, all of "
+                "which must reach their registry to resolve dependencies. "
+                "Use one or the other.")
+    return args
+
+
+def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="raptor-sca fix --cve-only",
         description="CVE-driven upgrade planner.",
@@ -564,19 +601,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
                    help="(accepted for orthogonality with `fix`; "
                         "this mode does not consult an LLM)")
     p.add_argument("-v", "--verbose", action="count", default=0)
-    args = p.parse_args(argv)
-    # ``--allow-cascade`` shells out to npm/pip/go which all need
-    # network to query their registries (the sandbox routes them
-    # through the egress proxy with a per-ecosystem allowlist).
-    # ``--offline`` says "no network at the SCA level". Combining
-    # them is operator confusion: the cascade resolver would always
-    # fail to reach its registry. Reject up-front.
-    if args.offline and args.allow_cascade:
-        p.error("--offline and --allow-cascade are mutually exclusive: "
-                "the cascade resolver shells out to npm/pip/go, all of "
-                "which must reach their registry to resolve dependencies. "
-                "Use one or the other.")
-    return args
+    return p
 
 
 # ---------------------------------------------------------------------------
