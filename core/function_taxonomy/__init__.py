@@ -526,9 +526,10 @@ MACOS_DANGEROUS_SUBSTRINGS: frozenset[str] = (
 # === Entry-point name exact matches ===
 # Function-name EXACT matches that suggest the function is an entry
 # point worth exploring. Used by radare2_understand for membership
-# check; the consumer separately applies a suffix-pattern check for
-# `*main`/`*init`/`*Main`/`*Init`/`*Entry` patterns (those don't
-# belong here — they're patterns, not names).
+# check. Matching is deliberately exact on BOTH sides: the consumer
+# removed its old suffix-pattern check (a `*Main` rule turned
+# ordinary methods like `isMain` into fake external entry points),
+# so patterns don't belong here either — names only.
 ENTRY_POINT_HINTS: frozenset[str] = frozenset({
     "main", "_start", "wmain",
     "WinMain", "DllMain", "DriverEntry",

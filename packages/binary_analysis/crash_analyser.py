@@ -24,11 +24,12 @@ from core.run.toolprobe import probe
 from core.sandbox import run as _sandbox_run
 from core.sandbox import run_trusted as _run_trusted
 
-# readelf/nm go through core.binary.inspect (FULL sandbox — the bytes
-# they parse are the crashing target's, and binutils' ELF parsers have
-# a long CVE history). _run_trusted remains for the remaining
-# read-only tools (file, strings, objdump, addr2line, otool) — sweep
-# candidates for the same helper.
+# readelf/nm/file/objdump go through core.binary.inspect (FULL
+# sandbox — the bytes they parse are the crashing target's, and
+# binutils' ELF parsers have a long CVE history). _run_trusted
+# remains only for addr2line (its address operand follows -e
+# <binary>, needing a substrate extension), the darwin-only otool
+# seam, and the sysctl host probe.
 # Crash-analysis work runs a debugger or ASAN-instrumented binary:
 # - GDB / LLDB: need ptrace → profile='debug' (keeps net/Landlock/most seccomp).
 # - ASAN binary: no ptrace needed → default full sandbox via _sandbox_run.
@@ -56,7 +57,16 @@ _DISASM_MARKERS = frozenset({"<", ">", "mov", "call", "jmp", "ret", "push", "pop
 
 @dataclass
 class CrashContext:
-    """Complete context for a crash. The more information, the better for LLM analysis."""
+    """Complete context for a crash. The more information, the better
+    for LLM analysis.
+
+    Provenance caveat: the debugger/ASAN output these fields derive
+    from includes the crashing INFERIOR's own stdout/stderr
+    (size-capped at 64 KiB per stream). A binary that prints a fake
+    sanitizer report can steer its own ``crash_type`` / ``stack_hash``
+    classification — inherent to black-box triage; treat those fields
+    as target-influenced evidence, not ground truth.
+    """
     crash_id: str
     binary_path: Path
     input_file: Path
