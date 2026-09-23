@@ -179,6 +179,10 @@ def assumption_from_dict(d: dict[str, Any]) -> SafetyAssumption:
         except (TypeError, ValueError):
             continue
 
+    # Same clamp as the spec twin (specs._safe_confidence): an LLM
+    # string/None confidence must not round-trip the store unclamped.
+    from .specs import _safe_confidence
+
     return SafetyAssumption(
         target=d.get("target", ""),
         file=d.get("file", ""),
@@ -187,7 +191,7 @@ def assumption_from_dict(d: dict[str, Any]) -> SafetyAssumption:
         enforced_by=raw_enforced,
         bug_class=d.get("bug_class", ""),
         params_affected=params_affected,
-        confidence=d.get("confidence", 0.5),
+        confidence=_safe_confidence(d.get("confidence", 0.5)),
         evidence_tier=tier,
         source=d.get("source", ""),
         underminer=d.get("underminer"),

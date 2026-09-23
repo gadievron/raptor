@@ -251,3 +251,29 @@ class TestEvictStaleAssumptions:
         rows = [self._assumption("gone.c",
                                  tier=EvidenceTier.XREF_BACKED)]
         assert evict_stale_assumptions(rows, {"live.c"}) == rows
+
+
+class TestConfidenceClamp:
+    """assumption_from_dict routes confidence through the spec twin's
+    clamp: LLM strings/None/out-of-range never round-trip the store."""
+
+    def _from_dict(self, confidence):
+        from core.iris.assumptions import assumption_from_dict
+        return assumption_from_dict({
+            "target": "t", "file": "a.c", "assumption": "x",
+            "category": "ordering", "enforced_by": ["check"],
+            "confidence": confidence,
+        })
+
+    def test_string_coerces(self):
+        assert self._from_dict("0.8").confidence == 0.8
+
+    def test_garbage_string_defaults(self):
+        assert self._from_dict("high").confidence == 0.5
+
+    def test_none_defaults(self):
+        assert self._from_dict(None).confidence == 0.5
+
+    def test_out_of_range_clamped(self):
+        assert self._from_dict(7).confidence == 1.0
+        assert self._from_dict(-3).confidence == 0.0
