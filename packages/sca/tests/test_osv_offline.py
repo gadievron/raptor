@@ -273,3 +273,41 @@ def test_osv_client_uses_offline_db_when_set(tmp_path: Path) -> None:
     results = client.query_batch([dep])
     assert len(results) == 1
     assert {a.osv_id for a in results[0].advisories} == {"PYSEC-1"}
+
+
+# ---------------------------------------------------------------------------
+# Cross-process contention on the shared sqlite DB
+# ---------------------------------------------------------------------------
+
+def test_connection_waits_out_a_concurrent_ingest(tmp_path: Path) -> None:
+    """The DB is shared across processes (~/.raptor/cache/sca) and a
+    refresh holds one long write transaction; the 5s default busy
+    timeout crashed the losing scan with \"database is locked\". The
+    connection must be configured to wait out a full ingest."""
+    db = OsvOfflineDB(tmp_path / "osv.sqlite", http=_ZipServingHttp({}))
+    db._init_db()
+    (timeout_ms,) = db._conn.execute("PRAGMA busy_timeout").fetchone()
+    assert timeout_ms >= 30_000
+
+
+def test_ingest_rechecks_freshness_after_taking_the_write_lock(
+    tmp_path: Path,
+) -> None:
+    """Two concurrent refreshers: the loser must notice — after
+    acquiring the write lock — that the winner already ingested, and
+    skip the duplicate wipe+ingest instead of redoing it."""
+    rec = _osv("GHSA-race", "PyPI", "racepkg", fixed="2.0")
+    http = _ZipServingHttp({"PyPI/all.zip": _make_zip([rec])})
+    winner = OsvOfflineDB(tmp_path / "osv.sqlite", http=http,
+                          ttl_seconds=3600)
+    assert winner.ensure_fresh(["PyPI"])          # real ingest
+
+    loser = OsvOfflineDB(tmp_path / "osv.sqlite", http=http,
+                         ttl_seconds=3600)
+    loser._init_db()
+    # Simulate losing the pre-download freshness race: the loser
+    # already decided to ingest (download done) before the winner's
+    # commit landed. The post-lock re-check must skip.
+    stats = loser._ingest_ecosystem("PyPI", "PyPI")
+    assert stats is None
+    assert loser.query("PyPI", "racepkg", "1.0")

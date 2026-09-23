@@ -56,6 +56,14 @@ _OSV_DUMP_URL = (
     "https://osv-vulnerabilities.storage.googleapis.com/{eco}/all.zip"
 )
 _DEFAULT_TTL = 24 * 3600
+# sqlite busy timeout. The DB is shared across processes (one file
+# under the cache root) and a refresh holds a single write
+# transaction for the whole per-ecosystem DELETE + re-ingest — tens
+# of thousands of INSERTs. The 5s library default made the losing
+# concurrent scan crash with "database is locked"; 60s comfortably
+# covers the longest observed ingest while still bounding a wedged
+# writer.
+_BUSY_TIMEOUT_SECONDS = 60
 # Per-zip download cap — OSV's largest current zip (npm) is ~60 MB
 # unpacked and well under 100 MB compressed. 200 MB gives headroom.
 _DOWNLOAD_CAP = 200 * 1024 * 1024
@@ -200,7 +208,9 @@ class OsvOfflineDB:
         if self._conn is not None:
             return
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(self._db_path))
+        self._conn = sqlite3.connect(
+            str(self._db_path), timeout=_BUSY_TIMEOUT_SECONDS,
+        )
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS advisories (
                 osv_id    TEXT NOT NULL,
@@ -321,6 +331,21 @@ class OsvOfflineDB:
             )
             return None
         skipped += expected_json_entries - len(files)
+        # Take the write lock EXPLICITLY, then re-check freshness: a
+        # concurrent refresher can commit its ingest between our
+        # pre-download freshness check and this point (the download
+        # runs outside the lock on purpose). Redoing the wipe+ingest
+        # would hold the lock for another full transaction for
+        # nothing — skip instead, keeping the winner's rows.
+        self._conn.execute("BEGIN IMMEDIATE")
+        if self._is_fresh(ecosystem):
+            self._conn.rollback()
+            logger.debug(
+                "sca.osv_offline: %s ingested by a concurrent refresh "
+                "while downloading; skipping duplicate ingest",
+                ecosystem,
+            )
+            return None
         # Wipe stale advisories for this ecosystem before re-ingesting
         # so removed (deprecated) IDs don't linger. Placed after zip
         # validation so a corrupt download doesn't destroy the cache.
