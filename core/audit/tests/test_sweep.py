@@ -571,8 +571,16 @@ class TestRunCodeqlSweep:
             }]
         }
 
-    def _setup(self, tmp_path: Path):
-        (tmp_path / "codeql-db").mkdir()
+    def _setup(self, tmp_path: Path, extracted: tuple[str, ...] = ("src/a.c",)):
+        import zipfile
+
+        db = tmp_path / "codeql-db"
+        db.mkdir()
+        # Source archive: a refutation-grade no-match needs the target
+        # extraction-witnessed; an unextracted file caps inconclusive.
+        with zipfile.ZipFile(db / "src.zip", "w") as zf:
+            for name in extracted:
+                zf.writestr(name, "int x;\n")
         query = tmp_path / "test.ql"
         query.write_text("select 1")
         return query
@@ -680,6 +688,95 @@ class TestRunCodeqlSweep:
         )
         assert result.outcome == "error"
         assert any("exited 2" in e for e in result.errors)
+
+
+class TestCodeqlExtractionWitness:
+    """A refutation-grade no-match needs a POSITIVE extraction
+    witness: buildless C/C++ extraction is partial by design and a
+    traced build only covers what the build command compiled — an
+    unextracted file yields zero rows for EVERY query,
+    indistinguishable from clean. The same scanned-witness rule the
+    semgrep leg enforces via files_examined. Composition with the
+    membership PRE-gate (which skips provably-absent files before
+    the analyze): the post-arm closes that gate's declared fail-open
+    price — an unreadable archive still dispatches (confirmations
+    land), but its zero rows cap at inconclusive, never refuted."""
+
+    def _run(self, tmp_path: Path, extracted: tuple[str, ...]):
+        import zipfile
+
+        db = tmp_path / "codeql-db"
+        db.mkdir()
+        if extracted is not None:
+            with zipfile.ZipFile(db / "src.zip", "w") as zf:
+                for name in extracted:
+                    zf.writestr(name, "int x;\n")
+        query = tmp_path / "test.ql"
+        query.write_text("select 1")
+
+        class MemoStub:
+            """Whole-DB results in which the target file never
+            appears — the shape an unextracted file produces."""
+
+            def get_or_compute(self, key, fn):
+                other = {
+                    "locations": [{"physicalLocation": {
+                        "artifactLocation": {"uri": "src/other.c"},
+                        "region": {"startLine": 10},
+                    }}],
+                }
+                return [other], True
+
+        return run_codeql_sweep(
+            target_path=tmp_path,
+            file_path="src/target.c",
+            function_name="parse_input",
+            query_path=str(query),
+            database_path=str(db),
+            line_start=1,
+            line_end=50,
+            memo=MemoStub(),
+        )
+
+    def test_unextracted_file_skips_at_the_membership_gate(
+        self, tmp_path: Path,
+    ):
+        # Provably absent from src.zip: the membership PRE-gate skips
+        # before any analyze — the stronger semantics (no vacuous
+        # dispatch, channel leaves tools_dispatched entirely), and
+        # strictly never refuted. The post-arm is the backstop for
+        # the archive-less case below.
+        result = self._run(tmp_path, extracted=("src/other.c",))
+        assert result.outcome == "skipped"
+        assert result.outcome != "refuted"
+
+    def test_no_source_archive_caps_at_inconclusive(self, tmp_path: Path):
+        result = self._run(tmp_path, extracted=None)
+        assert result.outcome == "inconclusive"
+        assert any("no readable source archive" in e for e in result.errors)
+
+    def test_extracted_file_still_refutes(self, tmp_path: Path):
+        result = self._run(
+            tmp_path, extracted=("home/user/proj/src/target.c",),
+        )
+        assert result.outcome == "refuted"
+
+    def test_cluster_member_database_still_witnesses(
+        self, tmp_path: Path,
+    ):
+        # A cluster MEMBER directory (what the router hands out) is a
+        # full database with its own root src.zip — the shared
+        # membership primitive serves it like any other db path.
+        import zipfile
+
+        from core.audit.codeql_dbs import db_contains_source
+
+        member = tmp_path / "cluster" / "cpp"
+        member.mkdir(parents=True)
+        with zipfile.ZipFile(member / "src.zip", "w") as zf:
+            zf.writestr("proj/src/target.c", "int x;\n")
+        assert db_contains_source(member, "src/target.c") is True
+        assert db_contains_source(member, "src/absent.c") is False
 
 
 class TestConsistencyCheck:

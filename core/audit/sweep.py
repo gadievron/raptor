@@ -3161,6 +3161,57 @@ def run_codeql_sweep(
         # corrupt another hypothesis's view.
         in_function = [copy.deepcopy(r) for r in in_function]
 
+        if not in_function:
+            # Refutation needs a POSITIVE extraction witness, the
+            # same rule the semgrep leg's files_examined check
+            # enforces: a file that never entered the database
+            # (buildless C/C++ extraction is partial by design; a
+            # traced build only covers what the build command
+            # compiled) yields zero rows for EVERY query —
+            # indistinguishable from clean. The membership pre-gate
+            # above already SKIPS provably-absent files before the
+            # analyze; this arm closes the pre-gate's declared
+            # fail-open price: with NO readable source archive the
+            # dispatch rightly proceeds (confirmations must still
+            # land), but the unwitnessed zero-row result may not
+            # claim refutation-grade silence — degrade to
+            # inconclusive, mirroring the semgrep leg's
+            # absent-sidecar arm. Same membership primitive as the
+            # pre-gate (one src.zip reader, one cache, one URI-match
+            # rule), so the two gates can never disagree on what
+            # "present" means.
+            extracted = db_contains_source(db, file_path)
+            if extracted is not True:
+                if extracted is False:
+                    # Only reachable when the archive changed between
+                    # the pre-gate and here — kept for direct-caller
+                    # robustness.
+                    capped_reason = (
+                        f"no extraction witness: {file_path} absent "
+                        "from the CodeQL database source archive — an "
+                        "unextracted file yields zero rows for every "
+                        "query; a silently skipped extraction cannot "
+                        "refute"
+                    )
+                else:
+                    capped_reason = (
+                        "no extraction witness: the CodeQL database "
+                        "has no readable source archive — an "
+                        "unwitnessed zero-row result cannot refute"
+                    )
+                logger.info(
+                    "codeql sweep capped at inconclusive for %s:%s — %s",
+                    file_path, function_name, capped_reason,
+                )
+                return SweepResult(
+                    tool="codeql",
+                    file_path=file_path,
+                    function_name=function_name,
+                    outcome="inconclusive",
+                    errors=[capped_reason],
+                    rule_id=query_path,
+                )
+
         outcome = "confirmed" if in_function else "refuted"
         return SweepResult(
             tool="codeql",
