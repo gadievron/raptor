@@ -28,6 +28,9 @@ from .lifecycle_model import ReadSite, StateField, WriteSite
 
 logger = logging.getLogger(__name__)
 
+# Per-file read cap for the regex extractors (hostile-source guard).
+_MAX_SOURCE_BYTES = 1_000_000
+
 # --- Struct/class field extraction (regex-based, multi-language) ---
 
 _C_STRUCT_KEYWORD_RE = re.compile(
@@ -58,21 +61,33 @@ _JAVA_FIELD_RE = re.compile(
 )
 
 
+def _match_braces(source: str) -> dict[int, int]:
+    """Open-brace position -> matching close position, one pass.
+    Unmatched opens are absent — callers SKIP such structs: malformed
+    heads get no body attribution (refusal direction), and running
+    each one's body to EOF made the field pass quadratic on hostile
+    sources full of unclosed 'struct x {' heads."""
+    match: dict[int, int] = {}
+    stack: list[int] = []
+    for i, ch in enumerate(source):
+        if ch == "{":
+            stack.append(i)
+        elif ch == "}" and stack:
+            match[stack.pop()] = i
+    return match
+
+
 def _extract_struct_fields_c(source: str) -> dict[str, list[str]]:
     """Extract struct/union definitions and their field names from C/C++ source."""
     result: dict[str, list[str]] = {}
+    braces = _match_braces(source)
     for m in _C_STRUCT_KEYWORD_RE.finditer(source):
         struct_name = m.group(1)
         brace_start = m.end() - 1  # position of the '{'
-        depth = 1
-        pos = brace_start + 1
-        while pos < len(source) and depth > 0:
-            if source[pos] == "{":
-                depth += 1
-            elif source[pos] == "}":
-                depth -= 1
-            pos += 1
-        body = source[brace_start + 1:pos - 1]
+        close = braces.get(brace_start)
+        if close is None:
+            continue
+        body = source[brace_start + 1:close]
         fields = [fm.group(2) for fm in _C_FIELD_RE.finditer(body)]
         if fields:
             result[struct_name] = fields
@@ -81,12 +96,21 @@ def _extract_struct_fields_c(source: str) -> dict[str, list[str]]:
 
 def _extract_class_fields_python(source: str) -> dict[str, list[str]]:
     """Extract class definitions and self.x assignments from Python source."""
+    import bisect
     result: dict[str, list[str]] = {}
     lines = source.splitlines(True)
+    # One cumulative newline-offset table shared by every class match
+    # — the per-class source[:pos].count("\n") recount was quadratic
+    # in class count on hostile sources.
+    nl_offsets = [i for i, ch in enumerate(source) if ch == "\n"]
+
+    def _line_index(pos: int) -> int:
+        return bisect.bisect_left(nl_offsets, pos)
+
     classes = list(_PY_CLASS_RE.finditer(source))
     for i, cm in enumerate(classes):
         class_name = cm.group(1)
-        class_line_start = source[:cm.start()].count("\n")
+        class_line_start = _line_index(cm.start())
         # Determine indent level of this class definition
         cls_line = lines[class_line_start]
         class_indent = len(cls_line) - len(cls_line.lstrip())
@@ -94,7 +118,7 @@ def _extract_class_fields_python(source: str) -> dict[str, list[str]]:
         # Find end: next class/def at same or lesser indentation
         end = len(source)
         for j in range(i + 1, len(classes)):
-            next_line_start = source[:classes[j].start()].count("\n")
+            next_line_start = _line_index(classes[j].start())
             nl = lines[next_line_start]
             next_indent = len(nl) - len(nl.lstrip())
             if next_indent <= class_indent:
@@ -248,6 +272,14 @@ def discover_state_fields(
             continue
 
         try:
+            # Checklist-listed files are hostile input; the regex
+            # extractors run over the whole text, so cap the read
+            # (skip = fewer discovered fields, the refusal direction).
+            if full_path.stat().st_size > _MAX_SOURCE_BYTES:
+                logger.debug(
+                    "field discovery: skipping %s (> %d bytes)",
+                    file_path, _MAX_SOURCE_BYTES)
+                continue
             source = full_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
