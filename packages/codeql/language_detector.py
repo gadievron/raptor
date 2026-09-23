@@ -73,14 +73,14 @@ class LanguageDetector:
             "min_confidence": 0.5,
         },
         "javascript": {
-            "extensions": {".js", ".jsx", ".mjs", ".cjs"},
+            "extensions": {".js", ".jsx", ".mjs", ".cjs", ".vue"},
             "build_files": {"package.json", "package-lock.json", "yarn.lock", "webpack.config.js", ".npmrc"},
             "build_file_suffixes": (),
             "indicators": {"node_modules/", "src/", "dist/"},
             "min_confidence": 0.5,
         },
         "typescript": {
-            "extensions": {".ts", ".tsx"},
+            "extensions": {".ts", ".tsx", ".mts", ".cts"},
             "build_files": {"tsconfig.json", "package.json"},
             "build_file_suffixes": (),
             "indicators": {"src/", "dist/"},
@@ -439,9 +439,17 @@ class LanguageDetector:
                     if self._indicator_matches(indicator, relative):
                         stats["indicators"].add(indicator)
 
-                # Count extensions
+                # Count extensions, case-folded: LANGUAGE_PATTERNS /
+                # NO_EXTRACTOR_EXTENSIONS keys are lowercase and the
+                # membership tests downstream are case-sensitive, so
+                # raw suffixes made uppercase spellings (.C/.CPP/.PY —
+                # common in legacy C++ and Windows-authored trees)
+                # invisible to detection: a pure-.C repo detected
+                # zero languages through all three retry tiers, and a
+                # mixed repo silently lost its C++ bulk with no
+                # unsupported-primary warning.
                 if file_path.suffix:
-                    stats["extensions"][file_path.suffix] += 1
+                    stats["extensions"][file_path.suffix.lower()] += 1
 
                 stats["total_files"] += 1
 

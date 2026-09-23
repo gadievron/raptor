@@ -765,3 +765,51 @@ class TestScanReuseAcrossTiers:
             "independent runs must re-walk — repo state can change"
         )
         assert len(self._banners(mock_logger)) == 2
+
+class TestSuffixCaseFolding:
+    """Extension counting is case-folded: uppercase spellings
+    (.C/.CPP/.PY — legacy C++ and Windows-authored trees) must be
+    visible to detection; the membership tests against
+    LANGUAGE_PATTERNS are case-sensitive on lowercase keys."""
+
+    def test_pure_uppercase_c_repo_detects_cpp(self, tmp_path: Path):
+        for i in range(3):
+            _write(tmp_path, f"src/mod{i}.C", "int f() { return 0; }\n")
+        detected = LanguageDetector(tmp_path).detect_languages(min_files=1)
+        assert "cpp" in detected
+
+    def test_uppercase_c_repo_clears_floor_tier(self, tmp_path: Path):
+        for i in range(3):
+            _write(tmp_path, f"src/mod{i}.C", "int f() { return 0; }\n")
+        floor = LanguageDetector(tmp_path).detect_languages_floor(floor=2)
+        assert "cpp" in floor
+
+    def test_mixed_repo_keeps_the_cpp_bulk(self, tmp_path: Path):
+        """Worst pre-fix case: the CodeQL lane silently omitted the
+        C++ bulk of a mixed repo AND no unsupported-primary warning
+        could fire — coverage read clean."""
+        for i in range(3):
+            _write(tmp_path, f"native/mod{i}.C", "int f() { return 0; }\n")
+        for i in range(3):
+            _write(tmp_path, f"py/mod{i}.py", "x = 1\n")
+        detected = LanguageDetector(tmp_path).detect_languages(min_files=1)
+        assert "python" in detected
+        assert "cpp" in detected
+
+
+class TestModernTsJsSpellings:
+    def test_mts_cts_count_as_typescript(self, tmp_path: Path):
+        _write(tmp_path, "package.json", "{}")
+        _write(tmp_path, "tsconfig.json", "{}")
+        for i in range(2):
+            _write(tmp_path, f"src/m{i}.mts", "export const x = 1;\n")
+        _write(tmp_path, "src/c.cts", "export const y = 2;\n")
+        detected = LanguageDetector(tmp_path).detect_languages(min_files=1)
+        assert "typescript" in detected
+
+    def test_vue_counts_as_javascript(self, tmp_path: Path):
+        _write(tmp_path, "package.json", "{}")
+        for i in range(3):
+            _write(tmp_path, f"src/App{i}.vue", "<template></template>\n")
+        detected = LanguageDetector(tmp_path).detect_languages(min_files=1)
+        assert "javascript" in detected
