@@ -364,15 +364,16 @@ def generate(data: dict[str, Any]) -> str:
         if fn_ids:
             lines.append(f"    class {fn_ids} candidate")
 
-    for node_id, dropped, what in (
-        ("TRUNC_EP", dropped_eps, "entry points"),
-        ("TRUNC_TB", dropped_tbs, "trust boundaries"),
-        ("TRUNC_SINK", dropped_sinks, "sinks"),
-        ("TRUNC_UF", dropped_uf, "unchecked flows"),
-        ("TRUNC_CF", dropped_cf, "candidate flows"),
-    ):
-        lines.extend(truncation_marker_lines(
-            node_id, dropped, what, _MAX_ELEMENTS))
+    lines.extend(truncation_marker_lines(
+        "TRUNC_EP", dropped_eps, "entry points", _MAX_ELEMENTS))
+    lines.extend(truncation_marker_lines(
+        "TRUNC_TB", dropped_tbs, "trust boundaries", _MAX_ELEMENTS))
+    lines.extend(truncation_marker_lines(
+        "TRUNC_SINK", dropped_sinks, "sinks", _MAX_ELEMENTS))
+    lines.extend(truncation_marker_lines(
+        "TRUNC_UF", dropped_uf, "unchecked flows", _MAX_ELEMENTS))
+    lines.extend(truncation_marker_lines(
+        "TRUNC_CF", dropped_cf, "candidate flows", _MAX_ELEMENTS))
 
     return "\n".join(lines)
 

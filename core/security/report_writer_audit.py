@@ -295,6 +295,10 @@ _SANITISERS = frozenset({
     "_text",
     "_sid",
     "sanitize_id",
+    # packages/diagram's shared truncation-marker chokepoint
+    # (caps.truncation_marker_lines: _sid on the node id, _sanitize on
+    # the category text, int coercion on the counts).
+    "truncation_marker_lines",
     "_md_escape_inline",
     "_md_table_cell",
     "_render_detail",
