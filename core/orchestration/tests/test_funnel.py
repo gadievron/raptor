@@ -338,3 +338,21 @@ class TestStatusAwareBucketing:
         b = bucket_orchestration_results(results)
         assert b["failed"] == 1
         assert b["true_positives"] == 0
+
+
+class TestNonDictRows:
+    """Whole-row shape drift: a bare string or scalar row must be
+    skipped, never crash the bucketing (str rows raised
+    AttributeError at `.get`, int rows TypeError at `"error" in r`)."""
+
+    def test_string_row_skipped(self):
+        b = bucket_orchestration_results(
+            ["an error occurred somewhere",
+             {"is_true_positive": True, "is_exploitable": False}])
+        assert b["true_positives"] == 1
+        assert b["failed"] == 0
+
+    def test_int_and_none_rows_skipped(self):
+        b = bucket_orchestration_results([42, None, []])
+        assert b["true_positives"] == 0
+        assert b["failed"] == 0
