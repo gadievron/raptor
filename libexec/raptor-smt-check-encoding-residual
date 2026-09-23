@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""SMT verb: CWE-116 encoder-completeness residual.
+
+Usage:
+  raptor-smt-check-encoding-residual --transfer JSON
+                                     [--grammar NAME]
+                                     [--forbidden JSON]
+
+Checks whether a byte forbidden by the target grammar can survive an
+emitter's per-character transfer unescaped.  The caller extracts the
+transfer semantics from the source and passes them as JSON — this verb
+never parses C:
+
+  --transfer   {"escaped": ["\""], "dropped": [], "passed": [[1,255]]}
+               escaped = bytes the emitter escapes (chars or ints),
+               dropped = bytes it strips/rejects,
+               passed  = inclusive [lo, hi] raw pass-through ranges
+               (default: all of 0-255).
+  --grammar    named forbidden set: protocol-line (CR/LF) or
+               quoted-string (double-quote/backslash).
+  --forbidden  explicit forbidden byte list (chars or ints); union
+               with --grammar when both given.
+
+Output: JSON to stdout matching validate_path's shape.
+
+  feasible=true   a forbidden byte survives (model holds the witness)
+  feasible=false  under the SUPPLIED description nothing survives —
+                  conditional on the extraction, not a source fact
+  feasible=null   Z3 unavailable
+"""
+import argparse
+import sys
+import json
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+
+from packages.exploit_feasibility.smt_encoding import (  # noqa: E402
+    GRAMMAR_FORBIDDEN,
+    check_encoding_residual,
+)
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="raptor-smt-check-encoding-residual",
+        description="SMT verb for CWE-116 encoder-completeness residual.",
+    )
+    p.add_argument("--transfer", required=True,
+                   help="Transfer semantics JSON (escaped/dropped/passed)")
+    p.add_argument("--grammar", default=None,
+                   choices=sorted(GRAMMAR_FORBIDDEN),
+                   help="Named target-grammar forbidden set")
+    p.add_argument("--forbidden", default=None,
+                   help="Explicit forbidden byte list (JSON array)")
+    # Accept --source and --function for compatibility with sweep runner
+    p.add_argument("--source", default=None, help=argparse.SUPPRESS)
+    p.add_argument("--function", default=None, help=argparse.SUPPRESS)
+    args = p.parse_args()
+
+    try:
+        transfer = json.loads(args.transfer)
+        forbidden = json.loads(args.forbidden) if args.forbidden else []
+    except json.JSONDecodeError as e:
+        print(
+            f"raptor-smt-check-encoding-residual: invalid JSON: {e}",
+            file=sys.stderr,
+        )
+        return 2
+    if not isinstance(forbidden, list):
+        print(
+            "raptor-smt-check-encoding-residual: --forbidden must be a "
+            "JSON array",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        result = check_encoding_residual(
+            transfer,
+            forbidden=forbidden,
+            grammar=args.grammar,
+        )
+    except (TypeError, ValueError) as e:
+        print(f"raptor-smt-check-encoding-residual: {e}", file=sys.stderr)
+        return 2
+
+    # ensure_ascii: this JSON goes to the operator terminal; JSON
+    # escapes C0 but passes C1 controls (single-byte CSI/OSC) raw
+    # when ensure_ascii is off (dumps_display is exactly that).
+    # ASCII output stays valid JSON for parsing consumers.
+    sys.stdout.write(json.dumps(result, indent=2, ensure_ascii=True,
+                                default=str))
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
