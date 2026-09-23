@@ -62,6 +62,11 @@ _GEMSPEC_VERSION_RE = re.compile(
 
 
 def _load_json(path: Path) -> dict | None:
+    # Deliberately NOT ``core.json.load_json_bounded`` (the
+    # repo-bundled-data loader the siblings use): these are
+    # TARGET-TREE manifests, and ``read_bounded``'s
+    # ``follow_symlinks=False`` refusal is load-bearing — a
+    # symlinked manifest must not be read through.
     text = _safe_read.read_bounded(path, follow_symlinks=False)
     if text is None:
         return None

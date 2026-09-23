@@ -39,6 +39,7 @@ from collections.abc import Callable
 
 from core.json import load_json_bounded, save_json
 
+from ..parsers import _safe_read
 from .typosquat_audit import Candidate, _load_name_set
 
 logger = logging.getLogger(__name__)
@@ -226,6 +227,25 @@ def apply_auto_legit(
             if o.gate_result.disposition is Disposition.AUTO_LEGIT]
     if not auto:
         return []
+    # Inter-process exclusion around the read-modify-write: the
+    # atomic replace protects against torn FILES, not lost UPDATES —
+    # two concurrent triage runs each read, merged their own rows,
+    # and the last writer silently dropped the other's.
+    with _safe_read.sidecar_lock(reviewed_legit_path):
+        return _apply_auto_legit_locked(
+            auto, ecosystem, reviewed_legit_path,
+            model=model, now=now,
+        )
+
+
+def _apply_auto_legit_locked(
+    auto: list[TriageOutcome],
+    ecosystem: str,
+    reviewed_legit_path: Path,
+    *,
+    model: str,
+    now: str | None,
+) -> list[str]:
     try:
         # Curation file this function also rewrites; ValueError covers
         # malformed JSON and the byte-budget refusal.

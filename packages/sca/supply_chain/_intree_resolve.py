@@ -214,7 +214,14 @@ def _classify_first_bytes(path: Path) -> str:
     try:
         head.decode("utf-8")
         return "source"
-    except UnicodeDecodeError:
+    except UnicodeDecodeError as e:
+        # The fixed-size head read can split a multibyte UTF-8
+        # character at the boundary — an invalid sequence STARTING
+        # in the last 3 bytes is truncation, not binary content
+        # (misclassifying it as binary minted a false
+        # ``intree_has_binary`` promotion on plain text).
+        if e.start >= len(head) - 3:
+            return "source"
         return "binary"
 
 

@@ -94,3 +94,45 @@ def test_confidence_is_high():
     deps = [_dep("flatmap-stream", ecosystem="npm", version="1.0")]
     hits = scan_deps(deps)
     assert hits[0].confidence.level == "high"
+
+
+def test_non_dict_bundled_json_degrades(monkeypatch, tmp_path):
+    """A non-dict sentinel document must degrade to no-hits — the
+    sibling loaders isinstance-gate; this one raised an uncaught
+    AttributeError (the except clause covers OSError/ValueError
+    only)."""
+    from packages.sca.supply_chain import sentinel as s
+    junk = tmp_path / "sentinel_packages.json"
+    junk.write_text('["not", "a", "dict"]', encoding="utf-8")
+    monkeypatch.setattr(s, "_DATA_FILE", junk)
+    monkeypatch.setattr(s, "_CACHE", None)
+    try:
+        assert s.scan_deps([_dep("event-stream")]) == []
+    finally:
+        s._CACHE = None
+
+
+def test_second_incident_for_same_dep_surfaces(monkeypatch, tmp_path):
+    """Two curated incidents for the same (eco, name, version) are
+    two findings — the dep-only dedup key silently hid every
+    incident after the first."""
+    from packages.sca.supply_chain import sentinel as s
+    data = tmp_path / "sentinel_packages.json"
+    data.write_text(
+        '{"packages": ['
+        '{"ecosystem": "npm", "name": "twice-hit", "versions": ["*"],'
+        ' "incident": "2024 wallet drainer", "ref": "ref-1"},'
+        '{"ecosystem": "npm", "name": "twice-hit", "versions": ["*"],'
+        ' "incident": "2026 re-compromise", "ref": "ref-2"}'
+        ']}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(s, "_DATA_FILE", data)
+    monkeypatch.setattr(s, "_CACHE", None)
+    try:
+        hits = s.scan_deps([_dep("twice-hit")])
+    finally:
+        s._CACHE = None
+    assert sorted(h.incident for h in hits) == [
+        "2024 wallet drainer", "2026 re-compromise",
+    ]

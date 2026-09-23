@@ -1110,3 +1110,71 @@ def test_adapter_finding_id_uses_supplychain_id_prefix() -> None:
     findings = to_supply_chain_findings([drop])
     assert len(findings) == 1
     assert findings[0].finding_id.startswith(SUPPLYCHAIN_ID_PREFIX)
+
+
+def test_every_group_members_parents_are_diffed() -> None:
+    """Two lockfile rows for the same canonical transitive can carry
+    DIFFERENT ``via`` parents (one manifest pulls it through parent
+    A, another through parent B). Sampling only the first member's
+    parents silently skipped every other parent's cross-version
+    diff — a missed recommendation."""
+    pypi = _StubPyPI({
+        "parent-a": {
+            "1.0.0": {"requires_dist": ["badpkg>=1.0"]},
+            "2.0.0": {"requires_dist": []},
+        },
+        "parent-b": {
+            "1.0.0": {"requires_dist": ["badpkg>=1.0"]},
+            "2.0.0": {"requires_dist": []},
+        },
+        "badpkg": {"1.0.0": {}},
+    })
+    deps = [
+        _dep("parent-a", "1.0.0", direct=True),
+        _dep("parent-b", "1.0.0", direct=True),
+        _dep("badpkg", "1.0.0",
+             direct=False, source_kind="cascade_resolver",
+             via=["parent-a"]),
+        _dep("badpkg", "1.0.0",
+             direct=False, source_kind="cascade_resolver",
+             via=["parent-b"]),
+    ]
+    vuln = _vuln(deps[2], severity="high")
+    findings = detect_droppable_transitives(
+        deps, vuln_findings=[vuln], pypi_client=pypi,
+    )
+    parents = sorted(f.parent_name for f in findings)
+    assert parents == ["parent-a", "parent-b"]
+
+
+def test_adapter_reason_names_the_diffed_metadata_per_ecosystem() -> None:
+    """The operator-facing confidence reason must name the metadata
+    field the detector actually diffed — it claimed ``PyPI
+    requires_dist`` for every ecosystem."""
+    from packages.sca.transitive_drop.adapter import (
+        to_supply_chain_findings,
+    )
+    from packages.sca.transitive_drop.detector import DropOnBumpFinding
+
+    def _finding(eco: str) -> DropOnBumpFinding:
+        return DropOnBumpFinding(
+            ecosystem=eco,
+            transitive_name="badpkg",
+            transitive_version="1.0.0",
+            transitive_finding_severity="high",
+            parent_name="parent-a",
+            parent_current_version="1.0.0",
+            parent_latest_version="2.0.0",
+            transitive_status_in_latest="removed",
+            extra_name=None,
+        )
+
+    pypi_reason = to_supply_chain_findings(
+        [_finding("PyPI")],
+    )[0].confidence.reason
+    npm_reason = to_supply_chain_findings(
+        [_finding("npm")],
+    )[0].confidence.reason
+    assert "requires_dist" in pypi_reason
+    assert "PyPI" not in npm_reason
+    assert "npm" in npm_reason

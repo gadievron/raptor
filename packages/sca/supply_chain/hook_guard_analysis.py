@@ -25,14 +25,12 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from pathlib import Path
+from typing import Any
 
 from .sink_vocab import HOOK_PAYLOAD_EXTRA_SINKS, SHARED_SUPPLY_CHAIN_SINKS
 
 from ..parsers._safe_read import read_bounded
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +181,13 @@ def analyze_intree_targets(
     """
     results: list[HookGuardAnalysis] = []
     for t in intree_targets:
-        target_path = project_root / t.path
+        # ``t.path`` may already be absolute (resolver output) —
+        # join only the relative case instead of leaning on
+        # pathlib's absolute-rhs-wins operator semantics.
+        t_path = Path(t.path)
+        target_path = (
+            t_path if t_path.is_absolute() else project_root / t_path
+        )
         # Bounded read: the payload file is attacker-controlled — an
         # unbounded read_text of a multi-GB in-tree file referenced
         # from a hook body was the one uncapped read in this lane.

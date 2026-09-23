@@ -106,9 +106,27 @@ def _make_finding(d: DropOnBumpFinding) -> SupplyChainFinding:
         confidence=Confidence(
             "high",
             reason=(
-                "PyPI requires_dist diff: dep moved behind optional extra"
+                f"{_metadata_source(d.ecosystem)} diff: dep moved "
+                f"behind optional gate"
                 if d.transitive_status_in_latest == "extras-gated"
-                else "PyPI requires_dist diff across parent versions"
+                else f"{_metadata_source(d.ecosystem)} diff across "
+                     f"parent versions"
             ),
         ),
     )
+
+
+def _metadata_source(ecosystem: str) -> str:
+    """The operator-facing name of the parent-metadata field the
+    detector actually diffed — per ecosystem, matching the detector's
+    ``_dep_state_in_version`` dispatch (the reason previously claimed
+    ``PyPI requires_dist`` for every ecosystem)."""
+    return {
+        "PyPI": "PyPI requires_dist",
+        "npm": "npm dependencies/optionalDependencies",
+        "Cargo": "Cargo [dependencies]/[features]",
+        "Packagist": "Composer require/require-dev",
+        "RubyGems": "gem dependency-type",
+        "Maven": "Maven dependency scope/optional",
+        "NuGet": "NuGet TFM dependency-group",
+    }.get(ecosystem, f"{ecosystem} parent dependency metadata")

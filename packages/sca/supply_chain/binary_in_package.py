@@ -414,8 +414,12 @@ def _walk_for_binaries(
     # ``Path.walk`` (3.12+) would be nicer but we keep compatibility.
     for dirpath, dirnames, filenames in __import__("os").walk(root):
         # Mutate dirnames in place so skipped dirs are not recursed.
-        dirnames[:] = [d for d in dirnames if d not in _BINARY_SKIP_DIRS]
-        for fn in filenames:
+        # Sorted so walk order (and which files hit the cap first) is
+        # filesystem-independent (parity with reachability._walker).
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in _BINARY_SKIP_DIRS
+        )
+        for fn in sorted(filenames):
             p = Path(dirpath) / fn
             yielded += 1
             if yielded > _MAX_WALKED_FILES:

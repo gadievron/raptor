@@ -148,27 +148,30 @@ def _grep_symbols(
     Returns the subset of ``symbols`` that were found (identifier-boundary
     match, not substring).
     """
+    # Stream file-by-file: buffering every importing file's full
+    # text simultaneously (then joining, doubling it) held multiple
+    # bounded-at-50MB files in memory at once with no total budget.
+    # One file is resident at a time; symbols already found are not
+    # re-searched, and the sweep stops early once every symbol hit.
+    patterns = {
+        sym: re.compile(r"\b" + re.escape(sym) + r"\b")
+        for sym in dict.fromkeys(symbols)
+    }
+    found: set[str] = set()
     files_checked: set = set()
-    file_contents: dict[Path, str] = {}
     for f, _, _ in hits:
         if f in files_checked:
             continue
         files_checked.add(f)
+        if len(found) == len(patterns):
+            break
         text = _safe_read.read_bounded(f, follow_symlinks=False)
         if text is None:
             continue
-        file_contents[f] = text
-
-    if not file_contents:
-        return []
-
-    found: list[str] = []
-    combined = "\n".join(file_contents.values())
-    for sym in symbols:
-        pat = re.compile(r"\b" + re.escape(sym) + r"\b")
-        if pat.search(combined):
-            found.append(sym)
-    return found
+        for sym, pat in patterns.items():
+            if sym not in found and pat.search(text):
+                found.add(sym)
+    return [sym for sym in patterns if sym in found]
 
 
 # ---------------------------------------------------------------------------

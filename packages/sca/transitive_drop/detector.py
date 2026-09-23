@@ -183,15 +183,26 @@ def detect_droppable_transitives(
 
     for (eco, canon_name), transitive_deps in by_eco_name.items():
         client = clients[eco]
-        # Only spend the PyPI roundtrip on transitives whose
+        # Only spend the registry roundtrip on transitives whose
         # PROBLEMS make a bump worth surfacing.
-        sample = transitive_deps[0]
         key = (eco, canon_name)
         if key not in issue_keys:
             continue
         underlying_sev = issue_keys[key]
 
-        for parent in sample.source_extra.get("via") or []:
+        # Walk EVERY canonical-group member's parents — different
+        # lockfile rows for the same canonical dep can carry
+        # different ``via`` parents (one manifest pulls it through
+        # parent A, another through parent B); sampling only the
+        # first member silently skipped every other parent's
+        # cross-version diff, a missed recommendation.
+        # ``seen_pairs`` dedups parents shared across members.
+        member_parents = [
+            (member, parent)
+            for member in transitive_deps
+            for parent in member.source_extra.get("via") or []
+        ]
+        for sample, parent in member_parents:
             parent_join = parent_join_key(parent.strip(), eco)
             pair = (eco, canon_name, parent_join)
             if pair in seen_pairs:

@@ -332,8 +332,12 @@ def _walk_sources(target: Path, *, max_depth: int) -> Iterable[Path]:
         if len(cur.parts) - root_depth >= max_depth:
             dirnames[:] = []
         else:
-            dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS]
-        for fn in filenames:
+        # Sorted so evidence/walk order is filesystem-independent
+        # (parity with reachability._walker's determinism rule).
+            dirnames[:] = sorted(
+                d for d in dirnames if d not in _SKIP_DIRS
+            )
+        for fn in sorted(filenames):
             if any(fn.endswith(ext) for ext in _EXTENSIONS) or fn in ("Dockerfile", "Containerfile"):
                 yield cur / fn
 

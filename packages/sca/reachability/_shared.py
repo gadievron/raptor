@@ -346,8 +346,15 @@ def format_evidence(
     """
     out: list[str] = []
     for f, line, _ in hits[:cap]:
-        rel = (f.relative_to(target) if target and target in f.parents
-                else f)
+        # ``relative_to`` (not ``in f.parents``): parents-membership
+        # only matches when both sides carry the same resolution
+        # state, leaving resolved-target callers relativised and
+        # everyone else absolute — python.py's form is the contract.
+        try:
+            rel = (f.relative_to(target)
+                   if target and f != target else f)
+        except ValueError:
+            rel = f
         out.append(f"{rel}:{line}")
     if len(hits) > cap:
         out.append(f"... (+{len(hits) - cap} more)")

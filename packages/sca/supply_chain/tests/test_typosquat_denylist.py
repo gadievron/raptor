@@ -50,10 +50,16 @@ def _dep(name: str, eco: str = "npm") -> Dependency:
 
 
 def _reset_caches() -> None:
+    # EVERY module-level memo the fixtures can populate — leaving the
+    # allowlist / slopsquat index behind made later tests in the same
+    # worker order-dependent on whichever fixture ran first.
+    from packages.sca.supply_chain import slopsquat
     for c in (typosquat._POPULAR_BY_ECO, typosquat._POPULAR_SET,
-              typosquat._POPULAR_BY_LEN, typosquat._DENYLIST_BY_ECO):
+              typosquat._POPULAR_BY_LEN, typosquat._DENYLIST_BY_ECO,
+              typosquat._ALLOWLIST_BY_ECO, slopsquat._COLLAPSED_INDEX):
         c.clear()
     typosquat._DENYLIST_RAW = None
+    typosquat._ALLOWLIST_RAW = None
 
 
 @pytest.fixture
