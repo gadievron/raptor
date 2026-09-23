@@ -333,13 +333,17 @@ class PomInheritanceResolver:
                 "stopping walk", group, artifact, version,
             )
             return
-        visited.add(coord_key)
 
         # Resolve the parent POM. Try local relativePath first
-        # (Phase 1), fall back to network (Phase 2).
+        # (Phase 1), fall back to network (Phase 2). The coord joins
+        # ``visited`` only AFTER a successful load: marking it before
+        # left a load failure (transient 404, racing checkout) both
+        # unvisitable and uncached, so a later BOM import of the SAME
+        # coordinate was silently skipped instead of retried.
         parent_root = self._load_parent_xml(parent_el, pom_path)
         if parent_root is None:
             return
+        visited.add(coord_key)
 
         # Build the parent's own view: its inherited stuff (recurse
         # into grandparent) PLUS its own properties + depMgmt.
@@ -924,7 +928,15 @@ def _coord_matches(parent_el: Any, candidate_root: Any) -> bool:
     """Verify that the local file we just read declares the
     coordinate the ``<parent>`` element references. Catches the
     misconfigured-relativePath case where ``../pom.xml`` is some
-    OTHER POM, not the declared parent."""
+    OTHER POM, not the declared parent.
+
+    The parent VERSION is deliberately NOT compared (Maven 3.5+
+    verifies it): in monorepo checkouts the sibling parent is
+    routinely ahead of the child's declared version and local-wins is
+    what the operator wants scanned; a version mismatch would push
+    resolution to the network for a file that is right there. The
+    trade-off is accepting a wrong-version local parent when both
+    exist — group/artifact identity still gates."""
     p_group = _text(parent_el, "groupId")
     p_artifact = _text(parent_el, "artifactId")
     if p_group is None or p_artifact is None:
