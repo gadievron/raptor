@@ -731,6 +731,45 @@ class TestLookupMany:
         out = client.lookup_many(cves)
         assert set(out) == set(cves[1:])
 
+    def test_failed_fetches_are_not_memoised(self, tmp_path: Path):
+        """Docstring contract: \"Skipped and FAILED ids are NOT
+        memoised\". A transient failure during the batched prefetch
+        must leave the id retryable by a later direct lookup in the
+        same process."""
+
+        class FlakyHttp:
+            def __init__(self, url: str, payload: dict) -> None:
+                self.url, self.payload = url, payload
+                self.calls = 0
+
+            def get_json(self, url: str, timeout: int = 30) -> dict:
+                self.calls += 1
+                if self.calls == 1:
+                    raise HttpError(f"HTTP 500 from {url}", status=500)
+                assert url == self.url
+                return self.payload
+
+        cve = "CVE-2024-95001"
+        http = FlakyHttp(_url(cve), _vulnrichment_record())
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        assert client.lookup_many([cve]) == {}
+        d = client.lookup(cve)
+        assert d is not None, "failed fetch was memoised — retry lost"
+        assert http.calls == 2
+
+    def test_definitive_no_signal_is_memoised(self, tmp_path: Path):
+        """The flip side: a successfully fetched record WITHOUT an
+        SSVC scorecard is a definitive no-signal answer — memoised so
+        repeat lookups in the run stay free."""
+        cve = "CVE-2024-95002"
+        http = FakeHttp(responses={
+            _url(cve): {"containers": {"adp": []}},
+        })
+        client = VulnrichmentClient(http, JsonCache(root=tmp_path))
+        assert client.lookup_many([cve]) == {}
+        assert client.lookup(cve) is None
+        assert http.gets == [_url(cve)]
+
     def test_budget_truncation_logs_one_summary_line(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture,
     ):

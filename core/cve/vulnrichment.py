@@ -187,7 +187,7 @@ class VulnrichmentClient:
         if self._offline:
             self._memo[key] = None
             return None
-        record = self._fetch_remote(key)
+        record, _definitive = self._fetch_remote(key)
         decision = self._decode_guarded(key, record)
         if decision is _DECODE_FAILED:
             decision = None
@@ -272,9 +272,15 @@ class VulnrichmentClient:
             skipped = len(uncached) - fetch_budget
             uncached = uncached[:fetch_budget]
 
-        def _fetch_one(key: str) -> tuple[str, SSVCDecision | None]:
+        def _fetch_one(
+            key: str,
+        ) -> tuple[str, SSVCDecision | None, bool]:
+            """Returns ``(key, decision, definitive)``. ``definitive``
+            is False for transport-class failures — those ids stay
+            un-memoised (the documented contract) so a later direct
+            :meth:`lookup` in the same process still gets a fetch."""
             try:
-                record = self._fetch_remote(key)
+                record, definitive = self._fetch_remote(key)
             except Exception as e:  # noqa: BLE001 — degrade per id, never
                 # let one hostile / malformed response sink the batch
                 # (HttpError is already absorbed inside _fetch_remote;
@@ -283,9 +289,14 @@ class VulnrichmentClient:
                     "core.cve.vulnrichment: lookup failed for %s: %s",
                     key, e,
                 )
-                return key, None
+                return key, None, False
             decision = self._decode_guarded(key, record)
-            return key, None if decision is _DECODE_FAILED else decision
+            if decision is _DECODE_FAILED:
+                # The fetch itself succeeded — the record is junk.
+                # Definitive for this run; a refetch returns the
+                # same bytes.
+                return key, None, True
+            return key, decision, definitive
 
         # Same small-input cutoff as the SCA license-enrichment pass:
         # below a handful of ids the pool spin-up costs more than the
@@ -301,9 +312,12 @@ class VulnrichmentClient:
                 fetched = list(pool.map(_fetch_one, uncached))
 
         # Memo writes happen on the calling thread — workers only
-        # touch the (thread-safe) JsonCache and HttpClient.
-        for key, decision in fetched:
-            self._memo[key] = decision
+        # touch the (thread-safe) JsonCache and HttpClient. Failed
+        # (non-definitive) fetches are NOT memoised — the docstring
+        # promises a later direct lookup its own chance.
+        for key, decision, definitive in fetched:
+            if definitive:
+                self._memo[key] = decision
             if decision is not None:
                 out[key] = decision
 
@@ -366,16 +380,19 @@ class VulnrichmentClient:
             return True, cached
         return False, None
 
-    def _fetch_remote(self, cve_id: str) -> dict | None:
-        """Network half of :meth:`_fetch_record`: one upstream GET
-        plus the positive / negative cache writes. Thread-safe — the
-        injected ``JsonCache`` locks internally and the ``HttpClient``
-        backends are shared across worker threads by the existing SCA
-        enrichment passes."""
+    def _fetch_remote(self, cve_id: str) -> tuple[dict | None, bool]:
+        """Network fetch of one Vulnrichment entry plus the positive /
+        negative cache writes. Returns ``(record, definitive)`` —
+        ``definitive`` is False only for transport-class failures
+        (5xx, network error), where a ``None`` record means "the
+        lookup did not happen" rather than "the upstream has no
+        SSVC for this id". Thread-safe — the injected ``JsonCache``
+        locks internally and the ``HttpClient`` backends are shared
+        across worker threads by the existing SCA enrichment passes."""
         cache_key = f"{_CACHE_KEY_PREFIX}/{cve_id}"
         url = _url_for_cve(cve_id)
         if url is None:
-            return None
+            return None, True
 
         try:
             record = self._http.get_json(url)
@@ -399,16 +416,19 @@ class VulnrichmentClient:
                     cache_key, {"_status": "missing"},
                     ttl_seconds=_NEGATIVE_TTL,
                 )
-                return None
+                return None, True
             # Other errors (transport, 5xx) — don't cache so the
             # next call gets a fresh try.
             logger.debug(
                 "core.cve.vulnrichment: fetch failed for %s: %s",
                 cve_id, e,
             )
-            return None
+            return None, False
         if not isinstance(record, dict):
-            return None
+            # A 200 whose body isn't a record object (proxy/CDN error
+            # page shaped as JSON) — not the upstream saying "no
+            # record"; treat as transient.
+            return None, False
         # Validate decodability BEFORE the positive cache write: a
         # record the decoder cannot walk must never become a sticky
         # 7-day entry (it would replay the failure — offline runs
@@ -421,9 +441,9 @@ class VulnrichmentClient:
                 "(%s: %s) — not caching; id degrades to no-signal",
                 cve_id, type(e).__name__, e,
             )
-            return None
+            return None, True
         self._cache.put(cache_key, record, ttl_seconds=self._ttl)
-        return record
+        return record, True
 
 
 def _url_for_cve(cve_id: str) -> str | None:
