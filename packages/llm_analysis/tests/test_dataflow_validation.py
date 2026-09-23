@@ -251,9 +251,9 @@ class TestDbFreshness:
         repo = tmp_path / "repo"
         repo.mkdir()
         (repo / "a.py").write_text("# old")
-        # DB created later — should be fresh
-        import time as _t
-        _t.sleep(0.05)
+        # DB created after the source; the 1-hour staleness grace
+        # makes sub-second creation-order skew irrelevant either way
+        # (the sibling tests pin ordering explicitly with os.utime).
         db = tmp_path / "db"
         db.mkdir()
         (db / "codeql-database.yml").write_text("")
