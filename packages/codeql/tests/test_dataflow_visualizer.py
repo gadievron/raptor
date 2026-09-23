@@ -218,3 +218,65 @@ class TestGenerateHtmlCappedRead:
         out = visualizer.generate_html(_flow(tmp_path), "f3", tmp_path)
         html = out.read_text(encoding="utf-8")
         assert "Error reading file" in html
+
+
+class TestSafeJsonHtmlParserStates:
+    """The embedded-JSON defang covers every `<` — the previous
+    `</`-only defang left `<!--<script` able to drive the browser's
+    script-data-double-escaped state (render-break)."""
+
+    def _html(self, visualizer, tmp_path, snippet):
+        (tmp_path / "a.c").write_text("int a;\nint b;\nint c;\n")
+        flow = _flow(tmp_path)
+        flow.source.snippet = snippet
+        out = visualizer.generate_html(flow, "fsj", tmp_path)
+        return out.read_text(encoding="utf-8")
+
+    def test_no_raw_lt_survives_in_embedded_json(
+            self, visualizer, tmp_path):
+        html = self._html(visualizer, tmp_path, "<!--<script>evil()")
+        import re
+        m = re.search(r"const nodes = (.*);", html)
+        assert m, "embedded nodes JSON not found"
+        assert "<" not in m.group(1)
+        # Round-trip: the data is byte-identical after JSON parse.
+        import json as _json
+        nodes = _json.loads(m.group(1))
+        assert any(
+            n.get("snippet") == "<!--<script>evil()" for n in nodes
+        )
+
+    def test_script_close_still_defanged(self, visualizer, tmp_path):
+        html = self._html(visualizer, tmp_path, "</script><script>x()")
+        import re
+        m = re.search(r"const nodes = (.*);", html)
+        assert "</script" not in m.group(1)
+
+
+class TestHtmlOfflineHardening:
+    def test_d3_tag_hardened_and_fallback_present(
+            self, visualizer, tmp_path):
+        (tmp_path / "a.c").write_text("int a;\n")
+        out = visualizer.generate_html(_flow(tmp_path), "fh", tmp_path)
+        html = out.read_text(encoding="utf-8")
+        assert 'crossorigin="anonymous"' in html
+        assert 'referrerpolicy="no-referrer"' in html
+        # Offline degradation is visible, not a silent blank page.
+        assert 'typeof d3 === "undefined"' in html
+        assert "d3 failed to load" in html
+
+
+class TestMermaidLabelSanitised:
+    def test_control_and_bidi_bytes_escaped_in_labels(
+            self, visualizer, tmp_path):
+        """Node label/path text gets escape_nonprintable before the
+        Mermaid syntax escapes — raw control/bidi bytes must not
+        reach the artifact file."""
+        (tmp_path / "a.c").write_text("int a;\n")
+        flow = _flow(tmp_path)
+        flow.sink.label = "sink\x1b]0;PWNED\x07‮"
+        out = visualizer.generate_mermaid(flow, "fm")
+        text = out.read_text(encoding="utf-8")
+        assert "\x1b" not in text
+        assert "\x07" not in text
+        assert "‮" not in text

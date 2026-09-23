@@ -236,20 +236,19 @@ class DataflowVisualizer:
     ) -> str:
         """Create HTML template with embedded visualization."""
 
-        # JSON-encode then defang `</` → `<\/` so any string in
-        # the data can't break out of the surrounding `<script>`
-        # block via a literal `</script>` substring. The browser's
-        # HTML parser searches for `</script>` regardless of JS
-        # string syntax — JSON encoding doesn't help (json.dumps
-        # produces `"</script>"` which is still `</script>` to
-        # the HTML parser). `<\/script>` is byte-equivalent in
-        # JS string literals (`\/` is just `/`) so the data round-
-        # trips identically; HTML parser sees `<\/script>` (not
-        # `</script>`) so the script context isn't closed.
-        # Same defence pattern OWASP recommends for any JSON
-        # embedded inline in `<script>...`.
+        # JSON-encode then escape EVERY `<` as the JSON unicode
+        # escape `\u003c` so no string in the data can influence the
+        # surrounding `<script>` block's HTML parsing. The browser's
+        # HTML parser scans script content for `</script>`, `<script`,
+        # AND `<!--` (the script-data-escaped states) regardless of JS
+        # string syntax — JSON encoding doesn't help, and the previous
+        # `</`-only defang left `<!--<script` able to drive the parser
+        # into the double-escaped state (render-break). `\u003c` is
+        # plain JSON, so the data round-trips byte-identically after
+        # parsing while the HTML parser never sees a `<` inside the
+        # block.
         def _safe_json(obj):
-            return json.dumps(obj).replace("</", "<\\/")
+            return json.dumps(obj).replace("<", "\\u003c")
         nodes_json = _safe_json(nodes)
         edges_json = _safe_json(edges)
 
@@ -259,7 +258,12 @@ class DataflowVisualizer:
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RAPTOR Dataflow Visualization - {escape(finding_id)}</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <!-- Executed third-party script in a security artifact:
+         crossorigin + no-referrer harden the fetch. An offline /
+         blocked-CDN open degrades to a visible notice (guard in the
+         main script) instead of a silently blank page. -->
+    <script src="https://d3js.org/d3.v7.min.js"
+            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <style>
         * {{
             margin: 0;
@@ -527,6 +531,16 @@ class DataflowVisualizer:
     </div>
 
     <script>
+        // Offline / blocked-CDN guard: without d3 the page used to
+        // fail silently with a blank canvas. Surface the degradation
+        // where the graph would render.
+        if (typeof d3 === "undefined") {{
+            document.getElementById("node-details").textContent =
+                "d3 failed to load (offline or CDN blocked) — the " +
+                "interactive graph is unavailable; the finding data " +
+                "is still embedded in this file's source.";
+            throw new Error("d3 unavailable");
+        }}
         const nodes = {nodes_json};
         const edges = {edges_json};
 
@@ -709,11 +723,23 @@ class DataflowVisualizer:
         return output_file
 
     def _escape_mermaid(self, text: str) -> str:
-        """Escape text for Mermaid syntax."""
+        """Escape text for Mermaid syntax.
+
+        Sanitise BEFORE the syntax escapes: node label and path text
+        comes from SARIF produced over the untrusted repo (labels
+        quote target source), so control/bidi bytes get the same
+        escape_nonprintable treatment the rule/message fields already
+        receive — Mermaid-syntax escaping alone left raw control
+        bytes in the artifact file.
+        """
+        from core.security.log_sanitisation import escape_nonprintable
         # Node labels are single-line: a literal newline (multi-line
         # SARIF step label) splits the node declaration mid-statement
-        # and the whole .mmd fails to render.
-        text = ' '.join(text.split())
+        # and the whole .mmd fails to render. Collapse whitespace
+        # FIRST so legitimate newlines become spaces; whatever
+        # control/bidi bytes remain are then escaped.
+        text = ' '.join(str(text).split())
+        text = escape_nonprintable(text)
 
         # Truncate long text
         if len(text) > 60:
@@ -747,9 +773,11 @@ class DataflowVisualizer:
 
         # Same provenance and threat as the mermaid sibling above:
         # labels/snippets come from SARIF over the UNTRUSTED repo
-        # (snippet text IS target source) and this block is echoed
-        # line-by-line through logger.info to the operator terminal —
-        # core/logging does no control/bidi scrubbing of its own.
+        # (snippet text IS target source). core.logging's console
+        # chokepoint (EscapingConsoleFormatter) escapes logger-routed
+        # terminal lines, but this block is ALSO persisted verbatim
+        # to the artifact FILE, which no formatter touches — the
+        # per-site sanitise is load-bearing for the file lane.
         from core.security.prompt_output_sanitise import sanitise_string
 
         def _clean(value, cap=256):
