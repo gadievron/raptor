@@ -415,3 +415,65 @@ def test_transport_failures_are_counted_and_scope_refusals_are_not():
     with pytest.raises(ValueError, match="outside configured target scope"):
         client.get("http://example.invalid/x")
     assert client.transport_errors == 1
+
+
+# -- concurrency + clock domain of the client's shared counters -----------------
+
+
+def test_transport_error_counting_is_atomic_under_threads():
+    client = WebClient("http://t.example", rate_limit=0)
+    threads = [
+        threading.Thread(
+            target=lambda: [client.note_transport_error() for _ in range(500)],
+        )
+        for _ in range(8)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+    assert client.transport_errors == 4000
+    client.close()
+
+
+def test_get_stats_snapshots_history_under_the_append_lock():
+    client = WebClient("http://t.example", rate_limit=0)
+    stop = threading.Event()
+
+    def _appender():
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b""
+        while not stop.is_set():
+            client._log_request("GET", "http://t.example/", response, 0.01)
+
+    thread = threading.Thread(target=_appender)
+    thread.start()
+    try:
+        for _ in range(200):
+            stats = client.get_stats()
+            assert stats == {} or stats["total_requests"] > 0
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+        client.close()
+
+
+def test_rate_limiter_ignores_wall_clock_steps(monkeypatch):
+    """Reservations on time.time() meant an NTP step parked
+    last_request_time in the future and stalled the limiter; the
+    monotonic clock is immune."""
+    client = WebClient("http://t.example", rate_limit=0.05)
+    sleeps: list[float] = []
+    monkeypatch.setattr(
+        client_module.time, "sleep", lambda s: sleeps.append(s),
+    )
+    real_time = time.time
+    client._rate_limit_wait()
+    # Simulate a backward NTP step of an hour between requests.
+    monkeypatch.setattr(
+        client_module.time, "time", lambda: real_time() - 3600,
+    )
+    client._rate_limit_wait()
+    client.close()
+    assert all(requested < 1.0 for requested in sleeps), sleeps

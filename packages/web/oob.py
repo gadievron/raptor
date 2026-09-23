@@ -117,7 +117,7 @@ class OobExpectation:
 
     context: OobContext
     path_marker: str          # substring the hit's path must carry; "" = any
-    expires_at: float
+    expires_at: float     # time.monotonic() deadline (never wall clock)
     hits: list[OobHit] = field(default_factory=list)
 
 
@@ -278,7 +278,9 @@ class OobListener:
             expectation = OobExpectation(
                 context=context,
                 path_marker=path_marker,
-                expires_at=time.time() + window_s,
+                # Monotonic: an NTP step across the window would
+                # shrink or stretch a wall-clock expiry.
+                expires_at=time.monotonic() + window_s,
             )
             self._expectations.append(expectation)
             return expectation
@@ -315,7 +317,7 @@ class OobListener:
     ) -> None:
         """Lock held by caller. Non-token requests match open
         expectations by path marker within their window."""
-        now = time.time()
+        now = time.monotonic()
         path = _strip_ctl(str(handler.path or ""), 256)
         for expectation in self._expectations:
             if now > expectation.expires_at:
