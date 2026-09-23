@@ -300,14 +300,28 @@ def build_local_array_index(
             if lhs in idx._fresh:
                 idx._violated.add(lhs)
             idx._fresh.add(lhs)
-            if v.type == "array_initializer":
-                for i, el in enumerate(c for c in v.children if c.is_named):
+            # 'new String[]{...}' nests its initializer under the
+            # creation expression — its elements are element WRITES
+            # exactly like the bare '{...}' spelling (missing them
+            # let the element-exclusive sanitizer proof hold over a
+            # hidden taint write). 'new String[2]' has no
+            # initializer: elements stay at Java's null default.
+            init = v if v.type == "array_initializer" \
+                else next((c for c in v.children
+                           if c.type == "array_initializer"), None)
+            if init is not None:
+                for i, el in enumerate(
+                        c for c in init.children if c.is_named):
                     idx._writes.setdefault((lhs, i), []).append(
                         _ElementWrite(lineno=line_of(el), rhs=el))
                     walk(el)
-            else:
+            if v.type != "array_initializer":
+                # Dimension expressions etc. of the creation form
+                # (the nested initializer's elements were walked
+                # above; the node type filter skips re-walking it —
+                # tree-sitter wrappers defeat identity comparison).
                 for c in v.children:
-                    if c.is_named:
+                    if c.is_named and c.type != "array_initializer":
                         walk(c)
             return
         if v is not None and v.type == _ARRAY_ACCESS:

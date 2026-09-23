@@ -196,6 +196,49 @@ class TestExemptLine:
         assert not idx.exempt_line(6)
 
 
+class TestArrayCreationInitializer:
+    CATALOG = {"org.owasp.encoder.Encode.forHtml"}
+
+    def test_creation_initializer_elements_are_writes(self):
+        # 'new String[]{taint}' writes taint to element 0 — invisible,
+        # the "every write is a catalog sanitizer" proof held over a
+        # hidden taint write (the not-overwritten path delivers it).
+        idx = _index(
+            "        String[] a = new String[]{x};\n"
+            "        if (i > 0) { a[0] = Encode.forHtml(x); }\n"
+            "        out.println(a[0]);\n"
+        )
+        writes = idx.element_writes("a", 0)
+        assert len(writes) == 2, (
+            "creation-initializer element write not recorded"
+        )
+        assert not all(
+            idx.write_is_catalog_call(w, self.CATALOG) for w in writes)
+
+    def test_creation_initializer_matches_bare_form(self):
+        # The bare '{x}' spelling already recorded the write — the
+        # 'new String[]{x}' spelling must behave identically.
+        bare = _index(
+            "        String[] a = {x};\n"
+            "        out.println(a[0]);\n"
+        )
+        creation = _index(
+            "        String[] a = new String[]{x};\n"
+            "        out.println(a[0]);\n"
+        )
+        assert len(bare.element_writes("a", 0)) \
+            == len(creation.element_writes("a", 0)) == 1
+
+    def test_dimension_only_creation_records_no_writes(self):
+        # Control: 'new String[2]' leaves elements at Java's null
+        # default — no element writes to record.
+        idx = _index(
+            "        String[] a = new String[2];\n"
+            "        out.println(a[0]);\n"
+        )
+        assert idx.element_writes("a", 0) == []
+
+
 class TestWriteIsCatalogCall:
     CATALOG = {"org.owasp.encoder.Encode.forHtml"}
 
