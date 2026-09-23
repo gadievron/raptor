@@ -155,3 +155,39 @@ class TestResolveGreatestLeq:
 
     def test_empty_candidates_returns_none(self):
         assert resolve_greatest_leq((2, 35), []) is None
+
+
+class TestFloatEncodingToTuple:
+    """The major + minor/100 float encoding orders unsoundly at some
+    boundaries (2 + 47/100.0 < 2.47 as floats); decoding both sides to
+    integer tuples must be exact for every minor 0..99."""
+
+    def test_roundtrip_every_minor(self):
+        from core.binary.glibc_versions import float_encoding_to_tuple
+        for major in (2, 3):
+            for minor in range(100):
+                encoded = major + minor / 100.0
+                assert float_encoding_to_tuple(encoded) == (major, minor), (
+                    major, minor)
+
+    def test_literal_thresholds_decode_identically(self):
+        # The unsound pairs: computed encoding vs float() of the
+        # zero-padded literal string (how thresholds are written).
+        from core.binary.glibc_versions import float_encoding_to_tuple
+        for major in (2, 3):
+            for minor in range(100):
+                computed = major + minor / 100.0
+                literal = float(f"{major}.{minor:02d}")
+                assert (float_encoding_to_tuple(computed)
+                        == float_encoding_to_tuple(literal)), (major, minor)
+
+    def test_boundary_minor_47_orders_correctly(self):
+        # Raw float ordering fails here: 2 + 47/100.0 < 2.47.
+        from core.binary.glibc_versions import float_encoding_to_tuple
+        computed = 2 + 47 / 100.0
+        assert computed < 2.47  # the unsoundness this helper absorbs
+        assert float_encoding_to_tuple(computed) >= float_encoding_to_tuple(2.47)
+
+    def test_unknown_sentinel_decodes_below_all_thresholds(self):
+        from core.binary.glibc_versions import float_encoding_to_tuple
+        assert float_encoding_to_tuple(0.0) == (0, 0)
