@@ -578,15 +578,29 @@ def scan_dedup_chains(
     target_path: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Group scan findings that share the same entry-to-sink path."""
-    def _do(conn, _target):
+    def _do(conn, target):
+        # Scoped to the queried target's snapshots when a target is
+        # given — this SQL used to carry no snapshot/target predicate
+        # at all, so a target-scoped call returned every target's
+        # chains into prompt seeding (envelope-wrapped but factually
+        # wrong memory).
+        target_join = ""
+        params: list[str] = []
+        if target:
+            target_join = (
+                "JOIN snapshots ssf ON ssf.id = sf.snapshot_id "
+                "AND (ssf.target_path=? OR ssf.target_path=?) "
+            )
+            params = [str(target), str(Path(target).resolve())]
         rows = conn.execute(
-            """
+            f"""
             SELECT e.src_id, e.dst_id,
                    GROUP_CONCAT(sf.name) AS finding_names,
                    GROUP_CONCAT(sf.id) AS finding_ids,
                    COUNT(*) AS chain_size,
                    MAX(json_extract(sf.props_json, '$.severity')) AS max_severity
             FROM nodes sf
+            {target_join}
             JOIN edges a ON a.src_id = sf.id AND a.kind = 'AFFECTS'
             JOIN nodes fn ON fn.id = a.dst_id AND fn.kind = 'function'
             JOIN nodes ep ON ep.name = fn.name AND ep.file = fn.file
@@ -598,7 +612,8 @@ def scan_dedup_chains(
             GROUP BY e.src_id, e.dst_id
             HAVING chain_size > 1
             ORDER BY chain_size DESC
-            """,
+            """,  # noqa: S608 — join fragment is a literal, values bound
+            params,
         ).fetchall()
         return [
             {

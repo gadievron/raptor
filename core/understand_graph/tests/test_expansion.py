@@ -436,6 +436,44 @@ def test_scan_dedup_groups_findings_on_same_path(tmp_path):
     assert chains[0]["chain_size"] >= 2
 
 
+def test_scan_dedup_chains_scopes_to_target(tmp_path):
+    """A target-scoped dedup query returns only that target's chains —
+    the SQL used to carry no snapshot/target predicate at all."""
+    target_a = tmp_path / "target-a"
+    target_b = tmp_path / "target-b"
+    run_dir = tmp_path / "run"
+    graph_path = _write_understand_run(run_dir, target_a)
+    save_json(run_dir / "findings.json", [
+        {"rule_id": "ra1", "file": "server.c", "function": "handle_request",
+         "severity": "high", "message": "A"},
+        {"rule_id": "ra2", "file": "server.c", "function": "handle_request",
+         "severity": "high", "message": "B"},
+    ])
+    ingest_scan_findings(run_dir, str(target_a))
+
+    # Second target's memory in the SAME store.
+    run_b = tmp_path / "run-b"
+    _write_understand_run(run_b, target_b)
+    save_json(run_b / "findings.json", [
+        {"rule_id": "rb1", "file": "server.c", "function": "handle_request",
+         "severity": "high", "message": "A"},
+        {"rule_id": "rb2", "file": "server.c", "function": "handle_request",
+         "severity": "high", "message": "B"},
+    ])
+    ingest_scan_findings(run_b, str(target_b), graph_path=graph_path)
+
+    chains_a = scan_dedup_chains(graph_path, str(target_a))
+    assert chains_a, "target-A's own chains must survive scoping"
+    scoped_findings = sum(len(c["finding_ids"]) for c in chains_a)
+    all_chains = scan_dedup_chains(graph_path)
+    unscoped_findings = sum(len(c["finding_ids"]) for c in all_chains)
+    # target-B's findings share target-A's function spelling, so the
+    # unscoped view folds them into the same chains; the target-scoped
+    # view must count only target-A's own findings.
+    assert scoped_findings == 4
+    assert unscoped_findings > scoped_findings
+
+
 # ---------------------------------------------------------------------------
 # Consumer — binary oracle propagation
 # ---------------------------------------------------------------------------

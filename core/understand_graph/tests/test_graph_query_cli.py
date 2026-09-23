@@ -1,24 +1,31 @@
-"""Terminal-escape tests for libexec/raptor-graph-query.
+"""CLI-contract tests for libexec/raptor-graph-query.
 
-Graph node ids / labels are ingested from run artifacts — scanned-tree
-file and function names, LLM hypothesis text — so the CLI's
-human-readable lanes must escape at the sink. A hostile repo that puts
-ANSI/OSC bytes in a path or function name must not reach the operator
-TTY raw through --paths / --threat-context / --reachable-sinks.
+Terminal escaping: graph node ids / labels are ingested from run
+artifacts — scanned-tree file and function names, LLM hypothesis text
+— so the CLI's human-readable lanes must escape at the sink. A hostile
+repo that puts ANSI/OSC bytes in a path or function name must not
+reach the operator TTY raw through --paths / --threat-context /
+--reachable-sinks.
+
+Argument forwarding: --target and --limit must reach every query lane
+— a dropped --target answers a target-A query with target-B's memory
+while claiming target scope.
+
+These spawn the real CLI as a subprocess but touch no network; they
+run on the default tier so the landed terminal-escape fix (and the
+forwarding contract) stay pinned on the PR gate — the ``integration``
+marker means live-network and is deselected there, which left these
+pins never running in CI.
 """
 
+import json
 import os
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
-import pytest
-
-# Every test spawns the real libexec/raptor-graph-query as a
-# subprocess; opt-in via ``pytest -m integration``.
-pytestmark = pytest.mark.integration
+from typing import Any
 
 # parents[3] = core/understand_graph/tests → … → repo root. Anchor to
 # this file, not $RAPTOR_DIR, so the wrapper resolves within this
@@ -111,6 +118,107 @@ class GraphQueryTerminalEscapeTests(unittest.TestCase):
             # json.dumps default ensure_ascii escapes nothing below
             # 0x20 into raw bytes — the machine lane carries \u escapes.
             self.assertNotIn("\x1b", proc.stdout)
+
+
+def _seed_two_target_graph(tmp: Path) -> tuple[Path, str, str]:
+    """One graph DB holding two targets' memory (target-B newest)."""
+    import time
+
+    from core.understand_graph import ingest_scan_findings
+
+    run_dir = tmp / "run"
+    graphs: list[Path] = []
+    targets: list[str] = []
+    for name, entry, sink in (("target-A", "alpha_entry", "system"),
+                              ("target-B", "beta_entry", "execve")):
+        target = tmp / name
+        target.mkdir(exist_ok=True)
+        (target / "code.c").write_text(f"void {entry}() {{ {sink}(x); }}\n")
+        run_dir.mkdir(exist_ok=True)
+        items = [{"name": entry, "line_start": 1}]
+        if name == "target-B":
+            items.append({"name": "gamma_entry", "line_start": 9})
+        save_json(run_dir / "checklist.json", {
+            "target_path": str(target),
+            "files": [{"path": "code.c", "sha256": "0" * 64,
+                       "items": items}],
+        })
+        context_map: dict[str, Any] = {
+            "meta": {"target": str(target)},
+            "entry_points": [{"id": "EP", "name": entry, "file": "code.c", "line": 1}],
+            "sinks": [{"id": "SK", "name": sink, "file": "code.c", "line": 1}],
+            "unchecked_flows": [{"id": "F", "entry_point": "EP", "sink": "SK",
+                                 "confidence": "high"}],
+        }
+        if name == "target-B":
+            # A second seed on the newest snapshot so --limit is
+            # observable on the un-targeted lane.
+            context_map["entry_points"].append(
+                {"id": "EP2", "name": "gamma_entry", "file": "code.c", "line": 9})
+            context_map["unchecked_flows"].append(
+                {"id": "F2", "entry_point": "EP2", "sink": "SK",
+                 "confidence": "high"})
+        save_json(run_dir / "context-map.json", context_map)
+        graph = ingest_run(run_dir, str(target))
+        assert graph is not None
+        graphs.append(graph)
+        for i in range(2):
+            save_json(run_dir / "findings.json", [
+                {"rule_id": f"r{i}-{entry}", "file": "code.c",
+                 "function": entry, "severity": "high", "message": "m"},
+            ])
+            ingest_scan_findings(run_dir, str(target))
+        targets.append(str(target))
+        time.sleep(0.02)
+    assert str(graphs[0]) == str(graphs[1])
+    return graphs[0], targets[0], targets[1]
+
+
+class GraphQueryTargetForwardingTests(unittest.TestCase):
+    """--target/--limit reach the seeds / fuzz-targets / dedup lanes."""
+
+    def test_hypothesis_seeds_respects_target(self):
+        with TemporaryDirectory() as td:
+            graph, target_a, _ = _seed_two_target_graph(Path(td))
+            proc = _run("--db", str(graph), "--target", target_a,
+                        "--hypothesis-seeds", "--json")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            seeds = json.loads(proc.stdout)["seeds"]
+            functions = {s["function"] for s in seeds}
+            self.assertEqual(functions, {"alpha_entry"}, (
+                "target-B's memory answered a target-A query"
+            ))
+
+    def test_fuzz_targets_respects_target(self):
+        with TemporaryDirectory() as td:
+            graph, target_a, _ = _seed_two_target_graph(Path(td))
+            proc = _run("--db", str(graph), "--target", target_a,
+                        "--fuzz-targets", "--json")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            rows = json.loads(proc.stdout)["fuzz_targets"]
+            pairs = {(r["function"], r["dangerous_sink"]) for r in rows}
+            self.assertEqual(pairs, {("alpha_entry", "system")})
+
+    def test_dedup_chains_respects_target(self):
+        with TemporaryDirectory() as td:
+            graph, target_a, _ = _seed_two_target_graph(Path(td))
+            proc = _run("--db", str(graph), "--target", target_a,
+                        "--dedup-chains", "--json")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            chains = json.loads(proc.stdout)["dedup_chains"]
+            self.assertEqual(len(chains), 1, chains)
+
+    def test_limit_reaches_the_seeds_lane(self):
+        with TemporaryDirectory() as td:
+            graph, _target_a, target_b = _seed_two_target_graph(Path(td))
+            # target-B (the newest understand snapshot) carries TWO
+            # seeds; --limit 1 must cut to one. An unforwarded --limit
+            # returned the lane default (20) and both came back.
+            proc = _run("--db", str(graph), "--target", target_b,
+                        "--hypothesis-seeds", "--limit", "1", "--json")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            seeds = json.loads(proc.stdout)["seeds"]
+            self.assertEqual(len(seeds), 1, seeds)
 
 
 if __name__ == "__main__":
