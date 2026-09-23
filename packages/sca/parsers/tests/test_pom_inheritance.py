@@ -1154,7 +1154,7 @@ def test_cache_hit_merges_even_when_coord_already_visited() -> None:
     cached = InheritanceView()
     cached.managed[("g", "dep")] = "9.9"
     cached.properties["k"] = "v"
-    resolver._cache[("g", "parent", "1.0")] = cached
+    resolver._cache[("parent", "g", "parent", "1.0")] = cached
 
     view = InheritanceView()
     visited = {("g", "parent", "1.0")}   # already seen in this walk
@@ -1168,7 +1168,7 @@ def test_cache_hit_merges_on_fresh_walk() -> None:
     resolver = PomInheritanceResolver(None, offline=True)
     cached = InheritanceView()
     cached.managed[("g", "dep")] = "1.2"
-    resolver._cache[("g", "parent", "1.0")] = cached
+    resolver._cache[("parent", "g", "parent", "1.0")] = cached
 
     view = InheritanceView()
     resolver._walk_parents(None, _root(_CHILD_XML), view, set(), depth=0)
@@ -1511,3 +1511,123 @@ def test_phase3_child_own_property_beats_inherited(tmp_path: Path):
     )
     assert jdb is not None
     assert jdb.version == "2.17.0"
+
+
+def _find(deps, suffix: str):
+    return next(d for d in deps if d.name.endswith(suffix))
+
+
+def test_bom_undefined_property_never_resolves_at_importer_scope(
+    tmp_path: Path,
+):
+    """A BOM's own managed entry referencing a property the BOM does
+    NOT define is scope-final at absorption: Maven leaves the
+    reference literal, and a literal ``${...}`` is not a version.
+    Left raw in the view, the apply pass resolved it against the
+    IMPORTING pom's properties — a name collision reported a version
+    the build never uses."""
+    bom_xml = '''\
+<project>
+  <groupId>corp</groupId><artifactId>bom2</artifactId><version>1.0</version>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>io.vendor</groupId><artifactId>vendor-core</artifactId>
+      <version>${vendor.core.version}</version></dependency>
+  </dependencies></dependencyManagement>
+</project>
+'''
+    child = _write(tmp_path, "pom.xml", '''\
+<project>
+  <groupId>corp</groupId><artifactId>app</artifactId><version>1</version>
+  <properties><vendor.core.version>99.99</vendor.core.version></properties>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>corp</groupId><artifactId>bom2</artifactId>
+      <version>1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>io.vendor</groupId><artifactId>vendor-core</artifactId></dependency>
+  </dependencies>
+</project>
+''')
+    client = _StubMavenClient({"corp:bom2:1.0": bom_xml})
+    deps = _parse_with_resolver(child, client)
+    # The importer defines the property, but the BOM's scope doesn't:
+    # the entry is dropped at BOM finalisation and the dep stays
+    # unpinned — never 99.99.
+    assert _find(deps, ":vendor-core").version is None
+
+
+def test_bom_undefined_property_refused_without_importer_collision(
+    tmp_path: Path,
+):
+    """Control for the scope-final rule: with NO importer property of
+    the same name, the entry is equally refused (the two shapes must
+    agree — refusal fired only in this one before)."""
+    bom_xml = '''\
+<project>
+  <groupId>corp</groupId><artifactId>bom2</artifactId><version>1.0</version>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>io.vendor</groupId><artifactId>vendor-core</artifactId>
+      <version>${vendor.core.version}</version></dependency>
+  </dependencies></dependencyManagement>
+</project>
+'''
+    child = _write(tmp_path, "pom.xml", '''\
+<project>
+  <groupId>corp</groupId><artifactId>app</artifactId><version>1</version>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>corp</groupId><artifactId>bom2</artifactId>
+      <version>1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>io.vendor</groupId><artifactId>vendor-core</artifactId></dependency>
+  </dependencies>
+</project>
+''')
+    client = _StubMavenClient({"corp:bom2:1.0": bom_xml})
+    deps = _parse_with_resolver(child, client)
+    assert _find(deps, ":vendor-core").version is None
+
+
+def test_bom_parent_chain_property_resolves_at_bom_scope(tmp_path: Path):
+    """Arrival path two for the same mechanism: the BOM's PARENT
+    chain contributes raw-by-design managed values; they must settle
+    at the BOM's merged scope (2.9.0 here), not at the importer's
+    (9.9.9-IMPORTER)."""
+    bom_xml = '''\
+<project>
+  <parent><groupId>corp</groupId><artifactId>bom-parent</artifactId>
+    <version>1.0</version></parent>
+  <groupId>corp</groupId><artifactId>bom</artifactId><version>1.0</version>
+</project>
+'''
+    bom_parent_xml = '''\
+<project>
+  <groupId>corp</groupId><artifactId>bom-parent</artifactId><version>1.0</version>
+  <properties><jackson.version>2.9.0</jackson.version></properties>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>${jackson.version}</version></dependency>
+  </dependencies></dependencyManagement>
+</project>
+'''
+    child = _write(tmp_path, "pom.xml", '''\
+<project>
+  <groupId>corp</groupId><artifactId>app</artifactId><version>1</version>
+  <properties><jackson.version>9.9.9-IMPORTER</jackson.version></properties>
+  <dependencyManagement><dependencies>
+    <dependency><groupId>corp</groupId><artifactId>bom</artifactId>
+      <version>1.0</version><type>pom</type><scope>import</scope></dependency>
+  </dependencies></dependencyManagement>
+  <dependencies>
+    <dependency><groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId></dependency>
+  </dependencies>
+</project>
+''')
+    client = _StubMavenClient({
+        "corp:bom:1.0": bom_xml,
+        "corp:bom-parent:1.0": bom_parent_xml,
+    })
+    deps = _parse_with_resolver(child, client)
+    assert _find(deps, ":jackson-databind").version == "2.9.0"

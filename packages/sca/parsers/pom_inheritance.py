@@ -203,10 +203,18 @@ class PomInheritanceResolver:
         self._scan_root = (
             scan_root.resolve() if scan_root is not None else None
         )
-        # ``(group, artifact, version) → InheritanceView``. Caches the
-        # MERGED view for a coordinate, so reuse across many child
-        # POMs that share a parent is O(1).
-        self._cache: dict[tuple[str, str, str], InheritanceView] = {}
+        # ``(role, group, artifact, version) → InheritanceView``.
+        # Caches the MERGED view for a coordinate, so reuse across
+        # many child POMs that share a parent is O(1). The ROLE
+        # segment ("parent" | "bom") keeps the two semantics apart:
+        # a parent view carries RAW ``${...}`` managed values (each
+        # child re-resolves them against its own merged property
+        # set), while a BOM view is scope-FINAL (resolved at the
+        # BOM's own scope before caching). A shared key let a
+        # coordinate first walked as a parent serve its raw view to
+        # a BOM import, whose leftovers then mis-resolved at the
+        # importer's scope.
+        self._cache: dict[tuple[str, str, str, str], InheritanceView] = {}
 
     def resolve(
         self,
@@ -293,12 +301,13 @@ class PomInheritanceResolver:
             return
 
         coord_key = (group, artifact, version)
+        cache_key = ("parent", group, artifact, version)
         # Cache hit: merge the cached view + carry on. Checked BEFORE
         # the cycle guard — same order as ``_absorb_boms`` — because
         # cache entries exist only for fully-resolved coords, so a hit
         # merges without recursion or fetch and never needs the guard.
-        if coord_key in self._cache:
-            cached = self._cache[coord_key]
+        if cache_key in self._cache:
+            cached = self._cache[cache_key]
             _merge_into(view, cached)
             # Process BOM imports declared in the child's own depMgmt
             # too (handled by the caller via _absorb_boms).
@@ -328,7 +337,7 @@ class PomInheritanceResolver:
         self._absorb_boms(parent_root, parent_view, visited, depth + 1)
 
         # Stash for reuse; merge into the caller's view.
-        self._cache[coord_key] = parent_view
+        self._cache[cache_key] = parent_view
         _merge_into(view, parent_view)
 
     def _load_parent_xml(
@@ -556,8 +565,9 @@ class PomInheritanceResolver:
             if not (group and artifact and version):
                 continue
             coord_key = (group, artifact, version)
-            if coord_key in self._cache:
-                _merge_into(view, self._cache[coord_key])
+            cache_key = ("bom", group, artifact, version)
+            if cache_key in self._cache:
+                _merge_into(view, self._cache[cache_key])
                 continue
             if coord_key in visited:
                 continue
@@ -578,7 +588,19 @@ class PomInheritanceResolver:
             )
             _absorb_self(bom_root, bom_view, resolve_versions=True)
             self._absorb_boms(bom_root, bom_view, visited, depth + 1)
-            self._cache[coord_key] = bom_view
+            # An imported BOM is scope-FINAL: any managed value still
+            # carrying ``${...}`` (the BOM's own entry referencing a
+            # property the BOM doesn't define, or its parent chain's
+            # raw-by-design entries) resolves HERE, at the BOM's own
+            # merged property scope, or not at all. Left raw, the
+            # apply pass resolved them against the IMPORTING pom's
+            # properties — a name collision (``revision``,
+            # ``jackson.version``) then reported a version the build
+            # never uses.
+            _finalise_bom_scope(
+                bom_view, origin=f"{group}:{artifact}@{version}",
+            )
+            self._cache[cache_key] = bom_view
             _merge_into(view, bom_view)
 
     def _read_network_parent_by_coord(
@@ -669,10 +691,14 @@ def _absorb_self(
         canonical corporate pattern: parent pins 2.9.0, child
         overrides to 2.17.1, Maven yields 2.17.1).
       * ``True`` — BOM absorption. An imported BOM resolves at its
-        OWN scope; the importing POM's properties never rewrite an
-        imported BOM's ``${...}`` (unresolvable references stay raw
-        and are refused at apply time rather than mis-resolved
-        against the importer's scope).
+        OWN scope. Whole-string references the current scope defines
+        resolve here; everything still ``${...}``-shaped afterwards
+        (undefined at this point, embedded forms, the BOM's raw
+        parent-chain entries) is settled by ``_finalise_bom_scope``
+        against the BOM's merged scope — resolved there or dropped —
+        BEFORE the view is cached or merged, so the apply pass can
+        never resolve a BOM-sourced value against the importer's
+        properties.
     """
     # Properties
     view.properties.update(_own_properties(root))
@@ -693,6 +719,32 @@ def _absorb_self(
             if not version:
                 continue
         view.managed[(group, artifact)] = version
+
+
+def _finalise_bom_scope(view: InheritanceView, *, origin: str) -> None:
+    """Make a BOM view scope-final: managed values still carrying
+    ``${...}`` are resolved against the BOM's own merged property
+    scope (embedded references included); values that scope cannot
+    fully resolve are DROPPED — Maven leaves such references literal,
+    a literal ``${...}`` is not a version, and keeping the entry raw
+    handed it to the apply pass for mis-resolution at importer scope.
+    A dropped entry surfaces downstream as an unpinned dep (refusal),
+    never as a fabricated pin."""
+    for coord, version in list(view.managed.items()):
+        if "${" not in version:
+            continue
+        resolved, fully = _resolve_property_refs(
+            version, view.properties, origin=origin,
+        )
+        if resolved is None or not fully:
+            logger.debug(
+                "sca.pom_inheritance: dropping BOM-managed %s:%s — "
+                "version %r unresolvable at the BOM's own scope (%s)",
+                coord[0], coord[1], version, origin,
+            )
+            del view.managed[coord]
+        else:
+            view.managed[coord] = resolved
 
 
 def _merge_into(dst: InheritanceView, src: InheritanceView) -> None:
@@ -780,8 +832,10 @@ def _resolve_property(
     Takes the property MAPPING (not a view) so callers choose the
     resolution scope explicitly: the child-side apply pass resolves
     against the merged child-wins set, while the BOM arms resolve at
-    the BOM's own scope (Maven semantics — an importing POM's
-    properties never rewrite an imported BOM's ``${...}``)."""
+    the BOM's own scope. A reference this function leaves raw is NOT
+    a refusal by itself — BOM views settle leftovers (resolve-or-drop)
+    in ``_finalise_bom_scope``, and the apply pass refuses whatever
+    still carries ``${...}`` after its own merged-scope resolution."""
     if value is None:
         return None
     if not (value.startswith("${") and value.endswith("}")):
