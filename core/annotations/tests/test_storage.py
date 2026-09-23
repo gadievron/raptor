@@ -275,6 +275,27 @@ class TestFormatting:
         # but the read shouldn't crash.
         assert got is not None
 
+    def test_hand_edited_tab_value_round_trips_quoted(self, tmp_path):
+        """The write path rejects tabs in values, so a quoted tab
+        value only arrives by hand edit — it parsed fine, then the
+        next rewrite re-emitted it UNQUOTED (quoting keyed on spaces
+        only) and the re-parse stopped at the tab, silently dropping
+        the remainder."""
+        path = annotation_path(tmp_path, "a.py")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            '<!-- annotations-version: 1 -->\n# a.py\n\n'
+            '## f\n<!-- meta: note="alpha\tbeta" source=agent -->\n'
+            '\nbody\n',
+        )
+        assert read_annotation(tmp_path, "a.py", "f").metadata["note"] \
+            == "alpha\tbeta"
+        write_annotation(tmp_path, Annotation(
+            file="a.py", function="g", body="x",
+        ))
+        assert read_annotation(tmp_path, "a.py", "f").metadata["note"] \
+            == "alpha\tbeta"
+
     def test_body_with_markdown_headings(self, tmp_path):
         """Body containing ``###`` headings (one level deeper than
         section heading) should NOT be confused with a new section."""
