@@ -131,3 +131,54 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+    def test_separate_exact_fit_statement_does_not_fire(self, tmp_path):
+        # The boundary IS handled, just as its own statement instead of
+        # >= or else-if — an unidiomatic but correct spelling.
+        results = _run_rule(tmp_path, """\
+            int fmt(char *buf, unsigned long sz, const char *s)
+            {
+                int n;
+                n = snprintf(buf, sz, "%s", s);
+                if (n > sz)
+                    return -1;
+                if (n == sz)
+                    return -2;
+                return n;
+            }
+        """)
+        assert results == []
+
+    def test_exact_fit_statement_before_gt_does_not_fire(self, tmp_path):
+        results = _run_rule(tmp_path, """\
+            int fmt(char *buf, unsigned long sz, const char *s)
+            {
+                int n;
+                n = snprintf(buf, sz, "%s", s);
+                if (n == sz)
+                    return -2;
+                if (n > sz)
+                    return -1;
+                return n;
+            }
+        """)
+        assert results == []
+
+    def test_unrelated_eq_check_keeps_gt_firing(self, tmp_path):
+        # Recall guard for the handled-boundary suppression: an ==
+        # check against a DIFFERENT bound does not handle the exact
+        # fit, so the > guard still fires.
+        results = _run_rule(tmp_path, """\
+            int fmt(char *buf, unsigned long sz, unsigned long lim,
+                    const char *s)
+            {
+                int n;
+                n = snprintf(buf, sz, "%s", s);
+                if (n == lim)
+                    return -2;
+                if (n > sz)
+                    return -1;
+                return n;
+            }
+        """)
+        assert len(results) == 1

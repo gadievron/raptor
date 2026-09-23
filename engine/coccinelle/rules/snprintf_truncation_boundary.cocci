@@ -23,10 +23,38 @@
 // zero-FP confidence high.
 // @role: verification
 
+// Handled-boundary suppression: a separate exact-fit statement
+// (`if (ret == SZ)`) against the SAME size, before or after the `>`
+// check with ret unmodified between, handles the boundary — the pair
+// is a correct (if unidiomatic) spelling of >=, not an off-by-one.
+// (An else-if spelling never matches the bug pattern to begin with:
+// `if (E) S` does not match an if with an else branch.)
+@trunc_gt_handled exists@
+expression ret, buf, SZ, E;
+statement S1, S2;
+position p;
+@@
+
+(
+ret = snprintf(buf, SZ, ...);
+|
+ret = vsnprintf(buf, SZ, ...);
+)
+... when != ret = E
+(
+if (<+... ret@p > SZ ...+>) S1
+... when != ret = E
+if (<+... ret == SZ ...+>) S2
+|
+if (<+... ret == SZ ...+>) S1
+... when != ret = E
+if (<+... ret@p > SZ ...+>) S2
+)
+
 @trunc_gt@
 expression ret, buf, SZ, E;
 statement S;
-position p;
+position p != trunc_gt_handled.p;
 @@
 
 (
