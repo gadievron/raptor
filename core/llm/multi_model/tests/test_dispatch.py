@@ -1186,3 +1186,64 @@ class TestPanelTimeoutParameter:
             adapter=IdentityAdapter(),
         )
         assert captured["timeout"] == 600.0
+
+
+class TestFailedModelsExcludedFromAdapterView:
+    """Failed panel members must not reach the adapter as empty-list
+    'contributors': BaseSetAdapter.correlate counts every key in its
+    denominator (an empty list from a LIVE model legitimately means
+    'looked, found nothing'), so a dead member silently demoted every
+    item one recall bucket — all_models was unreachable for the whole
+    run — and the summary named the corpse as a looker. Dispatch is
+    the one layer that knows failed from empty; it strips failed
+    members before the adapter sees the panel (per_model_raw and
+    failed_models still report them)."""
+
+    def _set_adapter(self):
+        from core.llm.multi_model.adapters import BaseSetAdapter
+
+        class SA(BaseSetAdapter):
+            def item_id(self, item):
+                return item["id"]
+
+            def item_key(self, item):
+                return item["id"]
+
+        return SA()
+
+    def test_recall_denominator_counts_live_models_only(self):
+        def task(model):
+            if model.model_name == "model-c":
+                raise RuntimeError("panel member down")
+            return [{"id": "v1"}]
+
+        result = run_multi_model(
+            task,
+            [FakeModel("model-a"), FakeModel("model-b"),
+             FakeModel("model-c")],
+            self._set_adapter(),
+        )
+        assert result.failed_models == ["model-c"]
+        # Found by EVERY live model → all_models, not majority.
+        assert result.correlation["recall_signals"]["v1"] == "all_models"
+        # The corpse is not listed as a looker...
+        assert result.correlation["summary"]["models"] == [
+            "model-a", "model-b",
+        ]
+        # ...but stays visible in the raw/failed reporting.
+        assert result.per_model_raw["model-c"] == []
+
+    def test_live_model_with_zero_finds_still_counts(self):
+        def task(model):
+            if model.model_name == "model-c":
+                return []  # looked, found nothing — a real observation
+            return [{"id": "v1"}]
+
+        result = run_multi_model(
+            task,
+            [FakeModel("model-a"), FakeModel("model-b"),
+             FakeModel("model-c")],
+            self._set_adapter(),
+        )
+        assert result.failed_models == []
+        assert result.correlation["recall_signals"]["v1"] == "majority"

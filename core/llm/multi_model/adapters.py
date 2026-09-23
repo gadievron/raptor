@@ -417,6 +417,14 @@ class BaseSetAdapter(ABC):
             recall_signals: {item_id: 'all_models'|'majority'|'minority'|'single_model'}
             presence_matrix: {item_id: [model_names]}
             summary: counts per recall bucket plus total and models
+
+        Denominator contract: EVERY key in ``per_model_results``
+        counts — an empty list means the model looked and found
+        nothing, a genuine observation for a set task. The substrate
+        dispatch strips FAILED members before calling (it is the one
+        layer that can tell failed from empty), so dead panel members
+        never deflate the recall buckets here. Direct callers own the
+        same responsibility.
         """
         n_models = len(per_model_results)
         models = sorted(per_model_results.keys())
