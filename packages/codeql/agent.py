@@ -200,7 +200,8 @@ class CodeQLWorkflowResult:
             for lang, result in self.analyses_completed.items()
         }
 
-        # CRITICAL: Convert sarif_files (type annotation says List[str], but agent.py:485 creates List[Path])
+        # CRITICAL: Convert sarif_files — the type annotation says
+        # List[str], but the workflow appends Path objects.
         data['sarif_files'] = [str(p) if isinstance(p, Path) else p for p in self.sarif_files]
 
         return data
@@ -1123,8 +1124,10 @@ class CodeQLAgent:
                 # the scanned repo's build scripts on traced builds and
                 # extractor diagnostics quoting hostile source. Escape
                 # before it reaches the operator's terminal (ANSI/OSC/
-                # bidi injection); core.logging does no control
-                # scrubbing of its own.
+                # bidi injection): this is a bare print(), which
+                # bypasses core.logging's console chokepoint
+                # (EscapingConsoleFormatter escapes logger-routed
+                # lines only), so the per-site escape is load-bearing.
                 from core.security.log_sanitisation import (
                     sanitise_for_terminal,
                 )

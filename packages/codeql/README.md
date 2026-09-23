@@ -6,7 +6,7 @@ Fully autonomous CodeQL security analysis with intelligent language detection, b
 
 ✅ **Phase 1 Complete - Foundation**
 
-- ✅ Autonomous language detection (10 languages supported)
+- ✅ Autonomous language detection (11 languages supported)
 - ✅ Intelligent build system detection and command generation
 - ✅ SHA256-based database caching (reuse databases for unchanged repos)
 - ✅ Parallel database creation for multi-language repositories
@@ -64,11 +64,11 @@ python3 packages/codeql/agent.py --repo /path/to/code --languages java,python
 ### Custom Build Command
 
 ```bash
-# Your example from earlier
-export CODEQL_CLI=/Users/daniel/reverse_engineering/codeql/codeql
+# Point CODEQL_CLI at a specific CLI bundle when several are installed
+export CODEQL_CLI=/opt/codeql/codeql
 
 python3 packages/codeql/agent.py \
-  --repo /Users/daniel/O365/CSR/Code/CodeQL-Crypto-Research/GHUniverse/acme-access-main \
+  --repo /path/to/java-project \
   --languages java \
   --build-command "mvn clean compile -DskipTests"
 ```
@@ -214,13 +214,16 @@ python3 packages/codeql/language_detector.py --repo /path/to/code --json
 
 **Fallback**: No-build mode for interpreted languages
 
-### Buildless C/C++ (default)
+### Buildless extraction (default for C/C++, Java, C#)
 
-C/C++ databases are created with `--build-mode=none` **by default** — the
+Databases for every language in `BUILDLESS_DEFAULT_LANGUAGES` (C/C++,
+Java, C#) are created with `--build-mode=none` **by default** — the
 extractor parses the source without invoking any build system, so an
-untrusted repo's build scripts (Make/CMake/configure — repo-controlled
-code) never execute. Requires CodeQL CLI >= 2.16; older CLIs skip C/C++
-with a clear error instead of silently falling back to a traced build.
+untrusted repo's build scripts (Make/CMake/configure/Maven/MSBuild —
+repo-controlled code) never execute. Buildless needs a per-language
+CLI floor: an older CLI skips C/C++ with a clear error (no safe
+alternative exists), while Java/C# fall back to the traced/autobuild
+path with a loud disclosure banner.
 
 Operators opt into traced-build extraction explicitly, asserting trust
 in the repo:
@@ -373,7 +376,7 @@ Phase 2 will add autonomous vulnerability analysis:
 
 ```bash
 python3 packages/codeql/agent.py \
-  --repo /Users/daniel/O365/CSR/Code/CodeQL-Crypto-Research/GHUniverse/acme-access-main
+  --repo /path/to/java-maven-project
 
 # Output:
 # ✓ Detected java (confidence: 0.92)

@@ -158,8 +158,13 @@ class LanguageDetector:
     # language they indicate. Operator messaging only — when the
     # repo's dominant source language lives here, the CodeQL lane is
     # structurally absent and its silence must not read as coverage.
-    # Deliberately conservative: unambiguous source extensions only
-    # (no ``.m`` — Objective-C/MATLAB collision — and no ``.d``).
+    # Membership criterion, declared: every UNAMBIGUOUS source
+    # extension of a language people ship whole repos in — an
+    # enumerated set, so a missing member silently reads
+    # clean-by-silence; extend it when a no-extractor language is
+    # encountered. Deliberately excluded as ambiguous: ``.m``
+    # (Objective-C/MATLAB), ``.d`` (D/Makefile deps), ``.v``
+    # (Verilog/Coq), ``.sc`` (Scala scripts/SuperCollider).
     NO_EXTRACTOR_EXTENSIONS: ClassVar[dict[str, str]] = {
         ".php": "php", ".phtml": "php",
         ".pl": "perl", ".pm": "perl",
@@ -170,6 +175,13 @@ class LanguageDetector:
         ".ml": "ocaml", ".mli": "ocaml",
         ".dart": "dart",
         ".r": "r",
+        ".scala": "scala",
+        ".groovy": "groovy",
+        ".clj": "clojure", ".cljc": "clojure",
+        ".zig": "zig",
+        ".nim": "nim",
+        ".jl": "julia",
+        ".f90": "fortran", ".f95": "fortran",
     }
 
     # Directories to ignore during scanning
