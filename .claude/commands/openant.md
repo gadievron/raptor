@@ -126,6 +126,22 @@ Zig) are auto-detected but cannot be forced — an out-of-set
 | `openant-report.md` | Human-readable markdown report |
 | `raptor_openant_report.json` | Machine-readable run summary |
 | `openant_scan/pipeline_output.json` | Raw OpenAnt output |
+| `openant_scan/openant-gateway-spend.json` | Dispatcher-gateway runs only: the scoped child token's booked spend (public token id, USD, request count) |
+
+---
+
+## Credentials
+
+No setup is needed beyond RAPTOR's own: with a direct credential
+(`ANTHROPIC_API_KEY` in env, or a key-bearing `anthropic` provider in
+the operator's OpenAnt `config.json`) the child calls the Anthropic
+API itself; on a keyless host running under the RAPTOR LLM dispatcher
+the scan automatically routes the child through a dispatcher child
+token on the loopback gateway — spend-capped, model-pinned, TTL'd to
+the scan, revoked at exit. Direct always wins; the gateway is the
+fallback. Keyless *and* dispatcher-less runs fail honestly at the
+child's startup credential probe. See docs/environment.md § OpenAnt
+integration for the full posture rules.
 
 ---
 
