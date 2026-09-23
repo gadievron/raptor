@@ -7451,14 +7451,7 @@ def _run_audit_body(
         if config.resume
         else set()
     )
-    # Verified rows only: this list feeds _check_finding_gates' G3
-    # re-recording check, where a planted prior "finding/suspicious"
-    # row demotes a genuine finding as a gate violation — authority,
-    # not telemetry. Unverified rows drop (no prior record → no G3
-    # demotion → the finding stands: fail toward not-suppressing).
-    audit_log = (
-        load_verified_audit_log(config.out_dir) if config.resume else []
-    )
+    audit_log = _g3_prior_review_rows(config)
 
     workqueue = []
     fn_filter = None
@@ -11951,6 +11944,24 @@ def _resolve_hypothesis(outcome: ReviewOutcome) -> str:
     from .invariant_gate import resolve_hypothesis
 
     return resolve_hypothesis(outcome)
+
+
+def _g3_prior_review_rows(config) -> list[dict[str, Any]]:
+    """Prior-review rows feeding :func:`_check_finding_gates`' G3
+    re-recording check on a resumed run ([] otherwise).
+
+    Verified rows only — authority, not telemetry: a prior
+    "finding/suspicious" row DEMOTES a genuine finding as a gate
+    violation, and the audit log lives in the target-writable run
+    dir, so a planted row must never earn that. Unverified rows drop
+    (no prior record → no G3 demotion → the finding stands: fail
+    toward not-suppressing). Behaviorally pinned by the forged-row
+    test beside the other authority consumers — the substring census
+    alone cannot see a revert to the tolerant loader.
+    """
+    if not config.resume:
+        return []
+    return load_verified_audit_log(config.out_dir)
 
 
 def _check_finding_gates(
