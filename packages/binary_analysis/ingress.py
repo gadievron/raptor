@@ -111,6 +111,26 @@ _PE_EXPORT_SKIP = {
     "DllGetClassObject",
 }
 
+# Export-table symbol types (radare2 iEj, upper-cased) that mark a
+# data export. A global length-limit constant exported as OBJ is real
+# surface information, but it is not an API an external caller can
+# invoke — ranking it as ``exported_api`` pushes genuine function
+# exports down the ingress queue. Data-typed exports are DEMOTED to
+# the low-score ``exported_data`` kind, never dropped: the type byte
+# is attacker-controlled (a 2-byte st_info patch relabels a callable
+# export OBJECT while it stays dlopen/dlsym-callable), so suppression
+# would hand the binary an operator-invisible surface-hiding lever —
+# demotion keeps every export visible in candidates, graph and report.
+# Unknown or missing types stay ``exported_api`` (fail-open):
+# symbol-type coverage varies by binary format and r2 version, and
+# demoting a real API is worse than ranking a constant.
+_DATA_EXPORT_TYPES = frozenset({"OBJ", "OBJECT", "TLS", "COMMON"})
+
+# Score for demoted data exports — below every callable-API surface
+# (exported_api is 70/75) so a data export can never outrank a
+# function export, while staying present in the ranked output.
+_DATA_EXPORT_SCORE = 10
+
 
 def _id(*parts: Any) -> str:
     raw = "::".join(str(part) for part in parts)
@@ -337,11 +357,39 @@ def recover_external_ingress(
 
     exports = [str(item) for item in getattr(manifest, "exports", []) if item]
     export_names = set(exports)
+    export_types = {
+        str(name): str(value).upper()
+        for name, value in (getattr(manifest, "export_types", {}) or {}).items()
+    }
+    data_export_names: list[str] = []
 
     def symbol_provenance(name: str) -> tuple[str, EvidenceTier]:
         if name in export_names:
             return "export_table", EvidenceTier.HEADER_BACKED
         return "radare2_function_name", EvidenceTier.HEURISTIC
+
+    def is_data_export(name: str) -> bool:
+        return export_types.get(name, "") in _DATA_EXPORT_TYPES
+
+    def add_data_export(name: str) -> None:
+        """Demote a data-typed export: visible low-score candidate,
+        never an ``exported_api`` peer (see _DATA_EXPORT_TYPES)."""
+        data_export_names.append(name)
+        function_id, function_name, address = bind_function(name)
+        add(
+            kind="exported_data",
+            name=name,
+            source="export_table",
+            external_control="external_caller",
+            boundary="caller_to_library",
+            score=_DATA_EXPORT_SCORE,
+            tier=EvidenceTier.HEADER_BACKED,
+            confidence="candidate",
+            bound_function_id=function_id,
+            bound_function_name=function_name,
+            address=address,
+            details={"symbol_type": export_types.get(name, "")},
+        )
 
     if str(getattr(manifest, "target_kind", "")).startswith("pe-"):
         for symbol, (kind, control, boundary, score) in _DRIVER_SYMBOLS.items():
@@ -371,6 +419,9 @@ def recover_external_ingress(
                 logger.info("PE DLL has %d exports", len(exports))
             for name in exports:
                 if name.split(".")[-1] in _PE_EXPORT_SKIP:
+                    continue
+                if is_data_export(name):
+                    add_data_export(name)
                     continue
                 function_id, function_name, address = bind_function(name)
                 add(
@@ -415,6 +466,9 @@ def recover_external_ingress(
         for name in exports:
             if name.split(".")[-1] in {"main", "_start"}:
                 continue
+            if is_data_export(name):
+                add_data_export(name)
+                continue
             function_id, function_name, address = bind_function(name)
             add(
                 kind="exported_api",
@@ -429,6 +483,36 @@ def recover_external_ingress(
                 bound_function_name=function_name,
                 address=address,
             )
+
+    if data_export_names:
+        # One aggregated record of the demotion decision, on top of
+        # the per-candidate evidence add() already emitted — the full
+        # count survives even when the name list is truncated, so a
+        # padded export table cannot push a demoted name out of the
+        # audit trail unnoticed.
+        truncated = len(data_export_names) > 200
+        records.append(make_evidence(
+            manifest.binary_sha256,
+            kind="exported_data_symbol",
+            source="export_table",
+            summary=(
+                f"{len(data_export_names)} exported data symbol(s) "
+                "demoted from exported_api to exported_data ingress"
+            ),
+            tier=EvidenceTier.HEADER_BACKED,
+            confidence="confirmed",
+            reproducible=True,
+            tool="binary-ingress",
+            location=manifest.binary_path,
+            data={
+                "kind": "exported_data",
+                "count": len(data_export_names),
+                # Bounded: a hostile export table must not balloon the
+                # evidence store through this record.
+                "names": sorted(data_export_names)[:200],
+                "names_truncated": truncated,
+            },
+        ))
 
     return [
         item.to_dict()

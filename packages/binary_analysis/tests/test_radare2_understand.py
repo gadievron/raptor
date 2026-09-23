@@ -1211,6 +1211,40 @@ class TestFunctionInventoryCap(unittest.TestCase):
         self.assertEqual(ctx.notes, [])
 
 
+class TestExportTypeExtraction(unittest.TestCase):
+    def test_export_types_recovered_from_iej(self):
+        """iEj symbol types (FUNC vs OBJ) must ride along with the
+        export names — ingress recovery needs them to keep exported
+        data objects out of the callable-API surface."""
+        understand = _make_understand_for("r2-exptype-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        r2 = MagicMock()
+        # Both iij and iEj receive the same canned payload; only the
+        # export-side assertions matter here.
+        r2.cmd.return_value = json.dumps([
+            {"name": "DecodePacket", "type": "FUNC", "vaddr": 0x1000},
+            {"name": "kMaxPacketLen", "type": "OBJ", "vaddr": 0x2000},
+            {"name": "mystery"},
+        ])
+        understand._extract_imports_exports(r2, ctx)
+        self.assertEqual(
+            ctx.exports, ["DecodePacket", "kMaxPacketLen", "mystery"])
+        self.assertEqual(
+            ctx.export_types,
+            {"DecodePacket": "FUNC", "kMaxPacketLen": "OBJ"})
+        d = ctx.to_dict()
+        self.assertEqual(d["export_types"], ctx.export_types)
+
+    def test_export_types_cleared_on_malformed_payload(self):
+        understand = _make_understand_for("r2-exptype2-", self.addCleanup)
+        ctx = BinaryContextMap(binary_path=understand.binary)
+        ctx.export_types = {"stale": "FUNC"}
+        r2 = MagicMock()
+        r2.cmd.return_value = json.dumps([42, "junk"])
+        understand._extract_imports_exports(r2, ctx)  # must not raise
+        self.assertEqual(ctx.export_types, {})
+
+
 class TestExportedMembership(unittest.TestCase):
     def test_is_exported_flag_still_set(self):
         """Membership moved from a per-function list scan to a set; the

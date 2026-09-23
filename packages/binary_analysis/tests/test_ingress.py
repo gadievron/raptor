@@ -23,6 +23,7 @@ def _manifest(
     *,
     target_kind: str,
     exports: Optional[list[str]] = None,
+    export_types: Optional[dict[str, str]] = None,
     app_bundle: Optional[AppBundleMetadata] = None,
 ) -> BinaryManifest:
     return BinaryManifest(
@@ -36,6 +37,7 @@ def _manifest(
         bits=64,
         binary_format=target_kind.split("-")[0] if "-" in target_kind else target_kind,
         exports=list(exports or []),
+        export_types=dict(export_types or {}),
         app_bundle=app_bundle,
     )
 
@@ -207,6 +209,141 @@ def test_export_base_name_fallback_binds_and_keeps_first_match(tmp_path: Path) -
     exported = next(item for item in ingress if item["kind"] == "exported_api")
     assert exported["bound_function_id"] == "BFN-401000"
     assert exported["bound_function_name"] == "sym.DecodePacket"
+
+
+def test_exported_data_symbols_demoted_not_dropped(tmp_path: Path) -> None:
+    """Exported OBJECT/data symbols (e.g. a global length-limit
+    constant) are not callable APIs — they must never rank as
+    ``exported_api`` peers of real function exports. But the type byte
+    is attacker-controlled (a 2-byte st_info patch relabels a callable
+    export OBJECT while it stays dlopen/dlsym-callable), so they are
+    DEMOTED to a visible low-score ``exported_data`` candidate, never
+    silently dropped."""
+    binary = _write_binary(tmp_path / "codec.dll", _pe_fixture())
+    manifest = _manifest(
+        binary,
+        target_kind="pe-dll",
+        exports=["DecodePacket", "kMaxPacketLen"],
+        export_types={"DecodePacket": "FUNC", "kMaxPacketLen": "OBJ"},
+    )
+    context = {
+        "interesting_functions": [],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, records = recover_external_ingress(manifest, context)
+
+    exported = [item for item in ingress if item["kind"] == "exported_api"]
+    assert [item["name"] for item in exported] == ["DecodePacket"]
+    demoted = [item for item in ingress if item["kind"] == "exported_data"]
+    assert [item["name"] for item in demoted] == ["kMaxPacketLen"]
+    assert demoted[0]["details"]["symbol_type"] == "OBJ"
+    # Demoted below every function export: an attacker-flippable type
+    # byte must never move a candidate ABOVE an API export.
+    assert demoted[0]["score"] < min(item["score"] for item in exported)
+    data_records = [r for r in records if r.kind == "exported_data_symbol"]
+    assert len(data_records) == 1
+    assert data_records[0].data["names"] == ["kMaxPacketLen"]
+    assert data_records[0].data["count"] == 1
+    assert data_records[0].data["names_truncated"] is False
+
+
+def test_exported_data_demotion_applies_to_elf_exports(tmp_path: Path) -> None:
+    binary = _write_binary(tmp_path / "libdemo.so", b"\x7fELF" + b"\x00" * 128)
+    manifest = _manifest(
+        binary,
+        target_kind="elf-linux",
+        exports=["demo_parse", "demo_version_string"],
+        export_types={"demo_parse": "FUNC", "demo_version_string": "OBJ"},
+    )
+    context = {
+        "interesting_functions": [],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, records = recover_external_ingress(manifest, context)
+
+    exported = [item for item in ingress if item["kind"] == "exported_api"]
+    assert [item["name"] for item in exported] == ["demo_parse"]
+    demoted = [item for item in ingress if item["kind"] == "exported_data"]
+    assert [item["name"] for item in demoted] == ["demo_version_string"]
+    assert any(r.kind == "exported_data_symbol" for r in records)
+
+
+def test_type_contradicted_export_stays_visible(tmp_path: Path) -> None:
+    """The type-contradiction case: an OBJ-typed export that r2's
+    aflj also lacks (aflj already skips OBJ-typed exports, so the
+    export loop is the last catch for a FUNC->OBJECT-patched callable)
+    must still surface as a visible candidate — with empty binding
+    fields, exactly like any other unbound export."""
+    binary = _write_binary(tmp_path / "codec.dll", _pe_fixture())
+    manifest = _manifest(
+        binary,
+        target_kind="pe-dll",
+        exports=["PatchedCallable"],
+        export_types={"PatchedCallable": "OBJECT"},
+    )
+    context = {
+        # aflj recovered nothing for this export.
+        "interesting_functions": [],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, _ = recover_external_ingress(manifest, context)
+
+    demoted = next(item for item in ingress if item["kind"] == "exported_data")
+    assert demoted["name"] == "PatchedCallable"
+    assert demoted["bound_function_id"] == ""
+    assert demoted["evidence_ids"]  # candidate carries its own evidence
+
+
+def test_exports_with_unknown_type_stay_api_ingress(tmp_path: Path) -> None:
+    """Symbol-type coverage varies by format and r2 version: an export
+    with no recorded type must keep its exported_api candidacy
+    (fail-open) — only a positively identified data type excludes."""
+    binary = _write_binary(tmp_path / "codec.dll", _pe_fixture())
+    manifest = _manifest(
+        binary,
+        target_kind="pe-dll",
+        exports=["MysteryExport", "NoTypeInfo"],
+        export_types={"MysteryExport": "NOTYPE"},
+    )
+    context = {
+        "interesting_functions": [],
+        "surface_details": [],
+        "sources": [],
+    }
+
+    ingress, records = recover_external_ingress(manifest, context)
+
+    exported = sorted(
+        item["name"] for item in ingress if item["kind"] == "exported_api"
+    )
+    assert exported == ["MysteryExport", "NoTypeInfo"]
+    assert not any(r.kind == "exported_data_symbol" for r in records)
+
+
+def test_manifest_export_types_roundtrip(tmp_path: Path) -> None:
+    """export_types must survive the to_dict/from_dict cycle — run-dir
+    reloads (report/investigate subcommands) would otherwise lose the
+    data/function distinction and re-rank data exports as APIs."""
+    binary = _write_binary(tmp_path / "codec.dll", _pe_fixture())
+    manifest = _manifest(
+        binary,
+        target_kind="pe-dll",
+        exports=["DecodePacket", "kMaxPacketLen"],
+        export_types={"DecodePacket": "FUNC", "kMaxPacketLen": "OBJ"},
+    )
+
+    reloaded = BinaryManifest.from_dict(manifest.to_dict())
+
+    assert reloaded.export_types == {
+        "DecodePacket": "FUNC",
+        "kMaxPacketLen": "OBJ",
+    }
 
 
 def test_unbound_export_still_surfaces(tmp_path: Path) -> None:

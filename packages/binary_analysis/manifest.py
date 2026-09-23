@@ -58,6 +58,9 @@ class BinaryManifest:
     analysis_depth: str = "full"
     imports: list[str] = field(default_factory=list)
     exports: list[str] = field(default_factory=list)
+    # Symbol type per export name (FUNC, OBJ, ...) from the radare2
+    # export table. Names with no reported type are absent.
+    export_types: dict[str, str] = field(default_factory=dict)
     capability_buckets: dict[str, list[str]] = field(default_factory=dict)
     runtime_signals: list[RuntimeSignal] = field(default_factory=list)
     slices: list[MachOSlice] = field(default_factory=list)
@@ -79,6 +82,10 @@ class BinaryManifest:
             "analysis_depth": self.analysis_depth,
             "imports": list(self.imports),
             "exports": list(self.exports),
+            "export_types": {
+                name: self.export_types[name]
+                for name in sorted(self.export_types)
+            },
             "capability_buckets": {
                 key: sorted(value)
                 for key, value in sorted(self.capability_buckets.items())
@@ -114,6 +121,11 @@ class BinaryManifest:
             analysis_depth=str(data.get("analysis_depth") or "full"),
             imports=[str(item) for item in data.get("imports") or []],
             exports=[str(item) for item in data.get("exports") or []],
+            export_types={
+                str(key): str(value)
+                for key, value in (data.get("export_types") or {}).items()
+                if value
+            },
             capability_buckets={
                 str(key): [str(item) for item in value]
                 for key, value in (data.get("capability_buckets") or {}).items()
@@ -341,6 +353,11 @@ def build_manifest(
     stat = binary.stat()
     imports = sorted({_normalise_symbol(item) for item in getattr(context, "imports", []) if item})
     exports = sorted({str(item) for item in getattr(context, "exports", []) if item})
+    export_types = {
+        str(key): str(value)
+        for key, value in (getattr(context, "export_types", {}) or {}).items()
+        if key and value
+    }
     runtime_signals, signal_evidence = _runtime_signals(
         binary,
         digest,
@@ -389,6 +406,7 @@ def build_manifest(
         analysis_depth=str(getattr(context, "analysis_depth", "") or "full"),
         imports=imports,
         exports=exports,
+        export_types=export_types,
         capability_buckets={
             key: sorted(value)
             for key, value in bucket_imports(set(imports)).items()

@@ -345,6 +345,11 @@ class BinaryContextMap:
 
     imports: list[str] = field(default_factory=list)
     exports: list[str] = field(default_factory=list)
+    # Symbol type per export name as reported by r2's iEj (upper-cased:
+    # FUNC, OBJ, NOTYPE, ...). Consumers use it to tell callable API
+    # exports from exported data objects; names with no type reported
+    # are simply absent from the dict.
+    export_types: dict[str, str] = field(default_factory=dict)
     strings_sample: list[str] = field(default_factory=list)
     classes: list[RecoveredClassInfo] = field(default_factory=list)
 
@@ -420,6 +425,7 @@ class BinaryContextMap:
             "trust_boundaries": [],
             "imports": self.imports,
             "exports": self.exports,
+            "export_types": dict(self.export_types),
             "strings_sample": self.strings_sample[:50],
             "classes": [item.to_dict() for item in self.classes],
             "fuzz_priorities": self.fuzz_priorities,
@@ -887,14 +893,28 @@ class BinaryUnderstand:
             exports_raw = json.loads(
                 self._cmd_deg(r2, ctx, "iEj", self._T_QUERY,
                               what="export table (iEj)") or "[]")
-            ctx.exports = [
-                str(e.get("name", "")) for e in exports_raw if e.get("name")
-            ]
+            exports: list[str] = []
+            export_types: dict[str, str] = {}
+            for e in exports_raw:
+                name = str(e.get("name", ""))
+                if not name:
+                    continue
+                exports.append(name)
+                # Keep the symbol type (FUNC vs OBJ etc.) so ingress
+                # recovery can exclude exported data objects from the
+                # callable-API surface. Absent/empty types are simply
+                # not recorded — consumers fail open on those.
+                symbol_type = str(e.get("type", "") or "").upper()
+                if symbol_type:
+                    export_types[name] = symbol_type
+            ctx.exports = exports
+            ctx.export_types = export_types
         except R2SessionLost:
             raise
         except Exception as e:  # noqa: BLE001 — r2 output is hostile; degrade
             logger.debug("exports extraction failed: %s", e)
             ctx.exports = []
+            ctx.export_types = {}
 
     _MAX_FUNCTIONS = 10_000
 
