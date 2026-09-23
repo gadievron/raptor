@@ -38,7 +38,7 @@ Two-phase: Claude runs `/understand --map` (LLM-driven, produces context-map.jso
 - `--pre-scan` — bounded Semgrep baseline when the run has no scan SARIF, feeding the SARIF-corroboration channels
 - `--out <dir>` — output directory (default: resolved by lifecycle)
 - `--codeql-db <path>` — CodeQL database for query dispatch and pre-sweep (repeatable — one per language for multi-language targets; per-function dispatch routes by the file's language)
-- `--max-cost <USD>` — stop after spending this many dollars on LLM calls
+- `--max-cost <USD>` — stop after spending this many dollars on LLM calls. Also accepted by `resume` for a single segment (overrides the original cap; booked spend from prior segments still counts against it; `0` removes the cap)
 - `--deepen-reserve <fraction>` — slice of `--max-cost` held back for the deepen phase so announced re-reviews can execute (default 0.15; 0 disables)
 - `--max-time <seconds>` — stop after this many wall-clock seconds
 - `--review-passes <N>` — independent review passes per function for self-consistency (default: 1)
