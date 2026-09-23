@@ -56,6 +56,19 @@ def _name_variants(function_name: str) -> "tuple[str, ...]":
     return (function_name,)
 
 
+def _file_gate_applies(file_path: str) -> bool:
+    """Whether the contract file-agreement gate can be evaluated.
+
+    Binary audits key review items by the ``binary:`` pseudo-path
+    (core.inventory.binary_builder.BINARY_PATH_PREFIX) while binary
+    study models carry decompile-unit file names — the two shapes are
+    incomparable, so the qualified-identity gate falls back to the
+    name match there instead of dropping every contract.
+    """
+    from core.inventory.binary_builder import BINARY_PATH_PREFIX
+    return bool(file_path) and not file_path.startswith(BINARY_PATH_PREFIX)
+
+
 def _paths_match(a: str, b: str) -> bool:
     """Check if two paths refer to the same file (suffix-match on components).
 
@@ -516,7 +529,18 @@ def domain_model_context(
 
     relevant_concepts = [c for c, s in scored_concepts[:max_concepts] if s > 1.0]
     relevant_invariants = [i for i, s in scored_invariants[:max_invariants] if s > 1.0]
-    relevant_contracts = [c for c, s in scored_contracts[:max_contracts] if s > 1.0]
+    # Contracts are per-function authority: a same-named function in
+    # another file must not receive this file's contract (qualified
+    # identity — the model's merge keys contracts by (function, file)).
+    # File-less contracts pass; the renderer shows their (missing)
+    # file and tier tag.
+    relevant_contracts = [
+        c for c, s in scored_contracts[:max_contracts]
+        if s > 1.0 and not (
+            str(c.get("file") or "") and _file_gate_applies(file_path)
+            and not _paths_match(file_path, str(c.get("file") or ""))
+        )
+    ]
 
     relevant_invariants = _add_derived_slots(
         relevant_invariants, scored_invariants)
@@ -825,15 +849,49 @@ def primers_from_domain_model(
         if cf not in tuple(v.lower()
                            for v in _name_variants(function_name)):
             continue
+        contract_file = str(contract.get("file") or "")
+        # Qualified identity, not name alone: same-named functions
+        # (parse_header, init, probe — routine statics in C) exist
+        # across files, and the model's own merge keys contracts by
+        # (function, file) for exactly that reason. Serving another
+        # file's contract here injects wrong semantics at the highest
+        # primer score — an authority-toned wrong contract can steer
+        # the review to dismiss a real finding.
+        if (contract_file and _file_gate_applies(file_path)
+                and not _paths_match(file_path, contract_file)):
+            continue
         if str(contract.get("state") or "") == "stale":
             # Quarantined by the staleness check — the function's
-            # source drifted since the contract was written. This
-            # primer states semantics with no tier tag, so a stale
+            # source drifted since the contract was written. A stale
             # contract must not be served at all (it describes an old
             # version of the code and can steer the review to dismiss
             # a real finding).
             continue
-        lines = [f"DOMAIN-SPECIFIC: CONTRACT FOR {contract['function']}"]
+        # The tier tag rides every served contract (the invariants
+        # blocks above tier-tag every line): without it an unverified
+        # LLM summary reads as established fact at the top score.
+        lines = [
+            f"DOMAIN-SPECIFIC: CONTRACT FOR {contract['function']} "
+            f"{_tier_tag(contract)}",
+        ]
+        if not contract_file:
+            # File unrecorded — name-only match. Serve it, but never
+            # as unqualified authority.
+            lines.append(
+                "Matched by function name only (the contract records "
+                "no file) — confirm it describes THIS function before "
+                "relying on it."
+            )
+        elif not _file_gate_applies(file_path):
+            # Pseudo-path fallback (binary audit): the contract has a
+            # file but the review path shape is incomparable — this
+            # serve is a name-only match too and carries the same
+            # caution, never unqualified authority.
+            lines.append(
+                "Matched by function name only (review path and "
+                "contract file are not comparable) — confirm it "
+                "describes THIS function before relying on it."
+            )
         if contract.get("input_semantics"):
             lines.append(f"Input: {contract['input_semantics']}")
         if contract.get("output_semantics"):

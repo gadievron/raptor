@@ -1163,3 +1163,114 @@ class TestNameVariantJoin:
         assert _name_variants("sym.") == ("sym.",)
         unrelated = {"id": "x", "description": "nothing related"}
         assert _relevance_score(unrelated, "f.c", "sym.", "") < 5.0
+
+
+class TestContractQualifiedIdentity:
+    """Contracts are (function, file) authority — never name-only."""
+
+    @staticmethod
+    def _model_with_contract(**overrides):
+        contract = {
+            "function": "parse_header",
+            "file": "driver_a/proto.c",
+            "input_semantics": "hdr is pre-validated by caller; "
+                               "len <= 64 guaranteed",
+            "provenance": "verbatim",
+        }
+        contract.update(overrides)
+        return {
+            "version": "1", "target": "t", "source_root": "s",
+            "concepts": [], "invariants": [],
+            "contracts": [contract],
+        }
+
+    def _write(self, tmp_path, model):
+        (tmp_path / "domain-model.json").write_text(
+            json.dumps(model), encoding="utf-8")
+        return tmp_path
+
+    def test_primer_not_served_across_files(self, tmp_path):
+        from core.concepts.audit_bridge import primers_from_domain_model
+        out = self._write(tmp_path, self._model_with_contract())
+        primers = primers_from_domain_model(
+            out, "driver_b/other.c", "parse_header")
+        assert not any("pre-validated" in p for p in primers), (
+            "another file's contract served as authority for a "
+            "same-named function"
+        )
+
+    def test_primer_served_for_matching_file(self, tmp_path):
+        from core.concepts.audit_bridge import primers_from_domain_model
+        out = self._write(tmp_path, self._model_with_contract())
+        primers = primers_from_domain_model(
+            out, "driver_a/proto.c", "parse_header")
+        served = [p for p in primers if "pre-validated" in p]
+        assert served, "same-file contract must still be served"
+
+    def test_served_contract_carries_tier_tag(self, tmp_path):
+        from core.concepts.audit_bridge import primers_from_domain_model
+        out = self._write(tmp_path, self._model_with_contract())
+        primers = primers_from_domain_model(
+            out, "driver_a/proto.c", "parse_header")
+        header = next(p for p in primers if "CONTRACT FOR" in p)
+        assert "[verbatim]" in header.splitlines()[0]
+
+    def test_unstamped_contract_reads_unverified(self, tmp_path):
+        from core.concepts.audit_bridge import primers_from_domain_model
+        model = self._model_with_contract()
+        del model["contracts"][0]["provenance"]
+        out = self._write(tmp_path, model)
+        primers = primers_from_domain_model(
+            out, "driver_a/proto.c", "parse_header")
+        header = next(p for p in primers if "CONTRACT FOR" in p)
+        assert "[unverified]" in header.splitlines()[0]
+
+    def test_fileless_contract_served_with_caution(self, tmp_path):
+        from core.concepts.audit_bridge import primers_from_domain_model
+        out = self._write(tmp_path, self._model_with_contract(file=""))
+        primers = primers_from_domain_model(
+            out, "driver_b/other.c", "parse_header")
+        served = next(p for p in primers if "CONTRACT FOR" in p)
+        assert "function name only" in served
+
+    def test_context_block_not_served_across_files(self, tmp_path):
+        model = self._model_with_contract()
+        # Give the contract a description naming the function so the
+        # relevance score clears the threshold on name alone.
+        model["contracts"][0]["description"] = (
+            "parse_header contract: caller pre-validates hdr")
+        out = self._write(tmp_path, model)
+        block = domain_model_context(
+            out, "driver_b/other.c", "parse_header")
+        assert block is None or "pre-validated" not in block
+
+    def test_binary_pseudo_path_falls_back_to_name_match(self, tmp_path):
+        """Binary audits key items by the binary: pseudo-path; study
+        contract files are decompile units — incomparable shapes must
+        not drop every contract."""
+        from core.concepts.audit_bridge import primers_from_domain_model
+        out = self._write(tmp_path, self._model_with_contract(file="g1.c"))
+        primers = primers_from_domain_model(
+            out, "binary:/x", "parse_header")
+        assert any("CONTRACT FOR" in p for p in primers)
+
+    def test_fallback_serve_carries_caution_exact_serve_does_not(
+        self, tmp_path,
+    ):
+        """A pseudo-path fallback serve is a name-only match and must
+        carry the same caution as the fileless path; an exact-keyed
+        (file-matched) serve must not."""
+        from core.concepts.audit_bridge import primers_from_domain_model
+        out = self._write(tmp_path, self._model_with_contract(file="g1.c"))
+        fallback = next(
+            p for p in primers_from_domain_model(
+                out, "binary:/x", "parse_header")
+            if "CONTRACT FOR" in p
+        )
+        assert "function name only" in fallback
+        exact = next(
+            p for p in primers_from_domain_model(
+                out, "g1.c", "parse_header")
+            if "CONTRACT FOR" in p
+        )
+        assert "function name only" not in exact
