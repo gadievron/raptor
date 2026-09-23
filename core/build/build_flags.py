@@ -294,6 +294,21 @@ def _bool_union(values, *, hardened: bool) -> bool | None:
     return hardened if hardened in seen else (not hardened)
 
 
+# Kernel hardening / sanitizer keys recognised in ``.config``.
+#
+# Provenance (the credential_env source/transcribed discipline —
+# a universe with no named mechanical source thins silently as the
+# kernel renames options): transcribed 2026-09-22 from the kernel's
+# own option homes — security/Kconfig.hardening (stackleak /
+# init-on-alloc / zero-init / randstruct), lib/Kconfig.kasan /
+# .kcsan / .kmsan / .kfence, arch Kconfig (CFI_CLANG,
+# SHADOW_CALL_STACK, STRICT_KERNEL_RWX, RANDOMIZE_BASE,
+# PAGE_TABLE_ISOLATION). Version notes are per-row; the unit suite
+# pins the modern spellings in both .config directions so a deletion
+# here fails there. Absent keys are the conservative direction (no
+# signal, never "disabled") — the cost of staleness is silently
+# THINNER Stage-D mitigation evidence on modern kernels, which is
+# exactly why the transcription is stamped.
 _HARDENING_CONFIGS: tuple[str, ...] = (
     "CONFIG_FORTIFY_SOURCE",
     "CONFIG_HARDENED_USERCOPY",
@@ -306,11 +321,27 @@ _HARDENING_CONFIGS: tuple[str, ...] = (
     "CONFIG_KASAN_HW_TAGS",
     "CONFIG_UBSAN",
     "CONFIG_KCOV",
+    "CONFIG_KMSAN",                  # kernel >= 6.1
+    "CONFIG_KCSAN",                  # kernel >= 5.8
+    "CONFIG_KFENCE",                 # kernel >= 5.12
     "CONFIG_RANDOMIZE_BASE",
     "CONFIG_PAGE_TABLE_ISOLATION",
     "CONFIG_GCC_PLUGIN_STRUCTLEAK",
     "CONFIG_GCC_PLUGIN_LATENT_ENTROPY",
-    "CONFIG_GCC_PLUGIN_RANDSTRUCT",
+    # randstruct: the GCC_PLUGIN_ spelling is < 5.19; 5.19 moved the
+    # choice to RANDSTRUCT_FULL / RANDSTRUCT_PERFORMANCE (Clang can
+    # provide it too, so the plugin prefix was dropped). Carrying only
+    # the old spelling meant every modern .config yielded NO
+    # randstruct signal.
+    "CONFIG_GCC_PLUGIN_RANDSTRUCT",  # kernel < 5.19
+    "CONFIG_RANDSTRUCT_FULL",        # kernel >= 5.19
+    "CONFIG_RANDSTRUCT_PERFORMANCE",  # kernel >= 5.19
+    "CONFIG_INIT_STACK_ALL_ZERO",    # kernel >= 5.9
+    "CONFIG_CFI_CLANG",              # kernel >= 5.13
+    "CONFIG_SHADOW_CALL_STACK",      # kernel >= 5.8
+    "CONFIG_STRICT_KERNEL_RWX",      # kernel >= 4.11
+    # Removed from kernels >= 5.5 (folded into refcount_t proper);
+    # kept for the older trees still routinely scanned.
     "CONFIG_REFCOUNT_FULL",
     "CONFIG_HARDENED_USERCOPY_PAGESPAN",
     "CONFIG_BUG_ON_DATA_CORRUPTION",
@@ -362,14 +393,20 @@ def _from_kconfig(path: Path) -> BuildFlagsContext:
     elif configs.get("CONFIG_STACK_PROTECTOR"):
         stack_proto = "weak"
 
-    # Sanitizers active.
+    # Sanitizers active (the full Kconfig sanitizer family — a
+    # KMSAN/KFENCE-instrumented kernel used to report
+    # sanitizers_enabled=()).
     sanitizers: list[str] = []
-    if configs.get("CONFIG_KASAN"):
-        sanitizers.append("kasan")
-    if configs.get("CONFIG_UBSAN"):
-        sanitizers.append("ubsan")
-    if configs.get("CONFIG_KCOV"):
-        sanitizers.append("kcov")
+    for key, name in (
+        ("CONFIG_KASAN", "kasan"),
+        ("CONFIG_KMSAN", "kmsan"),
+        ("CONFIG_KCSAN", "kcsan"),
+        ("CONFIG_KFENCE", "kfence"),
+        ("CONFIG_UBSAN", "ubsan"),
+        ("CONFIG_KCOV", "kcov"),
+    ):
+        if configs.get(key):
+            sanitizers.append(name)
 
     # Kernel FORTIFY_SOURCE doesn't tier — present means enabled.
     fortify: int | None = 1 if configs.get("CONFIG_FORTIFY_SOURCE") else None

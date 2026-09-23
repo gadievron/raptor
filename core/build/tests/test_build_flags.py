@@ -627,3 +627,49 @@ class TestPerCommandLastWinsUnion:
                         "-fdelete-null-pointer-checks a.c"),
         }])
         assert extract_flags(target).delete_null_pointer_checks is True
+
+
+class TestModernKconfigSpellings:
+    """Post-5.19 / modern hardening keys carry signal in BOTH .config
+    directions; a member deleted from _HARDENING_CONFIGS fails here
+    (the executable half of the tuple's transcription stamp)."""
+
+    _MODERN = [
+        "CONFIG_RANDSTRUCT_FULL",
+        "CONFIG_RANDSTRUCT_PERFORMANCE",
+        "CONFIG_KMSAN",
+        "CONFIG_KCSAN",
+        "CONFIG_KFENCE",
+        "CONFIG_INIT_STACK_ALL_ZERO",
+        "CONFIG_CFI_CLANG",
+        "CONFIG_SHADOW_CALL_STACK",
+        "CONFIG_STRICT_KERNEL_RWX",
+    ]
+
+    def test_enabled_modern_keys_surface(self, tmp_path):
+        (tmp_path / ".config").write_text(
+            "".join(f"{k}=y\n" for k in self._MODERN))
+        ctx = extract_flags(tmp_path)
+        got = dict(ctx.relevant_configs)
+        for k in self._MODERN:
+            assert got.get(k) is True, k
+        # The sanitizer arm consumes the modern family too — a
+        # KMSAN/KFENCE-instrumented kernel used to report ().
+        assert "kmsan" in ctx.sanitizers_enabled
+        assert "kcsan" in ctx.sanitizers_enabled
+        assert "kfence" in ctx.sanitizers_enabled
+
+    def test_disabled_modern_keys_surface(self, tmp_path):
+        (tmp_path / ".config").write_text(
+            "".join(f"# {k} is not set\n" for k in self._MODERN))
+        ctx = extract_flags(tmp_path)
+        got = dict(ctx.relevant_configs)
+        for k in self._MODERN:
+            assert got.get(k) is False, k
+        assert ctx.sanitizers_enabled == ()
+
+    def test_pre519_randstruct_spelling_still_recognised(self, tmp_path):
+        (tmp_path / ".config").write_text(
+            "CONFIG_GCC_PLUGIN_RANDSTRUCT=y\n")
+        got = dict(extract_flags(tmp_path).relevant_configs)
+        assert got.get("CONFIG_GCC_PLUGIN_RANDSTRUCT") is True
