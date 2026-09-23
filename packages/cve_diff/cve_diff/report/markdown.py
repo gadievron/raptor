@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from core.security.markdown_render import md_inline, md_prose
+
 if TYPE_CHECKING:
     from cve_diff.core.models import DiffBundle
     from cve_diff.analysis.analyzer import RootCause
@@ -454,12 +456,16 @@ def render_failure(cve_id: str, error_class: str, error_text: str) -> str:
     to make the rationale the report's headline content. Helps users
     understand WHY a CVE was refused without diving into ``summary.json``.
     """
-    rationale = _strip_surrender_prefix(error_text)
+    # The rationale is agent prose over hostile advisory/repo content —
+    # a prompt-injection relay into the operator deliverable unless the
+    # markdown structure is defanged. Same one-home discipline as the
+    # root-cause block below.
+    rationale = md_prose(_strip_surrender_prefix(error_text))
     classification = _humanize_class(error_class)
     return (
-        f"# {cve_id}\n\n"
+        f"# {md_inline(cve_id)}\n\n"
         f"**Outcome:** {classification}\n\n"
-        f"**Class:** `{error_class}`\n\n"
+        f"**Class:** `{md_inline(error_class)}`\n\n"
         f"## Why no fix was extracted\n\n"
         f"{rationale}\n"
     )
@@ -520,7 +526,11 @@ def _humanize_class(error_class: str) -> str:
         "submit_unverified_sha": "Agent submitted a SHA without verifying it via gh_commit_detail",
         "PerCveTimeout": "Per-CVE wall-clock timeout",
         "llm_error": "Anthropic API failure after retries",
-    }.get(error_class, f"Other ({error_class})")
+        # The fallback interpolates the raw class name; machine-typed
+        # today (exception class names / validated enums), but the slot
+        # is a rendered header — route it through the identifier
+        # defence so a future free-text class cannot carry structure.
+    }.get(error_class, f"Other ({md_inline(error_class)})")
 
 
 def _commit_url(repository_url: str, sha: str) -> str:
@@ -779,14 +789,25 @@ def _render_files(bundle: DiffBundle) -> str:
 
 
 def _render_root_cause(rc: RootCause) -> str:
-    bullets = "\n".join(f"- {step}" for step in rc.why_chain) or "- _(none)_"
-    funcs = ", ".join(f"`{f}`" for f in rc.affected_functions) or "_(none listed)_"
+    # Every free-text field here is str()-coerced, unconstrained model
+    # JSON produced while analysing HOSTILE diff/repo content — the same
+    # files escape sibling lanes (_md_cell/_md_safe/_neutralize_diff_fence)
+    # so these LLM-authored prose fields must not be the exception.
+    # cwe_id is regex-normalised by the analyzer; confidence is a float.
+    bullets = (
+        "\n".join(f"- {md_inline(step)}" for step in rc.why_chain)
+        or "- _(none)_"
+    )
+    funcs = (
+        ", ".join(f"`{md_inline(f)}`" for f in rc.affected_functions)
+        or "_(none listed)_"
+    )
     return (
         f"## Root cause\n\n"
-        f"**CWE:** {rc.cwe_id} — {rc.vulnerability_type}  \n"
+        f"**CWE:** {rc.cwe_id} — {md_inline(rc.vulnerability_type)}  \n"
         f"**Confidence:** {rc.confidence:.2f}  \n"
-        f"**Model:** {rc.model_id}\n\n"
-        f"{rc.summary}\n\n"
+        f"**Model:** {md_inline(rc.model_id)}\n\n"
+        f"{md_prose(rc.summary)}\n\n"
         f"**Why chain:**\n{bullets}\n\n"
         f"**Affected functions:** {funcs}\n\n"
     )
