@@ -215,6 +215,60 @@ class TestRecordGatesVerified:
         assert rc == 1
         assert "G2 TOOL-GROUNDED" in capsys.readouterr().err
 
+    def _record_finding_with_receipt(
+        self, tmp_path: Path, tool: str, rule_id: str,
+    ) -> int:
+        """--status finding grounded on one stamped confirmed sweep
+        row carrying *rule_id* — the G2 grade-check enforcement path."""
+        from core.audit.record import append_audit_log
+
+        mod = self._load_cli()
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        target = self._target(tmp_path)
+        append_audit_log(out_dir, {
+            "action": "context", "key": "src/a.c:foo",
+        })
+        append_audit_log(out_dir, {
+            "action": "sweep", "key": "src/a.c:foo",
+            "tool": tool, "outcome": "confirmed", "rule_id": rule_id,
+        })
+        return mod.cmd_record(self._args(
+            out_dir, target, status="finding",
+            evidence_tool=tool, vuln_type="buffer_overflow",
+            body="tool output", hypothesis="if p unbounded, CWE-787",
+        ))
+
+    def test_detection_grade_receipt_cannot_ground_finding(
+        self, tmp_path: Path, capsys,
+    ):
+        """Sweep rows carry ALREADY-NAMESPACED rule_ids
+        (smt:check-toctou, joern:flow-encoding) — the grade check must
+        classify them as-is; a re-prefixed smt:smt:* stamp matches no
+        classifier and every detection receipt graded verification."""
+        rc = self._record_finding_with_receipt(
+            tmp_path, "smt", "smt:check-toctou",
+        )
+        assert rc == 1
+        assert "detection-grade" in capsys.readouterr().err
+
+    def test_flow_encoding_receipt_cannot_ground_finding(
+        self, tmp_path: Path, capsys,
+    ):
+        rc = self._record_finding_with_receipt(
+            tmp_path, "joern", "joern:flow-encoding",
+        )
+        assert rc == 1
+        assert "detection-grade" in capsys.readouterr().err
+
+    def test_verification_grade_receipt_grounds_finding(
+        self, tmp_path: Path, capsys,
+    ):
+        rc = self._record_finding_with_receipt(
+            tmp_path, "joern", "joern:flow",
+        )
+        assert rc == 0, capsys.readouterr().err
+
 
 class TestG3ResumeFeedVerified:
     """The G3 re-recording gate DEMOTES findings on prior
