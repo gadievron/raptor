@@ -79,7 +79,8 @@ _LUA_EXTS = (".lua",)
 _HASH_COMMENT_EXT_LANG = {
     ".py": "python", ".pyi": "python",
     ".sh": "shell", ".bash": "bash",
-    ".rb": "ruby",
+    ".rb": "ruby", ".pl": "perl",
+    ".toml": "toml", ".yaml": "yaml", ".yml": "yaml",
 }
 
 
@@ -390,6 +391,34 @@ def _strip_c_family(
     return "".join(chars)
 
 
+# Perl POD: any line-start ``=word`` opens documentation until the
+# ``=cut`` line (perl's own lexer rule — no column-0 statement begins
+# with ``=`` followed by a letter). Ruby: column-0 ``=begin`` opens a
+# block comment until the column-0 ``=end`` line. Both read as CODE
+# before this — comment prose minted call-shaped false positives in
+# counting consumers (the over-inclusion direction), and neither was
+# in the declared residual list.
+_PERL_POD_OPEN_RE = re.compile(r"=[A-Za-z]\w*")
+_PERL_POD_CUT_RE = re.compile(r"^=cut\b[^\n]*", re.MULTILINE)
+_RUBY_BEGIN_RE = re.compile(r"=begin(?![0-9A-Za-z_])")
+_RUBY_END_RE = re.compile(r"^=end\b[^\n]*", re.MULTILINE)
+
+
+def _line_block_comment_end(
+    source: str, open_pos: int, close_re: re.Pattern[str],
+) -> int:
+    """Index just past the line closing the block comment opened at
+    ``open_pos`` (terminator searched from the opener line's end so a
+    self-terminating opener like perl's bare ``=cut`` still scans
+    forward), or end of input when unterminated — both languages read
+    an unterminated block as comment-to-EOF."""
+    line_end = source.find("\n", open_pos)
+    if line_end < 0:
+        return len(source)
+    m = close_re.search(source, line_end + 1)
+    return len(source) if m is None else m.end()
+
+
 def _strip_python_like(
     source: str, *, keep_strings: bool = False, lang: str | None = None,
 ) -> str:
@@ -398,7 +427,27 @@ def _strip_python_like(
     i = 0
     while i < n:
         ch = source[i]
-        if ch == "#":
+        if ch == "=" and (i == 0 or source[i - 1] == "\n"):
+            if lang == "perl" and _PERL_POD_OPEN_RE.match(source, i):
+                if _PERL_POD_CUT_RE.match(source, i):
+                    # A bare ``=cut`` opens and closes in one line —
+                    # blanking to the NEXT =cut would swallow live
+                    # code after it.
+                    line_end = source.find("\n", i)
+                    end = n if line_end < 0 else line_end
+                else:
+                    end = _line_block_comment_end(
+                        source, i, _PERL_POD_CUT_RE)
+                _blank(chars, i, end)
+                i = end
+                continue
+            if lang == "ruby" and _RUBY_BEGIN_RE.match(source, i):
+                end = _line_block_comment_end(source, i, _RUBY_END_RE)
+                _blank(chars, i, end)
+                i = end
+                continue
+            i += 1
+        elif ch == "#":
             if i > 0 and source[i - 1] == "$":
                 # Perl `$#array` (last index) / shell `$#` (arg
                 # count): a sigil-prefixed `#` is code, not a comment
@@ -450,7 +499,8 @@ def _strip_python_like(
                 # desync.
                 end = _string_end(
                     source, i, ch,
-                    escapes=_quote_escapes(source, i, ch, lang))
+                    escapes=_quote_escapes(source, i, ch, lang),
+                    doubling=(lang == "yaml" and ch == "'"))
                 if not keep_strings:
                     _blank(
                         chars, i + 1,
@@ -474,6 +524,13 @@ def _quote_escapes(
         # POSIX single quotes have no escapes; $'…' is ANSI-C quoting
         # where they DO apply.
         return i > 0 and source[i - 1] == "$"
+    if lang in ("toml", "yaml") and quote == "'":
+        # TOML literal strings and YAML single-quoted scalars have no
+        # backslash escapes — treating \' as one desynced quote state
+        # and swallowed the rest of the line after the true closer
+        # (YAML spells a literal quote by doubling instead — see
+        # ``doubling`` in :func:`_string_end`).
+        return False
     return True
 
 
@@ -877,15 +934,16 @@ def _char_literal_end(source: str, start: int) -> int | None:
 
 def _string_end(
     source: str, start: int, quote: str, *,
-    raw: bool = False, escapes: bool = True,
+    raw: bool = False, escapes: bool = True, doubling: bool = False,
 ) -> int:
     """Index just past the closing quote (or end of line/file).
 
     Unterminated single-line strings stop at the newline — a lone
     apostrophe in text must not swallow the rest of the file.
     ``escapes=False`` disables backslash handling for grammars whose
-    literal form has none (shell single quotes) while keeping the
-    newline stop.
+    literal form has none (shell/TOML/YAML single quotes) while
+    keeping the newline stop; ``doubling`` treats a doubled quote as
+    a literal quote (YAML single-quote grammar).
     """
     n = len(source)
     i = start + 1
@@ -895,6 +953,9 @@ def _string_end(
             i += 2
             continue
         if ch == quote:
+            if doubling and i + 1 < n and source[i + 1] == quote:
+                i += 2
+                continue
             return i + 1
         if ch == "\n" and not raw:
             return i + 1

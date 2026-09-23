@@ -807,6 +807,75 @@ class TestPhp:
         assert "run($c);" in view
 
 
+class TestLineBlockCommentsAndConfigQuotes:
+    """Perl POD and ruby =begin/=end are block comments — reading
+    their prose as code minted call-shaped false positives in
+    counting consumers. TOML literal / YAML single-quoted strings
+    have no backslash escapes — the default escape model swallowed
+    live same-line content after the true closer."""
+
+    def test_perl_pod_blanked(self):
+        src = "=pod\nhelper() twice from prose\n=cut\nreal_code();"
+        view = sanitized_view(src, language="perl")
+        assert "helper" not in view
+        assert "real_code();" in view
+        assert view.count("\n") == src.count("\n")
+
+    def test_perl_any_pod_command_opens(self):
+        src = "=head1 NAME\neval( prose\n=cut\ngo();"
+        view = sanitized_view(src, language="perl")
+        assert "eval" not in view
+        assert "go();" in view
+
+    def test_perl_bare_cut_blanks_one_line_only(self):
+        view = sanitized_view("=cut\ncode();", language="perl")
+        assert "code();" in view
+
+    def test_perl_unterminated_pod_blanks_to_eof(self):
+        view = sanitized_view("=pod\nprose eval(\nmore", language="perl")
+        assert "eval" not in view
+        assert "more" not in view
+
+    def test_perl_mid_line_equals_is_code(self):
+        src = "$x =~ s/a/b/;\n$y\n  = 5;"
+        assert sanitized_view(src, language="perl") == src
+
+    def test_ruby_begin_end_blanked(self):
+        src = "=begin\nhelper() twice from prose\n=end\nreal_code"
+        view = sanitized_view(src, language="ruby")
+        assert "helper" not in view
+        assert "real_code" in view
+
+    def test_ruby_begin_needs_column_zero(self):
+        src = "x = 5\n  =begin_ish\ny = 6"
+        assert sanitized_view(src, language="ruby") == src
+
+    def test_toml_single_quote_no_escapes(self):
+        src = "key = 'a\\' ; hostile = \"x\"\nnext_key = 1"
+        view = sanitized_view(src, file_path="config.toml")
+        # The literal string closes at the second quote (backslash is
+        # data) — the rest of the line is live, not swallowed.
+        assert "; hostile =" in view
+        assert "next_key = 1" in view
+        # String CONTENTS still blank (both quote forms).
+        assert "a\\" not in view
+        first_line = view.split("\n")[0]
+        assert '"x"' not in first_line and '" "' in first_line
+
+    def test_yaml_doubled_quote_is_literal(self):
+        src = "key: 'It''s fine' # eval( note\nnext: 2"
+        view = sanitized_view(src, file_path="c.yaml")
+        assert "eval" not in view
+        assert "next: 2" in view
+        assert "fine" not in view
+
+    def test_perl_extension_routes_pod(self):
+        src = "=pod\nprose popen(\n=cut\nrun();"
+        view = sanitized_view(src, "script.pl")
+        assert "popen" not in view
+        assert "run();" in view
+
+
 class TestPhpInterpolation:
     """PHP double-quoted strings and heredocs execute complex-syntax
     interpolation — `{$obj->method($arg)}` CALLS the method — so
