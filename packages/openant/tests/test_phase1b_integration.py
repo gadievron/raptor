@@ -947,6 +947,37 @@ class TestConsentGateObjectStoreForgery(unittest.TestCase):
             self.assertIs(prov["worktree_clean"], True)
 
 
+class TestAgenticOpenantFailureRecordPersisted(unittest.TestCase):
+    """Phase 1b failures must leave a PERSISTED record, not just a
+    stderr line: a hard failure beside a successful pattern scan let
+    the run complete with scan_metrics.openant carrying only
+    core_provenance, and in-process (post-subprocess) failures never
+    set openant_hard_error, so sole-scanner runs failed with the
+    wrong reason ("no SARIF files generated from scanning")."""
+
+    def setUp(self):
+        self.src = (Path(__file__).parents[3]
+                    / "raptor_agentic.py").read_text()
+
+    def test_subprocess_failure_is_recorded_in_metrics(self):
+        self.assertIn('openant_metrics["error"] = _oa_err', self.src)
+        self.assertIn('openant_metrics["hard_error"] = True', self.src)
+
+    def test_not_configured_skip_is_recorded(self):
+        self.assertIn(
+            'openant_metrics["error"] = f"not configured: {e}"', self.src)
+
+    def test_in_process_failure_sets_hard_error_for_the_exit_gate(self):
+        """The blanket except must set openant_hard_error so the
+        sole-scanner gate names the OpenAnt failure."""
+        blanket = self.src.split(
+            "OpenAnt scan failed (continuing)")[0].rsplit(
+            "except Exception as e:", 1)[1]
+        self.assertIn("openant_hard_error = sanitise_for_terminal",
+                      blanket)
+        self.assertIn('openant_metrics["hard_error"] = True', blanket)
+
+
 class TestAgenticOpenantHardFailure(unittest.TestCase):
     """Phase 1b distinguishes an attempted-and-failed OpenAnt scan
     (hard_error) from a not-configured skip, and a hard failure of the
