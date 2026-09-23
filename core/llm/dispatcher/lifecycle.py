@@ -17,6 +17,7 @@ from __future__ import annotations
 import atexit
 import contextlib
 import os
+import threading
 from pathlib import Path
 
 from .auth import CredentialStore, seed_from_config
@@ -52,6 +53,14 @@ def audit_path_for_run_dir(run_dir: Path) -> Path:
 # realistic single run instead; ``RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S``
 # still wins when the operator sets it.
 _INPROCESS_TOKEN_TTL_S = 7 * 24 * 60 * 60
+
+# Serialises ensure_inprocess_dispatcher_env's check-construct-export
+# sequence: the env read and the env write are otherwise a
+# check-then-set race — two first-callers on different threads each
+# saw no route, constructed two dispatchers, and one RAPTOR_LLM_SOCKET
+# write silently overwrote the other (stray dispatcher + socket dir
+# until the atexit/dead-owner sweep).
+_INPROCESS_ENV_LOCK = threading.Lock()
 
 # Explicit pass-through signature, replacing an earlier ``**kwargs``
 # fan-out. Pre-fix the wildcard accepted anything — typos like
@@ -149,35 +158,42 @@ def ensure_inprocess_dispatcher_env(
     The returned dispatcher is the caller's to ``shutdown()``; an
     ``atexit`` hook is registered as defence-in-depth, same contract
     as :func:`dispatcher_for_run`.
-    """
-    if os.environ.get("RAPTOR_LLM_SOCKET"):
-        return None
-    import uuid
 
-    # Orphaned socket dirs (SIGTERM'd/SIGKILL'd owners) are reclaimed
-    # by the dead-owner sweep inside LLMDispatcher's constructor —
-    # one chokepoint covering the in-process AND run-scoped prefixes.
-    creds = CredentialStore()
-    seed_from_config(creds)
-    kwargs: dict = {}
-    if not os.environ.get("RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S"):
-        # Only when the operator hasn't pinned a TTL — an explicit
-        # constructor arg would otherwise shadow the env override.
-        kwargs["token_ttl_s"] = _INPROCESS_TOKEN_TTL_S
-    if run_dir is not None and Path(run_dir).is_dir():
-        kwargs["audit_path"] = audit_path_for_run_dir(run_dir)
-    d = LLMDispatcher(
-        run_id=f"inproc-{uuid.uuid4().hex[:8]}", creds=creds, **kwargs,
-    )
-    try:
-        socket_path, token_fd = d.allocate_worker(label)
-    except Exception:
-        d.shutdown()
-        raise
-    os.environ["RAPTOR_LLM_SOCKET"] = socket_path
-    os.environ["RAPTOR_LLM_TOKEN_FD"] = str(token_fd)
-    atexit.register(d.shutdown)
-    return d
+    Thread-safe: the whole check-construct-export sequence runs under
+    ``_INPROCESS_ENV_LOCK`` — the second of two racing first-callers
+    sees the first one's route and no-ops instead of constructing a
+    duplicate dispatcher whose env write clobbers the winner's.
+    """
+    with _INPROCESS_ENV_LOCK:
+        if os.environ.get("RAPTOR_LLM_SOCKET"):
+            return None
+        import uuid
+
+        # Orphaned socket dirs (SIGTERM'd/SIGKILL'd owners) are
+        # reclaimed by the dead-owner sweep inside LLMDispatcher's
+        # constructor — one chokepoint covering the in-process AND
+        # run-scoped prefixes.
+        creds = CredentialStore()
+        seed_from_config(creds)
+        kwargs: dict = {}
+        if not os.environ.get("RAPTOR_LLM_DISPATCHER_TOKEN_TTL_S"):
+            # Only when the operator hasn't pinned a TTL — an explicit
+            # constructor arg would otherwise shadow the env override.
+            kwargs["token_ttl_s"] = _INPROCESS_TOKEN_TTL_S
+        if run_dir is not None and Path(run_dir).is_dir():
+            kwargs["audit_path"] = audit_path_for_run_dir(run_dir)
+        d = LLMDispatcher(
+            run_id=f"inproc-{uuid.uuid4().hex[:8]}", creds=creds, **kwargs,
+        )
+        try:
+            socket_path, token_fd = d.allocate_worker(label)
+        except Exception:
+            d.shutdown()
+            raise
+        os.environ["RAPTOR_LLM_SOCKET"] = socket_path
+        os.environ["RAPTOR_LLM_TOKEN_FD"] = str(token_fd)
+        atexit.register(d.shutdown)
+        return d
 
 
 def ensure_route_for_model_configs(

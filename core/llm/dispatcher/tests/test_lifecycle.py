@@ -128,6 +128,64 @@ class TestEnsureInprocessDispatcherEnv:
                 d.shutdown()
 
 
+class TestConcurrentFirstCallers:
+    def test_concurrent_first_callers_construct_one_dispatcher(
+        self, monkeypatch,
+    ):
+        """The env check-then-set sequence is locked: two racing first
+        callers must not both pass the RAPTOR_LLM_SOCKET check — the
+        loser's dispatcher would be stray (socket dir until the
+        atexit/dead-owner sweep) and its env write would silently
+        clobber the winner's route."""
+        import os
+        import threading
+        import time as _time
+
+        from core.llm.dispatcher import lifecycle
+        from core.llm.dispatcher.server import LLMDispatcher
+
+        monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
+        monkeypatch.delenv("RAPTOR_LLM_TOKEN_FD", raising=False)
+
+        constructed: list = []
+        real_init = LLMDispatcher.__init__
+
+        def slow_init(self, *a, **k):
+            constructed.append(self)
+            _time.sleep(0.3)  # hold the construction window open
+            real_init(self, *a, **k)
+
+        monkeypatch.setattr(LLMDispatcher, "__init__", slow_init)
+
+        results: list = []
+
+        def caller(tag: str) -> None:
+            results.append(
+                lifecycle.ensure_inprocess_dispatcher_env(
+                    label=f"race-{tag}"))
+
+        t1 = threading.Thread(target=caller, args=("a",))
+        t2 = threading.Thread(target=caller, args=("b",))
+        t1.start()
+        t2.start()
+        t1.join(timeout=30)
+        t2.join(timeout=30)
+        live = [d for d in results if d is not None]
+        try:
+            assert len(constructed) == 1, (
+                "concurrent first callers constructed "
+                f"{len(constructed)} dispatchers"
+            )
+            assert len(live) == 1
+            assert os.environ["RAPTOR_LLM_SOCKET"] == str(
+                live[0].socket_path)
+        finally:
+            os.environ.pop("RAPTOR_LLM_SOCKET", None)
+            os.environ.pop("RAPTOR_LLM_TOKEN_FD", None)
+            for d in live:
+                d.shutdown()
+
+
 class TestEnsureRouteForModelConfigs:
     """Shared self-serve gate for standalone entry points
     (raptor-llm-ask, the audit pipeline): starts an in-process
