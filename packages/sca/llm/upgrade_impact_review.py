@@ -36,6 +36,7 @@ from ..kinds import MAJOR_BUMP_DECISION_CLASS_PREFIX
 from .prompts import UPGRADE_IMPACT_PREFILTER_SYSTEM, UPGRADE_IMPACT_SYSTEM
 from .schemas import UpgradeImpactPrefilter, UpgradeImpactVerdict
 from typing import TYPE_CHECKING
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from ..models import Dependency
@@ -300,7 +301,7 @@ def _grep_call_sites(target: Path, dep: Dependency) -> list[str]:
                 )
                 if text is None:
                     continue
-                for i, line in enumerate(text.splitlines(), 1):
+                for i, line in enumerate(split_lines(text), 1):
                     for pat in import_patterns:
                         if pat.search(line):
                             rel = fpath.relative_to(target)

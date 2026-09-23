@@ -22,6 +22,7 @@ from ._shared import format_evidence as _format_evidence
 from ._shared import iter_matches_with_lines as _iter_matches_with_lines
 from ..parsers import _safe_read
 from typing import TYPE_CHECKING
+from core.source.lines import split_lines
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -208,7 +209,7 @@ def _imports_in(text: str) -> Iterable[tuple[str, int]]:
     # Block form — parsed line-wise from ``import (`` to the line
     # carrying the unquoted closing ``)``.
     in_block = False
-    for line_no, line in enumerate(text.splitlines(), start=1):
+    for line_no, line in enumerate(split_lines(text), start=1):
         if not in_block:
             open_m = _IMPORT_BLOCK_OPEN_RE.match(line)
             if not open_m:
