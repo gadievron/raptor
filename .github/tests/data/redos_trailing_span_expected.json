@@ -13,7 +13,7 @@
   },
   "core/analysis/binary_oracle.py\u001fname_indirect_re": {
    "digests": [
-    "fa25db46259e"
+    "733f4eac0999"
    ],
    "exp": 1.0,
    "rules": [
@@ -45,7 +45,7 @@
    "digests": [
     "d67aa42f0712"
    ],
-   "exp": 1.03,
+   "exp": 1.0,
    "rules": [
     "C",
     "R"
@@ -86,7 +86,7 @@
    "digests": [
     "d127aaa37edc"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -107,7 +107,7 @@
    "digests": [
     "f1cd68e60395"
    ],
-   "exp": 1.13,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -117,7 +117,7 @@
    "digests": [
     "0fe99021dce5"
    ],
-   "exp": 1.0,
+   "exp": 1.03,
    "rules": [
     "R"
    ],
@@ -126,16 +126,6 @@
   "core/audit/_util.py\u001f_IDENTIFIER_QUALIFIED_RE": {
    "digests": [
     "1f9a11132158"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/api_boundary.py\u001f\\s*(?:static\\s+|extern\\s+|inline\\s+|cons": {
-   "digests": [
-    "819a9e5554a0"
    ],
    "exp": 1.0,
    "rules": [
@@ -156,16 +146,6 @@
   "core/audit/asn1_template_mismatch.py\u001f_ANY_ACCESS_RE": {
    "digests": [
     "aa25ce8c7261"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/auth_witnesses.py\u001f_ABSTRACT_GETTER_RE": {
-   "digests": [
-    "4a8860d06ef4"
    ],
    "exp": 1.0,
    "rules": [
@@ -226,16 +206,6 @@
   "core/audit/callsite_consistency.py\u001f_STMT_ONLY_LINE_RE": {
    "digests": [
     "d7303233b80f"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/cocci_flow.py\u001f[`'\\\"]?([A-Za-z_][A-Za-z0-9_]*(?:(?:->|\\": {
-   "digests": [
-    "034ad36e41c1"
    ],
    "exp": 1.0,
    "rules": [
@@ -323,16 +293,6 @@
    ],
    "verdict": "linear"
   },
-  "core/audit/condition_smt.py\u001f_COMPARISON_RE": {
-   "digests": [
-    "3d3830e6d311"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "core/audit/condition_smt.py\u001f_ERROR_RETURN_RE": {
    "digests": [
     "105ceadc6e8f"
@@ -340,16 +300,6 @@
    "exp": 1.0,
    "rules": [
     "R"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/condition_smt.py\u001f_INT_HYPO_RE": {
-   "digests": [
-    "047af2e30b03"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
    ],
    "verdict": "linear"
   },
@@ -367,7 +317,7 @@
    "digests": [
     "2e6dcb3c34bb"
    ],
-   "exp": 1.01,
+   "exp": 1.04,
    "rules": [
     "R"
    ],
@@ -418,7 +368,7 @@
    "digests": [
     "1f06bec0b08b"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "rules": [
     "R"
    ],
@@ -427,46 +377,6 @@
   "core/audit/corpus/rule_eval.py\u001f_CWE_RE": {
    "digests": [
     "6af9cab6e369"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/cross_function_verify.py\u001f(?:resource|memory)\\s+leak|fail(?:s|ed|u": {
-   "digests": [
-    "e18c719a98d9"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/cross_function_verify.py\u001fcaller(?:s)?\\s+(?:must|do(?:es)?\\s+not|d": {
-   "digests": [
-    "6b1d5ebcca7d"
-   ],
-   "exp": 1.08,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/cross_function_verify.py\u001finteger\\s+(?:overflow|underflow|truncat|": {
-   "digests": [
-    "8c346d57da70"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/cross_function_verify.py\u001funsaniti[sz]ed\\s+(?:input|data|header|va": {
-   "digests": [
-    "0c1dcae6e1ff"
    ],
    "exp": 1.0,
    "rules": [
@@ -554,16 +464,6 @@
    ],
    "verdict": "linear"
   },
-  "core/audit/dispatch_table.py\u001f_IOCTL_CASE_RE": {
-   "digests": [
-    "b748995523e9"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "core/audit/fail_open_detector.py\u001f_C_FUNC_RE": {
    "digests": [
     "97f695d2c879"
@@ -604,9 +504,9 @@
    ],
    "verdict": "linear"
   },
-  "core/audit/heap_copy_checker.py\u001f_COMPARISON_RE": {
+  "core/audit/invariant_smt.py\u001f(?:^|[^&\\w])&\\s*(?:[A-Za-z_]\\w*\\s*(?:->|": {
    "digests": [
-    "db4320eee5a5"
+    "f7b4a925ef64"
    ],
    "exp": 1.0,
    "rules": [
@@ -665,51 +565,11 @@
    ],
    "verdict": "linear"
   },
-  "core/audit/negative_space.py\u001f(?:void|char)\\s*\\*\\s*\\w+\\b.*(?:sizeof\\s*": {
-   "digests": [
-    "d6701786b68d"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/negative_space.py\u001f_CONTEXT_MANAGER_LOCK": {
-   "digests": [
-    "fb722bbe5c31"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/negative_space.py\u001f_CROSS_PROC_PRIV_CONTEXT": {
-   "digests": [
-    "528ce3baba5d"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/negative_space.py\u001f_DEBUG_SKIP_SECURITY": {
-   "digests": [
-    "8b04cc9020df"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "core/audit/negative_space.py\u001f_GO_METHOD_RE": {
    "digests": [
     "775438c2881b"
    ],
-   "exp": 1.03,
+   "exp": 1.02,
    "rules": [
     "R"
    ],
@@ -775,21 +635,11 @@
    ],
    "verdict": "linear"
   },
-  "core/audit/prefilter.py\u001floop_re": {
-   "digests": [
-    "4cb4aaaa3d82"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "core/audit/preprocessor_view.py\u001f_FUNC_DEF_RE": {
    "digests": [
     "89ce5ff19ff3"
    ],
-   "exp": 1.0,
+   "exp": 1.04,
    "rules": [
     "C",
     "R"
@@ -803,46 +653,6 @@
    "exp": 1.0,
    "rules": [
     "R"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/propagation.py\u001fhas_literal": {
-   "digests": [
-    "08902bf05fe1"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/proto_length_checker.py\u001f_MAX_CHECK_RE": {
-   "digests": [
-    "5a12eb2b2926"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/proto_length_checker.py\u001f_RETURN_CHECK_RE": {
-   "digests": [
-    "7aab116eaa76"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
-  "core/audit/resource_bounds.py\u001f_CMP_RE": {
-   "digests": [
-    "efa8a21a07e4"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
    ],
    "verdict": "linear"
   },
@@ -910,7 +720,7 @@
    "digests": [
     "6a6d0cb6dc1e"
    ],
-   "exp": 1.06,
+   "exp": 0.98,
    "rules": [
     "R"
    ],
@@ -940,7 +750,7 @@
    "digests": [
     "33219fa48672"
    ],
-   "exp": 1.03,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -950,7 +760,7 @@
    "digests": [
     "2824456e461d"
    ],
-   "exp": 1.14,
+   "exp": 1.03,
    "rules": [
     "R"
    ],
@@ -958,7 +768,7 @@
   },
   "core/audit/vendored_detector.py\u001f_TABLE_LINE_RE": {
    "digests": [
-    "e69e55c60b80"
+    "e011ea9b3ada"
    ],
    "exp": 1.0,
    "rules": [
@@ -990,7 +800,7 @@
    "digests": [
     "607297954932"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "rules": [
     "C",
     "R"
@@ -1168,6 +978,16 @@
    ],
    "verdict": "linear"
   },
+  "core/dataflow/smt_barrier.py\u001f\\bfunction\\s*(?:\\*\\s*)?(?:\\w+\\s*)?\\(|=>\\": {
+   "digests": [
+    "3c06c6b4b926"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
+   ],
+   "verdict": "linear"
+  },
   "core/dataflow/structural_validator.py\u001f_BRANCH_GUARD_RE": {
    "digests": [
     "33ec3a32bab2"
@@ -1250,7 +1070,6 @@
   },
   "core/inventory/extractors.py\u001fmatch": {
    "digests": [
-    "35dedb5412c0",
     "dcf6ad671c98"
    ],
    "exp": 1.0,
@@ -1273,7 +1092,7 @@
    "digests": [
     "595152230065"
    ],
-   "exp": 1.04,
+   "exp": 1.02,
    "rules": [
     "R"
    ],
@@ -1313,7 +1132,7 @@
    "digests": [
     "2bd308c671e8"
    ],
-   "exp": 1.01,
+   "exp": 1.02,
    "rules": [
     "C",
     "R"
@@ -1354,7 +1173,7 @@
    "digests": [
     "f2dabacbe954"
    ],
-   "exp": 1.0,
+   "exp": 1.49,
    "rules": [
     "C",
     "R"
@@ -1365,7 +1184,7 @@
    "digests": [
     "b079fac4217e"
    ],
-   "exp": 1.0,
+   "exp": 1.06,
    "rules": [
     "C",
     "R"
@@ -1392,9 +1211,9 @@
    ],
    "verdict": "linear"
   },
-  "core/sage/hooks.py\u001fm_lang": {
+  "core/oci/image_ref.py\u001f_REPOSITORY_RE": {
    "digests": [
-    "5b1996e9f9ea"
+    "14d54c5052fd"
    ],
    "exp": 1.0,
    "rules": [
@@ -1404,7 +1223,7 @@
   },
   "core/sandbox/seatbelt_audit.py\u001f_LOG_LINE_RE": {
    "digests": [
-    "3f466ea2b059"
+    "90f7f057d321"
    ],
    "exp": 1.0,
    "rules": [
@@ -1414,7 +1233,7 @@
   },
   "core/sandbox/seatbelt_audit.py\u001f_LOG_LINE_RE_GREEDY": {
    "digests": [
-    "c3ac4d80bb4d"
+    "93ce24b4fc63"
    ],
    "exp": 1.0,
    "rules": [
@@ -1444,7 +1263,7 @@
   },
   "libexec/raptor-study-prep\u001f_ALLOC_THEN_CHECK_PATTERN": {
    "digests": [
-    "6f79936c9d02"
+    "e1aaf0662117"
    ],
    "exp": 1.0,
    "rules": [
@@ -1456,20 +1275,10 @@
    "digests": [
     "cdcb599248ab"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "rules": [
     "C",
     "R"
-   ],
-   "verdict": "linear"
-  },
-  "libexec/raptor-study-prep\u001f_FLAG_CHECK_PATTERN": {
-   "digests": [
-    "0578483b10d2"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
    ],
    "verdict": "linear"
   },
@@ -1487,7 +1296,7 @@
    "digests": [
     "9c365960943b"
    ],
-   "exp": 1.01,
+   "exp": 1.0,
    "rules": [
     "R"
    ],
@@ -1495,7 +1304,7 @@
   },
   "libexec/raptor-study-prep\u001f_VALIDATION_BOUND_PATTERN": {
    "digests": [
-    "69f4020cff15"
+    "b4f6e3a80953"
    ],
    "exp": 1.0,
    "rules": [
@@ -1507,7 +1316,7 @@
    "digests": [
     "e19a435256ca"
    ],
-   "exp": 1.02,
+   "exp": 0.99,
    "rules": [
     "R"
    ],
@@ -1517,7 +1326,7 @@
    "digests": [
     "40f0d3b291e3"
    ],
-   "exp": 1.02,
+   "exp": 1.01,
    "rules": [
     "R"
    ],
@@ -1530,6 +1339,16 @@
    "exp": 1.0,
    "rules": [
     "R"
+   ],
+   "verdict": "linear"
+  },
+  "packages/cve_env/cve_env/utils/exploit_text_sanitizer.py\u001fVDB-\\d+(?:[^.\\n]|\\.(?=\\d))*(?:\\.(?!\\d)|\\": {
+   "digests": [
+    "a5a06b050210"
+   ],
+   "exp": 1.0,
+   "rules": [
+    "C"
    ],
    "verdict": "linear"
   },
@@ -1600,16 +1419,6 @@
    ],
    "verdict": "linear"
   },
-  "packages/fuzzing/libfuzzer_runner.py\u001f_STATS_RE": {
-   "digests": [
-    "397ea76a0293"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "packages/joern/runner.py\u001f_IDENTIFIER_QUALIFIED_RE": {
    "digests": [
     "1f9a11132158"
@@ -1670,16 +1479,6 @@
    ],
    "verdict": "linear"
   },
-  "packages/sca/parsers/cmake_fetchcontent.py\u001f_FETCHCONTENT_RE": {
-   "digests": [
-    "f56d740b9ec7"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "packages/sca/parsers/composer.py\u001f_RELEASE_TAG_RE": {
    "digests": [
     "ea5b1b4057bd"
@@ -1732,7 +1531,7 @@
   },
   "packages/sca/parsers/inline_installs/_managers.py\u001f_YUM_SPLIT_RE": {
    "digests": [
-    "3a6143eefa7d"
+    "ede3f1262635"
    ],
    "exp": 1.0,
    "rules": [
@@ -1742,7 +1541,7 @@
   },
   "packages/sca/parsers/inline_installs/_managers.py\u001fm": {
    "digests": [
-    "2f06f76109a7"
+    "6d56b3a7fd84"
    ],
    "exp": 1.0,
    "rules": [
@@ -1784,7 +1583,7 @@
    "digests": [
     "f14dc063185a"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "rules": [
     "R"
    ],
@@ -1864,7 +1663,7 @@
    "digests": [
     "7e4d1743def4"
    ],
-   "exp": 1.01,
+   "exp": 1.18,
    "rules": [
     "R"
    ],
@@ -1872,7 +1671,7 @@
   },
   "packages/sca/reachability/nodejs.py\u001f_REQUIRE_RE": {
    "digests": [
-    "3f48e79b6ee5"
+    "944ff0017e28"
    ],
    "exp": 1.0,
    "rules": [
@@ -1884,7 +1683,7 @@
    "digests": [
     "7b32d4f318c5"
    ],
-   "exp": 0.98,
+   "exp": 1.02,
    "rules": [
     "R"
    ],
@@ -1922,7 +1721,7 @@
   },
   "packages/sca/rewriters/csproj.py\u001f(?P<open><PackageReference\\b)(?P<prefix>": {
    "digests": [
-    "6ed5a7e82edd"
+    "b6c2de5d95b1"
    ],
    "exp": 1.0,
    "rules": [
@@ -1932,7 +1731,7 @@
   },
   "packages/sca/rewriters/directory_build_targets.py\u001f(?P<open><PackageReference\\b)(?P<prefix>": {
    "digests": [
-    "e93feb320e48"
+    "7b5eb457c1a6"
    ],
    "exp": 1.0,
    "rules": [
@@ -1942,7 +1741,7 @@
   },
   "packages/sca/rewriters/directory_packages_props.py\u001f(?P<open><(?:PackageVersion|GlobalPackag": {
    "digests": [
-    "622627a03d17"
+    "86ab6acf54f9"
    ],
    "exp": 1.0,
    "rules": [
@@ -2015,16 +1814,6 @@
    ],
    "verdict": "linear"
   },
-  "packages/sca/supply_chain/gha_secret_flow.py\u001f\n    \\b(?:echo|printf)\\s+(?=\\S)\n    [^\\n": {
-   "digests": [
-    "f7b3c5f55e61"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
-   ],
-   "verdict": "linear"
-  },
   "packages/sca/supply_chain/gha_secret_flow.py\u001f_STDIN_PIPE_RE": {
    "digests": [
     "97894779c307"
@@ -2069,19 +1858,9 @@
    "digests": [
     "56f1c47a9e86"
    ],
-   "exp": 1.03,
+   "exp": 0.97,
    "rules": [
     "R"
-   ],
-   "verdict": "linear"
-  },
-  "packages/sca/update.py\u001f\\bmvn(?:w)?\\s+(?:[-\\w:]+\\s+)*(?:install:": {
-   "digests": [
-    "58ff01019631"
-   ],
-   "exp": 1.0,
-   "rules": [
-    "C"
    ],
    "verdict": "linear"
   },
@@ -2169,7 +1948,7 @@
    "digests": [
     "6f2c21a5b918"
    ],
-   "exp": 1.0,
+   "exp": 1.01,
    "rules": [
     "R"
    ],
@@ -2220,7 +1999,7 @@
    "digests": [
     "dd47682bd39f"
    ],
-   "exp": 1.03,
+   "exp": 0.94,
    "rules": [
     "R"
    ],
@@ -2238,9 +2017,9 @@
   },
   "packages/web/markers.py\u001f^root:[^:]*:\\d+:\\d+:|/bin/(?:ba)?sh\\b|ui": {
    "digests": [
-    "a589191f214a"
+    "b6399964e99b"
    ],
-   "exp": 0.99,
+   "exp": 1.02,
    "rules": [
     "R"
    ],
