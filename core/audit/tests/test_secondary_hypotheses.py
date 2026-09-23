@@ -39,7 +39,7 @@ def _result(outcomes):
 
 
 def _patch_chain(monkeypatch, confirmations, chain_calls=None):
-    def fake_chain(hypothesis, file_path, cwe=""):
+    def fake_chain(hypothesis, file_path, cwe="", language=None):
         if chain_calls is not None:
             chain_calls.append(hypothesis)
         return [{"type": "semgrep", "config": {}}]

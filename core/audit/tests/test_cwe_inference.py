@@ -105,7 +105,7 @@ class TestInferredChainSeeding:
 
         seeded_cwes = []
 
-        def fake_chain(hypothesis, file_path, cwe=""):
+        def fake_chain(hypothesis, file_path, cwe="", language=None):
             seeded_cwes.append(cwe)
             return []
 

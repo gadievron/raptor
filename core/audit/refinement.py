@@ -592,6 +592,13 @@ def _dispatch_semgrep(
         line_start = ctx.get("line_start", 0)
         line_end = ctx.get("line_end", 0)
 
+        # Same inventory language hint as the main tool-chain lane:
+        # without it the suggested-rule re-run silently skipped
+        # content-probed unknown-extension files (inconclusive) while
+        # the main lane confirmed/refuted them.
+        from .orchestrator import _inventory_language_hint
+        language = _inventory_language_hint(config, file_path)
+
         result = run_semgrep_sweep(
             rule_config=rule_path,
             target_path=target,
@@ -599,6 +606,7 @@ def _dispatch_semgrep(
             function_name=func_name,
             line_start=line_start,
             line_end=line_end,
+            language=language,
             hypothesis=getattr(outcome, "hypothesis", "") or "",
             rule_keyword=rule_keyword,
         )

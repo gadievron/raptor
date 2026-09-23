@@ -17074,6 +17074,7 @@ def _hypothesis_to_tool_chain(
     hypothesis: str,
     file_path: str,
     cwe: str = "",
+    language: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build an ordered list of tools to try for a hypothesis.
 
@@ -17086,12 +17087,17 @@ def _hypothesis_to_tool_chain(
     CWE-based dispatch seeds the chain first (strongest, most stable
     signal), then string-matched tools augment with hypothesis-specific
     patterns.
+
+    ``language`` is the inventory's recorded language for the file
+    (``_inventory_language_hint``): content-probed unknown extensions
+    can satisfy the curated-semgrep leg's language gate where the
+    extension cannot (see ``resolve_semgrep_rule_for_cwe``).
     """
     chain: list[dict[str, Any]] = []
     seen_types: set = set()
 
     if cwe:
-        cwe_chain = _cwe_fallback_chain(cwe, hypothesis, file_path)
+        cwe_chain = _cwe_fallback_chain(cwe, hypothesis, file_path, language)
         for entry in cwe_chain:
             chain.append(entry)
             seen_types.add(entry["type"])
@@ -17910,6 +17916,7 @@ def _cwe_fallback_chain(
     cwe: str,
     hypothesis: str = "",
     file_path: str = "",
+    language: str | None = None,
 ) -> list[dict[str, Any]]:
     """Generate tool chain from CWE dispatch when string matching fails.
 
@@ -17920,6 +17927,9 @@ def _cwe_fallback_chain(
     file declare the languages it can adjudicate, and the leg is
     dropped for other targets (the rule would scan nothing and its
     dead entry would shadow the keyword-mapped semgrep leg).
+    ``language`` (inventory hint) lets a content-probed unknown
+    extension satisfy that gate — the executed sweep then scans the
+    file via ``--scan-unknown-extensions``.
     """
     chain: list[dict[str, Any]] = []
     try:
@@ -17939,7 +17949,9 @@ def _cwe_fallback_chain(
     # the config — the identifier-consistency and negative-control
     # gates are for generated presence patterns; curated rules carry
     # their own sanitizer/anchor precision (see run_tool_chain).
-    semgrep_rule = resolve_semgrep_rule_for_cwe(cwe, file_path)
+    semgrep_rule = resolve_semgrep_rule_for_cwe(
+        cwe, file_path, language=language,
+    )
     if semgrep_rule:
         chain.append({"type": "semgrep", "config": {"rule": semgrep_rule}})
 
@@ -18392,6 +18404,12 @@ def _run_tool_chain(
     effective_target = target_path_override or config.target_path
     confirmed: list[str] = []
 
+    # Inventory language hint for the audited file: the semgrep leg
+    # consumes it so a content-probed unknown extension is actually
+    # scanned (--scan-unknown-extensions) instead of silently skipped.
+    # Best-effort — None on ordinary targets, where nothing changes.
+    _probed_language = _inventory_language_hint(config, file_path)
+
     if domain_vocab is None and config.out_dir:
         with contextlib.suppress(OSError):
             from .condition_smt import DomainVocabulary
@@ -18588,6 +18606,10 @@ def _run_tool_chain(
                             "line_end": _sg_line_end,
                             "hypothesis": _memo_hash_text(_sg_hypothesis),
                             "keyword": rule_keyword,
+                            # The hint changes the executed command
+                            # (--scan-unknown-extensions), so it joins
+                            # the memo key.
+                            "language": _probed_language or "",
                         },
                         lambda: run_semgrep_sweep(
                             target_path=effective_target,
@@ -18598,6 +18620,7 @@ def _run_tool_chain(
                             line_end=_sg_line_end,
                             hypothesis=_sg_hypothesis,
                             rule_keyword=rule_keyword,
+                            language=_probed_language,
                         ),
                     )
                 finally:
@@ -20578,7 +20601,10 @@ def _sweep_validate(
                         ",".join(h.rule_id for h in pf.hits[:3]),
                     )
 
-        chain = _hypothesis_to_tool_chain(hypothesis, effective_file, cwe=cwe)
+        chain = _hypothesis_to_tool_chain(
+            hypothesis, effective_file, cwe=cwe,
+            language=_inventory_language_hint(config, effective_file),
+        )
 
         if is_binary:
             try:
@@ -21787,7 +21813,10 @@ def _run_critique(
         if _has_refuting_counter(outcome):
             continue
         cwe = _effective_cwe(outcome, result.tier_counters)
-        chain = _hypothesis_to_tool_chain(outcome.hypothesis, outcome.file, cwe=cwe)
+        chain = _hypothesis_to_tool_chain(
+            outcome.hypothesis, outcome.file, cwe=cwe,
+            language=_inventory_language_hint(config, outcome.file),
+        )
         if not chain:
             continue
         source = _read_raw_source(
@@ -21889,7 +21918,10 @@ def _run_critique(
                     " found something but was dismissed"
                     " — recheck"
                 )
-                chain = _hypothesis_to_tool_chain(new_hyp, outcome.file, cwe="")
+                chain = _hypothesis_to_tool_chain(
+                    new_hyp, outcome.file, cwe="",
+                    language=_inventory_language_hint(config, outcome.file),
+                )
                 if chain:
                     source = _read_raw_source(
                         config.target_path,
@@ -23679,7 +23711,10 @@ def _promote_suspicious_one(
     cwe = _effective_cwe(outcome, result.tier_counters)
 
     if refuting_counter:
-        if _hypothesis_to_tool_chain(hypothesis, outcome.file, cwe=cwe):
+        if _hypothesis_to_tool_chain(
+            hypothesis, outcome.file, cwe=cwe,
+            language=_inventory_language_hint(config, outcome.file),
+        ):
             logger.debug(
                 "sweep skipped %s:%s — LLM counter-hypothesis present",
                 outcome.file,
@@ -23808,7 +23843,10 @@ def _promote_suspicious_one(
                 ",".join(h.rule_id for h in pf.hits[:3]),
             )
 
-    chain = _hypothesis_to_tool_chain(hypothesis, outcome.file, cwe=cwe)
+    chain = _hypothesis_to_tool_chain(
+        hypothesis, outcome.file, cwe=cwe,
+        language=_inventory_language_hint(config, outcome.file),
+    )
     if not chain:
         # No CWE dispatch entry and no cheap channel binds this
         # hypothesis — the static dispatch table has nothing to
@@ -24065,6 +24103,7 @@ def _resweep_zero_dispatch_suspicious(
             cwe = _effective_cwe(outcome, result.tier_counters)
             chain = _hypothesis_to_tool_chain(
                 hypothesis, outcome.file, cwe=cwe,
+                language=_inventory_language_hint(config, outcome.file),
             )
             if not chain:
                 record["skip_reason"] = "no-mechanical-chain"
@@ -25559,7 +25598,10 @@ def _promote_clean_refuted(
                     continue
 
             # ── Lane 2: cheap-channel chain (new) ──────────────────
-            chain = _hypothesis_to_tool_chain(mechanism, outcome.file, cwe=cwe)
+            chain = _hypothesis_to_tool_chain(
+                mechanism, outcome.file, cwe=cwe,
+                language=_inventory_language_hint(config, outcome.file),
+            )
             # SMT already dispatched above for this hypothesis; don't
             # re-run it inside the chain.
             if smt_verb:
@@ -25821,7 +25863,10 @@ def _dispatch_secondary_hypotheses(
             if not cwe:
                 cwe = fallback_cwe
 
-            chain = _hypothesis_to_tool_chain(mechanism, outcome.file, cwe=cwe)
+            chain = _hypothesis_to_tool_chain(
+                mechanism, outcome.file, cwe=cwe,
+                language=_inventory_language_hint(config, outcome.file),
+            )
             if not chain:
                 _increment_tier_dict(
                     result.tier_counters, "secondary_sweep", "skipped",
@@ -26203,12 +26248,13 @@ def _adversarial_refute_pass(
         overturned = False
         if named_evidence:
             cwe = _effective_cwe(outcome, result.tier_counters)
+            _hint = _inventory_language_hint(config, outcome.file)
             chain = _hypothesis_to_tool_chain(
-                hypothesis, outcome.file, cwe=cwe,
+                hypothesis, outcome.file, cwe=cwe, language=_hint,
             )
             if not chain:
                 chain = _hypothesis_to_tool_chain(
-                    named_evidence, outcome.file, cwe=cwe,
+                    named_evidence, outcome.file, cwe=cwe, language=_hint,
                 )
             if chain:
                 confirmed = _run_tool_chain(
