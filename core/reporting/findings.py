@@ -381,8 +381,17 @@ def build_finding_detail(finding: dict[str, Any], index: int) -> ReportSection:
     if isinstance(feasibility, dict):
         if feasibility.get("verdict"):
             lines.append(f"\n**Feasibility:** {sanitise_string(str(feasibility['verdict']), max_chars=200)}")
-        if feasibility.get("chain_breaks"):
-            breaks = [sanitise_string(str(b), max_chars=200) for b in feasibility['chain_breaks'][:3]]
+        # List-shaped only: feasibility records are finding-supplied
+        # JSON, and a dict here crashed the slice (KeyError on the
+        # slice object) while a string iterated per character into a
+        # junk render. Anything non-list is silently not a blocker
+        # list.
+        chain_breaks = feasibility.get("chain_breaks")
+        if isinstance(chain_breaks, list) and chain_breaks:
+            breaks = [
+                sanitise_string(str(b), max_chars=200)
+                for b in chain_breaks[:3]
+            ]
             lines.append(f"**Blockers:** {', '.join(breaks)}")
 
     # Dataflow
