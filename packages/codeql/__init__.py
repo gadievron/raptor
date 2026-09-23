@@ -19,8 +19,18 @@ from .tunables import CodeQLTunables
 
 def _resolve_cli() -> str | None:
     env = os.environ.get("CODEQL_CLI")
-    if env and os.path.isfile(env) and os.access(env, os.X_OK):
-        return env
+    if env:
+        if os.path.isfile(env) and os.access(env, os.X_OK):
+            return env
+        # Loud, like DatabaseManager._detect_codeql_cli on the same
+        # condition: a typo'd operator override silently probed
+        # whichever codeql was on PATH here while the DM path warned —
+        # the QueryRunner masked exactly the mistake the DM surfaced.
+        import logging
+        logging.getLogger(__name__).warning(
+            "CODEQL_CLI=%r is not an executable file — ignoring the "
+            "override and falling back to PATH lookup", env,
+        )
     return shutil.which("codeql")
 
 

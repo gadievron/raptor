@@ -663,6 +663,14 @@ class TestWitnessSteering:
         ) is None
         assert _steering_target([]) is None
 
+    def test_steering_target_never_yields_hex_fragments(self):
+        # The regex alone guarantees this (leading letter/underscore
+        # + digit lookbehind) — pinned so the guarantee survives a
+        # future regex change.
+        from packages.codeql.dataflow_validator import _steering_target
+        conds = [PathCondition("0xdead < buffer_len", step_index=0)]
+        assert _steering_target(conds) == "buffer_len"
+
     def _capture_prefer(self, rule_id, conditions):
         v = _validator()
         v._extract_path_conditions = MagicMock(return_value=(conditions, {}))

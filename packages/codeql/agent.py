@@ -206,6 +206,41 @@ class CodeQLWorkflowResult:
         return data
 
 
+def _collapse_shared_extractor_languages(
+    detected: dict[str, "LanguageInfo"],
+) -> None:
+    """Collapse detected languages that share one extractor AND one
+    query pack into a single database build.
+
+    javascript + typescript both resolve to the javascript extractor
+    and codeql/javascript-queries: keeping both built two databases
+    over the same tree and duplicated every finding in the merged
+    SARIF set. The typescript entry's evidence folds into the
+    javascript one so reporting still reflects both. (kotlin/java is
+    NOT collapsed here: detection never emits kotlin and java for
+    the same files, so the duplicate-DB shape cannot arise.)
+    """
+    if "javascript" in detected and "typescript" in detected:
+        logger.info(
+            "javascript + typescript detected — one javascript "
+            "database covers both (same extractor and query pack); "
+            "collapsing to a single build",
+        )
+        ts_info = detected.pop("typescript")
+        js_info = detected["javascript"]
+        js_info.file_count += ts_info.file_count
+        js_info.extensions_found |= ts_info.extensions_found
+        js_info.confidence = max(js_info.confidence, ts_info.confidence)
+
+
+def _workflow_success(analysis_results: dict[str, QueryResult]) -> bool:
+    """Workflow success means at least one language's ANALYSIS
+    succeeded. The previous any-SARIF rule let additive lanes (IRIS,
+    curated packs, learned models) turn a run whose every analyze
+    failed into success=True / exit 0."""
+    return any(r.success for r in analysis_results.values())
+
+
 class CodeQLAgent:
     """
     Main CodeQL agent orchestrator.
@@ -419,6 +454,8 @@ class CodeQLAgent:
                     detected = self.language_detector.detect_languages_floor(
                         floor=2, scan=scan)
                     detected = self.language_detector.filter_codeql_supported(detected)
+
+            _collapse_shared_extractor_languages(detected)
 
             if not detected:
                 error = "No CodeQL-supported languages detected"
@@ -785,7 +822,7 @@ class CodeQLAgent:
             logger.info("%s", '=' * 70)
 
             workflow_result = CodeQLWorkflowResult(
-                success=len(sarif_files) > 0,
+                success=_workflow_success(analysis_results),
                 repo_path=str(self.repo_path),
                 timestamp=datetime.now(timezone.utc).isoformat(),
                 duration_seconds=time.time() - self.start_time,

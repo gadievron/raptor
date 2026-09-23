@@ -334,3 +334,25 @@ class TestOversizedSarifDiagnosis:
     def test_missing_wording_unchanged(self, runner, tmp_path):
         reason = runner._unreadable_sarif_reason(tmp_path / "gone.sarif")
         assert "SARIF output missing" in reason
+
+
+class TestCustomQueriesStderrCap:
+    def test_failure_stderr_is_capped(self, runner, tmp_path, monkeypatch):
+        """run_custom_queries mirrors run_suite's [:1000] stderr cap —
+        the raw stream rode uncapped into the report JSON."""
+        import core.sandbox
+
+        def _run(cmd, **kwargs):
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=1, stdout="",
+                stderr="E" * 50_000,
+            )
+
+        monkeypatch.setattr(core.sandbox, "run", _run)
+        result = runner.run_custom_queries(
+            tmp_path / "db", tmp_path / "pack", tmp_path / "out",
+            "python",
+        )
+        assert result.success is False
+        assert result.errors
+        assert all(len(e) <= 1000 for e in result.errors)

@@ -51,3 +51,29 @@ def test_suppression_record_written_to_out_dir_not_repo(
     record = json.loads(record_file.read_text().splitlines()[0])
     assert record["rule_id"] == "cpp/dead-sink"
     assert record["verdict"] == "module_aborts"
+
+
+def test_suppression_record_carries_the_resolved_function(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    """suppressions.jsonl's contract carries `function`, and
+    suppress=True implies _locate_finding_function succeeded — the
+    record used to hardcode an empty string anyway."""
+    import core.analysis.reach_chokepoint as chokepoint
+
+    monkeypatch.setattr(
+        chokepoint, "check_suppress", lambda **kw: {"suppress": True},
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+
+    analyzer = _make_analyzer()
+    analyzer.analyze_finding_autonomous(
+        sarif_result={}, sarif_run={}, repo_path=repo, out_dir=out,
+    )
+    record = json.loads(
+        (out / "suppressions.jsonl").read_text().splitlines()[0],
+    )
+    assert record["function"] == "f"

@@ -670,6 +670,7 @@ class DatabaseManager:
         language: str,
         max_age_days: int | None = None,
         traced_build: bool | None = None,
+        repo_hash: str | None = None,
     ) -> Path | None:
         """
         Check if valid cached database exists.
@@ -695,13 +696,17 @@ class DatabaseManager:
                 when it was created — nothing untrusted executes by
                 serving it). ``None`` (mode-agnostic callers, e.g.
                 discovery probes) skips the check.
+            repo_hash: Pre-computed repo hash to reuse — each compute
+                is a `git status --porcelain` plus per-path stats;
+                create_database computes once and threads it through.
 
         Returns:
             Path to cached database or None
         """
         if max_age_days is None:
             max_age_days = self._cache_ttl_days()
-        repo_hash = self.compute_repo_hash(repo_path)
+        if repo_hash is None:
+            repo_hash = self.compute_repo_hash(repo_path)
         db_path = self.get_database_dir(repo_hash, language)
         metadata = self.load_metadata(repo_hash, language)
 
@@ -1205,6 +1210,13 @@ class DatabaseManager:
                 cached=False,
             )
 
+        # Repo hash computed ONCE for the whole create: each
+        # compute_repo_hash runs `git status --porcelain` plus a stat
+        # per dirty path, and this method used to recompute it up to
+        # four times (both cache checks, the metadata reload, the
+        # paths block).
+        repo_hash = self.compute_repo_hash(repo_path)
+
         # Check for cached database. The requested build mode joins
         # the lookup: an explicit traced request must not be served a
         # cached buildless DB (fidelity downgrade against an operator
@@ -1212,13 +1224,11 @@ class DatabaseManager:
         if not force:
             cached_db = self.get_cached_database(
                 repo_path, language, traced_build=traced_build,
+                repo_hash=repo_hash,
             )
             if cached_db:
                 duration = time.time() - start_time
-                metadata = self.load_metadata(
-                    self.compute_repo_hash(repo_path),
-                    language
-                )
+                metadata = self.load_metadata(repo_hash, language)
                 return DatabaseResult(
                     success=True,
                     language=language,
@@ -1229,10 +1239,9 @@ class DatabaseManager:
                     cached=True,
                 )
 
-        # Compute repo hash and paths. canonical is the cache slot;
-        # staging is per-process, on the same filesystem so atomic rename
-        # works. See _staging_path docstring for the same-fs requirement.
-        repo_hash = self.compute_repo_hash(repo_path)
+        # Paths. canonical is the cache slot; staging is per-process,
+        # on the same filesystem so atomic rename works. See
+        # _staging_path docstring for the same-fs requirement.
         canonical_path = self.get_database_dir(repo_hash, language)
         staging_path = self._staging_path(repo_hash, language)
 
@@ -1247,6 +1256,7 @@ class DatabaseManager:
         # Use rename-out-of-the-way rather than rmtree so any concurrent
         # reader keeps its inode references intact (see _evict_stale_canonical
         # docstring for the POSIX semantics).
+        force_evict_failed = False
         if force and canonical_path.exists():
             logger.info("Force rebuild: evicting cached database for %s", language)
             try:
@@ -1256,8 +1266,21 @@ class DatabaseManager:
                 # eviction, not at the evicted DB's own age (see
                 # _evict_stale_canonical).
                 os.utime(marker, None)
-            except OSError:
-                pass  # someone else evicted in parallel; harmless
+            except OSError as e:
+                # "Someone else evicted in parallel" only covers the
+                # canonical-gone case. If it still exists the rename
+                # genuinely failed (perms, EIO) and the surviving old
+                # canonical would win the promote race below — the
+                # exact DB the operator forced away, served back as
+                # cached=True. Remember the failure so the lost-race
+                # branch prefers our fresh staging.
+                if canonical_path.exists():
+                    force_evict_failed = True
+                    logger.warning(
+                        "Force eviction of %s failed (%s); the stale "
+                        "canonical will be evicted at promote time "
+                        "instead", canonical_path, e,
+                    )
 
         # Race-absorbing re-check: another concurrent writer may have
         # promoted their staging to canonical between our initial cache
@@ -1265,6 +1288,7 @@ class DatabaseManager:
         if not force:
             cached = self.get_cached_database(
                 repo_path, language, traced_build=traced_build,
+                repo_hash=repo_hash,
             )
             if cached:
                 duration = time.time() - start_time
@@ -1678,10 +1702,12 @@ class DatabaseManager:
                         # mode joins the check: a traced request must not
                         # adopt a sibling's buildless (or metadata-less)
                         # canonical over its own just-built traced staging.
-                        if self.validate_database(
-                            canonical_path,
-                        ) and self._sibling_canonical_acceptable(
-                            repo_hash, language, traced_build,
+                        if (
+                            not force_evict_failed
+                            and self.validate_database(canonical_path)
+                            and self._sibling_canonical_acceptable(
+                                repo_hash, language, traced_build,
+                            )
                         ):
                             logger.info(
                                 "✓ Database promoted by sibling; using cached %s", canonical_path
@@ -2107,6 +2133,23 @@ class DatabaseManager:
                             else:
                                 logger.info("Would delete: %s", db_path)
                             deleted.append(str(db_path))
+                        elif not dry_run:
+                            # Orphan metadata: the DB dir is already
+                            # gone (evicted / manually removed) but
+                            # the metadata file survived — pre-fix
+                            # the unlink only ran alongside the
+                            # rmtree, so orphans were re-parsed by
+                            # every future cleanup pass forever.
+                            metadata_file.unlink(missing_ok=True)
+                            logger.info(
+                                "Deleted orphan metadata: %s",
+                                metadata_file,
+                            )
+                        else:
+                            logger.info(
+                                "Would delete orphan metadata: %s",
+                                metadata_file,
+                            )
                 except Exception as e:  # noqa: BLE001 — best-effort; never fail the run
                     logger.warning("Error processing %s: %s", metadata_file, e)
 
