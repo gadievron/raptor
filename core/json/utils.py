@@ -435,31 +435,20 @@ def load_json_with_comments(
     if not p.exists():
         return None
     try:
-        import stat as _stat_mod
-        st = p.stat()
-        if not _stat_mod.S_ISREG(st.st_mode):
-            logger.warning(
-                "load_json_with_comments: refusing not a regular file: %s", p,
-            )
-            return None
-    except OSError as e:
-        logger.warning(
-            "load_json_with_comments: failed to stat %s: %s", p, e,
-        )
-        return None
-    if max_bytes is not None and st.st_size > max_bytes:
-        logger.warning(
-            "load_json_with_comments: refusing oversize file: "
-            "file size %d bytes exceeds max_bytes=%d: %s",
-            st.st_size, max_bytes, p,
-        )
-        return None
-    try:
-        # `utf-8-sig` for BOM tolerance — config files written /
-        # round-tripped through Windows editors commonly carry a
-        # leading `﻿` that vanilla utf-8 read passes through
-        # to the JSON parser as an unexpected character.
-        text = p.read_text(encoding="utf-8-sig")
+        # Gated read on the OPEN fd (shared with load_json): the
+        # earlier hand-rolled gate here stat'ed BY NAME and then
+        # read BY NAME — a file swapped for a FIFO between the two
+        # calls hung the consumer forever (the FIFO has no writer),
+        # and a file grown after the stat was buffered and parsed
+        # whole, past any max_bytes budget (no post-read re-check).
+        # ``_read_text_gated`` fstats the fd it reads, refuses
+        # non-regular files without blocking (O_NONBLOCK), re-checks
+        # the budget after a capped read, and decodes utf-8-sig (BOM
+        # tolerance for config files round-tripped through Windows
+        # editors). Its ValueError/OSError refusals land in the
+        # warn-and-return-None handler below — the same contract as
+        # a parse failure, which every caller already tolerates.
+        text = _read_text_gated(p, max_bytes)
         stripped = _strip_json_comments(text)
         if not stripped.strip():
             return None
