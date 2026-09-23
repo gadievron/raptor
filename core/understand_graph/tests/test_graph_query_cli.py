@@ -278,3 +278,14 @@ class GraphQuerySummaryKindEscapeTests(unittest.TestCase):
             self.assertEqual(proc.returncode, 0, proc.stderr)
             payload = __import__("json").loads(proc.stdout)
             self.assertIn(_HOSTILE_KIND, payload.get("nodes", {}))
+
+
+class GraphQueryLimitFloorTests(unittest.TestCase):
+    def test_limit_below_one_is_refused_at_parse_time(self):
+        # 0 silently blanks the SQL lanes and a negative value is
+        # LIMIT -n = unbounded in SQLite; both refuse loudly.
+        for bad in ("0", "-5"):
+            proc = _run("--db", "/nonexistent", "--hypothesis-seeds",
+                        "--limit", bad)
+            self.assertEqual(proc.returncode, 2, proc.stderr)
+            self.assertIn(">= 1", proc.stderr)

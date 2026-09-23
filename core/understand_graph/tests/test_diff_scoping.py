@@ -248,3 +248,46 @@ def test_new_risks_confidence_set_is_case_folded(tmp_path):
     diff = graph_diff(graph_path, str(target))
     risks = [(e["source"], e["sink"]) for e in diff["new_risks"]]
     assert ("handle_request", "execve") in risks
+
+
+def test_explicit_older_head_defaults_base_backwards_in_time(tmp_path):
+    """--head-snapshot naming a MIDDLE snapshot: the defaulted base
+    must be the newest snapshot OLDER than the head — defaulting to
+    the global newest produced a time-reversed drift verdict (the
+    newest snapshot's genuinely new surface reported as removed)."""
+    target = tmp_path / "target"
+    run_dir = tmp_path / "run"
+    graph_path = _write_understand_run(run_dir, target)
+    _bump_created_at(graph_path, "understand", "2026-01-01T00:00:00+00:00")
+
+    _write_understand_run(run_dir, target, extra_flow=True)
+    with open_graph(graph_path) as conn:
+        conn.execute(
+            "UPDATE snapshots SET created_at=? WHERE producer='understand' "
+            "AND created_at > '2026-01-01T00:00:01'",
+            ("2026-01-02T00:00:00+00:00",),
+        )
+    # Third snapshot: a separate run dir (distinct snapshot id),
+    # pinned into the same store; newest of all.
+    from core.understand_graph import ingest_run as _ingest_run
+
+    run2 = tmp_path / "run2"
+    _write_understand_run(run2, target, extra_flow=True)  # seeds artifacts
+    assert _ingest_run(run2, str(target), graph_path=graph_path) is not None
+    with open_graph(graph_path) as conn:
+        conn.execute(
+            "UPDATE snapshots SET created_at=? WHERE producer='understand' "
+            "AND created_at > '2026-01-02T00:00:01'",
+            ("2026-01-03T00:00:00+00:00",),
+        )
+        middle = conn.execute(
+            "SELECT id FROM snapshots WHERE created_at LIKE '2026-01-02%'"
+        ).fetchone()["id"]
+
+    diff = graph_diff(graph_path, str(target), head_snapshot=middle)
+    assert diff["is_diffable"] is True
+    assert diff["base_snapshot"]["created_at"].startswith("2026-01-01")
+    # Time flows base -> head: nothing from the NEWEST snapshot can
+    # read as removed surface.
+    removed = [n for kind in diff["nodes"].values() for n in kind["removed"]]
+    assert removed == []
