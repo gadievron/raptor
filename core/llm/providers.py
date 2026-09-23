@@ -650,14 +650,20 @@ class LLMProvider(ABC):
                     duration: float = 0.0,
                     cache_read_tokens: int = 0,
                     cache_write_tokens: int = 0) -> None:
-        """Track token usage, cost, and call duration (thread-safe)."""
+        """Track token usage, cost, and call duration (thread-safe).
+
+        ``sanitize_cost`` at the write: this ledger is the budget
+        enforcement floor (``max(total_cost, provider_spend)``), and a
+        single NaN booked here makes every budget comparison False.
+        """
+        from core.llm.cost import sanitize_cost
         with self._usage_lock:
             self.total_tokens += tokens
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
             self.total_cache_read_tokens += cache_read_tokens
             self.total_cache_write_tokens += cache_write_tokens
-            self.total_cost += (cost or 0.0)
+            self.total_cost += sanitize_cost(cost)
             self.call_count += 1
             self.total_duration += duration
         logger.debug("LLM usage: %s tokens, $%.4f (total: %s tokens, $%.4f)", tokens, cost or 0.0, self.total_tokens, self.total_cost)

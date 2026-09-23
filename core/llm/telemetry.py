@@ -105,7 +105,12 @@ class TelemetrySink:
             st.cache_hits += 1
         else:
             st.calls += 1
-        st.cost_usd += float(rec.get("cost_usd") or 0.0)
+        # sanitize_cost: this aggregate feeds mean_call_cost, which
+        # sizes the client's budget reservations — one NaN record
+        # would poison every later reservation and, through
+        # _acquire_budget's pre-debit, the budget ledger itself.
+        from core.llm.cost import sanitize_cost
+        st.cost_usd += sanitize_cost(rec.get("cost_usd"))
         st.duration_s += float(rec.get("duration_s") or 0.0)
         st.tokens_in += int(rec.get("tokens_in") or 0)
         st.tokens_out += int(rec.get("tokens_out") or 0)
