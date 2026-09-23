@@ -164,7 +164,15 @@ int main(int argc, char **argv) {
     not (_CC and _HAS_R2 and _HAS_R2PIPE),
     reason="live E2E needs a C compiler, radare2, and r2pipe",
 )
-def test_live_pipeline_emits_cyclomatic_for_compiled_fixture(tmp_path: Path) -> None:
+def test_live_pipeline_emits_cyclomatic_for_compiled_fixture(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Isolate the per-build-id CFG cache: without this the E2E wrote
+    # into the real shared BASE_OUT_DIR cache that production runs
+    # read (cross-process contention + test residue). Same idiom as
+    # test_function_cfg's cache_dir fixture.
+    from packages.binary_analysis import function_cfg
+    monkeypatch.setattr(
+        function_cfg, "_cache_dir", lambda: tmp_path / "cfg-cache")
     src = tmp_path / "fixture.c"
     src.write_text(_FIXTURE_C)
     binary = tmp_path / "fixture"
