@@ -34,6 +34,7 @@ from __future__ import annotations
 import bisect
 import contextlib
 import os
+import stat as pystat
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
@@ -95,10 +96,16 @@ def coverage_store_lock(coverage_path):
     # create and flock an attacker-chosen path. A refused symlink
     # degrades to the no-lock path (same as non-POSIX) with a loud
     # warning rather than crashing the best-effort snapshot writers.
+    # O_NONBLOCK + the regularity check on the opened fd: a planted
+    # FIFO at the sidecar path blocked this O_WRONLY open forever
+    # (reader-less; O_NOFOLLOW does not help) or, with a reader,
+    # opened as a non-regular file — either way the run-completion
+    # snapshot wedged. Both now degrade like the symlink case.
     flags = (
         os.O_WRONLY | os.O_CREAT
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
     )
     try:
         fd = os.open(str(lock_path), flags, 0o600)
@@ -106,7 +113,19 @@ def coverage_store_lock(coverage_path):
         _get_logger(__name__).warning(
             "coverage store lock %s: refusing to open (%s); proceeding "
             "WITHOUT cross-process lock — investigate a planted symlink "
-            "at that path", lock_path, exc)
+            "or FIFO at that path", lock_path, exc)
+        yield
+        return
+    try:
+        regular = pystat.S_ISREG(os.fstat(fd).st_mode)
+    except OSError:
+        regular = False
+    if not regular:
+        os.close(fd)
+        _get_logger(__name__).warning(
+            "coverage store lock %s is not a regular file; proceeding "
+            "WITHOUT cross-process lock — investigate a planted "
+            "FIFO/device at that path", lock_path)
         yield
         return
     try:

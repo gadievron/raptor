@@ -378,6 +378,17 @@ _append_lock = threading.Lock()
 #: spawned children (tool subprocesses must not inherit a journal fd).
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+#: O_NONBLOCK on the WRITE side: an O_WRONLY open of a planted
+#: reader-less FIFO blocks forever (O_NOFOLLOW does not help);
+#: with the flag it fails fast (ENXIO), and a FIFO that has a
+#: reader is caught by the fstat(S_ISREG) check on the opened fd.
+#: Regular files ignore the flag entirely.
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+
+
+def _fd_is_regular(fd: int) -> bool:
+    import stat as _stat
+    return _stat.S_ISREG(os.fstat(fd).st_mode)
 
 #: Bounded retries for the (rare) short-write path in
 #: :func:`append_entry`. Each retry re-writes the WHOLE line after
@@ -437,10 +448,23 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
         fd = os.open(
             str(journal_path),
             os.O_WRONLY | os.O_APPEND | os.O_CREAT
-            | _O_NOFOLLOW | _O_CLOEXEC,
+            | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK,
             0o644,
         )
         try:
+            if not _fd_is_regular(fd):
+                # A planted FIFO (with a reader — the reader-less case
+                # already failed the open with ENXIO thanks to
+                # O_NONBLOCK) or device node: writing the journal into
+                # it silently discards MAC-stamped rows and every
+                # journal writer queues behind this one on
+                # _append_lock. Same disposition as the symlink plant
+                # (O_NOFOLLOW → ELOOP): raise, journal untouched.
+                msg = (
+                    f"journal path {journal_path} is not a regular "
+                    "file — refusing to append"
+                )
+                raise OSError(msg)
             if _HAS_FCNTL:
                 fcntl.flock(fd, fcntl.LOCK_EX)
             try:
@@ -475,15 +499,20 @@ def append_entry(out_dir: Path, entry: ReviewJournalEntry) -> None:
 
 
 def flush_journal(out_dir: Path) -> None:
-    """fsync the journal file — call at batch/run boundaries."""
-    journal_path = out_dir / JOURNAL_FILENAME
-    if not journal_path.is_file():
+    """fsync the journal file — call at batch/run boundaries.
+
+    Same fd discipline as the appender: the pre-fix bare ``O_RDONLY``
+    open followed a planted symlink (fsync of a FOREIGN file) and
+    blocked forever on a writer-less FIFO (a read-side open of a FIFO
+    waits for a writer). Best-effort: a refused/missing journal is
+    silently skipped, like the old ``is_file()`` probe's negative.
+    """
+    from core.source import open_regular
+    fh = open_regular(out_dir / JOURNAL_FILENAME, "rb")
+    if fh is None:
         return
-    fd = os.open(str(journal_path), os.O_RDONLY)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
+    with fh:
+        os.fsync(fh.fileno())
 
 
 # ── Read ─────────────────────────────────────────────────────────────
@@ -1059,10 +1088,15 @@ def _flock(path: Path):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_suffix(path.suffix + ".lock")
+    # O_NONBLOCK: an O_WRONLY open of a planted reader-less FIFO
+    # blocked the merge forever; with the flag it fails fast (ENXIO,
+    # → the warn-and-degrade arm below) and a FIFO that has a reader
+    # is refused by the regularity check on the opened fd.
     flags = (
         os.O_WRONLY | os.O_CREAT
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_CLOEXEC", 0)
+        | _O_NONBLOCK
     )
     try:
         fd = os.open(str(lock_path), flags, 0o600)
@@ -1070,7 +1104,19 @@ def _flock(path: Path):
         logger.warning(
             "journal index lock %s: refusing to open (%s); proceeding "
             "WITHOUT cross-process lock — investigate a planted "
-            "symlink at that path", lock_path, exc)
+            "symlink or FIFO at that path", lock_path, exc)
+        yield
+        return
+    try:
+        regular = _fd_is_regular(fd)
+    except OSError:
+        regular = False
+    if not regular:
+        os.close(fd)
+        logger.warning(
+            "journal index lock %s is not a regular file; proceeding "
+            "WITHOUT cross-process lock — investigate a planted "
+            "FIFO/device at that path", lock_path)
         yield
         return
     try:

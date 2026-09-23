@@ -102,6 +102,106 @@ class TestManifestReader:
             t.join(2)
 
 
+def _bounded(fn, secs: float = 5.0):
+    """Run *fn* on a watchdog thread; fail the test if it wedges."""
+    done = threading.Event()
+    box: list = []
+
+    def _run() -> None:
+        try:
+            box.append(("ok", fn()))
+        except BaseException as exc:  # noqa: BLE001 — relayed to the assertion
+            box.append(("raised", exc))
+        finally:
+            done.set()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    assert done.wait(secs), "call wedged on a planted FIFO"
+    return box[0]
+
+
+class TestWriterFifoRefusal:
+    """The writer/lock side of the same trust boundary: readers
+    refused non-regular files, but one mkfifo from inside the sandbox
+    permanently wedged append_entry (every journal writer queues
+    behind _append_lock), the index/store lock sidecars, and the
+    batch fsync."""
+
+    def _entry(self):
+        from core.coverage.journal import ReviewJournalEntry, now_iso
+        return ReviewJournalEntry(
+            ts=now_iso(), run_id="x", file="a.c", function="f",
+            verdict="clean", source_hash="h", producer="audit")
+
+    def test_append_entry_refuses_fifo_journal(self, tmp_path):
+        from core.coverage.journal import append_entry
+        os.mkfifo(tmp_path / "review-journal.jsonl")
+        kind, value = _bounded(
+            lambda: append_entry(tmp_path, self._entry()))
+        assert kind == "raised" and isinstance(value, OSError)
+
+    def test_append_entry_refuses_fifo_with_reader(self, tmp_path):
+        # A FIFO that HAS a reader opens fine — the fstat check on
+        # the opened fd must still refuse it (rows written into a
+        # pipe are silently discarded journal history).
+        from core.coverage.journal import append_entry
+        fifo = tmp_path / "review-journal.jsonl"
+        os.mkfifo(fifo)
+        rfd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            kind, value = _bounded(
+                lambda: append_entry(tmp_path, self._entry()))
+            assert kind == "raised" and isinstance(value, OSError)
+        finally:
+            os.close(rfd)
+
+    def test_store_lock_degrades_on_fifo_sidecar(self, tmp_path):
+        from core.coverage.store import coverage_store_lock
+        cov = tmp_path / "coverage.json"
+        os.mkfifo(tmp_path / "coverage.json.lock")
+
+        def _take() -> str:
+            with coverage_store_lock(cov):
+                return "entered"
+
+        kind, value = _bounded(_take)
+        assert (kind, value) == ("ok", "entered")
+
+    def test_index_lock_degrades_on_fifo_sidecar(self, tmp_path):
+        from core.coverage.journal import _flock
+        index = tmp_path / "review-journal-index.json"
+        os.mkfifo(tmp_path / "review-journal-index.json.lock")
+
+        def _take() -> str:
+            with _flock(index):
+                return "entered"
+
+        kind, value = _bounded(_take)
+        assert (kind, value) == ("ok", "entered")
+
+    def test_flush_journal_skips_fifo(self, tmp_path):
+        from core.coverage.journal import flush_journal
+        os.mkfifo(tmp_path / "review-journal.jsonl")
+        kind, _ = _bounded(lambda: flush_journal(tmp_path))
+        assert kind == "ok"
+
+    def test_flush_journal_skips_symlink(self, tmp_path):
+        # A symlinked journal fsynced a FOREIGN file (one-flag
+        # symmetry with append_entry's O_NOFOLLOW).
+        from core.coverage.journal import flush_journal
+        foreign = tmp_path / "foreign"
+        foreign.write_text("x")
+        (tmp_path / "review-journal.jsonl").symlink_to(foreign)
+        kind, _ = _bounded(lambda: flush_journal(tmp_path))
+        assert kind == "ok"
+
+    def test_append_entry_still_writes_regular_journal(self, tmp_path):
+        from core.coverage.journal import append_entry, load_entries
+        append_entry(tmp_path, self._entry())
+        assert len(load_entries(tmp_path)) == 1
+
+
 class TestJournalReader:
     def test_fifo_journal_refused_without_blocking(self, tmp_path):
         os.mkfifo(tmp_path / "review-journal.jsonl")
