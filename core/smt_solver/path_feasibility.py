@@ -1090,8 +1090,13 @@ def _parse_condition(
     # Relational: lhs OP rhs
     # The LHS pattern consumes '>>' and '<<' as atomic units so the regex
     # doesn't split inside a shift operator.
+    # The lhs ends in a non-whitespace atom (or is a single char):
+    # the naive lazy lhs overlapped the following whitespace span —
+    # quadratic on a condition whose lhs ends in a whitespace run
+    # with no operator. The stripped capture is unchanged.
     m = re.fullmatch(
-        r'((?:>>|<<|[^<>]|(?<![<>])[<>](?![<>]))+?)'
+        r'((?:>>|<<|[^<>]|(?<![<>])[<>](?![<>]))*?'
+        r'(?:>>|<<|[^<>\s]|(?<![<>])[<>](?![<>]))|\s)'
         r'\s*(<=|>=|!=|==|<(?!<)|>(?!>))\s*(.+)',
         t,
     )

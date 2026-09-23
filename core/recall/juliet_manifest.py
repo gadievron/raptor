@@ -58,8 +58,11 @@ COMPARABLE_DIRS: dict[str, int] = {
 }
 
 _MULTI_FILE_RE = re.compile(r"_\d+[a-z]\.java$")
+# Bounded type window (the unbounded lazy window overlapped the
+# whitespace separators — quadratic even at the anchored match
+# call); 256 chars sits far above real Java signatures.
 _DECL_RE = re.compile(
-    r"^\s*(?:public|private|protected)\s+[\w<>\[\]., ]*?"
+    r"^\s*(?:public|private|protected)\s+[\w<>\[\]., ]{0,256}?"
     r"\s(bad\w*|good\w*)\s*\(")
 
 _ACQUIRE_HINT = (
