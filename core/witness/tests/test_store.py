@@ -7,6 +7,7 @@ hash-mismatch rejection, tolerant load on malformed manifests.
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -523,6 +524,69 @@ def test_list_witnesses_skips_non_hash_manifest_names(tmp_path):
 def test_get_bytes_verified_roundtrip_still_works(tmp_path):
     store = WitnessStore(tmp_path)
     data = b"round trip bytes"
+    w = _make_witness(data)
+    store.put(w, data)
+    assert store.get_bytes(w.bytes_hash) == data
+
+
+# ----------------------------------------------------------------------
+# Blob byte budget — refusal BEFORE buffering
+# ----------------------------------------------------------------------
+
+
+def _tighten_blob_budget(monkeypatch, budget: int = 1024) -> None:
+    import core.witness.store as store_mod
+
+    monkeypatch.setattr(
+        store_mod, "_MAX_BLOB_BYTES", budget, raising=False,
+    )
+
+
+def test_get_bytes_refuses_planted_oversize_blob(tmp_path, monkeypatch):
+    """A planted over-budget blob is refused at the size gate — even
+    when its content hashes to its address, so the pre-fix code path
+    (buffer everything, then verify) would have SERVED it after
+    paying the full allocation."""
+    _tighten_blob_budget(monkeypatch)
+    store = WitnessStore(tmp_path)
+    data = b"x" * 2048
+    bytes_hash = compute_bytes_hash(data)
+    blobs = tmp_path / "blobs"
+    blobs.mkdir(parents=True)
+    (blobs / f"{bytes_hash}.bin").write_bytes(data)
+    with pytest.raises(WitnessStoreError, match="blob budget"):
+        store.get_bytes(bytes_hash)
+
+
+def test_get_bytes_refuses_non_regular_blob(tmp_path):
+    """A FIFO planted at the blob path must be refused on the open
+    fd (O_NONBLOCK + fstat) — never block the consumer."""
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("platform lacks mkfifo")
+    store = WitnessStore(tmp_path)
+    bytes_hash = compute_bytes_hash(b"whatever")
+    blobs = tmp_path / "blobs"
+    blobs.mkdir(parents=True)
+    os.mkfifo(blobs / f"{bytes_hash}.bin")
+    with pytest.raises(WitnessStoreError, match="not a regular file"):
+        store.get_bytes(bytes_hash)
+
+
+def test_put_refuses_over_budget_blob(tmp_path, monkeypatch):
+    """Budget symmetry: put must not persist evidence get_bytes would
+    refuse to return (written-but-unreadable trap)."""
+    _tighten_blob_budget(monkeypatch)
+    store = WitnessStore(tmp_path)
+    data = b"y" * 2048
+    with pytest.raises(WitnessStoreError, match="blob budget"):
+        store.put(_make_witness(data), data)
+    assert not (tmp_path / "blobs").exists()
+
+
+def test_blob_budget_roundtrip_under_budget_unchanged(tmp_path, monkeypatch):
+    _tighten_blob_budget(monkeypatch)
+    store = WitnessStore(tmp_path)
+    data = b"z" * 512
     w = _make_witness(data)
     store.put(w, data)
     assert store.get_bytes(w.bytes_hash) == data

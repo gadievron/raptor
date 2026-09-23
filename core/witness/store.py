@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import stat as _stat_mod
 from pathlib import Path
 
 from core.atomic_fs import write_bytes_atomically, write_text_atomically
@@ -59,6 +61,20 @@ _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 # Byte budget for a single witness manifest — small JSON documents.
 _MAX_MANIFEST_BYTES = 8 * 1024 * 1024
+
+# Byte budget for a single witness blob. Witness bytes are crash
+# inputs, PoC stdin/stdout captures, and symbolic-execution results
+# (whose own transport ceiling is 64 MiB) — real blobs measure
+# kilobytes to low megabytes. Stores live in run output trees a
+# disk-staging attacker can pre-populate, and cross-run discovery
+# walks SIBLING runs' stores, so an unbudgeted read hands memory
+# control to any prior run's directory. Enforced symmetrically: put
+# refuses to persist what get_bytes would refuse to return. Trade-off,
+# both directions: lower starts refusing plausible large captures
+# (fuzz artifacts near the symex ceiling); higher stops bounding the
+# consumer's memory in any useful way (the fail direction is an
+# OOM-killed consumer, not a wrong verdict).
+_MAX_BLOB_BYTES = 64 * 1024 * 1024
 
 
 def _valid_hash_key(bytes_hash: str) -> bool:
@@ -142,6 +158,19 @@ class WitnessStore:
         state at "before the put started", never a partial /
         corrupt artefact.
         """
+        # Budget symmetry with get_bytes: never persist a blob the
+        # reader would refuse to return (evidence written but
+        # permanently unreadable — the same persisted-but-unreadable
+        # trap the allow_nan pre-check below closes for manifests).
+        if len(data) > _MAX_BLOB_BYTES:
+            msg = (
+                f"witness blob is {len(data)} bytes — exceeds the "
+                f"{_MAX_BLOB_BYTES}-byte blob budget get_bytes "
+                f"enforces; truncate or summarise the capture at the "
+                f"producer"
+            )
+            raise WitnessStoreError(msg)
+
         expected = compute_bytes_hash(data)
         if expected != witness.bytes_hash:
             msg = (
@@ -277,7 +306,10 @@ class WitnessStore:
 
         Raises :class:`WitnessStoreError` if the hash key is not a
         plain SHA-256 hex digest (it becomes an on-disk path), if the
-        blob is missing, or if the loaded bytes do not hash to
+        blob is missing, not a regular file, or over the
+        ``_MAX_BLOB_BYTES`` budget (refused BEFORE buffering — the
+        blast radius of a planted oversize blob is a refusal, not an
+        OOM-killed consumer), or if the loaded bytes do not hash to
         ``bytes_hash`` — the store is hash-addressed, so content that
         fails its own address is a planted/corrupt blob, not evidence.
         """
@@ -287,13 +319,66 @@ class WitnessStore:
                 f"a 64-char SHA-256 hex digest"
             )
         blob_path = self._blobs_dir / f"{bytes_hash}.bin"
-        if not blob_path.is_file():
+        # Gated read on the OPEN fd: manifests are budgeted in this
+        # same file, and blobs face the same disk-staging attacker
+        # (stores in prior runs' output trees reach every consumer
+        # via cross-run discovery). Pre-fix the whole blob was
+        # buffered BEFORE the hash check, so a planted multi-GB blob
+        # (sparse plants cost the attacker no disk) OOM-killed the
+        # consumer instead of being refused — integrity was covered,
+        # memory was not. fstat the fd actually read (a by-name check
+        # can be swapped), refuse non-regular files without blocking
+        # (O_NONBLOCK: a planted FIFO must not hang the consumer),
+        # refuse over-budget sizes before reading a byte, and
+        # re-check after a capped read so growth during the read is
+        # refused too.
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        try:
+            fd = os.open(str(blob_path), flags)
+        except FileNotFoundError:
             msg = (
                 f"blob not found for hash {bytes_hash[:16]!r}... "
                 f"(expected at {blob_path})"
             )
+            raise WitnessStoreError(msg) from None
+        except OSError as exc:
+            msg = f"cannot open blob at {blob_path}: {exc}"
+            raise WitnessStoreError(msg) from exc
+        try:
+            st = os.fstat(fd)
+            if not _stat_mod.S_ISREG(st.st_mode):
+                msg = f"blob at {blob_path} is not a regular file"
+                raise WitnessStoreError(msg)
+            if st.st_size > _MAX_BLOB_BYTES:
+                msg = (
+                    f"blob at {blob_path} is {st.st_size} bytes — "
+                    f"exceeds the {_MAX_BLOB_BYTES}-byte blob budget; "
+                    f"refusing to buffer it (planted or corrupt blob)"
+                )
+                raise WitnessStoreError(msg)
+            try:
+                with os.fdopen(fd, "rb") as fh:
+                    fd = -1  # fdopen owns it now
+                    data = fh.read(_MAX_BLOB_BYTES + 1)
+            except OSError as exc:
+                msg = f"cannot read blob at {blob_path}: {exc}"
+                raise WitnessStoreError(msg) from exc
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if len(data) > _MAX_BLOB_BYTES:
+            msg = (
+                f"blob at {blob_path} grew past the "
+                f"{_MAX_BLOB_BYTES}-byte blob budget during read"
+            )
             raise WitnessStoreError(msg)
-        data = blob_path.read_bytes()
         actual = compute_bytes_hash(data)
         if actual.lower() != bytes_hash.lower():
             raise WitnessStoreError(
