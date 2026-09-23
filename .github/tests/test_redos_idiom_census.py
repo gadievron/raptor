@@ -87,16 +87,30 @@ _RE_FUNCS = {
 # must be the ``M`` attribute to the gate too.  Known blind spots,
 # documented like the resolver's own spell-anchors-literally
 # discipline in ``_const_str_parts``: a comment or
-# backslash-continuation between the dot and the ``M``, and an inline
+# backslash-continuation between the dot and the ``M``, an inline
 # flag group no single string literal spells (escape-encoded
-# ``"(?\x6d)"`` or a concat split like ``"(?" + "m)"``) — spell flags
+# ``"(?\x6d)"`` or a concat split like ``"(?" + "m)"``), and a
+# MULTILINE-bit integer flag spelled non-decimally or computed
+# (``0x8``, ``8 + 0``, an int through a variable) — spell flags
 # plainly and adjacently.  ``test_scan_catches_every_multiline_spelling``
 # plants every supported spelling through ``_scan_file`` so a gate
 # regression fails the census's own tests, not the closure.
 _MULTILINE_SOURCE_GATE = re.compile(
     r"MULTILINE"          # re.MULTILINE / _rx.MULTILINE
     r"|\.\s*M\b"          # re.M / _rx.M (attribute-shaped token)
-    r"|\(\?[a-zA-Z-]*m",  # inline flags: (?m) (?im) (?m:...) ...
+    r"|\(\?[a-zA-Z-]*m"   # inline flags: (?m) (?im) (?m:...) ...
+    # Numeric flag literals: ``re.compile(p, 8)`` / ``flags=8`` set
+    # MULTILINE with no MULTILINE/M/(?m spelling anywhere in the file,
+    # so the gate must admit the decimal-literal shapes (a positional
+    # int argument, possibly ``|``-combined, or an int keyword value).
+    # The AST arm then checks the actual bit. Over-admission (any
+    # call with a trailing small-int arg) just pays the parse+walk
+    # price, per this gate's contract. Non-decimal or computed
+    # spellings (``0x8``, ``8+0``, an int through a variable) stay
+    # gate-blind — documented with the other spell-flags-plainly
+    # blind spots below.
+    r"|,\s*\d+\s*[|)]"
+    r"|flags\s*=\s*\d",
 )
 
 
@@ -143,8 +157,21 @@ def _const_str_parts(node: ast.AST, consts: dict[str, str]) -> str | None:
 
 
 def _flags_has_multiline(node: ast.AST) -> bool:
+    """Does a flags-position expression set MULTILINE? Two spellings:
+    the attribute (``re.MULTILINE`` / ``re.M``, wherever it sits in a
+    ``|`` expression), and a plain integer literal with the MULTILINE
+    bit set (``re.compile(p, 8)`` — the flag values are stable API).
+    The numeric arm checks the BIT, not equality, so combined numeric
+    flags (``10`` = I|M) count too. Bool is excluded: ``True`` in a
+    flags expression is not a flag spelling, and int-subclass bools
+    would otherwise smuggle bit 0-3 checks."""
     for sub in ast.walk(node):
         if isinstance(sub, ast.Attribute) and sub.attr in ("MULTILINE", "M"):
+            return True
+        if (isinstance(sub, ast.Constant)
+                and isinstance(sub.value, int)
+                and not isinstance(sub.value, bool)
+                and sub.value & re.MULTILINE):
             return True
     return False
 
@@ -521,6 +548,16 @@ class RedosIdiomCensus(unittest.TestCase):
             # agrees.
             ("import re\n"
              "p = re.compile(r'^\\s*planted', re.Ｍ)\n", "p"),
+            # Numeric flag literals: positional, |-combined value,
+            # and keyword — no MULTILINE/M/(?m token anywhere, so
+            # both the gate and the AST flag check must handle the
+            # decimal spelling.
+            ("import re\n"
+             "p = re.compile(r'^\\s*planted', 8)\n", "p"),
+            ("import re\n"
+             "p = re.compile(r'^\\s*planted', 10)\n", "p"),
+            ("import re\n"
+             "p = re.compile(r'^\\s*planted', flags=8)\n", "p"),
         ]
         for source, name in plants:
             with tempfile.NamedTemporaryFile(
