@@ -189,7 +189,14 @@ class BaseVerdictAdapter(ABC):
         for rid in first_seen_order:
             entries = by_id[rid]
             results_only = [r for _, r in entries]
-            primary = self.select_primary(results_only)
+            # Copy HERE, not in select_primary: the default policy
+            # returns a dict-copy, but the method is consumer-
+            # overridable and an override returning the winning dict
+            # itself would let the annotation below mutate the raw
+            # per-model record (types.py promises per_model_raw stays
+            # raw). One copy at the single mutation site keeps every
+            # override honest.
+            primary = dict(self.select_primary(results_only))
             # Gate on DISTINCT model count, not contribution count. A single
             # model returning the same id twice shouldn't masquerade as a
             # multi-model analysis. Mirrors BaseSetAdapter.merge's logic.
