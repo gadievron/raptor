@@ -84,18 +84,49 @@ _COCCI_POS_VAR_DENY = frozenset({
     "hasattr", "delattr",
 })
 
-# SmPL scripting-block headers. `@script:python@`, `@script:ocaml@`,
+# SmPL scripting constructs. `@script:python@`, `@script:ocaml@`,
 # `@initialize:python@`, and `@finalize:python@` blocks execute code
-# inside the spatch process — an LLM-synthesised or otherwise untrusted
-# rule carrying one is a code-execution vector, not a pattern. The
-# matcher anchors on the rule-header syntax (line-start `@`, optional
-# whitespace, keyword, `:`), so a comment merely *mentioning*
-# "@script:python" does not trip it. RAPTOR's own reporting harness is
-# appended by _inject_harness AFTER the gate and is exempt by
-# construction.
+# inside the spatch process, and the script *constraint* form
+# (`identifier i : script:python { ... }`, no `@`-header at all) does
+# the same on the newer Coccinelle grammars that accept it. An
+# LLM-synthesised or otherwise untrusted rule carrying any of them is
+# a code-execution vector, not a pattern.
+#
+# The gate judges the rule the way spatch's LEXER does, not the way
+# the raw bytes read. spatch skips /*...*/ and //-to-EOL comments
+# anywhere — including inside a rule header (`@/*c*/script:python@`
+# runs its script payload on spatch 1.3; python and ocaml both
+# probed), spanning lines, between the keyword and the colon
+# (`@script/*c*/:python@`), and after it — and accepts any
+# whitespace (newline, CR, FF, tab) between `@` and the keyword and
+# spaces around the `:`. The matcher therefore runs over
+# _lexical_scan() — comments replaced by whitespace, string/char-
+# literal contents blanked — and matches the bare keyword+colon.
+#
+# The matcher is deliberately WIDER than the probed executable set:
+# no line anchoring and no `@` requirement, so it also refuses the
+# script-constraint form (`identifier i : script:python { ... }`,
+# accepted by newer Coccinelle grammars, no `@`-header at all),
+# mid-line headers, and keywords a laxer parser might lex out of
+# positions spatch 1.3 rejects. On the untrusted paths every
+# widening only refuses more.
+#
+# Fail direction: every raw-text/lexer divergence is tuned to refuse
+# MORE, never less — a wrongly refused untrusted rule costs one LLM
+# retry; a wrongly admitted rule is code execution inside spatch plus
+# COCCIRESULT evidence forgery. A comment merely *mentioning*
+# "@script:python" still does not trip the gate (comments are
+# stripped first — inert for spatch too), and neither does the
+# marker inside a SAME-LINE string literal (blanked; probed: spatch
+# agrees on the same-line close and never runs a header out of one).
+# Strings and char constants WITHOUT a same-line close are a
+# different matter — spatch lexes those across newlines — and refuse
+# as ambiguous instead (see _lexical_scan). RAPTOR's own reporting
+# harness is appended by _inject_harness AFTER the gate and is
+# exempt by construction.
 _SCRIPT_BLOCK_RE = re.compile(
-    r"^[ \t]*@[ \t]*(?:script|initialize|finalize)[ \t]*:",
-    re.MULTILINE | re.IGNORECASE,
+    r"\b(?:script|initialize|finalize)\s*:",
+    re.IGNORECASE,
 )
 
 # Size cap on a .cocci rule body, shared by run_rule and the batched
@@ -105,25 +136,207 @@ _SCRIPT_BLOCK_RE = re.compile(
 # coccinelle rules are <100 KiB; 1 MiB is generous.
 _RULE_MAX_BYTES = 1 * 1024 * 1024
 
-# Structured-refusal message shared by run_rule / run_rules_batched.
+# Longest span a single quote may open as a char literal in
+# _lexical_scan before the gate refuses to classify it. Real C/SmPL
+# char literals are tiny ('x', '\n', '\x41'). A quote pair LONGER
+# than the cap on one line is a multi-char constant — spatch lexes it
+# as ONE token, so demoting the quote to a stray character would let
+# the literal's CONTENT reach the comment scanner (an embedded /*
+# would open a phantom comment and truncate a live script header out
+# of the gate's view). Ambiguous over-cap literals are therefore
+# REFUSED outright on untrusted paths (refuse-more; costs one LLM
+# retry), never demoted.
+_CHAR_LITERAL_CAP = 11  # MUST stay < len("script:ocaml") — pinned by test
+
+
+def _lexical_scan(text: str) -> tuple[str, bool]:
+    """Normalise SmPL rule text the way spatch's lexer sees it.
+
+    Returns ``(view, ambiguous)``. ``view`` is the text with comments
+    (``/*...*/`` and ``//`` to end-of-line) turned into whitespace
+    and string/char-literal CONTENTS blanked (the quotes stay);
+    length-preserving except for stripped comments. ``ambiguous`` is
+    True when the text contains quoting the scanner refuses to
+    classify — spatch can lex a quoted span WIDER than this view in
+    three shapes, and each would hand live-looking text (embedded
+    ``/*`` comment openers included) to the comment stripper,
+    opening a phantom comment that truncates a following script
+    header out of the gate's sight while spatch sees no comment at
+    all:
+
+    - a ``'`` pair closing on the same line but only BEYOND
+      ``_CHAR_LITERAL_CAP`` (a multi-char constant, one token for
+      spatch);
+    - a ``'`` with no same-line close when ANY later ``'`` exists
+      (spatch lexes a char constant ACROSS newlines to it);
+    - a ``"`` with no same-line close — raw newline OR backslash
+      continuation — when any later ``"`` exists (spatch lexes a
+      string literal across both).
+
+    All three refuse. The only demoted quotes are truly unpairable
+    ones (last quote of their kind in the text): probed inert on
+    spatch 1.3 — it consumes to EOF hunting the close and executes
+    nothing, even when the swallowed tail is independently
+    executable.
+
+    Divergences from the real lexer are deliberately refuse-more:
+
+    - an unterminated ``/*`` truncates the rest (probed: spatch
+      lexes nothing after it either, so nothing hidden there can
+      execute);
+    - a same-line-closed quote pair is blanked — for ``'`` the cap
+      keeps any hidden span shorter than the shortest executable
+      scripting spelling, and for ``"`` spatch agrees on the
+      same-line close (escape handling probed) and never runs a
+      header out of a same-line string.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    ambiguous = False
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            end = text.find("*/", i + 2)
+            out.append(" ")
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            nl = text.find("\n", i + 2)
+            out.append(" ")
+            if nl == -1:
+                break
+            i = nl  # keep the newline itself
+            continue
+        if c == '"':
+            end = -1
+            j = i + 1
+            while j < n:
+                ch = text[j]
+                if ch == "\\":
+                    if j + 1 < n and text[j + 1] == "\n":
+                        # Backslash continuation: no same-line close.
+                        break
+                    j += 2
+                    continue
+                if ch == '"':
+                    end = j
+                    break
+                if ch == "\n":
+                    break
+                j += 1
+            if end == -1:
+                # No same-line close — whether the scan stopped at a
+                # raw newline or a backslash continuation. spatch
+                # lexes a string literal ACROSS both to a later close
+                # quote (probed: rules with either shape parse and
+                # run), so everything between is one token for spatch
+                # while it would stay LIVE in this view — an embedded
+                # /* on the continuation line would open a phantom
+                # comment and truncate a following script header out
+                # of the gate's sight. Refuse whenever any later
+                # quote exists to pair with; only a quote with
+                # nothing left to pair against is a plain character
+                # (probed inert: spatch consumes to EOF hunting the
+                # close and executes nothing, even when the swallowed
+                # tail is independently executable).
+                if text.find('"', i + 1) != -1:
+                    ambiguous = True
+                out.append(c)
+                i += 1
+                continue
+            out.append('"')
+            out.append(" " * (end - i - 1))
+            out.append('"')
+            i = end + 1
+            continue
+        if c == "'":
+            end = -1
+            j = i + 1
+            while j < n:
+                ch = text[j]
+                if ch == "\\" and j + 1 < n:
+                    j += 2
+                    continue
+                if ch == "'":
+                    end = j
+                    break
+                if ch == "\n":
+                    break
+                j += 1
+            if end == -1:
+                # No same-line close. spatch lexes a char constant
+                # ACROSS newlines to a later close quote — everything
+                # between is one token for spatch while it stays LIVE
+                # in this view, so an embedded /* would open a
+                # phantom comment and truncate a following script
+                # header out of the gate's sight. Refuse whenever any
+                # later quote exists to pair with; only a quote with
+                # nothing left to pair against is a plain character
+                # (probed inert: spatch consumes to EOF and executes
+                # nothing).
+                if text.find("'", i + 1) != -1:
+                    ambiguous = True
+                out.append(c)
+                i += 1
+                continue
+            if end - i > _CHAR_LITERAL_CAP:
+                # Over-cap multi-char constant: refuse to classify
+                # (see _CHAR_LITERAL_CAP). Emit the quote as a plain
+                # character so the view stays inspectable.
+                ambiguous = True
+                out.append(c)
+                i += 1
+                continue
+            out.append("'")
+            out.append(" " * (end - i - 1))
+            out.append("'")
+            i = end + 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), ambiguous
+
+# Structured-refusal messages shared by run_rule / run_rules_batched.
 _SCRIPT_BLOCK_REFUSAL = (
-    "Rule contains a scripting block (@script:/@initialize:/@finalize:) "
-    "and allow_scripting=False — refused before spatch invocation. "
+    "Rule contains a scripting block (@script:/@initialize:/@finalize: "
+    "header or script:-constraint), or quoting too ambiguous to prove "
+    "the absence of one (a multi-char character constant), and "
+    "allow_scripting=False — refused before spatch invocation. "
     "Scripting blocks execute code inside spatch; pass "
     "allow_scripting=True only for in-repo, code-trust rules."
 )
 
+_RESULT_MARKER_REFUSAL = (
+    "Rule contains the COCCIRESULT result-marker text and "
+    "allow_scripting=False — refused before spatch invocation. The "
+    "runner nonce-rewrites every marker in the rule it executes, so a "
+    "rule-supplied emit site would be minted into accepted match "
+    "evidence (forgery). RAPTOR injects its own reporting harness; "
+    "remove the marker text, or pass allow_scripting=True only for "
+    "in-repo, code-trust rules."
+)
+
 
 def contains_script_block(rule_text: str) -> bool:
-    """True when ``rule_text`` declares an SmPL scripting block
-    (``@script:``, ``@initialize:``, or ``@finalize:`` rule header).
+    """True when ``rule_text`` declares an SmPL scripting construct
+    (``@script:`` / ``@initialize:`` / ``@finalize:`` rule header, or
+    the ``script:``-constraint form on a metavariable declaration) —
+    or when its quoting is lexically AMBIGUOUS (an over-cap
+    multi-char char constant) so the scan cannot prove the absence
+    of one (see ``_lexical_scan``); both refuse on untrusted paths.
 
     Shared gate: the runner refuses such rules unless the caller
     passes ``allow_scripting=True``, and checker synthesis uses the
     same predicate to reject LLM-emitted rules before they are
-    persisted to disk.
+    persisted to disk. Matches over the lexical view so comment /
+    whitespace spellings the real parser accepts cannot slip past a
+    raw-text scan (see ``_SCRIPT_BLOCK_RE``).
     """
-    return bool(_SCRIPT_BLOCK_RE.search(rule_text))
+    view, ambiguous = _lexical_scan(rule_text)
+    return ambiguous or bool(_SCRIPT_BLOCK_RE.search(view))
 
 
 def _sandboxed_run(cmd, **kwargs):
@@ -317,13 +530,17 @@ def run_rule(
             different isolation posture pass their own wrapper; tests
             pass stubs.
         allow_scripting: When False (default), a rule declaring an SmPL
-            scripting block (``@script:`` / ``@initialize:`` /
-            ``@finalize:``) is refused with a structured error before any
-            tempfile write or spatch invocation — those blocks execute
-            code inside spatch. Pass True only for in-repo, code-trust
-            rules (engine/coccinelle shipped rules, cocci_flow templates).
-            RAPTOR's own injected reporting harness is added after this
-            gate and is exempt by construction.
+            scripting construct (``@script:`` / ``@initialize:`` /
+            ``@finalize:`` header, or a ``script:``-constraint) is
+            refused with a structured error before any tempfile write or
+            spatch invocation — those constructs execute code inside
+            spatch. A rule carrying its own ``COCCIRESULT`` marker text
+            is refused the same way: the nonce rewrite would otherwise
+            mint the rule's emit site into accepted match evidence.
+            Pass True only for in-repo, code-trust rules
+            (engine/coccinelle shipped rules, cocci_flow templates).
+            RAPTOR's own injected reporting harness is added after these
+            gates and is exempt by construction.
         tree_files: Pre-enumerated C/H file walk of a directory target
             (see ``_collect_files_examined``). Multi-rule callers pass
             the same set for every rule so the loop-invariant tree walk
@@ -386,6 +603,21 @@ def run_rule(
         return SpatchResult(
             rule=rule_name, rule_path=str(rule),
             errors=[_SCRIPT_BLOCK_REFUSAL],
+            returncode=-1,
+        )
+
+    # Marker gate — an untrusted rule must never carry its own
+    # COCCIRESULT emit site: the nonce rewrite below rewrites EVERY
+    # marker in the text it executes, so a rule-supplied emit site
+    # would be noncified into evidence the parser accepts (forged
+    # matches minted as mechanical verdict) — the rule-side twin of
+    # the hostile-source forgery the per-invocation nonce closes (see
+    # _make_nonce). Refuse instead of noncifying; the injected harness
+    # is appended AFTER this gate and is exempt by construction.
+    if not allow_scripting and RESULT_PREFIX in rule_text:
+        return SpatchResult(
+            rule=rule_name, rule_path=str(rule),
+            errors=[_RESULT_MARKER_REFUSAL],
             returncode=-1,
         )
 
@@ -765,12 +997,20 @@ def run_rules_batched(
                 returncode=-1,
             )
             continue
-        # Scripting gate — same policy as run_rule, applied before the
-        # batch tempfile is written. Refused rules never reach spatch.
+        # Scripting + marker gates — same policy as run_rule, applied
+        # before the batch tempfile is written. Refused rules never
+        # reach spatch (and never reach the batch nonce rewrite).
         if not allow_scripting and contains_script_block(text):
             refused[r.stem] = SpatchResult(
                 rule=r.stem, rule_path=str(r),
                 errors=[_SCRIPT_BLOCK_REFUSAL],
+                returncode=-1,
+            )
+            continue
+        if not allow_scripting and RESULT_PREFIX in text:
+            refused[r.stem] = SpatchResult(
+                rule=r.stem, rule_path=str(r),
+                errors=[_RESULT_MARKER_REFUSAL],
                 returncode=-1,
             )
             continue

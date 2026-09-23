@@ -2398,3 +2398,550 @@ class TestFilesExaminedNoIncludes:
             f.endswith("never_included.h") for f in result.files_examined
         )
         assert any(f.endswith("a.c") for f in result.files_examined)
+class TestScriptingGateLexicalSpellings:
+    """contains_script_block must judge rule text the way spatch's
+    LEXER does, not the way the raw bytes read.
+
+    Every spelling in EXECUTED_SPELLINGS ran its script payload on
+    spatch 1.3 (python + ocaml scripting enabled), verified with a
+    runtime-computed marker so an error-output echo of the source can
+    never masquerade as execution, and with a clean (0) exit. A gate
+    that misses any of them admits code execution inside spatch on
+    the untrusted (allow_scripting=False) paths.
+
+    CONSERVATIVE_SPELLINGS do not execute on spatch 1.3 (most do not
+    even parse) but declare scripting in shapes other Coccinelle
+    grammars accept — the script-constraint form is real syntax on
+    newer versions — or that a laxer parser could lex; the gate
+    refuses them too, because on untrusted paths a wider matcher only
+    ever refuses more.
+    """
+
+    EXECUTED_SPELLINGS = {
+        "comment_in_header_python":
+            '@/*c*/script:python@\n@@\nprint("x")\n',
+        "comment_in_header_ocaml":
+            '@/*c*/script:ocaml@\n@@\nprint_string "x"\n',
+        "multiline_comment_spanning_header":
+            '@/*x\ny*/script:python@\n@@\nprint("x")\n',
+        "line_comment_then_keyword_next_line":
+            '@//c\nscript:python@\n@@\nprint("x")\n',
+        "newline_between_at_and_keyword":
+            '@\nscript:python@\n@@\nprint("x")\n',
+        "carriage_return_after_at":
+            '@\rscript:python@\n@@\nprint("x")\n',
+        "formfeed_after_at":
+            '@\x0cscript:python@\n@@\nprint("x")\n',
+        "tab_after_at":
+            '@\tscript:python@\n@@\nprint("x")\n',
+        "comment_between_keyword_and_colon":
+            '@script/*c*/:python@\n@@\nprint("x")\n',
+        "comment_after_colon":
+            '@script:/*c*/python@\n@@\nprint("x")\n',
+        "spaces_around_colon":
+            '@ script : python@\n@@\nprint("x")\n',
+        "comment_header_after_prior_rule":
+            '@r1@ expression E; @@ foo(E)\n'
+            '@/*x*/script:python@\n@@\nprint("x")\n',
+        "crlf_line_comment_header":
+            '@//c\r\nscript:python@\r\n@@\r\nprint("x")\r\n',
+        # Over-cap multi-char constant: spatch lexes it as ONE token,
+        # so a scanner that demoted the quote to a stray character
+        # let the embedded /* open a phantom comment truncating the
+        # live header below out of the gate's view.
+        "long_char_literal_phantom_comment_python":
+            "@a@ expression E; @@\nfoo(E, 'aaaaaaaaaaaaa/*aa');\n"
+            '@script:python@\n@@\nprint("x")\n',
+        "long_char_literal_phantom_comment_space_colon":
+            "@a@ expression E; @@\nfoo(E, 'aaaaaaaaaaaaa/*aa');\n"
+            '@script : python@\n@@\nprint("x")\n',
+        "long_char_literal_phantom_comment_ocaml":
+            "@a@ expression E; @@\nfoo(E, 'aaaaaaaaaaaaa/*aa');\n"
+            '@script:ocaml@\n@@\nprint_string "x"\n',
+        "minimal_over_cap_literal_phantom_comment":
+            "@a@ expression E; @@\nfoo(E, 'aaaaaaaaab/*');\n"
+            '@script:python@\n@@\nprint("x")\n',
+        # spatch lexes a char constant ACROSS newlines: no same-line
+        # close, but a later quote pairs it — everything between is
+        # ONE token for spatch while a live-view scan would hand the
+        # embedded /* to the comment stripper, truncating the header.
+        "multiline_char_literal_phantom_comment":
+            "@a@ expression E; position p; @@\n"
+            "foo@p(E, 'aa/*aa\nbb');\n"
+            '@script : python@\n@@\nprint("x")\n',
+        "multiline_char_literal_close_alone_on_next_line":
+            "@a@ expression E; position p; @@\n"
+            "foo@p(E, 'aa/*aa\n');\n"
+            '@script : python@\n@@\nprint("x")\n',
+        # Executed-but-visible ride-alongs: the CR / escaped-newline
+        # literals keep the header visible today; pinned so a future
+        # scanner change cannot silently admit them.
+        "cr_inside_char_literal":
+            "@a@ expression E; position p; @@\n"
+            "foo@p(E, 'aa/*a\rb');\n"
+            '@script:python@\n@@\nprint("x")\n',
+        "escaped_newline_inside_char_literal":
+            "@a@ expression E; position p; @@\n"
+            "foo@p(E, 'aa/*aa\\\nbb');\n"
+            '@script:python@\n@@\nprint("x")\n',
+        # spatch lexes a STRING literal across a raw newline and
+        # across a backslash continuation the same way: the
+        # continuation line is string content for spatch but would be
+        # live text for a view that stops at the newline — its /*
+        # would truncate the header below.
+        "multiline_string_phantom_comment":
+            '@a@ expression E; position p; @@\n'
+            'foo@p(E, "ab\n/*x");\n'
+            '@script : python@\n@@\nprint("x")\n',
+        "backslash_continued_string_phantom_comment":
+            '@a@ expression E; position p; @@\n'
+            'foo@p(E, "ab\\\n/*x");\n'
+            '@script : python@\n@@\nprint("x")\n',
+        "backslash_continued_string_phantom_plain_colon":
+            '@a@ expression E; position p; @@\n'
+            'foo@p(E, "ab\\\n/*x");\n'
+            '@script:python@\n@@\nprint("x")\n',
+        # Executed-but-visible ride-along: spatch honours //-comments
+        # on a #-directive line; the header on the next line runs and
+        # stays visible in the view.
+        "hash_line_comment_then_header":
+            '@x@ expression E; @@\nfoo(E);\n#define B // "\n'
+            '@script:python@\n@@\nprint("x")\n',
+    }
+
+    CONSERVATIVE_SPELLINGS = {
+        "comment_in_header_initialize":
+            '@/*c*/initialize:python@\n@@\nimport os\n',
+        "comment_in_header_finalize":
+            '@/*c*/finalize:python@\n@@\nimport os\n',
+        "depends_clause":
+            '@/*c*/script:python depends on r@\n@@\nprint("x")\n',
+        "uppercase_header":
+            '@SCRIPT:Python@\n@@\nprint("x")\n',
+        "header_midline_after_tokens":
+            '@r1@ expression E; @@ foo(E) @script:python@ @@ print("x")\n',
+        "script_constraint_no_header":
+            '@r@\nidentifier i : script:python { evil(i) };\n'
+            '@@\n- i(...);\n',
+        "script_constraint_on_inherited_metavar":
+            '@r@\nidentifier i;\n@@\n- i(...);\n'
+            '@t@\nidentifier r.i : script:python { evil(i) };\n'
+            '@@\n- i(...);\n',
+        "stray_quote_before_header":
+            "@r1@ expression E; @@\nfoo(E); ' @script:python@\n"
+            '@@\nprint("x")\n',
+        "unterminated_string_then_header_next_line":
+            '@r1@ expression E; @@\nfoo(E); "abc\n'
+            '@script:python@\n@@\nprint("x")\n',
+    }
+
+    @pytest.mark.parametrize(
+        "rule_text",
+        list(EXECUTED_SPELLINGS.values()),
+        ids=list(EXECUTED_SPELLINGS),
+    )
+    def test_executed_spellings_trip_the_gate(self, rule_text):
+        assert contains_script_block(rule_text)
+
+    @pytest.mark.parametrize(
+        "rule_text",
+        list(CONSERVATIVE_SPELLINGS.values()),
+        ids=list(CONSERVATIVE_SPELLINGS),
+    )
+    def test_conservative_spellings_trip_the_gate(self, rule_text):
+        assert contains_script_block(rule_text)
+
+    # ---- string/char-literal awareness: the stripper must neither
+    # ---- open comments inside literals (false-negative direction)
+    # ---- nor let literals swallow keywords (false-negative direction).
+
+    def test_block_comment_opener_inside_string_does_not_swallow_header(self):
+        # A string-unaware comment stripper would open /* here and
+        # swallow the real header below to EOF.
+        rule = (
+            '@r1@ expression E; @@\nfoo("a/*b");\n'
+            '@script:python@\n@@\nprint("x")\n'
+        )
+        assert contains_script_block(rule)
+
+    def test_line_comment_inside_string_does_not_swallow_sameline_header(self):
+        rule = (
+            '@r1@ expression E; @@\nfoo(E); "a//b" @script:python@\n'
+            '@@\nprint("x")\n'
+        )
+        assert contains_script_block(rule)
+
+    def test_comment_opener_inside_char_literal_does_not_swallow_header(self):
+        rule = (
+            "@r1@ expression E; @@\nfoo('/*');\n"
+            '@script:python@\n@@\nprint("x")\n'
+        )
+        assert contains_script_block(rule)
+
+    def test_over_cap_char_literal_is_refused_as_ambiguous(self):
+        # A '...' pair closing beyond the cap is a multi-char constant
+        # spatch lexes as one token — the scan refuses to classify it
+        # rather than demote the quote (whose contents would then
+        # reach the comment scanner: the phantom-comment bypass).
+        rule = "@x@ expression E; @@\nfoo(E, 'aaaaaaaaaaaaa/*aa');\n"
+        assert contains_script_block(rule)
+
+    def test_small_char_literals_stay_clean(self):
+        rule = "@x@ expression E; @@\nfoo(E, 'a', '\\x41', '\\n');\n"
+        assert not contains_script_block(rule)
+
+    def test_stray_quote_with_any_later_quote_is_refused(self):
+        # spatch can pair the quote ACROSS newlines with any later
+        # quote — the span between is one token for spatch, live text
+        # for a naive view, so it must refuse as ambiguous even with
+        # no scripting keyword anywhere.
+        rule = "@x@ expression E; @@\nfoo(E); ' \nbar(E, 'a');\n"
+        assert contains_script_block(rule)
+
+    def test_stray_quote_as_last_quote_stays_clean(self):
+        # Nothing left to pair with — probed inert on raw spatch
+        # (consumes to EOF looking for the close, executes nothing),
+        # and the view keeps everything after it live, so nothing
+        # can hide behind it.
+        rule = "@x@ expression E; @@\nfoo(E); ' \nbar(E);\n"
+        assert not contains_script_block(rule)
+
+    def test_unclosed_dquote_with_any_later_dquote_is_refused(self):
+        # Same pair-across-newlines hazard as the char constant:
+        # spatch lexes a string literal across a raw newline or a
+        # backslash continuation to a later close quote.
+        rule = '@x@ expression E; @@\nfoo(E, "ab\nbar(E, "x");\n'
+        assert contains_script_block(rule)
+        cont = '@x@ expression E; @@\nfoo(E, "ab\\\nbar(E, "x");\n'
+        assert contains_script_block(cont)
+
+    def test_stray_dquote_as_last_dquote_stays_clean(self):
+        # Probed inert on raw spatch (consumes to EOF hunting the
+        # close, executes nothing — even with an independently
+        # executable tail behind it).
+        rule = '@x@ expression E; @@\nfoo(E); "\nbar(E);\n'
+        assert not contains_script_block(rule)
+
+    def test_char_literal_cannot_blank_a_scripting_keyword(self):
+        # The shortest scripting spelling ("script:ocaml") is longer
+        # than the char-literal cap, so quoting it does not hide it.
+        from packages.coccinelle.runner import _CHAR_LITERAL_CAP
+        assert _CHAR_LITERAL_CAP < len("script:ocaml")
+        rule = (
+            "@r@\nidentifier i : 'script:ocaml' { evil(i) };\n"
+            "@@\n- i(...);\n"
+        )
+        assert contains_script_block(rule)
+
+    # ---- negatives: mentions that are NOT lexed as scripting must
+    # ---- keep passing (the gate stays adoption-compatible with the
+    # ---- shipped syntax example and comment-bearing LLM rules).
+
+    def test_comment_mention_not_flagged(self):
+        rule = (
+            "// this rule deliberately avoids @script:python blocks\n"
+            "@x@\nexpression E;\n@@\n* foo(E);\n"
+        )
+        assert not contains_script_block(rule)
+
+    def test_marker_inside_string_literal_not_flagged(self):
+        # Probed: spatch does not lex a header out of a string
+        # literal (the rule never executes), so no refusal either.
+        rule = '@x@\nexpression E;\n@@\nfoo("@script:python@");\n'
+        assert not contains_script_block(rule)
+
+    def test_word_suffix_not_flagged(self):
+        rule = "@x@\nexpression E;\n@@\npostscript: foo(E);\n"
+        assert not contains_script_block(rule)
+
+    def test_pure_smpl_not_flagged(self):
+        rule = (
+            "@unchecked@\nexpression E;\nposition p;\n@@\n"
+            "* E@p = malloc(...);\n... when != E == NULL\n* E->fld\n"
+        )
+        assert not contains_script_block(rule)
+
+
+class TestResultMarkerGate:
+    """An untrusted rule carrying its own COCCIRESULT emit site must be
+    refused before the nonce rewrite: the rewrite noncifies EVERY
+    marker in the text it executes, so a rule-supplied emit site would
+    be minted into evidence the parser accepts (forged SpatchMatch
+    rows chosen by the rule author)."""
+
+    MARKER_RULE = (
+        "// mentions COCCIRESULT: in prose only\n"
+        "@x@\nexpression E;\n@@\n* foo(E);\n"
+    )
+
+    def test_run_rule_refuses_marker_rule_before_invocation(self, tmp_path):
+        rule = tmp_path / "marker.cocci"
+        rule.write_text(self.MARKER_RULE)
+        target = tmp_path / "t.c"
+        target.write_text("int main(void){return 0;}\n")
+        calls = []
+
+        def record_runner(cmd, **kwargs):
+            calls.append(cmd)
+            proc = MagicMock()
+            proc.stdout, proc.stderr, proc.returncode = "", "", 0
+            return proc
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(target, rule, env=dict(os.environ),
+                              subprocess_runner=record_runner)
+        assert calls == []          # spatch never invoked
+        assert result.returncode == -1
+        assert result.matches == []
+        assert any("COCCIRESULT" in e for e in result.errors)
+
+    def test_trusted_caller_flag_still_admits_marker_rules(self, tmp_path):
+        rule = tmp_path / "marker.cocci"
+        rule.write_text(self.MARKER_RULE)
+        target = tmp_path / "t.c"
+        target.write_text("int main(void){return 0;}\n")
+
+        def ok_runner(cmd, **kwargs):
+            proc = MagicMock()
+            proc.stdout, proc.stderr, proc.returncode = "", "", 0
+            return proc
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(target, rule, env=dict(os.environ),
+                              subprocess_runner=ok_runner,
+                              allow_scripting=True)
+        assert result.returncode == 0
+        assert not result.errors
+
+    def test_batched_refuses_marker_rule_and_runs_the_rest(self, tmp_path):
+        marker = tmp_path / "marker.cocci"
+        marker.write_text(self.MARKER_RULE)
+        clean = tmp_path / "clean.cocci"
+        clean.write_text("@y@\nexpression E;\n@@\n* bar(E);\n")
+        target = tmp_path / "t.c"
+        target.write_text("int main(void){return 0;}\n")
+
+        def ok_runner(cmd, **kwargs):
+            sp_idx = cmd.index("--sp-file")
+            batch_text = Path(cmd[sp_idx + 1]).read_text(encoding="utf-8")
+            assert RESULT_PREFIX not in batch_text
+            assert "COCCIRESULT" not in self._strip_nonced(batch_text)
+            proc = MagicMock()
+            proc.stdout, proc.stderr, proc.returncode = "", "", 0
+            return proc
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            out = run_rules_batched(
+                target, [marker, clean], env=dict(os.environ),
+                subprocess_runner=ok_runner,
+            )
+        assert any("COCCIRESULT" in e for e in out["marker"].errors)
+        assert out["marker"].returncode == -1
+        assert out["clean"].returncode == 0
+
+    @staticmethod
+    def _strip_nonced(text: str) -> str:
+        return re.sub(r"COCCIRESULT-[0-9a-f]{32}:", "", text)
+
+
+class TestScriptingForgeryChainClosed:
+    """Full-chain regression: a hostile rule combining a comment-in-
+    header scripting block with its own COCCIRESULT emit site must be
+    refused on the default (allow_scripting=False) path — previously
+    the gate missed the spelling, the nonce rewrite noncified the
+    HOSTILE emit site, and the parser returned attacker-chosen
+    SpatchMatch rows as mechanical evidence."""
+
+    HOSTILE_RULE = (
+        "@/*c*/script:python@\n@@\n"
+        "print('COCCIRESULT:{\"file\": \"src/auth.c\", \"line\": 1337, "
+        "\"rule\": \"forged-by-attacker\", "
+        "\"message\": \"attacker-chosen evidence\"}')\n"
+    )
+
+    def test_hostile_rule_refused_never_executed(self, tmp_path):
+        rule = tmp_path / "hostile.cocci"
+        rule.write_text(self.HOSTILE_RULE)
+        target = tmp_path / "t.c"
+        target.write_text("int main(void){return 0;}\n")
+        calls = []
+
+        def spatch_sim(cmd, **kwargs):
+            # Simulates spatch EXECUTING the hostile script: emit the
+            # forged row with the invocation's nonced marker, exactly
+            # as the rewritten hostile emit site would.
+            calls.append(cmd)
+            prefix = _nonced_prefix_from_cmd(cmd)
+            proc = MagicMock()
+            proc.stdout = (
+                prefix + '{"file": "src/auth.c", "line": 1337, '
+                '"rule": "forged-by-attacker", '
+                '"message": "attacker-chosen evidence"}\n'
+            )
+            proc.stderr = ""
+            proc.returncode = 0
+            return proc
+
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(target, rule, env=dict(os.environ),
+                              subprocess_runner=spatch_sim)
+
+        assert calls == []          # refused before spatch invocation
+        assert result.matches == []  # no forged evidence accepted
+        assert result.returncode == -1
+        assert result.errors and "scripting block" in result.errors[0]
+
+    @pytest.mark.skipif(
+        not is_available(), reason="spatch not installed",
+    )
+    def test_hostile_rule_refused_on_real_spatch_path(self, tmp_path):
+        rule = tmp_path / "hostile.cocci"
+        rule.write_text(self.HOSTILE_RULE)
+        target = tmp_path / "t.c"
+        target.write_text("int main(void){return 0;}\n")
+        result = run_rule(target, rule)  # default allow_scripting=False
+        assert result.matches == []
+        assert result.returncode == -1
+        assert result.errors and "scripting block" in result.errors[0]
+
+    @pytest.mark.skipif(
+        not is_available(), reason="spatch not installed",
+    )
+    def test_constraint_form_refused_on_real_spatch_path(self, tmp_path):
+        rule = tmp_path / "constraint.cocci"
+        rule.write_text(
+            "@r@\nidentifier i : script:python "
+            "{ print('COCCIRESULT:{}') };\n@@\n- i(...);\n"
+        )
+        target = tmp_path / "t.c"
+        target.write_text("int main(void){return 0;}\n")
+        result = run_rule(target, rule)
+        assert result.matches == []
+        assert result.returncode == -1
+        assert result.errors and "scripting block" in result.errors[0]
+
+
+class TestNonceTheftForgeryChainClosed:
+    """The marker gate alone cannot survive an execution bypass: the
+    nonced harness is materialised into the SAME sp-file as the rule,
+    so an executing payload can read its own rule file (path via
+    /proc/self/cmdline) and mint a forged row with a VALID nonce —
+    no literal COCCIRESULT text in the rule, so only the scripting
+    gate stands between the rule and accepted forged evidence. This
+    pins the phantom-comment + space-colon spelling that once slipped
+    that gate, end to end."""
+
+    STEAL = (
+        "import re\n"
+        "raw = open('/proc/self/cmdline','rb').read().split(b'\\x00')\n"
+        "sp = raw[raw.index(b'--sp-file')+1].decode()\n"
+        "txt = open(sp).read()\n"
+        "mm = re.search('COCCIRESULT-[0-9a-f]{32}:', txt)\n"
+        "print(mm.group(0) + '{\"file\": \"src/auth.c\", \"line\": 1337, "
+        "\"rule\": \"forged-by-attacker\", "
+        "\"message\": \"attacker-chosen evidence\"}')\n"
+    )
+    HOSTILE_RULE = (
+        "@a@ expression E; position p; @@\n"
+        "foo@p(E, 'aaaaaaaaaaaaa/*aa');\n"
+        "@script : python@\n@@\n"
+    ) + STEAL
+    # Same chain through the multi-line-literal phantom (the close
+    # quote sits on the NEXT line; spatch lexes the constant across
+    # the newline, so no comment exists for it).
+    HOSTILE_RULE_MULTILINE = (
+        "@a@ expression E; position p; @@\n"
+        "foo@p(E, 'aa/*aa\nbb');\n"
+        "@script : python@\n@@\n"
+    ) + STEAL
+    # And through the string-literal twin (backslash continuation;
+    # spatch lexes the string across it, so the /* on the
+    # continuation line is string content for spatch).
+    HOSTILE_RULE_STRING = (
+        '@a@ expression E; position p; @@\n'
+        'foo@p(E, "ab\\\n/*x");\n'
+        "@script : python@\n@@\n"
+    ) + STEAL
+
+    def test_rules_carry_no_literal_marker(self):
+        # The theft variants deliberately defeat the marker gate; the
+        # scripting gate must therefore refuse them on its own.
+        for rule in (self.HOSTILE_RULE, self.HOSTILE_RULE_MULTILINE,
+                     self.HOSTILE_RULE_STRING):
+            assert RESULT_PREFIX not in rule
+            assert contains_script_block(rule)
+
+    def _record_runner(self, calls):
+        def record_runner(cmd, **kwargs):
+            # Snapshot the sp-file content at invocation time — the
+            # scratch dir is gone once the runner returns.
+            sp = Path(cmd[cmd.index("--sp-file") + 1])
+            calls.append((cmd, sp.read_text(encoding="utf-8")))
+            proc = MagicMock()
+            proc.stdout, proc.stderr, proc.returncode = "", "", 0
+            return proc
+        return record_runner
+
+    @pytest.mark.parametrize("rule_text", [
+        HOSTILE_RULE, HOSTILE_RULE_MULTILINE, HOSTILE_RULE_STRING,
+    ], ids=["over_cap_literal", "multiline_literal", "string_literal"])
+    def test_refused_before_spatch_invocation(self, tmp_path, rule_text):
+        rule = tmp_path / "hostile.cocci"
+        rule.write_text(rule_text)
+        target = tmp_path / "t.c"
+        target.write_text('int main(void){foo("z", 0); return 0;}\n')
+        calls = []
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            result = run_rule(target, rule, env=dict(os.environ),
+                              subprocess_runner=self._record_runner(calls))
+        assert calls == []
+        assert result.returncode == -1
+        assert result.matches == []
+        assert result.errors and "scripting block" in result.errors[0]
+
+    @pytest.mark.parametrize("rule_text", [
+        HOSTILE_RULE, HOSTILE_RULE_MULTILINE, HOSTILE_RULE_STRING,
+    ], ids=["over_cap_literal", "multiline_literal", "string_literal"])
+    def test_batched_path_refuses_too(self, tmp_path, rule_text):
+        hostile = tmp_path / "hostile.cocci"
+        hostile.write_text(rule_text)
+        clean = tmp_path / "clean.cocci"
+        clean.write_text("@y@\nexpression E;\n@@\n* bar(E);\n")
+        target = tmp_path / "t.c"
+        target.write_text('int main(void){foo("z", 0); return 0;}\n')
+        calls = []
+        with patch("packages.coccinelle.runner.is_available",
+                   return_value=True):
+            out = run_rules_batched(
+                target, [hostile, clean], env=dict(os.environ),
+                subprocess_runner=self._record_runner(calls),
+            )
+        assert out["hostile"].returncode == -1
+        assert out["hostile"].matches == []
+        assert any("scripting block" in e for e in out["hostile"].errors)
+        assert out["clean"].returncode == 0
+        # The one spatch invocation is the clean rule's batch — the
+        # hostile text never reaches an sp-file.
+        for _cmd, sp_text in calls:
+            assert "/proc/self/cmdline" not in sp_text
+
+    @pytest.mark.skipif(
+        not is_available(), reason="spatch not installed",
+    )
+    def test_refused_on_real_spatch_path(self, tmp_path):
+        rule = tmp_path / "hostile.cocci"
+        rule.write_text(self.HOSTILE_RULE)
+        target = tmp_path / "t.c"
+        target.write_text('int main(void){foo("z", 0); return 0;}\n')
+        result = run_rule(target, rule)  # allow_scripting defaults False
+        assert result.returncode == -1
+        assert result.matches == []
+        assert not any(
+            m.file == "src/auth.c" and m.line == 1337
+            for m in result.matches
+        )

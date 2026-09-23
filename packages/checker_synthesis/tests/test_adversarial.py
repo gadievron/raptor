@@ -623,6 +623,57 @@ class TestScriptingBlockRejection:
         )
         assert synth_mod._reject_cocci_scripting(body) is None
 
+    @pytest.mark.parametrize("body", [
+        '@/*c*/script:python@\n@@\nprint("x")\n',
+        '@/*c*/script:ocaml@\n@@\nprint_endline "x"\n',
+        '@/*x\ny*/script:python@\n@@\nprint("x")\n',
+        '@\nscript:python@\n@@\nprint("x")\n',
+        '@script/*c*/:python@\n@@\nprint("x")\n',
+        '@r@\nidentifier i : script:python { evil(i) };\n@@\n- i(...);\n',
+        "@a@ expression E; @@\nfoo(E, 'aaaaaaaaaaaaa/*aa');\n"
+        '@script:python@\n@@\nprint("x")\n',
+        "@a@ expression E; @@\nfoo(E, 'aaaaaaaaaaaaa/*aa');\n"
+        '@script : python@\n@@\nprint("x")\n',
+        "@a@ expression E; position p; @@\nfoo@p(E, 'aa/*aa\nbb');\n"
+        '@script : python@\n@@\nprint("x")\n',
+        '@a@ expression E; position p; @@\nfoo@p(E, "ab\\\n/*x");\n'
+        '@script : python@\n@@\nprint("x")\n',
+    ], ids=[
+        "comment_in_header_python",
+        "comment_in_header_ocaml",
+        "multiline_comment",
+        "newline_after_at",
+        "comment_between_keyword_and_colon",
+        "script_constraint_no_header",
+        "long_char_literal_phantom_comment_python",
+        "long_char_literal_phantom_comment_space_colon",
+        "multiline_char_literal_phantom_comment",
+        "continued_string_phantom_comment",
+    ])
+    def test_lexical_spellings_rejected(self, body):
+        """Comment-in-header and whitespace spellings execute their
+        script payloads on spatch 1.3 and must be rejected exactly
+        like the plain spelling; the script-constraint form (real
+        scripting syntax on newer Coccinelle grammars) is refused in
+        the same breath — a wider matcher on this path only ever
+        refuses more."""
+        err = synth_mod._reject_cocci_scripting(body)
+        assert err is not None
+        assert "scripting block" in err
+
+    def test_result_marker_body_rejected(self):
+        """A rule carrying its own COCCIRESULT emit site is an
+        evidence-forgery vector (the runner nonce-rewrites every
+        marker in the text it executes) and must never persist to the
+        checkers library."""
+        body = (
+            "@r@\nposition p;\n@@\nfree@p(...)\n"
+            "// COCCIRESULT: {\"file\": \"x.c\"}\n"
+        )
+        err = synth_mod._reject_cocci_scripting(body)
+        assert err is not None
+        assert "COCCIRESULT" in err
+
     def test_semgrep_rule_path_untouched(self, tmp_path, monkeypatch):
         """The gate is coccinelle-only — Semgrep YAML that merely
         contains the substring is not rejected."""

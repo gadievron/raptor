@@ -13,35 +13,28 @@ is injected by packages/coccinelle.runner._inject_harness — LLM-supplied
 rules must contain only declarative SmPL patterns.
 """
 
-import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
 from packages import coccinelle as coccinelle_pkg
+from packages.coccinelle.runner import contains_script_block
 
 from .base import ToolAdapter, ToolCapability, ToolEvidence, make_sandbox_runner
 
 
-# Annotations that introduce code execution into SmPL. Any of these in a
-# rule body (after the `@`) means the LLM is trying to run code, not match
-# patterns. We refuse such rules outright rather than try to neutralise.
-_FORBIDDEN_ANNOTATION_RE = re.compile(
-    r"@\s*(script\s*:|finalize\s*:|initialize\s*:)",
-    re.IGNORECASE,
-)
-
-
 def _contains_forbidden_blocks(rule: str) -> bool:
-    """Return True when the rule has @script:, @finalize:, or @initialize:.
+    """Return True when the rule declares an SmPL scripting construct
+    (@script:/@finalize:/@initialize: header, or a script:-constraint).
 
-    Comments are not stripped first — SmPL `//` comments don't span `@` lines
-    in practice, and being conservative (rejecting commented-out script
-    blocks too) is acceptable. It does mean prose mentioning the literal
-    annotations trips the gate, so the shipped syntax example (the text
-    the LLM mirrors) deliberately avoids spelling them out. See
-    _FORBIDDEN_ANNOTATION_RE for the matched syntax.
+    Delegates to the ONE shared gate — the runner's
+    ``contains_script_block`` — so this adapter, the runner's own
+    refusal, and checker synthesis agree on what counts as scripting.
+    A local weaker regex previously admitted spellings the real spatch
+    parser accepts (comment tokens inside the header, headers spanning
+    lines, the constraint form); the shared gate matches over the
+    lexer's view of the rule instead of its raw bytes.
     """
-    return bool(_FORBIDDEN_ANNOTATION_RE.search(rule))
+    return contains_script_block(rule)
 
 
 # Tokens that packages/coccinelle's runner keys its COCCIRESULT
@@ -51,13 +44,18 @@ def _contains_forbidden_blocks(rule: str) -> bool:
 # "no matches" — silently turning a rule that actually matched into a
 # refutation. Reject such rules up front: an LLM-generated declarative
 # rule never legitimately contains them (RAPTOR injects the result
-# scripting itself).
-_HARNESS_SUPPRESSING_TOKENS = ("script:python", "COCCIRESULT:")
+# scripting itself). Checked case-folded and any-language ("script:"
+# covers script:python AND script:ocaml / spelling-case variants) —
+# strictly wider than the runner's exact-substring keying, so every
+# rule that would suppress the harness is rejected here first; the
+# extra width only ever refuses more, never less.
+_HARNESS_SUPPRESSING_TOKENS = ("script:", "cocciresult")
 
 
 def _contains_harness_suppressors(rule: str) -> bool:
     """True when the rule text would disable result-harness injection."""
-    return any(tok in rule for tok in _HARNESS_SUPPRESSING_TOKENS)
+    low = rule.lower()
+    return any(tok in low for tok in _HARNESS_SUPPRESSING_TOKENS)
 
 
 _SYNTAX_EXAMPLE = """\

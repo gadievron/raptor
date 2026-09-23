@@ -151,6 +151,76 @@ class TestCoccinelleHarnessSuppressionRejection:
         rr.assert_called_once()
 
 
+class TestCoccinelleLexicalSpellingRejection:
+    """The gate must judge headers the way spatch's parser does.
+    spatch 1.3 (probed) skips comments inside rule headers and accepts
+    any whitespace between `@` and the scripting keyword — the local
+    raw-text regex admitted spellings whose script payloads execute.
+    The script-constraint form (`identifier i : script:python {...}`,
+    no `@`-header at all) is refused as well: it is real scripting
+    syntax on newer Coccinelle grammars, and a wider matcher on the
+    untrusted path only ever refuses more."""
+
+    @pytest.mark.parametrize("rule", [
+        '@/*c*/script:python@\n@@\nprint("x")\n',
+        '@/*c*/script:ocaml@\n@@\nprint_endline "x"\n',
+        '@/*x\ny*/script:python@\n@@\nprint("x")\n',
+        '@//c\nscript:python@\n@@\nprint("x")\n',
+        '@\nscript:python@\n@@\nprint("x")\n',
+        '@script/*c*/:python@\n@@\nprint("x")\n',
+        '@r1@ expression E; @@ foo(E) @script:python@ @@ print("x")\n',
+        '@r@\nidentifier i : script:python { evil(i) };\n@@\n- i(...);\n',
+        "@a@ expression E; @@\nfoo(E, 'aaaaaaaaaaaaa/*aa');\n"
+        '@script:python@\n@@\nprint("x")\n',
+        "@a@ expression E; @@\nfoo(E, 'aaaaaaaaaaaaa/*aa');\n"
+        '@script : python@\n@@\nprint("x")\n',
+        "@a@ expression E; @@\nfoo(E, 'aaaaaaaaaaaaa/*aa');\n"
+        '@script:ocaml@\n@@\nprint_string "x"\n',
+        "@a@ expression E; position p; @@\nfoo@p(E, 'aa/*aa\nbb');\n"
+        '@script : python@\n@@\nprint("x")\n',
+        '@a@ expression E; position p; @@\nfoo@p(E, "ab\\\n/*x");\n'
+        '@script : python@\n@@\nprint("x")\n',
+    ], ids=[
+        "comment_in_header_python",
+        "comment_in_header_ocaml",
+        "multiline_comment",
+        "line_comment_continuation",
+        "newline_after_at",
+        "comment_between_keyword_and_colon",
+        "header_midline",
+        "script_constraint_no_header",
+        "long_char_literal_phantom_comment_python",
+        "long_char_literal_phantom_comment_space_colon",
+        "long_char_literal_phantom_comment_ocaml",
+        "multiline_char_literal_phantom_comment",
+        "continued_string_phantom_comment",
+    ])
+    def test_lexical_spelling_rejected(self, rule):
+        assert _contains_forbidden_blocks(rule)
+
+    def test_run_rejects_comment_in_header_rule(self, tmp_path):
+        a = CoccinelleAdapter(sandbox=False)
+        with patch.object(a, "is_available", return_value=True):
+            ev = a.run(
+                '@/*c*/script:python@\n@@\nprint("x")\n', tmp_path,
+            )
+        assert not ev.success
+        assert "script" in ev.error.lower()
+
+    def test_suppressor_belt_is_case_folded_and_any_language(self):
+        from packages.hypothesis_validation.adapters.coccinelle import (
+            _contains_harness_suppressors,
+        )
+        # Case variants and the ocaml spelling must all trip the belt.
+        assert _contains_harness_suppressors("// uses SCRIPT:PYTHON")
+        assert _contains_harness_suppressors("// uses script:ocaml")
+        assert _contains_harness_suppressors("// CocciResult: lines")
+        # Direction guard: plain declarative text stays clean.
+        assert not _contains_harness_suppressors(
+            "@x@\nexpression E;\n@@\n* foo(E);\n"
+        )
+
+
 # HIGH: Safe env defaults -----------------------------------------------------
 
 class TestSafeEnvDefaults:
