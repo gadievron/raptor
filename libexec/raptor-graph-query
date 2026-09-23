@@ -169,10 +169,12 @@ def main() -> int:
         print(f"Graph: not found ({db_path})")
         return 1
     # Everything below interpolates graph-store content into the
-    # operator TTY. Node ids / labels / paths are ingested from run
-    # artifacts (scanned-tree file and function names, LLM hypothesis
-    # text), so the terminal lanes escape at the sink — the prompt
-    # consumers of the same strings ride the envelope instead.
+    # operator TTY. The store lives in the run/project directory whose
+    # write grant sandboxed target code holds, and the kind/count keys
+    # are read straight from its rows — like node ids / labels / paths
+    # (scanned-tree file and function names, LLM hypothesis text),
+    # every lane escapes at the sink; the prompt consumers of the same
+    # strings ride the envelope instead.
     if "nodes" in payload:
         print(f"Graph: {_sft(str(payload.get('path', db_path)))}")
         latest = payload.get("latest_snapshot") or {}
@@ -180,10 +182,10 @@ def main() -> int:
             print(f"Target: {_sft(str(latest['target_path']))}")
         print("Nodes:")
         for kind, count in sorted((payload.get("nodes") or {}).items()):
-            print(f"  {kind}: {count}")
+            print(f"  {_sft(str(kind), max_len=64)}: {count}")
         print("Edges:")
         for kind, count in sorted((payload.get("edges") or {}).items()):
-            print(f"  {kind}: {count}")
+            print(f"  {_sft(str(kind), max_len=64)}: {count}")
         return 0
     if "paths" in payload:
         for item in payload.get("paths", []):
@@ -194,7 +196,10 @@ def main() -> int:
                 f"{_sft(str(entry.get('id') or '?'))} {_sft(str(entry.get('label') or '?'))}"
                 f" -> {_sft(str(sink.get('id') or '?'))} {_sft(str(sink.get('label') or '?'))}"
                 f" ({status}, {_sft(str(item.get('confidence') or 'candidate'))},"
-                f" risk={item.get('risk_score')})"
+                # risk_score is computed as an int at query time (never
+                # a stored column); escaped anyway so the lane stays
+                # safe if that provenance changes.
+                f" risk={_sft(str(item.get('risk_score')), max_len=32)})"
             )
             if item.get("missing_boundary"):
                 print(f"  missing: {_sft(str(item['missing_boundary']), max_len=500)}")

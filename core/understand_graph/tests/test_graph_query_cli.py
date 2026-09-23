@@ -115,3 +115,58 @@ class GraphQueryTerminalEscapeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+_HOSTILE_KIND = "fn\x1b]0;PWNED\x07\x1b[2Jentry"
+
+
+def _seed_hostile_kind_graph(tmp: Path) -> Path:
+    """A store whose node/edge KIND columns carry hostile bytes.
+
+    The kind vocabulary is not enforced at INSERT and the store lives
+    in the run/project directory whose write grant sandboxed target
+    code holds — the summary lane's kind keys are attacker-influenced
+    bytes exactly like names and labels.
+    """
+    from core.understand_graph.store import open_graph
+
+    db = tmp / "hostile.graph.sqlite"
+    conn = open_graph(db)
+    conn.execute(
+        "INSERT INTO snapshots (id, target_path) VALUES ('s1', '/tgt')")
+    conn.execute(
+        "INSERT INTO nodes (id, kind, stable_key, name, file,"
+        " snapshot_id, stale) VALUES ('n1', ?, 'k1', 'n', 'f.c',"
+        " 's1', 0)", (_HOSTILE_KIND,))
+    conn.execute(
+        "INSERT INTO nodes (id, kind, stable_key, name, file,"
+        " snapshot_id, stale) VALUES ('n2', 'sink', 'k2', 'm',"
+        " 'g.c', 's1', 0)")
+    conn.execute(
+        "INSERT INTO edges (id, src_id, dst_id, kind, snapshot_id,"
+        " stale) VALUES ('e1', 'n1', 'n2', ?, 's1', 0)",
+        (_HOSTILE_KIND,))
+    conn.commit()
+    conn.close()
+    return db
+
+
+class GraphQuerySummaryKindEscapeTests(unittest.TestCase):
+
+    def test_summary_lane_escapes_hostile_kinds(self):
+        with TemporaryDirectory() as td:
+            db = _seed_hostile_kind_graph(Path(td))
+            proc = _run("--db", str(db), "--summary")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("Nodes:", proc.stdout)
+            self.assertIn("Edges:", proc.stdout)
+            self.assertNotIn("\x1b", proc.stdout)
+            self.assertNotIn("\x07", proc.stdout)
+
+    def test_summary_json_lane_stays_machine_exact(self):
+        with TemporaryDirectory() as td:
+            db = _seed_hostile_kind_graph(Path(td))
+            proc = _run("--db", str(db), "--summary", "--json")
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            payload = __import__("json").loads(proc.stdout)
+            self.assertIn(_HOSTILE_KIND, payload.get("nodes", {}))
