@@ -1,12 +1,11 @@
-"""Project run-dir readers pay the shared default read budget.
+"""Project run-dir readers pay a read budget on the import marker.
 
 ``run_is_imported`` reads the import marker through
-``core.json.load_json`` with no site-specific budget, so it must
-inherit the loader's capped-by-default contract: an oversized marker
-is refused and degrades to "not imported" (the site's own
-best-effort semantics), a normal marker still flows. The budget is
-tightened via the module constant (resolved per call) so the probe
-costs kilobytes, not the real cap.
+``core.json.load_json`` with an explicit site budget (1 MiB — a
+legitimate marker is ~100 bytes): an oversized marker is refused and
+degrades to "not imported" (the site's own best-effort semantics), a
+normal marker still flows. The site budget is tighter than the
+loader's default, so the probe exercises the real cap directly.
 """
 
 import json
@@ -31,9 +30,12 @@ def _write_marker(run_dir: Path, obj: dict) -> None:
     )
 
 
-def test_oversized_marker_refused(tmp_path, monkeypatch):
-    _tighten(monkeypatch)
-    _write_marker(tmp_path, {"imported": True, "pad": "x" * 4096})
+def test_oversized_marker_refused(tmp_path):
+    # over the site's own 1 MiB marker budget (the site cap is an
+    # explicit argument, tighter than the loader default — the
+    # module-constant tighten cannot reach it)
+    _write_marker(
+        tmp_path, {"imported": True, "pad": "x" * (1024 * 1024 + 1)})
     assert run_is_imported(tmp_path) is False
 
 

@@ -240,4 +240,7 @@ class TestPipelineE2E:
 
         paths = [{"id": "P1", "steps": [{"function": "open"}], "proximity": 5}]
         result = annotate_attack_paths(paths, {})
-        assert result is paths
+        # copy contract: callers own the result even on the no-evidence
+        # path — equal content, never the same (mutation-aliased) list
+        assert result == paths
+        assert result is not paths

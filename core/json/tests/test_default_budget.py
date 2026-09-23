@@ -114,8 +114,12 @@ class TestWithCommentsDefaultBudget(unittest.TestCase):
             big = _sparse(Path(d) / "big.json", DEFAULT_JSON_MAX_BYTES + 1)
             with self.assertLogs("core.json.utils", level="WARNING") as logs:
                 self.assertIsNone(load_json_with_comments(big))
+            # the gated-fd loader reports the budget breach through the
+            # parse-failure wrapper ("exceeds max_bytes"); older builds
+            # said "oversize" — accept either refusal spelling
             self.assertTrue(
-                any("oversize" in line for line in logs.output), logs.output,
+                any("oversize" in line or "exceeds max_bytes" in line
+                    for line in logs.output), logs.output,
             )
 
     def test_patched_default_enforced_and_none_waives(self):

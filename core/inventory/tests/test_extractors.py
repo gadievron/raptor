@@ -1043,6 +1043,7 @@ class TestCFillLineEndsLinear:
         assert by_name == {"broken": 5, "ok": 5}
 
 
+@requires_ts("c")
 def test_c_repair_pass_ignores_commented_out_functions():
     # tree-sitter correctly sees only a comment; the gap-filling regex
     # ran over raw text and minted a phantom function item (a
