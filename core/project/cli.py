@@ -3237,7 +3237,7 @@ def _do_merge(project, merge_type, yes) -> None:
     from core.json import save_json
     from core.run.metadata import RUN_METADATA_FILE
 
-    from .clean import split_live_runs
+    from .clean import run_is_live, split_live_runs
     from .merge import merge_runs
 
     groups = project.get_run_dirs_by_type()
@@ -3353,6 +3353,18 @@ def _do_merge(project, merge_type, yes) -> None:
         # Delete source runs (continue on individual failures)
         failed_deletes = []
         for d in dirs:
+            # Liveness re-check immediately before the delete, exactly
+            # as execute_clean does: the plan-time split is arbitrarily
+            # stale by now (an unbounded operator confirm sits between
+            # plan and delete, and a planned run can be RESUMED in that
+            # gap) — a plan-time check alone rmtree'd in-flight runs.
+            # The merged copy already exists, so skipping only leaves a
+            # duplicate source dir behind, never loses data.
+            if run_is_live(Path(d)):
+                print(f"  {shown_type}: skipped delete (resumed while "
+                      f"merging): "
+                      f"{sanitise_for_terminal(d.name, max_len=120)}")
+                continue
             try:
                 shutil.rmtree(d)
             except Exception as e:  # noqa: BLE001 — continue past one failure
