@@ -54,6 +54,16 @@ _SHOWMAP_SUMMARY_RE = re.compile(
 # One union-map entry per line: "edge_id" or "edge_id:hit_count".
 _SHOWMAP_EDGE_RE = re.compile(r"^\d+(?::\d+)?$")
 
+# Byte budgets for host-side reads of target-writable files. The fuzz
+# output dir is writable by the (attacker-built) target during the
+# campaign, so every file read back — logs, edge maps, fuzzer_stats —
+# must be bounded (the libFuzzer runner's _MAX_PARSE_BYTES and the
+# coverage bridge's _MAX_CAPTURE_BYTES are the sibling caps). Real
+# artifacts are orders of magnitude smaller than every cap here.
+_MAX_SHOWMAP_MAP_BYTES = 16 * 1024 * 1024
+_MAX_STATS_BYTES = 1024 * 1024
+_SHOWMAP_CONSOLE_TAIL_BYTES = 64 * 1024
+
 
 # Re-exported for callers/tests; implementation shared with the
 # libFuzzer runner and the capability probes.
@@ -1208,14 +1218,22 @@ class AFLRunner:
 
     @staticmethod
     def _tail_file(path: Path, max_bytes: int = 4096) -> str:
+        # Seek-tail, never read-then-slice: the file is target-
+        # writable and can be arbitrarily large — materialising it
+        # whole for a 4 KiB tail is a memory sink (same idiom as
+        # LibFuzzerRunner._read_log_tail).
         try:
-            data = path.read_bytes()
+            with path.open("rb") as fh:
+                size = os.fstat(fh.fileno()).st_size
+                if size > max_bytes:
+                    fh.seek(size - max_bytes)
+                data = fh.read(max_bytes)
         except OSError:
             return ""
         # Tails are target/afl output relayed to the operator's
         # terminal — strip escape-injection vectors at this boundary.
         return strip_terminal_controls(
-            data[-max_bytes:].decode(errors="replace")
+            data.decode(errors="replace")
         ).strip()
 
     @staticmethod
@@ -1430,22 +1448,26 @@ class AFLRunner:
     def get_stats(self) -> dict:
         """Get fuzzing statistics from AFL."""
         stats_file = self.output_dir / "main" / "fuzzer_stats"
-        stats = {}
+        stats: dict[str, str] = {}
         try:
-            with open(stats_file, encoding="utf-8", errors="replace") as f:
-                for line in f:
-                    if ":" in line:
-                        key, value = line.strip().split(":", 1)
-                        # fuzzer_stats lives in the target-writable
-                        # output dir and its values are logged to the
-                        # operator's terminal — strip control chars at
-                        # the parse chokepoint (numeric consumers are
-                        # unaffected).
-                        stats[strip_terminal_controls(key.strip())] = (
-                            strip_terminal_controls(value.strip())
-                        )
-        except FileNotFoundError:
-            pass
+            # Byte-capped read: the file is target-writable, and one
+            # giant line would materialise whole through per-line
+            # iteration. Real fuzzer_stats is ~30 short lines.
+            with open(stats_file, "rb") as f:
+                data = f.read(_MAX_STATS_BYTES)
+        except OSError:
+            return stats
+        for line in data.decode("utf-8", errors="replace").splitlines():
+            if ":" in line:
+                key, value = line.strip().split(":", 1)
+                # fuzzer_stats lives in the target-writable
+                # output dir and its values are logged to the
+                # operator's terminal — strip control chars at
+                # the parse chokepoint (numeric consumers are
+                # unaffected).
+                stats[strip_terminal_controls(key.strip())] = (
+                    strip_terminal_controls(value.strip())
+                )
         return stats
 
     def run_showmap(self) -> dict:
@@ -1547,29 +1569,41 @@ class AFLRunner:
             extra = {}
             if self.sandbox_rootfs is not None:
                 extra["rootfs"] = str(self.sandbox_rootfs)
-            result = _sandbox_run(
-                showmap_cmd,
-                block_network=True,
-                target=str(self.output_dir),
-                output=str(self.output_dir),
-                readable_paths=readable_paths,
-                capture_output=True,
-                text=True,
-                cwd=str(self.output_dir),
-                env=env,
-                timeout=300,
-                sanitise_host_fingerprint=True,
-                **extra,
-            )
+            # Console streams go to a file, never an in-memory PIPE:
+            # the showmap child replays the (attacker-built) target,
+            # which inherits stderr and can flood it without limit.
+            # Both streams share one log — the summary banner sits at
+            # the end of the output, so a bounded tail is all the
+            # parser needs.
+            console_log = self.output_dir / "showmap-console.log"
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            with console_log.open("wb") as con_fh:
+                _sandbox_run(
+                    showmap_cmd,
+                    block_network=True,
+                    target=str(self.output_dir),
+                    output=str(self.output_dir),
+                    readable_paths=readable_paths,
+                    stdout=con_fh,
+                    stderr=con_fh,
+                    cwd=str(self.output_dir),
+                    env=env,
+                    timeout=300,
+                    sanitise_host_fingerprint=True,
+                    **extra,
+                )
 
-            coverage = self._parse_showmap_output(
-                map_file,
-                (result.stdout or "") + "\n" + (result.stderr or ""),
-            )
+            console = self._tail_file(
+                self.output_dir / "showmap-console.log",
+                max_bytes=_SHOWMAP_CONSOLE_TAIL_BYTES)
+            coverage = self._parse_showmap_output(map_file, console)
             if coverage:
                 logger.info("Coverage analysis complete")
                 return coverage
-            logger.warning("afl-showmap failed: %s", result.stderr)
+            logger.warning(
+                "afl-showmap failed: %s",
+                self._tail_file(console_log, max_bytes=4096),
+            )
             return {}
 
         except SandboxSetupError:
@@ -1600,13 +1634,25 @@ class AFLRunner:
             coverage["inputs_processed"] = match.group(4)
             return coverage
         try:
-            edge_lines = [
-                line for line in map_file.read_text(
-                    encoding="utf-8", errors="replace").splitlines()
-                if _SHOWMAP_EDGE_RE.match(line)
-            ]
+            # Byte-capped read: the map lands in the target-writable
+            # output dir. A real union edge map is at most a few MB
+            # (one short line per edge); anything over the cap is a
+            # planted file — skip it loudly rather than count it.
+            with map_file.open(encoding="utf-8", errors="replace") as fh:
+                text = fh.read(_MAX_SHOWMAP_MAP_BYTES + 1)
         except OSError:
             return coverage
-        if edge_lines:
-            coverage["edges_covered"] = str(len(edge_lines))
+        if len(text) > _MAX_SHOWMAP_MAP_BYTES:
+            logger.warning(
+                "afl-showmap map %s exceeds the %d-byte cap "
+                "(target-writable file) — skipping the edge count",
+                map_file, _MAX_SHOWMAP_MAP_BYTES,
+            )
+            return coverage
+        edge_count = sum(
+            1 for line in text.splitlines()
+            if _SHOWMAP_EDGE_RE.match(line)
+        )
+        if edge_count:
+            coverage["edges_covered"] = str(edge_count)
         return coverage

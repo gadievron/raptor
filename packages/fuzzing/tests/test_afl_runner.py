@@ -901,7 +901,12 @@ class TestShowmapCoverage:
         def fake_run(cmd, **kwargs):
             seen["cmd"] = cmd
             seen.update(kwargs)
-            return sp.CompletedProcess(cmd, rc, stdout="", stderr=stderr)
+            # Console streams are file-redirected (bounded tail read),
+            # not PIPE-captured — emit the banner like the tool would.
+            err_fh = kwargs.get("stderr")
+            if err_fh is not None and hasattr(err_fh, "write"):
+                err_fh.write(stderr.encode())
+            return sp.CompletedProcess(cmd, rc)
 
         monkeypatch.setattr(mod, "_sandbox_run", fake_run)
         return seen
@@ -1025,3 +1030,109 @@ class TestStatusPathsFound:
 
     def test_no_discovery_key_reads_na(self):
         assert AFLRunner._status_paths_found({"execs_done": "1"}) == "N/A"
+
+
+class TestBoundedTargetWritableReads:
+    """AFL output files live in target-writable space; every host-side
+    reader must be byte-bounded (the libFuzzer runner's seek-tail and
+    the coverage bridge's capture cap are the sibling idioms). A
+    hostile target that floods its own stderr or plants a huge map /
+    stats file must not OOM the analyser after the campaign."""
+
+    def test_tail_file_does_not_materialise_whole_file(self, tmp_path):
+        import tracemalloc
+
+        log = tmp_path / "stderr.log"
+        with log.open("wb") as f:
+            f.write(b"A" * (8 * 1024 * 1024))
+            f.write(b"TAIL-MARKER")
+        tracemalloc.start()
+        tail = AFLRunner._tail_file(log)
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        assert tail.endswith("TAIL-MARKER")
+        assert peak < 1024 * 1024, (
+            f"whole file materialised for a 4 KiB tail (peak {peak} bytes)"
+        )
+
+    def test_parse_showmap_map_over_cap_skipped_with_warning(
+        self, tmp_path, monkeypatch, caplog,
+    ):
+        import packages.fuzzing.afl_runner as ar
+
+        monkeypatch.setattr(ar, "_MAX_SHOWMAP_MAP_BYTES", 1024)
+        map_file = tmp_path / "showmap-edges.txt"
+        map_file.write_text(
+            "".join(f"{i:06d}:1\n" for i in range(1024)))
+        with caplog.at_level("WARNING", logger="packages.fuzzing.afl_runner"):
+            coverage = AFLRunner._parse_showmap_output(map_file, "")
+        assert coverage == {}
+        assert any("cap" in r.getMessage() for r in caplog.records), (
+            "over-cap map must be skipped loudly, not counted or read whole"
+        )
+
+    def test_parse_showmap_map_under_cap_still_counts(self, tmp_path):
+        map_file = tmp_path / "showmap-edges.txt"
+        map_file.write_text("000001:1\n000002:5\nnot-an-edge\n")
+        coverage = AFLRunner._parse_showmap_output(map_file, "")
+        assert coverage["edges_covered"] == "2"
+
+    def test_get_stats_read_is_byte_capped(self, tmp_path, monkeypatch):
+        import packages.fuzzing.afl_runner as ar
+
+        monkeypatch.setattr(ar, "_MAX_STATS_BYTES", 1024)
+        runner = AFLRunner.__new__(AFLRunner)
+        runner.output_dir = tmp_path
+        stats_dir = tmp_path / "main"
+        stats_dir.mkdir(parents=True)
+        with (stats_dir / "fuzzer_stats").open("w") as f:
+            f.write("execs_done   : 123\n")
+            f.write("banner : " + "x" * (4 * 1024 * 1024) + "\n")
+        stats = runner.get_stats()
+        assert stats["execs_done"] == "123"
+        assert all(len(v) <= 1024 for v in stats.values()), (
+            "a giant single line must not materialise past the cap"
+        )
+
+    def test_run_showmap_redirects_capture_to_files(
+        self, tmp_path, monkeypatch,
+    ):
+        """The showmap subprocess inherits the (attacker-built)
+        target's stderr — capture must go to files with a bounded
+        tail read, never an unbounded in-memory PIPE buffer."""
+        import subprocess as sp
+
+        import packages.fuzzing.afl_runner as ar
+
+        seen = {}
+
+        def fake_sandbox_run(cmd, **kwargs):
+            seen["kwargs"] = kwargs
+            assert not kwargs.get("capture_output"), (
+                "unbounded in-memory capture over target-inherited stderr"
+            )
+            stdout = kwargs.get("stdout")
+            assert stdout is not None and hasattr(stdout, "write"), (
+                "stdout must be redirected to a file"
+            )
+            stdout.write(
+                b"A coverage of 7 edges were achieved out of 70 existing "
+                b"(10.00%) with 3 input files.\n"
+            )
+            return sp.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(ar, "_sandbox_run", fake_sandbox_run)
+        runner = AFLRunner.__new__(AFLRunner)
+        runner.output_dir = tmp_path
+        runner.corpus_dir = tmp_path / "corpus"
+        runner.corpus_dir.mkdir()
+        (runner.corpus_dir / "seed").write_bytes(b"s")
+        runner.binary = tmp_path / "target"
+        runner.binary.write_bytes(b"\x7fELF")
+        runner.sandbox_rootfs = None
+        runner.binary_in_rootfs = None
+        runner.afl_fuzz = "afl-fuzz"
+        runner.input_mode = "stdin"
+        runner._resolved_binary_mode = None
+        coverage = runner.run_showmap()
+        assert coverage.get("edges_covered") == "7"
