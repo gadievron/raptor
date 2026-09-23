@@ -217,18 +217,25 @@ def _classify_entry_points(
         ep_type = str(ep.get("type") or "").lower()
         trust_level = str(ep.get("trust_level") or "").lower()
 
-        if trust_level in ("internal_value", "runtime_constant"):
-            trust = "trusted"
-        elif trust_level in ("attacker_controlled", "persistent_store"):
+        # Authority order: operator threat-model names FIRST — the
+        # context map's trust_level is LLM-authored /understand
+        # output (imported unconditionally at prep), so it may only
+        # mark an entry UNTRUSTED. A "trusted" classification comes
+        # from the operator or the type heuristic alone: a hostile or
+        # hallucinated map stamping entries internal_value flowed
+        # into provenance_all_trusted, which resolves corroborated
+        # suspicious outcomes to clean and vetoes design-pattern-CWE
+        # promotion.
+        if ep_name in untrusted_names:
             trust = "untrusted"
         elif ep_name in trusted_names:
             trust = "trusted"
-        elif ep_name in untrusted_names:
+        elif trust_level in ("attacker_controlled", "persistent_store"):
+            trust = "untrusted"
+        elif ep_type in _UNTRUSTED_TYPES:
             trust = "untrusted"
         elif ep_type in _TRUSTED_TYPES:
             trust = "trusted"
-        elif ep_type in _UNTRUSTED_TYPES:
-            trust = "untrusted"
         else:
             trust = "untrusted"
 
