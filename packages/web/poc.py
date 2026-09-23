@@ -234,8 +234,15 @@ def build_nuclei_template(finding: WebFinding) -> str | None:
         "info:",
         f"  name: {json.dumps('RAPTOR replay — ' + str(data.get('title') or vuln_type))}",
         "  author: raptor",
-        f"  severity: {data.get('severity') or 'high'}",
-        f"  tags: {vuln_type},raptor-replay",
+        # ALL interpolated values are JSON-encoded — including method,
+        # which originates from hostile HTML (a crawled form's method
+        # attribute, entity-decoded by bs4, or an OpenAPI/hand-fed
+        # spec): raw interpolation let a newline-bearing value inject
+        # lines at column 0. severity/tags come from RAPTOR-side
+        # vocabularies today, but the docstring's totality claim must
+        # hold by construction, not by provenance accident.
+        f"  severity: {json.dumps(str(data.get('severity') or 'high'))}",
+        f"  tags: {json.dumps(vuln_type + ',raptor-replay')}",
         "  description: >-",
         "    Replays the confirmation probe of an oracle-proven RAPTOR web",
         "    finding with the class marker as the matcher. A match replays",
@@ -243,7 +250,7 @@ def build_nuclei_template(finding: WebFinding) -> str | None:
         "    regression check after remediation.",
         "",
         "http:",
-        f"  - method: {method}",
+        f"  - method: {json.dumps(method)}",
         "    path:",
         f"      - {json.dumps('{{BaseURL}}' + path)}",
     ]

@@ -266,3 +266,39 @@ class TestContextMapRendererContract(unittest.TestCase):
         self.assertIn("parameter 'q'", mermaid)
         self.assertNotIn('"?', mermaid)
         self.assertNotIn("unknown", mermaid)
+
+
+class TestFormMethodChokepoint(unittest.TestCase):
+    """The crawled form's method attribute is hostile HTML (bs4
+    entity-decodes `&#10;` into a live newline) and rides into fuzz
+    requests and PoC artifacts — normalise it at the discovery
+    chokepoint."""
+
+    def _parse(self, form_html: str) -> dict:
+        import pytest
+
+        bs4 = pytest.importorskip("bs4")
+        from unittest.mock import MagicMock as _Mock
+
+        from packages.web.crawler import WebCrawler
+
+        soup = bs4.BeautifulSoup(form_html, "html.parser")
+        crawler = WebCrawler(_Mock(), max_depth=1, max_pages=1)
+        return crawler._parse_form(soup.find("form"), "http://t.example/")
+
+    def test_entity_decoded_newline_method_defaults_to_get(self):
+        form = self._parse(
+            '<form action="/x" method="post&#10;x-injected: y">'
+            '<input name="a"></form>'
+        )
+        self.assertEqual(form["method"], "GET")
+
+    def test_legitimate_methods_survive_case_normalised(self):
+        self.assertEqual(
+            self._parse('<form method="post"><input name="a"></form>')["method"],
+            "POST",
+        )
+        self.assertEqual(
+            self._parse('<form><input name="a"></form>')["method"],
+            "GET",
+        )

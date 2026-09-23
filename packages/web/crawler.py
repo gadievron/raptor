@@ -450,11 +450,20 @@ class WebCrawler:
             pairs.append((str(name), str(meta.get("value", ""))))
         return tuple(sorted(pairs))
 
+    # The only methods an HTML form can submit with; anything else in
+    # the attribute (per the HTML spec, and per hostile pages — bs4
+    # entity-decodes `&#10;` into a live newline that would ride the
+    # discovered method into downstream artifacts) is invalid and
+    # defaults to GET.
+    _FORM_METHODS = frozenset({"GET", "POST"})
+
     def _parse_form(self, form_element, page_url: str) -> dict | None:
         """Parse HTML form to extract inputs and action."""
         try:
             action = form_element.get("action", "")
-            method = form_element.get("method", "GET").upper()
+            method = str(form_element.get("method", "GET") or "GET").strip().upper()
+            if method not in self._FORM_METHODS:
+                method = "GET"
             absolute_action = urljoin(page_url, action)
 
             inputs = {}
