@@ -348,10 +348,11 @@ def _spearman_rho(
 ) -> float | None:
     """Spearman rank correlation, hand-rolled (no scipy).
 
-    ρ = 1 - (6 · Σd²) / (n · (n² - 1))
-
-    Where d is the difference between ranks of paired values.
-    Tied ranks use the average-rank convention.
+    Computed as the Pearson correlation of the average ranks —
+    the correct general form under ties. (The textbook
+    ``1 − 6·Σd² / (n·(n² − 1))`` shortcut is equivalent only when
+    there are NO ties; our binary exploited labels are almost all
+    ties, so the shortcut would be wrong here.)
 
     Returns None when there are fewer than 2 paired values (not
     enough to compute a meaningful correlation) or all-x or all-y

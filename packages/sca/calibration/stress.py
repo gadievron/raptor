@@ -1287,6 +1287,10 @@ def write_baseline(
             "deps_analysed": r.deps_analysed,
             "vuln_findings": r.vuln_findings,
             "eco_breakdown": dict(sorted(r.eco_breakdown.items())),
+            # Single-run sample, NOT a percentile — the key name is
+            # frozen in the committed baseline schema (renaming
+            # would invalidate every existing baseline file). A real
+            # p50 needs repeat runs the sweep doesn't do.
             "elapsed_seconds_p50": round(r.elapsed_seconds, 1),
         }
     output = {

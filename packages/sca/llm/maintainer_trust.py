@@ -92,9 +92,11 @@ def assess_batch(
     return results
 
 
-# Per-field cap for registry-sourced strings in the prompt block.
-# readme_preview already carries its own cap with the rationale that
-# applies to every other field here too.
+# Per-field cap for registry-sourced strings in the prompt block:
+# registry metadata is attacker-influenced, and an uncapped field
+# would let one hostile value dominate the prompt. (This module
+# renders metadata fields only — readme_preview is rendered, and
+# separately capped, by slopsquat_verdict.)
 _FIELD_CAP = 200
 
 

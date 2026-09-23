@@ -1,8 +1,13 @@
 """Pydantic schemas for LLM stage structured outputs.
 
-Every field the LLM populates is bounded and typed so the mechanical
-layer never acts on free-form text without validation.  String fields
-are sanitised post-validation by :func:`packages.sca.llm.run_stage`.
+Every field the LLM populates is typed, and free-form strings are
+sanitised (and content-capped) post-validation by
+:func:`packages.sca.llm.run_stage`. Bounds are NOT total: list
+fields carry no cardinality limit and most string fields no
+``max_length`` (the "max 200 chars" notes in description strings
+are model guidance, not enforcement) — the mechanical layer must
+not assume schema-enforced size limits beyond the sanitiser's
+per-string content cap.
 """
 
 from __future__ import annotations
