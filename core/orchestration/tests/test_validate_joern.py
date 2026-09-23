@@ -330,3 +330,43 @@ class TestIrisSurfaceMerge:
         assert all(
             s.get("source_provenance") != "iris" for s in surface["sources"]
         )
+
+
+class TestBoundedMaterialisation:
+    """The cap bounds ENUMERATION cost, not just downstream use.
+
+    Same shape as the context-map enricher: the surface sections are
+    LLM-authored, so a dense n-per-section surface must cost O(cap)
+    tuples, never the O(n^2) cross product.
+    """
+
+    @staticmethod
+    def _dense_surface(n):
+        return {
+            "sources": [
+                {"type": "iris", "source_provenance": "iris",
+                 "function": f"src_{i}"} for i in range(n)
+            ],
+            "sinks": [
+                {"type": "buffer_write",
+                 "location": f"entry.c:{i} — sink_call_{i}(buf)"}
+                for i in range(n)
+            ],
+            "trust_boundaries": [],
+        }
+
+    def test_cap_bounds_materialisation_memory(self):
+        import tracemalloc
+
+        surface = self._dense_surface(1000)
+        srv = FakeServer()
+        tracemalloc.start()
+        enrich_attack_surface_with_taint(surface, srv, None, max_pairs=500)
+        _cur, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        assert len(srv.exists_queries) <= 500
+        assert surface["taint_summary"]["pairs_dropped_over_cap"] == (
+            1000 * 1000 - 500)
+        # Full-product materialisation of this fixture peaks in the
+        # hundred-MB range; bounded enumeration stays well under 32MB.
+        assert peak < 32 * 1024 * 1024, f"peak {peak/1e6:.1f}MB"

@@ -70,6 +70,7 @@ def build_taint_pairs(
     checklist: dict[str, Any] | None = None,
     *,
     iris_sinks: frozenset[str] = frozenset(),
+    max_pairs: int | None = None,
 ) -> list[tuple[dict[str, Any], dict[str, Any], str, str]]:
     """Enumerate (entry_point, sink_detail, source_method, sink_call).
 
@@ -79,26 +80,67 @@ def build_taint_pairs(
     still pairs when its ``name`` is a known IRIS sink — the wrapper
     function itself is the callee. Such sinks are stamped
     ``taint_spec_source: "iris"`` for provenance.
+
+    ``max_pairs`` bounds MATERIALISATION, not just downstream use: the
+    sections are LLM-authored, so an n-entries-per-section map must
+    cost O(cap), never O(n^2) (a 10k x 10k map would otherwise
+    materialise 10^8 tuples before any later slice could act).
+    """
+    pairs, _dropped = _enumerate_taint_pairs(
+        context_map, checklist, iris_sinks=iris_sinks, max_pairs=max_pairs)
+    return pairs
+
+
+def _enumerate_taint_pairs(
+    context_map: dict[str, Any],
+    checklist: dict[str, Any] | None,
+    *,
+    iris_sinks: frozenset[str] = frozenset(),
+    max_pairs: int | None = None,
+) -> tuple[list[tuple[dict[str, Any], dict[str, Any], str, str]], int]:
+    """Worker for :func:`build_taint_pairs`; also returns the drop count.
+
+    Sink resolution is entry-independent, so the overflow is counted
+    from the resolved-section product and logged without building the
+    excess tuples.
     """
     calls = _call_index(checklist)
-    pairs = []
-    for ep in dict_rows(context_map, "entry_points"):
-        source_method = ep.get("name")
-        if not source_method or not ep.get("id"):
+    entry_rows = [
+        (ep, ep["name"])
+        for ep in dict_rows(context_map, "entry_points")
+        if ep.get("name") and ep.get("id")
+    ]
+    if not entry_rows:
+        return [], 0
+    resolved_sinks: list[tuple[dict[str, Any], str]] = []
+    for sink in dict_rows(context_map, "sink_details"):
+        if not sink.get("id"):
             continue
-        for sink in dict_rows(context_map, "sink_details"):
-            if not sink.get("id"):
+        sink_call = _sink_call_name(sink, calls)
+        if not sink_call:
+            name = sink.get("name") or ""
+            if name and name in iris_sinks:
+                sink_call = name
+                sink.setdefault("taint_spec_source", "iris")
+            else:
                 continue
-            sink_call = _sink_call_name(sink, calls)
-            if not sink_call:
-                name = sink.get("name") or ""
-                if name and name in iris_sinks:
-                    sink_call = name
-                    sink.setdefault("taint_spec_source", "iris")
-                else:
-                    continue
+        resolved_sinks.append((sink, sink_call))
+
+    total = len(entry_rows) * len(resolved_sinks)
+    dropped = 0
+    if max_pairs is not None and total > max_pairs:
+        dropped = total - max_pairs
+        logger.warning(
+            "taint enrichment: %d pairs exceed cap of %d — "
+            "dropping the excess", total, max_pairs,
+        )
+    pairs: list[tuple[dict[str, Any], dict[str, Any], str, str]] = []
+    for ep, source_method in entry_rows:
+        for sink, sink_call in resolved_sinks:
+            if max_pairs is not None and len(pairs) >= max_pairs:
+                return pairs, dropped
             pairs.append((ep, sink, source_method, sink_call))
-    return pairs
+    return pairs, dropped
 
 
 def _clear_prior_annotations(context_map: dict[str, Any]) -> None:
@@ -164,14 +206,10 @@ def enrich_with_taint_flows(
         except Exception:
             logger.debug("IRIS sink load failed", exc_info=True)
 
-    pairs = build_taint_pairs(context_map, checklist, iris_sinks=iris_sinks)
-    dropped = max(0, len(pairs) - max_pairs)
-    if dropped:
-        logger.warning(
-            "taint enrichment: %d pairs exceed cap of %d — "
-            "dropping the excess", len(pairs), max_pairs,
-        )
-        pairs = pairs[:max_pairs]
+    # Cap enforced inside the enumeration (bounded materialisation);
+    # the overflow warning is logged there from the section product.
+    pairs, dropped = _enumerate_taint_pairs(
+        context_map, checklist, iris_sinks=iris_sinks, max_pairs=max_pairs)
 
     # Existence queries are per unique (source_method, sink_call);
     # multiple map pairs can share one query.
