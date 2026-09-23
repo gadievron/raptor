@@ -103,6 +103,7 @@ Extending:
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -2097,6 +2098,92 @@ def _mermaid_scan(tree: ast.AST, rel: str) -> list[Violation]:
     return out
 
 
+# Fence-lane sanitisers: correct ONLY where a wrapping ``` fence
+# isolates rendering. In a heading / table-row / bold-label slot they
+# preserve newlines, line-leading `#`, and live links — structure
+# forgery sails through while the gate sees "a recognised sanitiser"
+# (the flat _SANITISERS short-circuit has no slot model). The
+# wrong-slot arm below is the syntactic slot model for the highest-
+# signal shape: an f-string whose constant text puts the
+# interpolation in a single-line markdown structure slot.
+_FENCE_LANE_SANITISERS = frozenset({"md_fence", "sanitise_code"})
+
+# Constant-prefix shapes that mark a single-line markdown slot. The
+# prefix is the LAST LINE of constant text immediately before the
+# interpolation: a heading lead (`### `), a table-row cell (`| ` /
+# `x |`), or a bold-label opener (`**`).
+_HEADING_SLOT_RE = re.compile(r"[ \t]*#{1,6}[ \t]+\Z")
+_TABLE_SLOT_RE = re.compile(r".*\|[ \t]*\Z")
+_BOLD_SLOT_RE = re.compile(r".*\*\*\Z")
+
+
+def _wrong_slot_scan(tree: ast.AST, rel: str) -> list[Violation]:
+    """Flag fence-lane sanitiser calls interpolated into heading /
+    table-cell / bold-label f-string slots (``f"### {md_fence(x)}"``).
+
+    The next-writer failure mode after the one-home landed: adopting
+    the WRONG helper is indistinguishable from the right one to the
+    flat sanitiser vocabulary, and ``md_fence`` in a heading slot
+    passes the gate while preserving newlines, line-leading ``#`` and
+    live links. Allowlistable like every other kind.
+    """
+    hits: list[tuple[ast.FormattedValue, ast.JoinedStr, str, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.JoinedStr):
+            continue
+        before: list[str] = []
+        for part in node.values:
+            if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                before.append(part.value)
+                continue
+            if isinstance(part, ast.FormattedValue):
+                call_name = (_call_name(part.value)
+                             if isinstance(part.value, ast.Call) else None)
+                if call_name in _FENCE_LANE_SANITISERS:
+                    last_line = "".join(before).rsplit("\n", 1)[-1]
+                    slot = None
+                    if _HEADING_SLOT_RE.fullmatch(last_line):
+                        slot = "heading"
+                    elif _TABLE_SLOT_RE.fullmatch(last_line):
+                        slot = "table-cell"
+                    elif _BOLD_SLOT_RE.fullmatch(last_line):
+                        slot = "bold-label"
+                    if slot is not None:
+                        hits.append((part, node, call_name, slot))
+                # Any interpolation makes the running prefix
+                # non-constant — reset so a later call on the same
+                # line is only judged against text we can SEE.
+                before = []
+    if not hits:
+        return []
+
+    parents: dict = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+
+    def _func_of(node: ast.AST) -> str:
+        names: list[str] = []
+        cur = parents.get(node)
+        while cur is not None:
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                ast.ClassDef)):
+                names.append(cur.name)
+            cur = parents.get(cur)
+        return ".".join(reversed(names)) or "<module>"
+
+    return [
+        Violation(
+            file=rel,
+            line=part.lineno,
+            kind="wrong_slot_sanitiser",
+            detail=f"{call_name} in {slot} slot",
+            func_name=_func_of(node),
+        )
+        for part, node, call_name, slot in hits
+    ]
+
+
 def audit_source(source: str, rel: str = "<snippet>") -> list[Violation]:
     """Audit a source string. Used by the self-tests and by
     :func:`audit_file`."""
@@ -2115,6 +2202,7 @@ def audit_source(source: str, rel: str = "<snippet>") -> list[Violation]:
     violations = scanner.violations
     violations.extend(_mermaid_scan(tree, rel))
     violations.extend(_sanitiser_shadow_scan(tree, rel))
+    violations.extend(_wrong_slot_scan(tree, rel))
     _parents: dict = {}
     violations.extend(_exception_relay_scan(tree, rel, _parents))
     return violations
