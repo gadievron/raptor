@@ -1511,6 +1511,17 @@ def _run_executor(
         }
 
 
+# Plan-length ceiling. Trade-off, both directions: real generated
+# plans run well under 20 steps, and each step may legally wait up to
+# 300 s (stability_wait ceiling), so 64 already admits ~5.3 hours of
+# worst-case serial waiting; higher re-opens the wall-clock sink an
+# untrusted (LLM-authored / on-disk) plan can aim at the trusted
+# parent, lower starts rejecting legitimately thorough multi-service
+# plans. Raise deliberately if a real plan ever hits it — the refusal
+# names the cap.
+_MAX_PLAN_STEPS = 64
+
+
 def verify_plan(
     handle: RuntimeHandle | None = None,
     plan: list[dict[str, Any]] | None = None,
@@ -1557,6 +1568,22 @@ def verify_plan(
             "reason": (
                 f"verify: plan must be a list, got {type(plan).__name__} — "
                 "caller may have passed json.dumps(plan) instead of plan"
+            ),
+        }
+    if len(plan) > _MAX_PLAN_STEPS:
+        # Plans are untrusted (LLM-authored / on-disk spec artifacts)
+        # and each step can legally wait up to 300 s (stability_wait),
+        # so an uncapped N-step plan burns 300·N wall-seconds serially
+        # in the trusted parent. Fail loudly instead of truncating —
+        # a silently-shortened plan would report "passed" for checks
+        # that never ran.
+        return {
+            "passed": False,
+            "results": [],
+            "reason": (
+                f"verify: plan has {len(plan)} steps — refusing plans "
+                f"over {_MAX_PLAN_STEPS} (each step may wait minutes; "
+                "an unbounded hostile plan is a wall-clock sink)"
             ),
         }
     if endpoint is None and handle is not None:
