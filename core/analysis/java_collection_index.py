@@ -210,6 +210,14 @@ class LocalCollectionIndex:
     # (lineno, col) of qualifying get-invocations -> (name, key)
     _get_sites: dict[tuple[int, int], tuple[str, str]] = field(
         default_factory=dict)
+    # name -> [fresh_declarator_start_byte, enclosing_block_end_byte):
+    # positional vouch window; an op outside it targets a same-named
+    # FIELD / outer binding (the a1b positional-scope discipline).
+    _windows: dict[str, tuple[int, int]] = field(default_factory=dict)
+    # list-op log per receiver, consumed by the positional post-pass.
+    _list_ops: dict[str, list] = field(default_factory=dict)
+    # list receiver -> declaring linear-block id (see _linear_block_id).
+    _decl_block: dict[str, int | None] = field(default_factory=dict)
     _resolver: Any = None
 
     # ----- queries ---------------------------------------------------
@@ -262,6 +270,18 @@ class LocalCollectionIndex:
         return name is not None and name in catalog_callables
 
 
+def _enclosing_block_end(n) -> int:
+    """End byte of the nearest enclosing block-like scope — a fresh
+    declarator's vouch-window upper bound. No block ancestor (e.g. a
+    field declarator) ⇒ -1: an empty window, everything refuses."""
+    cur = n.parent
+    while cur is not None:
+        if cur.type in ("block", "constructor_body"):
+            return cur.end_byte
+        cur = cur.parent
+    return -1
+
+
 def _fresh_collection_kind(value) -> str | None:
     """``"map"`` / ``"list"`` when ``value`` is an argument-free fresh
     ``new`` of an allowlisted concrete type; None otherwise."""
@@ -302,8 +322,6 @@ def build_local_collection_index(
         return None
 
     idx = LocalCollectionIndex(ok=True)
-    idx._list_ops = {}
-    idx._decl_block = {}
     types, statics = build_import_map(tree.root_node)
     from core.analysis.cfg_builder_java import _FileLocalScopes
     idx._resolver = _NameResolver(
@@ -334,6 +352,13 @@ def build_local_collection_index(
         kind = idx._kind.get(recv)
         if kind is None:
             return False
+        # Positional vouch: an op outside the fresh declarator's
+        # window targets a same-named FIELD / outer binding — a
+        # different (rewritable) storage location. Record + consume
+        # as usual; the violation makes every query refuse.
+        w_lo, w_hi = idx._windows.get(recv, (0, -1))
+        if not (w_lo <= obj.start_byte < w_hi):
+            idx._violated.add(recv)
         method = _text(name_node)
         args = named_args(call)
         ln = line_of(call)
@@ -441,6 +466,8 @@ def build_local_collection_index(
                     if lhs in idx._kind:
                         idx._violated.add(lhs)
                     idx._kind[lhs] = kind
+                    idx._windows[lhs] = (
+                        n.start_byte, _enclosing_block_end(n))
                     if kind == "list":
                         idx._decl_block[lhs] = _linear_block_id(n)
                     consumed.add((name_node.start_byte, name_node.end_byte))
