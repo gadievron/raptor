@@ -1310,3 +1310,72 @@ class TestNonUniqueRuleIdJoin:
         lib.record_match(stem, is_tp=True)
         entry = lib.all_entries()[0]
         assert entry.feedback_classified == 1
+
+
+class TestTotalsFollowTargetDedup:
+    """total_matches / total_variants must follow the TargetRecord
+    dedup: a re-sweep of an already-recorded target must not inflate
+    the totals the per-target records refuse to double-count."""
+
+    def _lib_with_rule(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        lib.add_rule(
+            "r1", "semgrep", "rules:\n  - id: r1\n", cwe="CWE-89",
+            dual_control=True,
+        )
+        return lib
+
+    def test_same_target_resweep_does_not_inflate_totals(self, tmp_path):
+        lib = self._lib_with_rule(tmp_path)
+        matches = [Match(file="a.py", line=1)]
+        triage = [MatchTriage(match=matches[0], status="variant",
+                              reasoning="")]
+        lib.update("r1", "t1", matches, triage)
+        entry = lib.update("r1", "t1", matches, triage)
+        assert entry is not None
+        assert len(entry.targets) == 1
+        assert entry.total_matches == 1
+        assert entry.total_variants == 1
+
+    def test_new_target_still_counts(self, tmp_path):
+        lib = self._lib_with_rule(tmp_path)
+        matches = [Match(file="a.py", line=1)]
+        triage = [MatchTriage(match=matches[0], status="variant",
+                              reasoning="")]
+        lib.update("r1", "t1", matches, triage)
+        entry = lib.update("r1", "t2", matches, triage)
+        assert entry.total_matches == 2
+        assert len(entry.targets) == 2
+
+
+class TestPrecisionDenominatorsAgree:
+    def test_summary_and_stats_share_the_rated_denominator(self, tmp_path):
+        lib = RuleLibrary(tmp_path / "lib")
+        # One rated rule at 100%, one unrated (never replayed).
+        lib.add_rule("rated", "semgrep", "rules:\n  - id: rated\n",
+                     cwe="CWE-89", dual_control=True)
+        lib.add_rule("unrated", "semgrep", "rules:\n  - id: unrated\n",
+                     cwe="CWE-79", dual_control=True)
+        m = [Match(file="a.py", line=1)]
+        lib.update("rated", "t1", m,
+                   [MatchTriage(match=m[0], status="variant",
+                                reasoning="")])
+        s = lib.stats()
+        assert s["rated_rules"] == 1
+        assert s["avg_tp_rate"] == 1.0          # rated-only average
+        assert "avg precision 100%" in lib.summary()
+
+
+class TestDefaultLibraryDirAnchor:
+    def test_default_dir_anchors_at_raptor_dir(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("RAPTOR_DIR", str(tmp_path))
+        lib = RuleLibrary()
+        assert lib.library_dir == tmp_path / "out" / "rule-library"
+
+    def test_default_dir_falls_back_to_cwd_without_raptor_dir(
+        self, tmp_path, monkeypatch,
+    ):
+        monkeypatch.delenv("RAPTOR_DIR", raising=False)
+        monkeypatch.chdir(tmp_path)
+        lib = RuleLibrary()
+        assert lib.library_dir == tmp_path / "out" / "rule-library"

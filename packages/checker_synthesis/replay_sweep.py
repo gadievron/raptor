@@ -435,7 +435,10 @@ def run_sweep(
             if (cocci_entries or graduated_cocci) else False
         )
         run_cocci = bool(cocci_entries) and target_is_c
-        if cocci_entries and not run_cocci:
+        # Graduated cocci rules skip non-C targets the same way the
+        # library entries do — the skip record must cover both, or a
+        # graduated-only sweep under-reports its skipped targets.
+        if (cocci_entries or graduated_cocci) and not target_is_c:
             report.cocci_skipped_targets.append(str(target))
 
         for entry in semgrep_entries:

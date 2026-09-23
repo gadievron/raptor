@@ -182,14 +182,13 @@ position pos;
 @ rule2 depends on never r1 @ -- r1 never matched in the file
 ```
 
-### Script rules
+### Script rules — NEVER emit them
 
-```
-@ script:python depends on rule1 @
-p << rule1.pos;
-@@
-cocci.print_main("msg", p)
-```
+Do not emit `script:`, `initialize:`, or `finalize:` rules or
+script-constraints in any spelling: they execute code inside spatch
+and every synthesised rule carrying one is rejected before it
+reaches an engine (the reporting harness is injected automatically
+at run time). Emit declarative SmPL only.
 
 ### Common patterns for security checkers
 

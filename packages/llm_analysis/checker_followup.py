@@ -186,14 +186,13 @@ def _try_replay_from_library(
     try:
         from packages.checker_synthesis import RuleLibrary
         from packages.checker_synthesis.languages import detect_engine
-        from packages.checker_synthesis.library import _DEFAULT_LIBRARY_DIR
         from packages.checker_synthesis.synthesise import _run_engine, _triage
 
         engine = detect_engine(seed.file)
         if engine is None:
             return None
 
-        lib = RuleLibrary(_DEFAULT_LIBRARY_DIR)
+        lib = RuleLibrary()
         candidates = lib.find_replayable(seed.cwe, engine)
         if not candidates:
             return None
@@ -277,10 +276,9 @@ def _try_promote_to_library(result, repo_root: Path) -> None:
     """Promote a synthesis result to the rule library if eligible."""
     try:
         from packages.checker_synthesis import RuleLibrary
-        from packages.checker_synthesis.library import _DEFAULT_LIBRARY_DIR
         from packages.checker_synthesis.replay_sweep import target_hash_for
 
-        lib = RuleLibrary(_DEFAULT_LIBRARY_DIR)
+        lib = RuleLibrary()
         # Resolved-path convention — see the replay-record twin above.
         target_hash = target_hash_for(Path(repo_root))
         lib.promote(result, target_hash=target_hash)

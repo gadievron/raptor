@@ -344,10 +344,11 @@ def _propose_rule(
     fix_patch = data.get("fix_patch", "") or ""
     if not isinstance(body, str) or not body.strip():
         return None, "llm response missing 'rule_body'"
-    if len(body.encode("utf-8")) > _RULE_BODY_MAX_BYTES:
+    body_bytes = len(body.encode("utf-8"))
+    if body_bytes > _RULE_BODY_MAX_BYTES:
         return None, (
             f"rule body too large "
-            f"({len(body)} chars > {_RULE_BODY_MAX_BYTES})"
+            f"({body_bytes} bytes > {_RULE_BODY_MAX_BYTES})"
         )
     body_err = _validate_rule_body(body)
     if body_err:

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import threading
 from dataclasses import dataclass, field
@@ -42,7 +43,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_LIBRARY_DIR = Path("out/rule-library")
+def _default_library_dir() -> Path:
+    """Default rule-library location.
+
+    Anchored at the RAPTOR install when the launcher exported
+    RAPTOR_DIR; else the process cwd (bare test / dev runs). A purely
+    cwd-relative default keyed the library to whatever directory the
+    caller happened to run from — two callers with different cwds
+    silently read/write two different libraries.
+    """
+    base = os.environ.get("RAPTOR_DIR")
+    return (Path(base) if base else Path.cwd()) / "out" / "rule-library"
 
 _REPLAY_TP_THRESHOLD = 0.80
 _MIN_TARGETS_FOR_PRUNE = 3
@@ -296,7 +307,7 @@ class RuleLibrary:
     """Persistent rule library backed by a manifest.json file."""
 
     def __init__(self, library_dir: Path | None = None) -> None:
-        self._dir = Path(library_dir) if library_dir else _DEFAULT_LIBRARY_DIR
+        self._dir = Path(library_dir) if library_dir else _default_library_dir()
         self._manifest_path = self._dir / "manifest.json"
         self._entries: list[LibraryEntry] | None = None
         self._lock = threading.Lock()
@@ -582,9 +593,16 @@ class RuleLibrary:
         timestamp: str,
     ) -> None:
         tp_rate, _fp_rate, variant_count, classified = _compute_rates(result.triage)
+        # The totals follow the TargetRecord dedup: a re-run on an
+        # already-recorded target must not inflate them (the per-
+        # target record is first-write-wins, so the totals would
+        # otherwise double-count what the records refuse to). With no
+        # target_hash there is nothing to dedup on — count as before.
+        counted = True
         if target_hash:
             already = {t.target_hash for t in entry.targets}
-            if target_hash not in already:
+            counted = target_hash not in already
+            if counted:
                 entry.targets.append(TargetRecord(
                     target_hash=target_hash,
                     ts=timestamp,
@@ -593,8 +611,9 @@ class RuleLibrary:
                     tp_rate=tp_rate if classified else None,
                     classified=classified,
                 ))
-        entry.total_variants += variant_count
-        entry.total_matches += len(result.matches)
+        if counted:
+            entry.total_variants += variant_count
+            entry.total_matches += len(result.matches)
         # Only called from the promote() path, whose gate already
         # required every mechanical control — an existing add_rule
         # (sweep_once) copy of the same body is upgraded in place.
@@ -644,7 +663,9 @@ class RuleLibrary:
                 return None
 
             tp_rate, _fp_rate, variant_count, classified = _compute_rates(triage)
+            # Totals follow the TargetRecord dedup — see _update_entry.
             already = {t.target_hash for t in entry.targets}
+            counted = not target_hash or target_hash not in already
             if target_hash and target_hash not in already:
                 entry.targets.append(TargetRecord(
                     target_hash=target_hash,
@@ -654,8 +675,9 @@ class RuleLibrary:
                     tp_rate=tp_rate if classified else None,
                     classified=classified,
                 ))
-            entry.total_variants += variant_count
-            entry.total_matches += len(matches)
+            if counted:
+                entry.total_variants += variant_count
+                entry.total_matches += len(matches)
             self._recompute_aggregate(entry)
             self._auto_archive(entry)
             self._save()
@@ -972,6 +994,8 @@ class RuleLibrary:
         archived = len(entries) - len(active)
         if not entries:
             return "Rule library: empty"
+        # Same rated-only denominator as stats()["avg_tp_rate"] — the
+        # two operator surfaces must agree.
         rated = [e for e in active if e.tp_rate > 0]
         avg = sum(e.tp_rate for e in rated) / len(rated) if rated else 0.0
         return (
@@ -980,9 +1004,18 @@ class RuleLibrary:
         )
 
     def stats(self) -> dict[str, Any]:
-        """Summary statistics for /sage status or reports."""
+        """Summary statistics for /sage status or reports.
+
+        ``avg_tp_rate`` averages over RATED entries (tp_rate > 0) —
+        the same denominator as :meth:`summary`'s "avg precision", so
+        the two operator surfaces cannot disagree. Unrated entries sit
+        at 0.0 (a float field cannot distinguish "unmeasured" from
+        "measured at zero"), and folding them in read as a precision
+        collapse on libraries full of not-yet-replayed rules.
+        """
         entries = self._load()
         active = [e for e in entries if not e.archived]
+        rated = [e for e in active if e.tp_rate > 0]
         return {
             "total_rules": len(entries),
             "active_rules": len(active),
@@ -992,8 +1025,9 @@ class RuleLibrary:
                 "coccinelle": sum(1 for e in active if e.engine == "coccinelle"),
             },
             "total_variants_found": sum(e.total_variants for e in active),
+            "rated_rules": len(rated),
             "avg_tp_rate": (
-                sum(e.tp_rate for e in active) / len(active)
-                if active else 0.0
+                sum(e.tp_rate for e in rated) / len(rated)
+                if rated else 0.0
             ),
         }
