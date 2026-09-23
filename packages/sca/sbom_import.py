@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import urllib.parse
 
 from .models import Confidence, Dependency, PinStyle
 from .parsers import _safe_read
@@ -69,10 +70,19 @@ _PURL_ECO_MAP = {
     "composer": "Packagist",
     "github": "GitHub",
     "deb": "Debian",
-    "rpm": "RPM",
+    # OSV's "Red Hat" ecosystem covers RHEL / Rocky / Alma and keys by
+    # source package name — the same mapping the image-scan path
+    # (core/oci/sbom) applies to every RPM database. The literal "RPM"
+    # label binds to NO advisory surface: components carrying it
+    # imported cleanly and silently got zero advisories.
+    "rpm": "Red Hat",
     "apk": "Alpine",
     "oci": "Container",
 }
+# Closure invariant (pinned by test_purl_eco_map_values_all_bind_to_
+# an_advisory_surface): every VALUE above must be OSV-queryable or an
+# explicitly documented visibility-only label ("GitHub" → OSS-Fuzz
+# fallback; "Container" → image-scan path).
 
 # CycloneDX ``scope`` enum → SCA scope. CycloneDX has fewer
 # values; map conservatively.
@@ -239,7 +249,11 @@ def _parse_purl(purl: str) -> tuple[str, str, str | None] | None:
     last_at = path_and_version.rfind("@")
     if last_at > 0:
         path = path_and_version[:last_at]
-        version: str | None = path_and_version[last_at + 1:]
+        # purl components are percent-encoded (spec: a literal ``%``
+        # is ``%25``) — rpm versions carry the epoch as ``1%3A...``,
+        # and a literal ``%3A`` never matches any advisory range.
+        version: str | None = urllib.parse.unquote(
+            path_and_version[last_at + 1:])
     else:
         path = path_and_version
         version = None

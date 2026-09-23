@@ -380,3 +380,63 @@ def test_oversized_sbom_is_refused_with_size_error(tmp_path: Path) -> None:
     os.truncate(sbom, oversize)
     with pytest.raises(ValueError, match=rf"{oversize} bytes.*read cap"):
         parse_cyclonedx(sbom)
+
+
+# ---------------------------------------------------------------------------
+# Ecosystem labels must bind to an advisory surface
+# ---------------------------------------------------------------------------
+
+
+def test_rpm_purl_maps_to_osv_queryable_red_hat() -> None:
+    """Trivy/Syft SBOMs of RHEL/UBI images emit ``pkg:rpm`` routinely.
+    Mapping them to a label no advisory surface recognises ("RPM")
+    imported the deps cleanly, counted them in no failure counter, and
+    negative-cached them empty — a clean report indistinguishable from
+    genuinely clean. The image-scan path already maps everything RPM
+    to OSV's "Red Hat" ecosystem; the SBOM importer follows it."""
+    from packages.sca.ecosystems import distro_base
+    from packages.sca.sbom_import import _parse_purl
+
+    parsed = _parse_purl("pkg:rpm/redhat/openssl@1.1.1k")
+    assert parsed is not None
+    ecosystem, name, version = parsed
+    assert ecosystem == "Red Hat"
+    assert name == "openssl"
+    assert version == "1.1.1k"
+    assert distro_base(ecosystem) is not None
+
+
+def test_purl_eco_map_values_all_bind_to_an_advisory_surface() -> None:
+    """Closure over the map VALUES: every label must be OSV-queryable
+    (KNOWN_ECOSYSTEMS or a distro base) or explicitly exempted as
+    visibility-only — an unbindable label silently zeroes advisories
+    for every component carrying it."""
+    from packages.sca.ecosystems import KNOWN_ECOSYSTEMS, distro_base
+    from packages.sca.sbom_import import _PURL_ECO_MAP
+
+    queryable = {e for e in KNOWN_ECOSYSTEMS if e != "OSS-Fuzz"}
+    # Deliberately visibility-only labels (documented, not silent):
+    #   GitHub    — no OSV index; C/C++ deps get the OSS-Fuzz fallback
+    #   Container — image refs; advisories come from the image-scan
+    #               path, not the package matcher
+    visibility_only = {"GitHub", "Container"}
+    for purl_type, eco in sorted(_PURL_ECO_MAP.items()):
+        assert (
+            eco in queryable
+            or distro_base(eco) is not None
+            or eco in visibility_only
+        ), (
+            f"_PURL_ECO_MAP[{purl_type!r}] = {eco!r} binds to no "
+            f"advisory surface — components with this purl type get "
+            f"zero advisories silently"
+        )
+
+
+def test_parse_purl_percent_decodes_version() -> None:
+    """rpm purls carry the epoch percent-encoded (``1%3A1.1.1k``); a
+    literal ``%3A`` in the version never matches any advisory range."""
+    from packages.sca.sbom_import import _parse_purl
+
+    parsed = _parse_purl("pkg:rpm/redhat/openssl@1%3A1.1.1k-7.el8")
+    assert parsed is not None
+    assert parsed[2] == "1:1.1.1k-7.el8"
