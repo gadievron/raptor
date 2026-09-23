@@ -803,3 +803,64 @@ class TestSameLineSinkAmbiguity:
             language="c", cwe="CWE-78")
         result = resolve_finding(finding)
         assert isinstance(result, ResolutionFailure), result
+
+
+class TestSummaryMemo:
+    """resolve_finding(summary_memo=…) caches the per-file Phase
+    12+13 build across calls — the postpass otherwise rebuilds the
+    summary fixed point once per finding × source candidate."""
+
+    _SRC = (
+        "import html\n"
+        "def _clean(s):\n"
+        "    return html.escape(s)\n"
+        "def handle(x):\n"
+        "    y = _clean(x)\n"
+        "    render(y)\n"
+    )
+
+    def _native(self, path):
+        return {
+            "cwe": "CWE-79", "file_path": str(path),
+            "source_line": 4, "sink_line": 6, "language": "python",
+        }
+
+    def test_memo_reused_across_calls(self, tmp_path, monkeypatch):
+        import core.analysis.finding_resolver as fr
+        import core.analysis.taint_summaries as ts_mod
+        p = tmp_path / "app.py"
+        p.write_text(self._SRC)
+        calls = {"n": 0}
+        real = ts_mod.build_taint_summaries
+
+        def counting(cg, source):
+            calls["n"] += 1
+            return real(cg, source)
+
+        monkeypatch.setattr(ts_mod, "build_taint_summaries", counting)
+        memo: dict = {}
+        r1 = fr.resolve_finding(self._native(p), summary_memo=memo)
+        r2 = fr.resolve_finding(self._native(p), summary_memo=memo)
+        assert isinstance(r1, fr.ResolvedFinding)
+        assert isinstance(r2, fr.ResolvedFinding)
+        assert calls["n"] == 1
+        assert len(memo) == 1
+        # The memoised path still yields the synthetic binding.
+        assert r2.inter_proc_bindings
+
+    def test_no_memo_keeps_per_call_build(self, tmp_path, monkeypatch):
+        import core.analysis.finding_resolver as fr
+        import core.analysis.taint_summaries as ts_mod
+        p = tmp_path / "app.py"
+        p.write_text(self._SRC)
+        calls = {"n": 0}
+        real = ts_mod.build_taint_summaries
+
+        def counting(cg, source):
+            calls["n"] += 1
+            return real(cg, source)
+
+        monkeypatch.setattr(ts_mod, "build_taint_summaries", counting)
+        fr.resolve_finding(self._native(p))
+        fr.resolve_finding(self._native(p))
+        assert calls["n"] == 2

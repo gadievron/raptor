@@ -25,10 +25,11 @@ Computation:
 * Per-function fixed-point inside the function's intra-procedural
   CFG (reaching-defs lifted to track param origin + sanitizer
   effect chain).
-* Outer fixed-point over the call graph for mutual recursion.
-  Cycle bail at ``max(10, 3 × N)`` iterations, where ``N`` is the
-  number of in-module functions; survivors get
-  ``summary_unconverged=True``.
+* Outer fixed-point over the call graph for mutual recursion —
+  reverse-dependency worklist (recompute a function only when a
+  summary it joins changed), pop budget ``N + max(10, 3 × N)`` for
+  ``N`` in-module functions. Budget exhaustion marks EVERY
+  non-unknown summary ``summary_unconverged=True``.
 * Dynamic dispatch (``getattr`` / ``setattr`` / ``eval`` / ``exec``
   / ``globals`` / ``locals`` / ``__import__`` / ``importlib.*`` /
   ``**kwargs`` forwarding) marks the function as
@@ -46,6 +47,7 @@ Public surface:
 from __future__ import annotations
 
 import ast
+from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -1152,13 +1154,17 @@ def _compute_one_summary(
 # Outer fixed-point — call-graph iteration
 # ---------------------------------------------------------------------------
 
-# Outer fixed-point iteration budget = max(FLOOR, PER_FN * N), N being
-# the number of in-module functions. The 3*N term bounds worst-case
-# taint propagation depth through the call graph; the floor keeps tiny
-# modules from under-converging. Review #5: a bare 3*N starves small
-# modules — N=2 mutually recursive functions get only 6 passes, not
-# enough to settle a real sanitizer chain, so the summaries bail as
-# `summary_unconverged` and a genuine suppression is lost. Floor at 10.
+# Outer fixed-point recomputation budget = N seeding computations +
+# max(FLOOR, PER_FN * N) change-driven ones, N being the number of
+# in-module functions. The worklist below recomputes a function ONLY
+# when a summary it joins has changed, so a dependency chain of depth
+# d costs ~2d pops instead of the old Jacobi sweep's d full passes ×
+# N computations (O(N²) full CFG rebuilds — a planted file of ~3000
+# chained one-line defs wedged the default-on postpass for
+# minutes per finding × candidate). The floor keeps tiny modules from
+# under-converging (N=2 mutual recursion needs more than 6 pops to
+# settle a real sanitizer chain — Review #5's hazard restated for the
+# worklist form).
 _TAINT_SUMMARY_OUTER_ITER_FLOOR = 10
 _TAINT_SUMMARY_OUTER_ITER_PER_FN = 3
 
@@ -1177,13 +1183,19 @@ def build_taint_summaries(
     ``params`` matches the corresponding CFG's ``params`` — both
     derive from the same AST.
 
-    Convergence: outer fixed-point bails after
-    ``max(10, 3 × N)`` iterations where ``N`` is the number of
-    in-module functions (see
-    :data:`_TAINT_SUMMARY_OUTER_ITER_FLOOR`). Unconverged summaries
-    get ``summary_unconverged=True``
-    so Phase 14 can downgrade. In practice non-pathological codebases
-    converge in 2–3 passes.
+    Convergence: reverse-dependency worklist. Every function is
+    computed once, then re-computed only when a summary its body
+    joins (a call chain naming another summary key — exactly
+    ``_expr_taint``'s join criterion, over-approximated by walking
+    the whole function AST) has changed. When the recomputation
+    budget (see :data:`_TAINT_SUMMARY_OUTER_ITER_FLOOR`) is exhausted
+    before the queue drains, EVERY non-unknown summary is marked
+    ``summary_unconverged`` — an under-iterated summary can be
+    missing the direct-return atoms whose absence certifies a clean
+    wrapper, so a partial result must degrade wholesale rather than
+    stand (Phase 14 refuses unconverged summaries). In practice
+    non-pathological codebases drain the queue with ~2 pops per
+    function.
     """
     target_nodes = [
         n for n in cg.nodes()
@@ -1196,28 +1208,55 @@ def build_taint_summaries(
         node.name: TaintSummary(function=node.name, params=node.params)
         for node in target_nodes
     }
-    max_iters = max(
+    all_names = set(summaries)
+
+    # name → summary keys whose change requires recomputing name.
+    # Derived from the written call chains in the function's AST —
+    # the same name vocabulary ``_expr_taint`` joins on (walking
+    # nested defs' bodies too only over-approximates: extra deps cost
+    # pops, never correctness).
+    dependents: dict[str, set[str]] = {}
+    for node in target_nodes:
+        fn_ast = cg.function_ast(node.name)
+        if fn_ast is None:
+            continue
+        for sub in ast.walk(fn_ast):
+            if not isinstance(sub, ast.Call):
+                continue
+            callee_name = _attribute_chain_str(sub.func)
+            if callee_name and callee_name in all_names:
+                dependents.setdefault(callee_name, set()).add(node.name)
+
+    queue: deque[str] = deque(node.name for node in target_nodes)
+    queued: set[str] = set(queue)
+    pop_budget = len(target_nodes) + max(
         _TAINT_SUMMARY_OUTER_ITER_FLOOR,
         _TAINT_SUMMARY_OUTER_ITER_PER_FN * len(target_nodes),
     )
-    for _ in range(max_iters):
-        changed = False
-        for node in target_nodes:
-            if summaries[node.name].summary_unknown:
-                # Compute once to detect dynamic-dispatch even on the
-                # first pass; after that, leave it alone.
-                continue
-            new_summary = _compute_one_summary(
-                cg, node.name, summaries,
-            )
-            old = summaries[node.name]
-            if new_summary != old:
-                summaries[node.name] = new_summary
-                changed = True
-        if not changed:
-            return summaries
+    pops = 0
+    while queue and pops < pop_budget:
+        name = queue.popleft()
+        queued.discard(name)
+        pops += 1
+        if summaries[name].summary_unknown:
+            # Computed once already (dynamic dispatch / poisoned
+            # identity) — never revisited.
+            continue
+        new_summary = _compute_one_summary(cg, name, summaries)
+        if new_summary != summaries[name]:
+            summaries[name] = new_summary
+            for dep in dependents.get(name, ()):
+                if dep not in queued:
+                    queue.append(dep)
+                    queued.add(dep)
+    if not queue:
+        return summaries
 
-    # Bail out — mark unconverged.
+    # Budget exhausted with recomputations pending — mark EVERY
+    # non-unknown summary unconverged (a stale summary may certify a
+    # clean wrapper the fixed point would refuse; degrading only the
+    # queued names would let its already-computed consumers stand on
+    # the stale input).
     for name in list(summaries.keys()):
         s = summaries[name]
         if not s.summary_unknown:
