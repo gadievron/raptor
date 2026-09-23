@@ -41,6 +41,7 @@ import logging
 import os
 import signal
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -350,6 +351,15 @@ def joern_acquire(tunables: JoernTunables | None = None) -> JoernServer | None:
                         tunables.heap_mb, state["heap_mb"],
                     )
                 state["refcount"] = state.get("refcount", 0) + 1
+                # Lineage token: joern_release(token=...) decrements
+                # only when the state still records THIS lineage — a
+                # concurrent kill-and-replace by another session must
+                # not have its fresh server decremented (and killed at
+                # zero) by our bookkeeping. Legacy states are upgraded
+                # in place.
+                if not state.get("boot_nonce"):
+                    state["boot_nonce"] = uuid.uuid4().hex
+                srv._lifecycle_token = state["boot_nonce"]
                 _write_state(fd, state)
                 logger.info(
                     "joern lifecycle: reusing server on port %d "
@@ -373,6 +383,11 @@ def joern_acquire(tunables: JoernTunables | None = None) -> JoernServer | None:
             "query_timeout_s": tunables.query_timeout_s,
             "refcount": 1,
             "started_at": time.time(),
+            # Lineage identity for this server (restart() replacements
+            # included — note_server_replaced preserves it). Handed to
+            # the acquirer as srv._lifecycle_token; joern_release
+            # matches it before touching the record.
+            "boot_nonce": uuid.uuid4().hex,
             # Per-boot HTTP Basic credential — required to reconnect
             # to the reused server. The state file is mode 0600.
             "auth_user": srv._auth_user,
@@ -386,6 +401,7 @@ def joern_acquire(tunables: JoernTunables | None = None) -> JoernServer | None:
             # could not derive it unambiguously (fail-safe).
             **_member_anchor_fields(srv),
         }
+        srv._lifecycle_token = new_state["boot_nonce"]
         _write_state(fd, new_state)
         logger.info(
             "joern lifecycle: started fresh server on port %d (pid %d)",
@@ -394,13 +410,41 @@ def joern_acquire(tunables: JoernTunables | None = None) -> JoernServer | None:
         return srv
 
 
-def joern_release() -> None:
+def joern_release(
+    token: str | None = None,
+    srv: JoernServer | None = None,
+) -> None:
     """Release one reference to the shared Joern server.
 
     When the refcount reaches zero, the server is stopped.
+
+    ``token`` is the lineage token ``joern_acquire`` attached to the
+    handle (``srv._lifecycle_token``). Release used to decrement —
+    and kill at zero — WHATEVER the state file recorded: after a
+    restart + concurrent-acquire interleaving (this session's server
+    replaced mid-restart by another session's fresh one), that killed
+    the OTHER session's live server mid-query while this session's
+    replacement JVM leaked untracked. With a token, the record is
+    only touched when it still belongs to this lineage; on mismatch
+    the caller's own untracked handle (``srv``) is stopped directly —
+    its per-boot credential was never written to the state file, so
+    no other session can be using it. ``token=None`` keeps the legacy
+    unverified behaviour for out-of-tree callers.
     """
     with _locked() as fd:
         state = _read_state(fd)
+        recorded_nonce = state.get("boot_nonce") if state else None
+        if token is not None and (state is None or recorded_nonce != token):
+            logger.warning(
+                "joern lifecycle: state no longer records this "
+                "session's server lineage (replaced by a concurrent "
+                "session?) — leaving the recorded server alone and "
+                "stopping this session's untracked handle directly",
+            )
+            if srv is not None:
+                with contextlib.suppress(Exception):
+                    srv.stop()
+            return
         if state is None:
             return
 
@@ -464,7 +508,9 @@ def shared_joern_session(tunables: JoernTunables | None = None):
         yield srv
     finally:
         if srv is not None:
-            joern_release()
+            joern_release(
+                token=getattr(srv, "_lifecycle_token", None), srv=srv,
+            )
 
 
 #: Compatibility alias for the pre-rename import path — prefer
@@ -714,7 +760,15 @@ def note_server_replaced(
     ``joern_release`` can neither authenticate against nor stop the
     new multi-GB JVM (unreleasable orphan), and later acquires kill
     an unrelated pid. No-op when the state file tracks a different
-    server (or none).
+    server (or none) — the token-checked ``joern_release`` then stops
+    the untracked replacement through the caller's own handle.
+
+    Match rule: the handle's lineage token first (survives the
+    restart — it lives on the Python object); else the recorded pid;
+    else the recorded port ONLY when the recorded pid is dead — a
+    live recorded server that merely shares the old port number is a
+    DIFFERENT server, and repointing the state at our replacement
+    would orphan it unreleasably.
     """
     new_pid = srv.pid
     if new_pid is None:
@@ -723,7 +777,15 @@ def note_server_replaced(
         state = _read_state(fd)
         if state is None:
             return
-        if state.get("pid") != old_pid and state.get("port") != old_port:
+        token = getattr(srv, "_lifecycle_token", None)
+        token_match = (token is not None
+                       and state.get("boot_nonce") == token)
+        pid_match = state.get("pid") == old_pid
+        port_match_dead = (
+            state.get("port") == old_port
+            and not (state.get("pid") and _pid_alive(state["pid"]))
+        )
+        if not (token_match or pid_match or port_match_dead):
             return
         state["pid"] = new_pid
         state["comm"] = _read_comm(new_pid)
