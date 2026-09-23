@@ -3777,8 +3777,15 @@ def main() -> int:
                 # (target-influenced) — escape before the terminal.
                 _oa_err = sanitise_for_terminal(
                     str(oa_result.get("error") or "unknown"), max_len=600)
+                # The failure is PERSISTED, not just printed: a hard
+                # failure beside a successful Semgrep/CodeQL scan let
+                # the run complete with scan_metrics.openant carrying
+                # only core_provenance — post-run consumers could not
+                # distinguish "OpenAnt failed" from "found nothing".
+                openant_metrics["error"] = _oa_err
                 if oa_result.get("hard_error"):
                     openant_hard_error = _oa_err
+                    openant_metrics["hard_error"] = True
                     print(f"✗ OpenAnt scan failed: {_oa_err}", file=sys.stderr)
                 else:
                     # stderr like its hard-error twin and every other
@@ -3834,8 +3841,17 @@ def main() -> int:
                 except Exception:
                     logger.debug("Coverage tracking for OpenAnt failed", exc_info=True)
         except RuntimeError as e:
+            openant_metrics["error"] = f"not configured: {e}"
             logger.warning("OpenAnt not configured (continuing without it): %s", e)
         except Exception as e:
+            # In-process failure AFTER the subprocess (translate,
+            # dedup, save): this is a hard failure of the OpenAnt
+            # phase — record it and set openant_hard_error so a
+            # sole-scanner run fails with the REAL reason at the gate
+            # below, not "no SARIF files generated from scanning".
+            openant_hard_error = sanitise_for_terminal(str(e), max_len=600)
+            openant_metrics["error"] = openant_hard_error
+            openant_metrics["hard_error"] = True
             logger.warning("OpenAnt scan failed (continuing): %s", e)
 
     # ---- External SARIF import ----
