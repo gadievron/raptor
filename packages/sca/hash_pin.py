@@ -36,6 +36,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .parsers._safe_read import read_bounded
+
 if TYPE_CHECKING:
     from pathlib import Path
     from collections.abc import Iterable
@@ -120,10 +122,19 @@ def hash_pin_workflows(
     changed_files: list[Path] = []
 
     for wf_path in sorted(workflows.glob("*.y*ml")):
-        try:
-            text = wf_path.read_text(encoding="utf-8")
-        except OSError as e:
-            logger.warning("sca.hash_pin: cannot read %s: %s", wf_path, e)
+        # Bounded no-follow read — workflow files come from the
+        # scanned tree. This is a REWRITE path, so a file whose bytes
+        # did not decode cleanly (U+FFFD replacement present) is
+        # skipped too: writing the replaced text back would corrupt
+        # the operator's file.
+        text = read_bounded(wf_path, follow_symlinks=False)
+        if text is None:
+            continue        # read_bounded logged the refusal
+        if "\ufffd" in text:
+            logger.warning(
+                "sca.hash_pin: %s is not valid UTF-8; refusing to "
+                "rewrite it", wf_path,
+            )
             continue
         new_text, file_changes, file_skipped = _rewrite_file(
             text, wf_path, cache, token,

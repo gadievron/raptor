@@ -53,8 +53,8 @@ from typing import Any, TYPE_CHECKING
 from core.json import JsonCache, load_json, save_json
 
 # findings.json artifacts are RAPTOR-written run output — the
-# findings-class budget.
-_MAX_FINDINGS_BYTES = 64 * 1024 * 1024
+# findings-class budget (single owner: kinds.MAX_FINDINGS_BYTES).
+from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS_BYTES
 from . import SCA_CACHE_ROOT
 from .diff import compute_delta, md_cell
 from .findings import severity_rank

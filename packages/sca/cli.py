@@ -284,12 +284,15 @@ def _run_analyse(argv: list[str]) -> int:
     )
     cfg = cfg_from_args(args)
     if cfg.is_active:
-        import json as _json
+        from core.json import load_json as _load_json
+
+        from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS
         try:
-            rows = _json.loads(
-                (output_dir / "findings.json").read_text(encoding="utf-8")
-            )
-        except (OSError, _json.JSONDecodeError, UnicodeDecodeError) as e:
+            # Byte-budgeted: --out is operator-steered, so this read
+            # must not be an unbounded-slurp primitive.
+            rows = _load_json(output_dir / "findings.json", strict=True,
+                              max_bytes=_MAX_FINDINGS)
+        except (OSError, ValueError) as e:
             logger.error("raptor-sca: cannot read findings for "
                          "threshold check: %s", e)
             return 3
@@ -322,7 +325,6 @@ def _emit_baseline_delta(
     comment --body-file``. ``pr_comment_label`` overrides the header
     label (default: ``raptor-sca``).
     """
-    import json as _json
 
     from core.json import save_json
 
@@ -339,10 +341,14 @@ def _emit_baseline_delta(
         return
 
     try:
-        baseline_rows = _json.loads(
-            baseline_path.read_text(encoding="utf-8"))
-        current_rows = _json.loads(
-            current_findings.read_text(encoding="utf-8"))
+        from core.json import load_json as _load_json
+
+        from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS
+        # Byte-budgeted: --baseline points wherever the operator says.
+        baseline_rows = _load_json(baseline_path, strict=True,
+                                   max_bytes=_MAX_FINDINGS)
+        current_rows = _load_json(current_findings, strict=True,
+                                  max_bytes=_MAX_FINDINGS)
     except (ValueError, OSError) as exc:
         logger.warning("raptor-sca: cannot read baseline/findings: %s", exc)
         return

@@ -41,7 +41,7 @@ import json
 
 # findings.json artifacts are RAPTOR-written run output — the
 # findings-class budget.
-_MAX_FINDINGS_BYTES = 64 * 1024 * 1024
+from .kinds import MAX_FINDINGS_BYTES as _MAX_FINDINGS_BYTES
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

@@ -525,3 +525,30 @@ def test_disallowed_host_refused(monkeypatch) -> None:
         raise RuntimeError("boom")
     monkeypatch.setattr(core.git, "ls_remote", fake_ls)
     assert _resolve_sha("owner", "repo", "v4", {}, None) is None
+
+
+def test_workflow_read_is_bounded_and_no_follow(tmp_path) -> None:
+    """Workflow files come from the scanned tree: an oversized file is
+    refused by stat (not slurped) and a symlinked one is never
+    followed — both were bare read_text before."""
+    import tracemalloc
+
+    from packages.sca.hash_pin import hash_pin_workflows
+
+    target = tmp_path / "repo"
+    wf_dir = target / ".github" / "workflows"
+    wf_dir.mkdir(parents=True)
+    with (wf_dir / "huge.yml").open("wb") as fh:
+        fh.truncate(60 * 1024 * 1024)       # sparse
+    outside = tmp_path / "outside.yml"
+    outside.write_text("on: push\n", encoding="utf-8")
+    (wf_dir / "linked.yml").symlink_to(outside)
+
+    tracemalloc.start()
+    try:
+        result = hash_pin_workflows(target)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result.changes == []
+    assert peak < 10 * 1024 * 1024
