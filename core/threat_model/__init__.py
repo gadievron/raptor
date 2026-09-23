@@ -692,7 +692,7 @@ def from_context_map(project: Any, context_map: dict[str, Any]) -> ThreatModel:
     model.controls = _merge_records(model.controls, _controls_from_context_map(context_map))
     model.evidence = _merge_records(model.evidence, _evidence_from_context_map(context_map))
     model.updated_at = datetime.now(timezone.utc).isoformat()
-    return model
+    return _clip_model_strings(model)
 
 
 def enrich_from_context_map(model: ThreatModel, context_map: dict[str, Any]) -> ThreatModel:
@@ -737,6 +737,46 @@ def enrich_from_context_map(model: ThreatModel, context_map: dict[str, Any]) -> 
     if model.source == "operator":
         model.source = "enriched"
     model.updated_at = datetime.now(timezone.utc).isoformat()
+    return _clip_model_strings(model)
+
+
+#: Model fields that legitimately exceed ``_MAX_STRING_BYTES``:
+#: operator-prose blocks capped at ``_MAX_NOTES_BYTES`` instead
+#: (mirrors ``from_dict``). Every OTHER string field gets the
+#: standard clip — the set of capped fields is derived from the
+#: dataclass schema in ``_clip_model_strings``, never enumerated,
+#: so a new field is capped by construction.
+_MODEL_PROSE_FIELDS = frozenset({"summary", "notes"})
+
+
+def _clip_model_strings(model: ThreatModel) -> ThreatModel:
+    """Clip every string reachable through ``model``, in place.
+
+    The model boundary for LLM-derived inputs (``from_context_map`` /
+    ``enrich_from_context_map``): the context map is adversarial input,
+    and per-site ``_clip_str`` calls inside the summary builders have
+    historically missed sibling fields (an uncapped ``line`` value rode
+    a 100 KB string into every prompt block and the persisted JSON —
+    ``save_model`` writes the first save verbatim; ``from_dict`` clips
+    only on reload). Walking ``dataclasses.fields`` instead of an
+    enumerated field list means any string field is capped unless a
+    justified exception is declared in ``_MODEL_PROSE_FIELDS``.
+    """
+    import dataclasses
+    for f in dataclasses.fields(ThreatModel):
+        value = getattr(model, f.name)
+        if isinstance(value, str):
+            cap = (
+                _MAX_NOTES_BYTES if f.name in _MODEL_PROSE_FIELDS
+                else _MAX_STRING_BYTES
+            )
+            setattr(model, f.name, _clip_str(value, byte_cap=cap))
+        elif isinstance(value, list):
+            # Prose lists and record lists both route through
+            # ``_clip_value`` — entry-capped, recursed, key-clipped.
+            setattr(model, f.name, [
+                _clip_value(v) for v in value[:_MAX_LIST_ENTRIES]
+            ])
     return model
 
 
@@ -1705,9 +1745,9 @@ def _summaries_from_entries(entries: Any, *, default_label: str) -> list[str]:
             loc_str = _clip_str(location)
             if line is not None and ":" not in str(location):
                 # `line` is adversarial context-map input like every
-                # other field here — clip it too, or it is the one
-                # unescaped carrier in the summary string.
-                parts.append(f" ({loc_str}:{_clip_str(line)})")
+                # other field here; real line numbers are small ints —
+                # a hostile string rode 100 KB into the summary uncapped.
+                parts.append(f" ({loc_str}:{_clip_str(line, byte_cap=32)})")
             else:
                 parts.append(f" ({loc_str})")
         if trust:
@@ -1751,7 +1791,7 @@ def _summaries_from_unchecked_flows(
             loc = _clip_str(sink.get("file") or "?")
             line = sink.get("line")
             sink_type = _clip_str(sink.get("type") or "sink")
-            sink_label = f"{sink_id} {sink_type} at {loc}{':' + str(line) if line is not None else ''}"
+            sink_label = f"{sink_id} {sink_type} at {loc}{':' + _clip_str(line, byte_cap=32) if line is not None else ''}"
         issue = _clip_str(flow.get("missing_boundary") or flow.get("notes") or "unchecked flow")
         severity = flow.get("severity")
         label = f"{entry_label} -> {sink_label}: {issue}"
@@ -1894,7 +1934,11 @@ def _location(record: dict[str, Any]) -> str:
     if not file:
         return ""
     line = record.get("line")
-    return f"{file}:{line}" if line is not None and ":" not in str(file) else str(file)
+    if line is not None and ":" not in str(file):
+        # Same 32-byte line clip as the summary builders — a hostile
+        # string in a numeric slot must not dominate the location.
+        return f"{file}:{_clip_str(line, byte_cap=32)}"
+    return str(file)
 
 
 def _normalise_severity(value: Any) -> str:

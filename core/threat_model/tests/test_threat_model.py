@@ -1234,3 +1234,108 @@ def test_prompt_block_legit_render_unchanged_by_neutraliser():
     assert "[threat-model-context source=understand_graph]" in block
     assert "[/threat-model-context]" in block
     assert "- EP -> SINK" in block
+
+
+# ---------------------------------------------------------------------
+# Model-boundary string clipping (schema-derived).
+# ---------------------------------------------------------------------
+
+def _walk_strings(value):
+    """Yield every string reachable inside a model field value."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for v in value:
+            yield from _walk_strings(v)
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            yield from _walk_strings(k)
+            yield from _walk_strings(v)
+
+
+def _hostile_context_map(payload: str) -> dict:
+    """A context map carrying *payload* in every prose-shaped slot."""
+    return {
+        "entry_points": [{
+            "id": "e1", "name": payload, "file": payload,
+            "line": payload, "trust": payload,
+            "method": payload, "path": payload,
+        }],
+        "trust_boundaries": [{"name": payload, "boundary": payload}],
+        "sink_details": [{
+            "id": "s1", "name": payload, "file": payload,
+            "line": payload, "type": payload,
+        }],
+        "unchecked_flows": [{
+            "entry_point": "e1", "sink": "s1",
+            "missing_boundary": payload, "notes": payload,
+            "severity": payload, "id": payload,
+        }],
+        "hardcoded_secrets": [{"name": payload, "file": payload}],
+        "frameworks": [payload],
+    }
+
+
+def test_hostile_line_field_is_clipped_in_entry_summaries():
+    from core.threat_model import _MAX_STRING_BYTES, _summaries_from_entries
+    hostile = "\x1b]0;pwn\x07" + "A" * 100000
+    out = _summaries_from_entries(
+        [{"name": "handler", "file": "src/a.c", "line": hostile}],
+        default_label="entry",
+    )
+    assert out
+    assert all(len(s) <= _MAX_STRING_BYTES for s in out)
+    assert all("\x1b" not in s for s in out)
+
+
+def test_hostile_line_field_is_clipped_in_flow_summaries():
+    from core.threat_model import (
+        _MAX_STRING_BYTES,
+        _summaries_from_unchecked_flows,
+    )
+    out = _summaries_from_unchecked_flows(
+        [{"entry_point": "e1", "sink": "s1"}],
+        [{"id": "e1"}],
+        [{"id": "s1", "file": "src/b.c", "line": "B" * 100000,
+          "type": "exec"}],
+    )
+    assert out
+    assert all(len(s) <= _MAX_STRING_BYTES for s in out)
+
+
+def test_from_context_map_caps_every_string_field(tmp_path):
+    # Schema-derived closure: EVERY string reachable through the model
+    # built from a hostile context map obeys the module caps — not just
+    # the fields someone remembered to enumerate. A single uncapped
+    # field turns into a multi-hundred-KB prompt block and an unbounded
+    # persisted model (save_model writes the first save verbatim;
+    # from_dict clips only on reload).
+    import dataclasses
+
+    from core.threat_model import (
+        _MAX_NOTES_BYTES,
+        from_context_map,
+    )
+    project = _project(tmp_path)
+    payload = "\x1b]0;t\x07" + "A" * 100000
+    model = from_context_map(project, _hostile_context_map(payload))
+    for f in dataclasses.fields(model):
+        for s in _walk_strings(getattr(model, f.name)):
+            assert len(s) <= _MAX_NOTES_BYTES, (
+                f"field {f.name} carries an uncapped {len(s)}-char string"
+            )
+            assert "\x1b" not in s, f"field {f.name} carries raw ESC"
+
+
+def test_enrich_from_context_map_caps_derived_records(tmp_path):
+    import dataclasses
+
+    from core.threat_model import _MAX_NOTES_BYTES, ThreatModel
+    payload = "B" * 100000
+    model = ThreatModel(project_name="p", target=str(tmp_path))
+    enrich_from_context_map(model, _hostile_context_map(payload))
+    for f in dataclasses.fields(model):
+        for s in _walk_strings(getattr(model, f.name)):
+            assert len(s) <= _MAX_NOTES_BYTES, (
+                f"field {f.name} carries an uncapped {len(s)}-char string"
+            )
