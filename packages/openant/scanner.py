@@ -1152,7 +1152,7 @@ def _mint_gateway_credentials(config: OpenAntConfig) -> dict[str, Any] | None:
         mint_child_token,
     )
     port = enable_child_loopback()
-    model_id = _OPENANT_MODEL_IDS[_normalized_model(config.model)]
+    route, model_id = _gateway_route(config.model)
     minted = mint_child_token(
         budget_usd=_GATEWAY_BUDGET_USD,
         models=[model_id],
@@ -1162,15 +1162,54 @@ def _mint_gateway_credentials(config: OpenAntConfig) -> dict[str, Any] | None:
     )
     logger.info(
         "openant: no direct Anthropic credential — routing the child "
-        "through the dispatcher gateway (token %s, budget $%.2f)",
+        "through the dispatcher gateway (token %s, budget $%.2f, "
+        "route %s, model %s)",
         minted["token_id"], float(minted.get("budget_usd") or 0.0),
+        route, model_id,
     )
     return {
         "token": minted["token"],
         "token_id": minted["token_id"],
         "budget_usd": float(minted.get("budget_usd") or _GATEWAY_BUDGET_USD),
-        "base_url": f"http://127.0.0.1:{port}/anthropic",
+        "base_url": f"http://127.0.0.1:{port}{route}",
+        "model_id": model_id,
     }
+
+
+def _gateway_route(model: str) -> tuple[str, str]:
+    """Resolve the dispatcher front the gateway child dials:
+    ``(provider path prefix, model id)``.
+
+    The dispatcher fronts either the first-party API or Bedrock's
+    Mantle leg, and the install-level truth for which is the same
+    signal proxy-mode CC children trust: ``CLAUDE_CODE_USE_BEDROCK``
+    (spawn_worker forwards the routing family into this process). On
+    the Bedrock front the model id follows the CC adjudication too —
+    the install's own model pin, Mantle-normalized: a Bedrock account
+    serves what it is ENTITLED to, and requesting the integration's
+    pinned catalog id there fails with an upstream permission error
+    regardless of how correct the id is. The pin substitution is
+    operator-owned input (their env), logged loudly below; only when
+    no pin exists does the Mantle-normalized catalog id ride (and its
+    entitlement failure surfaces honestly from upstream). The
+    first-party front keeps the pinned catalog id unchanged.
+    """
+    pinned = _OPENANT_MODEL_IDS[_normalized_model(model)]
+    if not os.environ.get("CLAUDE_CODE_USE_BEDROCK"):
+        return "/anthropic", pinned
+    from core.llm.bedrock_prefixes import mantle_model_id
+    install_pin = os.environ.get("ANTHROPIC_MODEL", "").strip()
+    if install_pin:
+        model_id = mantle_model_id(install_pin)
+        if model_id != mantle_model_id(pinned):
+            logger.info(
+                "openant: gateway rides the install's Bedrock model "
+                "pin %s (requested %r maps to %s, which only the "
+                "account's entitlements could serve)",
+                model_id, str(model)[:40], mantle_model_id(pinned),
+            )
+        return "/bedrock/mantle", model_id
+    return "/bedrock/mantle", mantle_model_id(pinned)
 
 
 def _settle_gateway(gateway: dict[str, Any], out_dir: Path) -> None:
@@ -1307,8 +1346,13 @@ def _stage_llm_config(
         raw["llm_configs"] = configs
     model = _normalized_model(model)
     provider_name = "anthropic"
+    model_id = _OPENANT_MODEL_IDS[model]
     if gateway is not None:
         provider_name = _GATEWAY_PROVIDER_NAME
+        # The route-resolved id (see _gateway_route): the pinned
+        # catalog id on the first-party front, the install's
+        # Mantle-normalized pin on the Bedrock front.
+        model_id = gateway["model_id"]
         providers = raw.get("llm_providers")
         if not isinstance(providers, dict):
             providers = {}
@@ -1327,7 +1371,7 @@ def _stage_llm_config(
             "base_url": gateway["base_url"],
         }
     configs[_llm_profile_name(model)] = {
-        phase: {"provider": provider_name, "model": _OPENANT_MODEL_IDS[model]}
+        phase: {"provider": provider_name, "model": model_id}
         for phase in _OPENANT_LLM_PHASES
     }
 

@@ -22,6 +22,11 @@ import pytest
 def _scrub_credential_posture(monkeypatch, tmp_path):
     monkeypatch.delenv("RAPTOR_LLM_SOCKET", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    # Route-family signals (a Bedrock-fronted host's ambient
+    # CLAUDE_CODE_USE_BEDROCK + model pin would flip every gateway
+    # route assertion to the Mantle shape).
+    monkeypatch.delenv("CLAUDE_CODE_USE_BEDROCK", raising=False)
+    monkeypatch.delenv("ANTHROPIC_MODEL", raising=False)
     # Point the operator-config lookup at an empty per-test directory
     # so the host's real config never leaks into a posture decision.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-scrub"))

@@ -370,6 +370,61 @@ class TestGatewayStaging(_GatewayHarness):
         self.assertEqual(cfg.read_text(), operator_raw)
 
 
+class TestGatewayRouteResolution(_GatewayHarness):
+    """The gateway dials the front the dispatcher actually serves —
+    the same install-level signal proxy-mode CC children trust — and
+    on the Bedrock front the model follows the install's pin."""
+
+    def test_default_route_is_first_party_with_pinned_id(self):
+        from packages.openant.scanner import _gateway_route
+        self.assertEqual(_gateway_route("sonnet"),
+                         ("/anthropic", _OPENANT_MODEL_IDS["sonnet"]))
+
+    def test_bedrock_route_rides_the_install_pin_normalized(self):
+        from packages.openant.scanner import _gateway_route
+        with patch.dict(os.environ, {
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "ANTHROPIC_MODEL": "us.anthropic.claude-fable-5",
+        }):
+            self.assertEqual(
+                _gateway_route("sonnet"),
+                ("/bedrock/mantle", "anthropic.claude-fable-5"))
+
+    def test_bedrock_route_without_pin_normalizes_catalog_id(self):
+        from packages.openant.scanner import _gateway_route
+        with patch.dict(os.environ, {"CLAUDE_CODE_USE_BEDROCK": "1"}):
+            self.assertEqual(
+                _gateway_route("opus"),
+                ("/bedrock/mantle", "anthropic." +
+                 _OPENANT_MODEL_IDS["opus"]))
+
+    def test_bedrock_staging_binds_route_model_everywhere(self):
+        """Staged base_url, profile model, and the mint allowlist all
+        carry the route-resolved id — a profile/token disagreement
+        would 403 at the model allowlist."""
+        captured = {}
+
+        def fake_run(cmd, **kwargs):
+            captured["staged"] = _staged_config(self.out)
+            return subprocess.CompletedProcess(cmd, 2, stdout="", stderr="e")
+
+        self._run(fake_run, env_extra={
+            "RAPTOR_LLM_SOCKET": "/nonexistent/llm.sock",
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "ANTHROPIC_MODEL": "anthropic.claude-fable-5",
+        })
+        staged = captured["staged"]
+        entry = staged["llm_providers"][_GATEWAY_PROVIDER_NAME]
+        self.assertEqual(entry["base_url"],
+                         f"http://127.0.0.1:{_PORT}/bedrock/mantle")
+        profile = staged["llm_configs"]["raptor-sonnet"]
+        for phase in _OPENANT_LLM_PHASES:
+            self.assertEqual(profile[phase]["model"],
+                             "anthropic.claude-fable-5")
+        (mint,) = self.mint_calls
+        self.assertEqual(mint["models"], ["anthropic.claude-fable-5"])
+
+
 class TestGatewayAgainstRealDispatcher(unittest.TestCase):
     """Hermetic end-to-end: a real ``LLMDispatcher`` (captive upstream,
     no network) mints through the scanner's own seam, the staged
