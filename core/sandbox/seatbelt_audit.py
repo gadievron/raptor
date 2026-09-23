@@ -599,11 +599,15 @@ class LogStreamer:
         # Ambiguous-parse tamper counter (see _LOG_LINE_RE): records
         # whose PID field could not be anchored because the line
         # embeds the "(digits) <verdict> <token>" shape more than
-        # once. Single-writer discipline, no lock: only the reader
-        # thread increments (before the scope/budget gates, so the
-        # count can exceed the JSONL's flagged-record count when a
-        # pre-registration ambiguous record is later dropped), and
-        # stop() reads it after joining the reader.
+        # once. Incremented under _append_lock — BOTH the reader
+        # thread and the parent thread write it (register_target_pid
+        # flushes the pending buffer through _filter_and_append on
+        # the parent thread). Counted once per post-pending
+        # evaluation, after the buffer gate, so a buffered record is
+        # counted only when its flush re-enters — the count can
+        # still exceed the JSONL's flagged-record count by
+        # foreign-scope drops. stop() reads it after joining the
+        # reader.
         self._ambiguous_records = 0
         # Ambiguous-record admission accounting (_AMBIGUOUS_ADMIT_MAX):
         # admitted/dropped counts and the one-shot in-band cap marker
@@ -1177,22 +1181,6 @@ class LogStreamer:
 
     def _filter_and_append(self, record: dict) -> None:
         """Scope gate + budget + JSONL append for one parsed record."""
-        if record.get("parse_ambiguous"):
-            # One-shot loud escalation (the in-band flag on every
-            # such record carries the per-record detail; a hostile
-            # target can mint these at will, so the logger is not
-            # given a per-record amplification channel).
-            first = self._ambiguous_records == 0
-            self._ambiguous_records += 1
-            if first:
-                logger.warning(
-                    "seatbelt audit: kext log line with an "
-                    "unanchorable PID field (process name or path "
-                    "embeds the '(pid) verdict action' shape — "
-                    "possible audit-attribution spoofing attempt). "
-                    "Record kept, flagged parse_ambiguous, both "
-                    "candidate parses preserved; see the audit JSONL.",
-                )
         if self._require_scope:
             with self._scope_lock:
                 if not self._scope_pids and not self._scope_pgids:
@@ -1206,6 +1194,34 @@ class LogStreamer:
                     else:
                         self._foreign_records_dropped += 1
                     return
+        if record.get("parse_ambiguous"):
+            # One-shot loud escalation (the in-band flag on every
+            # such record carries the per-record detail; a hostile
+            # target can mint these at will, so the logger is not
+            # given a per-record amplification channel). Counted
+            # AFTER the pending gate — a pre-registration record is
+            # buffered here and re-enters via the registration
+            # flush, so counting before the gate double-counted it
+            # (and the flush runs on the PARENT thread, refuting the
+            # old "only the reader thread increments" comment) —
+            # and under _append_lock, because the reader thread and
+            # the parent-thread flush can evaluate concurrently.
+            # Records the buffer drops as unattributable are not
+            # counted; foreign-scope drops below still are (the
+            # count can exceed the JSONL's flagged-record count by
+            # exactly those).
+            with self._append_lock:
+                first = self._ambiguous_records == 0
+                self._ambiguous_records += 1
+            if first:
+                logger.warning(
+                    "seatbelt audit: kext log line with an "
+                    "unanchorable PID field (process name or path "
+                    "embeds the '(pid) verdict action' shape — "
+                    "possible audit-attribution spoofing attempt). "
+                    "Record kept, flagged parse_ambiguous, both "
+                    "candidate parses preserved; see the audit JSONL.",
+                )
         if not self._record_in_scope(record):
             # Host-wide kext event from a process outside the
             # registered scope — a sibling sandboxed run or an
