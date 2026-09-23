@@ -2394,6 +2394,27 @@ def run_graduated_rules_stage(
             continue
         all_findings.extend((rule_id, f.to_dict()) for f in res.findings)
 
+    if rule_files and failed == len(rule_files):
+        # Every rule failed: writing a zero-finding SARIF here would
+        # read downstream as a clean graduated run — the on-disk
+        # artifact is byte-indistinguishable from one for the SARIF
+        # merge, coverage records and later readers, silently retiring
+        # every precision-gated graduated detector. Surface the
+        # failure and emit nothing (mirrors the expanded-semgrep
+        # stage's all-packs-failed refusal).
+        print(
+            f"⚠️  graduated-rules stage FAILED: all {len(rule_files)} "
+            f"graduated rule(s) failed to run — no SARIF emitted (a "
+            f"zero-finding result would be indistinguishable from a "
+            f"clean run)",
+            file=sys.stderr,
+        )
+        logger.error(
+            "graduated-rules: all %d rules failed; no SARIF emitted",
+            len(rule_files),
+        )
+        return []
+
     sarif_path = Path(out_dir) / "graduated.sarif"
     save_json(sarif_path, _graduated_findings_to_sarif(all_findings))
     logger.info(
@@ -2470,6 +2491,21 @@ def run_source_wrapper_stage(
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("source-wrappers: run failed: %s", exc)
+        return [], []
+    if res.errors and not res.findings:
+        # Same all-failed-looks-clean refusal as the graduated-rules /
+        # expanded-semgrep stages: the stage's single semgrep run
+        # errored without producing findings, so a zero-finding SARIF
+        # would be indistinguishable from a clean source-wrapper run.
+        print(
+            f"⚠️  source-wrapper stage FAILED: semgrep run errored "
+            f"({len(res.errors)} error(s)) — no SARIF emitted",
+            file=sys.stderr,
+        )
+        logger.error(
+            "source-wrappers: run errored with no findings; no SARIF "
+            "emitted (first error: %s)", res.errors[0],
+        )
         return [], []
 
     findings = [("wrapper", f.to_dict()) for f in res.findings]
