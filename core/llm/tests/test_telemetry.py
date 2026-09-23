@@ -115,6 +115,41 @@ class TestSink:
         assert sink.total_records == 2
         assert "$2.00" in sink.summary_line()
 
+    def test_append_refuses_symlinked_trail(self, tmp_path):
+        # A run-dir-writable child can plant a symlink at the
+        # predictable trail name; the append must refuse (O_NOFOLLOW),
+        # never redirect attacker-influenced content onto the victim.
+        victim = tmp_path / "victim.log"
+        victim.write_text("pre\n")
+        run = tmp_path / "run"
+        run.mkdir()
+        trail = run / "llm-telemetry.jsonl"
+        trail.symlink_to(victim)
+        sink = TelemetrySink(trail)
+        sink.record({"event": "call", "call_class": "x", "cost_usd": 1.0})
+        assert victim.read_text() == "pre\n"
+        assert sink.total_records == 1  # aggregation survives
+
+    def test_trail_created_owner_only(self, tmp_path):
+        import stat as _stat
+        trail = tmp_path / "llm-telemetry.jsonl"
+        sink = TelemetrySink(trail)
+        sink.record({"event": "call", "call_class": "x", "cost_usd": 1.0})
+        assert _stat.S_IMODE(trail.stat().st_mode) == 0o600
+
+    def test_unserialisable_values_degrade_per_record(self, tmp_path):
+        # Non-finite floats / exotic objects degrade to strings for
+        # THAT record — they must not trip the one-warning latch and
+        # disable telemetry for the rest of the run.
+        from pathlib import Path as _Path
+        trail = tmp_path / "llm-telemetry.jsonl"
+        sink = TelemetrySink(trail)
+        sink.record({"event": "call", "call_class": "x",
+                     "cost_usd": float("nan"), "extra": _Path("/x")})
+        sink.record({"event": "call", "call_class": "x", "cost_usd": 1.0})
+        recs = _read_jsonl(trail)
+        assert len(recs) == 2
+
     def test_emit_without_sink_is_noop(self):
         emit(event="call", call_class="review")  # must not raise
 

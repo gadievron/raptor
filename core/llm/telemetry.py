@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass
@@ -35,6 +36,25 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 TELEMETRY_FILENAME = "llm-telemetry.jsonl"
+
+
+def _json_writable(rec: dict[str, Any]) -> dict[str, Any]:
+    """Best-effort record for the strict JSONL writer: non-finite
+    floats and non-JSON values become strings (per value; nested
+    containers that still fail serialisation degrade whole)."""
+    out: dict[str, Any] = {}
+    for key, value in rec.items():
+        if isinstance(value, float) and not math.isfinite(value):
+            out[str(key)] = str(value)
+        elif value is None or isinstance(value, (str, int, float, bool)):
+            out[str(key)] = value
+        else:
+            try:
+                json.dumps(value, allow_nan=False)
+                out[str(key)] = value
+            except (TypeError, ValueError):
+                out[str(key)] = str(value)
+    return out
 
 
 @dataclass
@@ -67,7 +87,8 @@ class TelemetrySink:
     # ── Recording ─────────────────────────────────────────────────
 
     def record(self, rec: dict[str, Any]) -> None:
-        """Append one record; update aggregates. Never raises."""
+        """Append one record; update aggregates. Never raises from the
+        write path (see the one-warning latch below)."""
         rec.setdefault("ts", time.time())
         with self._lock:
             self._aggregate(rec)
@@ -75,9 +96,28 @@ class TelemetrySink:
                 return
             try:
                 self.path.parent.mkdir(parents=True, exist_ok=True)
-                line = json.dumps(rec, separators=(",", ":"), default=str)
-                with open(self.path, "a", encoding="utf-8") as f:
-                    f.write(line + "\n")
+                # append_jsonl, not a bare open("a"): the trail sits at
+                # a predictable name inside the run output dir, and a
+                # run-dir-writable child could plant a symlink there to
+                # redirect same-UID appends onto an arbitrary file.
+                # O_NOFOLLOW refuses the plant (same threat call the
+                # dispatcher audit trail beside this one made when it
+                # adopted the chokepoint); 0o600 keeps the trail
+                # owner-only; the single os.write is also line-atomic
+                # cross-process, which the buffered writer was not.
+                from core.json.jsonl import append_jsonl
+                try:
+                    append_jsonl(self.path, rec, compact=True, mode=0o600)
+                except (TypeError, ValueError):
+                    # Non-serialisable or non-finite values degrade to
+                    # strings for THIS record (the previous writer's
+                    # default=str parity) instead of tripping the
+                    # one-warning latch and disabling telemetry for
+                    # the rest of the run.
+                    append_jsonl(
+                        self.path, _json_writable(rec),
+                        compact=True, mode=0o600,
+                    )
             except Exception:
                 # One warning, then stay silent — aggregation still
                 # works so the end-of-run summary line survives a
