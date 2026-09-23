@@ -227,3 +227,50 @@ def test_read_bounded_fifo_refused_without_blocking(tmp_path):
     t.join(timeout=10)
     assert not t.is_alive(), "_read_bounded blocked opening a FIFO"
     assert outcome == ["refused"]
+
+
+class TestNestingBombs:
+    """compile_commands.json is repo content read BECAUSE it is repo
+    content: a planted nesting bomb must degrade like malformed JSON
+    (the module's never-raises contract), never raise RecursionError
+    into the unwrapped inventory-stage consumers."""
+
+    def _plant(self, tmp_path, raw):
+        (tmp_path / "compile_commands.json").write_text(raw)
+
+    def test_leading_bomb_degrades_all_three_extractors(self, tmp_path):
+        from core.build.build_flags import extract_flags
+        from core.build.macro_config import extract_build_tus
+
+        self._plant(tmp_path, "[" * 100_000 + "]" * 100_000)
+        mc = extract_macro_config(tmp_path)
+        assert not mc
+        assert extract_build_tus(tmp_path) is None
+        assert extract_flags(tmp_path).extraction_confidence == "absent"
+
+    def test_bomb_past_the_scan_window_is_caught(self, tmp_path):
+        """A deep tail buried past the pre-gate's bounded prefix scan
+        exercises the RecursionError rows in the catch tuples — the
+        gate is an optimization, the catch tuple the guarantee."""
+        from core.build.build_flags import extract_flags
+        from core.build.macro_config import extract_build_tus
+
+        flat = '{"x":1},' * 140_000            # > the 1 MiB scan window
+        deep = "[" * 60_000 + "]" * 60_000
+        self._plant(tmp_path, "[" + flat + deep + "]")
+        mc = extract_macro_config(tmp_path)
+        assert not mc
+        assert extract_build_tus(tmp_path) is None
+        assert extract_flags(tmp_path).extraction_confidence == "absent"
+
+    def test_legitimately_nested_manifest_still_extracts(self, tmp_path):
+        """Real depth (array of dicts with arguments arrays, strings
+        full of brackets and escapes) stays far under the gate."""
+        entries = [
+            {"directory": "/src", "file": "a.c",
+             "arguments": ["cc", "-D_FORTIFY_SOURCE=2", "-DF\\\"[{OO",
+                           "-c", "a.c"]},
+        ]
+        self._plant(tmp_path, json.dumps(entries))
+        mc = extract_macro_config(tmp_path)
+        assert mc.is_defined("_FORTIFY_SOURCE") is True

@@ -192,9 +192,16 @@ def _scan_tokens(tokens: list[str], defined: dict[str, str],
 
 def _from_compile_commands(path: Path) -> MacroConfig:
     raw = _read_bounded(path, _MAX_COMPILE_COMMANDS_BYTES)
+    if _nests_like_a_bomb(raw):
+        logger.warning("deeply nested compile_commands.json at %s — "
+                       "refused before parse", path)
+        return MacroConfig(source="compile_commands.json")
     try:
         entries = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError, RecursionError):
+        # RecursionError: a nesting bomb past the pre-gate's scan
+        # window — same degradation as malformed JSON (the module's
+        # never-raises contract; the consumer is the inventory stage).
         logger.warning("malformed compile_commands.json at %s", path)
         return MacroConfig(source="compile_commands.json")
     if not isinstance(entries, list) or not entries:
@@ -246,6 +253,49 @@ def _from_kconfig(path: Path) -> MacroConfig:
                        source="kconfig")
 
 
+# Nesting pre-gate for compile_commands.json. A legitimate manifest is
+# a flat array of flat dicts (strings / arguments arrays — depth ~3);
+# a planted nesting bomb ("[" * 200k) drives the JSON parser into
+# RecursionError before any shape check while materialising a
+# container per bracket. The gate scans a bounded document prefix so
+# its own cost stays linear and small; a bomb buried past the window
+# is caught by the RecursionError rows in the parse catch tuples —
+# the gate is an early refusal for the common shape, the catch tuple
+# is the never-raises guarantee.
+_NESTING_SCAN_CHARS = 1_000_000
+# Far above any legitimate compile_commands nesting (depth ~3) and far
+# below the interpreter recursion limit the parser would otherwise hit.
+_MAX_NESTING_DEPTH = 64
+_ESCAPE_PAIR_RE = re.compile(r"\\.", re.DOTALL)
+_NON_STRUCTURAL_RE = re.compile(r'[^\[\]{}"]+')
+
+
+def _nests_like_a_bomb(raw: str) -> bool:
+    """True when the leading structure nests past ``_MAX_NESTING_DEPTH``.
+
+    C-speed reduction first (drop escape pairs, then every
+    non-structural character), then one pass over the surviving
+    bracket/quote skeleton with in-string tracking. Correct on
+    well-formed JSON; on malformed input either answer is fine —
+    the parser's own error (or RecursionError) is caught downstream.
+    """
+    skeleton = _NON_STRUCTURAL_RE.sub(
+        "", _ESCAPE_PAIR_RE.sub("", raw[:_NESTING_SCAN_CHARS]))
+    depth = 0
+    in_string = False
+    for ch in skeleton:
+        if ch == '"':
+            in_string = not in_string
+        elif not in_string:
+            if ch in "[{":
+                depth += 1
+                if depth > _MAX_NESTING_DEPTH:
+                    return True
+            else:
+                depth -= 1
+    return False
+
+
 def _find_compile_commands(target: Path) -> Path | None:
     for c in (target / "compile_commands.json",
               target / "build" / "compile_commands.json"):
@@ -271,7 +321,8 @@ def extract_macro_config(target: Path) -> MacroConfig:
             mc = _from_compile_commands(cc)
             if mc:
                 return mc
-        except (OSError, json.JSONDecodeError, ValueError) as exc:
+        except (OSError, json.JSONDecodeError, ValueError,
+                RecursionError) as exc:
             logger.debug("compile_commands.json macro parse failed: %s", exc)
 
     kconfig = target / ".config"
@@ -305,8 +356,14 @@ def extract_build_tus(target: Path) -> frozenset | None:
     if cc is None:
         return None
     try:
-        entries = json.loads(_read_bounded(cc, _MAX_COMPILE_COMMANDS_BYTES))
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raw = _read_bounded(cc, _MAX_COMPILE_COMMANDS_BYTES)
+        if _nests_like_a_bomb(raw):
+            logger.warning("deeply nested compile_commands.json at %s — "
+                           "refused before parse", cc)
+            return None
+        entries = json.loads(raw)
+    except (OSError, json.JSONDecodeError, ValueError,
+            RecursionError) as exc:
         logger.debug("compile_commands.json TU-set parse failed: %s", exc)
         return None
     if not isinstance(entries, list):
