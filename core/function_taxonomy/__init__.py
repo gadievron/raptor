@@ -1,12 +1,13 @@
 """Shared taxonomy of function-name categories with security significance.
 
 One source of truth for "dangerous string function", "exec sink", "parser
-entry point", etc. — consumers (packages/binary_analysis,
-packages/exploit_feasibility) compose the union they need from these
-primitive frozensets. Replaces three previously-divergent lists:
+entry point", etc. — consumers (packages/binary_analysis's
+dangerous-import tables, packages/exploit_feasibility's
+COMMON_FUNCTIONS ROP-target catalog) compose the union they need from
+these primitive frozensets. Replaces previously-divergent inline lists:
 
   - packages/binary_analysis/radare2_understand._DANGEROUS_IMPORTS
-  - packages/exploit_feasibility/constants.{COMMON,INPUT,STRING_TERMINATING}_FUNCTIONS
+  - packages/exploit_feasibility/constants.COMMON_FUNCTIONS
   - packages/binary_analysis/radare2_understand._DANGEROUS_MACOS_SUBSTRINGS
 
 Curation policy (why some "obvious" entries are missing):
