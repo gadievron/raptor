@@ -478,3 +478,17 @@ def test_invariant_row_whitespace_run_is_fast():
     hostile = "Invariant [x]: y" + " " * (1 << 16) + "("
     with cpu_budget(1.0, what="invariant-row whitespace-run scan"):
         assert _SAGE_INVARIANT_RE.match(hostile) is None
+
+
+def test_evidence_row_whitespace_run_is_fast():
+    """Hostile recall row opening 'Evidence (x):' and ending in a
+    long whitespace run with no dash: the previous spelling chained
+    overlapping whitespace spans around the lazy file group and the
+    optional hash atom — cubic in the row length. The \\S-delimited
+    file group with a gated hash group is linear."""
+    from core.concepts.study import _SAGE_EVIDENCE_RE
+    from core.testing.wallclock import cpu_budget
+
+    hostile = "Evidence (code_path): f" + " " * (1 << 16) + "x"
+    with cpu_budget(1.0, what="evidence-row whitespace-run scan"):
+        assert _SAGE_EVIDENCE_RE.match(hostile) is None

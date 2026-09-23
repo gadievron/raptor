@@ -4370,9 +4370,17 @@ def _verify_evidence_hashes(
     return checked > 0
 
 
+# The file group is \S-delimited (still lazy — the first colon that
+# satisfies the tail keeps splitting file:line exactly as before)
+# and the hash group carries its trailing whitespace inside the
+# gated optional group: the naive ``\s+(.+?)…(?:\s+\[h=…\])?\s+``
+# chained overlapping whitespace spans around optional atoms, so an
+# 'Evidence (x):' row ending in a long whitespace run with no dash
+# cost every split of the run — cubic in the recall-row length.
+# Match set and all five captures unchanged on writer-shaped rows.
 _SAGE_EVIDENCE_RE = re.compile(
-    r"Evidence\s+\((\w+)\):\s+(.+?)(?::(\d+))?"
-    r"(?:\s+\[h=([a-f0-9]+)\])?\s+[-–—]\s+(.*)"
+    r"Evidence\s+\((\w+)\):\s+(\S(?:.*?\S)??)(?::(\d+))?"
+    r"\s+(?:\[h=([a-f0-9]+)\]\s+)?[-–—]\s+(.*)"
 )
 # The statement group is \S-delimited and carries its trailing
 # whitespace inside the optional group, and the negation group is
