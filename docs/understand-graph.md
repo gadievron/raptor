@@ -113,7 +113,9 @@ open is write-free (the migration returns before any write), lock
 contention against an in-flight ingest degrades to "no data" after a
 brief retry, and a genuinely corrupt store is quarantined (renamed
 aside together with its WAL `-wal`/`-shm` sidecars), never silently
-deleted. Code should use `core.understand_graph`, not direct SQL.
+deleted. A store written by a newer RAPTOR degrades to "no data" as
+well — reported on stderr, file kept in place. Code should use
+`core.understand_graph`, not direct SQL.
 
 ## Maintenance
 

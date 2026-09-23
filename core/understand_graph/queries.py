@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from .schema import json_loads
-from .store import open_graph
+from .store import query_graph
 
 
 def _like_escape(value: str) -> str:
@@ -35,9 +35,10 @@ _CONFIDENCE_RANK_SQL = """CASE lower({col})
 
 
 def graph_summary(db_path: Path) -> dict[str, Any]:
-    if not Path(db_path).exists():
-        return {"exists": False}
-    with open_graph(db_path) as conn:
+    # Read lanes ride query_graph: corruption quarantines + degrades
+    # to the lane's empty, locks retry then degrade, schema-newer
+    # degrades with the file kept. Direct open_graph is for writers.
+    def _do(conn):
         node_counts = {
             row["kind"]: row["count"]
             for row in conn.execute("SELECT kind, COUNT(*) AS count FROM nodes WHERE stale=0 GROUP BY kind")
@@ -57,12 +58,13 @@ def graph_summary(db_path: Path) -> dict[str, Any]:
             "edges": edge_counts,
         }
 
+    result = query_graph(db_path, _do)
+    return result if result is not None else {"exists": False}
+
 
 def build_context_map(db_path: Path, target_path: Optional[str] = None) -> tuple[dict[str, Any], set[str]]:
     """Rebuild a context-map-compatible dict from graph rows."""
-    if not Path(db_path).exists():
-        return {}, set()
-    with open_graph(db_path) as conn:
+    def _do(conn, target_path):
         snapshot = _latest_snapshot(conn, target_path, producer="understand")
         if not snapshot:
             return {}, set()
@@ -112,6 +114,9 @@ def build_context_map(db_path: Path, target_path: Optional[str] = None) -> tuple
         }
         return context_map, stale_files
 
+    result = query_graph(db_path, _do, target_path)
+    return result if result is not None else ({}, set())
+
 
 def _backfill_node_props(props: dict[str, Any], row: Any) -> None:
     """Add stable node-row fields that older ingests did not store in props."""
@@ -133,9 +138,7 @@ def _backfill_node_props(props: dict[str, Any], row: Any) -> None:
 
 
 def reachable_sinks(db_path: Path, target_path: Optional[str] = None) -> list[dict[str, Any]]:
-    if not Path(db_path).exists():
-        return []
-    with open_graph(db_path) as conn:
+    def _do(conn, target_path):
         snapshot = _latest_snapshot(conn, target_path, producer="understand")
         if not snapshot:
             return []
@@ -166,6 +169,9 @@ def reachable_sinks(db_path: Path, target_path: Optional[str] = None) -> list[di
             }
             for row in rows
         ]
+
+    result = query_graph(db_path, _do, target_path)
+    return result if result is not None else []
 
 
 def attack_paths(
@@ -252,7 +258,8 @@ def graph_diff(
     """Compare two graph snapshots and return attack-surface drift."""
     if not Path(db_path).exists():
         return {"exists": False, "reason": "graph not found"}
-    with open_graph(db_path) as conn:
+
+    def _do(conn):
         base, head = _select_diff_snapshots(
             conn,
             target_path,
@@ -266,40 +273,45 @@ def graph_diff(
         base_edges = _snapshot_reachability_index(conn, base["id"])
         head_edges = _snapshot_reachability_index(conn, head["id"])
 
-    interesting = ("entry_point", "source", "trust_boundary", "sink", "unchecked_flow")
-    node_diff: dict[str, Any] = {}
-    for kind in interesting:
-        old = {k: v for k, v in base_nodes.items() if v.get("kind") == kind}
-        new = {k: v for k, v in head_nodes.items() if v.get("kind") == kind}
-        node_diff[kind] = {
-            "added": [_public_node(new[k]) for k in sorted(set(new) - set(old))],
-            "removed": [_public_node(old[k]) for k in sorted(set(old) - set(new))],
+        interesting = ("entry_point", "source", "trust_boundary", "sink", "unchecked_flow")
+        node_diff: dict[str, Any] = {}
+        for kind in interesting:
+            old = {k: v for k, v in base_nodes.items() if v.get("kind") == kind}
+            new = {k: v for k, v in head_nodes.items() if v.get("kind") == kind}
+            node_diff[kind] = {
+                "added": [_public_node(new[k]) for k in sorted(set(new) - set(old))],
+                "removed": [_public_node(old[k]) for k in sorted(set(old) - set(new))],
+            }
+
+        added_reachability = [
+            head_edges[k] for k in sorted(set(head_edges) - set(base_edges))
+        ]
+        removed_reachability = [
+            base_edges[k] for k in sorted(set(base_edges) - set(head_edges))
+        ]
+        return {
+            "exists": True,
+            "is_diffable": True,
+            "base_snapshot": _snapshot_public(base),
+            "head_snapshot": _snapshot_public(head),
+            "nodes": node_diff,
+            "reachability": {
+                "added": added_reachability,
+                "removed": removed_reachability,
+            },
+            "new_risks": [
+                edge for edge in added_reachability
+                if edge.get("unchecked") or edge.get("confidence") in {"high", "confirmed"}
+            ],
+            "is_drifted": any(
+                node_diff[k]["added"] or node_diff[k]["removed"]
+                for k in node_diff
+            ) or bool(added_reachability or removed_reachability),
         }
 
-    added_reachability = [
-        head_edges[k] for k in sorted(set(head_edges) - set(base_edges))
-    ]
-    removed_reachability = [
-        base_edges[k] for k in sorted(set(base_edges) - set(head_edges))
-    ]
-    return {
-        "exists": True,
-        "is_diffable": True,
-        "base_snapshot": _snapshot_public(base),
-        "head_snapshot": _snapshot_public(head),
-        "nodes": node_diff,
-        "reachability": {
-            "added": added_reachability,
-            "removed": removed_reachability,
-        },
-        "new_risks": [
-            edge for edge in added_reachability
-            if edge.get("unchecked") or edge.get("confidence") in {"high", "confirmed"}
-        ],
-        "is_drifted": any(
-            node_diff[k]["added"] or node_diff[k]["removed"]
-            for k in node_diff
-        ) or bool(added_reachability or removed_reachability),
+    result = query_graph(db_path, _do)
+    return result if result is not None else {
+        "exists": False, "reason": "graph unavailable",
     }
 
 
@@ -330,10 +342,11 @@ def threat_model_graph_context(
 
 def prompt_context_for_location(db_path: Path, file_path: str, line: int | None = None, *, limit: int = 6) -> str:
     """Return a compact, prompt-safe graph memory block for one finding."""
-    if not file_path or not Path(db_path).exists():
+    if not file_path:
         return ""
     file_name = str(file_path)
-    with open_graph(db_path) as conn:
+
+    def _do(conn):
         rows = conn.execute(
             """
             SELECT kind, name, file, line_start, props_json
@@ -357,6 +370,9 @@ def prompt_context_for_location(db_path: Path, file_path: str, line: int | None 
                 """,
                 (f"%{_like_escape(Path(file_name).name)}", limit),
             ).fetchall()
+        return rows
+
+    rows = query_graph(db_path, _do)
     if not rows:
         return ""
     lines = ["Graph memory from prior /understand runs:"]
@@ -380,8 +396,6 @@ def hypothesis_seeds(
     limit: int = 20,
 ) -> list[dict[str, Any]]:
     """Return functions near unchecked flows, ranked by flow density."""
-    from .store import query_graph
-
     def _do(conn, target, lim):
         # understand-shaped nodes only: a newer scan/validate snapshot
         # of the same target would blank the result otherwise.
@@ -432,8 +446,6 @@ def alternative_paths(
     limit: int = 5,
 ) -> list[dict[str, Any]]:
     """Find alternative entry points reaching the same sink."""
-    from .store import query_graph
-
     def _do(conn, sink_id, blocked_id, lim):
         rows = conn.execute(
             f"""
@@ -472,8 +484,6 @@ def sca_reachability(
     target_path: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Check if a dependency is reachable from an entry point."""
-    from .store import query_graph
-
     def _do(conn, dep, _target):
         rows = conn.execute(
             """
@@ -510,8 +520,6 @@ def coverage_residual(
     target_path: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Return attack paths that have NOT been validated."""
-    from .store import query_graph
-
     paths = attack_paths(db_path, target_path)
     if not paths:
         return []
@@ -575,8 +583,6 @@ def scan_dedup_chains(
     target_path: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Group scan findings that share the same entry-to-sink path."""
-    from .store import query_graph
-
     def _do(conn, _target):
         rows = conn.execute(
             """
@@ -622,8 +628,6 @@ def fuzz_targets(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """Rank functions by proximity to dangerous sinks via unchecked flows."""
-    from .store import query_graph
-
     _DANGEROUS = (
         "system", "exec", "execve", "popen", "memcpy", "strcpy",
         "sprintf", "printf", "gets", "scanf", "eval", "command",
@@ -743,8 +747,6 @@ def propagate_binary_verdicts(
 
 def dashboard_summary(db_path: Path) -> dict[str, Any]:
     """Aggregate metrics across all snapshots for project dashboards."""
-    from .store import query_graph
-
     _empty: dict[str, Any] = {
         "snapshots": [],
         "totals": {},

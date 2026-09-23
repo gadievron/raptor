@@ -102,7 +102,14 @@ def _quarantine_corrupt_graph(path: Path, exc: Exception) -> None:
                 sidecar.rename(quarantine.parent / sidecar.name.replace(
                     path.name, quarantine.name, 1))
     except OSError:
-        remove_graph_db(path)
+        if not remove_graph_db(path):
+            # Per the helper's contract: report the failure instead of
+            # claiming success — a corrupt DB that survives quarantine
+            # keeps crashing every consumer until an operator removes it.
+            print(
+                f"graph: could not quarantine or remove corrupt {path.name}",
+                file=sys.stderr,
+            )
 
 
 def graph_path_for_run(run_dir: Path, target_path: Optional[str] = None) -> Path:
@@ -209,6 +216,15 @@ def query_graph(path: Path, fn, *args, **kwargs):
         try:
             with graph_connection(path) as conn:
                 return fn(conn, *args, **kwargs)
+        except GraphSchemaNewerError as exc:
+            # From-the-future store: degrade (report + None), NEVER
+            # quarantine — the file is not corrupt, and the newer
+            # RAPTOR that wrote it can still read it.
+            print(
+                f"graph: {exc}; keeping {Path(path).name}",
+                file=sys.stderr,
+            )
+            return None
         except sqlite3.DatabaseError as exc:
             if _is_corruption(exc):
                 _quarantine_corrupt_graph(Path(path), exc)
