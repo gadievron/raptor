@@ -120,6 +120,16 @@ class TestEnsureAlive:
             assert srv.ensure_alive() is False
         restart.assert_not_called()
 
+    def test_dead_import_code_session_is_revived(self):
+        # restart() explicitly supports _code_path re-import; the
+        # liveness gate must not refuse the relaunch it delegates to.
+        srv = JoernServer()
+        srv._code_path = Path("/nonexistent/src")
+        with patch.object(srv, "restart", return_value=True) as restart, \
+                patch.object(srv, "health_check", return_value=False):
+            assert srv.ensure_alive() is True
+        restart.assert_called_once()
+
     def test_failed_relaunch_with_proc_none_retries(self):
         # A failed restart() leaves _proc None but _cpg_path set — the
         # next cooldown window must retry rather than giving up.
