@@ -105,8 +105,13 @@ def writes_fixed_stack_buffer(source: str) -> bool:
         # memcpy(buf, …) / snprintf(buf, …) / read(fd, buf, …)-style
         # first-or-second-arg destination uses.
         writer_alt = "|".join(_MEM_WRITERS)
+        # \S-headed first argument and gated '&' — the naive
+        # ``\(\s*(?:[^,()]+,\s*)?&?\s*`` chained whitespace spans
+        # around two optional atoms (quadratic on a writer call
+        # followed by a whitespace run). The dropped corner is a
+        # whitespace-only first argument, not real C.
         if re.search(
-            rf"\b(?:{writer_alt})\s*\(\s*(?:[^,()]+,\s*)?&?\s*{esc}\b",
+            rf"\b(?:{writer_alt})\s*\(\s*(?:[^,()\s][^,()]*,\s*)?(?:&\s*)?{esc}\b",
             source,
         ):
             return True

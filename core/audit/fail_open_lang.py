@@ -2673,8 +2673,12 @@ def rust_function_returns_result(
                          exc_info=True)
     # Line-regex fallback: signature shapes only (never handler
     # bodies): `fn name(...) -> Result<...>`.
+    # The optional generics group gates its own trailing whitespace
+    # ((?:<...>\s*)?): the naive ``\s*(?:<[^>]*>)?\s*`` put two
+    # whitespace spans around it — quadratic on an fn-opening line
+    # ending in a whitespace run.
     return bool(re.search(
-        rf"fn\s+{re.escape(tail)}\s*(?:<[^>]*>)?\s*\([^)]*\)\s*->\s*"
+        rf"fn\s+{re.escape(tail)}\s*(?:<[^>]*>\s*)?\([^)]*\)\s*->\s*"
         rf"[\w:]*Result\b",
         source,
     ))

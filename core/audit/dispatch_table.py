@@ -41,8 +41,14 @@ _OPS_TABLE_PATTERNS = [
     ),
 ]
 
+# \b pins the callee group (and the return keyword) to word starts
+# — the lazy filler and the group overlapped on word chars, so a
+# case-opening line with a long identifier run and no paren cost
+# every split of the run — quadratic. Earliest-match captures
+# unchanged; the one dropped corner is a mid-word 'return' suffix
+# ('xxreturn') acting as the keyword, which was never C.
 _IOCTL_CASE_RE = re.compile(
-    r"case\s+\w+\s*:.*?(?:return\s+)?(\w+)\s*\(",
+    r"case\s+\w+\s*:.*?(?:\breturn\s+)?\b(\w+)\s*\(",
 )
 
 _CAPABILITY_PATTERNS = [

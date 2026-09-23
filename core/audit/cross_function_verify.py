@@ -57,10 +57,15 @@ def _init_dispatch() -> None:
 
         (re.compile(
             r"unsaniti[sz]ed\s+(?:input|data|header|value|filename)"
-            r"|(?:user|attacker|external)[\w\s-]*(?:control|suppli|provid)\w*\s+(?:data|input|value).*(?:sink|output|render|inject|interpolat)"
+            # (?=\S) pins each whitespace run to end where the
+            # non-whitespace tail begins (same language — the
+            # dot-star absorbed any remainder); the naive runs split
+            # against the lazy fillers, quadratic on hypothesis text
+            # ending in a whitespace run.
+            r"|(?:user|attacker|external)[\w\s-]*(?:control|suppli|provid)\w*\s+(?:data|input|value)(?=\s|$|\W).*(?:sink|output|render|inject|interpolat)"
             r"|(?:host|header|query|path|url)\s+(?:value\s+)?(?:directly|without)"
-            r"|taint(?:ed)?\s+.*(?:sink|output|render)"
-            r"|unsaniti[sz]ed\s+\w+\s+.*(?:path|directory|travers)"
+            r"|taint(?:ed)?\s+(?=\S).*(?:sink|output|render)"
+            r"|unsaniti[sz]ed\s+\w+\s+(?=\S).*(?:path|directory|travers)"
             r"|(?:\.\./|path\s+travers|directory\s+travers)",
             re.IGNORECASE,
         ), "taint_source_sink"),
@@ -77,9 +82,11 @@ def _init_dispatch() -> None:
         (re.compile(
             r"integer\s+(?:overflow|underflow|truncat|wrap|narrow)"
             r"|arithmetic\s+(?:overflow|underflow)"
-            r"|(?:size|length|count|offset)\s+.*(?:overflow|truncat|wrap)"
-            r"|(?:multiply|shift|add)\s+.*(?:alloc|size|length)"
-            r"|truncat\w+\s+.*(?:int|u32|u16|size_t)",
+            # (?=\S)-pinned whitespace runs (same language), as in
+            # the taint patterns above.
+            r"|(?:size|length|count|offset)\s+(?=\S).*(?:overflow|truncat|wrap)"
+            r"|(?:multiply|shift|add)\s+(?=\S).*(?:alloc|size|length)"
+            r"|truncat\w+\s+(?=\S).*(?:int|u32|u16|size_t)",
             re.IGNORECASE,
         ), "taint_to_arithmetic"),
 
@@ -90,8 +97,10 @@ def _init_dispatch() -> None:
             r"|missing\s+(?:clean|free|release)"
             r"|omit(?:s|ted)?\s+(?:clean|free|release)"
             r"|incomplete\s+(?:clean|teardown|shutdown|release)"
-            r"|(?:freed|free)\s+.*(?:pointer|reference)\s+.*(?:remains|dangling|stale)"
-            r"|(?:pointer|reference)\s+.*(?:remains|dangling|stale)",
+            # (?=\S)-pinned whitespace runs (same language), as in
+            # the taint patterns above.
+            r"|(?:freed|free)\s+(?=\S).*(?:pointer|reference)\s+(?=\S).*(?:remains|dangling|stale)"
+            r"|(?:pointer|reference)\s+(?=\S).*(?:remains|dangling|stale)",
             re.IGNORECASE,
         ), "incomplete_cleanup"),
     ]

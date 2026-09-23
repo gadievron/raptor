@@ -344,7 +344,9 @@ _JS_FALSY_COERCION = [
 _JS_FUNC_RE = re.compile(
     r"\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?"
     r"(?:"
-    r"function\s*\*?\s+(\w+)"                          # function name(
+    # gated generator star ((?:\s*\*)?\s+ — the \s*\*?\s+ chain
+    # was quadratic on 'function' + whitespace run)
+    r"function(?:\s*\*)?\s+(\w+)"                      # function name(
     r"|(?:const|let|var)\s+(\w+)\s*=\s*"
     r"(?:(?:async\s+)?(?:\([^)]*\)|[A-Za-z_]\w*)\s*=>|\(?function)"  # arrow / function expr
     r"|(\w+)\s*\([^)]*\)\s*\{"             # name(...) {  (class method)

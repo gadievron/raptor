@@ -288,10 +288,14 @@ _LIBRARY_PREFIX_RE = re.compile(
 
 # Tri-state contract mined from domain-model contract prose
 # ("returns 1 on success, 0 on failure, -1 on error").
+# Each optional verb gates its own trailing whitespace: the naive
+# ``\s*(?:VERB)?\s*`` put two unbounded whitespace spans around it
+# (three times over) — quadratic on tristate-shaped prose ending in
+# a whitespace run.
 _TRISTATE_PROSE_RE = re.compile(
-    r"1\s*(?:=|on|for|means)?\s*(?:ok|success|valid).{0,60}"
-    r"0\s*(?:=|on|for|means)?\s*(?:fail|invalid|bad).{0,60}"
-    r"(?:-1|negative)\s*(?:=|on|for|means)?\s*(?:error|fault)",
+    r"1\s*(?:(?:=|on|for|means)\s*)?(?:ok|success|valid).{0,60}"
+    r"0\s*(?:(?:=|on|for|means)\s*)?(?:fail|invalid|bad).{0,60}"
+    r"(?:-1|negative)\s*(?:(?:=|on|for|means)\s*)?(?:error|fault)",
     re.IGNORECASE | re.DOTALL,
 )
 _ZERO_OK_PROSE_RE = re.compile(

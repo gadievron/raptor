@@ -209,9 +209,12 @@ def _event_call_re(names: tuple[str, ...]) -> re.Pattern:
     alts = "|".join(
         re.escape(n) for n in sorted(names, key=len, reverse=True)
     )
+    # The optional '&' gates its own trailing whitespace — the naive
+    # ``\s*&?\s*`` pair was quadratic on a release call followed by
+    # a whitespace run.
     return re.compile(
         r"\b(" + alts + r"|\w+_(?:free|destroy|release|put|teardown)\w*"
-        r")\s*\(\s*&?\s*([A-Za-z_]\w*)"
+        r")\s*\(\s*(?:&\s*)?([A-Za-z_]\w*)"
         r"((?:\s*(?:->|\.)\s*[A-Za-z_]\w*)*)"
     )
 

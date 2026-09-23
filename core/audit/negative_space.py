@@ -1138,8 +1138,13 @@ _UB_PATTERNS = [
         "CWE-120",
     ),
     (
+        # \b pins the pointer name to its full word — the name and
+        # the dot-star overlapped on word chars (quadratic on an
+        # identifier run with no sizeof). The one dropped corner is
+        # a mid-word 'sizeof' suffix ('mysizeof' counted as the
+        # operator), which was a false-positive row, not C.
         re.compile(
-            r"(?:void|char)\s*\*\s*\w+.*(?:sizeof\s*\(|sizeof\b)|"
+            r"(?:void|char)\s*\*\s*\w+\b.*(?:sizeof\s*\(|sizeof\b)|"
             r"sizeof\s*\(.*(?:void|char)\s*\*\s*\w+",
         ),
         "Pointer arithmetic on void*/char* near sizeof (potential type confusion)",
@@ -1280,8 +1285,10 @@ _EARLY_RETURN_AUTH = re.compile(
     re.IGNORECASE,
 )
 
+# Gated optional paren — the naive ``\(?\s*`` pair was quadratic on
+# a comparator followed by a whitespace run.
 _NON_CONSTANT_TIME_CMP = re.compile(
-    r"(?:strcmp|memcmp|==)\s*\(?\s*(?:password|passwd|token|secret|key|hmac|api_key|auth)",
+    r"(?:strcmp|memcmp|==)\s*(?:\(\s*)?(?:password|passwd|token|secret|key|hmac|api_key|auth)",
     re.IGNORECASE,
 )
 
@@ -1395,8 +1402,11 @@ _CROSS_PROC_PRIV = re.compile(
     re.IGNORECASE,
 )
 
+# (?=\S) pins the whitespace run to end where the tail begins
+# (same language — the dot-star absorbed any remainder), killing
+# the quadratic run-vs-dot-star split.
 _CROSS_PROC_PRIV_CONTEXT = re.compile(
-    r"if\s+.*(?:os\.getuid|os\.geteuid|getuid|geteuid)\s*\(",
+    r"if\s+(?=\S).*(?:os\.getuid|os\.geteuid|getuid|geteuid)\s*\(",
     re.IGNORECASE,
 )
 
@@ -1531,9 +1541,12 @@ _HARDCODED_PATH_SECURITY_CONTEXT = re.compile(
     re.IGNORECASE,
 )
 
+# (?=\S)-pinned whitespace runs, with the trailing run distributed
+# into the alternation so neither branch borders an unpinned span
+# (same language).
 _DEBUG_SKIP_SECURITY = re.compile(
-    r"if\s+.*(?:DEBUG|TESTING|DEV_MODE|DEVELOPMENT|TEST_MODE)\s*"
-    r"(?::|.*(?:skip|disable|bypass|no).*(?:auth|secur|valid|check|verif))",
+    r"if\s+(?=\S).*(?:DEBUG|TESTING|DEV_MODE|DEVELOPMENT|TEST_MODE)"
+    r"(?:\s*:|\s*(?=\S).*(?:skip|disable|bypass|no).*(?:auth|secur|valid|check|verif))",
     re.IGNORECASE,
 )
 
@@ -1629,8 +1642,11 @@ def check_deployment_assumptions(
 
 # ── Lock ordering patterns ────────────────────────────────────────────
 
+# The optional '&' gates its own trailing whitespace — the naive
+# ``\s*&?\s*`` pair was quadratic on a lock call followed by a
+# whitespace run.
 _LOCK_ACQUIRE = re.compile(
-    r"(?:(\w+)\.acquire\s*\(|pthread_mutex_lock\s*\(\s*&?\s*(\w+)|"
+    r"(?:(\w+)\.acquire\s*\(|pthread_mutex_lock\s*\(\s*(?:&\s*)?(\w+)|"
     r"(\w+)\.lock\s*\(|with\s+(\w+)\s*:)",
 )
 
@@ -1656,8 +1672,10 @@ _UNLOCK_PATTERN = re.compile(
 # would re-flag RAII-managed locks whose release IS the context
 # manager (false rows). Lock-ish name tokens keep both directions
 # covered.
+# (?=\S) pins the whitespace run to end where the line body begins
+# (same language — the line class absorbed any remainder).
 _CONTEXT_MANAGER_LOCK = re.compile(
-    r"with\s+[^\n]*(?:lock|mutex|guard|sema|cond|critical|monitor)",
+    r"with\s+(?=\S)[^\n]*(?:lock|mutex|guard|sema|cond|critical|monitor)",
     re.IGNORECASE,
 )
 

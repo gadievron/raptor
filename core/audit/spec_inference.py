@@ -548,7 +548,11 @@ _ASSERTION_PATTERNS: list[tuple] = [
     (re.compile(r"\bDCHECK\s*\((.+?)\)"), "precondition"),
     (re.compile(r"\bg_assert\s*\((.+?)\)"), "precondition"),
     (re.compile(r"\bg_return_if_fail\s*\((.+?)\)"), "precondition"),
-    (re.compile(r"\bg_return_val_if_fail\s*\((.+?)\s*,"), "precondition"),
+    # The condition group ends non-whitespace or is a single char
+    # ((.*?\S|.)): the naive ``(.+?)\s*,`` overlapped the lazy group
+    # and the whitespace span — quadratic on an assert-opening line
+    # ending in a whitespace run with no comma. Captures unchanged.
+    (re.compile(r"\bg_return_val_if_fail\s*\((.*?\S|.)\s*,"), "precondition"),
     (re.compile(r"\bprecondition\s*\((.+?)\)"), "precondition"),
     (re.compile(r"\bPy_CHECK_TYPE\s*\((.+?)\)"), "type_precondition"),
 ]
@@ -728,8 +732,10 @@ def _check_precondition_in_source(
         var_match = re.search(r"(\w+)\s*(?:!=\s*(?:NULL|0)|!= null)", precondition)
         if var_match:
             var = var_match.group(1)
+            # gated optional bang (the \s*!?\s* chain was
+            # quadratic on 'if (' + whitespace run)
             if re.search(
-                rf"if\s*\(\s*!?\s*{re.escape(var)}\s*\)|"
+                rf"if\s*\(\s*(?:!\s*)?{re.escape(var)}\s*\)|"
                 rf"if\s*\(\s*{re.escape(var)}\s*==\s*NULL|"
                 rf"if\s*\(\s*{re.escape(var)}\s*!=\s*NULL",
                 caller_source,

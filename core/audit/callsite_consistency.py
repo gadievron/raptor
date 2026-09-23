@@ -956,18 +956,26 @@ def _extract_callsites_ts(
 # keeps today's coarse classes"; no read-scan without a tree).
 # ---------------------------------------------------------------------------
 
+# The modifier branch pins its whitespace run with (?=\S) — the run
+# must end where the non-whitespace tail begins (same language: the
+# lazy tail absorbed any remainder) — and \b pins the name group to
+# a word start. The naive ``\s+.*?(\w+)`` let the run split against
+# the lazy tail and the tail split against the name — quadratic even
+# at the anchored match call.
 _FUNC_HEADER_RE = re.compile(
     r"\s*(?:"
     r"(?:def|func|function|fn)\s+"
     r"(?:\([^)]*\)\s+)?"
     r"(\w+)"
     r"|(?:public|private|protected|static|async|export|default)\s+"
-    r".*?(\w+)\s*\("
+    r"(?=\S).*?\b(\w+)\s*\("
     r")",
 )
 
+# \b keeps the unanchored scan from restarting inside an identifier
+# run (quadratic); earliest-start matches and captures unchanged.
 _CALL_IN_LINE_RE = re.compile(
-    r"(\w+(?:\.\w+)*)\s*\(",
+    r"\b(\w+(?:\.\w+)*)\s*\(",
 )
 
 # C/C++-style function definition or prototype: type token(s), then

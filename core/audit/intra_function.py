@@ -128,8 +128,11 @@ _COMPARISON_RE = re.compile(
     r"(\w+)\s*(==|!=|<=|>=|<(?!=)|>(?!=))\s*(\w+|\d+)",
 )
 
+# The optional bang gates its own trailing whitespace: the naive
+# ``\s*!?\s*`` put two whitespace spans around it — quadratic on an
+# if-line ending in a whitespace run.
 _GUARD_CHECK_RE = re.compile(
-    r"\b(if\s*\(\s*!?\s*\w+|IS_ERR\s*\(|unlikely\s*\(|WARN_ON\s*\(|BUG_ON\s*\()",
+    r"\b(if\s*\(\s*(?:!\s*)?\w+|IS_ERR\s*\(|unlikely\s*\(|WARN_ON\s*\(|BUG_ON\s*\()",
 )
 
 

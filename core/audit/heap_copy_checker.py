@@ -105,9 +105,14 @@ _STACK_ARRAY_RE = re.compile(
 # Comparison: if (var < N) or if (var > N) or similar.  The operator
 # is captured — equality tests and lower bounds must not read as
 # bounds checks (see _is_bounds_checked).
+# \b pins the LHS group to a word start and the RHS group to its
+# full word — each overlapped the neighbouring filler on word chars,
+# so a long identifier run with no operator (or no closing paren)
+# cost every split of the run — quadratic. Earliest-match captures
+# unchanged.
 _COMPARISON_RE = re.compile(
     r'\b(?:if|while)\s*\([^)]*?'
-    r'(\w+)\s*([<>]=?|==|!=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)'
+    r'\b(\w+)\s*([<>]=?|==|!=)\s*(\w+|\d+(?:x[\da-fA-F]+)?)\b'
     r'[^)]*\)',
 )
 

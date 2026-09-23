@@ -344,12 +344,20 @@ _C_KEYWORDS = frozenset({
     "if", "for", "while", "switch", "return", "sizeof", "do", "else",
 })
 _NULL_TOKENS = frozenset({"NULL", "nullptr"})
-_CONST_RE = re.compile(r"\A(?:0[xX][0-9a-fA-F]+|\d+|\".*\"|'.')\s*;?\s*\Z")
-_IDENT_RE = re.compile(r"\A([A-Za-z_]\w*)\s*;?\s*\Z")
+# Tail semicolons gate their own whitespace ((?:;\s*)?) in the
+# three RHS classifiers: the naive ``\s*;?\s*\Z`` put two
+# whitespace spans around the optional semicolon — quadratic on an
+# RHS ending in a whitespace run, even anchored.
+_CONST_RE = re.compile(r"\A(?:0[xX][0-9a-fA-F]+|\d+|\".*\"|'.')\s*(?:;\s*)?\Z")
+_IDENT_RE = re.compile(r"\A([A-Za-z_]\w*)\s*(?:;\s*)?\Z")
 _CALL_RHS_RE = re.compile(r"\A\(?\s*(?:\([\w\s\*]+\)\s*)?([A-Za-z_]\w*)\s*\(")
+# The cast and ampersand atoms gate their own trailing whitespace —
+# the naive ``\s*(?:\(..\)\s*)?&?\s*`` chain put unbounded
+# whitespace spans around two optional atoms (quadratic even
+# anchored). Same match set.
 _FIELD_RHS_RE = re.compile(
-    r"\A\(?\s*(?:\([\w\s\*]+\)\s*)?&?\s*([A-Za-z_]\w*)\s*(?:->|\.)\s*"
-    r"([A-Za-z_]\w*)\s*;?\s*\Z"
+    r"\A\(?\s*(?:\([\w\s\*]+\)\s*)?(?:&\s*)?([A-Za-z_]\w*)\s*(?:->|\.)\s*"
+    r"([A-Za-z_]\w*)\s*(?:;\s*)?\Z"
 )
 
 
