@@ -247,6 +247,17 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     print(f"\n  {fetched}/{len(pack_ids)} packs → {zip_name} ({size_kb:.0f} KB)")
     print("  Transfer this file to the airgapped machine and run:")
     print(f"    python3 engine/semgrep/tools/cache-packs.py import {zip_name}")
+    if fetched < len(pack_ids):
+        # The partial bundle is still written (the fetched packs are
+        # useful) but the build must not report success: an airgap
+        # bundle silently missing packs is a coverage loss on exactly
+        # the machine that cannot fetch them later.
+        print(
+            f"  WARNING: bundle is INCOMPLETE — "
+            f"{len(pack_ids) - fetched} pack(s) failed (see FAILED "
+            f"lines above)"
+        )
+        raise SystemExit(1)
 
 
 def _read_member_bounded(zf: zipfile.ZipFile, name: str) -> bytes | None:
@@ -374,6 +385,10 @@ def cmd_update(args: argparse.Namespace) -> None:
         updated += 1
 
     print(f"\n  {updated}/{len(pack_ids)} packs written to {CACHE_DIR}")
+    if updated < len(pack_ids):
+        # Operators and CI key off the exit code; a silent 0/N (or
+        # k/N) success code leaves the cache stale with no signal.
+        raise SystemExit(1)
 
 
 def main() -> None:
