@@ -257,6 +257,37 @@ class TestFieldIndex:
         assert set(vocab) == {"highest_sent"}
 
 
+class TestStateIndexThreading:
+    def test_passed_index_skips_rebuild(self, tmp_path, monkeypatch):
+        # The orchestrator threads a per-run memoised index; the
+        # check must consume it instead of rebuilding per dispatch.
+        import core.audit.protocol_state as ps
+
+        target = tmp_path / "target"
+        (target / "src").mkdir(parents=True)
+        src = (
+            "void on_ack(struct conn *conn, uint64_t v)\n"
+            "{\n"
+            "    conn->largest_acked = v;\n"
+            "}\n"
+        )
+        (target / "src/c.c").write_text(src)
+        texts = {"src/c.c": src}
+        index = ps.build_state_field_index(texts)
+
+        def boom(_texts):
+            raise AssertionError(
+                "index must not rebuild when state_index is threaded")
+
+        monkeypatch.setattr(ps, "build_state_field_index", boom)
+        res = ps.run_protocol_state_check(
+            target, "src/c.c", "on_ack",
+            "protocol state: largest_acked regression",
+            source_texts=texts, state_index=index,
+        )
+        assert res is not None
+
+
 class TestLeads:
     def test_ack_of_unsent_both_leads_with_receipts(self, tmp_path):
         out = run_protocol_state_prepass(TEXTS, out_dir=tmp_path)

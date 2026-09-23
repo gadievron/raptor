@@ -1058,6 +1058,7 @@ def run_protocol_state_check(
     domain_model: dict[str, Any] | None = None,
     invariant: str | None = None,
     source_texts: dict[str, str] | None = None,
+    state_index: dict[str, Any] | None = None,
     budget_s: float = INVARIANT_BUDGET_S,
 ) -> StateEvidence:
     """Adjudicate one protocol-state hypothesis.
@@ -1083,7 +1084,13 @@ def run_protocol_state_check(
             REASON_HYPOTHESIS_UNBINDABLE,
             f"no sources readable under {target_path}",
         )
-    index = build_state_field_index(source_texts)
+    # *state_index* threads the orchestrator's per-run memo — the
+    # index is a pure function of the source texts and was rebuilt on
+    # every hypothesis dispatch before.
+    index = (
+        state_index if state_index is not None
+        else build_state_field_index(source_texts)
+    )
     state_vocab = learned_state_fields(domain_model)
 
     if invariant is None:

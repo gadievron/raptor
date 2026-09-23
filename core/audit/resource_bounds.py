@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -737,8 +738,61 @@ def _c_function_spans(source: str) -> list[tuple[str, int, int]]:
     return spans
 
 
+#: Directory names pruned from the census walk: VCS internals are
+#: never target source, and a kernel-sized ``.git/objects`` was the
+#: dominant cost of the old whole-tree rglob (every path materialised
+#: per hypothesis dispatch before the suffix filter ran).
+_CENSUS_PRUNE_DIRS = frozenset({".git", ".hg", ".svn"})
+
+
+def _source_census(target_path: Path) -> list[tuple[str, str]]:
+    """Capped, contained source intake over the tree — a pure
+    function of the target, so the orchestrator memoises it per run
+    and threads the result through ``source_texts=`` instead of
+    paying the walk once per hypothesis dispatch.
+
+    A pruned ``os.walk`` replaces ``sorted(target_path.rglob("*"))``:
+    only source-suffix files are collected and VCS internals are
+    skipped. Candidates are sorted by full path, so the
+    ``_MAX_SCAN_FILES`` selection matches the old rglob order
+    exactly (``sorted(Path)`` compares the path string on POSIX).
+    """
+    from core.source import read_contained
+
+    candidates: list[str] = []
+    try:
+        for root, dirnames, filenames in os.walk(target_path):
+            dirnames[:] = [
+                d for d in dirnames if d not in _CENSUS_PRUNE_DIRS
+            ]
+            for name in filenames:
+                if os.path.splitext(name)[1] in _SOURCE_SUFFIXES:
+                    candidates.append(os.path.join(root, name))
+    except OSError:
+        return []
+    candidates.sort()
+    census: list[tuple[str, str]] = []
+    for full in candidates:
+        if len(census) >= _MAX_SCAN_FILES:
+            break
+        rel = os.path.relpath(full, target_path)
+        try:
+            if os.path.getsize(full) > _MAX_FILE_BYTES:
+                continue
+        except OSError:
+            continue
+        content = read_contained(
+            target_path, rel, max_chars=_MAX_FILE_BYTES,
+        )
+        if content is None:
+            continue
+        census.append((rel, content))
+    return census
+
+
 def _gather_source_texts(
     target_path: Path, primary_file: str,
+    census: list[tuple[str, str]] | None = None,
 ) -> dict[str, str]:
     """Contained, capped source intake for the hypothesis channels.
 
@@ -748,8 +802,10 @@ def _gather_source_texts(
     symlink escapes read as nothing instead of pulling host files
     into the analysed corpus. The primary read is capped at
     ``_MAX_FILE_BYTES`` (prefix kept — dropping the hypothesis file
-    outright would only blind the channel); rglob candidates over the
-    cap are skipped, as before.
+    outright would only blind the channel); census candidates over
+    the cap are skipped, as before. *census* threads a memoised
+    :func:`_source_census` result (per-run, from the orchestrator);
+    None walks the tree fresh.
     """
     from core.source import read_contained
 
@@ -759,28 +815,12 @@ def _gather_source_texts(
     )
     if primary_text is not None:
         texts[primary_file] = primary_text
-    try:
-        candidates = [
-            p for p in sorted(target_path.rglob("*"))
-            if p.is_file() and p.suffix in _SOURCE_SUFFIXES
-        ]
-    except OSError:
-        return texts
-    for p in candidates:
+    if census is None:
+        census = _source_census(target_path)
+    for rel, content in census:
         if len(texts) >= _MAX_SCAN_FILES:
             break
-        rel = str(p.relative_to(target_path))
         if rel in texts:
-            continue
-        try:
-            if p.stat().st_size > _MAX_FILE_BYTES:
-                continue
-        except OSError:
-            continue
-        content = read_contained(
-            target_path, rel, max_chars=_MAX_FILE_BYTES,
-        )
-        if content is None:
             continue
         texts[rel] = content
     return texts

@@ -278,6 +278,18 @@ def _default_codeql_memo() -> "BoundedMemo":
     return _BoundedMemo(_CODEQL_MEMO_MAX_ENTRIES)
 
 
+def _default_hypothesis_source_memo() -> "BoundedMemo":
+    """Fresh per-run memo for the resource-bounds / protocol-state
+    source census and state-field index. Both are pure functions of
+    the target tree (+ primary file for the index) that were re-paid
+    on every hypothesis dispatch: a full-tree walk incl. .git per
+    call. Run-scoped like codeql_memo — the read-only-target-tree
+    contract bounds correctness to one run."""
+    from .run_memo import BoundedMemo as _BoundedMemo
+
+    return _BoundedMemo(16)
+
+
 def _default_tu_cache() -> "BoundedMemo":
     """Fresh per-run compiler cache at the sweep layer's cap.
 
@@ -945,6 +957,9 @@ class OrchestratorConfig:
     # callers/tests.
     codeql_memo: "BoundedMemo" = field(
         default_factory=_default_codeql_memo, repr=False,
+    )
+    hypothesis_source_memo: "BoundedMemo" = field(
+        default_factory=_default_hypothesis_source_memo, repr=False,
     )
     tu_cache: "BoundedMemo" = field(
         default_factory=_default_tu_cache, repr=False,
@@ -11946,6 +11961,58 @@ def _resolve_hypothesis(outcome: ReviewOutcome) -> str:
     return resolve_hypothesis(outcome)
 
 
+def _hypothesis_source_texts(
+    config, target: Path, file_path: str,
+) -> dict[str, str] | None:
+    """Per-run memoised source intake for the resource-bounds /
+    protocol-state channels. The census walk is a pure function of
+    the target tree — memoised once per run; only the hypothesis's
+    primary-file overlay varies per dispatch (cheap: one contained
+    read). None for non-C/C++ primaries: both checks bail on those
+    before gathering, so eager intake would be pure waste."""
+    from .resource_bounds import (
+        _SOURCE_SUFFIXES,
+        _gather_source_texts,
+        _source_census,
+    )
+
+    if not file_path.endswith(_SOURCE_SUFFIXES):
+        return None
+    memo = getattr(config, "hypothesis_source_memo", None)
+    if memo is None:
+        # Duck-typed configs (tests, direct callers) without the
+        # per-run memo: compute uncached — the old per-dispatch cost,
+        # never a refusal.
+        census = _source_census(Path(target))
+    else:
+        census, _ = memo.get_or_compute(
+            ("source_census", str(target)),
+            lambda: _source_census(Path(target)),
+        )
+    return _gather_source_texts(Path(target), file_path, census=census)
+
+
+def _hypothesis_state_index(
+    config, target: Path, file_path: str,
+    source_texts: dict[str, str] | None,
+) -> dict[str, Any] | None:
+    """Per-run memoised state-field index (pure function of the
+    source texts; keyed on the primary file because its overlay
+    joins the indexed set). None when there is no intake."""
+    from .protocol_state import build_state_field_index
+
+    if source_texts is None:
+        return None
+    memo = getattr(config, "hypothesis_source_memo", None)
+    if memo is None:
+        return build_state_field_index(source_texts)
+    index, _ = memo.get_or_compute(
+        ("state_field_index", str(target), file_path),
+        lambda: build_state_field_index(source_texts),
+    )
+    return index
+
+
 def _g3_prior_review_rows(config) -> list[dict[str, Any]]:
     """Prior-review rows feeding :func:`_check_finding_gates`' G3
     re-recording check on a resumed run ([] otherwise).
@@ -19174,6 +19241,9 @@ def _run_tool_chain(
                     inventory=getattr(config, "inventory", None),
                     context=rb_ctx,
                     domain_model=rb_dm,
+                    source_texts=_hypothesis_source_texts(
+                        config, effective_target, file_path,
+                    ),
                 )
                 # Receipts already earned by earlier chain steps
                 # corroborate (the fail_open convention).
@@ -19339,6 +19409,9 @@ def _run_tool_chain(
                     inventory=getattr(config, "inventory", None),
                     context_map=getattr(config, "context_map", None),
                 )
+                ps_texts = _hypothesis_source_texts(
+                    config, effective_target, file_path,
+                )
                 ps_res = run_protocol_state_check(
                     effective_target,
                     file_path,
@@ -19348,6 +19421,10 @@ def _run_tool_chain(
                     context=ps_ctx,
                     domain_model=ps_dm,
                     invariant=tool_cfg.get("invariant") or None,
+                    source_texts=ps_texts,
+                    state_index=_hypothesis_state_index(
+                        config, effective_target, file_path, ps_texts,
+                    ),
                 )
                 ps_res.corroboration.extend(
                     c for c in confirmed
