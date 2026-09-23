@@ -25,8 +25,15 @@ rules:
       - pattern: Digest::MD5.digest(...)
       - pattern: Digest::SHA1.hexdigest(...)
       - pattern: Digest::SHA1.digest(...)
-      - pattern: OpenSSL::Digest.new("MD5")
-      - pattern: OpenSSL::Digest.new("SHA1")
+      # (?i): OpenSSL digest name lookup is case-insensitive, so
+      # OpenSSL::Digest.new("md5") is a fully working weak-hash use.
+      # (The Digest::MD5 constants above stay exact — Ruby constant
+      # names ARE case-sensitive.)
+      - patterns:
+          - pattern: OpenSSL::Digest.new($ALG, ...)
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: (?i)^["'](md5|sha-?1)["']$
     metadata:
       cwe: ["CWE-328"]
       asvs: ["V11.4.1"]

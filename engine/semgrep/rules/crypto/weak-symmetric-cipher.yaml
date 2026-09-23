@@ -3,15 +3,12 @@ rules:
     message: Weak symmetric cipher detected. Use AES-GCM or ChaCha20-Poly1305. Verify deprecation plan.
     languages: [java, kotlin]
     severity: HIGH
-    pattern-either:
-      - patterns:
-          - pattern: Cipher.getInstance($ALGO, ...)
-          - metavariable-regex:
-              metavariable: $ALGO
-              regex: ^"(DES|DESede)(/[^"]*)?"$
-      - pattern: Cipher.getInstance("RC4", ...)
-      - pattern: Cipher.getInstance("ARCFOUR", ...)
-      - pattern: Cipher.getInstance("Blowfish", ...)
+    patterns:
+      # (?i): JCA transformation lookup is case-insensitive per spec.
+      - pattern: Cipher.getInstance($ALGO, ...)
+      - metavariable-regex:
+          metavariable: $ALGO
+          regex: (?i)^"(des|desede|rc4|arcfour|blowfish)(/[^"]*)?"$
     metadata:
       cwe: ["CWE-326","CWE-327"]
       asvs: ["V3.11"]

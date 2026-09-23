@@ -274,3 +274,48 @@ def test_every_rule_has_cwe_metadata():
             if not rule.get("metadata", {}).get("cwe"):
                 missing.append(f"{rule.get('id')} ({rule_file.name})")
     assert not missing, "rules with no cwe metadata:\n  " + "\n  ".join(missing)
+
+
+# --- case-insensitive algorithm names (JCA / OpenSSL lookup) ----------------
+
+# rule file → (fixture, expected firing lines). JCA getInstance and
+# OpenSSL digest lookups are case-insensitive per spec, so every
+# case-variant line is a fully working weak-crypto use; exact line
+# sets keep each variant individually witnessed (a fires-at-least-once
+# assertion would let single variants regress silently).
+_CASE_FOLD_CASES = {
+    "crypto/weak-hash.yaml": ("weakcrypto_case_pos.java", [6, 7, 8, 9]),
+    "crypto/weak-symmetric-cipher.yaml": (
+        "weakcrypto_case_pos.java", [12, 13, 14, 15],
+    ),
+    "crypto/pkcs1v15-padding.yaml": (
+        "weakcrypto_case_pos.java", [18, 19],
+    ),
+    "crypto/weak-hash-extended.yaml": ("weakhash_case_pos.rb", [4, 5, 6]),
+}
+
+
+@pytest.mark.parametrize("rule_rel", sorted(_CASE_FOLD_CASES))
+def test_weak_crypto_matches_case_insensitively(rule_rel: str):
+    fixture, expected_lines = _CASE_FOLD_CASES[rule_rel]
+    rule_file = _RULES_DIR / rule_rel
+    target = _FIXTURES / fixture
+    results = _run_semgrep(rule_file, [target])["results"]
+    lines = sorted({r["start"]["line"] for r in results})
+    assert lines == expected_lines, (
+        f"{rule_rel} case-fold coverage drifted on {fixture}: "
+        f"fired {lines}, expected {expected_lines}"
+    )
+
+
+@pytest.mark.parametrize(
+    "rule_rel",
+    ["crypto/weak-hash.yaml", "crypto/weak-symmetric-cipher.yaml",
+     "crypto/pkcs1v15-padding.yaml"],
+)
+def test_weak_crypto_case_negatives_stay_silent(rule_rel: str):
+    rule_file = _RULES_DIR / rule_rel
+    target = _FIXTURES / "weakcrypto_case_neg.java"
+    results = _run_semgrep(rule_file, [target])["results"]
+    hits = [(r["check_id"], r["start"]["line"]) for r in results]
+    assert not hits, f"{rule_rel} fired on clean fixture: {hits}"
