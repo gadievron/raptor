@@ -1062,7 +1062,11 @@ def start_run(output_dir: Path, command: str,
         from core.sandbox.summary import set_active_run_dir
         save_json(output_dir / RUN_METADATA_FILE, metadata)
     set_active_run_dir(output_dir)
-    _setup_checklist_symlink(output_dir)
+    _run_target = metadata.get("target_path")
+    _setup_checklist_symlink(
+        output_dir,
+        target=_run_target if isinstance(_run_target, str) else None,
+    )
     # Session run ledger: the record drives exact
     # coverage-hook attribution and sibling-discovery tier 0.
     # Best-effort by contract — never lifecycle-critical.
@@ -1189,7 +1193,8 @@ def _cleanup_abandoned(project_dir: Path, command: str, session_pid: int) -> Non
                      record_timing=False)
 
 
-def _setup_checklist_symlink(run_dir: Path) -> None:
+def _setup_checklist_symlink(run_dir: Path,
+                             target: str | None = None) -> None:
     """Create a checklist.json symlink in the run dir pointing to the project-level checklist.
 
     Only acts in project mode (active project detected via .active symlink).
@@ -1197,6 +1202,21 @@ def _setup_checklist_symlink(run_dir: Path) -> None:
 
     If no project-level checklist exists yet, promotes the newest run-level
     checklist from sibling run dirs.
+
+    ``target``: the run's resolved target path (``start_run``'s sealed
+    ``target_path``). When both it and the project checklist's recorded
+    ``target_path`` are known ABSOLUTE paths and they resolve to
+    different locations, the symlink is REFUSED with a loud warning —
+    inheriting an inventory that describes a different tree silently
+    audits target B against target A's items. A file target inside the
+    recorded tree is still a mismatch: the inventory's items are the
+    tree's, not the file's. The run then builds its own checklist
+    downstream, exactly as a first project run does. When either side
+    is unknown (target-less start, legacy checklist without
+    ``target_path``, a relative recorded path whose anchor is lost),
+    the historical inheritance is preserved — refusing on unknowns
+    would break every standalone-shaped flow for a guard that cannot
+    actually compare anything.
     """
 
     # THE RUN PIN decides which project this is (start_run sealed it
@@ -1240,6 +1260,51 @@ def _setup_checklist_symlink(run_dir: Path) -> None:
     project_checklist = project_dir / "checklist.json"
     if not project_checklist.exists():
         _promote_checklist(project_dir)
+
+    # Target-match gate: never inherit an inventory recorded against a
+    # DIFFERENT target (checked after promotion so a just-promoted
+    # checklist is vetted too). Costs one bounded JSON parse at run
+    # start — the price of not silently steering a whole run's review
+    # loop, coverage, and journal at the wrong tree's item list.
+    if target and project_checklist.exists():
+        from core.coverage.record import RUN_ARTIFACT_MAX_BYTES
+        from core.json import load_json as _load_json
+        recorded: str = ""
+        try:
+            _data = _load_json(
+                project_checklist, max_bytes=RUN_ARTIFACT_MAX_BYTES,
+            )
+            if isinstance(_data, dict):
+                recorded = str(_data.get("target_path") or "")
+        except (OSError, ValueError):
+            # Unreadable/corrupt project checklist: leave the verdict
+            # to the downstream readers that already own that failure
+            # mode; the guard only acts on a POSITIVE mismatch.
+            recorded = ""
+        if recorded and Path(recorded).is_absolute():
+            # RuntimeError alongside OSError: on Python 3.10-3.12,
+            # Path.resolve() raises it on symlink loops — a planted
+            # loop in either path must fail OPEN (keep inheritance,
+            # never fail the lifecycle start), same as any other
+            # uncomparable input.
+            try:
+                _mismatch = (
+                    Path(recorded).resolve() != Path(target).resolve()
+                )
+            except (OSError, RuntimeError):
+                _mismatch = False
+            if _mismatch:
+                from core.logging import get_logger
+                get_logger(__name__).warning(
+                    "checklist inheritance refused for %s: the project "
+                    "checklist %s was built for target %s but this run "
+                    "targets %s — inheriting it would audit this run's "
+                    "target against the other tree's inventory. This "
+                    "run proceeds without it; commands that need an "
+                    "inventory build a fresh one for the actual target.",
+                    run_dir, project_checklist, recorded, target,
+                )
+                return
 
     # Create relative symlink: run_dir/checklist.json → ../checklist.json
     #

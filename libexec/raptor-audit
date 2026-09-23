@@ -1670,6 +1670,60 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # --- build checklist ---
     checklist_path = out_dir / "checklist.json"
+    # Target-match gate on an inherited/pre-existing checklist: an
+    # inventory recorded against a DIFFERENT target must never seed
+    # this run (lifecycle start refuses the project symlink for
+    # mismatches, but a reused --out dir or a symlink minted before
+    # that gate can still be sitting here). Discarding the run-LOCAL
+    # copy leaves any project-level original untouched; the rebuild
+    # below then inventories the actual target.
+    if checklist_path.exists():
+        _stale_recorded = _mismatched_checklist_target(
+            checklist_path, target_path,
+        )
+        if _stale_recorded is not None:
+            print(
+                "checklist target mismatch: existing "
+                f"{sanitise_for_terminal(str(checklist_path), max_len=300)} "
+                "was built for "
+                f"{sanitise_for_terminal(_stale_recorded, max_len=300)} "
+                "but this run targets "
+                f"{sanitise_for_terminal(str(target_path), max_len=300)} "
+                "— discarding the run-local copy and rebuilding the "
+                "inventory for the actual target (never auditing one "
+                "target against another target's inventory)",
+                file=sys.stderr, flush=True,
+            )
+            try:
+                if checklist_path.is_symlink():
+                    # Drop only the LINK; the project-level checklist
+                    # it points at belongs to the other target's runs.
+                    checklist_path.unlink()
+                else:
+                    # A real file is evidence — set it aside, never
+                    # delete a run artifact. Timestamp + counter so a
+                    # SECOND mismatch in the same dir cannot replace()
+                    # over the first set-aside (that would silently
+                    # destroy the earlier evidence).
+                    import time as _time
+                    _ts = _time.strftime(
+                        "%Y%m%dT%H%M%SZ", _time.gmtime())
+                    _aside = out_dir / (
+                        f"checklist.json.mismatched-target-{_ts}")
+                    _n = 1
+                    while _aside.exists():
+                        _aside = out_dir / (
+                            "checklist.json.mismatched-target-"
+                            f"{_ts}.{_n}")
+                        _n += 1
+                    checklist_path.replace(_aside)
+            except OSError as exc:
+                print(
+                    f"error: could not discard mismatched checklist: {exc}",
+                    file=sys.stderr,
+                )
+                _lifecycle_fail(out_dir, "mismatched checklist not removable")
+                return 1
     if not checklist_path.exists():
         # The builder's contract is two positionals: <target> <output_dir>
         # (it has no --out flag).
@@ -2725,6 +2779,42 @@ def _lifecycle_fail(out_dir: Path, reason: str) -> None:
             check=False,
             timeout=_LIFECYCLE_TIMEOUT_S,
         )
+
+
+def _mismatched_checklist_target(
+    checklist_path: Path,
+    target_path: Path,
+) -> str | None:
+    """The checklist's recorded ``target_path`` when it POSITIVELY
+    mismatches this run's resolved target, else ``None``.
+
+    Plain resolved-path equality: a file target inside the recorded
+    tree is still a mismatch — the inventory's items describe the
+    tree, not the file. Fail-open on unknowns (missing/relative
+    recorded path, unreadable checklist): the guard exists to stop a
+    demonstrably-wrong inheritance, not to refuse legacy checklists
+    that cannot be compared — those keep today's behavior and the
+    downstream readers' own failure modes.
+    """
+    try:
+        data = load_json(checklist_path, max_bytes=_MAX_CHECKLIST_BYTES)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    recorded = str(data.get("target_path") or "")
+    if not recorded or not Path(recorded).is_absolute():
+        return None
+    # RuntimeError alongside OSError: Python 3.10-3.12 raise it from
+    # Path.resolve() on symlink loops — a planted loop must fail OPEN
+    # (no discard, run proceeds on the existing checklist), never
+    # traceback out of cmd_run leaving the run stuck "running".
+    try:
+        if Path(recorded).resolve() != Path(target_path).resolve():
+            return recorded
+    except (OSError, RuntimeError):
+        return None
+    return None
 
 
 def _guess_target(out_dir: Path) -> Path | None:
