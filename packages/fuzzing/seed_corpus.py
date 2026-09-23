@@ -511,29 +511,73 @@ def _validate_builtin_output_directory(out_dir: Path) -> None:
 
 
 def _reset_builtin_output(out_dir: Path, seed_names: set[str]) -> None:
+    """Provenance-gated reset, mirroring ``_reset_generated_output``:
+    only content a generator-written ``manifest.json`` proves is ours
+    may be deleted. Seed names are ordinary-looking filenames, so an
+    operator-chosen out_dir can legitimately contain same-named
+    entries this generator never wrote — on first contact (no
+    manifest) or under a foreign/corrupt manifest, refuse loudly
+    rather than destroy foreign data. Directories are NEVER removed
+    recursively: this generator only ever writes flat seed FILES, so
+    a colliding directory is foreign by construction.
+    """
     generated_names = set(seed_names)
     existing_manifest = out_dir / "manifest.json"
+    ours = False
     if existing_manifest.is_file():
-        # Manifest from a previous run of this generator; missing /
-        # corrupt / oversize degrade to "no previous manifest".
+        # Corrupt / oversize / non-object manifests are treated as
+        # foreign — the safe direction.
         previous = load_json(existing_manifest, max_bytes=64 * 1024 * 1024)
-        if previous is None:
+        if not isinstance(previous, dict):
             previous = {}
-        if previous.get("source") == "raptor_builtin_seed_corpus":
-            for seed in previous.get("seeds") or []:
-                destination = str(seed.get("destination") or "")
-                if destination and "/" not in destination and "\\" not in destination and ".." not in destination:
-                    generated_names.add(destination)
-        existing_manifest.unlink()
+        ours = previous.get("source") == "raptor_builtin_seed_corpus"
+        if not ours:
+            msg = (
+                f"refusing to reset {out_dir}: manifest.json was not "
+                "written by the built-in seed corpus generator — pick "
+                "an empty or generator-owned output directory"
+            )
+            raise ValueError(msg)
+        seeds = previous.get("seeds")
+        for seed in seeds if isinstance(seeds, list) else []:
+            if not isinstance(seed, dict):
+                continue
+            destination = str(seed.get("destination") or "")
+            if destination and "/" not in destination and "\\" not in destination and ".." not in destination:
+                generated_names.add(destination)
 
-    for name in generated_names:
-        path = out_dir / name
+    colliding = [
+        out_dir / name for name in sorted(generated_names)
+        if (out_dir / name).exists() or (out_dir / name).is_symlink()
+    ]
+    if colliding and not ours:
+        names = ", ".join(p.name for p in colliding)
+        msg = (
+            f"refusing to reset {out_dir}: {names} exist but no "
+            "generator-written manifest.json proves they came from a "
+            "previous corpus run — pick an empty or generator-owned "
+            "output directory"
+        )
+        raise ValueError(msg)
+    foreign_dirs = [
+        p for p in colliding if p.is_dir() and not p.is_symlink()
+    ]
+    if foreign_dirs:
+        names = ", ".join(p.name for p in foreign_dirs)
+        msg = (
+            f"refusing to reset {out_dir}: {names} are directories — "
+            "the generator only writes flat seed files, so these were "
+            "not written by a previous corpus run"
+        )
+        raise ValueError(msg)
+
+    if ours:
+        existing_manifest.unlink()
+    for path in colliding:
         try:
-            if path.is_file() or path.is_symlink():
-                path.unlink()
-            elif path.is_dir():
-                shutil.rmtree(path)
-        except (FileNotFoundError, OSError):
+            path.unlink()
+        except OSError:
+            # Best-effort: the copy that follows overwrites in place.
             pass
 
 
