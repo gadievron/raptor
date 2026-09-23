@@ -2250,17 +2250,27 @@ def review_one_function(
 
     # ── Dead-code gate (G7): skip LLM for provably dead functions ────
     _dead_reason = _dead_code_reason(gap)
-    if not _dead_reason and config.binary_verdicts:
+    if not _dead_reason and (
+        config.binary_verdicts
+        or (
+            isinstance(config.inventory, dict)
+            and config.inventory.get("binary_oracle")
+        )
+    ):
         _fn_name = gap.get("name", "")
-        _bo_verdict = config.binary_verdicts.get(_fn_name, "")
         _is_header_inline = (
             gap["file"].endswith(".h")
             and "static" in gap.get("source", "")[:200]
         )
         if (
-            _bo_verdict == "absent"
-            and gap_key not in entry_points
+            gap_key not in entry_points
             and not _is_header_inline
+            # File+line join preferred over the flat name-keyed map —
+            # see _binary_absent_verdict.
+            and _binary_absent_verdict(
+                config, gap.get("file", ""), _fn_name,
+                gap.get("line_start", 0) or 0,
+            )
         ):
             _dead_reason = "binary_oracle_absent (not present in compiled binary)"
     if _dead_reason:
@@ -16278,6 +16288,41 @@ def _dead_code_reason(gap: dict[str, Any]) -> str | None:
     return None
 
 
+def _binary_absent_verdict(
+    config: OrchestratorConfig,
+    file_path: str,
+    name: str,
+    line: int = 0,
+) -> bool:
+    """Absent verdict for the review-time gates (G7, reachability).
+
+    Prefers the file+line join over the enriched inventory
+    (``core.analysis.reachability.binary_oracle_absent``) — the flat
+    name-keyed ``config.binary_verdicts`` map collapses same-named
+    static functions across translation units, so a LIVE function
+    could be demoted because a dead namesake in another TU carried
+    the verdict. The flat map remains the no-inventory fallback
+    (``extract_verdicts`` already withholds ``absent`` without a
+    full-tier contributor).
+    """
+    inventory = config.inventory
+    if isinstance(inventory, dict) and inventory.get("binary_oracle"):
+        try:
+            from core.analysis.reachability import binary_oracle_absent
+            return binary_oracle_absent(
+                inventory, file_path, name, line or 0,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "binary_oracle_absent join failed for %s:%s",
+                file_path, name, exc_info=True,
+            )
+            return False
+    if config.binary_verdicts:
+        return config.binary_verdicts.get(name, "") == "absent"
+    return False
+
+
 def _apply_reachability_gate(
     outcome: ReviewOutcome,
     ctx: dict[str, Any],
@@ -16310,8 +16355,10 @@ def _apply_reachability_gate(
     if is_sink:
         return outcome
 
-    if config.binary_verdicts:
-        verdict = config.binary_verdicts.get(outcome.function, "")
+    if config.binary_verdicts or (
+        isinstance(config.inventory, dict)
+        and config.inventory.get("binary_oracle")
+    ):
         _is_header_inline = (
             outcome.file.endswith(".h")
             and "static" in (ctx.get("source", "") or "")[:200]
@@ -16321,10 +16368,15 @@ def _apply_reachability_gate(
             and outcome.evidence_tool != "reachability:dead_code"
         )
         if (
-            verdict == "absent"
-            and not is_entry
+            not is_entry
             and not _is_header_inline
             and not _has_tool_evidence
+            # File+line join preferred over the flat name-keyed map —
+            # see _binary_absent_verdict.
+            and _binary_absent_verdict(
+                config, outcome.file, outcome.function,
+                outcome.line or 0,
+            )
         ):
             logger.info(
                 "reachability gate: %s demoted to dormant (binary: absent)",
