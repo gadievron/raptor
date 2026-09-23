@@ -61,3 +61,32 @@ class TestFormatCwe:
     ])
     def test_invalid_returns_none(self, raw):
         assert format_cwe(raw) is None
+
+
+class TestUnicodeDigits:
+    """CWE ids arrive from SARIF taxa / SCA producers over untrusted
+    repos. Non-ASCII decimal digits (Unicode Nd — Arabic-Indic and
+    friends) pass an un-pinned ``\\d`` and ``int()`` both, so without
+    ``re.ASCII`` the trio disagreed inside one module: canonicalize
+    kept the raw non-ASCII spelling (two spellings of one CWE never
+    join), the slug helper minted a non-ASCII directory name, and
+    format_cwe int-normalised. One doctrine, all three lanes: ASCII
+    digits only (the epss/vulnrichment sibling regexes carry the same
+    pin)."""
+
+    @pytest.mark.parametrize("helper", [canonicalize_cwe, cwe_dir_slug])
+    def test_non_ascii_digits_rejected(self, helper):
+        assert helper("CWE-١٢١") is None       # Arabic-Indic
+        assert helper("cwe-۱۲۱") is None       # Extended Arabic-Indic
+        assert helper("CWE-１２１") is None     # fullwidth
+
+    def test_format_cwe_rejects_non_ascii_digit_strings(self):
+        # ``int("١٢١")`` == 121, so the int() lane alone would mint
+        # "CWE-121" from a spelling the canonicaliser refuses.
+        assert format_cwe("١٢١") is None
+        assert format_cwe("۱۲۱") is None
+
+    def test_format_cwe_int_lane_unchanged(self):
+        assert format_cwe(121) == "CWE-121"
+        assert format_cwe("121") == "CWE-121"
+        assert format_cwe(" 416 ") == "CWE-416"

@@ -22,8 +22,17 @@ import re
 # Matches CWE-N shapes we accept: ``CWE-121``, ``cwe-121``, ``cwe121``,
 # ``CWE121``, ``CWE 121`` (SARIF sometimes emits a space separator),
 # ``cwe_121`` (underscore variant), with tolerated leading/trailing
-# whitespace. Rejects empty / non-numeric / malformed.
-_CWE_RE = re.compile(r"^\s*cwe[-_\s]?(\d+)\s*$", re.IGNORECASE)
+# whitespace. Rejects empty / non-numeric / malformed. ``re.ASCII``
+# pins ``\d``/``\s`` to ASCII (keep in sync with the epss /
+# vulnrichment id regexes): non-ASCII decimal digits pass an un-pinned
+# ``\d``, so two spellings of one CWE would fail to join for routing /
+# filtering and the slug helper would mint non-ASCII directory names.
+_CWE_RE = re.compile(r"^\s*cwe[-_\s]?(\d+)\s*$", re.IGNORECASE | re.ASCII)
+
+# ASCII-digits-only gate for :func:`format_cwe`'s string lane —
+# ``int()`` itself accepts Unicode digits, which would mint the
+# canonical spelling from inputs :func:`canonicalize_cwe` refuses.
+_ASCII_NUM_RE = re.compile(r"^\s*-?\d+\s*$", re.ASCII)
 
 
 def canonicalize_cwe(raw: str | None) -> str | None:
@@ -63,11 +72,14 @@ def format_cwe(number) -> str | None:
     future spelling change (zero-padding, prefix variant) touches
     one place.
 
-    Accepts ``int`` (positive), ``str`` (digits only), or an object
-    that ``int()`` accepts. Returns ``None`` on non-integers,
-    negatives, or zero.
+    Accepts ``int`` (positive), ``str`` (ASCII digits only — Unicode
+    digits are refused for parity with :func:`canonicalize_cwe`, even
+    though ``int()`` would coerce them), or an object that ``int()``
+    accepts. Returns ``None`` on non-integers, negatives, or zero.
     """
     if number is None:
+        return None
+    if isinstance(number, str) and _ASCII_NUM_RE.match(number) is None:
         return None
     try:
         n = int(str(number).strip())
