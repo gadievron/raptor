@@ -145,9 +145,48 @@ class PrecisionReport:
         }
 
 
+# Catalog roots the python fixtures use, mapped to the import line a
+# legitimate module would carry. The unbound-root refusal ("UNBOUND
+# names refuse" — builtins are repo-writable, so an identity with no
+# self-import is untrusted) means fixtures exercising OTHER defeat
+# mechanisms must bind their sanitizer the way real code does, or
+# every row degenerates into the same trivial unbound refusal and
+# stops testing its own mechanism. ``_fx`` normalises python sources
+# by prepending the missing import(s) and shifting the line numbers;
+# fixtures whose MECHANISM is the missing binding opt out via
+# ``auto_import=False``.
+_FIXTURE_IMPORTS: dict[str, str] = {
+    "html": "import html\n",
+    "shlex": "import shlex\n",
+    "werkzeug": "import werkzeug.security\nimport werkzeug.utils\n",
+}
+
+
+def _normalise_python_source(
+    source: str, src_ln: int, sink_ln: int,
+) -> tuple[str, int, int]:
+    import re as _re
+    prefix = ""
+    for root, import_line in _FIXTURE_IMPORTS.items():
+        if not _re.search(rf"\b{root}\.", source):
+            continue
+        if _re.search(rf"^[^\S\n]*(import|from)\s+{root}\b", source,
+                      _re.MULTILINE):
+            continue
+        prefix += import_line
+    if not prefix:
+        return source, src_ln, sink_ln
+    shift = prefix.count("\n")
+    return prefix + source, src_ln + shift, sink_ln + shift
+
+
 def _fx(name, sink_class, cwe, shape, label, source, src_ln, sink_ln,
         language: str="python", suffix: str=".py", aux_files=None,
-        use_repo_root: bool=False) -> CutFixture:
+        use_repo_root: bool=False, auto_import: bool=True) -> CutFixture:
+    if language == "python" and auto_import:
+        source, src_ln, sink_ln = _normalise_python_source(
+            source, src_ln, sink_ln,
+        )
     return CutFixture(
         name=name, sink_class=sink_class, cwe=cwe, language=language,
         shape=shape, label=label, source=source,
@@ -1545,6 +1584,20 @@ def build_corpus() -> list[CutFixture]:
         "def handle(x):\n"
         "    y = esc(x)\n"
         "    render(y)\n", 6, 8))
+    fixtures.append(_fx(
+        "xss_unbound_catalog_root", "xss", "CWE-79",
+        "catalog_root_unbound_builtins_writable",
+        LABEL_MUST_NOT_SUPPRESS,
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 1, 3, auto_import=False))
+    fixtures.append(_fx(
+        "xss_imported_catalog_root_control", "xss", "CWE-79",
+        "catalog_root_self_imported", LABEL_MAY_SUPPRESS,
+        "import html\n"
+        "def handle(x):\n"
+        "    y = html.escape(x)\n"
+        "    render(y)\n", 2, 4, auto_import=False))
     fixtures.append(_fx(
         "xss_star_import_catalog_root", "xss", "CWE-79",
         "catalog_root_star_import_shadowable", LABEL_MUST_NOT_SUPPRESS,

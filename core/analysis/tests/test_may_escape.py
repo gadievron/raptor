@@ -181,14 +181,15 @@ def test_python_path_unchanged_by_may_escape_check():
     safe straight-line case still suppresses — Phase 10 doesn't
     accidentally downgrade Python verdicts."""
     src = (
+        "import html\n"
         "def handle(x):\n"
         "    y = html.escape(x)\n"
         "    render(y)\n"
     )
     cfg = build_python_cfg(src, "handle")
     assert cfg is not None
-    # Source = entry (param x); sink = render call on line 3
-    sink_node = next(n for n in cfg.nodes() if n.lineno == 3)
+    # Source = entry (param x); sink = render call on line 4
+    sink_node = next(n for n in cfg.nodes() if n.lineno == 4)
     result = evaluate_finding(
         cfg, [cfg.entry_node], sink_node,
         cwe="CWE-79", language="python",
@@ -202,12 +203,13 @@ def test_may_escape_on_path_helper_python_node_returns_false():
     """``_may_escape_on_path`` over a Python CFG always returns False
     because PyCFGNode lacks the attribute (getattr default)."""
     src = (
+        "import html\n"
         "def handle(x):\n"
         "    y = html.escape(x)\n"
         "    render(y)\n"
     )
     cfg = build_python_cfg(src, "handle")
-    sink_node = next(n for n in cfg.nodes() if n.lineno == 3)
+    sink_node = next(n for n in cfg.nodes() if n.lineno == 4)
     assert _may_escape_on_path(
         cfg, [cfg.entry_node], sink_node, excluded=set(),
     ) is False
@@ -286,6 +288,7 @@ def test_evaluate_finding_downgrades_suppress_when_may_escape_on_path():
     exercises the evaluate_finding hook directly; Phase 11 wires
     it for real on CPPCFG."""
     src = (
+        "import html\n"
         "def handle(x):\n"
         "    y = html.escape(x)\n"
         "    render(y)\n"
@@ -295,7 +298,7 @@ def test_evaluate_finding_downgrades_suppress_when_may_escape_on_path():
 
     # Build a thin wrapper graph that adds may_escape to the SINK
     # node (line 3). The CFG's other surface is preserved.
-    sink_node = next(n for n in cfg.nodes() if n.lineno == 3)
+    sink_node = next(n for n in cfg.nodes() if n.lineno == 4)
 
     class _StampedSink:
         # Marker object — equals sink_node by identity, exposes
@@ -358,12 +361,13 @@ def test_evaluate_finding_downgrades_suppress_when_may_escape_on_path():
 def test_evaluate_finding_no_downgrade_when_no_may_escape():
     """Regression: the unstamped CFG still suppresses cleanly."""
     src = (
+        "import html\n"
         "def handle(x):\n"
         "    y = html.escape(x)\n"
         "    render(y)\n"
     )
     cfg = build_python_cfg(src, "handle")
-    sink = next(n for n in cfg.nodes() if n.lineno == 3)
+    sink = next(n for n in cfg.nodes() if n.lineno == 4)
     result = evaluate_finding(
         cfg, [cfg.entry_node], sink,
         cwe="CWE-79", language="python",

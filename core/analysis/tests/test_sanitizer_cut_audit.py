@@ -131,6 +131,7 @@ class TestSuppressRecord:
         self, tmp_path: Path,
     ):
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -158,17 +159,18 @@ class TestSuppressRecord:
         assert b["callable"] == "html.escape"
         assert b["input_symbols"] == ["x"]
         assert b["output_symbols"] == ["y"]
-        assert b["lineno"] == 2
+        assert b["lineno"] == 3
         # catalog_matches mirrors bindings when all catalog matches
         # are value-bound (the common straight-line case).
         assert len(r["catalog_matches"]) == 1
         # witness_lines is the deduped sorted set of line numbers.
-        assert r["witness_lines"] == [2]
+        assert r["witness_lines"] == [3]
 
     def test_symmetric_sanitize_records_both_bindings(self, tmp_path: Path):
         """When both branches sanitise, both bindings are witnesses
         and both lines appear in the audit record."""
         src = (
+            "import html\n"
             "def handle(user):\n"
             "    if user.is_admin:\n"
             "        safe = html.escape(user.name)\n"
@@ -211,6 +213,7 @@ class TestCandidateOnlyRecord:
         false)'`` to see exactly what survived the value-bound gate
         but the control-flow gate flagged."""
         src = (
+            "import html\n"
             "def handle(user, other):\n"
             "    safe_other = html.escape(other)\n"
             "    render(user.name)\n"
@@ -252,6 +255,7 @@ class TestNoSuppressNoRecord:
         the chokepoint records nothing — the LLM gets the finding
         with no audit trail from the suppressor."""
         src = (
+            "import html\n"
             "def handle(user):\n"
             "    if user.is_admin:\n"
             "        safe = html.escape(user.name)\n"
@@ -292,6 +296,7 @@ class TestCoexistence:
         )
         # Sanitizer-cut suppress record.
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -337,6 +342,7 @@ class TestLegacyPath:
         witness fields populated (empty lists / strings). Back-compat
         for callers that haven't been taught about value binding."""
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"

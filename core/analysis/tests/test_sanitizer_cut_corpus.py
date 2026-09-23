@@ -389,12 +389,14 @@ def test_corpus_ablation_summary(capsys):
 
 
 SAFE_SRC = (
+    "import html\n"
     "def handle(x):\n"
     "    y = html.escape(x)\n"
     "    render(y)\n"
 )
 
 WRONG_VARIABLE_SRC = (
+    "import html\n"
     "def handle(user, other):\n"
     "    safe_other = html.escape(other)\n"
     "    render(user.name)\n"

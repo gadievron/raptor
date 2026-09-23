@@ -326,6 +326,7 @@ class TestAuditWiring:
         from core.dataflow.smt_barrier import _value_bound_dominates
 
         src = (
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n"
@@ -337,7 +338,7 @@ class TestAuditWiring:
         sc.configure("on", run_dir=str(run_dir))
 
         verdict = _value_bound_dominates(
-            file_path=str(fixture), validator_line=1, sink_line=3,
+            file_path=str(fixture), validator_line=2, sink_line=4,
             cwe="CWE-79", language="python",
         )
         assert verdict is True
@@ -353,13 +354,14 @@ class TestAuditWiring:
 
         fixture = tmp_path / "safe.py"
         fixture.write_text(
+            "import html\n"
             "def handle(x):\n"
             "    y = html.escape(x)\n"
             "    render(y)\n", encoding="utf-8")
         sc.configure("on")  # no run_dir → no audit dir
 
         verdict = _value_bound_dominates(
-            file_path=str(fixture), validator_line=1, sink_line=3,
+            file_path=str(fixture), validator_line=2, sink_line=4,
             cwe="CWE-79", language="python",
         )
         assert verdict is True

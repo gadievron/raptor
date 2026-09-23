@@ -11,7 +11,7 @@ in one branch doesn't lexically precede the sink — the if/else
 structure has no single dominating line). Vertex-cut over the
 union of both bindings correctly suppresses.
 """
-
+import html
 
 def handle(user):
     if user.is_admin:

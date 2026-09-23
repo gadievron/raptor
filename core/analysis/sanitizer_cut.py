@@ -1784,6 +1784,21 @@ def evaluate_finding(
                 b for b in matched_bindings
                 if b.callable.split(".", 1)[0] not in local_roots
             )
+        # UNBOUND roots refuse too: a dotted identity whose root has
+        # no module-scope self-import resolves through builtins at
+        # runtime, and builtins are writable by any module in the
+        # repo (``builtins.html = FakeNs`` in a package __init__
+        # forged an enforced drop with no binding for the walkers to
+        # see). Legitimate code imports its sanitizer. ``None`` =
+        # roots not computed (hand-built / non-python CFGs) — the
+        # check does not apply.
+        trusted_roots = getattr(graph, "trusted_import_roots", None)
+        if matched_bindings and trusted_roots is not None:
+            matched_bindings = frozenset(
+                b for b in matched_bindings
+                if "." not in b.callable
+                or b.callable.split(".", 1)[0] in trusted_roots
+            )
     # Phase 14 — fold in inter-procedural synthetic bindings. A
     # finding whose enclosing function has NO direct catalog
     # sanitizer but DOES call an in-module helper that sanitizes

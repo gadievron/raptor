@@ -10,7 +10,7 @@ Control-flow cut still holds structurally (html.escape on every
 control-flow path entry → sanitize → rebind → sink).
 → candidate_only.
 """
-
+import html
 
 def handle(x):
     y = html.escape(x)                 # noqa: F821 — fixture

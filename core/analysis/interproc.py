@@ -233,6 +233,16 @@ def synthetic_sanitizer_bindings(
     ``evaluate_finding``'s ``extra_bindings``.
     """
     sanitizer_names = sanitizer_callables_for_cwe(cwe, language)
+    # Unbound-root refusal (mirrors the evaluate_finding catalog
+    # guard): a dotted catalog identity certifies a helper chain only
+    # when the module self-imports its root — an unbound root
+    # resolves through repo-writable builtins at runtime.
+    trusted_roots = getattr(cfg, "trusted_import_roots", None)
+    if trusted_roots is not None:
+        sanitizer_names = {
+            n for n in sanitizer_names
+            if "." not in n or n.split(".", 1)[0] in trusted_roots
+        }
     if not sanitizer_names or not summaries:
         return frozenset()
 

@@ -62,6 +62,7 @@ def test_every_builder_module_has_a_scope_discipline_leg():
 
 
 _PY_GLOBAL = '''
+import html
 def handle(x):
     global cfg
     cfg = html.escape(x)
@@ -70,6 +71,7 @@ def handle(x):
 '''
 
 _PY_LOCAL = '''
+import html
 def handle(x):
     cfg = html.escape(x)
     helper()
@@ -547,6 +549,7 @@ class TestGateEndToEnd:
         from core.analysis.taint_summaries import build_taint_summaries
 
         src = (
+            "import html\n"
             "def _clean(s):\n"
             "    global tmp\n"
             "    tmp = html.escape(s)\n"
@@ -575,9 +578,9 @@ class TestGateEndToEnd:
                 extra_bindings=bindings,
             )
 
-        assert not gate(src, 8).suppress
+        assert not gate(src, 9).suppress
         # The local-temp twin keeps the interprocedural suppression.
-        assert gate(src.replace("    global tmp\n", ""), 7).suppress
+        assert gate(src.replace("    global tmp\n", ""), 8).suppress
 
 
 # ---------------------------------------------------------------------------

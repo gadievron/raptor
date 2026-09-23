@@ -223,6 +223,16 @@ class PythonCFG:
     # resolution unprovable — the catalog guard refuses every written
     # identity in the function (suppression can only be lost).
     namespace_unprovable: bool = False
+    # Roots the module PROVABLY binds to their same-named module via
+    # a plain self-import (``import html`` / ``import html.parser``).
+    # A dotted catalog identity is trusted ONLY through these: an
+    # UNBOUND root resolves through builtins at runtime, and builtins
+    # are writable by any other module in the repo (a package
+    # __init__ doing ``builtins.html = FakeNs`` forged an enforced
+    # suppression with no binding for the walkers to see) —
+    # legitimate code always imports its sanitizer. ``None`` =
+    # not computed (hand-built CFGs): consumers skip the check.
+    trusted_import_roots: frozenset[str] | None = None
 
     @property
     def entry(self) -> PyCFGNode:
@@ -1177,6 +1187,7 @@ def build_python_cfg(
         module_dynamic_namespace,
         module_shadowed_identity_roots,
     )
+    from core.analysis.python_module_callgraph import module_import_map
     dyn_whole, dyn_names = module_dynamic_namespace(tree)
     return replace(
         cfg,
@@ -1186,6 +1197,10 @@ def build_python_cfg(
             | dyn_names
         ),
         namespace_unprovable=dyn_whole,
+        trusted_import_roots=frozenset(
+            root for root, src in module_import_map(tree).items()
+            if src == root
+        ),
     )
 
 

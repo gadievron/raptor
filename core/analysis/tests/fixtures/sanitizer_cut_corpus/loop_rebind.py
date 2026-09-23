@@ -9,7 +9,7 @@ assignment. Condition 3's exclusivity requirement (every reaching
 definer a sanitizer output) refuses — membership alone would have
 falsely suppressed this real flaw.
 """
-
+import html
 
 def handle(items, x):
     y = html.escape(x)                 # noqa: F821 — fixture
