@@ -603,7 +603,7 @@ _JS_AMBIGUOUS_SLASH_RE = re.compile(r"[)\]]\s*/")
 #: lexer got wrong. Partial hardening, not a closure: a regex body
 #: can hide a comment-opener with NO backslash (`a /[//]x/` — the
 #: char-class spelling), see the refusal-site comment.
-_JS_INVALID_SLASH_RE = re.compile(r"[)\]\"'`\w]\s*/[^\n\\]*\\")
+_JS_INVALID_SLASH_RE = re.compile(r"[)\]\"'`\w]\s*/[^\n\\]{0,1000}\\")
 _WRAPPER_RETURN_CALL_RE = re.compile(r'return\s+(\w+)\s*\(')
 # The subscript body is \S-headed ([^\]\s][^]]*): the naive
 # ``\[\s*[^]]+\]`` overlapped the whitespace span and the body on
@@ -611,7 +611,7 @@ _WRAPPER_RETURN_CALL_RE = re.compile(r'return\s+(\w+)\s*\(')
 # whitespace run. The dropped corner is a whitespace-only subscript
 # ('x[  ]'), not real C.
 _WRAPPER_PTR_ARITH_RE = re.compile(
-    r'(?<!\w->)\w+\s*\+\s*\w|\w+\s*\[\s*[^\]\s][^]]*\]|'
+    r'(?<!\w->)\w\s*\+\s*\w|\b\w+\s*\[\s*[^\]\s][^]]{0,4000}\]|'
     r'\(\s*\w+\s*\*\s*\)|'
     r'\(\s*(?:unsigned\s+)?(?:char|int|long|short|void)\s*\*\s*\)',
 )
@@ -1631,7 +1631,11 @@ def _is_trivial_wrapper(
         if brace >= 0 and start < brace:
             return False, ""
         if re.search(
-            r"\b(?:func(?:tion)?|fn|sub)\s+(?:\([^)]*\)\s*)?$",
+            # Param window bounded: planted 'func (' heads inside an
+            # unbounded [^)] span re-scan the tail per head —
+            # quadratic on hostile source (4000 is far above real
+            # parameter lists; longer ones stop matching).
+            r"\b(?:func(?:tion)?|fn|sub)\s+(?:\([^)]{0,4000}\)\s*)?$",
             body_no_sig[:start],
         ):
             return False, ""
@@ -2234,6 +2238,17 @@ def _is_simple_accessor(source: str, lang: str) -> bool:
 
 
 
+
+# Convention for the per-language pattern checks below: same-line
+# co-occurrence gaps are bounded (``.{0,200}``/``.{0,1000}`` by
+# shape, delimiter spans ``[^)]{0,4000}``) instead of unbounded
+# ``.*``/``[^)]*``.  The
+# scanned source is hostile, and an unbounded gap lets a crafted line
+# re-scan its whole tail from every occurrence of the head token —
+# quadratic in the line length.  The bounds sit far above real code
+# lines (short of generated/minified bundles); a longer gap simply
+# stops matching, which costs at most one heuristic hit on inputs no
+# human wrote.
 def _check_c_patterns(
     result: PrefilterResult,
     source: str,
@@ -2259,12 +2274,12 @@ def _check_c_patterns(
         )
 
     result.has_pointer_ops = bool(
-        re.search(r'\*\s*\(.*\+', source)
+        re.search(r'\*\s*\(.{0,1000}\+', source)
         or re.search(r'->\s*\w+\s*\[', source)
         or re.search(r'\(\w+\s*\*\)\s*\w+', source)
     )
 
-    result.has_array_access = bool(re.search(r'\w+\s*\[', source))
+    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
@@ -2294,8 +2309,8 @@ def _check_c_patterns(
             ))
 
         match = re.search(
-            r'snprintf\s*\([^,]+,\s*sizeof\s*\([^)]+\)\s*,'
-            r'\s*"[^"]*%s[^"]*"',
+            r'snprintf\s*\([^,]{1,4000},\s*sizeof\s*\([^)]{1,4000}\)\s*,'
+            r'\s*"[^"]{0,1000}%s[^"]{0,1000}"',
             stripped,
         )
         if match:
@@ -2310,7 +2325,7 @@ def _check_c_patterns(
             ))
 
         if re.search(
-            r"(SELECT|INSERT|UPDATE|DELETE)\b.*%s",
+            r"(SELECT|INSERT|UPDATE|DELETE)\b.{0,1000}%s",
             stripped, re.IGNORECASE,
         ):
             result.hits.append(PrefilterHit(
@@ -2320,7 +2335,11 @@ def _check_c_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\buint16_t\b.*\boffset\b|\buint16_t\b.*\blen\b', stripped):
+        if re.search(
+            r'\buint16_t\b.{0,1000}\boffset\b'
+            r'|\buint16_t\b.{0,1000}\blen\b',
+            stripped,
+        ):
             result.hits.append(PrefilterHit(
                 rule_id="narrow-integer-size",
                 message=(
@@ -2341,7 +2360,7 @@ def _check_c_patterns(
                     severity="warning",
                 ))
 
-        if re.search(r'\bmalloc\s*\([^)]*\*', stripped):
+        if re.search(r'\bmalloc\s*\([^)]{0,4000}\*', stripped):
             result.hits.append(PrefilterHit(
                 rule_id="malloc-multiply-overflow",
                 message=(
@@ -2408,7 +2427,7 @@ def _check_c_missing_bounds(
 
     params_with_index_access = set()
     for i, line in enumerate(lines, start=line_start):
-        for m in re.finditer(r'(\w+)\s*\[(\w+)\]', line):
+        for m in re.finditer(r'\b(\w+)\s*\[(\w+)\]', line):
             index_var = m.group(2)
             if not index_var.isdigit():
                 params_with_index_access.add((index_var, i))
@@ -2418,8 +2437,8 @@ def _check_c_missing_bounds(
         for line in lines:
             if re.search(
                 rf'\b{re.escape(var)}\s*(?:[<>]=?)\s*\w+|'
-                rf'\w+\s*(?:[<>]=?)\s*{re.escape(var)}|'
-                rf'if\s*\(.*{re.escape(var)}',
+                rf'\b\w+\s*(?:[<>]=?)\s*{re.escape(var)}|'
+                rf'if\s*\(.{{0,1000}}{re.escape(var)}',
                 line,
             ):
                 has_check = True
@@ -2553,7 +2572,7 @@ def _check_c_post_loop_oob(
     """
     lines = source.splitlines()
     loop_re = re.compile(
-        r'\b(?:while|for)\b.*\b(\w+)\s*<\s*(\w+)\b'
+        r'\b(?:while|for)\b.{0,200}\b(\w+)\s*<\s*(\w+)\b'
         r'(?!\s*[-+*/])',
     )
     brace_depth = 0
@@ -2593,9 +2612,11 @@ def _check_c_post_loop_oob(
         if loop_index_var and not in_loop:
             idx_esc = re.escape(loop_index_var)
             if re.search(
-                rf'\bif\b.*\b{idx_esc}\b.*<|'
-                rf'\bif\b.*\b{idx_esc}\b.*>|'
-                rf'\bif\b.*<.*\b{idx_esc}\b',
+                rf'\bif\b(?:(?!\b{idx_esc}\b).){{0,64}}'
+                rf'\b{idx_esc}\b.{{0,200}}<|'
+                rf'\bif\b(?:(?!\b{idx_esc}\b).){{0,64}}'
+                rf'\b{idx_esc}\b.{{0,200}}>|'
+                rf'\bif\b[^<\n]{{0,64}}<.{{0,200}}\b{idx_esc}\b',
                 stripped,
             ):
                 loop_index_var = None
@@ -2680,7 +2701,9 @@ def _check_python_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bsubprocess\.\w+\(.*shell\s*=\s*True', stripped):
+        if re.search(
+            r'\bsubprocess\.\w+\(.{0,1000}shell\s*=\s*True', stripped,
+        ):
             result.hits.append(PrefilterHit(
                 rule_id="subprocess-shell-true",
                 message="subprocess with shell=True — command injection risk",
@@ -2720,7 +2743,7 @@ def _check_go_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_GO_CALLEES)
-    result.has_array_access = bool(re.search(r'\w+\s*\[', source))
+    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
     result.has_pointer_ops = bool(
         re.search(r'\bunsafe\.Pointer\b', source)
         or re.search(r'\buintptr\b', source)
@@ -2797,7 +2820,7 @@ def _check_go_patterns(
             source,
         ) and not re.search(
             r'filepath\.Clean|filepath\.Abs|'
-            r'strings\.Contains.*\.\.|path\.Clean',
+            r'strings\.Contains.{0,1000}\.\.|path\.Clean',
             source,
         ):
             result.hits.append(PrefilterHit(
@@ -2884,7 +2907,7 @@ def _check_rust_patterns(
         re.search(r'\*const\b|\*mut\b', source)
         or re.search(r'\bas\s+\*(?:const|mut)\b', source)
     )
-    result.has_array_access = bool(re.search(r'\w+\s*\[', source))
+    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
 
     has_unsafe_block = bool(re.search(r'\bunsafe\s*\{', source))
 
@@ -3052,7 +3075,7 @@ def _check_php_patterns(
             ))
 
         if re.search(
-            r'\bpreg_replace\s*\(\s*["\'].*?/e["\']',
+            r'\bpreg_replace\s*\(\s*["\'].{0,1000}?/e["\']',
             stripped,
         ):
             result.hits.append(PrefilterHit(
@@ -3078,7 +3101,9 @@ def _check_php_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\becho\b.*\$_(?:GET|POST|REQUEST|COOKIE)', stripped):
+        if re.search(
+            r'\becho\b.{0,1000}\$_(?:GET|POST|REQUEST|COOKIE)', stripped,
+        ):
             result.hits.append(PrefilterHit(
                 rule_id="php-xss",
                 message=(
@@ -3107,7 +3132,7 @@ def _check_php_patterns(
             r'readfile|unlink|rename)\s*\(\s*\$',
             stripped,
         ) and not re.search(
-            r'realpath|basename|str_replace.*\.\.',
+            r'realpath|basename|str_replace.{0,1000}\.\.',
             source,
         ):
             result.hits.append(PrefilterHit(
@@ -3120,7 +3145,9 @@ def _check_php_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\bheader\s*\(\s*["\']Location.*\$', stripped):
+        if re.search(
+            r'\bheader\s*\(\s*["\']Location.{0,1000}\$', stripped,
+        ):
             result.hits.append(PrefilterHit(
                 rule_id="php-open-redirect",
                 message="redirect with user-controlled URL — open redirect",
@@ -3142,7 +3169,7 @@ def _check_java_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_JAVA_CALLEES)
-    result.has_array_access = bool(re.search(r'\w+\s*\[', source))
+    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
@@ -3192,7 +3219,7 @@ def _check_java_patterns(
 
         if re.search(
             r'Class\.forName\s*\(|\.newInstance\s*\(|'
-            r'\.getMethod\s*\(.*\.invoke\s*\(',
+            r'\.getMethod\s*\(.{0,1000}\.invoke\s*\(',
             stripped,
         ):
             result.hits.append(PrefilterHit(
@@ -3206,7 +3233,8 @@ def _check_java_patterns(
             ))
 
         if re.search(
-            r'new\s+File\s*\(.*(?:request|param|input|getParameter)',
+            r'new\s+File\s*\(.{0,200}'
+            r'(?:request|param|input|getParameter)',
             stripped, re.IGNORECASE,
         ):
             result.hits.append(PrefilterHit(
@@ -3232,7 +3260,7 @@ def _check_java_patterns(
         ) and not re.search(
             r'FEATURE_SECURE_PROCESSING|'
             r'disallow-doctype-decl|'
-            r'setExpandEntityReferences.*false',
+            r'setExpandEntityReferences.{0,1000}false',
             source,
         ):
             result.hits.append(PrefilterHit(
@@ -3246,7 +3274,7 @@ def _check_java_patterns(
             ))
 
         if re.search(
-            r'ScriptEngine|\.eval\s*\(.*(?:request|param|input)',
+            r'ScriptEngine|\.eval\s*\(.{0,200}(?:request|param|input)',
             stripped, re.IGNORECASE,
         ):
             result.hits.append(PrefilterHit(
@@ -3256,7 +3284,10 @@ def _check_java_patterns(
                 severity="error",
             ))
 
-        if re.search(r'\bLDAP\b.*\+\s*(?:request|param|input)', stripped, re.IGNORECASE):
+        if re.search(
+            r'\bLDAP\b.{0,1000}\+\s*(?:request|param|input)',
+            stripped, re.IGNORECASE,
+        ):
             result.hits.append(PrefilterHit(
                 rule_id="java-ldap-injection",
                 message="LDAP query with user input — injection risk",
@@ -3278,7 +3309,7 @@ def _check_js_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_JS_CALLEES)
-    result.has_array_access = bool(re.search(r'\w+\s*\[', source))
+    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
@@ -3300,12 +3331,13 @@ def _check_js_patterns(
             ))
 
         if re.search(
-            r'child_process.*\b(?:exec|execSync|spawn|execFile)\s*\(',
+            r'child_process.{0,1000}'
+            r'\b(?:exec|execSync|spawn|execFile)\s*\(',
             stripped,
         ) or (re.search(
             r'\b(?:exec|execSync|spawn|spawnSync|execFile)\s*\(',
             stripped,
-        ) and re.search(r'child_process|require.*child', source)):
+        ) and re.search(r'child_process|require.{0,1000}child', source)):
             result.hits.append(PrefilterHit(
                 rule_id="js-command-exec",
                 message="child_process execution — command injection risk",
@@ -3364,7 +3396,7 @@ def _check_js_patterns(
             source,
         ) and not re.search(
             r'path\.(?:resolve|normalize|basename)|'
-            r'sanitize|includes.*\.\.',
+            r'sanitize|includes.{0,1000}\.\.',
             source,
         ):
             result.hits.append(PrefilterHit(
@@ -3397,7 +3429,7 @@ def _check_js_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\.redirect\s*\(.*(?:req\.|params\.|query\.)', stripped):
+        if re.search(r'\.redirect\s*\(.{0,200}(?:req\.|params\.|query\.)', stripped):
             result.hits.append(PrefilterHit(
                 rule_id="js-open-redirect",
                 message="redirect with user-controlled URL — open redirect",
@@ -3405,7 +3437,10 @@ def _check_js_patterns(
                 severity="warning",
             ))
 
-        if re.search(r'\bnew\s+RegExp\s*\(.*(?:req\.|params\.|input)', stripped):
+        if re.search(
+            r'\bnew\s+RegExp\s*\(.{0,1000}(?:req\.|params\.|input)',
+            stripped,
+        ):
             result.hits.append(PrefilterHit(
                 rule_id="js-regex-injection",
                 message="RegExp with user input — ReDoS risk",
@@ -3427,7 +3462,7 @@ def _check_lua_patterns(
         callee_names = {c.get("name", "") for c in callees}
 
     result.has_dangerous_apis = bool(callee_names & _DANGEROUS_LUA_CALLEES)
-    result.has_array_access = bool(re.search(r'\w+\s*\[', source))
+    result.has_array_access = bool(re.search(r'\b\w+\s*\[', source))
 
     for i, line in enumerate(source.splitlines(), start=line_start):
         stripped = line.strip()
@@ -3520,7 +3555,8 @@ def _check_lua_patterns(
             ))
 
         if re.search(r'\bstring\.format\s*\(', stripped) and re.search(
-            r'%s.*user|%s.*input|%s.*req', stripped, re.IGNORECASE,
+            r'%s.{0,200}user|%s.{0,200}input|%s.{0,200}req',
+            stripped, re.IGNORECASE,
         ):
                 result.hits.append(PrefilterHit(
                     rule_id="lua-format-injection",
@@ -3591,7 +3627,7 @@ def _check_perl_patterns(
                 ))
 
         if re.search(
-            r'\bDBI\b.*\bdo\s*\(|\bprepare\s*\(.*\$',
+            r'\bDBI\b.{0,200}\bdo\s*\(|\bprepare\s*\(.{0,200}\$',
             stripped,
         ) and re.search(r'"\s*\.\s*\$|\$\w+', stripped) and not re.search(
             r'\?|placeholder', stripped, re.IGNORECASE,
@@ -3607,7 +3643,8 @@ def _check_perl_patterns(
             ))
 
         if re.search(
-            r'\bprint\b.*\$(?:query|param|input|cgi)', stripped, re.IGNORECASE,
+            r'\bprint\b.{0,1000}\$(?:query|param|input|cgi)',
+            stripped, re.IGNORECASE,
         ) and not re.search(r'encode_entities|escapeHTML|CGI::escape', source):
                 result.hits.append(PrefilterHit(
                     rule_id="perl-xss",
@@ -3616,7 +3653,11 @@ def _check_perl_patterns(
                     severity="warning",
                 ))
 
-        if re.search(r'=~\s*s/.*\$.*?/.*?/e', stripped):
+        if re.search(
+            r'=~\s*s/(?:\\.|[^/\\\n])*\$(?:\\.|[^/\\\n])*'
+            r'/(?:\\.|[^/\\\n])*/e',
+            stripped,
+        ):
             result.hits.append(PrefilterHit(
                 rule_id="perl-regex-eval",
                 message="regex substitution with /e modifier — code execution",
@@ -3633,7 +3674,7 @@ def _check_perl_patterns(
             ))
 
         if re.search(
-            r'\bchmod\s*(?:\(\s*)?0?777|\bchmod\b.*\$',
+            r'\bchmod\s*(?:\(\s*)?0?777|\bchmod\b.{0,1000}\$',
             stripped,
         ):
             result.hits.append(PrefilterHit(
