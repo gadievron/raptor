@@ -40,7 +40,11 @@ COMPOSE_FILE=/nonexistent/docker-compose.yml
 AUTHORIZED_PAYLOAD="$TEST_AUTHORIZED"
 REAUTHORIZE="${REAUTHORIZE:-0}"
 capture_boot_payload() {
-    printf '%s\\n' "$FAKE_PAYLOAD"
+    if [ -n "${FAKE_PAYLOAD_FILE:-}" ]; then
+        cat "$FAKE_PAYLOAD_FILE"
+    else
+        printf '%s\\n' "$FAKE_PAYLOAD"
+    fi
 }
 running_sage_digest() {
     echo "${FAKE_RUNNING_DIGEST:-none}"
@@ -72,7 +76,14 @@ class TestAuthorizeBootPayload(unittest.TestCase):
         env = dict(os.environ)
         env["TEST_RAPTOR_DIR"] = str(REPO_ROOT)
         env["TEST_AUTHORIZED"] = str(self.authorized)
-        env["FAKE_PAYLOAD"] = payload
+        if len(payload) > 100_000:
+            # execve caps a single env string well below large
+            # payloads — hand those to the capture stub as a file.
+            payload_file = self.dir / "fake-payload.txt"
+            payload_file.write_text(payload + "\n", encoding="utf-8")
+            env["FAKE_PAYLOAD_FILE"] = str(payload_file)
+        else:
+            env["FAKE_PAYLOAD"] = payload
         env["FAKE_RUNNING_DIGEST"] = running_digest
         env["REAUTHORIZE"] = "1" if reauthorize else "0"
         return env
@@ -88,13 +99,18 @@ class TestAuthorizeBootPayload(unittest.TestCase):
         )
 
     def _run_pty(self, payload: str, *, reauthorize: bool = True,
-                 running_digest: str = "none"):
+                 running_digest: str = "none",
+                 pty_input: str | None = None):
         """Run with a PTY on stdin — the operator-terminal shape the
-        stamp-replacing --reauthorize path now requires."""
+        stamp-replacing --reauthorize path (and now the first-capture
+        confirm) requires. ``pty_input`` queues answers for the
+        prompt loop in the line-discipline buffer before bash starts."""
         import os
         import pty
         master, slave = pty.openpty()
         try:
+            if pty_input is not None:
+                os.write(master, pty_input.encode("utf-8"))
             proc = subprocess.run(
                 ["bash", "-c", self.driver],
                 capture_output=True, text=True, timeout=30,
@@ -450,6 +466,142 @@ class TestRenderSizeCeilings(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("refusing to render", proc.stderr)
         self.assertEqual(proc.stdout, "")
+
+
+def _tools_payload(n: int = 33, schema_pad: int = 0) -> str:
+    """A first-capture payload with boot surfaces plus n tool
+    definitions (one JSON line each, like capture_boot_payload)."""
+    import json
+    lines = [
+        "### initialize.instructions",
+        "hello agent",
+        "### initialize.instructions.json",
+        json.dumps("hello agent"),
+        "### sage_inception.message",
+        "welcome",
+        "### sage_inception.content",
+        json.dumps([{"type": "text",
+                     "text": json.dumps({"message": "welcome"})}]),
+        "### tools.list",
+    ]
+    for i in range(n):
+        schema: dict = {"type": "object",
+                        "properties": {"a": {"type": "string"}}}
+        if schema_pad:
+            schema["properties"]["a"]["description"] = "x" * schema_pad
+        lines.append(json.dumps({
+            "name": f"sage_tool_{i:02d}",
+            "description": f"Does useful thing number {i}.",
+            "inputSchema": schema,
+        }))
+    return "\n".join(lines)
+
+
+class TestFirstCaptureToolsLane(TestAuthorizeBootPayload):
+    """First capture with a tools surface: boot instructions render
+    full-text (short, readable), tools render as the reviewer's digest
+    (count, names, description lengths, schema size+hash, red-flag
+    scan) — never one JSON wall per tool. A TTY first capture gets an
+    explicit confirm before anything is stamped; a non-TTY first
+    install records the boot surfaces only, leaving tools.list
+    unbaselined for the interactive review lane."""
+
+    def test_non_tty_first_install_defers_the_tools_surface(self):
+        proc = self._run(_tools_payload())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        stamped = self.authorized.read_text(encoding="utf-8")
+        self.assertIn("hello agent", stamped)
+        self.assertNotIn("### tools.list", stamped)
+        self.assertIn("left unbaselined", proc.stdout)
+        self.assertIn("raptor-sage-setup review", proc.stdout)
+        # The recorded hash covers exactly what was stamped.
+        import hashlib
+        body = stamped.split("# ---\n", 1)[1]
+        self.assertIn(
+            "# SHA256: "
+            + hashlib.sha256(body.encode("utf-8")).hexdigest(),
+            stamped)
+        self.assertNotIn("tools.list", stamped.split("Surfaces:")[-1]
+                         if "Surfaces:" in stamped else "")
+
+    def test_tty_first_capture_shows_digest_and_confirms(self):
+        proc = self._run_pty(_tools_payload(), reauthorize=False,
+                             pty_input="y\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # Digest, not walls: every name listed, schema mechanics
+        # summarized as size+hash, never dumped.
+        self.assertIn("sage_tool_00", proc.stdout)
+        self.assertIn("sage_tool_32", proc.stdout)
+        self.assertIn("sha256:", proc.stdout)
+        self.assertNotIn('"inputSchema"', proc.stdout)
+        self.assertIn("red-flag scan", proc.stdout)
+        # read -p writes the prompt to stderr.
+        self.assertIn("Baseline this surface?", proc.stderr)
+        # Confirmed: the FULL surface (tools included) is the stamp.
+        stamped = self.authorized.read_text(encoding="utf-8")
+        self.assertIn("### tools.list", stamped)
+        self.assertIn("sage_tool_32", stamped)
+
+    def test_tty_first_capture_decline_records_nothing(self):
+        proc = self._run_pty(_tools_payload(), reauthorize=False,
+                             pty_input="n\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("NOT recorded", proc.stderr)
+        self.assertFalse(self.authorized.exists())
+
+    def test_tty_first_capture_empty_answer_is_a_decline(self):
+        # The confirm defaults closed: anything but an explicit yes
+        # (including just pressing enter) records nothing.
+        proc = self._run_pty(_tools_payload(3), reauthorize=False,
+                             pty_input="\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("NOT recorded", proc.stderr)
+        self.assertFalse(self.authorized.exists())
+
+    def test_tty_drilldown_then_confirm(self):
+        proc = self._run_pty(_tools_payload(3), reauthorize=False,
+                             pty_input="d sage_tool_01\ny\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        # The drill-down rendered the full definition on request.
+        self.assertIn('"inputSchema"', proc.stdout)
+        self.assertTrue(self.authorized.exists())
+
+    def test_thirty_three_tools_render_under_the_display_ceilings(self):
+        """The digest keeps a realistic 33-tool first install INSIDE
+        the renderer's fail-closed size ceilings (which are untouched):
+        with ~70KB schemas the raw payload alone exceeds the 2M-char
+        render cap, so the pre-digest display refused outright and the
+        install could not record anything."""
+        payload = _tools_payload(33, schema_pad=70_000)
+        self.assertGreater(len(payload), 2_000_000)
+        proc = self._run_pty(payload, reauthorize=False,
+                             pty_input="y\n")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("refusing to render", proc.stderr)
+        self.assertIn("sage_tool_32", proc.stdout)
+        stamped = self.authorized.read_text(encoding="utf-8")
+        self.assertIn("### tools.list", stamped)
+
+    def test_no_tools_capture_keeps_the_plain_first_install(self):
+        # Payloads without a tools surface keep the pre-split display
+        # and the non-TTY record-on-install behavior.
+        proc = self._run("### initialize.instructions\nhello agent")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Payload text follows", proc.stdout)
+        self.assertNotIn("left unbaselined", proc.stdout)
+        self.assertTrue(self.authorized.exists())
+
+    def test_reviewer_failure_refuses_not_silently_stamps(self):
+        """If the display/stamp split helper itself fails, the install
+        must refuse (fail closed) rather than fall back to stamping a
+        surface nobody could review."""
+        self.driver = self.driver.replace(
+            'REAUTHORIZE="${REAUTHORIZE:-0}"',
+            'REAUTHORIZE="${REAUTHORIZE:-0}"\npython3() { return 1; }',
+        )
+        proc = self._run(_tools_payload(3))
+        self.assertEqual(proc.returncode, 1, proc.stderr)
+        self.assertFalse(self.authorized.exists())
 
 
 class TestStampCreationGate(TestAuthorizeBootPayload):
