@@ -375,7 +375,13 @@ class TestSandboxDefaultPolicy:
         mk.assert_not_called()
         assert "cmd" in calls
 
-    def test_registry_config_keeps_network_local_blocks(self, tmp_path):
+    def test_registry_config_gets_proxied_egress_local_blocks(
+            self, tmp_path):
+        """Posture pin: registry configs route through the egress
+        proxy with the shared semgrep hostname allowlist — never
+        open network (semgrep parses attacker-controlled source; a
+        parser compromise must not get a free exfil channel). Local
+        rule paths keep the full network block."""
         from packages.semgrep.runner import _default_sandbox_runner
         captured = {}
 
@@ -386,10 +392,18 @@ class TestSandboxDefaultPolicy:
         with patch("core.sandbox.context.run", side_effect=fake_sandbox_run):
             runner = _default_sandbox_runner(tmp_path, "p/security-audit")
             runner(["semgrep"], capture_output=True)
-            assert captured["block_network"] is False
+            assert captured.get("block_network") is not False
+            assert captured["use_egress_proxy"] is True
+            assert captured["proxy_hosts"], (
+                "registry lane must carry a hostname allowlist"
+            )
+            assert any("semgrep" in h for h in captured["proxy_hosts"])
+
+            captured.clear()
             runner = _default_sandbox_runner(tmp_path, "/local/rules.yaml")
             runner(["semgrep"], capture_output=True)
             assert captured["block_network"] is True
+            assert "use_egress_proxy" not in captured
             assert captured["target"] == str(tmp_path)
 
 

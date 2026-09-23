@@ -1,4 +1,9 @@
-"""Egress-proxy hostname allowlist for the semgrep scanner.
+"""Egress-proxy hostname allowlist for semgrep invocations.
+
+Shared by both semgrep lanes: the ``packages.semgrep.runner``
+registry-config path and the ``packages/static-analysis`` scanner
+(which loads this module by path — its hyphenated directory is not
+import-statement-addressable).
 
 Three-layer resolution: operator override → calibrated profile →
 static default. Same shape as ``core.llm.cc_proxy_hosts`` /

@@ -180,8 +180,15 @@ def _default_sandbox_runner(target: Path, config: str):
     back to an unsandboxed subprocess.
 
     Registry configs (p/..., category/...) are fetched from semgrep.dev
-    at run time, so those keep network access (still Landlock-confined);
-    local rule paths run with the network blocked.
+    at run time, so those get network — routed through the RAPTOR
+    egress proxy with the shared semgrep hostname allowlist
+    (``packages.semgrep._proxy_hosts``, the same posture the
+    static-analysis scanner and the codeql pack-download lane carry:
+    UDP blocked, hostname-allowlisted, resolved-IP-screened). This
+    module's own threat statement is that semgrep parses
+    attacker-controlled source, so the registry lane must not hand a
+    compromised parser fully open egress. Local rule paths run with
+    the network blocked entirely.
     """
     try:
         from core.sandbox.context import run as sandbox_run
@@ -189,6 +196,14 @@ def _default_sandbox_runner(target: Path, config: str):
         return None
 
     needs_registry = str(config).startswith(("p/", "category/"))
+    if needs_registry:
+        from ._proxy_hosts import proxy_hosts_for_semgrep
+        net_kwargs: dict = {
+            "use_egress_proxy": True,
+            "proxy_hosts": proxy_hosts_for_semgrep(),
+        }
+    else:
+        net_kwargs = {"block_network": True}
 
     def _runner(cmd, **kwargs):
         # Fake HOME in a per-invocation scratch dir: semgrep
@@ -206,12 +221,12 @@ def _default_sandbox_runner(target: Path, config: str):
         # semgrep's stderr still carries any real failure.
         return sandbox_run(
             cmd,
-            block_network=not needs_registry,
             target=str(target),
             caller_label="semgrep-runner",
             env_caller_filtered=True,
             output=_invocation_scratch_dir(),
             fake_home=True,
+            **net_kwargs,
             **{k: v for k, v in kwargs.items() if k != "shell"},
         )
 
