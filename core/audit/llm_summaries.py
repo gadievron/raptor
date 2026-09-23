@@ -452,13 +452,22 @@ def _ground_summary(
     from the source", so this drops hallucinations too); error paths
     must literally occur in it. A prompt-injected response can then
     at worst SUPPRESS true facts (the same failure mode as a refusal,
-    handled by the mechanical fallback) — it cannot insert a
-    fabricated flow, precondition, or callee that survives into the
-    audit context.
+    handled by the mechanical fallback) — it cannot fabricate a flow,
+    a callee, or a precondition on a nonexistent parameter.
 
-    State transitions are free prose consumed as descriptive context
-    only; they carry no identifiers to check and ground no decisions,
-    so they pass through.
+    Precondition CONDITIONS text is prose-tier and cannot be
+    content-grounded: legitimate assumptions paraphrase ("non-NULL"
+    for `if (buf == NULL)`) and reference caller-context names absent
+    from this source ("must be <= sizeof(buf)"). What IS enforced is
+    STRUCTURE containment — each entry is newline-flattened here
+    (embedded newlines defeated the per-line `- param …` framing and
+    minted forged headings in OTHER functions' prompts), and every
+    rendered field additionally passes through defend_prompt_field in
+    ``FunctionSummary.format_for_context`` with a hard length cap.
+    Residual: instruction-flavoured PROSE inside a condition survives
+    as inline data — the same declared residual as state transitions,
+    which pass through here by design (free prose, descriptive
+    context only, same render defence).
     """
     idents = set(_IDENT_RE.findall(source))
 
@@ -472,9 +481,17 @@ def _ground_summary(
         t for t in summary.taint_rules
         if t.source_param in idents and _known_name(t.sink_call)
     ]
-    summary.preconditions = [
-        p for p in summary.preconditions if p.param in idents
-    ]
+    grounded_pres = []
+    for p in summary.preconditions:
+        if p.param not in idents:
+            continue
+        p.conditions = [
+            " ".join(str(c).split())
+            for c in (p.conditions or [])
+            if str(c).strip()
+        ]
+        grounded_pres.append(p)
+    summary.preconditions = grounded_pres
     summary.callees = [c for c in summary.callees if _known_name(c)]
     summary.callers = [c for c in summary.callers if _known_name(c)]
     summary.error_paths = [

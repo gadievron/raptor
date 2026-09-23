@@ -27,6 +27,22 @@ from core.evidence import EvidenceTier
 logger = logging.getLogger(__name__)
 
 
+def _prompt_field_defence() -> Any:
+    """The shared render defence, with a flatten-only fallback.
+
+    Lazy so core.analysis keeps working without core.audit; the
+    fallback preserves the load-bearing property (no embedded newline
+    survives into a trusted line-shaped prompt region).
+    """
+    try:
+        from core.audit.prompt_defence import defend_prompt_field
+    except Exception:
+        def defend_prompt_field(value: Any, max_length: int = 200) -> str:
+            text = " ".join(str(value).split())
+            return text[:max_length]
+    return defend_prompt_field
+
+
 @dataclass
 class TaintRule:
     """A parameter→callee taint propagation path from the CPG."""
@@ -86,32 +102,50 @@ class FunctionSummary:
 
         depth="oneline" — one-sentence summary for GLANCE context.
         depth="full"    — complete summary for DEEP_DIVE context.
+
+        Every data field (names, params, conditions, code excerpts,
+        state prose) may derive from analysed source or an LLM
+        summary of it, and this rendering lands RAW in other
+        functions' review prompts — each field passes through
+        ``defend_prompt_field`` (newline flatten + tag/heading
+        neutralise + cap) so an embedded newline cannot mint a forged
+        heading or instruction line in trusted prompt position.
         """
+        _dpf = _prompt_field_defence()
         if self.is_empty():
             if depth == "oneline":
-                return f"`{self.function}()`: no CPG-derived security signals."
+                return (
+                    f"`{_dpf(self.function, 120)}()`: no CPG-derived "
+                    f"security signals."
+                )
             return ""
 
         if depth == "oneline":
             parts = []
             if self.taint_rules:
                 sinks = sorted({r.sink_call for r in self.taint_rules})
-                parts.append(f"taint→{','.join(sinks)}")
+                parts.append(
+                    "taint→" + ",".join(_dpf(s, 80) for s in sinks)
+                )
             if self.preconditions:
                 parts.append(f"{len(self.preconditions)} guards")
             if self.error_paths:
                 parts.append(f"{len(self.error_paths)} error returns")
             detail = "; ".join(parts) if parts else "utility"
-            return f"`{self.function}()`: {detail}."
+            return f"`{_dpf(self.function, 120)}()`: {detail}."
 
-        lines = [f"### CPG summary: `{self.function}()` [{self.evidence_tier.value}]"]
+        lines = [
+            f"### CPG summary: `{_dpf(self.function, 120)}()` "
+            f"[{self.evidence_tier.value}]"
+        ]
 
         if self.taint_rules:
             lines.append("**Taint propagation:**")
             for r in self.taint_rules:
                 tier_tag = f" [{r.evidence_tier.value}]" if r.evidence_tier != self.evidence_tier else ""
                 lines.append(
-                    f"- param `{r.source_param}` → `{r.sink_call}()` arg #{r.sink_arg_index}"
+                    f"- param `{_dpf(r.source_param, 120)}` → "
+                    f"`{_dpf(r.sink_call, 120)}()` arg #{r.sink_arg_index}"
                     + (f" ({r.hop_count} hops)" if r.hop_count > 1 else "")
                     + tier_tag
                 )
@@ -119,24 +153,30 @@ class FunctionSummary:
         if self.preconditions:
             lines.append("**Guards:**")
             for p in self.preconditions:
-                conds = ", ".join(str(c)[:80] for c in p.conditions[:3])
-                lines.append(f"- param `{p.param}` guarded by: {conds}")
+                conds = ", ".join(_dpf(c, 80) for c in p.conditions[:3])
+                lines.append(
+                    f"- param `{_dpf(p.param, 120)}` guarded by: {conds}"
+                )
 
         if self.returns:
             lines.append("**Returns:**")
             for r in self.returns[:5]:
                 cond_str = ""
                 if r.conditions:
-                    cond_str = f" when {r.conditions[0][:60]}"
-                lines.append(f"- `{r.code[:80]}`{cond_str}")
+                    cond_str = f" when {_dpf(r.conditions[0], 60)}"
+                lines.append(f"- `{_dpf(r.code, 80)}`{cond_str}")
 
         if self.error_paths:
             lines.append("**Error returns:**")
-            lines.extend(f"- `{ep[:80]}`" for ep in self.error_paths[:3])
+            lines.extend(
+                f"- `{_dpf(ep, 80)}`" for ep in self.error_paths[:3]
+            )
 
         if self.state_transitions:
             lines.append("**State transitions:**")
-            lines.extend(f"- {st[:80]}" for st in self.state_transitions[:5])
+            lines.extend(
+                f"- {_dpf(st, 80)}" for st in self.state_transitions[:5]
+            )
 
         return "\n".join(lines)
 
