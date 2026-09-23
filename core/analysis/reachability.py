@@ -2205,15 +2205,17 @@ def _candidate_qualified_names(
     class_required = file_path.endswith(".java")
     if package_name and class_name:
         candidates.append(f"{package_name}.{class_name}.{fn_name}")
-    if package_name and not (class_required and class_name is None):
-        # In Java, a method with no class context shouldn't exist
-        # — skip the module-level form to avoid colliding with
-        # other files' class-qualified candidates that happen to
-        # share the dotted prefix (e.g. ``com.example.Util.helper``
-        # where one file's package is ``com.example.Util`` and
-        # another's class is ``Util``).
-        if not class_required:
-            candidates.append(f"{package_name}.{fn_name}")
+    # In Java, a method with no class context shouldn't exist — skip
+    # the module-level form to avoid colliding with other files'
+    # class-qualified candidates that happen to share the dotted
+    # prefix (e.g. ``com.example.Util.helper`` where one file's
+    # package is ``com.example.Util`` and another's class is
+    # ``Util``). (The previous outer guard ``not (class_required and
+    # class_name is None)`` was behaviour-equivalent to this given
+    # the inner ``not class_required`` — one of the two conditions
+    # was dead.)
+    if package_name and not class_required:
+        candidates.append(f"{package_name}.{fn_name}")
 
     # Python path-based heuristic.
     if file_path.endswith((".py", ".pyi")):
