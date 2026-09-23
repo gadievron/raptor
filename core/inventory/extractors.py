@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from tree_sitter import Node
 
 from core.inventory import _ts_cache
+from core.source.lines import split_lines
 
 logger = logging.getLogger(__name__)
 
@@ -2336,7 +2337,11 @@ class TreeSitterExtractor:
             except Exception as e:  # noqa: BLE001 — caller falls back to regex
                 logger.warning("tree-sitter parse failed for %s: %s", filepath, e)
                 return []  # Caller will fall back to regex extractor
-        self._source_lines = content.splitlines(True)
+        # \n-model split: consumers index this list with
+        # tree-sitter rows, which count \n only — a
+        # splitlines() view mis-numbered recovered K&R/macro
+        # function ends after any string-literal form feed.
+        self._source_lines = split_lines(content)
         self._seen_cache = (0, set())
         functions: list[FunctionInfo] = []
         self._walk(_tree.root_node, functions, class_name=None, class_attributes=())
@@ -3432,7 +3437,7 @@ def compute_interstitial_items(
     skipped (pure blank-line runs aren't worth a coverage unit). Line numbers
     are 1-based, matching the extractors.
     """
-    lines = content.splitlines()
+    lines = split_lines(content)  # \n model, matching the extractors' line coordinates
     total = len(lines)
     if total == 0:
         return []
@@ -4115,7 +4120,7 @@ def _extract_macros_regex(content: str) -> list[CodeItem]:
     # the inventory under a homoglyph that matches a real ASCII
     # identifier — confusing greps + downstream cross-references.
     _DEFINE_RE = re.compile(r'^\s*#\s*define\s+(\w+)(.*)$', re.ASCII)
-    lines = content.splitlines()
+    lines = split_lines(content)  # \n model, matching the extractors' line coordinates
     for i, line in enumerate(lines, 1):
         m = _DEFINE_RE.match(line)
         if m:
@@ -4161,7 +4166,7 @@ def count_sloc(content: str, language: str, _tree=None) -> int:
             and the comment syntax for the regex fallback.
         _tree: Optional pre-parsed tree-sitter tree (from extract_items).
     """
-    lines = content.splitlines()
+    lines = split_lines(content)  # \n model, matching the extractors' line coordinates
     total = len(lines)
     blank = sum(1 for line in lines if not line.strip())
 
@@ -4256,7 +4261,7 @@ def _count_comment_lines_regex(content: str, language: str) -> int:
     """
     count = 0
     in_block = False
-    for line in content.splitlines():
+    for line in split_lines(content):
         stripped = line.strip()
         if not stripped:
             continue
