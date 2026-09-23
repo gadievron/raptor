@@ -60,7 +60,9 @@ class TestRenderFlowRule:
             "use_after_free", victim="conn->buf", free_fn="kfree",
         )
         assert r is not None
-        assert "kfree(conn->buf);" in r
+        # A spelled free function narrows the FN constraint to it.
+        assert "identifier FN = {kfree};" in r
+        assert "FN(conn->buf);" in r
         assert "when != conn->buf = E1" in r
         assert "COCCIRESULT" in r
         # star-deref pattern must not start at column 0 (SmPL star op)
@@ -68,16 +70,28 @@ class TestRenderFlowRule:
             if "*conn->buf@p" in line:
                 assert line.startswith(" ")
 
+    def test_uaf_unspelled_free_fn_renders_whole_family(self):
+        # No spelled function → the constraint is the whole free
+        # family, never a guessed literal free().
+        r = render_flow_rule("use_after_free", victim="conn->buf")
+        assert r is not None
+        assert (
+            "identifier FN = {kfree_sensitive, devm_kfree, kfree_rcu, "
+            "kvfree, kfree, vfree, free};" in r
+        )
+
     def test_double_free_binds(self):
         r = render_flow_rule("double_free", victim="ptr")
         assert r is not None
-        assert "free@p(ptr);" in r
+        assert "FN@p(ptr);" in r
+        assert "kfree" in r and "vfree" in r  # family-wide constraint
         assert "when != ptr = E1" in r
 
     def test_double_fetch_binds(self):
         r = render_flow_rule("double_fetch", victim="uptr")
         assert r is not None
-        assert "copy_from_user@p(D2, uptr, S2);" in r
+        assert "FN@p(D2, uptr, S2);" in r
+        assert "copy_from_user" in r and "__copy_from_user" in r
 
     def test_unchecked_return_binds_func(self):
         r = render_flow_rule("unchecked_return", func="kmalloc")
@@ -209,6 +223,28 @@ class TestExtractFlowBinding:
         assert extract_flow_binding(
             "double_free", "freeing the same pointer twice",
         ) is None
+
+    def test_hyphenated_class_name_does_not_bind_free(self):
+        # The literal `free` inside "use-after-free" is prose, not a
+        # spelled function — binding it rendered a rule that can never
+        # match kernel kfree code and minted a false 'refuted'.
+        b = extract_flow_binding(
+            "use_after_free",
+            "use-after-free of `conn->buf`: the buffer is freed twice "
+            "and then used after being freed on the error path",
+        )
+        assert b == {"victim": "conn->buf"}
+
+    def test_code_context_fn_binds(self):
+        # Backticked or call-shaped spellings ARE code context.
+        b = extract_flow_binding(
+            "double_free", "double free of `req`: `kfree` runs twice",
+        )
+        assert b == {"victim": "req", "free_fn": "kfree"}
+        b = extract_flow_binding(
+            "double_free", "double free of `req`: kfree(req) twice",
+        )
+        assert b == {"victim": "req", "free_fn": "kfree"}
 
 
 # ── sweep classification (hermetic, stubbed runner) ──────────────────
@@ -438,6 +474,32 @@ class TestFixturesLive:
     def test_guarded_fixture_refutes(self, template, hyp, bad, guarded):
         r = self._sweep(guarded, hyp, template)
         assert r.outcome == "refuted", (r.outcome, r.errors, r.matches)
+
+    def test_kernel_kfree_double_free_confirms_without_spelled_fn(
+        self, tmp_path,
+    ):
+        # Regression (end-to-end): a genuine double-kfree with the
+        # hypothesis phrased via the class name only. The prose-bound
+        # literal free() rendered a never-matching rule and minted
+        # 'refuted' on real double-free code; the family-wide FN
+        # constraint must confirm it.
+        (tmp_path / "drv.c").write_text(
+            "struct conn { char *buf; };\n"
+            "void teardown(struct conn *conn) {\n"
+            "    kfree(conn->buf);\n"
+            "    kfree(conn->buf);\n"
+            "}\n",
+        )
+        hyp = (
+            "use-after-free of `conn->buf`: the buffer is freed twice "
+            "and then used after being freed on the error path"
+        )
+        r = run_flow_cocci_sweep(
+            target_path=tmp_path, file_path="drv.c",
+            function_name="teardown", hypothesis=hyp,
+        )
+        assert r.outcome == "confirmed", (r.outcome, r.errors, r.details)
+        assert r.details["binding"] == {"victim": "conn->buf"}
 
     def test_uaf_matches_all_three_deref_forms(self):
         r = self._sweep(

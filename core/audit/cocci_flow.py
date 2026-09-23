@@ -102,33 +102,40 @@ for _p in p:
 """
 
 _UAF_TEMPLATE = """\
-// flow-sensitive use-after-free: {free_fn}({victim}) followed by a
+// flow-sensitive use-after-free: {free_desc}({victim}) followed by a
 // deref of {victim} with no intervening reassignment on the path.
+// FN is constrained to the free family — when the hypothesis spells
+// no concrete free function the constraint is the whole family, so
+// prose like "use-after-free" cannot bind the literal free() and
+// turn a clean no-match run on kfree code into a false refutation.
 @uaf1 exists@
 expression E1, E2;
+identifier FN = {{{free_fns}}};
 position p;
 @@
 
-{free_fn}({victim});
+FN({victim});
 ... when != {victim} = E1
 {victim}@p[E2]
 
 @uaf2 exists@
 expression E1;
+identifier FN = {{{free_fns}}};
 position p;
 @@
 
-{free_fn}({victim});
+FN({victim});
 ... when != {victim} = E1
  *{victim}@p
 
 @uaf3 exists@
 expression E1;
+identifier FN = {{{free_fns}}};
 identifier fld;
 position p;
 @@
 
-{free_fn}({victim});
+FN({victim});
 ... when != {victim} = E1
 {victim}@p->fld
 
@@ -138,32 +145,37 @@ position p;
 """
 
 _DOUBLE_FREE_TEMPLATE = """\
-// flow-sensitive double-free: a second {free_fn}({victim}) reachable
-// from the first with no intervening reassignment of {victim}.
+// flow-sensitive double-free: a second {free_desc}({victim})
+// reachable from the first with no intervening reassignment of
+// {victim}.  FN binds ONCE per match — both frees must use the same
+// function (a kfree/vfree mixed pair stays unmatched: conservative,
+// this channel only confirms).
 @dfree exists@
 expression E1;
+identifier FN = {{{free_fns}}};
 position p;
 @@
 
-{free_fn}({victim});
+FN({victim});
 ... when != {victim} = E1
-{free_fn}@p({victim});
+FN@p({victim});
 
 {script1}
 """
 
 _DOUBLE_FETCH_TEMPLATE = """\
-// flow-sensitive double-fetch: two {fetch_fn} reads from the same
+// flow-sensitive double-fetch: two {fetch_desc} reads from the same
 // user pointer {victim} with no re-binding of {victim} in between
 // (the second read can observe different bytes than were validated).
 @dfetch exists@
 expression D1, D2, S1, S2, E1;
+identifier FN = {{{fetch_fns}}};
 position p;
 @@
 
-{fetch_fn}(D1, {victim}, S1);
+FN(D1, {victim}, S1);
 ... when != {victim} = E1
-{fetch_fn}@p(D2, {victim}, S2);
+FN@p(D2, {victim}, S2);
 
 {script1}
 """
@@ -235,50 +247,73 @@ def _scripts(rule_names: list, rule_id: str, message: str) -> dict:
     return out
 
 
+def _fn_family(
+    bound_fn: str | None, family: tuple[str, ...],
+) -> tuple[str, str] | None:
+    """``(smpl_list, description)`` for the FN constraint, or None.
+
+    A hypothesis-spelled function narrows the constraint to that one
+    name; no spelling widens it to the whole family — never a guessed
+    single default, which turned a clean no-match run into a false
+    refutation whenever the hypothesis phrased the class without
+    spelling the concrete function.
+    """
+    fns = (bound_fn,) if bound_fn else family
+    if not all(_FUNC_RE.match(fn) for fn in fns):
+        return None
+    desc = bound_fn if bound_fn else f"\\({' | '.join(family)}\\)"
+    return ", ".join(fns), desc
+
+
 def render_flow_rule(
     template: str,
     *,
     victim: str | None = None,
     func: str | None = None,
-    free_fn: str = "free",
-    fetch_fn: str = "copy_from_user",
+    free_fn: str | None = None,
+    fetch_fn: str | None = None,
 ) -> str | None:
     """Render a flow-sensitive SmPL rule bound to hypothesis names.
 
     Returns the rule text, or None when the required binding is
     missing or fails validation (the caller must then decline a
-    verdict rather than sweep with an unbound rule).
+    verdict rather than sweep with an unbound rule). ``free_fn`` /
+    ``fetch_fn`` = None renders the whole family as an FN constraint
+    (see :func:`_fn_family`).
     """
     if template == "use_after_free":
-        if not victim or not victim_expr_valid(victim) \
-                or not _FUNC_RE.match(free_fn):
+        family = _fn_family(free_fn, _FREE_FNS)
+        if not victim or not victim_expr_valid(victim) or family is None:
             return None
+        free_fns, free_desc = family
         rule_id = "flow_use_after_free"
-        msg = f"use of {victim} after {free_fn} with no reassignment"
+        msg = f"use of {victim} after {free_desc} with no reassignment"
         return _UAF_TEMPLATE.format(
-            victim=victim, free_fn=free_fn,
+            victim=victim, free_fns=free_fns, free_desc=free_desc,
             **_scripts(["uaf1", "uaf2", "uaf3"], rule_id, msg),
         )
 
     if template == "double_free":
-        if not victim or not victim_expr_valid(victim) \
-                or not _FUNC_RE.match(free_fn):
+        family = _fn_family(free_fn, _FREE_FNS)
+        if not victim or not victim_expr_valid(victim) or family is None:
             return None
+        free_fns, free_desc = family
         rule_id = "flow_double_free"
-        msg = f"second {free_fn}({victim}) with no reassignment between"
+        msg = f"second {free_desc}({victim}) with no reassignment between"
         return _DOUBLE_FREE_TEMPLATE.format(
-            victim=victim, free_fn=free_fn,
+            victim=victim, free_fns=free_fns, free_desc=free_desc,
             **_scripts(["dfree"], rule_id, msg),
         )
 
     if template == "double_fetch":
-        if not victim or not victim_expr_valid(victim) \
-                or not _FUNC_RE.match(fetch_fn):
+        family = _fn_family(fetch_fn, _FETCH_FNS)
+        if not victim or not victim_expr_valid(victim) or family is None:
             return None
+        fetch_fns, fetch_desc = family
         rule_id = "flow_double_fetch"
-        msg = f"second {fetch_fn} from {victim} without re-binding"
+        msg = f"second {fetch_desc} from {victim} without re-binding"
         return _DOUBLE_FETCH_TEMPLATE.format(
-            victim=victim, fetch_fn=fetch_fn,
+            victim=victim, fetch_fns=fetch_fns, fetch_desc=fetch_desc,
             **_scripts(["dfetch"], rule_id, msg),
         )
 
@@ -431,15 +466,29 @@ def extract_flow_binding(
     binding: dict = {"victim": victim}
     if template in ("use_after_free", "double_free"):
         for fn in _FREE_FNS:
-            if re.search(rf"\b{fn}\b", hyp):
+            if _fn_in_code_context(fn, hyp):
                 binding["free_fn"] = fn
                 break
     elif template == "double_fetch":
         for fn in _FETCH_FNS:
-            if re.search(rf"\b{fn}\b", hyp):
+            if _fn_in_code_context(fn, hyp):
                 binding["fetch_fn"] = fn
                 break
+    # No concrete function spelled → the binding stays family-wide
+    # (render_flow_rule constrains FN to the whole family). Binding a
+    # guessed single default here made prose like "use-after-free"
+    # bind the literal free() and refute real kfree double-frees.
     return binding
+
+
+def _fn_in_code_context(fn: str, hyp: str) -> bool:
+    """The function name appears in a code-shaped context — inside
+    backticks (`kfree` / `kfree(p)`) or as a call shape ``kfree(`` —
+    never bare prose: the literal ``free`` matches inside the
+    hyphenated class name "use-after-free" otherwise."""
+    return bool(re.search(
+        rf"`{re.escape(fn)}[`(]|\b{re.escape(fn)}\s*\(", hyp,
+    ))
 
 
 # ── sweep entry point ────────────────────────────────────────────────
