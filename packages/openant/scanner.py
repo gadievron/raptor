@@ -87,7 +87,23 @@ def checkout_provenance(core_path: Path) -> dict[str, Any]:
     the translator keeps unknown verdicts visible instead of dropping
     them). The ``--openant-core`` consent gate is the enforcement
     point for the flag surface.
+
+    ``matches`` derives from a HASH-VERIFIED read, never from bare
+    ref resolution: ``rev-parse HEAD`` resolves whatever id
+    ``.git/HEAD`` (or a packed ref) carries WITHOUT checking that the
+    named object exists or hashes correctly, so a hostile core whose
+    ``.git/HEAD`` simply contains the raw pin id — no objects at all
+    — presented as pinned with zero warning, and on the env /
+    auto-detect surface that warning is the only defense. The peel
+    (``HEAD^{commit}``) forces git to read and parse the object
+    (rc 128 on a missing or corrupt one), and the payload is
+    additionally self-hashed in Python against the pin before
+    ``matches`` may become True — a pin-id ref over an unverifiable
+    commit is the hostile ``matches=None`` shape, warned like every
+    other one.
     """
+    import hashlib
+
     result: dict[str, Any] = {
         "pinned_commit": OPENANT_PINNED_COMMIT,
         "head": None,
@@ -116,14 +132,40 @@ def checkout_provenance(core_path: Path) -> dict[str, Any]:
         if expected.resolve() != Path(core_path).resolve():
             return _warn_unpinned_provenance(result, core_path)
 
-        proc = _git("rev-parse", "HEAD")
+        proc = _git("rev-parse", "--verify", "HEAD^{commit}")
     except (OSError, subprocess.SubprocessError):
         return _warn_unpinned_provenance(result, core_path)
     head = proc.stdout.strip().lower()
     if proc.returncode != 0 or not head:
         return _warn_unpinned_provenance(result, core_path)
     result["head"] = head
-    result["matches"] = head == OPENANT_PINNED_COMMIT
+    if head != OPENANT_PINNED_COMMIT:
+        result["matches"] = False
+        return _warn_unpinned_provenance(result, core_path)
+    # Belt over git's parse-time check: self-hash the commit payload
+    # against the pin (same discipline as the content survey) so
+    # `matches: True` never rests on the attacker-shipped object
+    # store alone.
+    if len(head) == 40:
+        hasher = hashlib.sha1
+    elif len(head) == 64:
+        hasher = hashlib.sha256
+    else:
+        return _warn_unpinned_provenance(result, core_path)
+    try:
+        raw = subprocess.run(
+            safe_git_readonly_command(
+                "-C", str(core_path), "cat-file", "commit", head),
+            capture_output=True, timeout=30, check=False,
+            env=get_safe_git_env(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return _warn_unpinned_provenance(result, core_path)
+    h = hasher(b"commit %d\x00" % len(raw.stdout))
+    h.update(raw.stdout)
+    if raw.returncode != 0 or h.hexdigest() != head:
+        return _warn_unpinned_provenance(result, core_path)
+    result["matches"] = True
     return _warn_unpinned_provenance(result, core_path)
 
 

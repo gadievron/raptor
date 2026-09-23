@@ -242,3 +242,106 @@ class TestEnvKnobsReachArgparse(unittest.TestCase):
         src = (Path(__file__).parents[3] / "raptor_agentic.py").read_text()
         self.assertIn('env_choice("OPENANT_MODEL"', src)
         self.assertIn('env_choice("OPENANT_LEVEL"', src)
+
+
+class TestCheckoutPinRefForgery(unittest.TestCase):
+    """``matches: True`` must rest on a hash-verified object read.
+    ``rev-parse HEAD`` resolves whatever id the (attacker-shipped)
+    ref carries without checking that the object exists or hashes
+    correctly — a ``.git/HEAD`` carrying the raw pin id forged the
+    pin bit and silenced the env-surface warning."""
+
+    _FAKE_PIN = "abd1dcf416a1ca329441c4bf8ebb68f70dd0f3cf"
+
+    @staticmethod
+    def _hostile_layout(td: Path) -> tuple[Path, Path]:
+        """A real git repo at the documented layout with HOSTILE
+        content committed; returns (repo, core_path)."""
+        import subprocess
+        repo = td / "OpenAnt"
+        core = repo / "libs" / "openant-core"
+        (core / "core").mkdir(parents=True)
+        (core / "core" / "scanner.py").write_text("hostile = True\n")
+        env = {**os.environ,
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        for cmd in (["git", "init", "-q"], ["git", "add", "-A"],
+                    ["git", "commit", "-q", "-m", "hostile"]):
+            subprocess.run(cmd, cwd=repo, env=env, check=True,
+                           capture_output=True)
+        return repo, core
+
+    def test_head_carrying_raw_pin_id_is_unverifiable(self):
+        """The evilhead shape: .git/HEAD = the raw pin id, no such
+        object in the store. Must be the hostile matches=None shape
+        with the loud UNVERIFIABLE warning — never matches=True."""
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core = self._hostile_layout(Path(td))
+            (repo / ".git" / "HEAD").write_text(self._FAKE_PIN + "\n")
+            with patch.object(scanner, "OPENANT_PINNED_COMMIT",
+                              self._FAKE_PIN):
+                with self.assertLogs("raptor", level="WARNING") as cm:
+                    prov = scanner.checkout_provenance(core)
+            self.assertIsNot(prov["matches"], True)
+            self.assertTrue(any("UNVERIFIABLE" in m for m in cm.output))
+
+    def test_packed_ref_carrying_pin_id_is_unverifiable(self):
+        """Adjacent forgery: HEAD stays a symref, the pin id sits in
+        .git/packed-refs for the named branch, no such object."""
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core = self._hostile_layout(Path(td))
+            (repo / ".git" / "HEAD").write_text("ref: refs/heads/evil\n")
+            for loose in (repo / ".git" / "refs" / "heads").glob("*"):
+                loose.unlink()
+            (repo / ".git" / "packed-refs").write_text(
+                "# pack-refs with: peeled fully-peeled sorted \n"
+                f"{self._FAKE_PIN} refs/heads/evil\n")
+            with patch.object(scanner, "OPENANT_PINNED_COMMIT",
+                              self._FAKE_PIN):
+                with self.assertLogs("raptor", level="WARNING") as cm:
+                    prov = scanner.checkout_provenance(core)
+            self.assertIsNot(prov["matches"], True)
+            self.assertTrue(any("UNVERIFIABLE" in m for m in cm.output))
+
+    def test_forged_commit_object_at_pin_id_is_unverifiable(self):
+        """A forged loose commit object stored UNDER the pin id (its
+        content hashes to something else) must not mint matches=True:
+        git verifies commits on parse, and the Python self-hash backs
+        that up."""
+        import shutil
+        import subprocess
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core = self._hostile_layout(Path(td))
+            real = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                capture_output=True, text=True).stdout.strip()
+            objects = repo / ".git" / "objects"
+            dst = objects / self._FAKE_PIN[:2] / self._FAKE_PIN[2:]
+            dst.parent.mkdir(exist_ok=True)
+            shutil.copyfile(objects / real[:2] / real[2:], dst)
+            (repo / ".git" / "HEAD").write_text(self._FAKE_PIN + "\n")
+            with patch.object(scanner, "OPENANT_PINNED_COMMIT",
+                              self._FAKE_PIN):
+                with self.assertLogs("raptor", level="WARNING") as cm:
+                    prov = scanner.checkout_provenance(core)
+            self.assertIsNot(prov["matches"], True)
+            self.assertTrue(any("UNVERIFIABLE" in m for m in cm.output))
+
+    def test_genuine_pinned_checkout_still_quiet_and_matching(self):
+        """Regression direction: a genuine checkout at the pin stays
+        the quiet matches=True shape under the verified read."""
+        import subprocess
+        from packages.openant import scanner
+        with tempfile.TemporaryDirectory() as td:
+            repo, core = self._hostile_layout(Path(td))
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+                capture_output=True, text=True).stdout.strip().lower()
+            with patch.object(scanner, "OPENANT_PINNED_COMMIT", head):
+                with self.assertNoLogs("raptor", level="WARNING"):
+                    prov = scanner.checkout_provenance(core)
+            self.assertIs(prov["matches"], True)
+            self.assertEqual(prov["head"], head)
