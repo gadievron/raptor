@@ -289,16 +289,21 @@ def _run_active_phase(
         env = RaptorConfig.get_llm_env() if llm else RaptorConfig.get_safe_env()
         if trusted:
             env.setdefault("_RAPTOR_TRUSTED", "1")
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=env,
-            check=False,
-            timeout=3600,
-        )
-        stdout_path.write_text(proc.stdout or "", encoding="utf-8")
-        stderr_path.write_text(proc.stderr or "", encoding="utf-8")
+        # Stream the child's output straight into the log files:
+        # capture_output buffered an hour-long fuzz/frida child's full
+        # stdout+stderr in THIS process's memory before a single byte
+        # hit disk. Consumers only ever read the log files.
+        with stdout_path.open("w", encoding="utf-8") as out_fh, \
+                stderr_path.open("w", encoding="utf-8") as err_fh:
+            proc = subprocess.run(
+                cmd,
+                stdout=out_fh,
+                stderr=err_fh,
+                text=True,
+                env=env,
+                check=False,
+                timeout=3600,
+            )
         return {
             "kind": kind,
             "status": "completed" if proc.returncode == 0 else "failed",
@@ -309,7 +314,18 @@ def _run_active_phase(
             "command": cmd,
         }
     except Exception as exc:  # noqa: BLE001 - report phase failure, keep static map useful
-        stderr_path.write_text(f"{type(exc).__name__}: {exc}\n", encoding="utf-8")
+        # Exception text echoes the child's argv and paths — target-
+        # influenced content (a hostile filename rides TimeoutExpired's
+        # message), so it goes through the same terminal-grade scrub
+        # as every other exc interpolation in this module. Append —
+        # the streamed partial output (e.g. up to a timeout kill) is
+        # diagnostic and must not be clobbered.
+        error_line = (
+            f"{type(exc).__name__}: "
+            f"{sanitise_for_terminal(str(exc), max_len=300)}"
+        )
+        with stderr_path.open("a", encoding="utf-8") as err_fh:
+            err_fh.write(error_line + "\n")
         return {
             "kind": kind,
             "status": "failed",
@@ -318,7 +334,7 @@ def _run_active_phase(
             "stdout": str(stdout_path),
             "stderr": str(stderr_path),
             "command": cmd,
-            "error": f"{type(exc).__name__}: {exc}",
+            "error": error_line,
         }
 
 
@@ -609,6 +625,11 @@ def _run_trace_parser(args: argparse.Namespace) -> int:
     # hostile replacement in a shared workspace) since the original map
     # run, and the evidence-refresh gate inside
     # append_runtime_evidence_to_run only runs after execution.
+    # Residual TOCTOU window, accepted: a swap between this hash and
+    # the spawn executes the replacement — sandboxed either way — and
+    # the post-execution re-hash keeps swapped-binary evidence out of
+    # the run artifacts, so containment and evidence integrity hold;
+    # only the (sandboxed) execution itself is time-dependent.
     try:
         current_sha = sha256_file(binary)
     except OSError as exc:
