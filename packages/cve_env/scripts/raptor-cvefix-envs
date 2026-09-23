@@ -108,28 +108,47 @@ def resolve_parent(spec) -> str:
     """``commit_before`` = the fix commit's first parent.
 
     Local clone first (offline, exact); GitHub commits API as the
-    fallback (same resolution the S5.1 A/B staging used). Raises
-    ValueError when neither resolves — the entry records stage_failed.
+    fallback. Raises ValueError when neither resolves — the entry
+    records stage_failed.
+
+    Both lanes go through the repo chokepoints rather than bare
+    subprocess/urllib: the clone is an UNTRUSTED working tree, so the
+    rev-parse runs with safe_git_command + get_safe_git_env (config
+    isolation — the CVE-2024-32002-family defence every other
+    rev-parse on untrusted clones in this tree uses), and the API
+    fetch uses core.http with a response-size cap instead of an
+    unbounded ``json.load`` over raw urllib.
     """
+    from core.git import get_safe_git_env
+    from core.git.clone import safe_git_command
+
     clone = Path(spec.local_clone)
     if (clone / ".git").exists() or (clone / "HEAD").exists():
         proc = subprocess.run(
-            ["git", "-C", str(clone), "rev-parse",
-             f"{spec.fix_commit}^"],
+            safe_git_command(
+                "-C", str(clone), "rev-parse", f"{spec.fix_commit}^"
+            ),
             capture_output=True, text=True, timeout=30, check=False,
+            env=get_safe_git_env(),
         )
         sha = (proc.stdout or "").strip()
         if proc.returncode == 0 and len(sha) == 40:
             return sha
     if spec.repo_url.startswith("https://github.com/"):
-        import urllib.request
+        from core.http import HttpError
+        from core.http.urllib_backend import UrllibClient
+
         slug = spec.repo_url.removesuffix(".git").split("github.com/")[1]
         url = (f"https://api.github.com/repos/{slug}/commits/"
                f"{spec.fix_commit}")
-        with urllib.request.urlopen(url, timeout=20) as r:
-            data = json.load(r)
-        parents = data.get("parents") or []
-        if parents and parents[0].get("sha"):
+        try:
+            data = UrllibClient(
+                user_agent="raptor-cvefix-envs/0.1"
+            ).get_json(url, timeout=20, max_bytes=2 * 1024 * 1024, retries=0)
+        except HttpError:
+            data = None
+        parents = (data or {}).get("parents") if isinstance(data, dict) else None
+        if parents and isinstance(parents[0], dict) and parents[0].get("sha"):
             return parents[0]["sha"]
     raise ValueError(
         f"{spec.cve_id}: cannot resolve {spec.fix_commit}^ from the "
