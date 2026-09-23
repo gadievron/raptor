@@ -821,8 +821,9 @@ def _binary_decompilation(
 
     Callers must treat None as an error — sweeping an empty source
     silently logs a vacuous outcome for code that exists in the
-    binary. Sanitisation degrades to the raw decompilation on
-    failure (hostile symbol content must not turn into a crash).
+    binary. Sanitisation failure is fail-closed (None): a
+    decompilation crafted to crash the sanitiser must not re-open
+    the raw channel the sanitiser exists to close.
     """
     from core.audit.binary_context import find_redb, load_redb
     redb_path = find_redb(out_dir, target_path)
@@ -837,8 +838,14 @@ def _binary_decompilation(
     try:
         from core.audit.decompiler_sanitise import sanitise
         return sanitise(source)
-    except Exception:  # noqa: BLE001 — degrade to raw
-        return source
+    except Exception:  # noqa: BLE001 — fail closed, skip the item
+        print(
+            "warning: decompiler sanitisation failed for "
+            f"{sanitise_for_terminal(function_name)} — refusing the "
+            "raw decompilation",
+            file=sys.stderr,
+        )
+        return None
 
 
 def cmd_sweep(args: argparse.Namespace) -> int:

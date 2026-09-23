@@ -100,3 +100,31 @@ def test_heap_copy_sweeps_available_decompilation(tmp_path, capsys):
               if e.get("action") == "sweep"]
     assert len(sweeps) == 1
     assert sweeps[0]["tool"].startswith("heap-copy")
+
+
+def test_sanitiser_failure_is_fail_closed(tmp_path, capsys, monkeypatch):
+    """A decompilation crafted to crash the sanitiser must not re-open
+    the raw channel — the item is skipped (None), matching the file's
+    refusal contracts."""
+    import core.audit.decompiler_sanitise as ds
+
+    mod = _load_cli()
+    out_dir, target = _setup(tmp_path, with_redb=True)
+
+    def boom(source):
+        raise RuntimeError("hostile decompilation broke the sanitiser")
+
+    monkeypatch.setattr(ds, "sanitise", boom)
+    result = mod._binary_decompilation(out_dir, target, "parse_hdr")
+    assert result is None
+    err = capsys.readouterr().err
+    assert "sanitisation failed" in err
+    assert "refusing the raw decompilation" in err
+
+
+def test_sanitised_decompilation_still_returned(tmp_path):
+    mod = _load_cli()
+    out_dir, target = _setup(tmp_path, with_redb=True)
+    result = mod._binary_decompilation(out_dir, target, "parse_hdr")
+    assert result is not None
+    assert "memcpy" in result

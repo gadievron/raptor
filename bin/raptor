@@ -510,8 +510,10 @@ done
 # Build initial prompt: /raptor [target]. Strip control bytes from
 # the operator-supplied TARGET first - an embedded newline would
 # split the prompt and read as a second downstream instruction;
-# legitimate paths don't contain them.
-_target_clean=$(printf '%s' "$TARGET" | tr -d '\000-\010\012-\037')
+# legitimate paths don't contain them. Full C0 range plus DEL, the
+# same class the caller-dir gate below refuses via [[:cntrl:]] -
+# TAB and DEL are no more legitimate in a target path than ESC.
+_target_clean=$(printf '%s' "$TARGET" | tr -d '\000-\037\177')
 if [ "$_target_clean" != "$TARGET" ]; then
     echo "raptor: TARGET contained control bytes - stripped before use" >&2
 fi
