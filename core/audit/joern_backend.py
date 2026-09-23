@@ -362,8 +362,10 @@ def joern_function_in_cpg(
     server: Any,
     function_name: str,
     timeout: int = 10,
+    *,
+    file_path: str | None = None,
 ) -> bool | None:
-    """Whether the loaded CPG contains *function_name* at all.
+    """Whether the loaded CPG actually MODELS *function_name*.
 
     Verdict-bearing callers treat query silence as "looked and found
     nothing". That is only true when the CPG actually models the
@@ -373,9 +375,21 @@ def joern_function_in_cpg(
     clean at scale. Returns None when the probe itself cannot answer
     (no query API, transport error, unparseable output) — callers must
     treat None as "did not look", never as absence.
+
+    ``file_path`` (checklist-relative) binds coverage to the item's
+    OWN file: a same-named definition elsewhere in the tree is not
+    coverage of this item (the same-named-definitions mechanism), so
+    it answers False → the caller skips instead of refuting. CPG
+    filenames are compared exact-or-suffix (``== path`` or
+    ``endsWith("/" + path)``) so relative- and absolute-rooted
+    imports both bind; a layout that matches neither degrades to
+    False — the fail-safe direction (skip, never a refutation).
     """
     try:
-        from packages.joern.runner import _validate_substitution_value
+        from packages.joern.runner import (
+            _escape_scala_string,
+            _validate_substitution_value,
+        )
     except ImportError:
         return None
     if not _validate_substitution_value(function_name):
@@ -385,8 +399,9 @@ def joern_function_in_cpg(
         return None
 
     cache = getattr(server, _FN_COVERAGE_CACHE_ATTR, None)
-    if cache is not None and function_name in cache:
-        return cache[function_name]
+    cache_key = (function_name, file_path)
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
 
     nonce = hashlib.sha256(
         f"fncov:{function_name}:{time.monotonic_ns()}".encode(),
@@ -398,10 +413,40 @@ def joern_function_in_cpg(
     # probe answers None on every real server, which silently demotes
     # every silent live query to skipped — abolishing the refutation
     # lane instead of gating it.
-    query = (
-        'import io.shiftleft.semanticcpg.language._\n'
-        f'"{nonce}:" + cpg.method.nameExact("{function_name}").nonEmpty\n'
+    # Coverage = a non-external method WITH A BODY in the item's own
+    # file, live-verified filters (each closes a confirmed
+    # false-coverage shape):
+    # * .filterNot(_.isExternal) — Joern mints external METHOD STUBS
+    #   for called-but-undefined names, so a bare nameExact probe
+    #   answers true off a mere CALL SITE anywhere in the parsed
+    #   tree — exactly this gate's target cases (parse-failed file,
+    #   exclude_dirs drop, mixed-tree language sliver).
+    # * .filter(_.block.astChildren.nonEmpty) — a DECLARED prototype
+    #   is isExternal=false with an empty body; it models nothing.
+    #   Cost: a legitimately empty-bodied function also demotes to
+    #   skipped (its silence-refutation is vacuous anyway).
+    # * filename binding (when a file anchor is given) — a same-named
+    #   definition in a DIFFERENT file is not coverage of this item.
+    cov_expr = (
+        f'cpg.method.nameExact("{function_name}")'
+        '.filterNot(_.isExternal)'
+        '.filter(_.block.astChildren.nonEmpty).l'
     )
+    if file_path is not None:
+        fp = _escape_scala_string(file_path)
+        query = (
+            'import io.shiftleft.semanticcpg.language._\n'
+            f'val raptorCov = {cov_expr}\n'
+            f'"{nonce}:" + (if (raptorCov.isEmpty) "false" '
+            f'else if (raptorCov.exists(m => m.filename == "{fp}" || '
+            f'm.filename.endsWith("/{fp}"))) "true" else "otherfile")\n'
+        )
+    else:
+        query = (
+            'import io.shiftleft.semanticcpg.language._\n'
+            f'val raptorCov = {cov_expr}\n'
+            f'"{nonce}:" + raptorCov.nonEmpty\n'
+        )
     try:
         result = query_fn(query, timeout=timeout, check_length=False)
     except Exception:  # noqa: BLE001 — degrade to "unanswered", never crash
@@ -412,7 +457,9 @@ def joern_function_in_cpg(
         raw = str(getattr(result, "raw_output", "") or "")
         if f"{nonce}:true" in raw:
             answer = True
-        elif f"{nonce}:false" in raw:
+        elif f"{nonce}:false" in raw or f"{nonce}:otherfile" in raw:
+            # otherfile = a same-named definition exists but not in
+            # the item's file — not coverage of THIS item.
             answer = False
         else:
             answer = None
@@ -421,7 +468,7 @@ def joern_function_in_cpg(
         # heal within one CPG load, and re-probing pays a full REPL
         # round trip per silent hypothesis on the shared
         # single-threaded server. The memo dies with the CPG (re)load.
-        cache[function_name] = answer
+        cache[cache_key] = answer
     return answer
 
 

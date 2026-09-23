@@ -19563,6 +19563,10 @@ def _run_tool_chain(
                             _increment_tier_dict(tier_counters, "joern", "errors")
                     elif (_cov := _joern_function_in_cpg(
                         joern_server, function_name,
+                        # File-bound: a same-named definition (or a
+                        # declared prototype) elsewhere is not
+                        # coverage of THIS checklist item.
+                        file_path=file_path,
                     )):
                         _record_joern_outcome(config, error=False)
                         if tier_counters:
