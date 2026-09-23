@@ -164,6 +164,45 @@ class TestBaselineSemantics:
         assert rc == 0
         assert "WARN stale" in out
 
+    @staticmethod
+    def _many_lists(n: int) -> str:
+        """n distinct 12-name lists (each over MAX_SEED_NAMES)."""
+        return "".join(
+            f"_S{i} = ["
+            + ", ".join(f'"api_fn_{j}"' for j in range(12))
+            + "]\n"
+            for i in range(n)
+        )
+
+    def test_grown_within_budget_warns_but_passes(self, det, tmp_path,
+                                                  capsys):
+        """Exactly AT the drift budget (floor 10): warn-only, exit 0 —
+        the lower direction of the threshold (see the trade-off comment
+        at the check site: a tighter budget re-arms refresh churn)."""
+        root = _tree(tmp_path, "core/foo.py", self._many_lists(11))
+        entries = {f"core/foo.py::_S{i}": {"kind": "literal", "count": 10}
+                   for i in range(10)}
+        entries["core/foo.py::_S10"] = {"kind": "literal", "count": 12}
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps(entries), encoding="utf-8")
+        rc, out = self._run(det, root, baseline, capsys)
+        assert rc == 0
+        assert out.count("WARN grown") == 10
+        assert "drift budget" not in out
+
+    def test_grown_over_budget_fails(self, det, tmp_path, capsys):
+        """One past the budget: fail, pointing at the note-preserving
+        refresh — the upper direction of the threshold (unreviewed
+        additions must not pool under baselined keys indefinitely)."""
+        root = _tree(tmp_path, "core/foo.py", self._many_lists(11))
+        entries = {f"core/foo.py::_S{i}": {"kind": "literal", "count": 10}
+                   for i in range(11)}
+        baseline = tmp_path / "baseline.json"
+        baseline.write_text(json.dumps(entries), encoding="utf-8")
+        rc, out = self._run(det, root, baseline, capsys)
+        assert rc == 1
+        assert "drift budget" in out
+
 
 class TestWriteBaselineRoundTrip:
     def test_notes_survive_regeneration(self, det, tmp_path):
