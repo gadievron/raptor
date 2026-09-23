@@ -47,9 +47,13 @@ _CS_USING_RE = re.compile(
     r"([A-Za-z_][A-Za-z0-9_.]*)\s*;",
     re.MULTILINE,
 )
-# F#: ``open Foo.Bar``
+# F#: ``open Foo.Bar``. The keyword gap is horizontal ([^\S\n]+):
+# an ``open`` directive is one line, and the newline-capable ``\s+``
+# let every ``open`` anchor re-scan a shared blank run — quadratic
+# over planted keyword lines. The dropped corner is a cross-line
+# ``open\nFoo``, which is not F#.
 _FS_OPEN_RE = re.compile(
-    r"^[^\S\n]*open\s+([A-Za-z_][A-Za-z0-9_.]*)",
+    r"^[^\S\n]*open[^\S\n]+([A-Za-z_][A-Za-z0-9_.]*)",
     re.MULTILINE,
 )
 # VB: ``Imports Foo.Bar``
