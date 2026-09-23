@@ -994,11 +994,32 @@ def merge_into_study_list(
     items actually added.  Creates a minimal skeleton when the file
     does not exist yet.
     """
+    from core.fs_lock import artifact_lock
+
+    path = Path(study_list_path)
+    # Cross-process lock over the whole load → merge → save window:
+    # the shared-out_dir pattern (study loop beside /audit's consumer)
+    # makes this the same lost-update shape as canonical promotion —
+    # two unserialised writers silently drop each other's items.
+    with artifact_lock(path, subject="study list"):
+        return _merge_into_study_list_locked(
+            path, items, related_docs=related_docs,
+            unresolved=unresolved,
+        )
+
+
+def _merge_into_study_list_locked(
+    path: Path,
+    items: list[StudyItem],
+    *,
+    related_docs: list[dict] | None,
+    unresolved: list[dict] | None,
+) -> int:
+    """Body of :func:`merge_into_study_list`; caller holds the lock."""
     from dataclasses import asdict
 
     from core.json import load_json, save_json
 
-    path = Path(study_list_path)
     data: dict = {"target": "", "source_root": "", "items": []}
     if path.is_file():
         loaded = load_json(path, max_bytes=64 * 1024 * 1024)
