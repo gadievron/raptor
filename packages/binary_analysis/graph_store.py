@@ -8,16 +8,23 @@ extractor.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import logging
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Self, TYPE_CHECKING
 
+from core.hash import sha256_file
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+logger = logging.getLogger(__name__)
 
 GRAPH_FILENAME = "binary-graph.sqlite"
 SCHEMA_VERSION = 2
@@ -52,7 +59,25 @@ def open_graph(path: Path) -> sqlite3.Connection:
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA journal_mode=WAL")
+        # Switching journal mode needs a moment of exclusivity, and
+        # SQLite can report busy here WITHOUT consulting the busy
+        # handler while a concurrent open's migration (or an ingest
+        # batch) holds the write lock — a raced open of a fresh store
+        # failed outright on this pragma. Bounded retry; on sustained
+        # contention keep the inherited mode (WAL is a performance
+        # preference, not a correctness gate — the store's creator
+        # sets it durably).
+        for attempt in range(50):
+            try:
+                conn.execute("PRAGMA journal_mode=WAL")
+                break
+            except sqlite3.OperationalError:
+                if attempt == 49:
+                    logger.warning(
+                        "binary graph %s: journal_mode=WAL contended; "
+                        "keeping inherited mode", path)
+                    break
+                time.sleep(0.02)
         conn.execute("PRAGMA synchronous=NORMAL")
         _migrate(conn)
     except BaseException:
@@ -79,6 +104,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if current > SCHEMA_VERSION:
         msg = f"binary graph schema version {current} is newer than this RAPTOR ({SCHEMA_VERSION})"
         raise RuntimeError(msg)
+    if current == SCHEMA_VERSION:
+        # Up to date — nothing to stamp. Re-stamping here committed a
+        # WRITE on every open, so every pure read lane (graph_summary,
+        # query_edges, /binary report) contended as a writer against
+        # in-flight ingest batches (busy_timeout, then "database is
+        # locked").
+        return
     if current == 0:
         conn.executescript(
             """
@@ -166,7 +198,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
             """
         )
     elif current == 1:
-        _upgrade_v1_to_v2(conn)
+        try:
+            _upgrade_v1_to_v2(conn)
+        except sqlite3.OperationalError:
+            # Two processes raced the upgrade: the loser blocked on the
+            # winner's BEGIN IMMEDIATE, then failed mid-script against
+            # the already-rebuilt tables. Losing the race means someone
+            # else migrated — verify and carry on.
+            with contextlib.suppress(sqlite3.OperationalError):
+                conn.rollback()
+            now = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            if now != SCHEMA_VERSION:
+                raise
+            return
     conn.execute(f"PRAGMA user_version={int(SCHEMA_VERSION)}")
     conn.execute(
         "INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)",
@@ -178,10 +222,17 @@ def _upgrade_v1_to_v2(conn: sqlite3.Connection) -> None:
     """v1 omitted the snapshot FK on node_evidence/edge_evidence/artifacts,
     so a snapshot REPLACE cascaded nodes/edges/evidence but orphaned these
     rows. SQLite cannot add a FK in place; rebuild each table and drop rows
-    already orphaned."""
+    already orphaned.
+
+    BEGIN IMMEDIATE takes the write lock up front so two processes
+    racing the upgrade cannot interleave the rebuild; the version
+    stamp commits atomically with it. The loser blocks on the lock
+    (busy_timeout), then fails against the already-rebuilt tables —
+    _migrate treats that as "someone else migrated" after re-reading
+    user_version."""
     conn.executescript(
         """
-        BEGIN;
+        BEGIN IMMEDIATE;
         ALTER TABLE node_evidence RENAME TO node_evidence_v1;
         CREATE TABLE node_evidence (
             snapshot_id TEXT NOT NULL,
@@ -221,6 +272,7 @@ def _upgrade_v1_to_v2(conn: sqlite3.Connection) -> None:
             SELECT snapshot_id, kind, path, sha256 FROM artifacts_v1
             WHERE snapshot_id IN (SELECT id FROM snapshots);
         DROP TABLE artifacts_v1;
+        PRAGMA user_version=2;
         COMMIT;
         """
     )
@@ -310,7 +362,13 @@ class BinaryGraphStore:
         if not self.path.exists():
             return None
         with self._connection() as conn:
-            row = conn.execute("SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1").fetchone()
+            # rowid tie-break: created_at is an ISO string, and two
+            # snapshots minted in the same instant otherwise pick an
+            # arbitrary winner — insertion order is the honest tie.
+            row = conn.execute(
+                "SELECT id FROM snapshots "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1"
+            ).fetchone()
             return str(row["id"]) if row else None
 
     def add_evidence(self, snapshot_id: str, record: Any) -> None:
@@ -395,8 +453,10 @@ class BinaryGraphStore:
         return edge_id
 
     def add_artifact(self, snapshot_id: str, kind: str, path: Path) -> None:
+        # Streamed hash chokepoint — never read_bytes() a whole
+        # artifact (decompilation corpora reach hundreds of MB).
         try:
-            digest = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            digest = sha256_file(Path(path))
         except OSError:
             digest = ""
         with self._connection() as conn:
