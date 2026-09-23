@@ -942,6 +942,44 @@ TOOLCHAIN_HOME_ENV_VARS: frozenset[str] = frozenset({
     "RUSTUP_HOME",
 })
 
+# --- Config-home redirect class (settings-scan lane only) ------------
+#
+# Directories config-consuming tools resolve their OWN config trees
+# from. Same power class as the long-blocked HOME: a repo-supplied
+# settings env repointing one makes the operator session's next tool
+# invocation read attacker-authored config — and config IS exec on
+# these surfaces (CC settings.json: apiKeyHelper/hooks/permissions;
+# XDG_CONFIG_HOME: git/config alias `!sh` + credential.helper,
+# pip.conf, gh config; XDG_DATA_HOME/XDG_CACHE_HOME: template/hook
+# and loader-cache trees several tools execute or import from).
+#
+# source= freedesktop.org basedir-spec 0.8 (XDG_CONFIG_HOME,
+#   XDG_DATA_HOME, XDG_STATE_HOME, XDG_CACHE_HOME; XDG_CONFIG_DIRS /
+#   XDG_DATA_DIRS are the search-path plural forms with the same
+#   redirect power) + Claude Code settings docs (CLAUDE_CONFIG_DIR
+#   repoints CC's own config dir wholesale).
+# transcribed= 2026-09-22; basedir-spec full variable walk; CC env
+#   docs walk.
+# completeness= XDG_RUNTIME_DIR: documented out — consumers require
+#   it to already exist with 0700 ownership, and it carries sockets,
+#   not executed config. Per-tool config-FILE pointers
+#   (GIT_CONFIG_GLOBAL, PIP_CONFIG_FILE, AWS_CONFIG_FILE, ...) are
+#   homed in DANGEROUS_ENV_VARS / the credential-env family; this
+#   class is the config-HOME (whole-tree) spelling only.
+#
+# Settings-scan lane only, like TOOLCHAIN_HOME_ENV_VARS: operators
+# legitimately export XDG_* on their own hosts; only a scanned repo's
+# settings env has no business setting them.
+CONFIG_HOME_REDIRECT_ENV_VARS: frozenset[str] = frozenset({
+    "CLAUDE_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_CONFIG_DIRS",
+    "XDG_DATA_HOME",
+    "XDG_DATA_DIRS",
+    "XDG_STATE_HOME",
+    "XDG_CACHE_HOME",
+})
+
 # --- BUILD_SYSTEMS census --------------------------------------------
 #
 # Every build-system type the detector inventory
@@ -1178,6 +1216,28 @@ def is_model_traffic_redirect_shaped(name: str) -> bool:
     if upper.startswith("AWS_ENDPOINT_URL"):
         return True
     return upper.startswith("CLAUDE_CODE_SKIP_")
+
+
+def is_function_injection_shaped(name: str) -> bool:
+    """True when *name* is shaped like an exported-shell-function key.
+
+    bash (post-Shellshock) imports ``BASH_FUNC_<name>%%`` environment
+    entries as shell functions at startup, and function lookup
+    precedes builtin lookup — one such key makes every later-spawned
+    bash resolve ``<name>`` to the attacker's function (PATH-grade
+    exec; it can even shadow ``unset`` itself). Derivational rather
+    than an enumerated pair of spellings: legitimate env NAMES are
+    portable identifiers (``[A-Za-z_][A-Za-z0-9_]*``), so any
+    candidate carrying the ``BASH_FUNC_`` head or the function-
+    encoding punctuation (``%``, ``(``, ``)``) in its NAME is the
+    injection shape, whichever historical bash encoding
+    (``BASH_FUNC_x%%``, ``BASH_FUNC_x()``) produced it.
+
+    Hostile-input lanes only (repo-supplied settings env keys).
+    """
+    if name.upper().startswith("BASH_FUNC_"):
+        return True
+    return any(c in name for c in "%()")
 
 
 def fold_env_candidate(name: str) -> str:
