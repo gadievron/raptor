@@ -1203,3 +1203,81 @@ class TestBinaryOracleAbsentUnannotatedNamesake:
                  "line_start": 60, "line_end": 70, "metadata": {}}
         inv = self._inventory([dict(self._ABSENT), macro])
         assert binary_oracle_absent(inv, "src/a.c", "dead_fn") is True
+
+
+class TestProseOnlyIndentedAndExoticQuotes:
+    """_prose_only stripped fenced/inline/plain-quote forms only:
+    markdown INDENTED code blocks and non-space/tab-indented quote
+    lines carried planted target text into the demotion gates."""
+
+    _PLANT = "the buffer is correctly bounded"
+
+    def test_indented_code_block_stripped(self):
+        from core.analysis.reachability_gates import (
+            _prose_only,
+            has_safety_self_contradiction,
+        )
+        body = (
+            "Overflow in copy loop.\n\n"
+            f"    // {self._PLANT}\n\n"
+            "Attacker reaches this."
+        )
+        assert self._PLANT not in _prose_only(body)
+        assert not has_safety_self_contradiction(body)
+
+    def test_tab_indented_block_stripped(self):
+        from core.analysis.reachability_gates import _prose_only
+        body = f"Real bug.\n\n\t// {self._PLANT}\n\nEvidence."
+        assert self._PLANT not in _prose_only(body)
+
+    def test_multiline_indented_run_stripped_as_one_block(self):
+        from core.analysis.reachability_gates import _prose_only
+        body = (
+            "Prose.\n\n"
+            "    line one\n"
+            f"    {self._PLANT}\n"
+            "    line three\n\n"
+            "More prose."
+        )
+        out = _prose_only(body)
+        assert self._PLANT not in out
+        assert "More prose." in out
+
+    def test_nbsp_indented_quote_line_stripped(self):
+        from core.analysis.reachability_gates import (
+            _prose_only,
+            has_safety_self_contradiction,
+        )
+        body = (
+            "Overflow in copy loop.\n\n"
+            f" > {self._PLANT}\n\n"
+            "Attacker reaches this."
+        )
+        assert self._PLANT not in _prose_only(body)
+        assert not has_safety_self_contradiction(body)
+
+    def test_indented_conduit_text_no_longer_fires(self):
+        from core.analysis.reachability_gates import is_conduit_candidate
+        body = (
+            "Real overflow.\n\n"
+            "    passes buf to memcpy(dst, src, n)\n\n"
+            "evidence."
+        )
+        assert not is_conduit_candidate(body)
+
+    def test_model_prose_assertion_still_fires(self):
+        # Direction pin: an UNQUOTED safety assertion in flowing
+        # prose keeps firing the gate.
+        from core.analysis.reachability_gates import (
+            has_safety_self_contradiction,
+        )
+        body = (
+            "The copy is correctly bounded by the length check, "
+            "yet this finding claims otherwise."
+        )
+        assert has_safety_self_contradiction(body)
+
+    def test_short_prose_indent_under_four_spaces_kept(self):
+        from core.analysis.reachability_gates import _prose_only
+        body = "Point one.\n  continuation kept as prose\nPoint two."
+        assert "continuation kept as prose" in _prose_only(body)
