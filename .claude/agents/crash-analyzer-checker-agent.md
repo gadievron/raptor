@@ -44,8 +44,14 @@ grep -o "0x[0-9a-fA-F]\{8,\}" root-cause-hypothesis-YYY.md | sort -u | wc -l
 
 **Check 3: Check for Red Flag Phrases**
 ```bash
-grep -E "(expected output|should show|likely|probably|can be verified|ideally)" root-cause-hypothesis-YYY.md
+grep -iE "(expected output|should show|\blikely\b|\bprobably\b|can be verified|\bideally\b)" root-cause-hypothesis-YYY.md
 # Must return empty (no matches)
+# -i: the analyzer's own self-reject rule spells these capitalized
+#     ("Expected Output:", "Should show") — a case-sensitive grep let
+#     the canonical spellings through.
+# Word boundaries on likely/probably/ideally: substrings inside
+#     ordinary words ("unlikely-looking", "improbably") must not
+#     over-reject legitimate prose.
 # If matches found, REJECT: "Contains red flag phrases indicating lack of actual verification"
 ```
 
