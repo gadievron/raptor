@@ -410,6 +410,12 @@ class RaptorConfig:
     # (detector synthesis) rather than operator-set. Always re-assigned
     # alongside BINARY_ORACLE_PATHS (never gate on truthiness).
     BINARY_ORACLE_NO_SUPPRESS: tuple[str, ...] = ()
+    # Subset of BINARY_ORACLE_PATHS the OPERATOR declared (explicit
+    # ``--binary`` flags + the project binary store). Declared binaries
+    # are exempt from the enrichment's source-coverage floor — the
+    # declaration is the trust assertion the floor's drop warning names
+    # as its remedy. Always re-assigned alongside BINARY_ORACLE_PATHS.
+    BINARY_ORACLE_DECLARED: tuple[str, ...] = ()
 
     # Inc 2b Tier 1: when True, extract direct call edges from each
     # binary in BINARY_ORACLE_PATHS (via r2) and annotate inventory

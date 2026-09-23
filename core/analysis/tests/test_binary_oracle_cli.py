@@ -366,3 +366,73 @@ class TestHostileNamesSanitisedOnTerminal:
         # production; drive the wrapper directly for the log shape.
         joined = " ".join(r.getMessage() for r in caplog.records)
         assert "\x1b" not in joined
+
+
+class TestDeclaredOut:
+    """``declared_out`` collects the operator-declared subset only:
+    explicit --binary paths and project-store binaries. Auto-detected
+    paths are never declared (they stay floor-subject)."""
+
+    @patch("core.analysis.binary_oracle_cli._project_binaries",
+           return_value=([], None))
+    @patch("core.analysis.binary_oracle_cli._autodetect_binaries",
+           return_value=[])
+    @patch("core.analysis.binary_oracle_cli._validate_explicit_paths",
+           return_value=[Path("/tmp/explicit-bin")])
+    def test_explicit_paths_are_declared(
+        self, _mock_validate, _mock_auto, _mock_proj, tmp_path,
+    ):
+        declared: list = []
+        resolve_binary_paths(
+            _args(binary=["/tmp/explicit-bin"]), tmp_path, "auto",
+            declared_out=declared,
+        )
+        assert declared == ["/tmp/explicit-bin"]
+
+    @patch("core.analysis.binary_oracle_cli._autodetect_binaries",
+           return_value=[Path("/build/example")])
+    def test_project_binaries_are_declared_autodetect_is_not(
+        self, _mock_auto, tmp_path,
+    ):
+        proj_bin = tmp_path / "lib.so"
+        proj_bin.write_bytes(b"\x7fELF")
+        with patch(
+            "core.analysis.binary_oracle_cli._project_binaries",
+            return_value=([proj_bin], "myproj"),
+        ):
+            declared: list = []
+            result = resolve_binary_paths(
+                _args(), tmp_path, "auto", declared_out=declared,
+            )
+        assert str(proj_bin) in declared
+        assert "/build/example" in result
+        assert "/build/example" not in declared
+
+    @patch("core.analysis.binary_oracle_cli._project_binaries",
+           return_value=([], None))
+    @patch("core.analysis.binary_oracle_cli._autodetect_binaries",
+           return_value=[])
+    @patch("core.analysis.binary_oracle_cli._validate_explicit_paths",
+           side_effect=lambda b, parser=None: [Path(p) for p in (b or [])])
+    def test_apply_to_config_assigns_declared(
+        self, _mock_validate, _mock_auto, _mock_proj, tmp_path,
+    ):
+        from core.analysis.binary_oracle_cli import apply_to_config
+        from core.config import RaptorConfig
+        prev = (RaptorConfig.BINARY_ORACLE_PATHS,
+                RaptorConfig.BINARY_ORACLE_NO_SUPPRESS,
+                RaptorConfig.BINARY_ORACLE_DECLARED,
+                RaptorConfig.BINARY_ORACLE_EDGES)
+        try:
+            apply_to_config(
+                _args(binary=["/tmp/explicit-bin"]), tmp_path)
+            assert RaptorConfig.BINARY_ORACLE_DECLARED == (
+                "/tmp/explicit-bin",)
+            # Always re-assigned: a declared-less run clears it.
+            apply_to_config(_args(), tmp_path)
+            assert RaptorConfig.BINARY_ORACLE_DECLARED == ()
+        finally:
+            (RaptorConfig.BINARY_ORACLE_PATHS,
+             RaptorConfig.BINARY_ORACLE_NO_SUPPRESS,
+             RaptorConfig.BINARY_ORACLE_DECLARED,
+             RaptorConfig.BINARY_ORACLE_EDGES) = prev

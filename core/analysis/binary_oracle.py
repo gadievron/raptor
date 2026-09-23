@@ -1146,6 +1146,7 @@ def enrich_inventory_with_binary_oracle(
     inventory: dict,
     binaries,
     no_suppression_paths=(),
+    declared_paths=(),
 ) -> dict[str, int]:
     """Annotate each native-language inventory item with its binary-oracle
     classification, plus a top-level summary on the inventory itself.
@@ -1160,6 +1161,16 @@ def enrich_inventory_with_binary_oracle(
         (symbol_present > folded > inlined)
       - **absent from every binary** ⇒ combined verdict is ``absent``
         — and ONLY then can the downstream chokepoint hard-suppress
+
+    ``declared_paths`` names the binaries the OPERATOR declared
+    (explicit ``--binary`` flags and the project binary store). They
+    are exempt from the source-coverage floor below — the operator
+    asserted trust, and the floor's drop warning names exactly that
+    remedy. When the floor drops a NON-declared binary that produced
+    evidence, every surviving binary's records downgrade to
+    ``suppression_grade: false``: the "absent from every binary"
+    quantifier was silently narrowed, so ``absent`` may still enrich
+    but must not license suppression.
 
     Storage shape on each item::
 
@@ -1281,6 +1292,15 @@ def enrich_inventory_with_binary_oracle(
     })
     project_names = [n for n in names if n not in _BOILERPLATE_NAMES]
     n_project = len(project_names)
+    _declared = {str(Path(x).resolve()) for x in (declared_paths or ())}
+
+    def _is_declared(p: Path) -> bool:
+        try:
+            return str(p.resolve()) in _declared
+        except OSError:
+            return str(p) in _declared
+
+    floor_dropped: list[str] = []
     kept: list[tuple[Path, str, dict[str, BinaryOracleWitness]]] = []
     for bp, build_id, verdicts in per_binary:
         if not verdicts:
@@ -1305,6 +1325,23 @@ def enrich_inventory_with_binary_oracle(
                 and n_project >= SRC_FLOOR_MIN_PROJECT_NAMES
                 and (matched < SRC_COVERAGE_MIN_MATCHED
                      or ratio < SRC_COVERAGE_FLOOR)):
+            if _is_declared(bp):
+                # Operator-declared (--binary / project binary store):
+                # the declaration IS the trust assertion the floor's
+                # remedy names, so warn-and-keep. Dropping here would
+                # make the "absent only when EVERY declared binary
+                # lacks it" contract quantify over a set the operator
+                # never saw shrink.
+                logger.warning(
+                    "binary_oracle: declared binary %s matched only %d of "
+                    "%d project source names (%.1f%%, floor %.0f%% / min "
+                    "%d) — kept because the operator declared it, but "
+                    "verify it was built from THIS source tree.",
+                    bp.name, matched, n_project, ratio * 100,
+                    SRC_COVERAGE_FLOOR * 100, SRC_COVERAGE_MIN_MATCHED,
+                )
+                kept.append((bp, build_id, verdicts))
+                continue
             logger.warning(
                 "binary_oracle: dropping %s — only %d of %d project source "
                 "names matched (%.1f%%, floor %.0f%% / min %d). Likely the "
@@ -1314,6 +1351,7 @@ def enrich_inventory_with_binary_oracle(
                 bp.name, matched, n_project, ratio * 100,
                 SRC_COVERAGE_FLOOR * 100, SRC_COVERAGE_MIN_MATCHED,
             )
+            floor_dropped.append(str(bp))
             continue
         kept.append((bp, build_id, verdicts))
     per_binary = kept
@@ -1322,6 +1360,16 @@ def enrich_inventory_with_binary_oracle(
             "binary_oracle: all binaries dropped by source-coverage floor; "
             "skipping enrichment")
         return counts
+    if floor_dropped:
+        logger.warning(
+            "binary_oracle: %d binary(s) floor-dropped while %d survived — "
+            "'absent' verdicts from the survivors lose suppression "
+            "authority for this run (a function unique to a dropped "
+            "binary would otherwise hard-suppress). Pass --binary for "
+            "the dropped path(s) to restore it, or --no-binary-oracle "
+            "to disable oracle filtering.",
+            len(floor_dropped), len(per_binary),
+        )
 
     # Combine + annotate. The combined classification is what downstream
     # consumers (reach_witness, /codeql autonomous_analyzer, /validate
@@ -1343,6 +1391,7 @@ def enrich_inventory_with_binary_oracle(
     any_guessed_build = any(
         str(bp) in _no_suppress for bp, _, _ in per_binary
     )
+    any_floor_dropped = bool(floor_dropped)
     for fi, ii, name in targets:
         per_binary_entries: list[dict[str, object]] = []
         for bp, build_id, verdicts in per_binary:
@@ -1356,8 +1405,12 @@ def enrich_inventory_with_binary_oracle(
                 # F1): the summary-level earns_suppression is not what
                 # the live gates read — the chokepoint, demoter, and
                 # audit verdict extraction all gate per item, so the
-                # guessed-build downgrade must live here too.
-                "suppression_grade": str(bp) not in _no_suppress,
+                # guessed-build downgrade must live here too. A
+                # floor-drop of any sibling binary downgrades EVERY
+                # surviving record the same way: the combined verdict
+                # no longer quantifies over every declared binary.
+                "suppression_grade": (str(bp) not in _no_suppress
+                                      and not any_floor_dropped),
                 "classification": w.classification,
                 "address":        w.address,
                 "tier":           w.tier,
@@ -1427,10 +1480,16 @@ def enrich_inventory_with_binary_oracle(
         # could license a false negative. Downgrade conservatively
         # when ANY contributing binary is symbol-only (E1 stripped-
         # binary fallback).
-        "earns_suppression": not any_symbol_only and not any_guessed_build,
+        "earns_suppression": (not any_symbol_only and not any_guessed_build
+                              and not any_floor_dropped),
         # Surfaced for operator-visible evidence-tier reporting.
         "any_symbol_only": any_symbol_only,
         "any_env_built_guessed": any_guessed_build,
+        # True when the source-coverage floor dropped a non-declared
+        # binary that had produced evidence — the surviving verdicts
+        # then enrich but never suppress (see suppression_grade above).
+        "any_floor_dropped": any_floor_dropped,
+        "floor_dropped": list(floor_dropped),
     }
     return counts
 
@@ -1453,9 +1512,9 @@ def absent_earns_suppression(per_binary) -> bool:
       * EVERY contributing binary is full-tier (a symbol-only binary
         can't distinguish ``inlined`` from ``absent``), AND
       * no contributing binary is marked ``suppression_grade: false``
-        (env-built with a GUESSED build command — its absence says
-        nothing suppression-grade about the operator's tree; a
-        missing key = legacy record = full grade).
+        (env-built with a GUESSED build command, or a sibling binary
+        was floor-dropped so the every-binary quantifier no longer
+        holds; a missing key = legacy record = full grade).
     """
     entries = [b for b in (per_binary or []) if isinstance(b, dict)]
     if not entries:
