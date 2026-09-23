@@ -103,6 +103,86 @@ def get_rule_role(rule_path: str) -> str:
     return "detection"
 
 
+# Per-rule confirm-only role marker: the exact comment line
+# `# raptor: confirm-only` in a CURATED rule file's leading comment
+# block. Curated rules that adjudicate a sub-shape narrower than the
+# class they dispatch for declare it so their silence maps to
+# inconclusive instead of refuted (see the scanned-witness branch in
+# run_semgrep_sweep). Distinct from get_rule_role's
+# detection/verification split, which governs whether a MATCH may
+# promote; this marker governs what a NON-match means.
+_CONFIRM_ONLY_MARKER = "# raptor: confirm-only"
+
+#: The curated rule library. The confirm-only role is scoped to it:
+#: dynamic per-hypothesis tempfile rules and synthesized checkers are
+#: authored by the LLM at run time, and letting a rule's AUTHOR opt
+#: its own rule out of refutation semantics would be refutation
+#: evasion.
+_CURATED_SEMGREP_RULES_DIR = (
+    Path(__file__).resolve().parents[2] / "engine" / "semgrep" / "rules"
+)
+
+# Per-path memo — curated rule files are read once per process, not
+# per sweep. Bounded: only curated paths are ever cached.
+_CONFIRM_ONLY_CACHE: dict[str, bool] = {}
+
+
+def _parse_confirm_only_header(text: str) -> bool:
+    """Anchored marker parse: the exact marker line must appear in
+    the file's LEADING comment block (before the first line that is
+    neither blank nor a ``#`` comment). Marker-shaped text anywhere
+    else — inside a YAML ``message:`` block, a trailing comment, a
+    pattern string — never activates the role. A UTF-8 BOM on the
+    first line is tolerated; near-miss spellings (extra spaces,
+    missing colon) deliberately do not parse — the loud companion
+    test over the curated library catches them so a mis-spelled
+    marker fails CI instead of silently reverting a rule to
+    refutation semantics.
+    """
+    for line in text.splitlines():
+        stripped = line.lstrip("\ufeff").strip()
+        if not stripped:
+            continue
+        if not stripped.startswith("#"):
+            return False
+        if stripped == _CONFIRM_ONLY_MARKER:
+            return True
+    return False
+
+
+def is_confirm_only_rule(rule_path: str) -> bool:
+    """True when a CURATED rule file declares the confirm-only marker.
+
+    Curated paths only (under ``engine/semgrep/rules``): dynamic
+    per-hypothesis tempfile rules and on-demand synthesized checkers
+    return False regardless of content — their author is the LLM, and
+    an author-controlled opt-out of refutation semantics is
+    refutation evasion. Unreadable files return False — only an
+    explicit, well-formed header declaration narrows a rule's
+    silence.
+    """
+    if not rule_path:
+        return False
+    try:
+        resolved = Path(rule_path).resolve()
+        if not resolved.is_relative_to(_CURATED_SEMGREP_RULES_DIR):
+            return False
+    except OSError:
+        return False
+    key = str(resolved)
+    cached = _CONFIRM_ONLY_CACHE.get(key)
+    if cached is not None:
+        return cached
+    try:
+        result = _parse_confirm_only_header(
+            resolved.read_text(encoding="utf-8"),
+        )
+    except (OSError, UnicodeDecodeError):
+        result = False
+    _CONFIRM_ONLY_CACHE[key] = result
+    return result
+
+
 _IDENTIFIER_QUALIFIED_RE = None  # lazy import
 
 
@@ -988,6 +1068,43 @@ def run_semgrep_sweep(
             )
             if expanded is not None:
                 return expanded
+            if is_confirm_only_rule(rule_config):
+                # Confirm-only rules adjudicate a sub-shape NARROWER
+                # than the class they dispatch for, so a scanned
+                # zero-match answers "not this sub-shape", never "not
+                # this class" — booking refuted here would let every
+                # documented FN mode of such a rule discard real bugs
+                # through the tool-refutes-then-drop doctrine. Both
+                # directions weighed at this site: mapping silence to
+                # inconclusive forfeits mechanical refutations from
+                # these rules (more human review on the correct-code
+                # direction) in exchange for never converting a shape
+                # miss into a class refutation. Rules whose claim
+                # spans their whole dispatched class omit the marker
+                # and keep the scanned-witness refutation above.
+                # (Placed after the expanded second pass so the
+                # macro-view rescue still runs first — an
+                # inconclusive lead for marked rules, a CONFIRM
+                # rescue only for unmarked ones, which return before
+                # reaching this branch.)
+                capped_reason = (
+                    "confirm-only rule: a scanned zero-match answers "
+                    "only the rule's sub-shape, not the dispatched "
+                    "class — silence stays inconclusive (dark), "
+                    "never refuted"
+                )
+                logger.info(
+                    "semgrep sweep capped at inconclusive for %s:%s "
+                    "— %s",
+                    file_path, function_name, capped_reason,
+                )
+                outcome = "inconclusive"
+                witness_cov = Coverage(
+                    covered=None,
+                    tier="scanned-witness",
+                    reason=capped_reason,
+                    unknown_policy=UNKNOWN_INCONCLUSIVE,
+                )
         serialized = []
         for f in in_function:
             if hasattr(f, "to_dict"):
@@ -1147,6 +1264,34 @@ def _expanded_second_pass(
                 "expanded semgrep sweep capped at inconclusive for "
                 "%s:%s — %s",
                 file_path, function_name, capped_reason,
+            )
+            outcome = "inconclusive"
+        elif is_confirm_only_rule(rule_config):
+            # Confirm-only rules must not CONFIRM from the expanded
+            # view: fidelity-3 preprocessing rewrites the libc guard
+            # idioms their exclusions anchor on (glibc strpbrk/strchr
+            # become _Generic(...) selections), so pattern-not-inside
+            # clauses structurally stop binding while the positive
+            # sink pattern still matches — CORRECT code reads as a
+            # match here. Both directions weighed at this site:
+            # capping forfeits promotion-grade macro-hidden-sink
+            # confirms for marked rules (the match survives below as
+            # an inconclusive LEAD with its evidence attached), in
+            # exchange for never minting a promotion-grade
+            # ``:expanded`` receipt from a view where the rule's
+            # exclusions are unsound. Unmarked rules keep the
+            # expanded confirm exactly as before.
+            details["reason"] = (
+                "confirm-only rule: expanded-view match kept as a "
+                "lead, not a confirmation — preprocessing rewrites "
+                "the guard idioms this rule's exclusions anchor on, "
+                "so they cannot bind in this view"
+            )
+            logger.info(
+                "expanded semgrep sweep capped at inconclusive for "
+                "%s:%s — confirm-only rule (exclusions unsound in "
+                "the expanded view)",
+                file_path, function_name,
             )
             outcome = "inconclusive"
         else:
@@ -1764,6 +1909,7 @@ _SMT_VERBS = {
     "check-null-deref": "raptor-smt-check-null-deref",
     "check-overflow-to-oob": "raptor-smt-check-overflow-to-oob",
     "check-negative-bypass": "raptor-smt-check-negative-bypass",
+    "check-encoding-residual": "raptor-smt-check-encoding-residual",
     "validate-path": "raptor-smt-validate-path",
 }
 
@@ -1815,6 +1961,18 @@ _SMT_VERB_ROLES = {
     "check-early-release": "detection",
     "check-lock-domain": "detection",
     "check-toctou": "detection",
+    # Detection by construction: z3 models exactly the byte-survival
+    # predicate it is asked, but the premises (the emitter's transfer
+    # description) are an LLM/orchestrator extraction the verb never
+    # verifies against the source — a fired probe corroborates and
+    # seeds, it does not convict alone. NOT in VACUOUS_SMT_VERBS: the
+    # intrinsic is fully constrained by the supplied escaped/dropped/
+    # passed sets, so SAT is meaningful without guard premises. The
+    # ``:witness`` suffix must never be stamped for this verb — its
+    # model is a byte satisfying the SUPPLIED description, not a
+    # source-discriminating witness (is_detection_rule_id withholds
+    # the :witness escape accordingly).
+    "check-encoding-residual": "detection",
 }
 
 
@@ -1853,15 +2011,20 @@ def is_detection_rule_id(stamp: str) -> bool:
     A ``:witness`` suffix records a concrete solver model and keeps the
     stamp's receipt; verbs the table does not name keep their current
     grading (the firewall only demotes what the channel has explicitly
-    classified as detection-role).
+    classified as detection-role). Exception: check-encoding-residual
+    — its solver model ranges over premises (the transfer description)
+    the verb never verifies against the source, so a concrete model
+    does NOT discriminate and the ``:witness`` escape is withheld.
     """
     part = stamp.split(":", 1)[1] if ":" in stamp else stamp
     if part.startswith("symbolic-") or stamp.startswith("symbolic"):
         return part == "symbolic-reach"
 
-    if ":" not in stamp or stamp.endswith(":witness"):
+    if ":" not in stamp:
         return False
     verb = stamp.split(":", 2)[1]
+    if stamp.endswith(":witness"):
+        return verb == "check-encoding-residual"
     return _SMT_VERB_ROLES.get(verb) == "detection"
 
 
@@ -1886,6 +2049,15 @@ VACUOUS_SMT_VERBS = frozenset({
     "check-overflow", "check-oob", "check-overflow-to-oob",
 })
 
+# smt_args keys whose shim contract is ONE JSON-array argument rather
+# than a repeated flag (``check-encoding-residual --forbidden``).
+# Repeating such a flag would hand argparse only the last element —
+# silently narrowing the set toward refutation. Keys stay listed here
+# per-flag: defaulting ALL lists to JSON arrays would break the
+# repeated ``--guard`` / ``--operand`` contract every other shim
+# documents.
+_SMT_JSON_ARRAY_ARGS = frozenset({"forbidden"})
+
 
 def is_vacuous_smt_verb(verb: str) -> bool:
     """True when *verb* (bare or ``smt:``-prefixed) is in the vacuous set."""
@@ -1906,9 +2078,13 @@ def run_smt_sweep(
         file_path: Source file being audited (for logging).
         function_name: Function being audited.
         verb: SMT verb name (e.g. "check-overflow", "validate-path").
-        smt_args: Dict of CLI args for the verb (keys become --key flags,
-            values become their arguments). List values are serialised
-            as JSON.
+        smt_args: Dict of CLI args for the verb (keys become --key
+            flags, values become their arguments). List values repeat
+            the flag once per item (the ``--guard`` / ``--operand``
+            shim contract), EXCEPT keys in
+            :data:`_SMT_JSON_ARRAY_ARGS`, which pass one JSON-array
+            argument. Dict values pass as one JSON object;
+            ``conditions`` is positional (see below).
 
     Returns:
         SweepResult with outcome ``confirmed`` (sat — the condition is
@@ -1986,8 +2162,11 @@ def run_smt_sweep(
             if value:
                 cmd.append(flag)
         elif isinstance(value, list):
-            for item in value:
-                cmd.extend([flag, str(item)])
+            if key in _SMT_JSON_ARRAY_ARGS:
+                cmd.extend([flag, _json.dumps(value)])
+            else:
+                for item in value:
+                    cmd.extend([flag, str(item)])
         elif isinstance(value, dict):
             cmd.extend([flag, _json.dumps(value)])
         else:
