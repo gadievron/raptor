@@ -1,22 +1,22 @@
 """Rank witnesses by how well they match a given finding.
 
-PLANNED consumer: validation Stage E (or any consumer that wants
-"the most relevant witness for this finding") picking from the
-witness set discovered by :mod:`core.witness.discovery`. As of this
-writing NO production consumer is wired — Stage E's witness stage
-(``packages/exploitability_validation/witness_stage.py``) does
-dark-verify execution and does not import this module; only the
-package tests exercise the API. Whoever wires the first consumer
-must validate the join keys against REAL producer output before
-trusting the scores: the finding side reads ``finding.get("id")``
-only (no ``finding_id`` fallback, unlike provenance's
-``_finding_coords``), ``cwe_id`` string forms ("79" vs "CWE-79")
-are not normalised, and ``file_path`` may be absolute on one side
-and repo-relative on the other — none of these spellings has been
-exercised against real consumer shapes, so a silent mis-join is
-the expected failure mode of an unvalidated adoption. The matching
-is purely structural — no LLM judgment — driven by the
-``outcome_detail`` fields the witness producers populate.
+LIVE consumer: ``libexec/raptor-run-feasibility`` imports
+``discover_witness_stores`` / ``iter_visible_witnesses`` /
+``best_match_for_finding`` and feeds the matched witness bytes into
+binary feasibility analysis (persisted as the empirical mitigation
+map). Stage E's witness stage
+(``packages/exploitability_validation/witness_stage.py``) still does
+dark-verify execution and does not import this module. Because a
+consumer is wired, the join keys are normalised rather than compared
+by raw spelling: the finding id falls back from ``id`` to
+``finding_id`` (provenance's ``_finding_coords`` precedent), CWE
+spellings ("79" vs "CWE-79", case) canonicalise before comparison,
+and file paths match on exact equality OR a component-boundary
+suffix (absolute producer path vs repo-relative finding path). The
+matching is purely structural — no LLM judgment — driven by the
+``outcome_detail`` fields the witness producers populate; matched
+evidence is additive enrichment, so a residual mis-join steers an
+empirical mitigation map, never a suppression.
 
 Ranking (higher score → better match):
 
@@ -116,6 +116,46 @@ def _outcome_priority(outcome: WitnessOutcome) -> int:
     return 1
 
 
+def _norm_cwe(value: Any) -> str | None:
+    """Canonical ``CWE-N`` spelling from any common form, or None.
+
+    Producers and findings disagree on spelling ("79", "CWE-79",
+    "cwe-79"); comparing raw strings silently never matched across
+    the divide and fell through to weaker criteria.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().upper()
+    if text.startswith("CWE-"):
+        text = text[4:]
+    return f"CWE-{text}" if text.isdigit() else None
+
+
+def _paths_match(a: Any, b: Any) -> bool:
+    """Exact or component-boundary-suffix path equality.
+
+    The producer side records the path it analysed (often absolute);
+    the finding side is usually repo-relative — raw equality never
+    joined them. A suffix match is accepted only on a whole-component
+    boundary so ``b/x.c`` never matches ``ab/x.c``.
+    """
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+
+    def _norm(p: str) -> str:
+        p = p.replace("\\", "/")
+        while p.startswith("./"):
+            p = p[2:]
+        return p
+
+    na, nb = _norm(a), _norm(b)
+    if not na or not nb:
+        return False
+    if na == nb:
+        return True
+    return na.endswith("/" + nb) or nb.endswith("/" + na)
+
+
 def score_witness_for_finding(
     witness: Witness,
     finding: dict[str, Any],
@@ -125,19 +165,27 @@ def score_witness_for_finding(
     the maxima via :func:`best_match_for_finding`."""
     detail = witness.outcome_detail if isinstance(witness.outcome_detail, dict) else {}
 
-    finding_id = finding.get("id")
-    finding_cwe = finding.get("cwe_id") or finding.get("cwe")
+    finding_id = finding.get("id") or finding.get("finding_id")
+    finding_cwe = _norm_cwe(finding.get("cwe_id") or finding.get("cwe"))
     finding_file = finding.get("file") or finding.get("file_path")
     binary_path = _finding_binary_path(finding)
 
     if finding_id and detail.get("finding_id") == finding_id:
         return 10, "exact finding-id match"
 
-    if (finding_cwe and detail.get("cwe_id") == finding_cwe
-            and finding_file and detail.get("file_path") == finding_file):
+    # Both producer spellings are live: the LLM-emit adapter writes
+    # cwe_id / file_path, the symbolic-witness producer writes cwe /
+    # file. Reading one spelling silently never matched the other
+    # producer's witnesses.
+    detail_cwe = _norm_cwe(detail.get("cwe_id") or detail.get("cwe"))
+    file_matches = bool(finding_file) and _paths_match(
+        detail.get("file_path") or detail.get("file"), finding_file,
+    )
+
+    if finding_cwe and detail_cwe == finding_cwe and file_matches:
         return 7, "cwe + file match"
 
-    if finding_file and detail.get("file_path") == finding_file:
+    if file_matches:
         return 4, "file match"
 
     # Binary-hash fallback for fuzz witnesses (no finding_id /
