@@ -608,3 +608,54 @@ class TestMergeDeleteTimeLivenessRecheck(unittest.TestCase):
             self.assertIn("skipped delete", buf.getvalue())
             # The non-live sibling still merged and got deleted.
             self.assertFalse((out / "scan-2").exists())
+
+
+class TestMergeDotPrefixAndLengthGate(unittest.TestCase):
+    """Boundary of the merge name gate: a forged command of ".x"
+    passed and produced a merged dir _list_run_dirs skips forever —
+    while the source runs were deleted on success (merged data
+    invisible to every project view). Over-NAME_MAX / NUL command
+    types escaped as uncaught OSError from the mkdir."""
+
+    def _run(self, out: Path, name: str, command) -> Path:
+        d = out / name
+        d.mkdir(parents=True)
+        (d / ".raptor-run.json").write_text(json.dumps({
+            "version": 2, "command": command, "status": "completed",
+            "project": None, "project_source": "none",
+        }), encoding="utf-8")
+        (d / "findings.json").write_text("[]", encoding="utf-8")
+        return d
+
+    def _merge(self, command):
+        from core.project.cli import _do_merge
+        from core.project.project import Project
+        with TemporaryDirectory() as td:
+            tmp = Path(td)
+            out = tmp / "proj-out"
+            out.mkdir()
+            project = Project(name="p", target=str(tmp / "code"),
+                              output_dir=str(out))
+            self._run(out, "scan-1", command)
+            self._run(out, "scan-2", command)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                _do_merge(project, "all", yes=True)
+            return (buf.getvalue(), (out / "scan-1").exists(),
+                    (out / "scan-2").exists())
+
+    def test_dot_prefixed_command_refused(self):
+        text, s1, s2 = self._merge(".x")
+        self.assertIn("refus", text.lower())
+        self.assertTrue(s1)
+        self.assertTrue(s2)
+
+    def test_underscore_prefixed_command_refused(self):
+        text, s1, _s2 = self._merge("_gen")
+        self.assertIn("refus", text.lower())
+        self.assertTrue(s1)
+
+    def test_over_length_command_refused_not_oserror(self):
+        text, s1, _s2 = self._merge("s" * 300)
+        self.assertIn("refus", text.lower())
+        self.assertTrue(s1)
