@@ -621,3 +621,36 @@ def test_redirection_tokens_are_not_packages():
     )
     pkgs = extract_apt_packages(insts)
     assert sorted(p.name for p in pkgs) == ["curl", "jq", "wget"]
+
+
+class TestTrailingHeredoc:
+    def test_trailing_heredoc_body_not_parsed_as_packages(self):
+        insts = parse_dockerfile(
+            "FROM debian\n"
+            "RUN apt-get install -y curl <<EOF\n"
+            "phantom-package\n"
+            "EOF\n"
+        )
+        assert [p.name for p in extract_apt_packages(insts)] == ["curl"]
+
+    def test_chomp_heredoc_variant_cut(self):
+        insts = parse_dockerfile(
+            "FROM debian\n"
+            "RUN apt-get install -y curl <<-MARK\n"
+            "\tphantom\n"
+            "MARK\n"
+        )
+        assert [p.name for p in extract_apt_packages(insts)] == ["curl"]
+
+    def test_quoted_angle_tokens_do_not_truncate(self):
+        insts = parse_dockerfile(
+            "FROM debian\n"
+            "RUN echo 'placeholder <<VERSION' && apt-get install -y curl\n"
+        )
+        assert [p.name for p in extract_apt_packages(insts)] == ["curl"]
+
+    def test_plain_install_unaffected(self):
+        insts = parse_dockerfile(
+            "FROM debian\nRUN apt-get install -y curl wget\n")
+        assert [p.name for p in extract_apt_packages(insts)] == [
+            "curl", "wget"]

@@ -33,8 +33,13 @@ Dockerfile uses this.
     ``apt-get install`` actually takes in real Dockerfiles.
     ``RUN bash -c "apt-get install -y foo"`` (subshell-quoted) is
     rare and intentionally out of scope.
-  * **Heredoc bodies.** ``RUN <<EOF`` is skipped — practically
-    never used for apt installs.
+  * **Heredoc bodies.** Skipped in both positions: an args-LEADING
+    ``RUN <<EOF`` skips the instruction, and a TRAILING heredoc
+    (``apt-get install -y curl <<EOF``) cuts extraction at the
+    marker so body lines never parse as install args. A command
+    chained AFTER a heredoc on the same RUN (``cmd <<EOF … && apt
+    install x``) is cut with it — conservative; practically unused
+    for apt installs.
   * **Globs / wildcards.** ``pkg*`` is returned verbatim as the
     name; the consumer (SCA tier) decides whether to resolve.
 """
@@ -46,6 +51,7 @@ import shlex
 from dataclasses import dataclass
 
 from .parser import Instruction
+from .parser import _heredoc_tags as parser_heredoc_tags
 
 
 @dataclass(frozen=True)
@@ -96,6 +102,26 @@ def _extract_from_run(inst: Instruction) -> list[AptPackage]:
         # Heredoc body — out of scope.
         return []
     flat = _flatten_run(inst.raw)
+    # Trailing heredocs: ``RUN apt-get install -y curl <<EOF`` — the
+    # leading-marker guard above never fires, and flattening folded
+    # the BODY lines into the command, so body text parsed as install
+    # args (phantom package rows polluting the SBOM). Cut the
+    # flattened command at the first real heredoc marker (the
+    # quote-state token scan from the parser, not a bare `<<` sweep —
+    # `sed 's/<<X/y/'` must not truncate): everything from the marker
+    # on is body + terminator, never arguments.
+    tags = parser_heredoc_tags(inst.args)
+    if tags:
+        tag = tags[0][0]
+        marker = re.compile(
+            r"<<-?(?:" + "|".join(
+                (re.escape(tag), '"' + re.escape(tag) + '"',
+                 "'" + re.escape(tag) + "'"),
+            ) + r")(?=\s|$)"
+        )
+        m = marker.search(flat)
+        if m:
+            flat = flat[:m.start()]
     out: list[AptPackage] = []
     for tokens in _split_commands(flat):
         out.extend(_packages_from_command(tokens, inst.line, inst.stage_name))
