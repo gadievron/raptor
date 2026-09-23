@@ -80,6 +80,7 @@ from .storage import (
     read_annotation,
     read_file_annotations,
     remove_annotation,
+    restamp_annotation,
     write_annotation,
 )
 
@@ -104,5 +105,6 @@ __all__ = [
     "read_annotation",
     "read_file_annotations",
     "remove_annotation",
+    "restamp_annotation",
     "write_annotation",
 ]
