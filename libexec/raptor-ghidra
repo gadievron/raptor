@@ -224,6 +224,7 @@ def _do_import(gpr: Path, args: argparse.Namespace, out_dir: Path):
             db = bridge.import_and_enrich(
                 out_dir,
                 binary_path=args.binary.resolve() if args.binary else None,
+                decompile=args.decompile_all,
                 timeout=args.timeout,
             )
         else:
