@@ -118,3 +118,20 @@ def test_md_prose_defangs_structural_html():
 def test_md_inline_defangs_structural_html():
     from core.security.markdown_render import md_inline
     assert "<h1>" not in md_inline("t<h1>forge</h1>")
+
+
+def test_md_inline_default_cap_is_300():
+    """Kills the cap mutation (300 → 300000 survived the battery):
+    the default md_inline cap is a load-bearing bound for heading /
+    label / cell slots."""
+    from core.security.markdown_render import md_inline
+    assert len(md_inline("A" * 1000)) <= 300
+
+
+def test_md_fence_preserves_code_verbatim():
+    """Kills the body-swap mutation (md_fence → sanitise_string
+    survived): md_fence's distinguishing contract is that it does NOT
+    strip or escape markdown/code characters — `#include`, `*ptr`,
+    and raw `<...>` are legitimate code the wrapping fence isolates."""
+    from core.security.markdown_render import md_fence
+    assert md_fence("#include <a>\n*ptr") == "#include <a>\n*ptr"

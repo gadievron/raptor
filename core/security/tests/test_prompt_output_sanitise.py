@@ -519,3 +519,18 @@ def test_code_lane_keeps_raw_html():
     control bytes are defanged there."""
     from core.security.prompt_output_sanitise import sanitise_code
     assert sanitise_code("#include <stdio.h>") == "#include <stdio.h>"
+
+
+def test_report_supplement_layer_is_pinned():
+    """Kills the delete-supplement mutation: `<mglyph src=//e>` is a
+    fetching form the envelope alternation does NOT carry — only the
+    report-side supplement strips it, so this pin fails if the PROSE
+    lane loses its second autofetch layer."""
+    from core.security.prompt_output_sanitise import (
+        sanitise_inline,
+        sanitise_string,
+    )
+    for fn in (sanitise_string, sanitise_inline):
+        out = fn("x <mglyph src=//e> y")
+        assert "mglyph" not in out, fn.__name__
+        assert "[REDACTED-AUTOFETCH-MARKUP]" in out, fn.__name__
