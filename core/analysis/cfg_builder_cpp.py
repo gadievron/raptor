@@ -990,6 +990,11 @@ class _CPPCFGBuilder:
         )
         self._adjacency: dict[CPPCFGNode, list[CPPCFGNode]] = {}
         self._all_nodes: list[CPPCFGNode] = [self.entry, self.exit]
+        # Hash-set twin of _all_nodes for the _make_node collision
+        # probe — a list scan per node made CFG construction quadratic
+        # in statement count (machine-generated/hostile sources reach
+        # 100k+ statements per function). _all_nodes keeps ordering.
+        self._node_seen: set[CPPCFGNode] = {self.entry, self.exit}
         # Loop context stack: (break_target, continue_target).
         self._loop_stack: list[tuple[CPPCFGNode, CPPCFGNode]] = []
         # switch context stack: (break_target, fallthrough-from-prev-case)
@@ -1036,7 +1041,7 @@ class _CPPCFGBuilder:
             calls=calls, defs=defs, uses=uses, call_sites=call_sites,
             may_escape=may_escape,
         )
-        if node in self._adjacency or node in self._all_nodes:
+        if node in self._adjacency or node in self._node_seen:
             self._dedupe_counter += 1
             tag = f" #{self._dedupe_counter}"
             node = CPPCFGNode(
@@ -1045,6 +1050,7 @@ class _CPPCFGBuilder:
                 may_escape=may_escape,
             )
         self._all_nodes.append(node)
+        self._node_seen.add(node)
         return node
 
     # ----- statement dispatch -----
@@ -1535,7 +1541,14 @@ def build_cpp_intraproc_cfg(
         return None
     if isinstance(source, Path):
         file_path = str(source)
-        source_text = source.read_text(encoding="utf-8")
+        try:
+            source_text = source.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # Hostile / binary bytes on the direct-Path API: refuse
+            # (None) like every other unbuildable input — decoding
+            # with replacement could mangle string literals that
+            # downstream folds read as values.
+            return None
     else:
         file_path = "<string>"
         source_text = source

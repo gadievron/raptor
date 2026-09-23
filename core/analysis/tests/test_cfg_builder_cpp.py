@@ -251,6 +251,34 @@ class TestIfElse:
 # ---------------------------------------------------------------------------
 
 
+class TestScale:
+    @pytest.mark.slow
+    def test_straight_line_build_is_not_quadratic(self):
+        # Machine-generated / hostile sources reach 100k+ statements
+        # per function; a per-node list-membership scan made the build
+        # ~4x slower per statement-count doubling (9s at 16k). Bound
+        # generously: quadratic blows through this, linear does not.
+        import time
+        n = 16000
+        body = "".join(f"    int v{i} = {i};\n" for i in range(n))
+        src = "void f(void) {\n" + body + "}\n"
+        t0 = time.monotonic()
+        cfg = _build(src)
+        elapsed = time.monotonic() - t0
+        assert cfg is not None
+        assert elapsed < 5.0, f"CFG build took {elapsed:.1f}s at n={n}"
+
+
+class TestHostileBytes:
+    def test_non_utf8_path_read_refuses(self, tmp_path):
+        # Direct-Path API over hostile bytes: refuse (None), never
+        # raise and never decode-with-replacement into a wrong-value
+        # graph.
+        f = tmp_path / "bad.c"
+        f.write_bytes(b"void f(void) { char *s = \"\xff\xfe\x9d\"; }\n")
+        assert build_cpp_intraproc_cfg(f, "f", language="c") is None
+
+
 class TestLoops:
     def test_while_loop_back_edge(self):
         src = (
