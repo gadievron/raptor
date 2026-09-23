@@ -61,6 +61,70 @@ __all__ = ["keepalive_register", "keepalive_unregister", "scratch_dir"]
 #: from this constant, so raising the interval raises the clamp).
 _KEEPALIVE_INTERVAL_S: float = 900.0
 
+# ── inode-ceiling advisory ──────────────────────────────────────────
+#
+# System-tmp scratch usually lives on a tmpfs whose INODE table, not
+# its bytes, is the binding resource — a long-lived session minting
+# lanes between reap cycles can push a shared /tmp toward inode
+# exhaustion while byte-based warnings stay silent. Each system-tmp
+# lane creation therefore takes one statvfs of the target filesystem
+# and warns LOUDLY past a soft ceiling. Advisory only, never a
+# refusal: the pressure is usually someone else's litter on a shared
+# substrate, and failing this run would punish the wrong process —
+# the operator decides what to clean.
+_INODE_PCT_ENV = "RAPTOR_TMP_INODE_SOFT_PCT"
+_DEFAULT_INODE_SOFT_PCT = 90.0
+#: Re-warn cadence: pressure changes slowly, lanes are minted often.
+_INODE_WARN_INTERVAL_S = 3600.0
+_inode_warn_lock = threading.Lock()
+_last_inode_warning: float = 0.0
+
+
+def _inode_ceiling_advisory(path: Path) -> None:
+    """Warn (rate-limited) when *path*'s filesystem is near inode
+    exhaustion. Best-effort — never raises, never refuses.
+
+    ``RAPTOR_TMP_INODE_SOFT_PCT`` moves the ceiling (percent of the
+    filesystem's inodes in use); ``0``/negative disables; non-numeric
+    keeps the default. Filesystems without inode accounting
+    (``f_files == 0``) are skipped.
+    """
+    global _last_inode_warning
+    threshold = _DEFAULT_INODE_SOFT_PCT
+    raw = os.environ.get(_INODE_PCT_ENV, "")
+    if raw:
+        try:
+            threshold = float(raw)
+        except ValueError:
+            logger.debug("ignoring non-numeric %s=%r", _INODE_PCT_ENV, raw)
+    if threshold <= 0:
+        return
+    try:
+        st = os.statvfs(path)
+    except (OSError, AttributeError):
+        return
+    if st.f_files <= 0:
+        return
+    used = st.f_files - st.f_ffree
+    used_pct = 100.0 * used / st.f_files
+    if used_pct < threshold:
+        return
+    now = time.monotonic()
+    with _inode_warn_lock:
+        if _last_inode_warning and (
+                now - _last_inode_warning < _INODE_WARN_INTERVAL_S):
+            return
+        _last_inode_warning = now
+    logger.warning(
+        "tmp filesystem holding %s is at %.0f%% inode usage "
+        "(%d of %d inodes; soft ceiling %.0f%%) — scratch creation "
+        "will start failing with ENOSPC at 100%%. Stale RAPTOR "
+        "artifacts sweep on their own cadence; the usual pressure is "
+        "long-lived checkout/scratch trees, which only the operator "
+        "can judge. Tune or disable this advisory with %s.",
+        path, used_pct, used, st.f_files, threshold, _INODE_PCT_ENV,
+    )
+
 _keepalive_lock = threading.Lock()
 #: Live system-tmp scratch paths (str) whose mtime the tick refreshes.
 _keepalive_paths: set[str] = set()
@@ -223,6 +287,10 @@ def scratch_dir(
         # session must never age past the sweep's floor. Run-output
         # scratch (dir=...) is never swept, so it is not tracked.
         keepalive_register(path)
+        # System-tmp lanes are the growth surface a live session adds
+        # between reap cycles — one cheap statvfs per lane keeps the
+        # operator ahead of tmpfs inode exhaustion (advisory only).
+        _inode_ceiling_advisory(path)
     if env is not None:
         env["TMPDIR"] = str(path)
     try:
