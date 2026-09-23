@@ -227,10 +227,6 @@
     "count": 17,
     "kind": "literal"
   },
-  "core/audit/binary_layer0.py::_SECURITY_CRITICAL_ATTR_RE": {
-    "count": 10,
-    "kind": "alternation"
-  },
   "core/audit/binary_layer0.py::_SENSITIVE_NAME_FRAGMENTS": {
     "count": 13,
     "kind": "literal"
@@ -363,10 +359,6 @@
   },
   "core/audit/condition_smt.py::_TOCTOU_GO_USES": {
     "count": 14,
-    "kind": "alternation"
-  },
-  "core/audit/condition_smt.py::_TOCTOU_PY_USES": {
-    "count": 13,
     "kind": "alternation"
   },
   "core/audit/condition_smt.py::_TYPE_WIDTHS": {
@@ -659,6 +651,11 @@
     "count": 15,
     "kind": "alternation",
     "note": "wiring-verb and view/api suffix morphology gating auth-mode asymmetry receipts to registration-shaped callees (verb/suffix taxonomy, not target API names)"
+  },
+  "core/audit/negative_space.py::_LOCALHOST_KEYWORD_RE": {
+    "count": 11,
+    "kind": "alternation",
+    "note": "security-keyword seed set for the hardcoded-localhost check, unchanged in content: it always lived inside the single localhost-bypass pattern and only became a standalone alternation when that pattern's unbounded same-line gap was decomposed into an ordered token walk (the gap re-scanned hostile source from every planted keyword); growth still routes through DomainVocabulary/IRIS"
   },
   "core/audit/negative_space.py::_NON_REENTRANT_CALLS": {
     "count": 14,
