@@ -582,8 +582,17 @@ def _classify_bound_guard(
     return undecided
 
 
+# Both argument groups are delimited by non-whitespace on both ends:
+# the naive trim spelling ``\s*([^,()]+?)\s*,`` overlaps three
+# unbounded repeats on whitespace, and a ``min(`` followed by a long
+# whitespace run with no closing token makes the engine try every
+# split of the run between them — cubic in the line length. Match
+# set unchanged for any argument with a non-whitespace char; the
+# whitespace-only-argument corner (``min( , x)``, not a real clamp)
+# no longer matches.
 _CLAMP_RE = re.compile(
-    r"\b(\w+)\s*=\s*(?:min|MIN)\s*\(\s*([^,()]+?)\s*,\s*([^()]+?)\s*\)",
+    r"\b(\w+)\s*=\s*(?:min|MIN)\s*\(\s*([^,()\s](?:[^,()]*[^,()\s])?)"
+    r"\s*,\s*([^()\s](?:[^()]*[^()\s])?)\s*\)",
 )
 
 

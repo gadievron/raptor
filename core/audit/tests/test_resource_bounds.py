@@ -891,3 +891,33 @@ class TestConsistencyGatherContainment:
             ), hostile
         ok = _gather_source_texts(target, "src/a.c", ["helper"])
         assert "src/a.c" in ok
+
+
+class TestClampWhitespaceRun:
+    def test_min_whitespace_run_is_fast(self):
+        """Hostile line opening ``n = min(`` and ending in a long
+        whitespace run with no comma / closing paren: the previous
+        trim spelling ``\\s*([^,()]+?)\\s*,`` overlapped three
+        unbounded repeats on whitespace and tried every split of the
+        run between them — cubic in the line length. The
+        \\S-delimited argument spelling is linear. Both-direction
+        bound: fast AND real clamps still match."""
+        from core.audit.resource_bounds import _CLAMP_RE
+        from core.testing.wallclock import cpu_budget
+
+        hostile = "n = min(count" + " " * (1 << 16) + "x"
+        with cpu_budget(1.0, what="clamp whitespace-run scan"):
+            assert _CLAMP_RE.search(hostile) is None
+
+    def test_clamp_forms_still_match(self):
+        from core.audit.resource_bounds import _CLAMP_RE
+
+        for line, args in (
+            ("n = min(count, MAX_CONN);", ("count", "MAX_CONN")),
+            ("n = MIN( a + b , limit );", ("a + b", "limit")),
+            ("sz = min(x, y + z)", ("x", "y + z")),
+        ):
+            m = _CLAMP_RE.search(line)
+            assert m is not None, line
+            assert (m.group(2), m.group(3)) == args, line
+        assert _CLAMP_RE.search("n = max(count, MAX)") is None
