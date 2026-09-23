@@ -2927,66 +2927,6 @@ class ScanRestartCensus(unittest.TestCase):
         self.assertFalse(rule_s(r"\s*==\s*0\b", 0, "match"))
         self.assertFalse(rule_s(r"\s*(.*)"))
 
-    def test_oracle_flags_superlinear_and_passes_fixed(self) -> None:
-        """Oracle self-check with real timing: a known scan-restart
-        member measures superlinear and its run-start-pinned fix
-        measures linear — so a broken oracle cannot silently bless
-        the tree."""
-        bad = r"\s*==\s*0\b"
-        exponent, synthesized = _scan_oracle_classify(bad, 0)
-        self.assertTrue(synthesized)
-        assert exponent is not None
-        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
-        good = r"(?<!\s)\s*==\s*0\b"
-        exponent, _ = _scan_oracle_classify(good, 0)
-        self.assertLess(exponent if exponent is not None else 1.0,
-                        _SUPERLINEAR_EXP)
-        # The lazy-DOTALL delimited-span exemplar: planted openers
-        # with the closer withheld make every opener re-scan to the
-        # end — the position-density pump must expose it.
-        exponent, synthesized = _scan_oracle_classify(
-            r"/\*.*?\*/", re.DOTALL,
-        )
-        self.assertTrue(synthesized)
-        assert exponent is not None
-        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
-        # The body-unit exemplar: a multi-char repeat body only
-        # iterates under a whole-unit pump (a single-char fill
-        # measured this shape "linear"), and the bounded fix passes.
-        exponent, synthesized = _scan_oracle_classify(r"(?:ab)*c!", 0)
-        self.assertTrue(synthesized)
-        assert exponent is not None
-        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
-        exponent, _ = _scan_oracle_classify(r"(?:ab){0,32}c!", 0)
-        self.assertLess(exponent if exponent is not None else 1.0,
-                        _SUPERLINEAR_EXP)
-        # The identifier-chain exemplar: the continuation's UNION
-        # charset covers every word char, so a fill drawn against it
-        # starved the density lane and minted a linear pin for this
-        # quadratic shape — the TRUE first-set ({ws, -, .}) restores
-        # the lane, and the run-start-pinned fix passes.
-        chain = r"([A-Za-z_]\w*)((?:\s*(?:->|\.)\s*[A-Za-z_]\w*)+)"
-        exponent, synthesized = _scan_oracle_classify(chain, 0)
-        self.assertTrue(synthesized)
-        assert exponent is not None
-        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
-        exponent, _ = _scan_oracle_classify(r"(?<![\w.])" + chain, 0)
-        self.assertLess(exponent if exponent is not None else 1.0,
-                        _SUPERLINEAR_EXP)
-        # The boundary-maker exemplar: an alphanumeric fill FUSES a
-        # \b-pinned pump into one word and measures the pin as if it
-        # held — the guard-breaking fill (derived from the pin's own
-        # negated class) keeps every planted head a live attempt.
-        exponent, synthesized = _scan_oracle_classify(
-            r"\b\w[\w.]*\(", 0,
-        )
-        self.assertTrue(synthesized)
-        assert exponent is not None
-        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
-        exponent, _ = _scan_oracle_classify(r"\b\w[\w.]{0,32}\(", 0)
-        self.assertLess(exponent if exponent is not None else 1.0,
-                        _SUPERLINEAR_EXP)
-
     def test_members_match_the_pinned_verdicts(self) -> None:
         """Default-tier closure: the live Rule S proposal set equals
         the pinned set, digests match, and every pin is linear or
@@ -3135,6 +3075,72 @@ class ScanRestartNightly(unittest.TestCase):
     re-measures every scan-restart pin, so a hand-edited verdict or
     an environment-dependent regression cannot hide behind the
     default tier's static-only check."""
+
+    @pytest.mark.slow
+    def test_oracle_flags_superlinear_and_passes_fixed(self) -> None:
+        """Oracle self-check with real timing: a known scan-restart
+        member measures superlinear and its run-start-pinned fix
+        measures linear — so a broken oracle cannot silently bless
+        the tree.  Nightly like its trailing-span twin
+        (``test_nightly_oracle_detects_a_known_superlinear``): six
+        exemplar classifications of hard-killed doubling-size probe
+        workers are genuine multi-second cost, and the default tier
+        never runs the oracle — its protections are the static rule
+        self-check and the pinned-verdict closure."""
+        bad = r"\s*==\s*0\b"
+        exponent, synthesized = _scan_oracle_classify(bad, 0)
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        good = r"(?<!\s)\s*==\s*0\b"
+        exponent, _ = _scan_oracle_classify(good, 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
+        # The lazy-DOTALL delimited-span exemplar: planted openers
+        # with the closer withheld make every opener re-scan to the
+        # end — the position-density pump must expose it.
+        exponent, synthesized = _scan_oracle_classify(
+            r"/\*.*?\*/", re.DOTALL,
+        )
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        # The body-unit exemplar: a multi-char repeat body only
+        # iterates under a whole-unit pump (a single-char fill
+        # measured this shape "linear"), and the bounded fix passes.
+        exponent, synthesized = _scan_oracle_classify(r"(?:ab)*c!", 0)
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        exponent, _ = _scan_oracle_classify(r"(?:ab){0,32}c!", 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
+        # The identifier-chain exemplar: the continuation's UNION
+        # charset covers every word char, so a fill drawn against it
+        # starved the density lane and minted a linear pin for this
+        # quadratic shape — the TRUE first-set ({ws, -, .}) restores
+        # the lane, and the run-start-pinned fix passes.
+        chain = r"([A-Za-z_]\w*)((?:\s*(?:->|\.)\s*[A-Za-z_]\w*)+)"
+        exponent, synthesized = _scan_oracle_classify(chain, 0)
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        exponent, _ = _scan_oracle_classify(r"(?<![\w.])" + chain, 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
+        # The boundary-maker exemplar: an alphanumeric fill FUSES a
+        # \b-pinned pump into one word and measures the pin as if it
+        # held — the guard-breaking fill (derived from the pin's own
+        # negated class) keeps every planted head a live attempt.
+        exponent, synthesized = _scan_oracle_classify(
+            r"\b\w[\w.]*\(", 0,
+        )
+        self.assertTrue(synthesized)
+        assert exponent is not None
+        self.assertGreaterEqual(exponent, _SUPERLINEAR_EXP)
+        exponent, _ = _scan_oracle_classify(r"\b\w[\w.]{0,32}\(", 0)
+        self.assertLess(exponent if exponent is not None else 1.0,
+                        _SUPERLINEAR_EXP)
 
     @pytest.mark.slow
     def test_nightly_oracle_agrees_with_pins(self) -> None:
