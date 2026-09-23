@@ -504,8 +504,30 @@ travels as a staged llm-config profile (`--llm-config raptor-<model>`,
 with the child's `XDG_CONFIG_HOME` pointed at a run-local merged copy
 of the operator's `~/.config/openant/config.json`), and the level as a
 command-line argument. OpenAnt itself runs as a sandboxed subprocess
-(`core.sandbox.context.run`). `ANTHROPIC_API_KEY` is forwarded (OpenAnt
-calls the Anthropic API).
+(`core.sandbox.context.run`).
+
+Child credential posture (direct wins; the gateway is the fallback,
+never a replacement): with a direct credential — `ANTHROPIC_API_KEY`
+in env, or a key-bearing `anthropic` provider entry (or legacy
+top-level `api_key`) in the operator's OpenAnt config.json — the key
+is forwarded and the child calls the Anthropic API itself (its env
+keeps the operator's proxy route for that egress). On a keyless host
+running under the RAPTOR LLM dispatcher (`RAPTOR_LLM_SOCKET` present),
+the scan instead mints a scoped dispatcher child token — model
+allowlist pinned to the run's model, TTL sized to the scan timeout,
+USD-budget- and request-capped — and stages a RAPTOR-owned
+`raptor-gateway` provider entry pointing at the dispatcher's loopback
+plane; the child then carries no provider credential and no proxy
+route at all. The gateway dials whichever front the dispatcher
+serves, following the install's routing signal the way proxy-mode CC
+children do: first-party API installs keep the integration's pinned
+catalog model ids, while `CLAUDE_CODE_USE_BEDROCK` installs ride the
+Bedrock Mantle leg with the install's own `ANTHROPIC_MODEL` pin
+(Mantle-normalized; the substitution is logged) — a Bedrock account
+serves what it is entitled to, not what a catalog id names. The token lives only inside the run-local staged config
+(scrubbed when the child exits) and is revoked server-side on every
+exit path; the spend it booked is written to
+`openant-gateway-spend.json` in the scan output directory.
 
 
 ## SAGE
