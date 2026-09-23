@@ -304,6 +304,91 @@ public class H {
         for pat in TRUST_BOUNDARY_SINKS:
             assert pat in origin, f"pattern drifted from origin rule: {pat}"
 
+    def test_xpath_blocks_match_origin_rule(self):
+        # The sixth mirrored family — its absence from this oracle
+        # refuted the module's "a sync test pins each pattern"
+        # totality claim while xpath drift stayed silent.
+        from packages.semgrep.source_wrapper_rules import XPATH_SINK_BLOCKS
+        origin = self._origin(
+            "engine/semgrep/rules/injection/xpath-taint.yaml",
+        )
+        for pat in self._pattern_strings(list(XPATH_SINK_BLOCKS)):
+            assert pat in origin, f"pattern drifted from origin rule: {pat}"
+
+    # -- mechanically-derived oracle universe --------------------------
+
+    # Every mirrored block constant and the origin rule file its
+    # patterns must appear in verbatim. The completeness test below
+    # DERIVES the constant list from the module, so a new mirrored
+    # family cannot be added without joining this map (the drift
+    # oracle's own universe was hand-picked and missed
+    # XPATH_SINK_BLOCKS at birth).
+    _ORIGIN_BY_CONSTANT = {
+        "XSS_SINKS": "engine/semgrep/rules/injection/xss.yaml",
+        "XSS_SANITIZERS": "engine/semgrep/rules/injection/xss.yaml",
+        "COLLECTION_PROPAGATORS":
+            "engine/semgrep/rules/injection/xss.yaml",
+        "XPATH_SINK_BLOCKS":
+            "engine/semgrep/rules/injection/xpath-taint.yaml",
+        "SQLI_SINKS": "engine/semgrep/rules/injection/sql-taint.yaml",
+        "SQLI_SINK_BLOCKS":
+            "engine/semgrep/rules/injection/sql-taint.yaml",
+        "TRUST_BOUNDARY_SINKS":
+            "engine/semgrep/rules/java/trust-boundary.yaml",
+    }
+
+    @staticmethod
+    def _pattern_strings(node):
+        """Every semgrep pattern / regex string reachable in a block
+        structure — plain strings, ``pattern`` values, propagator
+        ``pattern`` keys, and ``metavariable-regex`` regexes."""
+        if isinstance(node, str):
+            yield node
+        elif isinstance(node, dict):
+            for key, val in node.items():
+                if key == "pattern" and isinstance(val, str):
+                    yield val
+                elif key == "metavariable-regex":
+                    yield val["regex"]
+                elif key not in ("from", "to", "focus-metavariable"):
+                    yield from (
+                        TestSemgrepProjectionSync._pattern_strings(val)
+                    )
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                yield from TestSemgrepProjectionSync._pattern_strings(item)
+
+    def test_every_mirrored_block_constant_is_pinned(self):
+        """Universe completeness: every ALL-CAPS sequence constant in
+        the module must have an origin mapping here — a new mirrored
+        family without a sync pin fails this test instead of
+        drifting silently."""
+        from packages.semgrep import source_wrapper_rules as swr
+        mirrored = {
+            name for name, value in vars(swr).items()
+            if name.isupper() and isinstance(value, (list, tuple))
+        }
+        unpinned = mirrored - set(self._ORIGIN_BY_CONSTANT)
+        assert not unpinned, (
+            f"mirrored block constant(s) {sorted(unpinned)} have no "
+            f"origin mapping in _ORIGIN_BY_CONSTANT — add the mapping "
+            f"so the sync oracle covers them"
+        )
+        stale = set(self._ORIGIN_BY_CONSTANT) - mirrored
+        assert not stale, f"stale origin mapping(s): {sorted(stale)}"
+
+    def test_all_mirrored_blocks_match_their_origin(self):
+        """One derived walk over EVERY mirrored constant — the
+        per-family tests above stay as readable exhibits; this one
+        guarantees totality."""
+        from packages.semgrep import source_wrapper_rules as swr
+        for name, rel in self._ORIGIN_BY_CONSTANT.items():
+            origin = self._origin(rel)
+            for pat in self._pattern_strings(list(getattr(swr, name))):
+                assert pat in origin, (
+                    f"{name} pattern drifted from {rel}: {pat}"
+                )
+
     def test_generated_yaml_shape(self):
         from packages.semgrep.source_wrapper_rules import generate_rules_yaml
         s, _ = _summaries(_PKG + """
