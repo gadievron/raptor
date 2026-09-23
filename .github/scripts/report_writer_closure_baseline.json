@@ -307,6 +307,9 @@
     "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::label": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
+    "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::mem": {
+      "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; severity-vocabulary widening made the seed-record container visible; sanitise + register on next functional touch"
+    },
     "core/sage/scripts/seed_sage_knowledge.py::seed::unsanitised_llm_value::status": {
       "note": "dev-time script (subsystem scripts/ dir), operator-run over self-produced data; sanitise + register on next functional touch"
     },
@@ -315,9 +318,6 @@
     },
     "core/startup/init.py::_check_analyzer_capabilities::unsanitised_llm_value::gcc_ver": {
       "note": "gcc --version first line from the local trusted toolchain probe (safe_subprocess_env, no target input)"
-    },
-    "core/threat_model/__init__.py::prompt_context::unsanitised_llm_value::rendered": {
-      "note": "title/summary route through the module's _safe_for_render/escape_nonprintable discipline (helper names outside the audit vocabulary); prompt_context feeds an LLM prompt"
     },
     "core/understand_graph/queries.py::threat_model_graph_context::unsanitised_llm_value::entry": {
       "note": "builds the graph_context STRING from hostile-influenced node labels (scanned-tree file/function names, LLM hypothesis text); not itself a render sink \u2014 the prompt consumer rides the envelope and the raptor-graph-query terminal consumer escapes at its sink"

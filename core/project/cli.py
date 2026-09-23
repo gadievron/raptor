@@ -2240,7 +2240,9 @@ def _handle_threat_model(mgr, args: argparse.Namespace) -> None:
             # (LLM-refreshed fields) — terminal lane, escape at print.
             print(
                 "  - {severity}: {field}: {message}".format(
-                    severity=str(issue.get("severity", "info")).title(),
+                    severity=sanitise_for_terminal(
+                        str(issue.get("severity", "info")).title(),
+                        max_len=40),
                     field=sanitise_for_terminal(str(issue.get("field", "?")), max_len=120),
                     message=sanitise_for_terminal(str(issue.get("message", "")), max_len=500),
                 )
