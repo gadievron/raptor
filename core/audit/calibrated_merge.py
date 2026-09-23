@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -44,6 +43,8 @@ from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+from core.llm.scorecard.cwe import extract_cwe
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,9 @@ MIN_RELIABILITY_EVENTS = 5
 # prefer-positive rule, never by floating-point noise.
 _TIE_EPSILON = 1e-9
 
-_CWE_RE = re.compile(r"CWE-\d+", re.IGNORECASE)
+# CWE extraction shares one grammar with the audit:<CWE> writers
+# (core.llm.scorecard.cwe) — suffix spellings are routine in journal
+# rows, and a writer/reader grammar split silently un-joins the cells.
 
 # Statuses that cast a vote. dormant/error/unknown variants are kept in
 # the panel annotations but do not move the posterior.
@@ -104,10 +107,9 @@ def decision_class_for(variants: list[dict[str, Any]]) -> str:
     falls back to the catch-all audit review class.
     """
     for v in variants:
-        cwe = str(v.get("cwe") or v.get("cwe_class") or "")
-        m = _CWE_RE.search(cwe)
-        if m:
-            return f"{DECISION_CLASS_PREFIX}:{m.group(0).upper()}"
+        tag = extract_cwe(v.get("cwe") or v.get("cwe_class") or "")
+        if tag:
+            return f"{DECISION_CLASS_PREFIX}:{tag}"
     return DEFAULT_DECISION_CLASS
 
 
@@ -204,11 +206,10 @@ def _priors_from_journal_uncached(out_dir: Path) -> Mapping[str, Any]:
 
     counts: dict[str, list[int]] = {}
     for e in latest.values():
-        cwe = str(getattr(e, "cwe", "") or "")
-        m = _CWE_RE.search(cwe)
-        if not m:
+        tag = extract_cwe(getattr(e, "cwe", "") or "")
+        if not tag:
             continue
-        dc = f"{DECISION_CLASS_PREFIX}:{m.group(0).upper()}"
+        dc = f"{DECISION_CLASS_PREFIX}:{tag}"
         bucket = counts.setdefault(dc, [0, 0])
         verdict = (e.validate_verdict or "").strip().lower()
         if verdict in ("confirmed", "exploitable"):
