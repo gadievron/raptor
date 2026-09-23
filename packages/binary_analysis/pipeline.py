@@ -2031,6 +2031,12 @@ def analyse_blackbox_binary(
 
     save_json(out_dir / "binary-manifest.json", manifest.to_dict())
     save_json(out_dir / "binary-evidence.json", {"evidence": [record.to_dict() for record in evidence]})
+    # The map embeds its own evidence array for self-containment —
+    # refresh it with the records minted AFTER _context_map built the
+    # initial list (external ingress, runtime-parser flows, parser
+    # boundaries), or the map's *_candidates[].evidence_ids dangle
+    # within the same document until a later append rewrites it.
+    context_map["evidence"] = [record.to_dict() for record in evidence]
     _stamp_context_map(context_map)
     save_context_map(out_dir / "binary-context-map.json", context_map)
     save_context_map(out_dir / "context-map.json", context_map)

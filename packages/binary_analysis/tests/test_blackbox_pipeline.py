@@ -970,3 +970,49 @@ def test_analysis_scope_lanes_escaped(tmp_path: Path) -> None:
     assert "Analysis Scope" in text
     for raw in ("\x1b", "\x07", "\x9b"):
         assert raw not in text
+
+
+def test_analyse_path_context_map_evidence_is_self_contained(tmp_path: Path) -> None:
+    """Every evidence id referenced from the map's candidate arrays
+    must resolve within the map's OWN embedded evidence list on the
+    analyse path — records minted after _context_map (external
+    ingress, runtime-parser flows, parser boundaries) previously
+    reached binary-evidence.json but dangled inside the document
+    until a later append rewrote it."""
+    binary = _write_binary(tmp_path / "sample", b"\x7fELF" + b"\x00" * 128)
+    out = tmp_path / "out"
+    ctx = BinaryContextMap(
+        binary_path=binary,
+        arch="x86",
+        bits=64,
+        binary_format="elf",
+        analysis_depth="full",
+    )
+    ctx.imports = ["recv", "read", "fopen"]
+
+    with patch("packages.binary_analysis.pipeline.analyse_binary_context", return_value=ctx):
+        result = analyse_blackbox_binary(binary, out_dir=out)
+
+    context_map = json.loads((out / "binary-context-map.json").read_text())
+    embedded_ids = {
+        item.get("id") for item in context_map.get("evidence", [])
+        if isinstance(item, dict)
+    }
+    # Whole-document parity with the sidecar first.
+    sidecar = json.loads((out / "binary-evidence.json").read_text())
+    sidecar_ids = {item.get("id") for item in sidecar["evidence"]}
+    assert embedded_ids == sidecar_ids
+    # And no candidate's evidence_ids dangle within the document.
+    for key in (
+        "external_ingress_candidates",
+        "parser_boundary_candidates",
+        "sources",
+    ):
+        for candidate in context_map.get(key, []) or []:
+            if not isinstance(candidate, dict):
+                continue
+            for evidence_id in candidate.get("evidence_ids", []) or []:
+                assert evidence_id in embedded_ids, (
+                    f"{key} references {evidence_id} missing from the "
+                    "map's embedded evidence")
+    assert result.context_map["evidence"] == context_map["evidence"]
