@@ -9,6 +9,9 @@ It keeps the substrate mechanical:
 - ``runtime`` is an explicit Frida run.
 - ``harness`` turns one evidence-backed ingress into a harness plan.
 - ``fuzz`` is an explicit handoff to the existing fuzz workflow.
+- ``corpus`` profiles a directory of input samples with byte
+  statistics only — it never parses a sample semantically and never
+  executes anything.
 - ``graph`` / ``report`` / ``handoff`` are read-only views.
 - ``diagram`` is a derived view too, but writes ``diagrams.md`` into
   the run dir by default (``--stdout`` prints instead; ``--force``
@@ -44,6 +47,12 @@ from core.json import load_json, save_json
 from core.run.metadata import complete_run, fail_run, start_run
 from core.run.output import TargetMismatchError, get_output_dir
 
+from packages.binary_analysis.corpus_profile import (
+    CorpusProfileOptions,
+    DEFAULT_MAX_BYTES_PER_SAMPLE,
+    DEFAULT_MAX_SAMPLES,
+    profile_corpus,
+)
 from packages.binary_analysis.investigation import write_investigation
 from packages.binary_analysis.harness import generate_binary_harness
 from packages.binary_analysis.manifest import BinaryManifest
@@ -59,6 +68,7 @@ _COMMANDS = {
     "runtime",
     "trace-parser",
     "harness",
+    "corpus",
     "fuzz",
     "graph",
     "report",
@@ -134,6 +144,22 @@ def _build_parser() -> argparse.ArgumentParser:
     harness_p.add_argument("--device", help="Operator-supplied device path for ioctl harnesses")
     harness_p.add_argument("--ioctl-code", help="Operator-supplied ioctl/control code, for example 0x222003")
     harness_p.add_argument("--json", action="store_true", help="Emit compact JSON")
+
+    corpus_p = sub.add_parser(
+        "corpus",
+        help="Profile a directory of input samples (byte statistics only; no parsing, no execution)",
+    )
+    corpus_p.add_argument("samples_dir", help="Directory of input samples harvested for the target")
+    corpus_p.add_argument("--family", help="Only profile samples whose relative path matches this glob")
+    corpus_p.add_argument(
+        "--max-samples", type=_positive_int, default=DEFAULT_MAX_SAMPLES,
+        help=f"Maximum samples to profile (default: {DEFAULT_MAX_SAMPLES})",
+    )
+    corpus_p.add_argument(
+        "--max-bytes-per-sample", type=_positive_int, default=DEFAULT_MAX_BYTES_PER_SAMPLE,
+        help=f"Per-sample read cap in bytes (default: {DEFAULT_MAX_BYTES_PER_SAMPLE})",
+    )
+    corpus_p.add_argument("--out", help="Explicit output directory")
 
     fuzz_p = sub.add_parser("fuzz", help="Hand off to RAPTOR's existing fuzz workflow")
     fuzz_p.add_argument("target", help="Binary to fuzz")
@@ -700,6 +726,86 @@ def _run_trace_parser(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_corpus_summary(profile: dict[str, Any]) -> None:
+    summary = profile["summary"]
+    artifacts = profile["artifacts"]
+    print("Mode: corpus")
+    print("Models: none (mechanical byte statistics)")
+    print(
+        f"Samples: {summary['samples_profiled']} profiled of "
+        f"{summary['samples_seen']} seen | families={summary['family_count']}"
+    )
+    # Family keys embed extension/name-template characters from
+    # attacker-chosen sample filenames — same terminal scrub as the
+    # investigation summaries.
+    _sft = sanitise_for_terminal
+    for family in profile["families"][:5]:
+        size_fields = len(family["size_field_candidates"])
+        print(
+            f"  - {_sft(str(family['id']), max_len=16)} "
+            f"{_sft(str(family['key']), max_len=80)}: "
+            f"{family['sample_count']} samples, "
+            f"endianness={family['endianness_vote']}, "
+            f"entropy={family['entropy']['classification']}, "
+            f"size_fields={size_fields}, "
+            f"tlv={family['tlv']['likelihood']}"
+        )
+    if summary["caps_hit"]:
+        print(f"Caps hit: {', '.join(summary['caps_hit'])}")
+    print(f"Seeds: {artifacts['seed_count']} in {artifacts['seed_dir']}")
+    if artifacts["fuzz_dict"]:
+        print(f"Dictionary: {artifacts['fuzz_dict']} ({artifacts['dict_entries']} tokens)")
+    print(f"Profile: {artifacts['profile_json']}")
+    print(f"Report: {artifacts['report']}")
+
+
+def _run_corpus(args: argparse.Namespace) -> int:
+    samples_dir = Path(args.samples_dir).expanduser().resolve()
+    if not samples_dir.is_dir():
+        print(f"raptor-binary: samples dir is not a directory: {samples_dir}", file=sys.stderr)
+        return 2
+    try:
+        out_dir = get_output_dir(
+            "understand",
+            target_name=samples_dir.name,
+            explicit_out=args.out,
+            target_path=str(samples_dir),
+        )
+    except TargetMismatchError as exc:
+        print(f"raptor-binary: {exc}", file=sys.stderr)
+        return 2
+
+    from core.project.oplock import OpLockContention
+    from core.run.pin import ProjectArgvError
+    try:
+        start_run(out_dir, "understand", target=str(samples_dir))
+    except (OpLockContention, ProjectArgvError) as e:
+        print(f"raptor-binary: {e}", file=sys.stderr)
+        return 1
+    try:
+        profile = profile_corpus(CorpusProfileOptions(
+            samples_dir=samples_dir,
+            out_dir=out_dir,
+            family_glob=args.family,
+            max_samples=args.max_samples,
+            max_bytes_per_sample=args.max_bytes_per_sample,
+        ))
+        complete_run(out_dir)
+    except KeyboardInterrupt:
+        fail_run(out_dir, "corpus profiling interrupted")
+        raise
+    except Exception as exc:  # noqa: BLE001 - operator-facing clean failure
+        # Exception text can echo hostile sample paths — same
+        # terminal-grade scrub as the sibling subcommands.
+        fail_run(out_dir, f"corpus profiling failed: {type(exc).__name__}: "
+                          f"{sanitise_for_terminal(str(exc), max_len=300)}")
+        print(f"raptor-binary: corpus failed: {type(exc).__name__}: "
+              f"{sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
+        return 1
+    _print_corpus_summary(profile)
+    return 0
+
+
 def _run_fuzz(args: argparse.Namespace) -> int:
     target = Path(args.target).expanduser().resolve()
     cmd = [
@@ -846,6 +952,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_trace_parser(args)
     if args.command == "harness":
         return _run_harness(args)
+    if args.command == "corpus":
+        return _run_corpus(args)
     if args.command == "fuzz":
         return _run_fuzz(args)
     if args.command == "graph":
