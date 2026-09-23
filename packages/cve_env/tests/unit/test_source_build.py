@@ -304,13 +304,13 @@ def test_read_dockerfile_caps_at_64kib(tmp_path: Path) -> None:
     huge = tmp_path / "Dockerfile"
     huge.write_text("X" * (128 * 1024))
     builder = SourceBuilder()
-    text = builder._read_dockerfile(huge)
+    text = builder._read_dockerfile(huge, tmp_path)
     assert text is not None
     assert len(text) == 64 * 1024
 
-def test_read_dockerfile_none_when_path_none() -> None:
+def test_read_dockerfile_none_when_path_none(tmp_path: Path) -> None:
     builder = SourceBuilder()
-    assert builder._read_dockerfile(None) is None
+    assert builder._read_dockerfile(None, tmp_path) is None
 
 def test_find_devcontainer_image_jsonc_tolerant(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
@@ -1610,40 +1610,33 @@ def test_download_tarball_skips_topdir_dotdot_and_foreign_members(
 
 # -- _read_dockerfile OSError (665-666) ------------------------------------
 
-def test_read_dockerfile_oserror_returns_none(tmp_path: Path) -> None:
-    """Lines 665-666: a read that raises OSError (e.g. a directory, or perms) →
-    None rather than propagating."""
+def test_read_dockerfile_refuses_non_regular_file(tmp_path: Path) -> None:
+    """The fd-disciplined read refuses non-regular files (fstat on the
+    OPENED fd, O_NONBLOCK so a reader-less FIFO cannot hang the build)
+    and unreadable files degrade to None rather than propagating."""
+    import os
+
     builder = SourceBuilder()
-    a_dir = tmp_path / "Dockerfile"
-    a_dir.mkdir()  # reading a directory as text raises OSError
-    assert builder._read_dockerfile(a_dir) is None
+    fifo = tmp_path / "Dockerfile"
+    os.mkfifo(fifo)
+    assert builder._read_dockerfile(fifo, tmp_path) is None
 
 # -- _find_devcontainer_image branches (687-688, 694-695, 699) -------------
 
-def test_find_devcontainer_image_read_oserror_continues(tmp_path: Path) -> None:
-    """Lines 687-688: an OSError reading the first devcontainer location is
-    swallowed (``continue``); a readable second location still wins."""
+def test_find_devcontainer_image_unreadable_candidate_continues(
+    tmp_path: Path,
+) -> None:
+    """An unreadable first devcontainer location is swallowed
+    (``continue``) rather than propagating — the fd-disciplined read
+    refuses a non-regular candidate (FIFO) and the loop moves on."""
+    import os
+
     repo = tmp_path / "repo"
     (repo / ".devcontainer").mkdir(parents=True)
-    # First candidate (.devcontainer/devcontainer.json) is a DIRECTORY → is_file()
-    # is False, so it's skipped at the is_file gate. To force the read-OSError
-    # branch we instead make the root .devcontainer.json a directory after the
-    # first is_file passes — simplest: stub read_text to raise once.
-    df = repo / ".devcontainer" / "devcontainer.json"
-    df.write_text('{"image": "img:tag"}')
-    real_read = Path.read_text
-    calls = {"n": 0}
-
-    def flaky_read(self: Path, *a: Any, **k: Any) -> str:
-        if self == df and calls["n"] == 0:
-            calls["n"] += 1
-            raise OSError("transient")
-        return real_read(self, *a, **k)
-
-    with patch.object(Path, "read_text", flaky_read):
-        builder = SourceBuilder()
-        # Only one candidate is readable-but-raises → loop continues → returns None.
-        assert builder._find_devcontainer_image(repo) is None
+    os.mkfifo(repo / ".devcontainer" / "devcontainer.json")
+    builder = SourceBuilder()
+    # Only candidate is present-but-unreadable → continue → None.
+    assert builder._find_devcontainer_image(repo) is None
 
 def test_find_devcontainer_image_invalid_json_returns_none(tmp_path: Path) -> None:
     """Lines 694-695: malformed JSON (even after JSONC stripping) → None."""
@@ -1854,3 +1847,121 @@ class TestCodeloadTagShape:
         builder = sb.SourceBuilder()
         assert builder._download_tarball("owner", "repo", "v1.2.3+build", tmp_path) is False
         assert seen["url"].endswith("/tar.gz/refs/tags/v1.2.3%2Bbuild")
+
+
+# -- clone-path symlink containment (parity with tarball filter="data") ----
+
+
+def test_find_dockerfile_rejects_symlink_escaping_repo(tmp_path: Path) -> None:
+    """A committed ``Dockerfile -> <host path>`` materialises verbatim on
+    clone; following it would disclose host file content into the LLM
+    context and the audit JSONL. The tarball path refuses this class via
+    ``extract(filter="data")`` — the clone path must refuse it too."""
+    secret = tmp_path / "hostsecret.txt"
+    secret.write_text("SECRET-HOST-CONTENT: fake-credential-abc123\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "Dockerfile").symlink_to(secret)
+    builder = SourceBuilder()
+    assert builder._find_dockerfile(repo) is None
+
+
+def test_read_dockerfile_rejects_symlink_escaping_repo(tmp_path: Path) -> None:
+    secret = tmp_path / "hostsecret.txt"
+    secret.write_text("SECRET-HOST-CONTENT: fake-credential-abc123\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    link = repo / "Dockerfile"
+    link.symlink_to(secret)
+    builder = SourceBuilder()
+    assert builder._read_dockerfile(link, repo) is None
+
+
+def test_find_dockerfile_rejects_rglob_symlink_escape(tmp_path: Path) -> None:
+    """The rglob fallback lane must apply the same containment vet."""
+    secret = tmp_path / "hostsecret.txt"
+    secret.write_text("SECRET\n")
+    repo = tmp_path / "repo"
+    (repo / "sub").mkdir(parents=True)
+    (repo / "sub" / "Containerfile").symlink_to(secret)
+    builder = SourceBuilder()
+    assert builder._find_dockerfile(repo) is None
+
+
+def test_find_dockerfile_rejects_symlinked_parent_escape(tmp_path: Path) -> None:
+    """Containment is checked on the RESOLVED path, so a symlinked parent
+    directory pointing outside the repo is refused as well."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "Dockerfile").write_text("FROM alpine")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "docker").symlink_to(outside)
+    builder = SourceBuilder()
+    assert builder._find_dockerfile(repo) is None
+
+
+def test_find_dockerfile_allows_in_repo_symlink(tmp_path: Path) -> None:
+    """Parity with ``filter="data"``: links that RESOLVE inside the repo
+    stay usable (repos legitimately alias their canonical Dockerfile)."""
+    repo = tmp_path / "repo"
+    (repo / "docker").mkdir(parents=True)
+    real = repo / "docker" / "Dockerfile"
+    real.write_text("FROM alpine")
+    (repo / "Dockerfile").symlink_to(real)
+    builder = SourceBuilder()
+    found = builder._find_dockerfile(repo)
+    assert found == repo / "Dockerfile"
+    assert builder._read_dockerfile(found, repo) == "FROM alpine"
+
+
+def test_find_devcontainer_image_rejects_symlink_escape(tmp_path: Path) -> None:
+    secret = tmp_path / "settings.json"
+    secret.write_text('{"image": "attacker/steered:1"}')
+    repo = tmp_path / "repo"
+    (repo / ".devcontainer").mkdir(parents=True)
+    (repo / ".devcontainer" / "devcontainer.json").symlink_to(secret)
+    builder = SourceBuilder()
+    assert builder._find_devcontainer_image(repo) is None
+
+
+def test_find_build_config_rejects_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path / "pom.xml"
+    outside.write_text("<project/>")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "pom.xml").symlink_to(outside)
+    builder = SourceBuilder()
+    assert builder._find_build_config(repo) is None
+
+
+def test_read_dockerfile_refuses_post_vet_symlink_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vet-to-read TOCTOU: a target swapped to a host-pointing symlink
+    AFTER the containment vet passes must still be refused — the read
+    opens with O_NOFOLLOW and checks the opened fd, so winning the race
+    against a by-name re-check is not enough."""
+    secret = tmp_path / "hostsecret.txt"
+    secret.write_text("SECRET-HOST-CONTENT: fake-credential-abc123\n")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    dockerfile = repo / "Dockerfile"
+    dockerfile.write_text("FROM alpine")
+
+    real_vet = SourceBuilder._contained_repo_file
+
+    def vet_then_swap(repo_dir: Path, path: Path) -> Path | None:
+        vetted = real_vet(repo_dir, path)
+        if vetted is not None and path == dockerfile:
+            path.unlink()
+            path.symlink_to(secret)
+        return vetted
+
+    monkeypatch.setattr(
+        SourceBuilder, "_contained_repo_file", staticmethod(vet_then_swap)
+    )
+    builder = SourceBuilder()
+    text = builder._read_dockerfile(dockerfile, repo)
+    assert text is None or "SECRET-HOST-CONTENT" not in text
+    assert text is None
