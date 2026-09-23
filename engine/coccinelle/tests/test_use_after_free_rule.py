@@ -185,3 +185,70 @@ class TestNegatives:
             }
         """)
         assert results == []
+
+
+class _FakeVocab:
+    def __init__(self, deallocators: frozenset) -> None:
+        self.deallocators = deallocators
+
+
+class TestVocabRendered:
+    """Behavioural pins for the vocab-rendered form.
+
+    The report-script ``_safe`` suppression set spans multiple lines;
+    a line-bound splice left it seed-only while the SmPL trigger
+    alternations DID learn the project deallocator — so a learned
+    ``my_free(o)`` after ``kfree(o)`` was reported as use-after-free
+    (a double-free shape the seed design deliberately routes away
+    from this rule), mislabelled, on every vocabulary-bearing audit.
+    """
+
+    def _run_rendered(
+        self, tmp_path: Path, rendered: Path, source: str,
+    ) -> list[dict]:
+        src = tmp_path / "target.c"
+        src.write_text(textwrap.dedent(source), encoding="utf-8")
+        proc = subprocess.run(  # noqa: S603 — fixed local binary, fixture input
+            ["spatch", "--sp-file", str(rendered), str(src),
+             "--no-show-diff"],
+            capture_output=True, text=True, timeout=120,
+        )
+        results = []
+        for stream in (proc.stdout, proc.stderr):
+            for line in stream.splitlines():
+                if line.startswith("COCCIRESULT:"):
+                    results.append(json.loads(line[len("COCCIRESULT:"):]))
+        return results
+
+    def test_learned_deallocator_joins_the_safe_set(self, tmp_path):
+        from engine.coccinelle.vocab_renderer import render
+
+        vocab = _FakeVocab(deallocators=frozenset({"my_project_free"}))
+        rendered = render(_RULE, vocab)
+        assert rendered is not None
+        try:
+            # A learned deallocator call after kfree is a DOUBLE-FREE
+            # shape, not a use-after-free — the seed design routes it
+            # away from this rule (kvfree after kfree stays silent),
+            # and the learned lane must inherit that routing.
+            silent = self._run_rendered(tmp_path, rendered, """\
+                void teardown(struct s *o)
+                {
+                    kfree(o);
+                    my_project_free(o);
+                }
+            """)
+            assert silent == []
+            # Control: a genuine use through a non-deallocator still
+            # fires under the rendered rule.
+            fires = self._run_rendered(tmp_path, rendered, """\
+                void bug(struct s *o)
+                {
+                    kfree(o);
+                    consume(o);
+                }
+            """)
+            assert len(fires) == 1
+            assert fires[0]["line"] == 4
+        finally:
+            rendered.unlink()

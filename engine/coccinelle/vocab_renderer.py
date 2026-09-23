@@ -8,7 +8,8 @@ Supported constructs (auto-detected from the line after the marker):
 
 * **Inline alternation** ``\(a\|b\)`` — appends ``\|name`` entries.
 * **Identifier list** ``identifier fn = {a, b, ...};`` — appends names.
-* **Python set literal** ``{"a", "b", ...}`` — appends ``"name"`` entries.
+* **Python set literal** ``{"a", "b", ...}`` — appends ``"name"``
+  entries; the literal may span multiple lines.
 * **when-clause block** ``when != func(`` — inserts extra ``when !=`` lines.
 * **Multi-line disjunction** ``(`` block with ``// @vocab-tmpl:`` —
   inserts new ``|`` entries from the template (``%s`` = name).
@@ -110,15 +111,41 @@ def _extend_identifier_list(line: str, names: frozenset[str]) -> str:
     return line.replace("};", f", {extra}}};", 1)
 
 
-def _extend_python_set(line: str, names: frozenset[str]) -> str:
-    """Extend ``{"a", "b", ...}`` with extra quoted names."""
+def _extend_python_set(
+    lines: list[str], start: int, names: frozenset[str],
+) -> tuple[list[str], int, bool]:
+    """Extend a ``{"a", "b", ...}`` set literal with extra quoted names.
+
+    The literal may span multiple lines (the stock rules' report-script
+    suppression sets do) — scan forward to the line carrying the
+    closing ``}`` like ``_extend_when_block`` scans its block, and
+    insert the new entries before it.  Returns ``(replacement lines,
+    source lines consumed, changed)``.
+    """
+    close_idx = None
+    for i in range(start, len(lines)):
+        if i > start and (
+            _MARKER_RE.match(lines[i]) or _TMPL_RE.match(lines[i])
+        ):
+            # Ran into the next marker before any closing brace: the
+            # literal is malformed — refuse the splice, keep the next
+            # marker scannable, and let the dead-splice witness make
+            # the refusal loud.
+            break
+        if "}" in lines[i]:
+            close_idx = i
+            break
+    if close_idx is None:
+        return [lines[start]], 1, False
+    consumed = close_idx - start + 1
     if not names:
-        return line
+        return list(lines[start : start + consumed]), consumed, False
     extra = ", ".join(f'"{n}"' for n in sorted(names))
-    idx = line.rfind("}")
-    if idx < 0:
-        return line
-    return line[:idx] + ", " + extra + line[idx:]
+    closing = lines[close_idx]
+    idx = closing.rfind("}")
+    block = list(lines[start:close_idx])
+    block.append(closing[:idx] + ", " + extra + closing[idx:])
+    return block, consumed, True
 
 
 def _extend_when_block(
@@ -209,6 +236,28 @@ def _extend_disjunction(
     )
 
 
+def _warn_if_dead(
+    rule_path: Path, bucket_name: str, names: frozenset[str],
+    changed: bool,
+) -> None:
+    """Witness a dead splice slot.
+
+    A ``@vocab`` marker with a non-empty vocabulary that produced no
+    textual change means the construct after the marker was not
+    recognised or never grew — the learned lane is seed-only with
+    zero diagnostics otherwise (the unknown-bucket warning only covers
+    bucket-name typos, not effect-free splices).
+    """
+    if names and not changed:
+        logger.warning(
+            "@vocab marker for bucket %r in %s produced no extension "
+            "— the construct after the marker was not recognised or "
+            "never grew; this splice slot is DEAD (seed names only) "
+            "on every vocabulary-bearing audit",
+            bucket_name, rule_path.name,
+        )
+
+
 def render(rule_path: Path, vocab: Any) -> Path | None:
     """Render a ``.cocci`` rule with vocab extensions.
 
@@ -238,6 +287,12 @@ def render(rule_path: Path, vocab: Any) -> Path | None:
         names = _get_bucket(vocab, bucket_name)
         out.append(lines[i])
         i += 1
+        # Per-marker witness: a marker with non-empty names whose
+        # construct never changed is a dead splice slot — the learned
+        # lane is silently seed-only forever. The warning is the only
+        # runtime witness (rendering must keep degrading gracefully);
+        # the render-validity oracle promotes it to a CI failure.
+        changed = False
 
         tmpl_match = _TMPL_RE.match(lines[i].rstrip()) if i < len(lines) else None
         if tmpl_match:
@@ -254,42 +309,49 @@ def render(rule_path: Path, vocab: Any) -> Path | None:
                 # asymmetric splice that minted findings on
                 # project-vocabulary code.
                 block, consumed = _extend_disjunction(lines, i, tmpl, names)
-                if len(block) != consumed:
+                changed = len(block) != consumed
+                if changed:
                     modified = True
                 out.extend(block)
                 i += consumed
+                _warn_if_dead(rule_path, bucket_name, names, changed)
                 continue
 
-        if i >= len(lines):
-            break
+        if i < len(lines):
+            line = lines[i]
+            stripped = line.strip()
 
-        line = lines[i]
-        stripped = line.strip()
+            if r"\(" in stripped and r"\)" in stripped:
+                new_line = _extend_alternation(line, names)
+                changed = new_line != line
+                out.append(new_line)
+                i += 1
+            elif stripped.startswith("identifier") and "= {" in stripped:
+                new_line = _extend_identifier_list(line, names)
+                changed = new_line != line
+                out.append(new_line)
+                i += 1
+            elif '= {"' in stripped or ('= {' in stripped and '"' in stripped):
+                block, consumed, changed = _extend_python_set(
+                    lines, i, names,
+                )
+                out.extend(block)
+                i += consumed
+            elif "when !=" in stripped:
+                # Same scanning rule as the disjunction branch: extend
+                # only the when-clause block and resume after it, so
+                # later markers in the file still get processed.
+                block, consumed = _extend_when_block(lines, i, names)
+                changed = len(block) != consumed
+                out.extend(block)
+                i += consumed
+            else:
+                out.append(line)
+                i += 1
 
-        if r"\(" in stripped and r"\)" in stripped:
-            out.append(_extend_alternation(line, names))
-            modified = modified or bool(names)
-            i += 1
-        elif stripped.startswith("identifier") and "= {" in stripped:
-            out.append(_extend_identifier_list(line, names))
-            modified = modified or bool(names)
-            i += 1
-        elif '= {"' in stripped or ('= {' in stripped and '"' in stripped):
-            out.append(_extend_python_set(line, names))
-            modified = modified or bool(names)
-            i += 1
-        elif "when !=" in stripped:
-            # Same scanning rule as the disjunction branch: extend only
-            # the when-clause block and resume after it, so later
-            # markers in the file still get processed.
-            block, consumed = _extend_when_block(lines, i, names)
-            if len(block) != consumed:
-                modified = True
-            out.extend(block)
-            i += consumed
-        else:
-            out.append(line)
-            i += 1
+        if changed:
+            modified = True
+        _warn_if_dead(rule_path, bucket_name, names, changed)
 
     if not modified:
         return None
