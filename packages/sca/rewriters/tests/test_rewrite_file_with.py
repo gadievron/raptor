@@ -52,7 +52,7 @@ def test_read_failure_fails_every_edit(tmp_path: Path):
     results = rewrite_file_with(f, [_edit("a"), _edit("b")], _replace_apply_one)
     assert len(results) == 2
     assert all(not r.applied for r in results)
-    assert all(r.reason.startswith("error: read failed") for r in results)
+    assert all(r.reason.startswith("error: read refused") for r in results)
 
 
 def test_write_failure_fails_only_applied_edits(tmp_path: Path, monkeypatch):
@@ -99,3 +99,46 @@ def test_rewriter_modules_share_the_single_write_path() -> None:
         and "atomic_fs" in p.read_text(encoding="utf-8")
     )
     assert offenders == []
+
+
+def test_symlinked_manifest_is_refused(tmp_path: Path):
+    """A symlinked rewrite target must not be read THROUGH the link:
+    out-of-tree content otherwise reached the evolving text and was
+    echoed into operator-facing ``value_mismatch`` reason strings.
+    Scan and fix are separate invocations — the rewrite side cannot
+    assume the parse side vetted the same path."""
+    real = tmp_path / "outside.props"
+    real.write_text("pkg=OUT-OF-TREE-9.9.9\n", encoding="utf-8")
+    link = tmp_path / "Directory.Packages.props"
+    link.symlink_to(real)
+    results = rewrite_file_with(link, [_edit("pkg")], _replace_apply_one)
+    assert [r.applied for r in results] == [False]
+    assert results[0].reason.startswith("error: read refused")
+    # The linked-to content stayed out of the verdict.
+    assert "OUT-OF-TREE" not in results[0].reason
+
+
+def test_oversize_manifest_is_refused(tmp_path: Path):
+    """A manifest over the parsers' read cap fails every edit with a
+    loud refusal instead of being buffered whole."""
+    from packages.sca.parsers._safe_read import _MAX_PARSER_BYTES
+
+    big = tmp_path / "big.props"
+    with big.open("w", encoding="utf-8") as fh:
+        fh.write("pkg=1.0\n")
+        fh.seek(_MAX_PARSER_BYTES + 1)
+        fh.write("x")
+    results = rewrite_file_with(big, [_edit("pkg")], _replace_apply_one)
+    assert [r.applied for r in results] == [False]
+    assert results[0].reason.startswith("error: read refused")
+
+
+def test_crlf_manifest_keeps_lf_view(tmp_path: Path):
+    """The bounded reader returns raw text; the driver restores the
+    historical text-mode view (CRLF read as LF) so the recorded
+    write-side newline behaviour is unchanged."""
+    p = tmp_path / "win.props"
+    p.write_bytes(b"pkg=1.0\r\nother=3.0\r\n")
+    results = rewrite_file_with(p, [_edit("pkg")], _replace_apply_one)
+    assert [r.applied for r in results] == [True]
+    assert p.read_bytes() == b"pkg=2.0\nother=3.0\n"
