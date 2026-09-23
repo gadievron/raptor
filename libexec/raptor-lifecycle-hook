@@ -224,10 +224,10 @@ def main():
         #
         # Two-tier emit: stderr breadcrumb (one short line, won't
         # spam interactive sessions because legitimate Claude Code
-        # invocations always find the ancestor) + non-zero exit
-        # code 0 (the hook ran successfully — there was just
-        # nothing to do; failing here would surface in Claude Code
-        # as a hook error and confuse the operator).
+        # invocations always find the ancestor) + exit code 0 (the
+        # hook ran successfully — there was just nothing to do;
+        # exiting non-zero here would surface in Claude Code as a
+        # hook error and confuse the operator).
         sys.stderr.write(
             f"raptor-lifecycle-hook[{event}]: no claude-code ancestor "
             f"in pid tree from pid {os.getpid()}; nothing to do\n"
