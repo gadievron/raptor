@@ -173,6 +173,64 @@ def test_drain_stops_when_grandchild_chatters_after_target_exit(
     assert result["drained"][out_r].startswith(b"x"), "no bytes collected"
 
 
+def test_drain_detects_exit_when_deadline_shorter_than_poll_interval():
+    """A caller deadline SHORTER than the idle poll interval must not
+    outrun exit detection.
+
+    Pre-fix the liveness probe ran on a time schedule (first probe one
+    full ``_DRAIN_IDLE_POLL_S`` in — 30s in production), so with a
+    sub-interval deadline the drain broke at the deadline with the
+    target's exit never observed, and the caller then reported a
+    target that exited 0 immediately as TimeoutExpired. The probe now
+    runs on every wake; the production poll interval is deliberately
+    NOT shrunk here.
+    """
+    out_r, out_w = os.pipe()
+    child = _spawn_child(f"import os; os.write({out_w}, b'hello')", out_w)
+    # Parent deliberately KEEPS out_w open — the backgrounded-
+    # grandchild shape that holds the pipe past the target's exit.
+    try:
+        time.sleep(0.3)  # let the target exit
+        t0 = time.monotonic()
+        drained = mod._drain_pipes_until_eof(
+            (out_r,), child.pid, deadline=time.monotonic() + 5.0,
+        )
+        elapsed = time.monotonic() - t0
+        assert drained[out_r] == b"hello"
+        # Post-fix the probe sees the exit on the first wake and the
+        # bounded final sweep ends the drain immediately; pre-fix the
+        # drain slept out the whole 5s deadline. Generous margin —
+        # the pin is "exit detected long before the deadline".
+        assert elapsed < 2.5, (
+            "drain waited out the caller deadline on an "
+            "already-exited target"
+        )
+    finally:
+        os.close(out_w)
+        os.close(out_r)
+        child.wait(timeout=10)
+
+
+def test_exited_zero_target_with_grandchild_is_not_a_timeout(tmp_path):
+    """End-to-end: run_landlock_audit must report the target's real
+    exit (rc 0, stdout intact) when a backgrounded grandchild holds
+    the stdio write ends past the caller's deadline — never mint
+    TimeoutExpired for a target that exited in time. Mirrors _spawn's
+    exited-target exemption on the audit lane."""
+    from core.sandbox.ptrace_probe import check_ptrace_available
+    from core.sandbox.seccomp import check_seccomp_available
+    if not (check_ptrace_available() and check_seccomp_available()):
+        pytest.skip("ptrace/libseccomp unavailable")
+    result = mod.run_landlock_audit(
+        ["/bin/sh", "-c", "echo hello; sleep 5 & exit 0"],
+        audit_run_dir=str(tmp_path),
+        timeout=2.0,
+        capture_output=True,
+    )
+    assert result.returncode == 0
+    assert "hello" in (result.stdout or "")
+
+
 def test_drain_respects_deadline(monkeypatch):
     """A live-but-silent child must not pin the drain past the
     caller's deadline — the caller kills and raises TimeoutExpired."""
