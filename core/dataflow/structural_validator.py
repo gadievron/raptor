@@ -204,31 +204,76 @@ def _extract_graph(content: str, language: str) -> FileCallGraph | None:
         return None
 
 
+def _enclosing_function_state(
+    line: int,
+    graph: FileCallGraph,
+    content: str,
+    language: str,
+) -> tuple[str | None, bool]:
+    """Enclosing-function name for ``line`` plus whether the two
+    attribution sources agree on it.
+
+    The name comes from call sites' caller field when a call on the
+    line carries one, else from ``extract_functions`` spans.
+    ``resolved`` is False when the sources DIVERGE — the span names a
+    function but the graph attributes calls inside that span to no
+    caller at all (the arrow-function / extractor-gap shape: the span
+    extractor sees ``const run = (x) => {…}`` as function ``run``
+    while the call-graph extractor tags its calls ``caller=None``) —
+    or when span extraction itself failed, leaving "module level"
+    indistinguishable from "could not tell".  An unresolved
+    attribution must never ground a broken-link refutation: filtering
+    ``graph.calls`` by a caller name the graph never uses finds
+    vacuous emptiness, not evidence.
+    """
+    callers_at = [c.caller for c in graph.calls
+                  if c.caller and c.line == line]
+    if callers_at:
+        # The graph itself speaks for this line, and the link check
+        # filters on the same vocabulary — self-consistent by
+        # construction.
+        return callers_at[0], True
+
+    span_name: str | None = None
+    span_lo = span_hi = 0
+    extraction_ok = True
+    try:
+        from core.inventory.extractors import extract_functions
+        funcs = extract_functions("<structural-validator>", language, content)
+        for f in funcs:
+            if f.line_start <= line and (f.line_end is None or line <= f.line_end):
+                span_name = f.name
+                span_lo = f.line_start
+                span_hi = f.line_end if f.line_end is not None else line
+                break
+    except Exception:
+        logger.debug("function-at-line lookup failed", exc_info=True)
+        extraction_ok = False
+    if span_name is None:
+        # Module level is trustworthy only when extraction actually
+        # ran; a failed extractor conflates "module level" with
+        # "unknown".
+        return None, extraction_ok
+    # Calls inside the span attributed to a NAMED caller (this
+    # function, or a nested named function) are legitimate graph
+    # vocabulary; caller-less calls inside a span the extractor says
+    # belongs to ``span_name`` are the divergence signal.
+    unattributed_in_span = any(
+        c.caller is None and span_lo <= c.line <= span_hi
+        for c in graph.calls
+    )
+    return span_name, not unattributed_in_span
+
+
 def _find_enclosing_function(
     line: int,
     graph: FileCallGraph,
     content: str,
     language: str,
 ) -> str | None:
-    """Find the function name enclosing a given line number.
-
-    Uses call sites' caller field as a hint, then falls back to
-    function extraction.
-    """
-    callers_at = [c.caller for c in graph.calls
-                  if c.caller and c.line == line]
-    if callers_at:
-        return callers_at[0]
-
-    try:
-        from core.inventory.extractors import extract_functions
-        funcs = extract_functions("<structural-validator>", language, content)
-        for f in funcs:
-            if f.line_start <= line and (f.line_end is None or line <= f.line_end):
-                return f.name
-    except Exception:
-        logger.debug("function-at-line lookup failed", exc_info=True)
-    return None
+    """Enclosing-function name only (see
+    :func:`_enclosing_function_state` for the agreement flag)."""
+    return _enclosing_function_state(line, graph, content, language)[0]
 
 
 def _check_call_link(
@@ -236,11 +281,20 @@ def _check_call_link(
     to_func: str | None,
     graph: FileCallGraph,
     cross_file: bool = False,
+    attribution_resolved: bool = True,
 ) -> tuple[bool | None, bool]:
     """Check if from_func calls to_func via the call graph.
 
     Returns (link_found, has_indirection).
     link_found: True=confirmed, False=refuted, None=inconclusive.
+
+    ``attribution_resolved=False`` (either endpoint's enclosing-
+    function attribution diverged between the span extractor and the
+    call graph — see :func:`_enclosing_function_state`) downgrades a
+    would-be refutation to inconclusive: the emptiness of a filter
+    keyed on a name the graph never uses is not evidence that the
+    call chain is broken.  Positive matches still count — a found
+    edge is a found edge.
     """
     if not to_func:
         return None, False
@@ -298,6 +352,9 @@ def _check_call_link(
         return None, True
 
     if cross_file:
+        return None, False
+
+    if not attribution_resolved:
         return None, False
 
     return False, False
@@ -448,8 +505,11 @@ def validate_structurally(
             continue
 
         func_name = None
+        func_resolved = True
         if graph and lang:
-            func_name = _find_enclosing_function(line, graph, content, lang)
+            func_name, func_resolved = _enclosing_function_state(
+                line, graph, content, lang,
+            )
 
         sanitizer_calls = []
         if graph:
@@ -477,27 +537,26 @@ def validate_structurally(
             cross_file = next_resolved is not None and str(next_resolved) != cache_key
 
             next_func = None
-            if next_resolved and str(next_resolved) in file_cache:
-                next_content, next_lang, next_graph = file_cache[str(next_resolved)]
-                next_line = next_step.get("line", 0) or 0
-                if next_graph and next_lang and next_content:
-                    next_func = _find_enclosing_function(
-                        next_line, next_graph, next_content, next_lang,
-                    )
-            elif next_resolved:
+            next_func_resolved = True
+            if next_resolved and str(next_resolved) not in file_cache:
                 next_content = _read_file_content(next_resolved)
                 next_lang = language or detect_language(str(next_resolved))
                 next_graph = _extract_graph(next_content, next_lang) if next_content and next_lang else None
                 file_cache[str(next_resolved)] = (next_content, next_lang, next_graph)
+            if next_resolved:
+                next_content, next_lang, next_graph = file_cache[str(next_resolved)]
                 next_line = next_step.get("line", 0) or 0
                 if next_graph and next_lang and next_content:
-                    next_func = _find_enclosing_function(
+                    next_func, next_func_resolved = _enclosing_function_state(
                         next_line, next_graph, next_content, next_lang,
                     )
 
             if graph:
                 call_link, has_indirection = _check_call_link(
                     func_name, next_func, graph, cross_file=cross_file,
+                    attribution_resolved=(
+                        func_resolved and next_func_resolved
+                    ),
                 )
 
         verifications.append(StepVerification(
@@ -599,7 +658,11 @@ def _compute_verdict(
 
     return StructuralResult(
         verdict="inconclusive",
-        reasoning=f"Mixed call chain evidence: {', '.join(parts)}",
+        reasoning=(
+            f"Mixed call chain evidence: {', '.join(parts)}" if parts
+            else "No call link could be resolved (caller attribution "
+                 "ambiguous or no graph evidence)"
+        ),
         evidence=evidence,
         sanitizers=sanitizers,
         path_conditions=path_conditions,
