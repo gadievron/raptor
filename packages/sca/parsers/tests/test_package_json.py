@@ -252,3 +252,20 @@ def test_npm_malformed_scope_target_stays_unknown(tmp_path: Path) -> None:
     assert d.version is None
     assert d.purl == "pkg:npm/x"
     assert d.pin_style is PinStyle.UNKNOWN
+
+
+def test_all_digit_bare_version_is_exact_not_git(tmp_path):
+    """"1234567" is hex-shaped but far likelier a bare version than a
+    commit that spells only digits — a git classification suppressed
+    the EXACT pin (and its registry lookup) for a real version."""
+    p = tmp_path / "package.json"
+    p.write_text(
+        '{"dependencies": {"leftpad": "1234567", '
+        '"pinned": "deadbeefcafe"}}',
+        encoding="utf-8",
+    )
+    deps = {d.name: d for d in parse(p)}
+    assert deps["leftpad"].pin_style is PinStyle.EXACT
+    assert deps["leftpad"].version == "1234567"
+    # A sha with hex letters keeps the git classification.
+    assert deps["pinned"].pin_style is PinStyle.GIT
