@@ -788,3 +788,17 @@ class TestMakeDefaultDatabaseCrossCheck:
         # A row for a name the database no longer references is stale.
         for name in self._ADJUDICATED_OUT:
             assert name not in CREDENTIAL_EXEC_REDIRECT_ENV_VARS, name
+
+
+class TestPassphraseSegment:
+    def test_passphrase_names_are_credential_shaped(self):
+        from core.security.credential_env import is_credential_shaped
+        assert is_credential_shaped("GPG_PASSPHRASE")
+        assert is_credential_shaped("SSH_KEY_PASSPHRASE")
+        assert is_credential_shaped("passphrase")
+
+    def test_non_segment_words_stay_benign(self):
+        from core.security.credential_env import is_credential_shaped
+        # Segment-exact: PASSPHRASE inside a larger word is no match.
+        assert not is_credential_shaped("PASSPHRASEBOOK_PATH")
+        assert not is_credential_shaped("MY_PHRASE")

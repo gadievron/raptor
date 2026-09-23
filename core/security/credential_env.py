@@ -1088,6 +1088,10 @@ _CREDENTIAL_NAME_SEGMENTS: frozenset[str] = frozenset({
     "SECRET", "SECRETS",
     "CREDENTIAL", "CREDENTIALS",
     "PASSWORD", "PASSWORDS", "PASSWD",
+    # GPG_PASSPHRASE-class names: the passphrase IS the credential
+    # (armours a key at rest); no common tooling knob collides with
+    # the segment.
+    "PASSPHRASE",
 })
 
 # Documented benign operator knobs whose names collide with the
