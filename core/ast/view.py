@@ -388,8 +388,11 @@ def _ts_grammar_module(language: str):
 # minimum the regex is the right precision/cost trade-off; a future
 # revision can switch to a tree-sitter ``gnu_asm_statement`` walk if
 # false positives surface in real corpora.
+# The optional qualifier gates its own trailing whitespace — the
+# naive ``\s*(?:volatile|goto)?\s*`` put two whitespace spans
+# around it, quadratic on an asm token followed by a whitespace run.
 _ASM_PATTERN = re.compile(
-    r"\b(__asm__|__asm|asm)\b\s*(?:volatile|goto)?\s*[(]",
+    r"\b(__asm__|__asm|asm)\b\s*(?:(?:volatile|goto)\s*)?[(]",
 )
 
 
