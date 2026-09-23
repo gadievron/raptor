@@ -892,3 +892,47 @@ class TestDeclaredLocallyDerefStore:
 
     def test_multi_declarator_star_still_counts(self):
         assert self._risk("int f(void) { int a, *g; ") is None
+
+
+class TestTreeWalk:
+    """_walk_tree_entries streams the tree; it must visit exactly
+    rglob("*")'s entry set (symlinked dirs yielded, never descended)
+    and survive hostile nesting depth without recursion."""
+
+    def test_visitation_set_matches_rglob(self, tmp_path):
+        from core.audit.api_boundary import _walk_tree_entries
+
+        (tmp_path / "a").mkdir()
+        (tmp_path / "a" / "x.c").write_text("int x;\n")
+        (tmp_path / "a.c").write_text("int a;\n")
+        (tmp_path / "b" / "c").mkdir(parents=True)
+        (tmp_path / "b" / "c" / "y.h").write_text("int y;\n")
+        outside = tmp_path.parent / f"{tmp_path.name}-outside"
+        outside.mkdir()
+        (outside / "hidden.c").write_text("int h;\n")
+        (tmp_path / "link").symlink_to(outside)
+        walked = set(_walk_tree_entries(tmp_path))
+        assert walked == set(tmp_path.rglob("*"))
+        # the symlinked dir itself is an entry; its contents are not
+        assert (tmp_path / "link") in walked
+        assert not any(p.name == "hidden.c" for p in walked)
+
+    def test_deep_nesting_does_not_recurse(self, tmp_path):
+        from core.audit.api_boundary import _walk_tree_entries
+
+        d = tmp_path
+        for _ in range(600):
+            d = d / "d"
+        d.mkdir(parents=True)
+        (d / "leaf.c").write_text("int z;\n")
+        names = [p.name for p in _walk_tree_entries(tmp_path)]
+        assert names.count("leaf.c") == 1
+
+    def test_name_sorted_within_directory(self, tmp_path):
+        from core.audit.api_boundary import _walk_tree_entries
+
+        for name in ("b.c", "a.c", "c.c"):
+            (tmp_path / name).write_text("x\n")
+        assert [p.name for p in _walk_tree_entries(tmp_path)] == [
+            "a.c", "b.c", "c.c",
+        ]

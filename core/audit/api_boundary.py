@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import bisect
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -689,6 +690,43 @@ def _looks_like_decl_or_def(line: str, function_name: str) -> bool:
     )) or bool(re.match(rf"\s*#\s*define\s+{re.escape(function_name)}\b", line))
 
 
+def _walk_tree_entries(root):
+    """Streaming, name-sorted DFS over the tree.
+
+    Yields every entry (files, dirs, symlinks); symlinked directories
+    are yielded but never descended — exactly ``rglob("*")``'s
+    visitation set. Replaces ``sorted(root.rglob("*"))``, which
+    materialised the WHOLE tree before any scan cap could apply: the
+    caps bound scanning, not the walk, so a huge hostile tree cost
+    the full listing (memory + time) on every call. Explicit stack —
+    repo-shaped nesting must not recurse. Ordering is deterministic
+    name-sorted DFS; it differs from the old full-path lexicographic
+    sort only in dir-vs-file interleaving, observable only past a
+    scan cap.
+    """
+    work: list[tuple[bool, str]] = []
+
+    def _push_children(d: str) -> None:
+        try:
+            with os.scandir(d) as it:
+                entries = sorted(it, key=lambda e: e.name, reverse=True)
+        except OSError:
+            return
+        for e in entries:
+            try:
+                descend = e.is_dir(follow_symlinks=False)
+            except OSError:
+                descend = False
+            work.append((descend, e.path))
+
+    _push_children(str(root))
+    while work:
+        descend, path = work.pop()
+        yield Path(path)
+        if descend:
+            _push_children(path)
+
+
 def _scan_file_for_calls(
     path: Path,
     rel: str,
@@ -918,9 +956,10 @@ def enumerate_call_sites_with_report(
             report["method"] = "call-graph"
             return sites, report
 
-    # Fallback: bounded tree scan.
+    # Fallback: bounded tree scan (streaming walk — see
+    # _walk_tree_entries).
     scanned = 0
-    for path in sorted(target_path.rglob("*")):
+    for path in _walk_tree_entries(target_path):
         if scanned >= _MAX_SCAN_FILES:
             report["scan_capped"] = True
             break
@@ -1391,7 +1430,7 @@ def address_taken_occurrences(
     capped = False
     size_skipped = 0
     from .source_view import sanitized_view
-    for path in sorted(target_path.rglob("*")):
+    for path in _walk_tree_entries(target_path):
         if scanned >= _MAX_SCAN_FILES:
             capped = True
             break

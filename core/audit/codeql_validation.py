@@ -79,6 +79,12 @@ def _validate_identifier(name: str, label: str) -> None:
         raise ValueError(msg)
 
 
+def _codeql_base_name(name: str) -> str:
+    """The unqualified, template-arg-free form CodeQL's ``getName()``
+    reports (`ns::f<T>` -> `f`, `f<T>::g` -> `g`)."""
+    return name.rsplit("::", 1)[-1].split("<", 1)[0]
+
+
 def generate_taint_query(claim: DataflowClaim, *, language: str = "cpp") -> str:
     """Generate a targeted CodeQL taint-tracking query for a claim.
 
@@ -94,8 +100,12 @@ def generate_taint_query(claim: DataflowClaim, *, language: str = "cpp") -> str:
         msg = f"unsupported language for CodeQL validation: {language}"
         raise ValueError(msg)
 
-    source_fn = claim.source_function
-    sink_fn = claim.sink_function
+    # CodeQL's getName() is unqualified and template-arg-free: a
+    # qualified (`ns::f`) or template (`f<T>`) spelling interpolated
+    # verbatim can never equal it, so every such claim came back a
+    # vacuous confirmed=False.
+    source_fn = _codeql_base_name(claim.source_function)
+    sink_fn = _codeql_base_name(claim.sink_function)
 
     return f"""\
 /**

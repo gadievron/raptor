@@ -647,18 +647,37 @@ def _run_query(server: Any, query: str) -> list | None:
 
 
 def _split_scala_items(text: str) -> list:
-    """Split comma-separated items, respecting double-quoted strings."""
+    """Split comma-separated items, respecting double-quoted strings.
+
+    Backslash escapes inside strings are honoured like
+    :func:`_extract_list_literal` beside it — a Scala-escaped ``\\"``
+    in an element (an identifier echoed with a quote) must not toggle
+    the string state and shear every later element at the wrong
+    comma.
+    """
     items: list[str] = []
     current: list[str] = []
     in_quotes = False
+    escaped = False
     for ch in text:
-        if ch == '"' and not in_quotes:
+        if escaped:
+            escaped = False
+            current.append(ch)
+            continue
+        if in_quotes:
+            if ch == "\\":
+                escaped = True
+                current.append(ch)
+                continue
+            if ch == '"':
+                in_quotes = False
+                continue
+            current.append(ch)
+            continue
+        if ch == '"':
             in_quotes = True
             continue
-        if ch == '"' and in_quotes:
-            in_quotes = False
-            continue
-        if ch == ',' and not in_quotes:
+        if ch == ',':
             items.append("".join(current).strip())
             current = []
             continue

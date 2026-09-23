@@ -72,6 +72,14 @@ _COMPOSABLE_PAIRS: dict[tuple, str] = {
 # Maximum length for multi-step chains (transitive composition).
 _MAX_CHAIN_LENGTH = 5
 
+# Cap on multi-step chains minted per run. Raising it grows
+# attack-chains.json and the report section on combinatorial targets
+# (the extension explores subsets of composable findings); lowering
+# it drops lower-ranked chains a large genuine run would keep.
+# Uncapped, a hostile-shaped group blew memory/time and the consumer
+# converted the blowup into a loud failure that lost the artifact.
+_MAX_MULTI_CHAINS = 128
+
 # Output→input type compatibility for chain step stitching.
 # Maps (output_primitive, input_primitive) to a description of the data
 # flowing between them.  A pair NOT in this table is a type mismatch.
@@ -357,7 +365,9 @@ def synthesize_chains(
         "attacker synthesis: %d chains from %d findings "
         "(%d confirmed, %d hypothetical, %d multi-step)",
         len(chains),
-        sum(len(g) for g in groups),
+        # Distinct findings — one finding in two entry-point groups
+        # is still one finding.
+        len({idx for g in groups for idx in g}),
         sum(1 for c in chains if c.chain_status == "confirmed"),
         sum(1 for c in chains if c.chain_status == "hypothetical"),
         sum(1 for c in chains if len(c.finding_keys) > 2),
@@ -478,6 +488,13 @@ def _build_multi_step_chains(
             if out_kind != tail_prim.kind:
                 continue
             for candidate_idx in kind_to_indices.get(in_kind, []):
+                if len(multi_chains) >= _MAX_MULTI_CHAINS:
+                    logger.warning(
+                        "attacker synthesis: multi-step chain cap "
+                        "(%d) reached — further extensions dropped",
+                        _MAX_MULTI_CHAINS,
+                    )
+                    return multi_chains, chain_counter
                 if candidate_idx in current:
                     continue  # no cycles
                 extended = current + [candidate_idx]
@@ -676,20 +693,24 @@ def _find_reachable_entries(
         callee_key = f"{callee_file}:{edge.get('callee', '')}"
         callers_of.setdefault(callee_key, set()).add(caller_key)
 
-    reachable = []
+    reachable: list[str] = []
     visited: set[str] = set()
-
-    def _walk_callers(k: str) -> None:
+    # Explicit stack, not recursion: the caller graph is repo-derived,
+    # and a deep chain blows the interpreter recursion limit
+    # (condition_extraction's walker was converted for exactly this).
+    # Reverse-sorted extension reproduces the sorted DFS order.
+    stack = [key]
+    while stack:
+        k = stack.pop()
         if k in visited:
-            return
+            continue
         visited.add(k)
         if k in ep_names:
             reachable.append(k)
-            return
-        for caller in sorted(callers_of.get(k, ())):
-            _walk_callers(caller)
-
-    _walk_callers(key)
+            if len(reachable) >= 5:
+                break
+            continue
+        stack.extend(sorted(callers_of.get(k, ()), reverse=True))
     return reachable[:5]
 
 

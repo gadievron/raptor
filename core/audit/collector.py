@@ -599,7 +599,10 @@ class Collector:
 
         try:
             self._flush_audit_log()
-        except (OSError, TypeError, ValueError):
+        except Exception:  # noqa: BLE001 — "never raises" must be exception-total:
+            # flush runs from end-of-run paths and the SIGTERM hook,
+            # where an uncaught row-shape surprise would take the
+            # whole shutdown path down with it.
             logger.warning(
                 "audit-log flush failed — %d buffered entries retained "
                 "for the next flush",

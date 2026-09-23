@@ -268,3 +268,25 @@ class TestFormatForPrompt:
         )]
         text = format_block_sibling_findings_for_prompt(findings)
         assert "CHECK" not in text
+
+
+class TestElseIfWhitespaceNormalisation:
+    def test_tab_separated_else_if_keeps_the_chain(self):
+        # `else\s+if` admits any whitespace run; the chain comparison
+        # used literal spellings, so `else\tif` broke the chain and
+        # the group was lost.
+        from core.audit.block_sibling_analysis import (
+            _collect_branches_regex,
+        )
+
+        src = (
+            "func handle(x int) {\n"
+            "if (x == 1) {\n    a()\n}\n"
+            "else\tif (x == 2) {\n    b()\n}\n"
+            "else\tif (x == 3) {\n    c()\n}\n"
+            "else {\n    d()\n}\n"
+            "}\n"
+        )
+        groups = _collect_branches_regex("f.go", src)
+        assert groups, "tab-separated else-if chain must group"
+        assert len(groups[0][2]) >= 3

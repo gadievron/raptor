@@ -88,6 +88,7 @@ from .api_boundary import (
     _MAX_FILE_BYTES,
     _MAX_SCAN_FILES,
     _MAX_WINDOW_LINE_CHARS,
+    _walk_tree_entries,
     _SOURCE_SUFFIXES,
     _balanced_span,
     _scan_file_for_calls,
@@ -326,7 +327,7 @@ def _scan_tree_for_visibility(
         re.IGNORECASE,
     )
     scanned = 0
-    for path in sorted(target_path.rglob("*")):
+    for path in _walk_tree_entries(target_path):
         if scanned >= _MAX_SCAN_FILES:
             return f"tree scan hit its {_MAX_SCAN_FILES}-file cap"
         if ".git" in path.parts:

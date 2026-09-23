@@ -18,25 +18,22 @@ class _FakeLLMClient:
     def __init__(self):
         self.total_cost = 0.0
         self.model_name = "stub-model"
-        # Mirrors LLMClient's per-class cost history — synthesis cost
-        # attribution reads the checker_synthesis class delta (the
-        # shared budget client's total_cost moves with every
-        # concurrent call class).
-        self._call_cost_history: dict = {}
-
-    def note(self, cost, call_class="checker_synthesis"):
-        n, total = self._call_cost_history.get(call_class, (0, 0.0))
-        self._call_cost_history[call_class] = (n + 1, total + cost)
-        self.total_cost += cost
 
 
 def _fake_llm_pair(monkeypatch, cost_per_call=0.05):
-    """Patch _build_llm_callable to a stub pair; return the client."""
+    """Patch _build_llm_callable to a stub pair; return the client.
+
+    Cost attribution contract: the CALLABLE accumulates its own
+    calls' spend on ``cost_usd`` (per-callable attribution — reading
+    the shared client's per-class history cross-attributed concurrent
+    synthesis callers).
+    """
     client = _FakeLLMClient()
 
     def _callable(prompt, schema, system_prompt):
-        client.note(cost_per_call)
+        _callable.cost_usd += cost_per_call
 
+    _callable.cost_usd = 0.0
     monkeypatch.setattr(
         "core.audit.checker_synthesis._build_llm_callable",
         lambda config: (_callable, client),
@@ -65,8 +62,11 @@ def _cs_result(
 
 def _stub_synthesise(monkeypatch, cs, client=None, cost=0.05):
     def _run(seed, **kwargs):
-        if client is not None:
-            client.note(cost)
+        # The real engine's LLM calls route through the callable,
+        # which accumulates its own spend.
+        llm = kwargs.get("llm")
+        if llm is not None and hasattr(llm, "cost_usd"):
+            llm.cost_usd += cost
         return cs
 
     monkeypatch.setattr(

@@ -238,3 +238,14 @@ class TestWriteMatrix:
         data = json.loads(path.read_text())
         assert "cells" in data
         assert "summary" in data
+
+
+class TestManifestShapeTolerance:
+    def test_scalar_manifest_yields_no_bugs(self, tmp_path):
+        # A scalar JSON manifest previously escaped as
+        # AttributeError ('str' has no .get).
+        from core.audit.adversarial_test import load_planted_bugs
+
+        p = tmp_path / "m.json"
+        p.write_text('"just a string"')
+        assert load_planted_bugs(p) == []

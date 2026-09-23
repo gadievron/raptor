@@ -1199,16 +1199,15 @@ def _gather_source_texts(
     own = read_contained(target, file_path, max_chars=_MAX_FILE_BYTES)
     if own is not None:
         texts[file_path] = own
-    try:
-        paths = sorted(
-            p for p in target.rglob("*")
-            if p.is_file() and p.suffix in _SOURCE_SUFFIXES
-        )
-    except OSError:
-        return texts
-    for p in paths:
+    # Streaming walk (see api_boundary._walk_tree_entries): the old
+    # sorted-rglob materialised the whole tree before the cap.
+    from .api_boundary import _walk_tree_entries
+
+    for p in _walk_tree_entries(target):
         if len(texts) >= _MAX_SCAN_FILES:
             break
+        if not p.is_file() or p.suffix not in _SOURCE_SUFFIXES:
+            continue
         try:
             rel = str(p.relative_to(target))
         except ValueError:

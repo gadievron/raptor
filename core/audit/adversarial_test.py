@@ -272,7 +272,18 @@ def load_planted_bugs(manifest_path: Path) -> list[PlantedBug]:
     if data is None:  # manifest vanished between is_file() and the read
         return []
 
-    items = data if isinstance(data, list) else data.get("bugs", [])
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        items = data.get("bugs", [])
+    else:
+        # A scalar manifest (corrupted / hand-edited JSON) previously
+        # escaped as AttributeError.
+        logger.debug(
+            "planted-bug manifest %s is not a list or object — ignored",
+            manifest_path,
+        )
+        return []
     bugs = []
     for item in items:
         try:

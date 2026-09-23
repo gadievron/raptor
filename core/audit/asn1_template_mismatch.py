@@ -103,6 +103,15 @@ def scan_source(file_path: str, source: str) -> list[Asn1Mismatch]:
     """Scan one C translation unit for template/access mismatches."""
     if "ASN1_TYPE_cmp" not in source:
         return []
+    # Comments/string literals are blanked (offsets preserved) before
+    # matching: a commented-out template entry or access site must
+    # not mint a detection-grade lead (boost-only, but leads steer
+    # review attention).
+    from .source_view import sanitized_view
+
+    source = sanitized_view(source, file_path)
+    if "ASN1_TYPE_cmp" not in source:
+        return []
     templates = _template_types(source)
     if not templates:
         return []

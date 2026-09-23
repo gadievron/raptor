@@ -520,3 +520,27 @@ class TestNegatedGuardPolarity:
         assert len(sink_guards) == 1
         res = assess_guard_adequacy("memcpy", sink_guards[0].guards)
         assert res.verdict == Adequacy.INSUFFICIENT, res.to_dict()
+
+
+class TestZeroComparandNotAnUpperBound:
+    """`len >= 0` / `0 <= len` negate to `len < 0` — a sign check,
+    never upper-bound protection; counting it was a narrow FP path
+    into SUFFICIENT, whose consumer skips review."""
+
+    def test_zero_comparand_excluded_both_spellings(self):
+        from core.audit.condition_adequacy import (
+            _has_negated_upper_bound_comparison as neg,
+        )
+        assert not neg("len >= 0")
+        assert not neg("0 <= len")
+        assert not neg("len > 0")
+
+    def test_real_bounds_still_match(self):
+        from core.audit.condition_adequacy import (
+            _has_negated_upper_bound_comparison as neg,
+        )
+        assert neg("len >= limit")
+        assert neg("len >= 64")
+        assert neg("5 <= len")
+        assert neg("buf[i] >= size")
+        assert neg("len >= 0x80")

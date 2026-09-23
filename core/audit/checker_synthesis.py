@@ -14,6 +14,7 @@ and ``OrchestratorConfig`` types to the substrate's ``SeedBug`` /
 from __future__ import annotations
 
 import logging
+import threading
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -139,17 +140,6 @@ def _hypothesis_self_classified_refuted(
     return all(_refuted(h) for h in entries)
 
 
-def _synthesis_class_cost(client: Any) -> float:
-    """Completed-call spend recorded for the checker_synthesis class.
-
-    The budget client is shared across audit phases, so deltas must be
-    read from the per-class history rather than ``total_cost`` (which
-    moves with every concurrent call class)."""
-    hist = getattr(client, "_call_cost_history", None) or {}
-    entry = hist.get("checker_synthesis")
-    return float(entry[1]) if entry else 0.0
-
-
 def _build_llm_callable(config: Any):
     """Build a ``packages.checker_synthesis.LLMCallable`` from /audit's
     LLM config. Returns ``(callable, client)`` or None when no LLM is
@@ -185,6 +175,11 @@ def _build_llm_callable(config: Any):
     # rather than reporting refusal-shaped "no synthesis" as success.
     from core.llm.client import AuthFailureTracker
     auth_tracker = AuthFailureTracker("checker-synthesis")
+    # Per-callable spend accumulator: each phase driver builds its own
+    # callable, so summing THIS callable's per-call costs attributes
+    # spend exactly. (Reading the shared budget client's per-class
+    # history cross-attributed concurrent synthesis callers' spend.)
+    cost_lock = threading.Lock()
 
     def _call(prompt: str, schema: dict[str, Any], system_prompt: str):
         from core.security.prompt_framing import with_audit_framing
@@ -193,7 +188,7 @@ def _build_llm_callable(config: Any):
             # skip the network round trip; the phase driver raises.
             return None
         try:
-            data, _full = client.generate_structured(
+            resp = client.generate_structured(
                 prompt=prompt,
                 schema=schema,
                 # Audit-purpose framing at the audit boundary — the
@@ -210,6 +205,9 @@ def _build_llm_callable(config: Any):
                 # this call class before it completes.
                 timeout_s=SYNTHESIS_TIMEOUT_S,
             )
+            data, _raw = resp
+            with cost_lock:
+                _call.cost_usd += float(getattr(resp, "cost", 0.0) or 0.0)
             auth_tracker.note_success()
             return data
         except Exception as exc:  # noqa: BLE001 — any transport failure degrades to no-synthesis
@@ -218,6 +216,7 @@ def _build_llm_callable(config: Any):
             return None
 
     _call.auth_tracker = auth_tracker
+    _call.cost_usd = 0.0
     return _call, client
 
 
@@ -428,7 +427,6 @@ def synthesize_and_sweep(
     if llm_pair is None:
         return None
     llm_callable, llm_client = llm_pair
-    cost_before = _synthesis_class_cost(llm_client)
 
     out_dir = getattr(config, "out_dir", None)
     target_path = getattr(config, "target_path", None)
@@ -596,7 +594,7 @@ def synthesize_and_sweep(
         origin_file=file_path,
         origin_function=function,
         hits=new_hits,
-        cost_usd=_synthesis_class_cost(llm_client) - cost_before,
+        cost_usd=float(getattr(llm_callable, "cost_usd", 0.0)),
         dual_control=bool(cs_result.dual_control),
         rule_tier=getattr(cs_result, "rule_tier", "sweep_once"),
     )
@@ -640,7 +638,6 @@ def synthesize_from_external_seed(
     if llm_pair is None:
         return None
     llm_callable, llm_client = llm_pair
-    cost_before = _synthesis_class_cost(llm_client)
 
     positive = getattr(ext_seed, "positive_fixture", None)
     negative = getattr(ext_seed, "negative_fixture", None)
@@ -703,7 +700,7 @@ def synthesize_from_external_seed(
         origin_file=seed.file,
         origin_function=seed.function,
         hits=hits,
-        cost_usd=_synthesis_class_cost(llm_client) - cost_before,
+        cost_usd=float(getattr(llm_callable, "cost_usd", 0.0)),
         dual_control=bool(cs_result.dual_control),
         rule_tier=getattr(cs_result, "rule_tier", "sweep_once"),
     )
@@ -892,7 +889,6 @@ def synthesize_verification_rule(
     if llm_pair is None:
         return None
     llm_callable, llm_client = llm_pair
-    cost_before = _synthesis_class_cost(llm_client)
 
     try:
         from packages.checker_synthesis import SeedBug
@@ -928,10 +924,10 @@ def synthesize_verification_rule(
         )
         return OnDemandSynthesisResult(
             cwe=seed.cwe,
-            cost_usd=_synthesis_class_cost(llm_client) - cost_before,
+            cost_usd=float(getattr(llm_callable, "cost_usd", 0.0)),
         )
 
-    cost = _synthesis_class_cost(llm_client) - cost_before
+    cost = float(getattr(llm_callable, "cost_usd", 0.0))
     if cs.rule is None:
         logger.debug(
             "on-demand synthesis: no rule produced for %s:%s (errors: %s)",

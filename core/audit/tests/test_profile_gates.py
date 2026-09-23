@@ -411,10 +411,6 @@ def _synthesis_patches():
                 pkg, "synthesise_with_refinement",
                 return_value=SimpleNamespace(rule=None, errors=[]),
             ))
-            stack.enter_context(patch(
-                "core.audit.checker_synthesis._synthesis_class_cost",
-                return_value=0.0,
-            ))
             yield {
                 "library": library,
                 "sage_replay": sage_replay,

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import partial
 from itertools import islice
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ from typing import Any
 from core.json import load_json
 from core.paths import confine
 from core.security.prompt_envelope import neutralize_tag_forgery, wrap_untrusted
+
+from .run_memo import BoundedMemo
 
 logger = logging.getLogger(__name__)
 
@@ -586,7 +589,9 @@ _KERNEL_SOURCE_MARKERS = (
 #: Keyed (target_path, relative file path) — the relative path alone
 #: collides across targets in one process (a kernel verdict from one
 #: run bled into the next target's identically-named file).
-_kernel_file_cache: dict[tuple[str, str], bool] = {}
+# Bounded + thread-safe (per-key in-flight collapse): concurrent
+# review workers raced the bare dict's check-then-set.
+_kernel_file_cache: "BoundedMemo[bool]" = BoundedMemo(2048)
 
 
 def _file_has_kernel_markers(ctx: dict[str, Any]) -> bool:
@@ -599,20 +604,25 @@ def _file_has_kernel_markers(ctx: dict[str, Any]) -> bool:
     """
     fp = ctx.get("file", "")
     cache_key = (str(ctx.get("target_path") or ""), fp)
-    cached = _kernel_file_cache.get(cache_key)
-    if cached is not None:
-        return cached
-    result = True
-    target = ctx.get("target_path")
-    if target:
-        full = _safe_path(Path(target), fp)
-        if full is not None and full.is_file():
-            text = _read_target_text(full)
-            if text is not None:
-                head = text[:4096]
-                result = any(m in head for m in _KERNEL_SOURCE_MARKERS)
-    _kernel_file_cache[cache_key] = result
-    return result
+
+    def _compute() -> bool:
+        result = True
+        target = ctx.get("target_path")
+        if target:
+            full = _safe_path(Path(target), fp)
+            if full is not None and full.is_file():
+                text = _read_target_text(full)
+                if text is not None:
+                    head = text[:4096]
+                    result = any(
+                        m in head for m in _KERNEL_SOURCE_MARKERS
+                    )
+        return result
+
+    value, _cached = _kernel_file_cache.get_or_compute(
+        cache_key, _compute,
+    )
+    return value
 
 
 def _is_kernel_c(ctx: dict[str, Any]) -> bool:
@@ -2835,7 +2845,10 @@ def _resolve_types(
     return results
 
 
-_header_cache: dict[str, list[Path]] = {}
+# Bounded + thread-safe (per-key in-flight collapse): concurrent
+# review workers raced the bare dict's check-then-set and re-walked
+# the tree in parallel.
+_header_cache: "BoundedMemo[list[Path]]" = BoundedMemo(16)
 
 
 def _admissible_header(target_path: Path, header: Path) -> bool:
@@ -2882,13 +2895,13 @@ def _find_headers(target_path: Path, source_file: str) -> list[Path]:
             )
 
     cache_key = str(target_path)
-    all_headers = _header_cache.get(cache_key)
-    if all_headers is None:
-        all_headers = [
+    all_headers, _cached = _header_cache.get_or_compute(
+        cache_key,
+        lambda: [
             h for h in sorted(islice(target_path.rglob("*.h"), 1000))
             if _admissible_header(target_path, h)
-        ]
-        _header_cache[cache_key] = all_headers
+        ],
+    )
 
     for h in all_headers:
         if h not in headers:
@@ -4048,6 +4061,11 @@ def _resolve_macros(
         return []
 
 
+# Extension → PATTERN-FILE key (tiers/patterns/<key>.md), not the
+# inventory language: pattern files exist at coarser granularity, so
+# the whole C/C++ family shares c.md and TypeScript shares
+# javascript.md. Divergences from core.inventory.languages are
+# deliberate and pinned by test_language_map_alignment.
 _LANG_PATTERN_EXT_MAP = {
     ".c": "c", ".h": "c",
     ".cpp": "c", ".cc": "c", ".cxx": "c", ".hpp": "c", ".hxx": "c",
@@ -4175,8 +4193,10 @@ _TRIGGER_KEYWORDS: dict[str, list[str]] = {
 }
 
 _PATTERNS_DIR = Path(__file__).resolve().parent / "patterns"
-_patterns_cache: dict[str, Any] = {}
-_pattern_file_cache: dict[str, list[tuple]] = {}
+# Bounded + thread-safe (per-key in-flight collapse): concurrent
+# review workers raced the bare dicts' check-then-set.
+_patterns_cache: "BoundedMemo[dict[str, Any] | None]" = BoundedMemo(32)
+_pattern_file_cache: "BoundedMemo[list[tuple]]" = BoundedMemo(32)
 
 _PATTERN_HEADING_RE = re.compile(r"^## \d+\.\s+(.+)$", re.MULTILINE)
 
@@ -4232,62 +4252,60 @@ def _load_language_patterns(
 
     cache_key = lang_key if not source else None
 
-    if cache_key and cache_key in _patterns_cache:
-        return _patterns_cache[cache_key]
+    def _compute() -> dict[str, Any] | None:
+        all_patterns: list[tuple] = []
+        for name in ("common", lang_key):
+            pats, _cached = _pattern_file_cache.get_or_compute(
+                name, partial(_load_pattern_file, name),
+            )
+            all_patterns.extend(pats)
 
-    all_patterns: list[tuple] = []
-    for name in ("common", lang_key):
-        cached_pats = _pattern_file_cache.get(name)
-        if cached_pats is not None:
-            all_patterns.extend(cached_pats)
-            continue
-        p = _PATTERNS_DIR / f"{name}.md"
-        if not p.is_file():
-            _pattern_file_cache[name] = []
-            continue
-        try:
-            text = p.read_text()
-        except OSError:
-            _pattern_file_cache[name] = []
-            continue
-        tier1_set = _TIER1.get(name, set())
-        file_pats = []
-        for title, full_text, summary in _parse_patterns(text):
-            is_t1 = _is_tier1(title, tier1_set)
-            file_pats.append((title, full_text, summary, is_t1))
-        _pattern_file_cache[name] = file_pats
-        all_patterns.extend(file_pats)
+        tier1_parts: list[str] = []
+        tier2_parts: list[str] = []
+        source_lower = source.lower()
 
-    tier1_parts: list[str] = []
-    tier2_parts: list[str] = []
-    source_lower = source.lower()
+        for title, full_text, summary, is_t1 in all_patterns:
+            if is_t1:
+                tier1_parts.append(full_text)
+                continue
+            promoted = False
+            if source:
+                keywords = _match_trigger_keywords(title)
+                if keywords:
+                    for kw in keywords:
+                        if kw.lower() in source_lower:
+                            tier1_parts.append(full_text)
+                            promoted = True
+                            break
+            if not promoted:
+                tier2_parts.append(f"- **{title}**: {summary}")
 
-    for title, full_text, summary, is_t1 in all_patterns:
-        if is_t1:
-            tier1_parts.append(full_text)
-            continue
-        promoted = False
-        if source:
-            keywords = _match_trigger_keywords(title)
-            if keywords:
-                for kw in keywords:
-                    if kw.lower() in source_lower:
-                        tier1_parts.append(full_text)
-                        promoted = True
-                        break
-        if not promoted:
-            tier2_parts.append(f"- **{title}**: {summary}")
-
-    if not tier1_parts and not tier2_parts:
-        result = None
-    else:
-        result = {
+        if not tier1_parts and not tier2_parts:
+            return None
+        return {
             "tier1": "\n\n".join(tier1_parts),
             "tier2": "\n".join(tier2_parts),
         }
-    if cache_key:
-        _patterns_cache[cache_key] = result
+
+    result, _cached = _patterns_cache.get_or_compute(cache_key, _compute)
     return result
+
+
+def _load_pattern_file(name: str) -> list[tuple]:
+    """(title, full_text, summary, is_tier1) tuples for one pattern
+    file; empty list when missing/unreadable."""
+    p = _PATTERNS_DIR / f"{name}.md"
+    if not p.is_file():
+        return []
+    try:
+        text = p.read_text()
+    except OSError:
+        return []
+    tier1_set = _TIER1.get(name, set())
+    return [
+        (title, full_text, summary, _is_tier1(title, tier1_set))
+        for title, full_text, summary in _parse_patterns(text)
+    ]
 
 
 def _load_strategy_primers(

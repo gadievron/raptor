@@ -19,9 +19,11 @@ witness. This is that witness: single-function, structural,
 detection-grade (@role detection — seeds the hypothesis and
 corroborates a matching claim; never promotes on its own).
 
-Scope: Go sources (sync.Mutex ``.Lock()``/``.Unlock()``/``.RLock()``
-method spellings and ``m[k] = v`` map writes are Go-stdlib ABI, not
-learned project vocabulary). Other languages spell the registry
+Scope: Go sources (sync.Mutex ``.Lock()``/``.Unlock()`` method
+spellings and ``m[k] = v`` map writes are Go-stdlib ABI, not learned
+project vocabulary; ``.RLock()`` regions are deliberately invisible —
+a read-lock does not serialise the create, so an RLock-guarded write
+region reads as unlocked and stays out of scope). Other languages spell the registry
 compound differently and get their own legs when a corpus shape
 demands them.
 
@@ -47,7 +49,6 @@ _MAP_WRITE_RE = re.compile(
 _LOCK_RE = re.compile(r"^\s*(?P<lk>[\w.]+)\.Lock\(\)")
 _UNLOCK_RE = re.compile(r"^\s*(?:defer\s+)?(?P<lk>[\w.]+)\.Unlock\(\)")
 _DEFER_UNLOCK_RE = re.compile(r"^\s*defer\s+(?P<lk>[\w.]+)\.Unlock\(\)")
-_RLOCK_RE = re.compile(r"^\s*(?P<lk>[\w.]+)\.RLock\(\)")
 
 # Early-return existence check: a keyed call or keyed map read whose
 # result short-circuits the function when present.

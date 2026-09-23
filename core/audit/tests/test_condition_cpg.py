@@ -542,3 +542,20 @@ class TestContractCompliance:
         )
         assert ev.source == "condition_cpg"
         assert ev.action == "add_finding"
+
+
+class TestSplitScalaItemsEscapes:
+    def test_escaped_quote_does_not_shear_items(self):
+        # A Scala-escaped \" inside an element toggled the naive
+        # string state and sheared every later element at the wrong
+        # comma (advisory channel: garbage identifiers fail to match).
+        from core.audit.condition_cpg import _split_scala_items
+
+        items = _split_scala_items(r'"a\"b", "c", "d"')
+        assert len(items) == 3
+        assert items[1] == "c" and items[2] == "d"
+
+    def test_plain_items_unchanged(self):
+        from core.audit.condition_cpg import _split_scala_items
+
+        assert _split_scala_items('"a", "b,c", d') == ["a", "b,c", "d"]

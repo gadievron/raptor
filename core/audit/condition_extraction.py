@@ -174,6 +174,11 @@ def _get_parser(lang: str) -> Any | None:
 # Language → file extension mapping
 # ---------------------------------------------------------------------------
 
+# Extension → TREE-SITTER GRAMMAR name (not the inventory language:
+# grammar names are what Language()/parser loading accepts). Kept
+# value-aligned with core.inventory.languages.LANGUAGE_MAP where the
+# keys overlap — test_language_map_alignment pins the alignment and
+# the enumerated extras, so drift is a test-visible act.
 _EXT_TO_LANG: dict[str, str] = {
     ".c": "c", ".h": "c",
     ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".hpp": "cpp", ".hh": "cpp",
@@ -481,7 +486,13 @@ def _determine_polarity(
             return "required" if is_unless else "negated_guard"
 
     # Sink is after the if-block but not in an early-return pattern,
-    # or we can't determine — assume required (conservative)
+    # or we can't determine — fall back to "required". NOT
+    # conservative for every consumer: "required" counts toward
+    # adequacy, and the SUFFICIENT verdict's consumer SKIPS review —
+    # so this guess leans toward suppression there. It is the
+    # less-wrong default only because "excluded" polarity is
+    # discarded outright and a dropped condition under-counts
+    # protection for the confirm direction.
     if sink_row > cond_node.end_point[0]:
         return "excluded" if is_unless else "required"
 

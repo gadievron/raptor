@@ -851,3 +851,34 @@ class TestDetectDbLanguage:
         assert _detect_db_language("") is None
         assert _detect_db_language("gibberish") is None
         assert _detect_db_language('{"languages": []}') is None
+
+
+class TestCppNameNormalisation:
+    """CodeQL's getName() is unqualified and template-arg-free — a
+    qualified/template spelling interpolated verbatim can never match
+    it, so every such claim came back a vacuous confirmed=False."""
+
+    def test_qualified_and_template_names_normalise(self):
+        from core.audit.codeql_validation import _codeql_base_name
+
+        assert _codeql_base_name("ns::f") == "f"
+        assert _codeql_base_name("f<T>") == "f"
+        assert _codeql_base_name("ns::f<T>") == "f"
+        assert _codeql_base_name("f<T>::g") == "g"
+        assert _codeql_base_name("plain") == "plain"
+        assert _codeql_base_name("~Dtor") == "~Dtor"
+
+    def test_query_interpolates_base_names(self):
+        from core.audit.codeql_validation import (
+            DataflowClaim,
+            generate_taint_query,
+        )
+
+        claim = DataflowClaim(
+            source_file="a.cpp", source_function="ns::get_input",
+            sink_file="b.cpp", sink_function="util::copy_bytes<char>",
+        )
+        q = generate_taint_query(claim)
+        assert '"get_input"' in q
+        assert '"copy_bytes"' in q
+        assert "ns::" not in q.split("@id")[1]
