@@ -193,3 +193,24 @@ class TestEmitter:
         q = _build_summary_batch_query(["bad name", "good_name"])
         assert '"good_name"' in q
         assert "bad name" not in q
+
+
+class TestBatchNameFilterAnchoring:
+    """fullmatch, not match: a `$` anchor alone admits a trailing
+    newline, and one admitted name with a raw newline breaks the
+    List(...) literal's Scala compile — losing the WHOLE batch."""
+
+    def test_trailing_newline_name_is_filtered(self):
+        from packages.joern.runner import _build_summary_batch_query
+        query = _build_summary_batch_query(["good_name", "evil\n"])
+        assert query is not None
+        list_line = next(
+            line for line in query.splitlines()
+            if line.startswith("val names = List(")
+        )
+        assert '"good_name"' in list_line
+        assert "evil" not in query
+
+    def test_all_names_invalid_returns_none(self):
+        from packages.joern.runner import _build_summary_batch_query
+        assert _build_summary_batch_query(["evil\n"]) is None

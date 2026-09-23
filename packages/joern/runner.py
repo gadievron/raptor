@@ -1795,7 +1795,13 @@ def _build_summary_batch_query(method_names: list[str]) -> str | None:
     """
     if not method_names:
         return None
-    safe = [n for n in method_names if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", n)]
+    # fullmatch, not match — the module's own anchoring rule (see
+    # _validate_substitution_value): a `$` anchor alone admits a
+    # trailing newline, and one admitted name with a raw newline
+    # breaks the List(...) literal's compile — the WHOLE batch then
+    # returns {} for one bad name.
+    safe = [n for n in method_names
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", n)]
     if not safe:
         return None
     names_list = ", ".join(f'"{n}"' for n in safe)
