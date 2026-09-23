@@ -363,3 +363,109 @@ class TestRunDirReadBudgetClosure:
             "max_bytes (RUN_ARTIFACT_MAX_BYTES class) or allowlist "
             f"with rationale: {offenders}"
         )
+
+
+class TestBuilderShapes:
+    """Hostile CONTAINER shapes in scanner output: the run dir is
+    sandbox-writable, and a crashed builder silently cost the whole
+    scanner coverage record (raptor.py wraps semgrep + codeql record
+    building in ONE try block, so the semgrep crash dropped both) —
+    while a string ``paths.scanned`` unioned its CHARACTERS in as
+    examined files."""
+
+    def _semgrep(self, tmp_path, payload):
+        import json
+
+        from core.coverage.record import build_from_semgrep
+        p = tmp_path / "semgrep.json"
+        p.write_text(json.dumps(payload))
+        return build_from_semgrep(tmp_path, p)
+
+    def _codeql(self, tmp_path, payload):
+        import json
+
+        from core.coverage.record import build_from_codeql
+        p = tmp_path / "codeql.sarif"
+        p.write_text(json.dumps(payload))
+        return build_from_codeql(p)
+
+    def test_semgrep_list_paths_degrades(self, tmp_path):
+        assert self._semgrep(tmp_path, {"paths": ["a.c"]}) is None
+
+    def test_semgrep_string_scanned_never_chars_as_files(self, tmp_path):
+        rec = self._semgrep(tmp_path, {"paths": {"scanned": "abc"}})
+        assert rec is None
+
+    def test_semgrep_nonstring_scanned_members_dropped(self, tmp_path):
+        rec = self._semgrep(
+            tmp_path, {"paths": {"scanned": ["a.c", 5, None, ["x"]]}})
+        assert rec is not None
+        assert rec["files_examined"] == ["a.c"]
+
+    def test_semgrep_hostile_errors_contained(self, tmp_path):
+        rec = self._semgrep(tmp_path, {
+            "paths": {"scanned": ["a.c"]},
+            "errors": {"path": "x"},           # dict, not list
+        })
+        assert rec is not None and "files_failed" not in rec
+        rec = self._semgrep(tmp_path, {
+            "paths": {"scanned": ["a.c"]},
+            "errors": ["boom", {"path": "b.c", "message": {"m": 1}},
+                       {"path": 5}],
+        })
+        assert rec is not None
+        assert rec.get("files_failed") == [
+            {"path": "b.c", "reason": "error"}]
+
+    def test_semgrep_healthy_control(self, tmp_path):
+        rec = self._semgrep(tmp_path, {
+            "paths": {"scanned": ["a.c", "b.c"]},
+            "errors": [{"path": "b.c", "message": "timeout"}],
+            "version": "1.2.3",
+        })
+        assert rec is not None
+        assert rec["files_examined"] == ["a.c", "b.c"]
+        assert rec["files_failed"] == [
+            {"path": "b.c", "reason": "timeout"}]
+        assert rec["version"] == "1.2.3"
+
+    def test_codeql_string_runs_degrade(self, tmp_path):
+        assert self._codeql(tmp_path, {"runs": ["boom"]}) is None
+        assert self._codeql(tmp_path, {"runs": "boom"}) is None
+
+    def test_codeql_hostile_nested_shapes_contained(self, tmp_path):
+        rec = self._codeql(tmp_path, {"runs": [{
+            "artifacts": [{"location": "x"},
+                          {"location": {"uri": "a.c"}}, "junk"],
+            "tool": {"driver": {"version": 7,
+                                "rules": ["r", {"id": "q1"}]},
+                     "extensions": "nope"},
+            "invocations": [{"toolExecutionNotifications": [
+                {"level": "error", "locations": "x",
+                 "message": "not-a-dict"},
+            ]}, "junk"],
+        }]})
+        assert rec is not None
+        assert rec["files_examined"] == ["a.c"]
+        assert "version" not in rec
+        assert "q1" in rec["rules_applied"]
+
+    def test_codeql_healthy_control(self, tmp_path):
+        rec = self._codeql(tmp_path, {"runs": [{
+            "artifacts": [{"location": {"uri": "a.c"}}],
+            "tool": {"driver": {"version": "2.0",
+                                "rules": [{"id": "q1"}]},
+                     "extensions": [{"name": "pack", "version": "1"}]},
+            "invocations": [{"toolExecutionNotifications": [
+                {"level": "error",
+                 "locations": [{"physicalLocation": {
+                     "artifactLocation": {"uri": "b.c"}}}],
+                 "message": {"text": "extraction failed"}},
+            ]}],
+        }]})
+        assert rec is not None
+        assert rec["files_examined"] == ["a.c"]
+        assert rec["version"] == "2.0"
+        assert rec["packs"] == ["pack@1"]
+        assert rec["files_failed"] == [
+            {"path": "b.c", "reason": "extraction failed"}]

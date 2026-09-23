@@ -225,21 +225,40 @@ def build_from_semgrep(_run_dir: Path, semgrep_json_path: Path,
     if not data or not isinstance(data, dict):
         return None
 
+    # Container shapes are as attacker-writable as the file (run dir
+    # sits in the sandbox write grant): a list ``paths`` / dict
+    # ``errors`` crashed the builder — and raptor.py's shared
+    # try-block then silently dropped BOTH scanner records — while a
+    # STRING ``scanned`` iterated per-character, unioning single
+    # characters in as examined files. Same isinstance discipline as
+    # build_from_findings.
     paths = data.get("paths", {})
-    scanned = paths.get("scanned", [])
+    if not isinstance(paths, dict):
+        paths = {}
+    scanned_raw = paths.get("scanned", [])
+    if not isinstance(scanned_raw, list):
+        scanned_raw = []
+    scanned = [s for s in scanned_raw if isinstance(s, str)]
     if not scanned:
         return None
 
-    errors = list(data.get("errors", []))
+    def _error_rows(value: Any) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [e for e in value if isinstance(e, dict)]
+
+    errors = _error_rows(data.get("errors"))
     for extra in (extra_error_json_paths or []):
         if Path(extra) == Path(semgrep_json_path):
             continue
         extra_data = load_json(extra, max_bytes=RUN_ARTIFACT_MAX_BYTES)
         if isinstance(extra_data, dict):
-            errors.extend(extra_data.get("errors", []))
+            errors.extend(_error_rows(extra_data.get("errors")))
     version = data.get("version", "")
+    if not isinstance(version, str):
+        version = ""
 
-    record = {
+    record: dict[str, Any] = {
         "tool": "semgrep",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "files_examined": sorted(scanned),
@@ -251,13 +270,17 @@ def build_from_semgrep(_run_dir: Path, semgrep_json_path: Path,
     seen: set = set()
     failed = []
     for e in errors:
-        if not e.get("path"):
+        path = e.get("path")
+        if not path or not isinstance(path, str):
             continue
-        key = (e.get("path"), e.get("message", "error"))
+        message = e.get("message")
+        if not isinstance(message, str) or not message:
+            message = "error"
+        key = (path, message)
         if key in seen:
             continue
         seen.add(key)
-        failed.append({"path": e["path"], "reason": e.get("message", "error")})
+        failed.append({"path": path, "reason": message})
     if failed:
         record["files_failed"] = failed
 
@@ -354,40 +377,71 @@ def build_from_codeql(sarif_path: Path) -> dict[str, Any] | None:
     failures = []
     version = ""
 
-    for run in data.get("runs", []):
+    def _rows(container: Any, key: str) -> list[dict[str, Any]]:
+        # SARIF containers are run-dir JSON — every nesting level's
+        # shape is attacker-writable, and a string row crashed the
+        # ``.get`` walks below (silently costing the whole codeql
+        # coverage record through the callers' broad try blocks).
+        if not isinstance(container, dict):
+            return []
+        value = container.get(key)
+        if not isinstance(value, list):
+            return []
+        return [row for row in value if isinstance(row, dict)]
+
+    def _dict(container: Any, key: str) -> dict[str, Any]:
+        if not isinstance(container, dict):
+            return {}
+        value = container.get(key)
+        return value if isinstance(value, dict) else {}
+
+    def _str(container: Any, key: str, default: str = "") -> str:
+        if not isinstance(container, dict):
+            return default
+        value = container.get(key)
+        return value if isinstance(value, str) else default
+
+    for run in _rows(data, "runs"):
         # Files extracted
-        for artifact in run.get("artifacts", []):
-            uri = artifact.get("location", {}).get("uri", "")
+        for artifact in _rows(run, "artifacts"):
+            uri = _str(_dict(artifact, "location"), "uri")
             if uri:
                 files.append(uri)
 
         # Tool info
-        tool = run.get("tool", {})
-        driver = tool.get("driver", {})
-        version = version or driver.get("version") or driver.get("semanticVersion") or ""
-        rules.extend(r.get("id", "") for r in driver.get("rules", []))
+        tool = _dict(run, "tool")
+        driver = _dict(tool, "driver")
+        version = (version or _str(driver, "version")
+                   or _str(driver, "semanticVersion"))
+        rules.extend(_str(r, "id") for r in _rows(driver, "rules"))
 
         # Packs
-        for ext in tool.get("extensions", []):
-            name = ext.get("name", "")
-            ver = ext.get("version", "")
+        for ext in _rows(tool, "extensions"):
+            name = _str(ext, "name")
+            ver = _str(ext, "version")
             packs.append(f"{name}@{ver}" if ver else name)
 
         # Extraction failures
-        for inv in run.get("invocations", []):
-            for notif in inv.get("toolExecutionNotifications", []):
-                if notif.get("level") in ("error", "warning"):
-                    loc = notif.get("locations", [{}])[0] if notif.get("locations") else {}
-                    path = loc.get("physicalLocation", {}).get("artifactLocation", {}).get("uri", "")
-                    failures.append({
-                        "path": path,
-                        "reason": notif.get("message", {}).get("text", "unknown"),
-                    })
+        for inv in _rows(run, "invocations"):
+            for notif in _rows(inv, "toolExecutionNotifications"):
+                if notif.get("level") not in ("error", "warning"):
+                    continue
+                locations = notif.get("locations")
+                loc = (locations[0] if isinstance(locations, list)
+                       and locations else {})
+                path = _str(
+                    _dict(_dict(loc, "physicalLocation"),
+                          "artifactLocation"), "uri")
+                failures.append({
+                    "path": path,
+                    "reason": _str(_dict(notif, "message"), "text",
+                                   "unknown"),
+                })
 
     if not files:
         return None
 
-    record = {
+    record: dict[str, Any] = {
         "tool": "codeql",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "files_examined": sorted(set(files)),
