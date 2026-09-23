@@ -35,6 +35,41 @@ def _as_dict(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+#: Dismissed-finding spellings across the producing pipelines
+#: (validate rulings, /agentic classifier statuses). Feasibility
+#: analysis must not resurrect a dismissed finding with an
+#: "analyzed" feasibility verdict.
+_NEGATIVE_VERDICTS = frozenset({
+    "disproven", "ruled_out", "false_positive",
+})
+
+
+def _verdict_token(value: object) -> str:
+    """One normalised spelling for a status/ruling verdict."""
+    return str(value or "").strip().lower().replace(
+        "-", "_").replace(" ", "_")
+
+
+def _ruling_dict(finding: dict) -> "dict | None":
+    """The finding's ruling, dict-normalised across both documented
+    shapes: validate writes ``{"status": ...}`` dicts, /agentic
+    rulings can arrive as a bare status string."""
+    ruling = finding.get("ruling")
+    if isinstance(ruling, dict):
+        return ruling
+    if isinstance(ruling, str):
+        return {"status": ruling}
+    return None
+
+
+def _is_dismissed(finding: dict) -> bool:
+    """Whether a finding carries a negative status or ruling."""
+    if _verdict_token(finding.get("status")) in _NEGATIVE_VERDICTS:
+        return True
+    ruling = _ruling_dict(finding) or {}
+    return _verdict_token(ruling.get("status")) in _NEGATIVE_VERDICTS
+
+
 def _map_filename(raw_id: str) -> str:
     """Filesystem-safe stem for a finding's mitigation-feasibility file.
 
@@ -156,13 +191,16 @@ def main():
             # authored across stages — a null or non-dict feasibility/
             # ruling is expected shape drift (``.get(key, {})`` returns
             # the null, then ``.get`` on it raises), and one malformed
-            # finding must not abort the whole group.
+            # finding must not abort the whole group. Dismissal covers
+            # every documented negative spelling and BOTH ruling
+            # shapes — the old two-literal filter admitted
+            # false_positive rows and string-shaped rulings into the
+            # analysis flow.
             group = [
                 f for f in findings_data.get("findings", [])
                 if _as_dict(f.get("feasibility")).get("binary_path")
                 == binary_path
-                and f.get("status") != "disproven"
-                and _as_dict(f.get("ruling")).get("status") != "ruled_out"
+                and not _is_dismissed(f)
             ]
 
             if not group:
@@ -190,8 +228,20 @@ def main():
             result = constraints
             print(f"  Binary verdict (generic): {constraints.get('verdict', 'unknown')}", file=sys.stderr)
             print("  Mapping per-finding verdicts (vuln-type-aware)...", file=sys.stderr)
+            # Forward each finding's ruling (dict-normalised) and
+            # status: the mapper owns a dismissal gate of its own,
+            # and a gate behind a caller that strips rulings protects
+            # nothing — the mapper must see what the finding carries.
             mapped = map_findings_to_constraints(
-                [{"id": f.get("id"), "vuln_type": f.get("vuln_type", "")} for f in group if f.get("id")],
+                [
+                    {
+                        "id": f.get("id"),
+                        "vuln_type": f.get("vuln_type", ""),
+                        "status": f.get("status"),
+                        "ruling": _ruling_dict(f),
+                    }
+                    for f in group if f.get("id")
+                ],
                 constraints,
             )
 
