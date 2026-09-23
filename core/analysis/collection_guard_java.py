@@ -70,12 +70,15 @@ logger = logging.getLogger(__name__)
 _MAX_DECLARING_CANDIDATES = 8
 _MAX_TREE_FILES = 5000
 
-# Loop statements carry a back edge — inside one, textual order stops
-# implying execution order (the writer-interval extension below).
-_LOOP_STATEMENT_TYPES = frozenset({
-    "while_statement", "do_statement", "for_statement",
-    "enhanced_for_statement",
-})
+def _loop_statement_types() -> frozenset[str]:
+    """Loop statements carry a back edge — inside one, textual order
+    stops implying execution order (the writer-interval extension in
+    collection_guard_reason). Grammar-validated single home."""
+    from core.analysis.cfg_node_tables import JAVA_TABLES
+    return JAVA_TABLES.loops
+
+
+_LOOP_STATEMENT_TYPES = _loop_statement_types()
 _MAX_REFERENCING_FILES = 64
 _MAX_ELEMENTS = 64
 
