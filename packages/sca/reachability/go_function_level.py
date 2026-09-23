@@ -55,6 +55,7 @@ from typing import Any
 from collections.abc import Iterable
 
 from ..models import Confidence, Dependency, Reachability
+from ._shared import UNRESOLVED_ENTRY
 
 logger = logging.getLogger(__name__)
 
@@ -131,9 +132,18 @@ def _extract_qualified(advisory: Any, dep_name: str) -> list[str]:
             if not isinstance(imp, dict):
                 continue
             path = imp.get("path")
+            junk_path = path is not None and not isinstance(path, str)
             symbols = imp.get("symbols") or []
             for s in symbols:
                 if not (isinstance(s, str) and s):
+                    continue
+                if junk_path:
+                    # A junk (non-string) path admits no honest
+                    # composition — dep-qualifying its symbols is a
+                    # guess whose wrong readings pair NOT_CALLED and
+                    # satisfy the coverage gate. Count the entry
+                    # unresolved so the tier abstains instead.
+                    out.append(UNRESOLVED_ENTRY)
                     continue
                 head = path if isinstance(path, str) and path else dep_name
                 if not head:

@@ -24,6 +24,15 @@ tree-sitter needed):
     disable the tier's suppression arm).
   * ``bindable_called`` — a bindable entry the project calls:
     ``likely_called`` must come back (the tier binds correctly).
+  * ``imports_path_unbindable_exercised`` — the exercised entry rides
+    an ``imports[].path`` the tier cannot bind (hyphenated / slashed /
+    coordinate spellings that fail the resolver's dotted-identifier
+    grammar, or outright junk). Composing ``<path>.<symbol>`` anyway
+    mints a well-formed garbage query that pairs NOT_CALLED and
+    satisfies the coverage gate — the same false-suppression
+    mechanism as the flat arms, one arm over. The tier must bind the
+    entry through its own convention or route it to the counted
+    marker and abstain — never downgrade.
 """
 
 from __future__ import annotations
@@ -159,6 +168,7 @@ _SCENARIO_NAMES = (
     "mixed_unbindable_exercised",
     "all_bindable_uncalled",
     "bindable_called",
+    "imports_path_unbindable_exercised",
 )
 
 
@@ -189,6 +199,15 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
                 {"lodash": "lodash"}, (("lodash", "get"),),
                 expected="likely_called",
             ),
+            # npm's builder reads bare names only — the junk path is
+            # discarded and the symbol binds through the dep-head
+            # convention (pinned so the arm can't drift).
+            "imports_path_unbindable_exercised": _Scenario(
+                {"imports": [{"path": "lo-dash/internals",
+                              "symbols": ["get"]}]}, None,
+                {"lodash": "lodash"}, (("lodash", "get"),),
+                expected="likely_called",
+            ),
         },
     ),
     "python_function_level": _TierSpec(
@@ -211,6 +230,15 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
             # Module-head-qualified spelling binds verbatim.
             "bindable_called": _Scenario(
                 None, {"affected_functions": ["yaml.load"]},
+                {"yaml": "yaml"}, (("yaml", "load"),),
+                expected="likely_called",
+            ),
+            # The PyPI builder reads bare names only — the junk path
+            # is discarded and the symbol binds through the candidate
+            # modules (pinned so the arm can't drift).
+            "imports_path_unbindable_exercised": _Scenario(
+                {"imports": [{"path": "py-yaml/junk",
+                              "symbols": ["load"]}]}, None,
                 {"yaml": "yaml"}, (("yaml", "load"),),
                 expected="likely_called",
             ),
@@ -243,6 +271,16 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
                 {"lib": "example.com/lib"}, (("lib", "Parse"),),
                 expected="likely_called",
             ),
+            # A junk (non-string) path admits no honest composition:
+            # dep-qualifying its symbols is a GUESS whose wrong
+            # readings pair NOT_CALLED — the entry must be counted
+            # unresolved so the tier abstains.
+            "imports_path_unbindable_exercised": _Scenario(
+                {"imports": [{"path": 123, "symbols": ["Parse"]}]},
+                None,
+                {"sub": "example.com/lib/sub"}, (("sub", "Parse"),),
+                expected="imported",
+            ),
         },
     ),
     "java_function_level": _TierSpec(
@@ -274,6 +312,16 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
                 (("Mapper", "readValue"),),
                 expected="likely_called",
             ),
+            # A Maven COORDINATE in the path slot is not a Java
+            # package — composing it mints a colon-headed garbage
+            # query; the entry must be counted unresolved instead.
+            "imports_path_unbindable_exercised": _Scenario(
+                {"imports": [{"path": "com.example:foo",
+                              "symbols": ["Mapper.readValue"]}]}, None,
+                {"Mapper": "com.example.foo.Mapper"},
+                (("Mapper", "readValue"),),
+                expected="imported",
+            ),
         },
     ),
     "cargo_function_level": _TierSpec(
@@ -299,6 +347,17 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
                 None,
                 {"parser": "my_crate.parser"}, (("parser", "parse"),),
                 expected="likely_called",
+            ),
+            # A hyphenated CRATE-NAME spelling in the path slot fails
+            # the resolver grammar — composing it mints a garbage
+            # query on a function the project genuinely calls (as
+            # ``serde_json.from_str``); the entry must be counted
+            # unresolved so the tier abstains.
+            "imports_path_unbindable_exercised": _Scenario(
+                {"imports": [{"path": "my-crate",
+                              "symbols": ["from_str"]}]}, None,
+                {"my_crate": "my_crate"}, (("my_crate", "from_str"),),
+                expected="imported",
             ),
         },
     ),
@@ -330,6 +389,16 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
                 (("Mapper", "draw"),),
                 expected="likely_called",
             ),
+            # A hyphenated gem-name spelling in the path slot fails
+            # the resolver grammar after ``::``→``.`` normalisation —
+            # counted unresolved, never composed.
+            "imports_path_unbindable_exercised": _Scenario(
+                {"imports": [{"path": "action-dispatch::Routing",
+                              "symbols": ["Mapper#draw"]}]}, None,
+                {"Mapper": "ActionDispatch.Routing.Mapper"},
+                (("Mapper", "draw"),),
+                expected="imported",
+            ),
         },
     ),
     "nuget_function_level": _TierSpec(
@@ -354,6 +423,15 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
                               "symbols": ["Widget.Run"]}]}, None,
                 {"Widget": "MyPkg.Widget"}, (("Widget", "Run"),),
                 expected="likely_called",
+            ),
+            # A hyphenated PACKAGE-ID spelling in the path slot fails
+            # the resolver grammar — counted unresolved, never
+            # composed into a garbage query.
+            "imports_path_unbindable_exercised": _Scenario(
+                {"imports": [{"path": "My-Pkg",
+                              "symbols": ["Widget.Run"]}]}, None,
+                {"Widget": "MyPkg.Widget"}, (("Widget", "Run"),),
+                expected="imported",
             ),
         },
     ),
@@ -387,6 +465,17 @@ _TIER_SPECS: Dict[str, _TierSpec] = {
                 {"Request": "Symfony.Component.HttpFoundation.Request"},
                 (("Request", "create"),),
                 expected="likely_called",
+            ),
+            # A vendor/pkg PACKAGE-NAME spelling in the path slot
+            # (slash survives normalisation) fails the resolver
+            # grammar — counted unresolved, never composed.
+            "imports_path_unbindable_exercised": _Scenario(
+                {"imports": [
+                    {"path": "symfony/http-foundation",
+                     "symbols": ["Request::create"]}]}, None,
+                {"Request": "Symfony.Component.HttpFoundation.Request"},
+                (("Request", "create"),),
+                expected="imported",
             ),
         },
     ),
