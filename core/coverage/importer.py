@@ -231,14 +231,19 @@ def import_journal(
 
     marks = 0
     for entry in entries.values():
-        if entry.verdict == "error":
+        if entry.verdict in ("error", "dark"):
             # Error verdicts are transient failures (budget exceeded,
             # API error, truncation) — the function was never actually
             # reviewed. Marking it as covered would misrepresent the
             # coverage view AND suppress it from any consumer that
             # derives "already reviewed" from the store. Keep it
             # unreviewed, consistent with journal.reviewed_set() and
-            # the gap computation's index fold.
+            # the gap computation's index fold. ``dark`` is excluded
+            # for the same direction: it is the UNRESOLVED
+            # gate-resolution bucket, and a store mark has no
+            # re-adjudication route — an interrupted run's dark rows
+            # must stay visible as unreviewed in every store-derived
+            # coverage view.
             continue
         if entry.edge_callee:
             # Tier-1 edge-contract review: only the CALL EDGE was
