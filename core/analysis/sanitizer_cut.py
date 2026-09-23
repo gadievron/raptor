@@ -1749,6 +1749,13 @@ def evaluate_finding(
                     )
 
     matched_bindings = match_sanitizers_in_cfg(graph, cwe, language)
+    # Whole-module namespace distrust: a dynamic rebinding route in
+    # the module (star-import, exec/eval, sys.modules, escaping
+    # globals()/vars()) means NO written identity in this function is
+    # provable — every catalog match degrades (see
+    # PythonCFG.namespace_unprovable; absent on other CFG types).
+    if matched_bindings and getattr(graph, "namespace_unprovable", False):
+        matched_bindings = frozenset()
     # Shadow guard on the catalog join: matching is by the WRITTEN
     # dotted name, but when the analysed function itself binds the
     # chain's root (``html = FakeNs`` / a parameter named ``html``

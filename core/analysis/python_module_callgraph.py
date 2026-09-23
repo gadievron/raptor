@@ -158,6 +158,11 @@ class PyModuleCallGraph:
     # Module-scope import bindings (root → dotted source) for
     # resolving written names to trusted identities.
     import_map: dict[str, str] = field(default_factory=dict)
+    # True when a dynamic route (star-import, exec/eval, sys.modules,
+    # escaping globals()/vars()) makes the WHOLE module's name
+    # resolution unprovable — every summary degrades to unknown and
+    # every catalog identity is refused (see module_dynamic_namespace).
+    namespace_unprovable: bool = False
 
     @property
     def entry(self) -> PyCallGraphNode:
@@ -662,6 +667,105 @@ def module_distrusted_roots(tree: ast.Module) -> frozenset[str]:
     return frozenset(out)
 
 
+def module_dynamic_namespace(
+    tree: ast.Module,
+) -> tuple[bool, frozenset[str]]:
+    """Dynamic module-namespace rebinding routes → ``(whole_module,
+    poisoned_names)``.
+
+    The static walkers above see BINDING STATEMENTS; Python also
+    rebinds module names through routes with no binding syntax at
+    all, and a hostile repo used every one of them to keep a clean
+    written identity over a raw runtime callee:
+
+    * ``from x import *`` — every name in the module is now
+      potentially the star module's object → the WHOLE module's
+      name-resolution confidence is void.
+    * ``exec`` / ``eval`` at module-reachable scope (module body,
+      class body — both run at import), or anywhere with an explicit
+      globals argument — arbitrary rebinds → whole module.
+    * any reachable ``sys.modules`` (aliased imports included) — a
+      ``setattr(sys.modules[__name__], …)`` rebinds by attribute,
+      and aliasing makes name-level tracking unsound → whole module.
+    * ``globals()`` / ``vars()`` / module-scope ``locals()``:
+      a constant-key subscript STORE/DELETE poisons exactly that
+      name; a constant-key LOAD is harmless; every other use
+      (non-constant key store, aliasing the dict, ``.update(…)``,
+      passing it on) → whole module.
+
+    Consumers abstain: a poisoned name (or every name, when
+    whole_module) loses join/catalog trust — suppression can only be
+    lost, never gained.
+    """
+    whole = False
+    names: set[str] = set()
+
+    # Parent map for positional analysis of globals()/vars() calls.
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    imap = module_import_map(tree)
+    sys_aliases = {r for r, src in imap.items() if src == "sys"}
+    modules_aliases = {
+        r for r, src in imap.items()
+        if src == "sys.modules" or src.startswith("sys.modules.")
+    }
+
+    def _module_reachable(node: ast.AST) -> bool:
+        cur = parents.get(node)
+        while cur is not None:
+            if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                ast.Lambda)):
+                return False
+            cur = parents.get(cur)
+        return True
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if any(alias.name == "*" for alias in node.names):
+                whole = True
+        elif isinstance(node, ast.Attribute):
+            if (node.attr == "modules"
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id in sys_aliases):
+                whole = True
+        elif isinstance(node, ast.Name):
+            if node.id in modules_aliases:
+                whole = True
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if not isinstance(func, ast.Name):
+                continue
+            fname = func.id
+            if fname in ("exec", "eval"):
+                if len(node.args) >= 2 or _module_reachable(node):
+                    whole = True
+                continue
+            if fname not in ("globals", "vars", "locals"):
+                continue
+            if fname == "locals" and not _module_reachable(node):
+                # A function's locals() cannot rebind module names.
+                continue
+            parent = parents.get(node)
+            if (isinstance(parent, ast.Subscript)
+                    and parent.value is node):
+                if isinstance(parent.ctx, ast.Load):
+                    continue                     # read-only — harmless
+                key = parent.slice
+                if (isinstance(key, ast.Constant)
+                        and isinstance(key.value, str)):
+                    names.add(key.value.split(".", 1)[0])
+                    continue
+                whole = True                     # computed-key write
+                continue
+            # Aliased, updated, or escaping namespace dict.
+            whole = True
+
+    return whole, frozenset(names)
+
+
 def module_shadowed_identity_roots(tree: ast.Module) -> frozenset[str]:
     """Roots a WRITTEN dotted identity must never be trusted through:
     every non-import rebind (:func:`module_distrusted_roots`) plus
@@ -993,8 +1097,9 @@ def build_python_module_callgraph(
     # summary consumers, so intersect the module-scope rebinds down
     # to them.
     fn_roots = {fr.qualified_name.split(".", 1)[0] for fr in fn_records}
+    dyn_whole, dyn_names = module_dynamic_namespace(tree)
     rebound = frozenset(
-        _module_rebound_names(tree) & fn_roots,
+        (_module_rebound_names(tree) | dyn_names) & fn_roots,
     )
 
     return PyModuleCallGraph(
@@ -1009,9 +1114,14 @@ def build_python_module_callgraph(
         },
         _asts_by_node=asts_by_node,
         rebound_names=rebound,
-        distrusted_roots=module_shadowed_identity_roots(tree),
-        nonimport_distrusted_roots=module_distrusted_roots(tree),
+        distrusted_roots=(
+            module_shadowed_identity_roots(tree) | dyn_names
+        ),
+        nonimport_distrusted_roots=(
+            module_distrusted_roots(tree) | dyn_names
+        ),
         import_map=module_import_map(tree),
+        namespace_unprovable=dyn_whole,
     )
 
 
@@ -1023,5 +1133,6 @@ __all__ = [
     "local_binding_names",
     "module_distrusted_roots",
     "module_import_map",
+    "module_dynamic_namespace",
     "module_shadowed_identity_roots",
 ]

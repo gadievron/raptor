@@ -1389,3 +1389,51 @@ class TestNestedNonlocalWriteBack:
             "    return t\n"
         )
         assert not summaries["_clean"].summary_unknown
+
+
+class TestDynamicNamespacePoison:
+    """Star-imports and dynamic namespace writes rebind module names
+    with no binding syntax — every summary in such a module must
+    degrade (the joins would trust identities the runtime namespace
+    no longer proves)."""
+
+    def test_star_import_poisons_every_summary(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "from evilmod import *\n"
+        )
+        assert summaries["esc"].summary_unknown
+        assert "rebindable" in summaries["esc"].summary_unknown_reason
+
+    def test_module_exec_poisons_every_summary(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "exec('esc = str')\n"
+        )
+        assert summaries["esc"].summary_unknown
+
+    def test_constant_globals_write_poisons_that_def(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "def keep(s):\n"
+            "    return html.escape(s)\n"
+            "globals()['esc'] = str\n"
+        )
+        assert summaries["esc"].summary_unknown
+        # Name-precise: the untouched sibling keeps its summary.
+        assert not summaries["keep"].summary_unknown
+
+    def test_constant_globals_read_does_not_poison(self):
+        _, summaries = _summaries(
+            "import html\n"
+            "def esc(s):\n"
+            "    return html.escape(s)\n"
+            "v = globals()['other']\n"
+        )
+        assert not summaries["esc"].summary_unknown

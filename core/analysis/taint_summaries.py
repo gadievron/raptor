@@ -963,6 +963,20 @@ def _compute_one_summary(
     node = cg.find(qualified_name)
     if node is None:
         return TaintSummary(function=qualified_name, params=())
+    # Dynamic namespace routes (star-import, exec/eval, sys.modules,
+    # escaping globals()/vars()) void EVERY name's resolution in this
+    # module — no summary may certify anything (the name-keyed joins
+    # would trust identities the runtime namespace no longer proves).
+    if cg.namespace_unprovable:
+        return TaintSummary(
+            function=qualified_name,
+            params=node.params,
+            summary_unknown=True,
+            summary_unknown_reason=(
+                "module namespace dynamically rebindable "
+                "(star-import / exec / sys.modules / globals write)"
+            ),
+        )
     # Conditional redefinition: which body runs depends on
     # module-import-time state, and summaries are name-keyed — a
     # single-variant summary would silently stand in for both bodies
