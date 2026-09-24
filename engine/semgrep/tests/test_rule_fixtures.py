@@ -308,15 +308,24 @@ _PHP_EXACT_LINES = {
     "php/unserialize-taint.yaml": ("unserialize_taint_pos.php", {
         (3, "request-data"), (8, "request-data"),
         (12, "request-data"), (16, "request-data"),
+        (20, "request-data"), (23, "request-data"),
+        (26, "request-data"), (29, "request-data"),
+        (32, "request-data"),
     }),
     "php/attr-xss.yaml": ("attr_xss_pos.php", {
-        (4, "single-quote-attr"), (8, "single-quote-attr"),
-        (12, "unquoted-attr"), (15, "single-quote-attr"),
+        (4, "attr-context"), (8, "attr-context"),
+        (12, "attr-context"), (15, "attr-context"),
+        (18, "attr-context"), (22, "attr-context"),
+        (25, "attr-context"), (29, "attr-context"),
+        (32, "attr-context"),
     }),
     "php/open-redirect.yaml": ("open_redirect_pos.php", {
         (4, "header-location"), (8, "header-location"),
         (12, "header-location"), (15, "header-location"),
         (19, "header-location"), (22, "header-location"),
+        (25, "header-location"), (28, "header-location"),
+        (31, "header-location"), (35, "header-location"),
+        (38, "header-location"), (41, "header-location"),
     }),
     "php/include-injection.yaml": ("include_injection_pos.php", {
         (4, "request-path"), (7, "request-path"),
@@ -340,6 +349,33 @@ def test_php_web_family_exact_lines(rule_rel: str):
         f"{rule_rel} variant coverage drifted on {fixture}: "
         f"fired {sorted(fired)}, expected {sorted(expected)}"
     )
+
+
+def test_php_pack_holds_flat_on_adversarial_concat_chains(tmp_path: Path):
+    """Perf pin for the whole php pack against concatenation-chain
+    fodder: a 100+-term single-expression chain of attribute-opener
+    literals and superglobals. The unconstrained ``$LIT . $V`` sink
+    shape was superlinear here (minutes at 100 terms, timeout at 800
+    — and a per-file semgrep timeout strips the pack from exactly
+    the files these rules target); the literal-anchored shape holds
+    a flat per-rule constant. The bound is generous for slow CI
+    hosts while still catching a superlinear regression by orders of
+    magnitude; the chain is also a true positive series, so the
+    attr-xss rule must FIRE on it, keeping the pin non-vacuous."""
+    import time
+
+    seg = "\"<td style='\" . $_GET[\"x\"]"
+    chain = " . ".join([seg] * 120)
+    target = tmp_path / "chain.php"
+    target.write_text("<?php\nfunction f() {\n    echo " + chain + ";\n}\n")
+    started = time.monotonic()
+    results = _run_semgrep(_RULES_DIR / "php", [target])["results"]
+    elapsed = time.monotonic() - started
+    assert elapsed < 90, (
+        f"php pack took {elapsed:.1f}s on a 120-term concat chain — "
+        "superlinear sink shape regression"
+    )
+    assert any("attr-xss" in r["check_id"] for r in results)
 
 
 # --- case-insensitive algorithm names (JCA / OpenSSL lookup) ----------------

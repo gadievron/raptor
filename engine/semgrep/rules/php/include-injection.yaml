@@ -33,14 +33,15 @@ rules:
   #     unknown key includes null — a warning, not traversal). The
   #     recommended form — the same map behind an array_key_exists
   #     guard — is silent, so the remediation never re-fires.
-  # Known FN modes:
-  #   - Taint through helper indirection (a getter function wrapping
-  #     the superglobal read) is invisible to single-function taint.
-  #   - basename() clears taint wholesale: a value that only selects
-  #     among same-directory .php files is still attacker file
-  #     selection within that directory — stated residual, accepted
-  #     because basename removes the traversal and wrapper vectors
-  #     that make the class code-execution.
+  # Sanitizer note: basename() clears taint — it removes the
+  #   traversal and stream-wrapper vectors that make this class
+  #   code-execution (the message still recommends an allowlist on
+  #   top for the remaining same-directory selection).
+  #
+  # Scope pins: taint is single-function, and the sinks are the
+  #   include/require family only (see the scoping note above). The
+  #   negative fixture carries out-of-scope shape pins for both
+  #   boundaries — each flips when a matching shape lands.
   - id: raptor.php.include-injection.request-path
     mode: taint
     languages: [php]
@@ -59,14 +60,19 @@ rules:
           - pattern: $_REQUEST[...]
           - pattern: $_COOKIE[...]
     pattern-sanitizers:
-      - pattern: basename(...)
-      - pattern: intval(...)
-      - pattern: (int) $X
+      - pattern-either:
+          - pattern: basename(...)
+          - pattern: \basename(...)
+          - pattern: intval(...)
+          - pattern: \intval(...)
+          - pattern: (int) $X
       - by-side-effect: true
         patterns:
           - pattern-either:
               - pattern: in_array($V, ...)
+              - pattern: \in_array($V, ...)
               - pattern: array_key_exists($V, ...)
+              - pattern: \array_key_exists($V, ...)
               - pattern: isset($MAP[$V])
           - focus-metavariable: $V
     pattern-sinks:

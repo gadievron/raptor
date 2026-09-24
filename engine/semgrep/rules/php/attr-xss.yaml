@@ -1,54 +1,80 @@
 rules:
   # CWE-79: reflected XSS, attribute-context subset — request data
-  # concatenated into a single-quoted or unquoted HTML attribute with
-  # NO output encoding at all. Both rules key on the string literal
-  # immediately concatenated before the tainted value: an unclosed
-  # single-quoted attribute opener (ends ...=' or ...='<text>), or an
-  # unquoted attribute opener (ends ...=). An embedded quote or
-  # whitespace in the value closes the attribute and adds
-  # event-handler attributes — htmlspecialchars alone does not help
-  # in the unquoted context, which is why the fix is ENT_QUOTES plus
-  # a quoted attribute.
+  # emitted into a single-quoted or unquoted HTML attribute with NO
+  # output encoding at all. One taint rule, three sink spellings:
+  #   1. concatenation after a single-quoted attribute opener — a
+  #      double-quote-delimited literal whose content opens ...=' and
+  #      never closes it, immediately followed by `.` and the value;
+  #   2. the same for an unquoted attribute opener (literal ends
+  #      attr= with its single quotes BALANCED — unbalanced tails
+  #      belong to shape 1);
+  #   3. double-quoted string INTERPOLATION in an echo/print
+  #      statement: "<font color='$c'>" / '{$_POST[...]}' with the
+  #      interpolation directly in the single-quoted attribute opener
+  #      position.
+  # An embedded quote or whitespace in the value closes the attribute
+  # and adds event-handler attributes — htmlspecialchars alone does
+  # not help in the unquoted context, which is why the fix is
+  # ENT_QUOTES plus a quoted attribute.
   #
-  # Division of labour: ANY htmlspecialchars/htmlentities call clears
-  # taint here — the encoded-but-wrong-flags residual (ENT_COMPAT /
-  # ENT_NOQUOTES into a quoted attribute) is php/attr-encoding.yaml's
-  # (CWE-116) job, so the two rules never double-claim one shape.
+  # Shape note (load-bearing, do not "simplify" back): the
+  # concatenation sinks are text-level (pattern-regex), not the AST
+  # shape `$LIT . $V`. The AST shape enumerates operand splits of a
+  # flattened concatenation chain, which is superlinear on 100+-term
+  # chains — past semgrep's default per-rule-per-file timeout, so a
+  # whole-pack scan silently STRIPPED this rule from exactly the
+  # concat-heavy files it targets. The text anchor scans flat and
+  # also covers openers mid-chain (a leading expression before the
+  # opener literal needs no separate pattern). The regex classes are
+  # newline-bounded, so a sink candidate never spans lines.
+  #
+  # Division of labour: ANY htmlspecialchars/htmlentities call
+  # (qualified or not) clears taint here — the encoded-but-wrong-flags
+  # residual (ENT_COMPAT / ENT_NOQUOTES into a quoted attribute) is
+  # php/attr-encoding.yaml's (CWE-116) job, so the two rules never
+  # double-claim one shape.
   #
   # Known FP modes:
-  #   - The sink is the concatenation expression, not an echo: a
-  #     tainted value concatenated after an attribute-opener-shaped
+  #   - The concatenation sinks are expression-level, not echo-bound:
+  #     a tainted value concatenated after an attribute-opener-shaped
   #     literal fires even when the result never reaches output —
   #     bounded by requiring a <tag prefix in the literal (a config
   #     line ending in = stays silent).
-  # Known FN modes:
-  #   - Flagless htmlspecialchars($x) clears taint, but before PHP
-  #     8.1 the default flags do not encode single quotes, so on
-  #     legacy runtimes the single-quoted-attribute breakout survives
-  #     encoding (the php/attr-encoding.yaml precedent: flagging the
-  #     flagless call would FP on every modern codebase).
-  #   - Full-html-pipeline shapes — the opener and the value assembled
-  #     in different statements or via printf/sprintf templates,
-  #     heredocs, or a template function — are missed: no literal is
-  #     concatenated adjacent to the tainted value.
-  #   - The literal anchors key on double-quote-DELIMITED PHP strings
-  #     (the regexes require the closing "), so an opener written as a
-  #     single-quote-delimited literal with an escaped quote
-  #     ('<font color=\'') is missed — the php/attr-encoding.yaml
-  #     precedent, where the same delimiter restriction is stated.
-  #   - Double-quoted attributes and text content are deliberately
-  #     out of scope: this is the narrow quote-breakout subset, not a
-  #     claim on the whole echo-XSS class.
-  - id: raptor.php.attr-xss.single-quote-attr
+  #   - The text-level sinks match opener-shaped character runs
+  #     anywhere in a line, including inside a longer string's
+  #     CONTENT (a code sample embedded in a string) — a tainted
+  #     expression must still land inside the matched range for a
+  #     finding, which bounds the mode to concatenations adjacent to
+  #     such text.
+  #   - The interpolation sink is string-granular: it requires an
+  #     interpolation directly after a single-quoted attribute opener
+  #     and taint somewhere in the string, but does not prove they
+  #     are the SAME slot — a string with a safe '$var' in opener
+  #     position and the tainted variable elsewhere still fires.
+  # Sanitizer note: ANY htmlspecialchars call clears taint, flagged
+  #   or flagless — since PHP 8.1 the default flags include
+  #   ENT_QUOTES, so flagging the flagless call would FP on every
+  #   modern codebase (the php/attr-encoding.yaml precedent).
+  #
+  # Scope pins: an opener is one double-quote-delimited literal with
+  #   no embedded escapes (the php/attr-encoding.yaml delimiter
+  #   restriction); the value arrives by direct concatenation or by
+  #   interpolation in ONE echoed/printed string; taint is
+  #   single-function; double-quoted attributes and text content
+  #   belong to the generic echo-XSS class, which this rule does not
+  #   claim. The negative fixture carries out-of-scope shape pins for
+  #   each boundary — each flips when a matching shape lands.
+  - id: raptor.php.attr-xss.attr-context
     mode: taint
     languages: [php]
     severity: HIGH
     message: >
-      Request data is concatenated into a single-quoted HTML attribute
-      (the preceding literal opens ...=' and never closes it) with no
-      output encoding. An embedded single quote closes the attribute
-      and injects event-handler attributes. Encode with
-      htmlspecialchars($v, ENT_QUOTES) at the emission site.
+      Request data is emitted into a single-quoted or unquoted HTML
+      attribute with no output encoding. An embedded quote (or, in
+      the unquoted context, whitespace) closes the attribute and
+      injects event-handler attributes. Quote the attribute AND
+      encode with htmlspecialchars($v, ENT_QUOTES) at the emission
+      site.
     pattern-sources:
       - pattern-either:
           - pattern: $_GET[...]
@@ -56,53 +82,37 @@ rules:
           - pattern: $_REQUEST[...]
           - pattern: $_COOKIE[...]
     pattern-sanitizers:
-      - pattern: htmlspecialchars(...)
-      - pattern: htmlentities(...)
-      - pattern: urlencode(...)
-      - pattern: rawurlencode(...)
-      - pattern: intval(...)
-      - pattern: (int) $X
-    pattern-sinks:
-      - patterns:
-          - pattern: $LIT . $V
-          - focus-metavariable: $V
-          - metavariable-regex:
-              metavariable: $LIT
-              regex: .*<[a-zA-Z][^>]*='[^']*"$
-    metadata:
-      cwe: ["CWE-79"]
-  - id: raptor.php.attr-xss.unquoted-attr
-    mode: taint
-    languages: [php]
-    severity: HIGH
-    message: >
-      Request data is concatenated as an unquoted HTML attribute value
-      (the preceding literal ends with attr=) with no output encoding.
-      Whitespace in the value starts a new attribute, so even
-      htmlspecialchars cannot contain it. Quote the attribute AND
-      encode with htmlspecialchars($v, ENT_QUOTES).
-    pattern-sources:
       - pattern-either:
-          - pattern: $_GET[...]
-          - pattern: $_POST[...]
-          - pattern: $_REQUEST[...]
-          - pattern: $_COOKIE[...]
-    pattern-sanitizers:
-      - pattern: htmlspecialchars(...)
-      - pattern: htmlentities(...)
-      - pattern: urlencode(...)
-      - pattern: rawurlencode(...)
-      - pattern: intval(...)
-      - pattern: (int) $X
+          - pattern: htmlspecialchars(...)
+          - pattern: \htmlspecialchars(...)
+          - pattern: htmlentities(...)
+          - pattern: \htmlentities(...)
+          - pattern: urlencode(...)
+          - pattern: \urlencode(...)
+          - pattern: rawurlencode(...)
+          - pattern: \rawurlencode(...)
+          - pattern: intval(...)
+          - pattern: \intval(...)
+          - pattern: (int) $X
     pattern-sinks:
+      # 1: single-quoted attribute opener literal, then `.` and the
+      # value (which must carry the taint).
+      - pattern-regex: '"[^"\n]*<[a-zA-Z][^>"\n]*=''[^''"\n]*"\s*\.\s*\S{1,120}'
+      # 2: unquoted attribute opener literal (single quotes balanced
+      # — an unclosed opener belongs to shape 1), then `.` and the
+      # value.
+      - pattern-regex: '"(?:[^"''\n]|''[^''\n]*'')*<[a-zA-Z](?:[^"''>\n]|''[^''\n]*'')*[a-zA-Z0-9_-]="\s*\.\s*\S{1,120}'
+      # 3: interpolation in the single-quoted opener position of one
+      # echoed/printed double-quoted string.
       - patterns:
-          - pattern: $LIT . $V
-          - focus-metavariable: $V
-          # Balanced single quotes required (the lookahead): a literal
-          # whose tail sits inside an unclosed single-quoted attribute
-          # belongs to the single-quote rule above, not here.
+          - pattern-either:
+              - pattern: echo $S;
+              - pattern: print $S;
           - metavariable-regex:
-              metavariable: $LIT
-              regex: ^(?=(?:[^']*'[^']*')*[^']*"$).*<[a-zA-Z][^>]*[a-zA-Z0-9_-]="$
+              metavariable: $S
+              regex: ^"[^"\\]*(?:\\.[^"\\]*)*"$
+          - metavariable-regex:
+              metavariable: $S
+              regex: .*<[a-zA-Z][^>]*='[^']*\{?\$
     metadata:
       cwe: ["CWE-79"]

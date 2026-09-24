@@ -16,3 +16,18 @@ function load_encoded() {
     $obj = unserialize(base64_decode($_GET['blob']));
     return $obj;
 }
+function load_qualified() {
+    return \unserialize($_COOKIE['prefs']);
+}
+function load_suppressed() {
+    return @unserialize($_COOKIE['prefs']);
+}
+function load_permissive_options() {
+    return unserialize($_COOKIE['prefs'], ['allowed_classes' => true]);
+}
+function load_permissive_extra_keys() {
+    return unserialize($_COOKIE['prefs'], ['allowed_classes' => true, 'max_depth' => 128]);
+}
+function load_permissive_legacy_array() {
+    return unserialize($_COOKIE['prefs'], array('allowed_classes' => true));
+}

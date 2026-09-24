@@ -4,10 +4,18 @@ rules:
   # attacker-controlled $_SERVER members that commonly seed
   # "self"-redirect URLs: HTTP_HOST and HTTP_X_FORWARDED_HOST (client
   # header echoes — a host-header-derived base URL redirects to an
-  # attacker host), PHP_SELF (carries decoded PATH_INFO), REQUEST_URI
-  # and QUERY_STRING (raw request echoes). The sink is any header()
-  # call whose first argument starts with a Location: literal —
-  # concatenated and interpolated forms both match.
+  # attacker host), HTTP_REFERER (the redirect-back shape — the
+  # header is fully client-chosen), PHP_SELF (carries decoded
+  # PATH_INFO), REQUEST_URI and QUERY_STRING (raw request echoes).
+  #
+  # Sinks — header()/\header() first arguments in four spellings,
+  # each anchored on a case-insensitive Location: literal (header
+  # names are case-insensitive): a literal-led concatenation, an
+  # interpolated "Location: $x" string, a sprintf('Location: %s', ..)
+  # build, and the one-hop variable form ($loc = 'Location: ' . ...;
+  # header($loc)). Every sink focuses the first argument, so taint in
+  # ANY OTHER argument (header('Location: /fixed', true, $code))
+  # never fires.
   #
   # Known FP modes:
   #   - Guard-shaped validation is invisible to taint mode: a strict
@@ -21,23 +29,20 @@ rules:
   #     path assumption (an encoded value cannot introduce a scheme
   #     or authority); a value encoded and used as the ENTIRE URL
   #     would be a broken redirect, not a working open one.
-  # Known FN modes:
-  #   - A base URL assembled from HTTP_HOST inside a helper function
-  #     and returned to the redirecting caller is invisible to
-  #     single-function taint (helper indirection).
-  #   - Non-Location redirects are out of the sink scope by design:
-  #     meta refresh markup and JavaScript location assignments are
-  #     output-encoding shapes, not response-header shapes, and a
-  #     'Refresh: 0; url=...' header stays silent — the anchor is the
-  #     Location: literal only.
+  # Scope pins: the anchor is one Location: literal in the first
+  #   argument (case-insensitive), at most one assignment hop away;
+  #   taint is single-function; non-Location redirects (Refresh:,
+  #   markup, script) are output-encoding shapes, not response-header
+  #   shapes. The negative fixture carries out-of-scope shape pins
+  #   for each boundary — each flips when a matching shape lands.
   - id: raptor.php.open-redirect.header-location
     mode: taint
     languages: [php]
     severity: MEDIUM
     message: >
       A Location response header is built from request-derived data
-      (request parameter, host header, or request-URI echo), so the
-      redirect target is attacker-influenced (open redirect —
+      (request parameter, host/referer header, or request-URI echo),
+      so the redirect target is attacker-influenced (open redirect —
       phishing bounce, and token leakage via Referer). Compare the
       value against a fixed allowlist of local paths, or send a
       server-configured absolute base URL.
@@ -51,24 +56,62 @@ rules:
               - pattern: $_SERVER[$KEY]
               - metavariable-regex:
                   metavariable: $KEY
-                  regex: ^['"](HTTP_HOST|HTTP_X_FORWARDED_HOST|PHP_SELF|REQUEST_URI|QUERY_STRING)['"]$
+                  regex: ^['"](HTTP_HOST|HTTP_X_FORWARDED_HOST|HTTP_REFERER|PHP_SELF|REQUEST_URI|QUERY_STRING)['"]$
     pattern-sanitizers:
-      - pattern: urlencode(...)
-      - pattern: rawurlencode(...)
-      - pattern: intval(...)
-      - pattern: (int) $X
+      - pattern-either:
+          - pattern: urlencode(...)
+          - pattern: \urlencode(...)
+          - pattern: rawurlencode(...)
+          - pattern: \rawurlencode(...)
+          - pattern: intval(...)
+          - pattern: \intval(...)
+          - pattern: (int) $X
       - by-side-effect: true
         patterns:
           - pattern-either:
               - pattern: in_array($V, ...)
+              - pattern: \in_array($V, ...)
               - pattern: array_key_exists($V, ...)
+              - pattern: \array_key_exists($V, ...)
               - pattern: isset($MAP[$V])
           - focus-metavariable: $V
     pattern-sinks:
+      # Literal-led concatenation or interpolated string as the first
+      # argument.
       - patterns:
-          - pattern: header($ARG, ...)
+          - pattern-either:
+              - pattern: header($ARG, ...)
+              - pattern: \header($ARG, ...)
+          - focus-metavariable: $ARG
           - metavariable-regex:
               metavariable: $ARG
-              regex: '^[''"][Ll]ocation\s*:'
+              regex: '^[''"](?i:location)\s*:'
+      # sprintf-built first argument (focused like the others: taint
+      # in a later header() argument must not ride on it).
+      - patterns:
+          - pattern-either:
+              - pattern: header($F, ...)
+              - pattern: \header($F, ...)
+          - focus-metavariable: $F
+          - metavariable-pattern:
+              metavariable: $F
+              patterns:
+                - pattern: sprintf($LIT, ...)
+                - metavariable-regex:
+                    metavariable: $LIT
+                    regex: '^[''"](?i:location)\s*:'
+      # One-hop variable: the Location string is assembled into a
+      # local and passed by name.
+      - patterns:
+          - pattern-inside: |
+              $LOC = $LIT . $REST;
+              ...
+          - pattern-either:
+              - pattern: header($LOC, ...)
+              - pattern: \header($LOC, ...)
+          - focus-metavariable: $LOC
+          - metavariable-regex:
+              metavariable: $LIT
+              regex: '^[''"](?i:location)\s*:'
     metadata:
       cwe: ["CWE-601"]

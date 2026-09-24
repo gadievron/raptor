@@ -6,6 +6,10 @@ function load_page_module_safe() {
     $page = basename($_GET['page']);
     include 'modules/' . $page . '.php';
 }
+function load_page_module_safe_qualified() {
+    $page = \basename($_GET['page']);
+    include 'modules/' . $page . '.php';
+}
 function load_allowlisted() {
     $page = $_GET['page'];
     if (!in_array($page, ['home', 'about'], true)) {
@@ -34,21 +38,19 @@ function read_param($key) {
     return $_GET[$key];
 }
 function helper_indirection_launder() {
-    // Documented FN: the superglobal read lives in a helper — taint
-    // is single-function, so the call-site value is untainted
-    // (semgrep intraprocedurality). Committed as the executable
-    // record of the shape: CWE-22 carries a PRE-EXISTING semgrep
-    // coverage row (core/audit/tool_coverage.py), so a silent rule
-    // resolves the class clean — an accepted, test-pinned
-    // consequence (test_tool_coverage.py names this mode).
+    // Out-of-scope shape pin: the superglobal read lives in a helper
+    // and the taint engine is single-function, so the call-site
+    // value is untainted. Flips when a matching shape lands.
+    // Class-level silence adjudication is pinned in
+    // test_tool_coverage.py (dark-preserved: CWE-22 carries
+    // dark_verify, keeping the witness channel armed).
     include 'modules/' . read_param('page') . '.php';
 }
 function file_read_out_of_scope() {
-    // Documented FN by scope: read/write file-op traversal
+    // Out-of-scope shape pin: read/write file-op traversal
     // (fopen/file_get_contents/readfile) is the generic CWE-22
-    // file-op shape, deliberately outside this rule's
-    // include/require sink scope (stated in-rule). Same accepted
-    // clean-when-silent consequence as above.
+    // file-op shape, outside this rule's include/require sink scope
+    // (see rule scope). Same adjudication pin as above.
     $name = $_GET['attachment'];
     return file_get_contents('attachments/' . $name);
 }
