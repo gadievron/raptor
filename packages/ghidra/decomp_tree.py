@@ -351,7 +351,9 @@ def _render_types(db: REDatabase) -> str:
     return "\n".join(parts)
 
 
-def write_decomp_tree(db: REDatabase, root: Path) -> DecompTree:
+def write_decomp_tree(
+    db: REDatabase, root: Path, *, conformance: bool = True,
+) -> DecompTree:
     """Write the pseudo-source tree for *db* under *root*.
 
     Idempotent for a given database: file grouping and content are
@@ -359,6 +361,13 @@ def write_decomp_tree(db: REDatabase, root: Path) -> DecompTree:
     database rewrites in place — the sidecar is written LAST so a
     reader never sees a sidecar pointing at files that don't exist
     yet.
+
+    ``conformance`` (default on) measures per-tool parse conformance
+    of the freshly emitted tree — sandboxed tree-sitter + semgrep
+    probe legs — into ``decomp-tree-conformance.json`` beside the
+    sidecar (:mod:`packages.ghidra.decomp_conformance`; the audit
+    report cites it as the sweep denominator). Best-effort: a
+    measurement failure warns and never fails the build.
     """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
@@ -462,6 +471,17 @@ def write_decomp_tree(db: REDatabase, root: Path) -> DecompTree:
     sidecar["truncated"] = result.truncated
     from core.json import save_json
     save_json(root / SIDECAR_NAME, sidecar)
+    if conformance:
+        try:
+            # Module-attribute call so tests can stub the sandboxed
+            # measurement without touching the tree emitter.
+            from . import decomp_conformance
+            decomp_conformance.measure_conformance(root)
+        except Exception:  # noqa: BLE001 — measurement never fails the build
+            logger.warning(
+                "decomp-tree conformance measurement failed",
+                exc_info=True,
+            )
     return result
 
 
