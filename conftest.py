@@ -490,6 +490,29 @@ def _sessions_registry_in_tmp(monkeypatch):
     # next test's resolution — clear it per test.
     from core.run import pin as _pin
     _pin._frozen_pins.clear()
+    # Same doctrine for the process-scoped --project override: entry
+    # points (raptor.py, raptor_agentic.py, the scanner mains) set it
+    # once for the process lifetime because in production they own the
+    # process. A test that drives such a main() in-process inherits
+    # that lifetime — every later test on the worker then resolves its
+    # ambient project through the leaked override (a leaked ``-`` reads
+    # as authoritatively projectless, silently dropping project-setting
+    # consumption in victim tests). Reset per test; tests that need an
+    # override set it in their own bodies, after this fixture runs.
+    _pin._process_project = None
+    _pin._process_project_set = False
+    # Sibling in the same process-global class: the operator sandbox
+    # disable (--sandbox none / --no-sandbox) and its profile twin,
+    # set process-wide by core.sandbox.cli for the same
+    # entry-point-owns-the-process reason. A leaked disable makes
+    # consent chokepoints (apply_project_sandbox_floor and every
+    # sandbox construction) silently skip in victim tests. Reset the
+    # PAIR coherently — cli._set_cli_state keeps them in lockstep, so
+    # resetting one alone would leave an incoherent combination no
+    # real process can reach.
+    from core.sandbox import state as _sbx_state
+    _sbx_state._cli_sandbox_disabled = False
+    _sbx_state._cli_sandbox_profile = None
 
 
 @pytest.fixture(autouse=True)
