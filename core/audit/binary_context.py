@@ -76,7 +76,7 @@ def _lazy_decompile(
                     srv.start()
                     import atexit
                     atexit.register(srv.stop)
-                    srv.open()
+                    srv.open()  # raw-open: not a filesystem open — Ghidra bridge server session
                     with _SERVER_CACHE_LOCK:
                         _SERVER_CACHE[key] = srv
                 except Exception:  # noqa: BLE001 — boot failure poisons the cache

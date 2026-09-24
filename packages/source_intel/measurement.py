@@ -187,7 +187,7 @@ def _iter_memory_corruption_corpus(
         if prefix and not fp.name.startswith(prefix):
             continue
         try:
-            finding = Finding.from_json(fp.read_text(encoding="utf-8"))
+            finding = Finding.from_json(fp.read_text(encoding="utf-8"))  # raw-open: corpus finding fixture (eval lane)
         except Exception:
             logger.debug("skipping %s: parse error", fp.name, exc_info=True)
             continue
@@ -197,7 +197,7 @@ def _iter_memory_corruption_corpus(
         if not label_path.exists():
             continue
         try:
-            label = GroundTruth.from_json(label_path.read_text(encoding="utf-8"))
+            label = GroundTruth.from_json(label_path.read_text(encoding="utf-8"))  # raw-open: corpus label fixture (eval lane)
         except Exception:
             logger.debug(
                 "skipping %s: label parse error",

@@ -851,7 +851,7 @@ def _presweep_flows_identity(target_path) -> tuple[str, str] | None:
         )
         rendered = scala_string_list(STANDARD_SWEEP_SINKS)
         sink_hash = hashlib.sha256(
-            script.read_bytes() + b"\x00" + rendered.encode("utf-8"),
+            script.read_bytes() + b"\x00" + rendered.encode("utf-8"),  # raw-open: shipped Joern script (RAPTOR-owned)
         ).hexdigest()
     except Exception:  # noqa: BLE001 — cache identity must not cost the sweep
         logger.debug("pre-sweep flow-cache identity failed", exc_info=True)

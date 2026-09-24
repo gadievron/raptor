@@ -340,7 +340,7 @@ def _iris_sanitizer_names(out_dir: Path | None) -> tuple[str, ...]:
     if memo is not None and memo[0] == mtime:
         return memo[1]
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8"))  # raw-open: RAPTOR-written joern verdict artifact in the run dir
     except Exception:  # noqa: BLE001 — degrade per the docstring contract
         # A defective spec FILE (unreadable bytes, invalid JSON)
         # degrades this tier to empty — a malformed run artifact must

@@ -520,7 +520,7 @@ def expand_translation_unit(
                     f"expanded output exceeds {_MAX_EXPANDED_BYTES} bytes",
                     tool=Path(pre[0]).name,
                 )
-            output = out_file.read_text(errors="replace")
+            output = out_file.read_text(errors="replace")  # raw-open: cpp output written by this module into run scratch
         except OSError as exc:
             return _degraded(
                 file_path,

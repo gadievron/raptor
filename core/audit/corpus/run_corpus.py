@@ -200,7 +200,7 @@ def _label_files_sha256(labels_dir: Path | None = None) -> str:
     h = hashlib.sha256()
     for path in files:
         try:
-            raw = path.read_bytes()
+            raw = path.read_bytes()  # raw-open: operator-curated corpus config (eval lane)
         except OSError:
             continue
         try:
@@ -782,7 +782,7 @@ def _verify_label_functions(
         if not name:
             continue
         try:
-            text = src_file.read_text(encoding="utf-8", errors="replace")
+            text = src_file.read_text(encoding="utf-8", errors="replace")  # raw-open: operator-curated corpus tree (eval lane)
         except OSError:
             continue
         if name not in text:
@@ -873,7 +873,7 @@ def _label_preprocessor_dead(src_dir: Path | None, label: Any) -> bool:
         from core.inventory.translation_view import (
             detect_preprocessor_dead_ranges,
         )
-        text = src_file.read_text(encoding="utf-8", errors="replace")
+        text = src_file.read_text(encoding="utf-8", errors="replace")  # raw-open: operator-curated corpus tree (eval lane)
         ranges = detect_preprocessor_dead_ranges(text)
     except Exception:  # noqa: BLE001 — enrichment only, never fatal
         logger.debug(
@@ -1606,7 +1606,7 @@ def _parse_audit_log_outcomes(
     qualified_by_bare: dict[str, str] = {}
     raw_entries: list[dict[str, Any]] = []
     if log_path.exists():
-        with Path(log_path).open() as f:
+        with Path(log_path).open() as f:  # raw-open: run log written by this harness (eval lane)
             for raw in f:
                 raw = raw.strip()
                 if not raw:
@@ -1637,7 +1637,7 @@ def _parse_audit_log_outcomes(
     # quality suppression exempts them, like any tool confirmation).
     floored_bases: set[str] = set()
     if log_path.exists():
-        with Path(log_path).open() as f:
+        with Path(log_path).open() as f:  # raw-open: run log written by this harness (eval lane)
             for raw in f:
                 raw = raw.strip()
                 if not raw:
@@ -1705,7 +1705,7 @@ def _extract_source(
     src_file = source_dir / label.source.file
     if not src_file.is_file():
         return None
-    lines = src_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = src_file.read_text(encoding="utf-8", errors="replace").splitlines()  # raw-open: operator-curated corpus tree (eval lane)
     start = max(0, label.source.line_start - 1)
     end = label.source.line_end
     return "\n".join(lines[start:end])
@@ -2080,7 +2080,7 @@ def _aggregate_spend(run_dirs: list[Path]) -> dict[str, Any] | None:
             calls = 0
             cost = 0.0
             try:
-                with Path(tel_path).open(encoding="utf-8") as f:
+                with Path(tel_path).open(encoding="utf-8") as f:  # raw-open: telemetry written by this harness (eval lane)
                     for raw in f:
                         raw = raw.strip()
                         if not raw:
@@ -2522,7 +2522,7 @@ def _save_debug(
         jpath = d / "review-journal.jsonl"
         if not jpath.exists():
             continue
-        with open(jpath) as f:
+        with open(jpath) as f:  # raw-open: journal written by this harness run (eval lane)
             for raw in f:
                 raw = raw.strip()
                 if not raw:

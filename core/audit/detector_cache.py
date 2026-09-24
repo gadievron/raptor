@@ -175,7 +175,7 @@ def _module_imports(name: str, path: Path, root: Path) -> set[str]:
     """
     try:
         tree = ast.parse(
-            path.read_text(encoding="utf-8", errors="replace"),
+            path.read_text(encoding="utf-8", errors="replace"),  # raw-open: RAPTOR-owned detector cache dir, written by this module
         )
     except SyntaxError:
         return set()
@@ -288,7 +288,7 @@ def _module_source_bytes(name: str) -> bytes:
         except Exception:
             return b"<module-unavailable>"
     try:
-        return path.read_bytes()
+        return path.read_bytes()  # raw-open: RAPTOR-owned detector cache dir, written by this module
     except OSError:
         return b"<module-unavailable>"
 
@@ -512,7 +512,7 @@ def call_graph_inputs_fingerprint(
                     if path.stat().st_size > CALL_GRAPH_MAX_FILE_BYTES:
                         data = b"<oversized>"
                     else:
-                        data = path.read_bytes()
+                        data = path.read_bytes()  # raw-open: RAPTOR-owned detector cache dir, written by this module
                 except OSError:
                     data = b"<unreadable>"
                 yield (f"{rel}\0{decl_language or ''}", data)

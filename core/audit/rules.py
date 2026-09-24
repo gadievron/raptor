@@ -125,7 +125,7 @@ def get_rule(out_dir: Path, rule_id: str) -> dict[str, Any] | None:
 
     rule_path = out_dir / meta.get("file", "")
     if rule_path.exists():
-        result["content"] = rule_path.read_text()
+        result["content"] = rule_path.read_text()  # raw-open: run-dir rule named by the RAPTOR-written manifest
     return result
 
 

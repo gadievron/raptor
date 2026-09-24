@@ -327,7 +327,7 @@ def _sage_replay_rule(
             )
             continue
         try:
-            body = rule_path.read_text(encoding="utf-8")
+            body = rule_path.read_text(encoding="utf-8")  # raw-open: RAPTOR rules-dir file; id charset-vetted, content hash-pinned below
         except OSError:
             continue
         digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -466,7 +466,7 @@ def synthesize_and_sweep(
                     rule = SynthesisedRule(
                         engine=entry.engine,
                         rule_id=entry.rule_id,
-                        body=rule_path.read_text(encoding="utf-8"),
+                        body=rule_path.read_text(encoding="utf-8"),  # raw-open: RAPTOR rules-dir file, path from the vetted registry row
                         rationale=entry.rationale,
                     )
                     matches, errors = _run_engine(rule, rule_path, Path(target_path))

@@ -64,7 +64,7 @@ def _pack_cleanup_names(target_path: Path | None) -> frozenset[str]:
         if not is_kernel_tree(target_path):
             return frozenset()
         raw = json.loads(
-            (_PACK_DIR / "linux_kernel.json").read_text(encoding="utf-8"),
+            (_PACK_DIR / "linux_kernel.json").read_text(encoding="utf-8"),  # raw-open: shipped vocab pack under _PACK_DIR (RAPTOR-owned)
         )
     except Exception:
         return frozenset()

@@ -228,7 +228,7 @@ def discover_semgrep_rules(
     for d in dirs:
         for yf in sorted(list(d.glob("*.yaml")) + list(d.glob("*.yml"))):
             try:
-                doc = yaml.safe_load(yf.read_text(encoding="utf-8"))
+                doc = yaml.safe_load(yf.read_text(encoding="utf-8"))  # raw-open: operator-curated corpus rule fixture (eval lane)
             except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
                 errors.append(f"{yf}: {exc}")
                 continue
@@ -288,7 +288,7 @@ def discover_cocci_rules(
     for path in sorted(rules_dir.glob("*.cocci")):
         cwes: set = set()
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = path.read_text(encoding="utf-8", errors="replace")  # raw-open: operator-curated corpus tree (eval lane)
         except OSError:
             continue
         for line in text.splitlines():
@@ -343,7 +343,7 @@ def discover_codeql_rules() -> list[RuleInfo]:
                                      frozenset({lang_dir.name}))
         for path in sorted(lang_dir.glob("*.ql")):
             try:
-                text = path.read_text(encoding="utf-8", errors="replace")
+                text = path.read_text(encoding="utf-8", errors="replace")  # raw-open: operator-curated corpus tree (eval lane)
             except OSError:
                 continue
             header = text.split("*/", 1)[0]
@@ -834,7 +834,7 @@ def run_codeql_engine(
         if sarif_path and Path(sarif_path).is_file():
             from packages.semgrep.models import parse_sarif
 
-            findings = parse_sarif(Path(sarif_path).read_text(
+            findings = parse_sarif(Path(sarif_path).read_text(  # raw-open: SARIF produced by this harness run (eval lane)
                 encoding="utf-8", errors="replace",
             ))
             for f in findings:

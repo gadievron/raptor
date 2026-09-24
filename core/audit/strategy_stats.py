@@ -48,7 +48,7 @@ def aggregate_strategy_stats(
         if not log_path.exists():
             continue
         try:
-            with open(log_path, encoding="utf-8") as f:
+            with open(log_path, encoding="utf-8") as f:  # raw-open: RAPTOR-written strategy log in the run dir
                 for line in f:
                     line = line.strip()
                     if not line:

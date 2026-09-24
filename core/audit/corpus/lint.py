@@ -489,7 +489,7 @@ def _tree_search(tree: Path, name: str, limit: int = 3) -> list[str]:
                 continue
             fpath = Path(root) / fname
             try:
-                text = fpath.read_text(encoding="utf-8", errors="replace")
+                text = fpath.read_text(encoding="utf-8", errors="replace")  # raw-open: operator-curated corpus tree (eval lane)
             except OSError:
                 continue
             for i, line in enumerate(text.splitlines()):
@@ -655,7 +655,7 @@ def verify_pin(
             )
 
     try:
-        text = src_file.read_text(encoding="utf-8", errors="replace")
+        text = src_file.read_text(encoding="utf-8", errors="replace")  # raw-open: operator-curated corpus tree (eval lane)
     except OSError as exc:
         return PinCheck(
             label=label, path=path, outcome=PIN_MISSING,
