@@ -199,7 +199,9 @@ if not store_coverage_threshold_met(view, fail_under=80.0):
     "items_by_kind": {"function": 8, "global": 2, "interstitial": 1},
     "functions_covered": 10,               # examined by any tool (verdict-based)
     "functions_by_category": {"static": 10, "llm": 7, "runtime": 0},
-    "llm_reviewable": 8,                    # function + top_level items only
+    "llm_reviewable": 8,                    # function + top_level items,
+                                            #   plus interstitials stamped
+                                            #   script_handler: true
     "gap_no_tool": 1, "gap_no_llm": 1,     # gap_no_llm counts reviewable kinds
     "llm_gap_functions": [{"file": ..., "function": ..., "line": ...}],
     "verdicts": {"clean": 9, "open": 1, "found_then_lost": 0, "unexamined": 1},

@@ -291,11 +291,13 @@ def content_identity(checklist: dict[str, Any]) -> str | None:
     return f"content:{digest[:16]}"
 
 
-def iter_inventory_functions(
+def iter_inventory_items(
     checklist: dict[str, Any],
-) -> Iterator[tuple[str, str, int, int | None, str]]:
-    """Yield ``(file, name, line_start, line_end, kind)`` for every inventory
-    item.
+) -> Iterator[tuple[str, str, int, int | None, str, dict[str, Any]]]:
+    """Yield ``(file, name, line_start, line_end, kind, item)`` for every
+    inventory item — :func:`iter_inventory_functions` plus the raw item
+    dict, for consumers that read builder-stamped item fields (e.g. the
+    ``script_handler`` classification) alongside the normalised row.
 
     Handles the ``items`` key with ``functions`` fallback (matching
     ``core.inventory``). ``line_end`` may be ``None`` when the extractor
@@ -306,7 +308,9 @@ def iter_inventory_functions(
     attacker-writable: rows are walked tolerantly and every numeric
     field is normalised to a genuine int (``_opt_int``) — a forged
     ``"line_start": "1"`` previously flowed into interval arithmetic
-    and crashed every store query that touched the function.
+    and crashed every store query that touched the function. The raw
+    ``item`` dict is NOT normalised — readers must validate what they
+    take from it.
     """
     for fe in iter_file_entries(checklist):
         path = fe.get("path")
@@ -331,6 +335,7 @@ def iter_inventory_functions(
                     address,
                     address + max(size - 1, 0),
                     kind,
+                    fn,
                 )
                 continue
             yield (
@@ -339,7 +344,17 @@ def iter_inventory_functions(
                 _opt_int(fn.get("line_start")) or 0,
                 _opt_int(fn.get("line_end")),
                 kind,
+                fn,
             )
+
+
+def iter_inventory_functions(
+    checklist: dict[str, Any],
+) -> Iterator[tuple[str, str, int, int | None, str]]:
+    """Yield ``(file, name, line_start, line_end, kind)`` for every inventory
+    item. See :func:`iter_inventory_items` (this drops the item dict)."""
+    for file, name, lo, hi, kind, _item in iter_inventory_items(checklist):
+        yield (file, name, lo, hi, kind)
 
 
 class CoverageStore:
