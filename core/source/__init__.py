@@ -12,8 +12,11 @@ Concerns:
 - **Gated reads** (``core.source.gated``) — the raising flavor of the
   same read discipline, for loaders whose file is REQUIRED and whose
   refusal classes must surface distinctly.
+- **Anchored opens** (``core.source.beneath``) — dir-fd–anchored opens
+  beneath a root, closing the resolve-then-open swap window.
 """
 
+from core.source.beneath import open_regular_beneath
 from core.source.contained import (
     DEFAULT_MAX_SOURCE_CHARS,
     open_regular,
@@ -46,6 +49,7 @@ __all__ = [
     "ReadBudgetExceededError",
     "number_lines",
     "open_regular",
+    "open_regular_beneath",
     "read_bytes_capped",
     "read_contained",
     "read_context",
