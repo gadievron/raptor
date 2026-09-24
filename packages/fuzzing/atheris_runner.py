@@ -331,14 +331,22 @@ class AtherisRunner(LibFuzzerRunner):
         return records
 
     def _persist_crash_records(self, records: list[dict[str, Any]]) -> None:
-        if not records:
-            return
+        # ALWAYS write, even an empty list: the output dir is inside
+        # the campaign's sandbox write scope, so a hostile harness can
+        # plant its own atheris-crashes.json mid-run — an early return
+        # on zero records would leave that forged operator-facing
+        # sidecar in place after a crash-less campaign.
         try:
             path = self.output_dir / "atheris-crashes.json"
+            # Remove any planted entry first: a planted SYMLINK of
+            # this name would otherwise turn our own write into an
+            # arbitrary-path write outside the run dir.
+            path.unlink(missing_ok=True)
             path.write_text(
                 json.dumps(records, indent=2), encoding="utf-8",
             )
-            logger.info("atheris crash records: %s", path)
+            if records:
+                logger.info("atheris crash records: %s", path)
         except OSError as e:
             logger.warning("could not persist atheris crash records: %s", e)
 

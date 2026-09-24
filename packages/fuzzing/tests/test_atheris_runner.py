@@ -225,6 +225,38 @@ class TestAtherisRunnerContract(unittest.TestCase):
                               python_executable=str(tmp / "no-python"))
             self.assertIn("not found", str(ctx.exception))
 
+    def test_planted_crash_sidecar_is_replaced_on_crashless_run(self):
+        # The output dir is inside the campaign's sandbox write scope:
+        # a hostile harness can plant atheris-crashes.json mid-run. A
+        # crash-less campaign must still overwrite it (and a planted
+        # symlink must be unlinked, not written through).
+        tmp = _tmpdir(self)
+        runner = self._runner(tmp)
+
+        def fake_sandbox_run(cmd, **kwargs):
+            # No crash this run; the "harness" plants a forged sidecar
+            # as a symlink to a file outside the run dir.
+            outside = tmp / "outside.txt"
+            outside.write_text("precious")
+            (runner.output_dir / "atheris-crashes.json").symlink_to(outside)
+            kwargs["stderr"].write(b"#100\tDONE   cov: 1 ft: 1 corp: 1/1b exec/s: 50\n")
+
+            class Result:
+                returncode = 0
+
+            return Result()
+
+        with patch("packages.fuzzing.libfuzzer_runner._sandbox_run",
+                   side_effect=fake_sandbox_run):
+            result = runner.run()
+
+        self.assertEqual(len(result.crashes), 0)
+        sidecar = runner.output_dir / "atheris-crashes.json"
+        self.assertFalse(sidecar.is_symlink())
+        self.assertEqual(json.loads(sidecar.read_text()), [])
+        # The symlink target outside the run dir was not written to.
+        self.assertEqual((tmp / "outside.txt").read_text(), "precious")
+
     def test_custom_interpreter_venv_root_joins_tool_paths(self):
         # python_runtime_tool_paths() inspects the RUNNING interpreter;
         # a campaign pointed at a different venv's python must get that
