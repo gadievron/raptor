@@ -806,3 +806,61 @@ class TestCleanRefutedCallerGate:
         assert rec["dropped"] is False
         assert rec["verdict"] == "smt_promotion_caller_gate"
         assert rec["error_class"] == "ModuleNotFoundError"
+
+
+class TestCallerGateContainment:
+    """The defining-source read is contained: ``file_path`` arrives
+    from receipt records (LLM-writable), so an absolute path or a
+    ``../`` walk must never read a host file outside the target root
+    into gate evidence — the pre-fix bare join did exactly that."""
+
+    def _split_tree(self, tmp_path: Path) -> tuple[Path, Path]:
+        target = tmp_path / "target"
+        target.mkdir()
+        (target / "use.c").write_text(
+            "int use_a(void) { return compute(4u, 4u); }\n",
+        )
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "callee.c"
+        secret.write_text(_CALLEE)
+        return target, secret
+
+    def test_escaping_file_path_reads_nothing_and_holds_unbindable(
+            self, tmp_path):
+        import sys
+
+        target, secret = self._split_tree(tmp_path)
+        opened: list = []
+
+        def hook(event, args):
+            if event == "open" and args and str(secret) in str(args[0]):
+                opened.append(args)
+
+        sys.addaudithook(hook)
+        for fp in (str(secret), "../outside/callee.c"):
+            decision = evaluate_caller_gate(
+                target, fp, "compute",
+                "check-overflow", _MECHANISM,
+                source=_CALLEE, def_span=(1, 4),
+            )
+            # No defining source -> no parameter operands -> the
+            # receipt binds nothing. Pre-fix, the secret's params
+            # bound contracts and the gate adjudicated on them.
+            assert decision.action == "hold"
+            assert decision.channel_outcome == "unbindable"
+        assert opened == [], (
+            "out-of-root defining file was opened by the caller gate"
+        )
+
+    def test_in_root_defining_source_still_binds(self, tmp_path):
+        target, _ = self._split_tree(tmp_path)
+        (target / "lib.c").write_text(_CALLEE)
+        decision = evaluate_caller_gate(
+            target, "lib.c", "compute",
+            "check-overflow", _MECHANISM,
+            source=_CALLEE, def_span=(1, 4),
+        )
+        # The contained read binds the parameters exactly as the raw
+        # read did: the gate proceeds past unbindable.
+        assert decision.channel_outcome != "unbindable"

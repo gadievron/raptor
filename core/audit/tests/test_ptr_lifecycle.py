@@ -607,3 +607,36 @@ class TestInvalidationHolderConstraint:
         )
         assert res.outcome == "refuted"
         assert res.to_dict()["invalidation_search"]["kind"] == "null-write"
+
+
+class TestSourceReadContainment:
+    """run_ptr_lifecycle_check's own source read (source_texts=None)
+    is contained + capped — same gap-record join class as
+    lock_region."""
+
+    def test_escaping_file_path_holds_unbindable(self, tmp_path):
+        import sys
+
+        target = tmp_path / "target"
+        target.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        secret = outside / "evil.c"
+        secret.write_text("void freed_alias(void) { }\n")
+        opened: list = []
+
+        def hook(event, args):
+            if event == "open" and args and str(secret) in str(args[0]):
+                opened.append(args)
+
+        sys.addaudithook(hook)
+        for fp in (str(secret), "../outside/evil.c"):
+            res = pl.run_ptr_lifecycle_check(
+                target, fp, "freed_alias",
+                "stale alias dereferenced after free",
+            )
+            assert res.outcome == "inconclusive"
+            assert res.reason.startswith(pl.REASON_HYPOTHESIS_UNBINDABLE)
+        assert opened == [], (
+            "out-of-root file was opened by the ptr_lifecycle source read"
+        )
