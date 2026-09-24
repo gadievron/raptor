@@ -86,6 +86,17 @@ _FRAME_RE = re.compile(
 )
 
 
+def _is_other_interpreter(python_executable: str) -> bool:
+    """Whether *python_executable* names a different interpreter than
+    the running one — by UNRESOLVED absolute path, because a venv's
+    python symlinks to the base interpreter while carrying its own
+    site-packages."""
+    return (
+        Path(python_executable).absolute()
+        != Path(sys.executable).absolute()
+    )
+
+
 def atheris_available(python_executable: str | None = None) -> bool:
     """Whether the interpreter that will run the harness can import
     atheris.
@@ -94,10 +105,13 @@ def atheris_available(python_executable: str | None = None) -> bool:
     code executes). A different ``python_executable`` cannot be probed
     without running it, so it is optimistically assumed capable — the
     campaign itself fails loudly (campaign_failed) if the import dies.
+
+    "Different" compares UNRESOLVED absolute paths: a venv's python is
+    a symlink to the base interpreter, so resolving would collapse a
+    venv (its own site-packages, possibly with atheris) into "same
+    interpreter" and wrongly refuse it.
     """
-    if python_executable and Path(python_executable).resolve() != Path(
-        sys.executable
-    ).resolve():
+    if python_executable and _is_other_interpreter(python_executable):
         return True
     try:
         return importlib.util.find_spec("atheris") is not None
@@ -220,8 +234,13 @@ class AtherisRunner(LibFuzzerRunner):
         # own prefix tree (site-packages with atheris) must be
         # readable too.
         paths = python_runtime_tool_paths()
-        exe = Path(self.python_executable).resolve()
-        if exe != Path(sys.executable).resolve() and len(exe.parents) >= 2:
+        # UNRESOLVED path for the venv-root derivation: a venv's
+        # python symlinks to the base interpreter, and resolving first
+        # would derive the base prefix instead of the venv tree that
+        # actually holds atheris.
+        exe = Path(self.python_executable).absolute()
+        if _is_other_interpreter(self.python_executable) \
+                and len(exe.parents) >= 2:
             venv_root = str(exe.parents[1])
             if venv_root not in paths:
                 paths.append(venv_root)
@@ -251,7 +270,13 @@ class AtherisRunner(LibFuzzerRunner):
     ) -> AtherisResult:
         result = super()._parse_result(stderr, _stdout, elapsed)
         assert isinstance(result, AtherisResult)  # _new_result contract
-        result.python_exception = parse_python_exception(stderr)
+        # Atheris prints the uncaught-exception block on STDOUT while
+        # libFuzzer's own crash handling goes to stderr — check both,
+        # stdout first (observed placement on real campaigns).
+        result.python_exception = (
+            parse_python_exception(_stdout)
+            or parse_python_exception(stderr)
+        )
         result.crash_records = self._normalize_crash_records(result)
         self._persist_crash_records(result.crash_records)
         return result
@@ -295,9 +320,10 @@ class AtherisRunner(LibFuzzerRunner):
             logger.warning("could not persist atheris crash records: %s", e)
 
 
-def parse_python_exception(stderr: str) -> PythonExceptionInfo | None:
+def parse_python_exception(output: str) -> PythonExceptionInfo | None:
     """Parse the LAST uncaught-Python-exception block from atheris
-    stderr.
+    output (observed on stdout on real campaigns; callers check both
+    streams).
 
     Atheris prints ``=== Uncaught Python exception: ===`` followed by
     the ``Type: message`` line and the traceback before the libFuzzer
@@ -305,10 +331,10 @@ def parse_python_exception(stderr: str) -> PythonExceptionInfo | None:
     output: lines are stripped of terminal control sequences, length-
     bounded, and the frame count is capped.
     """
-    idx = stderr.rfind(_EXC_HEADER)
+    idx = output.rfind(_EXC_HEADER)
     if idx < 0:
         return None
-    lines = stderr[idx + len(_EXC_HEADER):].splitlines()
+    lines = output[idx + len(_EXC_HEADER):].splitlines()
 
     exc_type = ""
     message = ""

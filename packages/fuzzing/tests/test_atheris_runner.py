@@ -25,13 +25,24 @@ from packages.fuzzing.atheris_runner import (
     parse_python_exception,
 )
 
-# Realistic atheris stderr: libFuzzer banner + stats grammar, then the
-# uncaught-Python-exception block, then the crash artifact line.
+# Realistic atheris streams, matching observed real-campaign
+# placement: libFuzzer banner, stats grammar, crash handling, and the
+# -print_final_stats summary on STDERR; the uncaught-Python-exception
+# block on STDOUT.
 _ATHERIS_CRASH_STDERR = """\
 INFO: Instrumenting mypkg
 INFO: Seed: 12345
 #2\tINITED cov: 5 ft: 5 corp: 1/1b exec/s: 0 rss: 40Mb
 #100\tNEW    cov: 12 ft: 24 corp: 5/16b lim: 4 exec/s: 100 rss: 41Mb
+==12345== ERROR: libFuzzer: fuzz target exited
+SUMMARY: libFuzzer: fuzz target exited
+Test unit written to ./crash-da39a3ee5e6b
+stat::number_of_executed_units: 113
+stat::average_exec_per_sec:     0
+stat::peak_rss_mb:              40
+"""
+
+_ATHERIS_CRASH_STDOUT = """\
 
  === Uncaught Python exception: ===
 ValueError: bad payload
@@ -41,10 +52,6 @@ Traceback (most recent call last):
   File "/tmp/pkg/mypkg/__init__.py", line 4, in parse
     raise ValueError("bad payload")
 ValueError: bad payload
-
-==12345== ERROR: libFuzzer: fuzz target exited
-SUMMARY: libFuzzer: fuzz target exited
-Test unit written to ./crash-da39a3ee5e6b
 """
 
 
@@ -85,6 +92,7 @@ class TestAtherisRunnerContract(unittest.TestCase):
         def fake_sandbox_run(cmd, **kwargs):
             captured["cmd"] = cmd
             captured["kwargs"] = kwargs
+            kwargs["stdout"].write(_ATHERIS_CRASH_STDOUT.encode())
             kwargs["stderr"].write(_ATHERIS_CRASH_STDERR.encode())
 
             class Result:
@@ -123,8 +131,10 @@ class TestAtherisRunnerContract(unittest.TestCase):
         self.assertIn(str(runner.target_dir), py_path)
         self.assertIn(str(runner.target_dir / "src"), py_path)
 
-        # Stats parsed from the libFuzzer grammar atheris emits.
-        self.assertEqual(result.stats.total_executions, 100)
+        # Stats parsed from the libFuzzer grammar atheris emits —
+        # incl. the -print_final_stats execution count, which is the
+        # only one a crash-terminated campaign prints.
+        self.assertEqual(result.stats.total_executions, 113)
         self.assertEqual(result.stats.coverage_features, 24)
 
         # Crash artifact collected; exception is the triage signal.
@@ -212,7 +222,27 @@ class TestAtherisRunnerContract(unittest.TestCase):
                 harness, target_dir=target, output_dir=tmp / "out",
                 python_executable=str(venv_python),
             )
-        self.assertIn(str((tmp / "venv").resolve()),
+        self.assertIn(str((tmp / "venv").absolute()),
+                      runner._sandbox_tool_paths())
+
+    def test_venv_symlink_python_counts_as_other_interpreter(self):
+        # A venv's python is a SYMLINK to the base interpreter;
+        # resolving would collapse it into "same interpreter" and
+        # wrongly refuse a venv that has atheris installed.
+        tmp = _tmpdir(self)
+        harness, target = _make_target(tmp)
+        venv_bin = tmp / "venv" / "bin"
+        venv_bin.mkdir(parents=True)
+        venv_python = venv_bin / "python3"
+        venv_python.symlink_to(sys.executable)
+        with patch("importlib.util.find_spec", return_value=None):
+            # In-process interpreter has no atheris, but the venv
+            # interpreter is a different one — optimistic pass.
+            runner = AtherisRunner(
+                harness, target_dir=target, output_dir=tmp / "out",
+                python_executable=str(venv_python),
+            )
+        self.assertIn(str((tmp / "venv").absolute()),
                       runner._sandbox_tool_paths())
 
     def test_harness_needs_no_executable_bit(self):
