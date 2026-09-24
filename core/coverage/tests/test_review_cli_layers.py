@@ -390,9 +390,16 @@ def test_compact_refuses_non_serializable_preserved_row(
     rewrite loudly instead of crashing save_json mid-compaction."""
     import pytest
 
+    import core.coverage.journal as journal_mod
     import core.json.utils as json_utils
 
+    # Dual-namespace stdlib-arm forcing: the setattr covers journal's
+    # function-local (call-time) imports; the setitem covers its
+    # module-level ``loads`` / ``load_json`` bindings, which after a
+    # sibling suite purges core.json.* from sys.modules read a
+    # detached module the sys.modules-only patch misses.
     monkeypatch.setattr(json_utils, "_orjson", None)
+    monkeypatch.setitem(journal_mod.loads.__globals__, "_orjson", None)
     project = tmp_path / "proj"
     project.mkdir()
     planted = (

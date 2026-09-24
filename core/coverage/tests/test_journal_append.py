@@ -528,8 +528,19 @@ class TestSerializationHostility:
 
     @staticmethod
     def _force_stdlib_json(monkeypatch) -> None:
+        # Two namespaces on purpose. journal.py's function-local
+        # imports resolve through sys.modules at call time (the
+        # setattr covers those), but its module-level ``loads`` /
+        # ``load_json`` bindings keep reading the module object they
+        # were imported from — after a sibling suite purges
+        # core.json.* from sys.modules that object is detached, a
+        # sys.modules-only patch misses it, and where orjson is
+        # installed this pin silently exercises the orjson arm. The
+        # setitem through the held function's globals covers the
+        # detached copy.
         import core.json.utils as json_utils
         monkeypatch.setattr(json_utils, "_orjson", None)
+        monkeypatch.setitem(journal_mod.loads.__globals__, "_orjson", None)
 
     def _plant(self, tmp_path: Path, line: str) -> None:
         append_entry(tmp_path, _entry(1))
@@ -852,9 +863,9 @@ class TestIndexShapeGuards:
         # ValueError) crashed save_json inside the merge flock on
         # EVERY retry. The writer must refuse loudly instead, file
         # untouched — parity with orjson environments, where the same
-        # planted index refuses at parse.
-        import core.json.utils as json_utils
-        monkeypatch.setattr(json_utils, "_orjson", None)
+        # planted index refuses at parse. Dual-namespace forcing for
+        # the same reason as TestSerializationHostility's helper.
+        TestSerializationHostility._force_stdlib_json(monkeypatch)
         index_path = tmp_path / journal_mod.INDEX_FILENAME
         index_path.write_text(planted, encoding="ascii")
         run = self._run_with_entry(tmp_path)
