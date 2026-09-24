@@ -16,12 +16,14 @@ generated harnesses.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from core.atomic_fs import open_exclusive_artifact
 from core.config import RaptorConfig
 from core.logging import get_logger
 from core.sandbox import run as _sandbox_run
@@ -258,8 +260,16 @@ class LibFuzzerRunner:
         stderr_path = self.output_dir / "stderr.log"
         wedge_timeout = False
         try:
-            with open(stdout_path, "wb") as stdout_fp, \
-                    open(stderr_path, "wb") as stderr_fp:
+            # Exclusive create (lstat-honest pre-unlink + O_EXCL |
+            # O_NOFOLLOW): output_dir is reused across campaigns and
+            # is the hostile harness's sandbox write scope — a
+            # planted symlink/FIFO at these predictable names would
+            # be followed / block a bare "wb" open.
+            with os.fdopen(
+                open_exclusive_artifact(stdout_path, replace=True), "wb",
+            ) as stdout_fp, os.fdopen(
+                open_exclusive_artifact(stderr_path, replace=True), "wb",
+            ) as stderr_fp:
                 completed = _sandbox_run(
                     cmd,
                     block_network=True,

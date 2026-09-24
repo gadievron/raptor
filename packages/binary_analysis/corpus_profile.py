@@ -48,6 +48,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import open_exclusive_artifact
 from core.hash import sha256_file
 from core.json import load_json, save_json
 from core.security.log_sanitisation import sanitise_for_terminal
@@ -937,19 +938,15 @@ def _write_seed_bytes(dest: Path, data: bytes) -> str | None:
     """Exclusive, symlink-refusing seed write. Returns a skip reason
     on refusal, None on success.
 
-    O_CREAT|O_EXCL|O_NOFOLLOW: the reset phase owns every
-    pre-existing name, so anything occupying the destination at write
-    time — e.g. a concurrently planted symlink aimed at a victim file
-    — makes the write fail closed with a manifest record instead of
-    following/truncating the target (plain ``write_bytes`` opens with
-    O_TRUNC and follows symlinks).
+    ``open_exclusive_artifact`` (O_CREAT|O_EXCL|O_NOFOLLOW): the reset
+    phase owns every pre-existing name, so anything occupying the
+    destination at write time — e.g. a concurrently planted symlink
+    aimed at a victim file — makes the write fail closed with a
+    manifest record instead of following/truncating the target (plain
+    ``write_bytes`` opens with O_TRUNC and follows symlinks).
     """
     try:
-        fd = os.open(
-            str(dest),
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
-            0o644,
-        )
+        fd = open_exclusive_artifact(dest)
     except OSError as exc:
         return f"destination not exclusively creatable: {type(exc).__name__}"
     try:

@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
+from core.atomic_fs import open_exclusive_artifact, write_new_text
 from core.binary.inspect import inspect_binary as _inspect_binary
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
@@ -136,8 +137,21 @@ class _SandboxedAFLInstance:
 
     def _run(self) -> None:
         try:
-            with open(self.stdout_path, "wb") as stdout_fp, \
-                    open(self.stderr_path, "wb") as stderr_fp:
+            # Exclusive-create the instance logs (lstat-honest
+            # pre-unlink + O_EXCL|O_NOFOLLOW): they live under
+            # output_dir/raptor-logs — inside every instance's
+            # sandbox write grant — so a master instance's live
+            # child can plant a symlink/FIFO at a secondary's
+            # predictable log names before this open runs. A bare
+            # "wb" open would follow the symlink (write laundering)
+            # or block on the FIFO.
+            with os.fdopen(
+                open_exclusive_artifact(self.stdout_path, replace=True),
+                "wb",
+            ) as stdout_fp, os.fdopen(
+                open_exclusive_artifact(self.stderr_path, replace=True),
+                "wb",
+            ) as stderr_fp:
                 extra = {}
                 if self.rootfs is not None:
                     extra["rootfs"] = str(self.rootfs)
@@ -925,7 +939,15 @@ class AFLRunner:
 
                 stdout_path = log_dir / f"{instance_name}.stdout.log"
                 stderr_path = log_dir / f"{instance_name}.stderr.log"
-                (log_dir / f"{instance_name}.cmdline").write_text(" ".join(cmd) + "\n", encoding="utf-8")
+                # Exclusive create (see _SandboxedAFLInstance._run):
+                # by the time a secondary instance's records are
+                # written the master's sandboxed child is already
+                # live with write on this directory.
+                write_new_text(
+                    log_dir / f"{instance_name}.cmdline",
+                    " ".join(cmd) + "\n",
+                    replace=True,
+                )
 
                 instance = _SandboxedAFLInstance(
                     name=instance_name,
@@ -1204,12 +1226,33 @@ class AFLRunner:
         for f in crash_files:
             instance = f.parent.parent.name
             dest = merged / f"{f.name},instance:{instance}"
-            if dest.exists():
+            # lstat, not exists(): merged_crashes sits inside the
+            # sandboxed (attacker-built) target's write grant, and a
+            # planted DANGLING symlink passes exists() == False — the
+            # copy fallback would then create the symlink's target at
+            # an attacker-chosen path. Anything already occupying the
+            # name, dangling links included, is skipped.
+            try:
+                dest.lstat()
+            except FileNotFoundError:
+                pass
+            else:
                 continue
             try:
                 dest.hardlink_to(f)
             except OSError:
-                shutil.copy2(f, dest)
+                # Exclusive-create copy: hardlink_to refuses an
+                # occupied name by itself; the fallback must match
+                # (copy2 opens the destination with O_TRUNC and
+                # follows symlinks planted in the lstat→copy window).
+                # A plant landing INSIDE that window makes this open
+                # raise (FileExistsError) — failing the merge loudly
+                # is the chosen behaviour: an active mid-merge
+                # attacker is a bigger finding than a lost merge.
+                with os.fdopen(
+                    open_exclusive_artifact(dest), "wb",
+                ) as out_fh, f.open("rb") as src_fh:
+                    shutil.copyfileobj(src_fh, out_fh)
         return merged
 
     @staticmethod
@@ -1589,7 +1632,13 @@ class AFLRunner:
             # parser needs.
             console_log = self.output_dir / "showmap-console.log"
             self.output_dir.mkdir(parents=True, exist_ok=True)
-            with console_log.open("wb") as con_fh:
+            # Exclusive create: the campaign's (attacker-built)
+            # target just ran with write on output_dir and can have
+            # left a symlink/FIFO at this predictable name — a bare
+            # "wb" open would follow / block on it.
+            with os.fdopen(
+                open_exclusive_artifact(console_log, replace=True), "wb",
+            ) as con_fh:
                 _sandbox_run(
                     showmap_cmd,
                     block_network=True,

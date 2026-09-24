@@ -62,6 +62,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_new_text
 from core.logging import get_logger
 from core.sandbox import python_runtime_tool_paths
 from packages.fuzzing.libfuzzer_runner import (
@@ -338,12 +339,13 @@ class AtherisRunner(LibFuzzerRunner):
         # sidecar in place after a crash-less campaign.
         try:
             path = self.output_dir / "atheris-crashes.json"
-            # Remove any planted entry first: a planted SYMLINK of
-            # this name would otherwise turn our own write into an
-            # arbitrary-path write outside the run dir.
-            path.unlink(missing_ok=True)
-            path.write_text(
-                json.dumps(records, indent=2), encoding="utf-8",
+            # Exclusive create (replace=True unlinks a planted SYMLINK
+            # of this name ITSELF — it would otherwise turn our own
+            # write into an arbitrary-path write outside the run dir —
+            # and the O_EXCL open fails loud on anything reappearing
+            # in the window).
+            write_new_text(
+                path, json.dumps(records, indent=2), replace=True,
             )
             if records:
                 logger.info("atheris crash records: %s", path)

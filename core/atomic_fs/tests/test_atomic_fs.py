@@ -393,3 +393,185 @@ class TestShortWriteCompletion:
         monkeypatch.undo()
         assert not target.exists()
         assert list(tmp_path.iterdir()) == []
+
+
+class TestOpenExclusiveArtifact:
+    """The exclusive-create family: anything occupying the
+    destination name refuses the open instead of being followed,
+    truncated, or blocked on."""
+
+    def test_creates_new_file(self, tmp_path):
+        import os
+
+        from core.atomic_fs import open_exclusive_artifact
+
+        target = tmp_path / "artifact.bin"
+        fd = open_exclusive_artifact(target)
+        try:
+            os.write(fd, b"payload")
+        finally:
+            os.close(fd)
+        assert target.read_bytes() == b"payload"
+
+    def test_refuses_existing_file(self, tmp_path):
+        from core.atomic_fs import open_exclusive_artifact
+
+        target = tmp_path / "artifact.bin"
+        target.write_bytes(b"old")
+        with pytest.raises(OSError):
+            open_exclusive_artifact(target)
+        assert target.read_bytes() == b"old"
+
+    def test_refuses_dangling_symlink(self, tmp_path):
+        """A dangling symlink passes ``exists() == False`` — the
+        exact blind spot O_EXCL closes: creating through it would
+        materialise the attacker-chosen target."""
+        from core.atomic_fs import open_exclusive_artifact
+
+        victim = tmp_path / "victim"
+        link = tmp_path / "artifact.bin"
+        link.symlink_to(victim)
+        with pytest.raises(OSError):
+            open_exclusive_artifact(link)
+        assert not victim.exists()
+
+    def test_refuses_symlink_to_existing_victim(self, tmp_path):
+        from core.atomic_fs import open_exclusive_artifact
+
+        victim = tmp_path / "victim"
+        victim.write_text("do not touch")
+        link = tmp_path / "artifact.bin"
+        link.symlink_to(victim)
+        with pytest.raises(OSError):
+            open_exclusive_artifact(link)
+        assert victim.read_text() == "do not touch"
+
+    def test_replace_removes_planted_symlink_not_its_target(
+        self, tmp_path,
+    ):
+        from core.atomic_fs import write_new_bytes
+
+        victim = tmp_path / "victim"
+        victim.write_text("do not touch")
+        link = tmp_path / "artifact.bin"
+        link.symlink_to(victim)
+        write_new_bytes(link, b"fresh", replace=True)
+        assert victim.read_text() == "do not touch"
+        assert not link.is_symlink()
+        assert link.read_bytes() == b"fresh"
+
+    def test_replace_overwrites_own_previous_emission(self, tmp_path):
+        from core.atomic_fs import write_new_bytes
+
+        target = tmp_path / "artifact.bin"
+        write_new_bytes(target, b"run one", replace=True)
+        write_new_bytes(target, b"run two", replace=True)
+        assert target.read_bytes() == b"run two"
+
+    def test_replace_refuses_directory(self, tmp_path):
+        from core.atomic_fs import open_exclusive_artifact
+
+        target = tmp_path / "artifact.bin"
+        target.mkdir()
+        with pytest.raises(OSError):
+            open_exclusive_artifact(target, replace=True)
+        assert target.is_dir()
+
+    @pytest.mark.skipif(
+        not hasattr(__import__("os"), "mkfifo"),
+        reason="mkfifo unavailable (non-POSIX)")
+    def test_replace_removes_planted_fifo(self, tmp_path):
+        import os
+
+        from core.atomic_fs import write_new_bytes
+
+        target = tmp_path / "artifact.bin"
+        os.mkfifo(target)
+        write_new_bytes(target, b"fresh", replace=True)
+        assert target.read_bytes() == b"fresh"
+
+    def test_mode_wins_over_umask(self, tmp_path):
+        import os
+        import stat
+
+        from core.atomic_fs import open_exclusive_artifact
+
+        target = tmp_path / "script.sh"
+        old_umask = os.umask(0o077)
+        try:
+            fd = open_exclusive_artifact(target, mode=0o755)
+            os.close(fd)
+        finally:
+            os.umask(old_umask)
+        assert stat.S_IMODE(target.stat().st_mode) == 0o755
+
+    def test_mode_rejects_setuid(self, tmp_path):
+        from core.atomic_fs import open_exclusive_artifact
+
+        with pytest.raises(ValueError):
+            open_exclusive_artifact(tmp_path / "f", mode=0o4755)
+
+    def test_write_new_text_round_trip(self, tmp_path):
+        from core.atomic_fs import write_new_text
+
+        target = tmp_path / "artifact.txt"
+        write_new_text(target, "héllo\n")
+        assert target.read_text(encoding="utf-8") == "héllo\n"
+
+
+class TestOpenHardenedAppend:
+
+    def test_appends_not_truncates(self, tmp_path):
+        import os
+
+        from core.atomic_fs import open_hardened_append
+
+        target = tmp_path / "trail.log"
+        for chunk in (b"one\n", b"two\n"):
+            fd = open_hardened_append(target)
+            try:
+                os.write(fd, chunk)
+            finally:
+                os.close(fd)
+        assert target.read_bytes() == b"one\ntwo\n"
+
+    def test_refuses_symlink(self, tmp_path):
+        from core.atomic_fs import open_hardened_append
+
+        victim = tmp_path / "victim"
+        victim.write_text("do not touch")
+        link = tmp_path / "trail.log"
+        link.symlink_to(victim)
+        with pytest.raises(OSError):
+            open_hardened_append(link)
+        assert victim.read_text() == "do not touch"
+
+    @pytest.mark.skipif(
+        not hasattr(__import__("os"), "mkfifo"),
+        reason="mkfifo unavailable (non-POSIX)")
+    def test_refuses_readerless_fifo_without_blocking(self, tmp_path):
+        import os
+
+        from core.atomic_fs import open_hardened_append
+
+        target = tmp_path / "trail.log"
+        os.mkfifo(target)
+        with pytest.raises(OSError):
+            open_hardened_append(target)
+
+    @pytest.mark.skipif(
+        not hasattr(__import__("os"), "mkfifo"),
+        reason="mkfifo unavailable (non-POSIX)")
+    def test_refuses_fifo_with_reader(self, tmp_path):
+        import os
+
+        from core.atomic_fs import open_hardened_append
+
+        target = tmp_path / "trail.log"
+        os.mkfifo(target)
+        reader = os.open(str(target), os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            with pytest.raises(OSError):
+                open_hardened_append(target)
+        finally:
+            os.close(reader)

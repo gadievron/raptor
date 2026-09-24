@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import tempfile
 import time
 import unittest
@@ -193,6 +194,32 @@ class TestFuzzingTelemetry(unittest.TestCase):
         self.assertIn("campaign_start", captured)
         self.assertIn("crash", captured)
         self.assertIn("campaign_end", captured)
+
+
+class TestEventTrailHardening(unittest.TestCase):
+    """The events trail lives in a reused output dir a previous
+    campaign's hostile child had write on — planted symlinks/FIFOs at
+    the predictable name must refuse the open, never be followed or
+    block campaign start."""
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "mkfifo unavailable")
+    def test_start_refuses_planted_readerless_fifo_without_blocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            os.mkfifo(out_dir / "fuzz-events.jsonl")
+            tel = FuzzingTelemetry(out_dir=out_dir)
+            with self.assertRaises(OSError):
+                tel.start()
+
+    def test_start_refuses_planted_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out_dir = Path(tmp)
+            victim = out_dir / "victim"
+            (out_dir / "fuzz-events.jsonl").symlink_to(victim)
+            tel = FuzzingTelemetry(out_dir=out_dir)
+            with self.assertRaises(OSError):
+                tel.start()
+            self.assertFalse(victim.exists())
 
 
 if __name__ == "__main__":
