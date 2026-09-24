@@ -9,12 +9,13 @@ import json
 import logging
 import math
 import os
-import stat as _stat_mod
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from core.atomic_fs import write_text_atomically
+from core.source.gated import ReadBudgetExceededError
+from core.source.gated import read_text_gated as _read_text_gated_impl
 
 logger = logging.getLogger(__name__)
 
@@ -92,14 +93,15 @@ class _DefaultBudget:
 _USE_DEFAULT_BUDGET = _DefaultBudget()
 
 
-class JsonBudgetExceededError(ValueError):
+class JsonBudgetExceededError(ReadBudgetExceededError):
     """JSON input exceeds its byte budget.
 
     Raised (never returned) so an over-budget payload can't be
     mistaken for an empty-but-valid document. The message always
     names the observed size and the budget.
 
-    Subclasses ``ValueError`` so call sites with an existing
+    Subclasses :class:`core.source.gated.ReadBudgetExceededError`
+    (itself a ``ValueError``) so call sites with an existing
     ``except ValueError`` / ``except json.JSONDecodeError``
     malformed-input path degrade the same way for over-budget input
     without new plumbing — while callers that want to report the
@@ -202,60 +204,19 @@ def _reject_non_finite(token: str) -> Any:
 def _read_text_gated(p: Path, max_bytes: int | None) -> str:
     """Open-then-fstat read for :func:`load_json`.
 
-    Both gates check the OPEN fd's inode, not a name that can be
-    swapped between calls:
-
-    * Regular files only — a FIFO stats as 0 bytes (passing any
-      ``max_bytes``) and then BLOCKS the reader forever, a plantable
-      hang for every consumer of files in another principal's write
-      grant. ``O_NONBLOCK`` makes a FIFO/device open return instead
-      of blocking (no effect on regular-file reads), so even the
-      open itself can't hang. Symlink-to-regular still resolves;
-      symlink-to-FIFO is refused with the FIFO.
-    * ``max_bytes`` — checked on the fstat size AND re-checked after
-      a capped read, so a file that grows between fstat and read is
-      refused instead of buffered unbounded (``core.json.bounded``
-      closed exactly this window; same pattern here).
-
-    Raises ``ValueError`` for non-regular files,
-    ``JsonBudgetExceededError`` (a ``ValueError``) for over-budget
-    files — so a strict caller can report the refusal distinctly, per
-    that class's contract — ``OSError`` for open/read failures, and
-    ``UnicodeDecodeError`` (a ``ValueError``) for undecodable bytes:
-    all shapes ``load_json``'s strict/lenient branches already handle.
+    The implementation is the promoted
+    :func:`core.source.gated.read_text_gated` (single body — this
+    module's loaders and non-JSON strict readers consume the same
+    gates: fd-checked regularity, ``O_NONBLOCK`` FIFO refusal, fstat
+    budget check re-checked after a capped read). Budget refusals are
+    raised as :class:`JsonBudgetExceededError` so this module's
+    strict/lenient branches and every external catcher keep their
+    contract; all other shapes (``ValueError`` for non-regular files,
+    ``OSError``, ``UnicodeDecodeError``) pass through unchanged.
     """
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_NONBLOCK", 0)
-        | getattr(os, "O_CLOEXEC", 0)
+    return _read_text_gated_impl(
+        p, max_bytes, budget_error=JsonBudgetExceededError,
     )
-    fd = os.open(str(p), flags)
-    try:
-        st = os.fstat(fd)
-        if not _stat_mod.S_ISREG(st.st_mode):
-            msg = f"not a regular file: {p}"
-            raise ValueError(msg)
-        if max_bytes is not None and st.st_size > max_bytes:
-            msg = (
-                f"file size {st.st_size} bytes exceeds "
-                f"max_bytes={max_bytes}: {p}"
-            )
-            raise JsonBudgetExceededError(msg)
-        with os.fdopen(fd, "rb") as fh:
-            fd = -1  # fdopen owns it now
-            raw = fh.read(max_bytes + 1 if max_bytes is not None else -1)
-        if max_bytes is not None and len(raw) > max_bytes:
-            msg = (
-                f"file grew past max_bytes={max_bytes} during read: {p}"
-            )
-            raise JsonBudgetExceededError(msg)
-        return raw.decode("utf-8-sig")
-    finally:
-        if fd >= 0:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
 
 
 def load_json(
