@@ -4585,15 +4585,21 @@ def _reviewable_item_count(
     A positive ``--include-kinds`` entry naming them counts them
     again, exactly as the loop would then dispatch them.
 
-    Deliberate over-count (fail-open toward PROCEEDING, both
-    directions documented): ``interstitial`` items are counted
-    whenever their lane is enabled — the per-item script-handler
+    Interstitial items consult the builder-persisted
+    ``script_handler`` stamp when present — a free dict read, so the
+    count matches what gap selection would dispatch (stamped-False
+    wiring no longer holds the count above zero). Stamp ABSENT
+    (pre-stamp checklist) keeps the deliberate over-count (fail-open
+    toward PROCEEDING, both directions documented): the per-item
     content gate is a source read this cheap pre-check must not
     replicate, and refusing a checklist whose interstitials WOULD
     dispatch is the worse error. The residual under-refusal (yaml
-    workflow ``job:`` items and content-rejected interstitials can
-    still hold the count above zero) is accepted and documented.
+    workflow ``job:`` items, and unstamped content-rejected
+    interstitials, can still hold the count above zero) is accepted
+    and documented.
     """
+    from core.inventory.script_handler import script_handler_stamp
+
     from .gaps import (
         _resolve_reviewable_kinds,
         _script_interstitials_enabled,
@@ -4609,7 +4615,10 @@ def _reviewable_item_count(
             if not isinstance(item, dict):
                 continue
             kind = item.get("kind", "")
-            if kind in kinds or (kind == "interstitial" and interstitials):
+            if kind in kinds or (
+                kind == "interstitial" and interstitials
+                and script_handler_stamp(item) is not False
+            ):
                 count += 1
     return count
 
