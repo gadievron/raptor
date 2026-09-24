@@ -29,6 +29,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.atomic_fs import write_text_atomically
 from core.json import save_json
 from core.security.env_sanitisation import safe_subprocess_env
 from core.security.markdown_render import md_inline
@@ -361,9 +362,13 @@ def check_report(
         else:
             base = text
         try:
-            report_path.write_text(
+            # Atomic read-modify-write commit: the report lives in
+            # the reused run dir — a plain write_text follows a
+            # planted symlink at the name; os.replace replaces it.
+            write_text_atomically(
+                report_path,
                 base.rstrip("\n") + "\n" + render_section(results),
-                encoding="utf-8")
+            )
         except OSError as exc:
             logger.warning("blamed_lines: report stamp failed: %s", exc)
     if summary["not_executed"]:

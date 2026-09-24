@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import os
+import stat as _stat
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -139,12 +140,37 @@ def store_lock(out_dir: Path):
         yield
         return
     lock_path = _project_dir(out_dir) / _STORE_DIR / ".lock"
+    fd = None
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
-    except OSError:
-        # Lock file uncreatable (read-only dir, ENOSPC) — proceed
-        # unserialised rather than failing the persist.
+        # O_NOFOLLOW / O_NONBLOCK / fstat S_ISREG (core.fs_lock's flag
+        # shape): a planted symlink at the predictable lock path must
+        # not steer the flock to an attacker-chosen path, and a
+        # planted reader-less FIFO must not wedge the persist on the
+        # open.
+        fd = os.open(
+            str(lock_path),
+            os.O_WRONLY | os.O_CREAT
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NONBLOCK", 0),
+            0o600,
+        )
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(f"lock path {lock_path} is not a regular file")
+    except OSError as exc:
+        # Lock file uncreatable (read-only dir, ENOSPC) or
+        # tamper-shaped (symlink/FIFO) — proceed unserialised rather
+        # than failing the persist, but loudly.
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        logger.warning(
+            "IRIS store lock %s: refusing to open (%s); proceeding "
+            "WITHOUT cross-process lock — concurrent writers may drop "
+            "each other's specs; investigate a planted symlink or "
+            "FIFO at that path", lock_path, exc,
+        )
         yield
         return
     try:

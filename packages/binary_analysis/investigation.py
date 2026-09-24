@@ -17,6 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from core.atomic_fs import write_text_atomically
 from core.binary.addrmap import passthrough_fid
 from core.json import save_json
 from core.security.markdown_render import md_inline
@@ -935,9 +936,11 @@ def write_investigation(
     out_dir = Path(out_dir).resolve()
     save_json(out_dir / "binary-investigation.json", investigation)
     report_path = out_dir / "binary-investigation-report.md"
-    report_path.write_text(
-        render_investigation_report(investigation),
-        encoding="utf-8",
+    # Atomic like the save_json above: a plain write_text at the
+    # predictable report name follows planted symlinks in the reused
+    # run dir.
+    write_text_atomically(
+        report_path, render_investigation_report(investigation),
     )
     with BinaryGraphStore(result.graph_path) as store:
         snapshot_id = store.latest_snapshot_id()

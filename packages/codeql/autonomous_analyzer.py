@@ -21,6 +21,7 @@ from typing import Any
 # silently breaking under relocation.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.atomic_fs import write_text_atomically
 from core.json import save_json
 from core.llm.methodology import load_methodology
 from core.llm.scorecard import fast_tier_model_name, run_cheap_fp_check
@@ -1507,8 +1508,9 @@ class AutonomousCodeQLAnalyzer:
             else:
                 exploit_ext = ".py"
             exploit_file = out_dir / f"{safe_id}_exploit{exploit_ext}"
-            with Path(exploit_file).open("w", encoding="utf-8") as f:
-                f.write(exploit_code)
+            # Atomic write: predictable artifact name in the reused
+            # run dir — a bare open("w") follows a planted symlink.
+            write_text_atomically(exploit_file, exploit_code)
             self.logger.info("✓ Exploit saved: %s", exploit_file)
 
         return AutonomousAnalysisResult(

@@ -17,6 +17,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import stat as _stat_mod
 from typing import Any, TYPE_CHECKING
 
 from core.atomic_fs import write_text_atomically
@@ -849,8 +850,25 @@ def _model_write_lock(json_path: Path) -> Iterator[None]:
         yield
         return
     lock_path = json_path.with_name(json_path.name + ".lock")
-    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+    # O_NOFOLLOW / O_NONBLOCK / fstat S_ISREG (core.fs_lock's flag
+    # shape): the lock sits beside the model in a project dir other
+    # runs' sandboxed children may have written — a planted symlink
+    # must not steer the flock, and a planted reader-less FIFO must
+    # not wedge the save on the open. This lock's contract is
+    # raise-on-failure (save_model must not proceed unserialised), so
+    # a tamper-shaped path fails the save loudly.
+    fd = os.open(
+        str(lock_path),
+        os.O_RDWR | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0),
+        0o600,
+    )
     try:
+        if not _stat_mod.S_ISREG(os.fstat(fd).st_mode):
+            msg = f"lock path {lock_path} is not a regular file"
+            raise OSError(msg)
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield
     finally:

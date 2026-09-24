@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_text_atomically
 from core.coverage.journal import is_mechanical_echo as _is_mechanical_echo
 from core.coverage.record import READS_MANIFEST, read_manifest_lines
 from core.json import load_json, save_json
@@ -839,10 +840,12 @@ def write_markdown_report(
 
     content = "\n".join(lines)
     path = out_dir / "audit-report.md"
-    # Pinned encoding: finding titles/bodies carry target-derived text
-    # (often non-ASCII); the platform default (POSIX locale → ASCII)
-    # made the report write crash at run end.
-    path.write_text(content, encoding="utf-8")
+    # Atomic write, pinned utf-8 (the atomic writer's default): the
+    # platform default encoding (POSIX locale → ASCII) once crashed
+    # the report write at run end, and a bare write_text at the
+    # predictable name follows a symlink planted in the reused,
+    # sandbox-writable run dir.
+    write_text_atomically(path, content)
     return path
 
 

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import socket
 import sys
@@ -33,6 +34,8 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+from core.atomic_fs import open_exclusive_artifact
 
 from .detect import pyghidra_available
 from .headless import _install_read_paths
@@ -465,7 +468,16 @@ class GhidraServer:
             )
         out_path = Path(out_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(worker_out, out_path, follow_symlinks=False)
+        # Exclusive-create copy: follow_symlinks=False only covers
+        # the SOURCE side of copy2 — the destination open is O_TRUNC
+        # and follows whatever occupies out_path in the reused run
+        # dir. Fresh O_EXCL|O_NOFOLLOW inode after an lstat-honest
+        # unlink.
+        out_path.unlink(missing_ok=True)
+        with open(worker_out, "rb") as src_fh, os.fdopen(
+            open_exclusive_artifact(out_path), "wb",
+        ) as dst_fh:
+            shutil.copyfileobj(src_fh, dst_fh)
         return resp["functions"]
 
     @property
@@ -495,7 +507,14 @@ class GhidraServer:
                 "working copy .gpr is a symlink — refusing to persist"
             )
         dst_gpr = dst_dir / self._work_gpr.name
-        shutil.copy2(self._work_gpr, dst_gpr, follow_symlinks=False)
+        # Destination-side hardening (the docstring's lstat rationale
+        # covered the source only): exclusive-create copy so a
+        # symlink planted at the destination name is never followed.
+        dst_gpr.unlink(missing_ok=True)
+        with open(self._work_gpr, "rb") as src_fh, os.fdopen(
+            open_exclusive_artifact(dst_gpr), "wb",
+        ) as dst_fh:
+            shutil.copyfileobj(src_fh, dst_fh)
         src_rep = self._work_gpr.with_suffix(".rep")
         dst_rep = dst_dir / src_rep.name
         if dst_rep.exists():

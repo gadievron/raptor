@@ -19,6 +19,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_text_atomically
+
 logger = logging.getLogger(__name__)
 
 # One whole-target semgrep pass; generous but bounded.
@@ -119,7 +121,9 @@ def run_baseline_pre_scan(
         scan_dir.mkdir(parents=True, exist_ok=True)
         path = scan_dir / f"{PRE_SCAN_SARIF_PREFIX}_{label}.sarif"
         try:
-            path.write_text(sarif_text, encoding="utf-8")
+            # Atomic write: predictable artifact name in the reused
+            # run dir — a bare write_text follows a planted symlink.
+            write_text_atomically(path, sarif_text)
         except OSError:
             logger.debug("pre-scan: SARIF write failed", exc_info=True)
             continue

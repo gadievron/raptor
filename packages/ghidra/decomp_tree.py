@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import logging
 import re
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+from core.atomic_fs import write_new_text
 
 from .match import _CONTROL
 
@@ -383,7 +386,16 @@ def write_decomp_tree(
     # that is no longer in the database as if it were live code.
     for old in list(root.glob("g*.c")) + [root / TYPES_HEADER]:
         try:
-            if old.is_file():
+            # lstat, not is_file(): is_file() follows symlinks and is
+            # False for a dangling one, so planted symlinks/FIFOs at
+            # tree names survived the sweep and the write_text below
+            # then followed them. Remove any non-directory entry —
+            # unlink removes a symlink ITSELF, never its target.
+            st = old.lstat()
+        except OSError:
+            continue
+        try:
+            if not stat.S_ISDIR(st.st_mode):
                 old.unlink()
         except OSError:
             logger.warning("could not remove stale tree file %s", old)
@@ -398,8 +410,10 @@ def write_decomp_tree(
     types_text = _render_types(db)
     if db.types:
         if len(types_text.encode("utf-8")) <= budget:
-            (root / TYPES_HEADER).write_text(types_text,
-                                             encoding="utf-8")
+            # Exclusive create (replace unlinks a planted entry
+            # itself; the sweep above already cleared known names).
+            write_new_text(root / TYPES_HEADER, types_text,
+                           replace=True)
             result.files.append(TYPES_HEADER)
             budget -= len(types_text.encode("utf-8"))
         else:
@@ -459,7 +473,8 @@ def write_decomp_tree(
         if not chunks:
             continue
         text = "\n".join(chunks)
-        (root / fname).write_text(text, encoding="utf-8")
+        # Exclusive create — see the TYPES_HEADER write above.
+        write_new_text(root / fname, text, replace=True)
         budget = group_budget
         result.files.append(fname)
         result.functions_emitted += len(entries)

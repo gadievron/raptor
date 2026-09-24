@@ -41,6 +41,7 @@ from core.analysis.peer_groups import (
     resolve_peer_groups,
 )
 from core.artifacts.provenance import stamp_provenance
+from core.atomic_fs import write_text_atomically
 from core.audit.binary_check_vectors import (
     GroupCheckVectors,
     extract_group_check_vectors,
@@ -649,8 +650,11 @@ def run_siblings(
     with run_artifacts_lock(run_dir):
         save_json(run_dir / CLUSTERS_FILENAME, payload)
         save_json(run_dir / HYPOTHESES_FILENAME, hypotheses_payload)
-        (run_dir / REPORT_FILENAME).write_text(
-            _render_report(payload), encoding="utf-8",
+        # Atomic like the save_json siblings: a plain write_text at
+        # the predictable report name follows planted symlinks in the
+        # reused run dir.
+        write_text_atomically(
+            run_dir / REPORT_FILENAME, _render_report(payload),
         )
     payload["artifacts"] = {
         "json": str(run_dir / CLUSTERS_FILENAME),

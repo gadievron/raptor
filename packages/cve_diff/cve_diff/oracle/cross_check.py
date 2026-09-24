@@ -30,6 +30,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from core.atomic_fs import write_bytes_atomically
 from core.http.urllib_backend import UrllibClient
 from core.json import load_json_bounded
 from core.url_patterns import GITHUB_COMMIT_URL_RE, normalize_slug
@@ -208,8 +209,20 @@ def main() -> int:
     # Per-iteration `fh.flush()` is intentional checkpoint behaviour
     # — operator can `tail -f oracle_verdicts.jsonl.tmp` to watch
     # progress in real time on large runs (1000+ CVEs take 30+ min).
+    # Exclusive create at the (deliberately predictable — the tail -f
+    # contract above) tmp name: a symlink left at it would make this
+    # writer stream verdicts to an attacker-chosen path. The
+    # missing_ok unlink removes a planted symlink ITSELF; O_EXCL |
+    # O_NOFOLLOW fails loud if anything reappears in the window.
     tmp_path = jsonl_path.with_suffix(jsonl_path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as fh:
+    tmp_path.unlink(missing_ok=True)
+    tmp_fd = os.open(
+        str(tmp_path),
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        | getattr(os, "O_NOFOLLOW", 0),
+        0o644,
+    )
+    with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
         for i, r in enumerate(results, 1):
             cve_id = r.get("cve_id", "UNKNOWN")
             status = _classify_bench_status(r)
@@ -257,7 +270,13 @@ def main() -> int:
     # JSONL written with NO oracle_summary.md, blamed an oracle
     # bug rather than the upstream feed encoding issue.
     md = _render_markdown(summary_path.name, results, verdicts_by_status)
-    (out_dir / "oracle_summary.md").write_text(md, encoding="utf-8", errors="replace")
+    # Atomic write (planted-symlink defence at the predictable report
+    # name — same threat as the verdicts stream above); bytes variant
+    # keeps the errors="replace" encoding contract.
+    write_bytes_atomically(
+        out_dir / "oracle_summary.md",
+        md.encode("utf-8", errors="replace"),
+    )
 
     # Headline to stderr
     pass_results = verdicts_by_status.get("PASS", [])

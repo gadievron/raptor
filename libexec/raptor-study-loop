@@ -1031,7 +1031,10 @@ def _render_study_report(output_dir: Path) -> None:
         parts.extend(seed_section)
 
     report_path = output_dir / "study-report.md"
-    report_path.write_text("\n".join(parts) + "\n", encoding="utf-8")
+    # Atomic write (planted-symlink defence at the predictable report
+    # name in the reused run dir).
+    from core.atomic_fs import write_text_atomically
+    write_text_atomically(report_path, "\n".join(parts) + "\n")
     print(f"\nstudy-loop: report written to {report_path}",
           file=sys.stderr)
 

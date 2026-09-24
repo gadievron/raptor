@@ -167,7 +167,23 @@ class _Session:
             ),
             "functions": functions,
         }
-        with open(out, "w") as f:
+        # Exclusive create at the requested path (no RAPTOR imports
+        # by design — inline flags): the work dir is this worker's
+        # sandbox write scope, but the export must never follow a
+        # symlink left at the name by an earlier op on a hostile
+        # project. Fresh inode per export; the server side re-checks
+        # regularity before copying the file out.
+        try:
+            os.unlink(out)
+        except FileNotFoundError:
+            pass
+        fd = os.open(
+            out,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o644,
+        )
+        with os.fdopen(fd, "w") as f:
             json.dump(doc, f)
         return {"functions": len(functions), "out": out}
 

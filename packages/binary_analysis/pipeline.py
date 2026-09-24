@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_text_atomically
 from core.artifacts.context_map_budget import save_context_map
 from core.artifacts.provenance import (
     CONTEXT_MAP_TEXT_SCHEMA,
@@ -1383,7 +1384,14 @@ def _write_report(result: BinaryAnalysisResult, out_dir: Path) -> None:
         f"Validation handoff: `{Path(out_dir) / 'binary-validation-handoff.json'}`",
         f"Graph: `{result.graph_path}`",
     ])
-    (Path(out_dir) / "binary-analysis-report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # Atomic write: the run dir is reused and inside sandboxed
+    # children's write grants — a planted symlink at the predictable
+    # report name must never route the write (os.replace replaces the
+    # symlink itself, mirroring the save_json artifacts beside it).
+    write_text_atomically(
+        Path(out_dir) / "binary-analysis-report.md",
+        "\n".join(lines) + "\n",
+    )
 
 
 def _ingest_graph(result: BinaryAnalysisResult, out_dir: Path) -> None:

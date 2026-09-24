@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_bytes_atomically
 from core.sarif import emit
 from core.source import read_text_capped
 
@@ -379,6 +380,20 @@ def build_expanded_corpus(
     target_path = Path(target_path)
     scratch_root = Path(scratch_root)
     scratch_root.mkdir(parents=True, exist_ok=True)
+    # Process-private scratch contract: the expanded copies land at
+    # target-derived relative paths, so a pre-populated or symlinked
+    # scratch root could alias those writes onto foreign files. The
+    # caller owns creating a FRESH dir (mkdtemp under the run dir);
+    # refuse anything else loudly instead of writing into it.
+    if scratch_root.is_symlink():
+        msg = f"expanded-corpus scratch root is a symlink: {scratch_root}"
+        raise ValueError(msg)
+    if any(scratch_root.iterdir()):
+        msg = (
+            f"expanded-corpus scratch root {scratch_root} is not empty "
+            "— pass a fresh process-private directory"
+        )
+        raise ValueError(msg)
     corpus = ExpandedCorpus(root=scratch_root)
 
     budget = max_tus
@@ -418,7 +433,13 @@ def build_expanded_corpus(
         dest = scratch_root / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            dest.write_text(view.text, encoding="utf-8", errors="replace")
+            # Atomic write: belt-and-braces under the fresh-scratch
+            # contract above — os.replace never follows a symlink
+            # planted mid-loop by a concurrent writer. Bytes variant
+            # keeps the old write_text errors="replace" behaviour.
+            write_bytes_atomically(
+                dest, view.text.encode("utf-8", errors="replace"),
+            )
         except OSError as exc:
             corpus.failed += 1
             logger.debug("expanded corpus: could not write %s: %s", dest, exc)

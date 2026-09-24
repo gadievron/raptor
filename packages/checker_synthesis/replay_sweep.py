@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_text_atomically
 from core.json import save_json
 from packages.coccinelle import runner as cocci_runner
 from packages.semgrep import runner as semgrep_runner
@@ -528,9 +529,15 @@ def write_report(report: SweepReport, out_dir: Path) -> Path:
     """Write matches.jsonl + summary.json under *out_dir*."""
     out_dir.mkdir(parents=True, exist_ok=True)
     matches_path = out_dir / "matches.jsonl"
-    with matches_path.open("w", encoding="utf-8") as f:
-        for m in report.matches:
-            f.write(json.dumps(m.to_dict(), sort_keys=True) + "\n")
+    # Atomic like the save_json below (planted-symlink defence at the
+    # predictable artifact name in the reused out dir).
+    write_text_atomically(
+        matches_path,
+        "".join(
+            json.dumps(m.to_dict(), sort_keys=True) + "\n"
+            for m in report.matches
+        ),
+    )
     summary_path = out_dir / "summary.json"
     save_json(summary_path, report.summary_dict(), sort_keys=True)
     return matches_path
