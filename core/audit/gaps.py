@@ -24,7 +24,10 @@ from typing import Any
 from core.artifacts.context_map_budget import CONTEXT_MAP_CONSUMER_MAX_BYTES
 from core.coverage.journal import make_function_key
 from core.inventory.languages import SCRIPT_PER_FILE_LANGUAGES
-from core.inventory.script_handler import interstitial_is_handler
+from core.inventory.script_handler import (
+    interstitial_is_handler,
+    script_handler_stamp,
+)
 from core.json import load_json, save_json
 
 from ._util import extract_context_map_set, safe_join
@@ -463,6 +466,9 @@ def compute_gaps(
     reviewable_kinds = _resolve_reviewable_kinds(include_kinds)
     script_interstitials = _script_interstitials_enabled(include_kinds)
     consumed_covered: dict[str, int] = {}
+    # One warning per run when the checklist predates the
+    # script_handler stamp (see the fallback below).
+    _stamp_fallback_logged = False
 
     # Single-slot source cache for the parser-shape classifier: gap
     # iteration is grouped per checklist file, so one slot hits like
@@ -533,23 +539,44 @@ def compute_gaps(
             # residue exclusion below: their interstitial spans are
             # declarations-and-braces glue, and reviewing those burned
             # full review slots on items with nothing to review.
+            # The builder-persisted stamp is the source of truth;
+            # recomputing from source is the STAMP-ABSENT fallback
+            # only (a checklist written before the stamp existed —
+            # resumable runs). The fallback is full-fidelity — the
+            # same classifier over the same raw bytes the builder
+            # stamps from — so a missing stamp never changes which
+            # gaps this selection emits; it is still logged loudly
+            # once per run so the operator knows the checklist
+            # predates the stamp (a rebuild persists it).
             script_handler = False
             if (
                 item_kind == "interstitial"
                 and file_language in SCRIPT_PER_FILE_LANGUAGES
             ):
-                _ls = item.get("line_start", 0)
-                if (
-                    isinstance(_ls, int)
-                    and not isinstance(_ls, bool)
-                    and _ls > 0
-                ):
-                    script_handler = interstitial_is_handler(
-                        file_language,
-                        _function_source(
-                            file_path, _ls, item.get("line_end"),
-                        ),
-                    )
+                stamp = script_handler_stamp(item)
+                if stamp is not None:
+                    script_handler = stamp
+                else:
+                    if not _stamp_fallback_logged:
+                        _stamp_fallback_logged = True
+                        logger.info(
+                            "compute_gaps: checklist items lack the "
+                            "script_handler stamp (pre-stamp "
+                            "inventory) — recomputing the handler "
+                            "classification from source for this run",
+                        )
+                    _ls = item.get("line_start", 0)
+                    if (
+                        isinstance(_ls, int)
+                        and not isinstance(_ls, bool)
+                        and _ls > 0
+                    ):
+                        script_handler = interstitial_is_handler(
+                            file_language,
+                            _function_source(
+                                file_path, _ls, item.get("line_end"),
+                            ),
+                        )
 
             # Functions/methods plus top_level/macro/global by default
             # (see _resolve_reviewable_kinds); --include-kinds narrows
