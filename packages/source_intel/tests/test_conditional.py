@@ -255,3 +255,29 @@ def test_clear_cache_still_drops_entries(tmp_path):
     assert _index_file_stat.cache_info().currsize >= 1
     clear_cache()
     assert _index_file_stat.cache_info().currsize == 0
+
+
+class TestReadDiscipline:
+    def test_fifo_refuses_instead_of_wedging(self, tmp_path):
+        """Walked target entries are target content: a planted
+        reader-less FIFO must refuse at the open (empty index), not
+        block the indexer forever. Bounded child so a regression
+        fails instead of hanging the suite."""
+        import multiprocessing
+        import os
+
+        from packages.source_intel.conditional import _index_file
+
+        fifo = tmp_path / "wedge.h"
+        os.mkfifo(fifo)
+        child = multiprocessing.Process(target=_index_file, args=(fifo,))
+        child.start()
+        child.join(timeout=20)
+        try:
+            assert not child.is_alive(), (
+                "_index_file blocked on a planted FIFO"
+            )
+        finally:
+            if child.is_alive():
+                child.kill()
+                child.join()
