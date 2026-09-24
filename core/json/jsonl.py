@@ -17,6 +17,11 @@ This module is the one hardened implementation:
   on both the write and the read side, mirroring the trust contract
   of ``core/sandbox/observe_profile._iter_records``.
 - ``O_CLOEXEC`` keeps the fd out of spawned children.
+- ``O_NONBLOCK`` plus a post-open ``fstat`` regularity check on the
+  write side refuses a planted FIFO: an ``O_WRONLY`` open of a
+  reader-less FIFO otherwise blocks the appending process forever,
+  and a FIFO with a reader would silently swallow the record. Same
+  discipline as the coverage journal's lock open.
 
 ``append_jsonl`` raises ``OSError`` (including ELOOP for a rejected
 symlink); best-effort callers wrap it. ``load_jsonl`` is best-effort
@@ -30,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import stat as _stat
 from typing import Any, TYPE_CHECKING
 
 from core.json.utils import _loads, _reject_non_finite
@@ -41,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 _O_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 
 
 def append_jsonl(
@@ -58,7 +65,9 @@ def append_jsonl(
     separators (``json.dumps(separators=(",", ":"))``).
 
     Raises ``OSError`` on I/O failure — notably ELOOP when *path* is a
-    symlink (O_NOFOLLOW) — ``TypeError`` when *record* is not JSON
+    symlink (O_NOFOLLOW), ENXIO when it is a reader-less FIFO
+    (O_NONBLOCK), and a regularity refusal when the opened fd is any
+    other non-regular file — ``TypeError`` when *record* is not JSON
     serialisable, and ``ValueError`` when it contains a non-finite
     float (``allow_nan=False``): the read side skips NaN/Infinity
     lines as malformed on both backends, so letting a writer emit
@@ -74,9 +83,24 @@ def append_jsonl(
             allow_nan=False,
         ) + "\n"
     ).encode("utf-8")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | _O_NOFOLLOW | _O_CLOEXEC
+    # O_NONBLOCK: trail paths live inside run dirs a sandboxed child
+    # holds (or held) write on — an O_WRONLY open of a planted
+    # reader-less FIFO would otherwise wedge the appender forever.
+    # With the flag it fails fast (ENXIO); a FIFO that HAS a reader
+    # opens fine, so the post-open fstat refusal below is the second
+    # half of the same defence (O_NONBLOCK is a no-op on the regular
+    # files every legitimate trail is).
+    flags = (
+        os.O_WRONLY | os.O_CREAT | os.O_APPEND
+        | _O_NOFOLLOW | _O_CLOEXEC | _O_NONBLOCK
+    )
     fd = os.open(str(path), flags, mode)
     try:
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(
+                f"refusing to append to {path}: not a regular file "
+                "(planted FIFO/device at the trail path?)",
+            )
         # ``os.write`` may return a SHORT count (RLIMIT_FSIZE, quota,
         # signal after partial progress). Ignoring it reported a
         # truncated record as success — and the read side deliberately

@@ -13,6 +13,12 @@ here). Contract, matching those siblings:
   grants reach — a planted symlink must not steer the flock to an
   attacker-chosen path. A refused open degrades to the unlocked path
   with a loud warning rather than failing the (best-effort) writer;
+- ``O_NONBLOCK`` plus the post-open ``fstat`` regularity refusal: a
+  planted reader-less FIFO at the lock path would otherwise block the
+  writer forever on the bare ``O_WRONLY`` open, and a FIFO that has a
+  reader would flock a non-regular inode. Both degrade to the same
+  loud unlocked path (same discipline as
+  ``core.run.metadata``'s metadata lock);
 - degrade to a no-op without ``fcntl`` (non-POSIX);
 - the lock file is deliberately never unlinked — unlink-after-unlock
   races split lockers across two inodes.
@@ -31,6 +37,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import stat as _stat
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -58,16 +65,24 @@ def artifact_lock(artifact: Path, *, subject: str = "artifact") -> Iterator[None
         os.O_WRONLY | os.O_CREAT
         | getattr(os, "O_NOFOLLOW", 0)
         | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
     )
+    fd = None
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(str(lock_path), flags, 0o600)
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(
+                f"lock path {lock_path} is not a regular file")
     except OSError as exc:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
         logger.warning(
             "%s lock %s: refusing to open (%s); proceeding WITHOUT "
             "cross-process lock — concurrent writers may drop each "
-            "other's contributions; investigate a planted symlink at "
-            "that path", subject, lock_path, exc,
+            "other's contributions; investigate a planted symlink or "
+            "FIFO at that path", subject, lock_path, exc,
         )
         yield
         return
