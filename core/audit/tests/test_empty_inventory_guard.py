@@ -92,14 +92,37 @@ class TestReviewableItemCount:
             checklist, {"declaration"}) == 1
 
     def test_interstitial_counted_while_lane_enabled(self):
-        # Deliberate over-count: the per-item script-handler content
-        # gate is not replicated here, so interstitials count as long
-        # as their lane is on (fail-open toward proceeding).
+        # UNSTAMPED interstitial: deliberate over-count — the per-item
+        # content gate is a source read this pre-check must not
+        # replicate, so absent a stamp the item counts as long as its
+        # lane is on (fail-open toward proceeding).
         checklist = {"files": [{"path": "a.php", "items": [
             {"name": "interstitial_1", "kind": "interstitial"},
         ]}]}
         assert _reviewable_item_count(checklist) == 1
         assert _reviewable_item_count(checklist, {"none"}) == 0
+
+    def test_interstitial_stamp_makes_count_precise(self):
+        # STAMPED items cost nothing to consult: stamped-False wiring
+        # no longer holds the count above zero; stamped-True handlers
+        # count exactly as gap selection would dispatch them.
+        wiring_only = {"files": [{"path": "a.php", "items": [
+            {"name": "interstitial:1-3", "kind": "interstitial",
+             "script_handler": False},
+        ]}]}
+        assert _reviewable_item_count(wiring_only) == 0
+        handler = {"files": [{"path": "a.php", "items": [
+            {"name": "interstitial:8-9", "kind": "interstitial",
+             "script_handler": True},
+        ]}]}
+        assert _reviewable_item_count(handler) == 1
+        assert _reviewable_item_count(handler, {"none"}) == 0
+        # Forged non-bool stamps read as absent (fail-open count).
+        forged = {"files": [{"path": "a.php", "items": [
+            {"name": "interstitial:8-9", "kind": "interstitial",
+             "script_handler": "false"},
+        ]}]}
+        assert _reviewable_item_count(forged) == 1
 
 
 @pytest.mark.slow
