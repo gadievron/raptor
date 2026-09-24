@@ -2223,3 +2223,37 @@ class TestCFuncExtractionHostileRuns:
         )
         names = {f["name"] for f in prep._extract_functions(src, "x.h")}
         assert {"lookup_foo", "sum_all", "plain"} <= names
+
+
+class TestCappedSourceReads:
+    """Target-tree reads route through the shared capped reader — a
+    planted huge file yields its prefix (extraction is additive:
+    items past the cap are simply not extracted), never a whole-file
+    buffer."""
+
+    def test_scan_read_is_capped(self, tmp_path: Path, monkeypatch) -> None:
+        real = prep.read_text_capped
+
+        def tiny_cap(path, max_chars=None, **kw):
+            return real(path, 256, **kw)
+
+        monkeypatch.setattr(prep, "read_text_capped", tiny_cap)
+        sf = tmp_path / "big.c"
+        sf.write_text(
+            "struct early { int a; };\n"
+            + "/* pad */\n" * 100
+            + "struct tail_sentinel { int z; };\n",
+        )
+        structs, _funcs, _protos, _incs = prep._scan_file_result(
+            sf, tmp_path, False, None,
+        )
+        names = {s["name"] for s in structs}
+        assert "early" in names
+        assert "tail_sentinel" not in names
+
+    def test_no_unbounded_target_reads_remain(self) -> None:
+        # Wiring pin: every target-tree read in the script routes
+        # through the capped reader — a bare ``.read_text(`` re-grown
+        # on a Path would reopen the whole-file-buffer class.
+        src = _PREP_PATH.read_text(encoding="utf-8")
+        assert ".read_text(" not in src
