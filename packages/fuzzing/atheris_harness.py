@@ -24,6 +24,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.atomic_fs import write_new_text
 from core.logging import get_logger
 
 logger = get_logger()
@@ -160,6 +161,9 @@ def write_atheris_harness(spec: AtherisHarnessSpec, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     name = f"fuzz_{spec.module.replace('.', '_')}_{spec.function.replace('.', '_')}.py"
     target = out_dir / name
-    target.write_text(generate_atheris_harness(spec), encoding="utf-8")
+    # Exclusive create (lstat-honest replace): a planted symlink at
+    # the predictable harness name in the reused out dir would send
+    # the generated (executed!) script to an attacker-chosen path.
+    write_new_text(target, generate_atheris_harness(spec), replace=True)
     logger.info("Wrote generated atheris harness: %s", target)
     return target

@@ -2172,7 +2172,12 @@ def _write_poc_file(wdir, data, binary, run_stamp, index):
                 / f"frida-sink-watch-poc-{run_stamp}-{index}-"
                   f"{Path(binary).name}")
     try:
-        poc_path.write_bytes(data)
+        # Exclusive create (lstat-honest replace): the workdir is
+        # target-writable and the basename component is
+        # target-derived — a planted symlink at the predictable name
+        # must never route the PoC bytes elsewhere.
+        from core.atomic_fs import write_new_bytes
+        write_new_bytes(poc_path, data, replace=True)
     except OSError:
         return None
     return poc_path

@@ -417,8 +417,13 @@ def _merge_promote_domain_model_locked(per_run_path: Path,
             dir=str(canonical.parent), suffix=".tmp",
             prefix="domain-model-",
         )
-        os.close(fd)
-        shutil.copy2(str(per_run_path), tmp)
+        # Copy through the fd mkstemp returned (O_EXCL-created,
+        # race-free): a close-then-reopen-by-path copy would follow a
+        # symlink swapped in at the tempfile name in this shared
+        # project dir.
+        with os.fdopen(fd, "wb") as tmp_fh, \
+                open(per_run_path, "rb") as src_fh:
+            shutil.copyfileobj(src_fh, tmp_fh)
         Path(tmp).rename(canonical)
     except OSError:
         if tmp:

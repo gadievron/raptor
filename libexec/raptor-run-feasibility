@@ -561,7 +561,10 @@ def _enrich_with_empirical_mitigation_map(
         fmap_file = (
             feasibility_dir / f"{_map_filename(str(fid))}.json"
         )
-        fmap_file.write_text(to_json(fmap), encoding="utf-8")
+        # Atomic write (planted-symlink defence at the predictable
+        # artifact name in the reused run dir).
+        from core.atomic_fs import write_text_atomically
+        write_text_atomically(fmap_file, to_json(fmap))
 
         finding.setdefault("feasibility", {})[
             "empirical_mitigation_map"

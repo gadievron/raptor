@@ -351,6 +351,31 @@ def test_non_c_file_degrades(tmp_path):
     assert "not a C/C++" in res.reason
 
 
+def test_scratch_root_must_be_empty(tmp_path):
+    """Expanded copies land at target-derived relative paths — a
+    pre-populated scratch root (planted symlinks at those paths) could
+    alias the writes onto foreign files, so anything but a fresh dir
+    is refused loudly."""
+    target = tmp_path / "repo"
+    target.mkdir()
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    (scratch / "planted").write_text("x")
+    with pytest.raises(ValueError, match="not empty"):
+        build_expanded_corpus(target, scratch)
+
+
+def test_scratch_root_symlink_refused(tmp_path):
+    target = tmp_path / "repo"
+    target.mkdir()
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "scratch"
+    link.symlink_to(real)
+    with pytest.raises(ValueError, match="symlink"):
+        build_expanded_corpus(target, link)
+
+
 def test_path_escape_degrades(tmp_path):
     res = run_expanded_semgrep_rule(
         target_path=tmp_path, file_path="../../etc/passwd.c",

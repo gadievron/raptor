@@ -429,7 +429,13 @@ def main():
         target = _pick_failure_run(failure_candidates, failing_command or "")
         if target is not None:
             try:
-                (target / FAILURE_MARKER).write_text("")
+                # Exclusive create: the run dir is sandbox-writable —
+                # a bare write_text at the predictable marker name
+                # follows a planted symlink. An already-present
+                # marker (FileExistsError) means the run is already
+                # flagged; same best-effort swallow as before.
+                from core.atomic_fs import write_new_text
+                write_new_text(target / FAILURE_MARKER, "")
             except OSError:
                 pass
 

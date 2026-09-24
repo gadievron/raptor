@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Optional
+
+from core.json import save_json
 
 from .detect import (
     pyghidra_available,
@@ -268,8 +269,10 @@ class GhidraBridge:
         enrichments = self._build_enrichments(db, findings)
 
         enrichments_json = output_dir / "ghidra-enrichments.json"
-        with open(enrichments_json, "w") as f:
-            json.dump(enrichments, f, indent=2)
+        # save_json (atomic tempfile + rename) like this module's
+        # other JSON artifacts: a raw open("w") at the predictable
+        # name follows a symlink planted in the reused output dir.
+        save_json(enrichments_json, enrichments)
 
         from .detect import prefer_in_process
         if prefer_in_process():

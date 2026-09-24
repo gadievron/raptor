@@ -624,7 +624,11 @@ def _cmd_diff(args: argparse.Namespace) -> int:
                   file=sys.stderr)
         matches = match_databases(db_old, db_new)
         match_path = out_dir / "binary-match.json"
-        match_path.write_text(json.dumps(matches.to_dict(), indent=2))
+        # Atomic write (planted-symlink defence at the predictable
+        # artifact name in the reused run dir).
+        from core.atomic_fs import write_text_atomically
+        write_text_atomically(
+            match_path, json.dumps(matches.to_dict(), indent=2))
         stats = matches.stats
         print(f"matched: {stats.get('matched', 0)} pairs, "
               f"{stats.get('unmatched_old', 0)} old / "

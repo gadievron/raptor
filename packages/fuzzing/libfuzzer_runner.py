@@ -23,8 +23,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from core.atomic_fs import open_exclusive_artifact
+from core.atomic_fs import open_exclusive_artifact, write_new_bytes
 from core.config import RaptorConfig
+from core.paths import confine
 from core.logging import get_logger
 from core.sandbox import run as _sandbox_run
 from packages.fuzzing.output_hygiene import strip_terminal_controls
@@ -229,8 +230,22 @@ class LibFuzzerRunner:
                     continue
                 relative = item.relative_to(source)
                 target = destination / relative
+                # Vet the INTERMEDIATE chain before mkdir/write: the
+                # exclusive create hardens only the final component
+                # and mkdir(parents=True) follows a planted
+                # intermediate-directory symlink out of the staging
+                # dir. Check-then-write is accepted — staging runs
+                # before the harness spawns, so planted entries are a
+                # previous run's leftovers, not live racers.
+                if confine(destination, relative.parent) is None:
+                    skipped += 1
+                    continue
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_bytes(data)
+                # Exclusive create (replace unlinks a planted symlink
+                # ITSELF): the source-side symlink checks above say
+                # nothing about what occupies the destination name in
+                # the reused, harness-writable staging dir.
+                write_new_bytes(target, data, replace=True)
         if skipped:
             logger.warning(
                 "corpus seeding: skipped %d non-regular or oversize "

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import contextlib
 import shutil
@@ -20,6 +21,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import open_exclusive_artifact, open_hardened_append
 from core.json import dumps_artifact
 from core.sarif.parser import parse_sarif_findings
 
@@ -132,8 +134,15 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
     # in memory just to write it out and grep one sentinel line.
     stderr_tmp = log_path.with_suffix(log_path.suffix + ".stderr.tmp")
     try:
-        with open(log_path, "wb") as out_f, \
-                open(stderr_tmp, "wb") as err_f:
+        # Exclusive create (lstat-honest replace + O_EXCL|O_NOFOLLOW):
+        # the log dir is reused run output the pipeline's children
+        # write under — a planted symlink/FIFO at these predictable
+        # names must not be followed / block the open.
+        with os.fdopen(
+            open_exclusive_artifact(log_path, replace=True), "wb",
+        ) as out_f, os.fdopen(
+            open_exclusive_artifact(stderr_tmp, replace=True), "wb",
+        ) as err_f:
             try:
                 proc = subprocess.run(
                     argv, stdout=out_f, stderr=err_f,
@@ -157,8 +166,11 @@ def run_pipeline(manifest: RecallManifest, target: Path, repo_root: Path,
 
         # Append stderr behind the same separator the log always
         # carried, by chunked copy (never buffered whole).
-        with open(log_path, "ab") as out_f, \
-                open(stderr_tmp, "rb") as err_f:
+        # Hardened append (O_NOFOLLOW + FIFO refusal) for the reopen
+        # of our own log after the pipeline's children ran.
+        with os.fdopen(
+            open_hardened_append(log_path), "ab",
+        ) as out_f, open(stderr_tmp, "rb") as err_f:
             out_f.write(b"\n--- stderr ---\n")
             shutil.copyfileobj(err_f, out_f)
     finally:

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from core.atomic_fs import write_text_atomically
 from core.logging import get_logger
 from core.sandbox import run_untrusted_networked
 from core.security.redaction import redact_secrets
@@ -314,7 +315,9 @@ class ExternalValidatorRunner:
                 self._scrub_response_store(responses_dir)
 
         output_file = run_dir / f"nuclei-results{suffix}.jsonl"
-        output_file.write_text(self._redact(stdout), encoding="utf-8")
+        # Atomic write (planted-symlink defence at the predictable
+        # artifact name in the reused, child-writable run dir).
+        write_text_atomically(output_file, self._redact(stdout))
 
         matches_by_target: dict[str, list[dict[str, Any]]] = {u: [] for u in targets}
         for line in stdout.splitlines():
@@ -413,6 +416,12 @@ class ExternalValidatorRunner:
             logger.debug("could not restrict response store dir", exc_info=True)
         for entry in entries:
             try:
+                # Skip symlinks outright: the store was written by
+                # the (network-facing) child — following a planted
+                # link here would chmod/read/REWRITE whatever it
+                # points at outside the store.
+                if entry.is_symlink():
+                    continue
                 if entry.is_dir():
                     entry.chmod(0o700)
                     continue
@@ -424,7 +433,7 @@ class ExternalValidatorRunner:
                 text = entry.read_text(encoding="utf-8", errors="replace")
                 redacted = redact_secrets(text)
                 if redacted != text:
-                    entry.write_text(redacted, encoding="utf-8")
+                    write_text_atomically(entry, redacted)
             except OSError:
                 logger.debug(
                     "could not scrub transcript %s", entry, exc_info=True,

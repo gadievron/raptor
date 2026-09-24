@@ -37,6 +37,7 @@ from typing import Any, TYPE_CHECKING
 # positional-walk fallback that silently imports a different checkout.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.atomic_fs import open_exclusive_artifact, open_hardened_append
 from core.hash import sha256_file
 from core.security.log_sanitisation import (
     escape_nonprintable,
@@ -384,8 +385,17 @@ def _run_active_phase(
         # capture_output buffered an hour-long fuzz/frida child's full
         # stdout+stderr in THIS process's memory before a single byte
         # hit disk. Consumers only ever read the log files.
-        with stdout_path.open("w", encoding="utf-8") as out_fh, \
-                stderr_path.open("w", encoding="utf-8") as err_fh:
+        # Exclusive create (lstat-honest replace + O_EXCL|O_NOFOLLOW):
+        # the phase dir is reused run output previous phases' children
+        # had write on — a planted symlink/FIFO at the predictable log
+        # names must not be followed / block the open.
+        with os.fdopen(
+            open_exclusive_artifact(stdout_path, replace=True),
+            "w", encoding="utf-8",
+        ) as out_fh, os.fdopen(
+            open_exclusive_artifact(stderr_path, replace=True),
+            "w", encoding="utf-8",
+        ) as err_fh:
             proc = subprocess.run(
                 cmd,
                 stdout=out_fh,
@@ -415,7 +425,12 @@ def _run_active_phase(
             f"{type(exc).__name__}: "
             f"{sanitise_for_terminal(str(exc), max_len=300)}"
         )
-        with stderr_path.open("a", encoding="utf-8") as err_fh:
+        # Hardened append (O_NOFOLLOW + FIFO refusal): the failure
+        # path can run before the exclusive create above (spawn
+        # refused), so the append must not trust the name either.
+        with os.fdopen(
+            open_hardened_append(stderr_path), "a", encoding="utf-8",
+        ) as err_fh:
             err_fh.write(error_line + "\n")
         return {
             "kind": kind,

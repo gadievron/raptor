@@ -30,6 +30,8 @@ import json
 import shutil
 import subprocess
 import sys
+
+from core.atomic_fs import write_text_atomically
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -246,8 +248,10 @@ def run_measurement(out_dir: Path) -> Report:
         },
     )
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "report.json").write_text(
-        json.dumps(report.to_dict(), indent=2))
+    # Atomic write (planted-symlink defence at the predictable
+    # artifact name in the reused out dir).
+    write_text_atomically(
+        out_dir / "report.json", json.dumps(report.to_dict(), indent=2))
     return report
 
 

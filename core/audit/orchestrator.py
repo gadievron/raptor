@@ -40,6 +40,7 @@ from core.analysis.reachability_gates import (
     check_sink_guarded,
     compute_demotion_verdict,
 )
+from core.atomic_fs import write_text_atomically
 from core.evidence import (
     EvidenceRecord,
     build_evidence_index,
@@ -4439,10 +4440,15 @@ def _iris_prep_specs(
             iris_taint_specs = [_iris_candidate_to_spec(c) for c in iris_candidates]
             if iris_taint_specs and config.out_dir:
                 spec_path = config.out_dir / "iris-taint-specs.json"
-                spec_path.write_text(specs_to_json(iris_taint_specs))
+                # Atomic writes: predictable artifact names in the
+                # reused, sandbox-writable run dir — a bare
+                # write_text follows a planted symlink.
+                write_text_atomically(
+                    spec_path, specs_to_json(iris_taint_specs))
                 joern_cfg = compile_joern_config(iris_taint_specs)
                 if joern_cfg.strip():
-                    (config.out_dir / "iris-joern.scala").write_text(joern_cfg)
+                    write_text_atomically(
+                        config.out_dir / "iris-joern.scala", joern_cfg)
                 logger.info(
                     "IRIS: synthesised %d taint specs (%d sources, %d sinks, "
                     "%d sanitisers, %d propagators)",
@@ -7580,7 +7586,10 @@ def _iris_refine_and_bypass(
                 )
                 if config.out_dir:
                     spec_path = config.out_dir / "iris-taint-specs-refined.json"
-                    spec_path.write_text(specs_to_json(refined_specs))
+                    # Atomic write — same planted-symlink rationale
+                    # as the initial spec emission.
+                    write_text_atomically(
+                        spec_path, specs_to_json(refined_specs))
                     # Caller-persist step: merge the refined specs
                     # into the persistent project store (evidence
                     # tiers carried through; envelope metadata —

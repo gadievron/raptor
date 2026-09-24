@@ -222,6 +222,27 @@ class TestWriterHardening:
         assert on_disk == {f for f in tree.files if f.endswith(".c")}
         assert not any("gone" in n for n in on_disk)
 
+    def test_planted_dangling_symlink_swept_never_followed(
+        self, tmp_path,
+    ):
+        """The stale sweep gated on is_file(), which is False for a
+        DANGLING symlink — a link planted at a tree name survived and
+        the write then created the attacker-chosen target."""
+        db = _db(functions=[
+            _fn("keep", 0x1000, decomp="void k(void){}"),
+        ])
+        probe = write_decomp_tree(db, tmp_path)
+        emitted = next(f for f in probe.files if f.endswith(".c"))
+        victim = tmp_path / "victim"
+        (tmp_path / emitted).unlink()
+        (tmp_path / emitted).symlink_to(victim)
+
+        write_decomp_tree(db, tmp_path)
+
+        assert not victim.exists()
+        assert not (tmp_path / emitted).is_symlink()
+        assert "keep" in (tmp_path / emitted).read_text()
+
     def test_types_header_over_budget_marks_truncated(
         self, tmp_path, monkeypatch,
     ):

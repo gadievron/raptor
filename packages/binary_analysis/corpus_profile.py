@@ -1442,8 +1442,10 @@ def profile_corpus(options: CorpusProfileOptions) -> dict[str, Any]:
             },
         }
         save_json(out_dir / PROFILE_JSON_NAME, profile, sort_keys=True)
-        (out_dir / PROFILE_REPORT_NAME).write_text(
-            _render_markdown(profile), encoding="utf-8",
+        # Atomic like the save_json beside it (planted-symlink
+        # defence at the predictable report name).
+        write_text_atomically(
+            out_dir / PROFILE_REPORT_NAME, _render_markdown(profile),
         )
     return profile
 

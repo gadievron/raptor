@@ -14,6 +14,8 @@ import shutil
 import stat
 from pathlib import Path
 
+from core.atomic_fs import open_exclusive_artifact
+
 from .detect import get_project_name
 
 logger = logging.getLogger(__name__)
@@ -98,8 +100,10 @@ def prepare_working_copy(gpr_path: Path, work_dir: Path) -> Path:
     # deliverable).
     if dst_rep.exists():
         shutil.rmtree(dst_rep)
-    if dst_gpr.exists():
-        dst_gpr.unlink()
+    # missing_ok unlink, not exists()-gated: a DANGLING symlink at
+    # the destination passes exists() == False and survived, and the
+    # copy below then created the symlink's target.
+    dst_gpr.unlink(missing_ok=True)
 
     # The .gpr rides the same byte ceiling as the .rep tree: it is a
     # small XML pointer file in any real project, and a hostile
@@ -112,7 +116,14 @@ def prepare_working_copy(gpr_path: Path, work_dir: Path) -> Path:
             f"exceeds the {MAX_REP_COPY_BYTES}-byte project-copy ceiling"
         )
         raise ValueError(msg)
-    shutil.copy2(gpr_path, dst_gpr)
+    # Exclusive-create copy: copy2 opens the DESTINATION with O_TRUNC
+    # and follows whatever occupies it (the source side was symlink-
+    # vetted above; the destination side was not) — a fresh O_EXCL |
+    # O_NOFOLLOW inode closes the unlink→copy window.
+    with open(gpr_path, "rb") as src_fh, os.fdopen(
+        open_exclusive_artifact(dst_gpr), "wb",
+    ) as dst_fh:
+        shutil.copyfileobj(src_fh, dst_fh)
     if src_rep.is_dir() and not src_rep.is_symlink():
         _copy_rep_tree(src_rep, dst_rep)
 

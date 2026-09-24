@@ -253,6 +253,35 @@ class TestSeedWorkingCorpusSymlinks(unittest.TestCase):
             self.assertEqual((dest / "seed0").read_bytes(), b"A")
             self.assertFalse((dest / "dirlink").exists())
 
+    def test_planted_intermediate_dir_symlink_at_destination(self):
+        """DESTINATION-side intermediate symlink: the staging dir is
+        reused and harness-writable, so a planted dest/sub aimed at
+        an operator dir plus a repo seed named sub/<victim-name>
+        would carry the mkdir and the seed write outside staging.
+        The chain is vetted (confine) before any mkdir or write."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            attacker_dir = tmp / "attacker_dir"
+            attacker_dir.mkdir()
+            operator_file = attacker_dir / "profile"
+            operator_file.write_text("operator content\n")
+
+            source = tmp / "corpus"
+            (source / "sub").mkdir(parents=True)
+            (source / "sub" / "profile").write_bytes(b"attacker bytes\n")
+            (source / "seed0").write_bytes(b"A")
+
+            dest = tmp / "staging"
+            dest.mkdir()
+            (dest / "sub").symlink_to(attacker_dir)
+
+            LibFuzzerRunner._seed_working_corpus(source, dest)
+
+            self.assertEqual(
+                operator_file.read_text(), "operator content\n")
+            # The vetted flat seed still staged.
+            self.assertEqual((dest / "seed0").read_bytes(), b"A")
+
 
 if __name__ == "__main__":
     unittest.main()

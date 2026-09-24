@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 
 from core.artifacts.context_map_budget import CONTEXT_MAP_CONSUMER_MAX_BYTES
 from core.artifacts.provenance import stamp_provenance
+from core.atomic_fs import write_text_atomically
 from core.binary.addrmap import (
     FidIndex,
     from_fid,
@@ -1144,9 +1145,11 @@ def _write_hunt_artifacts(
         json_path = run_dir / f"binary-hunt-{slug}.json"
         report_path = run_dir / f"binary-hunt-{slug}.md"
         save_json(json_path, payload)
-        report_path.write_text(
-            _render_report(payload), encoding="utf-8",
-        )
+        # Atomic like the save_json beside it: the collision loop's
+        # exists() probe shares exists()'s dangling-symlink blind
+        # spot, and a plain write_text would follow whatever occupies
+        # the name; os.replace replaces a planted symlink itself.
+        write_text_atomically(report_path, _render_report(payload))
     return {"json": str(json_path), "report": str(report_path)}
 
 

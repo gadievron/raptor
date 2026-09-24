@@ -20,6 +20,7 @@ from pathlib import Path
 # silently breaking under relocation.
 sys.path.insert(0, os.environ["RAPTOR_DIR"])
 
+from core.atomic_fs import write_text_atomically
 from core.logging import get_logger
 from core.source import read_text_capped
 from packages.codeql.dataflow_validator import DataflowPath
@@ -232,8 +233,11 @@ class DataflowVisualizer:
             sanitizers=dataflow.sanitizers
         )
 
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(html_content)
+        # Atomic write (repeated at every artifact writer in this
+        # module): the visualizer emits at predictable names in the
+        # reused run dir — a bare open("w") follows a planted symlink;
+        # os.replace replaces the symlink itself.
+        write_text_atomically(output_file, html_content)
 
         return output_file
 
@@ -729,8 +733,7 @@ class DataflowVisualizer:
                 for san in dataflow.sanitizers
             )
 
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+        write_text_atomically(output_file, '\n'.join(lines))
 
         return output_file
 
@@ -863,8 +866,7 @@ class DataflowVisualizer:
         lines.append("=" * 80)
         lines.append("")
 
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+        write_text_atomically(output_file, '\n'.join(lines))
 
         # Also print to logger for terminal viewing
         self.logger.info("ASCII Dataflow Visualization:")
@@ -921,22 +923,22 @@ class DataflowVisualizer:
 
         lines.append("}")
 
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(lines))
+        write_text_atomically(output_file, '\n'.join(lines))
 
         # Add instructions
         instructions_file = self.output_dir / f"{finding_id}_dataflow_instructions.txt"
-        with open(instructions_file, 'w', encoding="utf-8") as f:
-            f.write("To render the DOT file:\n\n")
-            f.write("# Install Graphviz (if not already installed):\n")
-            f.write("# macOS: brew install graphviz\n")
-            f.write("# Ubuntu: sudo apt-get install graphviz\n\n")
-            f.write("# Render to PNG:\n")
-            f.write(f"dot -Tpng {output_file.name} -o {finding_id}_dataflow.png\n\n")
-            f.write("# Render to SVG:\n")
-            f.write(f"dot -Tsvg {output_file.name} -o {finding_id}_dataflow.svg\n\n")
-            f.write("# Render to PDF:\n")
-            f.write(f"dot -Tpdf {output_file.name} -o {finding_id}_dataflow.pdf\n")
+        write_text_atomically(instructions_file, (
+            "To render the DOT file:\n\n"
+            "# Install Graphviz (if not already installed):\n"
+            "# macOS: brew install graphviz\n"
+            "# Ubuntu: sudo apt-get install graphviz\n\n"
+            "# Render to PNG:\n"
+            f"dot -Tpng {output_file.name} -o {finding_id}_dataflow.png\n\n"
+            "# Render to SVG:\n"
+            f"dot -Tsvg {output_file.name} -o {finding_id}_dataflow.svg\n\n"
+            "# Render to PDF:\n"
+            f"dot -Tpdf {output_file.name} -o {finding_id}_dataflow.pdf\n"
+        ))
 
         return output_file
 
