@@ -42,6 +42,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from core.atomic_fs import write_new_bytes, write_text_atomically
 from core.json import load_json, save_json
 
 # Analysis-report / attack-path artifacts are RAPTOR-written run
@@ -142,6 +143,25 @@ def _dict_escape(data: bytes) -> str:
 def _sanitize_token_name(label: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_]", "_", label).strip("_") or "var"
     return name[:64]
+
+
+def _write_seed_exclusive(seed_path: Path, data: bytes) -> str | None:
+    """Exclusive, symlink-refusing seed write. Returns a skip reason
+    for the manifest on refusal, None on success.
+
+    O_CREAT|O_EXCL|O_NOFOLLOW via the shared helper: the seed dir is
+    inside the (reused, target-writable) run dir, so anything already
+    occupying a deterministic seed name — including a dangling
+    symlink, which passes ``exists() == False`` — fails closed with a
+    manifest record instead of being followed or overwritten.
+    """
+    try:
+        write_new_bytes(seed_path, data)
+    except FileExistsError:
+        return "seed filename collision"
+    except OSError as exc:
+        return f"seed write refused: {type(exc).__name__}"
+    return None
 
 
 def collect_witnesses(source_dir: Path) -> tuple[list[WitnessRecord], list[dict]]:
@@ -262,18 +282,22 @@ def synthesize_seeds(
                     length = min(value, SEED_LEN_CAP)
                     name = f"smt_{idx:03d}_{token_base}_len{value}"[:120]
                     seed_path = out_dir / name
-                    if seed_path.exists():
-                        # Same exists() → skip-record guard the
-                        # magic-value path carries below: a
-                        # pre-existing file must never be silently
-                        # overwritten and then listed in the manifest.
+                    # Exclusive create, not exists()-then-write: a
+                    # pre-existing file must never be silently
+                    # overwritten and then listed in the manifest —
+                    # and a planted DANGLING symlink passes
+                    # exists() == False, making the plain write_bytes
+                    # create the attacker-chosen target. Anything
+                    # occupying the name refuses with a skip record.
+                    skip_reason = _write_seed_exclusive(
+                        seed_path, _FILL_BYTE * length)
+                    if skip_reason is not None:
                         all_skipped.append({
                             **provenance,
-                            "reason": "seed filename collision",
+                            "reason": skip_reason,
                             "seed": name,
                         })
                     else:
-                        seed_path.write_bytes(_FILL_BYTE * length)
                         seeds.append({
                             **provenance,
                             "seed": name,
@@ -305,8 +329,12 @@ def synthesize_seeds(
             else:
                 name = f"smt_{idx:03d}_{token_base}_raw"[:120]
                 seed_path = out_dir / name
-                if not seed_path.exists():
-                    seed_path.write_bytes(encoded)
+                # Exclusive create (see the length rule above): every
+                # dropped artifact is recorded — the manifest promises
+                # no silent truncation — and a planted dangling
+                # symlink can never route the write elsewhere.
+                skip_reason = _write_seed_exclusive(seed_path, encoded)
+                if skip_reason is None:
                     seeds.append({
                         **provenance,
                         "seed": name,
@@ -315,13 +343,9 @@ def synthesize_seeds(
                         "clamped": False,
                     })
                 else:
-                    # Filename collision (two variables sanitizing to
-                    # the same token in one record, or a pre-existing
-                    # file): every dropped artifact is recorded — the
-                    # manifest promises no silent truncation.
                     all_skipped.append({
                         **provenance,
-                        "reason": "seed filename collision",
+                        "reason": skip_reason,
                         "seed": name,
                     })
 
@@ -329,7 +353,10 @@ def synthesize_seeds(
     if dict_entries:
         dict_path = out_dir / "smt-witness.dict"
         lines = [f'{name}="{value}"' for name, value in sorted(dict_entries.items())]
-        dict_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        # Atomic write: the run dir is reused and target-writable —
+        # os.replace over a planted symlink replaces the symlink
+        # itself, never follows it.
+        write_text_atomically(dict_path, "\n".join(lines) + "\n")
 
     manifest = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -367,7 +394,10 @@ def merge_witness_dict(seed_dir: Path, run_out_dir: Path) -> Path | None:
     ]
     if not added:
         return target if target.is_file() else None
-    target.write_text("\n".join([*existing, *added]) + "\n", encoding="utf-8")
+    # Atomic read-merge-write commit (same rationale as the witness
+    # dict write above — the plain write_text followed planted
+    # symlinks in the reused run dir).
+    write_text_atomically(target, "\n".join([*existing, *added]) + "\n")
     return target
 
 

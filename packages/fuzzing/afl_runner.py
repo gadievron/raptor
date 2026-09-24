@@ -28,7 +28,11 @@ import time
 from pathlib import Path
 from typing import ClassVar
 
-from core.atomic_fs import open_exclusive_artifact, write_new_text
+from core.atomic_fs import (
+    open_exclusive_artifact,
+    write_new_bytes,
+    write_new_text,
+)
 from core.binary.inspect import inspect_binary as _inspect_binary
 from core.logging import get_logger
 from core.sandbox import SandboxSetupError
@@ -506,7 +510,11 @@ class AFLRunner:
                 b"GET / HTTP/1.0\r\n\r\n",
             ]
             for idx, seed in enumerate(seeds):
-                (corpus / f"seed{idx}").write_bytes(seed)
+                # Exclusive create with lstat-honest replace: the
+                # staged corpus sits under output_dir (reused,
+                # target-writable) and a planted symlink at these
+                # deterministic names must never route the write.
+                write_new_bytes(corpus / f"seed{idx}", seed, replace=True)
             logger.info("Created emergency default corpus with %d seeds", len(seeds))
         return corpus
 

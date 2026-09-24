@@ -44,6 +44,42 @@ def test_prepare_seed_corpus_groups_supported_inputs_and_writes_manifest(tmp_pat
     assert manifest["seeds"][0]["sha256"]
 
 
+def test_prepare_seed_corpus_planted_kind_dir_symlink_not_traversed(
+    tmp_path, monkeypatch,
+):
+    """Belt-and-braces containment for the reset→write window: a kind
+    directory symlink that survives into the write phase must never
+    carry the mkdir + seed write outside out_dir (the exclusive
+    create hardens only the final component; mkdir(parents=True)
+    follows intermediate symlinks). The reset normally clears planted
+    kind entries — stub it out to model a plant landing after it."""
+    import packages.fuzzing.seed_corpus as sc
+
+    attacker_dir = tmp_path / "attacker_dir"
+    attacker_dir.mkdir()
+    (attacker_dir / "keep").write_text("operator content\n")
+
+    source = tmp_path / "project"
+    (source / "examples").mkdir(parents=True)
+    (source / "examples" / "case.json").write_text("{}\n", encoding="utf-8")
+
+    out = tmp_path / "seeds"
+    out.mkdir()
+    (out / "json").symlink_to(attacker_dir)
+    monkeypatch.setattr(sc, "_reset_generated_output", lambda _out: None)
+
+    manifest = prepare_seed_corpus(
+        SeedCorpusOptions(source_dir=source, out_dir=out))
+
+    assert manifest["seed_count"] == 0
+    assert any(
+        "outside the output directory" in s["reason"]
+        for s in manifest["skipped"]
+    )
+    assert (attacker_dir / "keep").read_text() == "operator content\n"
+    assert not (attacker_dir / "seed-0001.json").exists()
+
+
 def test_prepare_seed_corpus_skips_sensitive_and_uninteresting_files(tmp_path):
     source = tmp_path / "project"
     out = tmp_path / "seeds"
