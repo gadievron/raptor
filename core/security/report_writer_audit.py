@@ -574,6 +574,11 @@ _REPORT_WRITER_FILES = (
     # hostile sample bytes — escape-at-capture + hex-only rendering.
     "packages/binary_analysis/corpus_profile.py",
     "packages/binary_analysis/harness.py",
+    # Operator-steered hunt: binary-hunt-<slug>.md writer plus the
+    # payload it renders — anchor strings and function names are
+    # hostile-binary content routed through the module's _md_escape
+    # (md_inline chokepoint).
+    "packages/binary_analysis/hunt.py",
     "packages/binary_analysis/investigation.py",
     "packages/binary_analysis/pipeline.py",
     # cve_diff terminal lanes: bench result echoes (agent/tool error
