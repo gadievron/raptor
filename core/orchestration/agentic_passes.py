@@ -182,9 +182,10 @@ def _run_understand_prepass_unsafe(
     # The shared runner adds str(_RAPTOR_DIR) on top of the calibrated
     # readable_paths so the LLM-directed Bash tool can invoke
     # libexec/raptor-normalize-context-map (MAP-5) and
-    # libexec/raptor-coverage-summary --mark (MAP-6) — those scripts
-    # live under RAPTOR_DIR. target + understand_dir are auto-
-    # allowlisted via the target=/output= positional args.
+    # libexec/raptor-coverage-summary --mark ... --map-grade (MAP-6,
+    # map-grade: examination evidence only, never review credit) —
+    # those scripts live under RAPTOR_DIR. target + understand_dir are
+    # auto-allowlisted via the target=/output= positional args.
     dispatch = run_skill_dispatch(
         command="understand",
         target=target,
