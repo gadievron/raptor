@@ -26,16 +26,20 @@ SARIF locations, finding records, crash artifacts:
   (``read_contained`` does, via ``confine``), which also keeps
   resolved in-root symlinks working.
 
-  Scope of the race-free claim: it covers the REGULARITY check (fd,
-  not name) and the final component (``O_NOFOLLOW``). CONTAINMENT is
-  resolve-then-open: an attacker with concurrent local write access
-  inside the target tree can swap an INTERMEDIATE directory for an
-  out-of-tree symlink between ``confine()``'s resolve and the open,
-  steering the read out of root — a materially narrower threat than
-  the static plants above (it needs an active local attacker racing
-  the analyser, not repo content), and closable only with
-  ``openat2(RESOLVE_BENEATH)`` / a dir-fd walk. Consumers must not
-  build on a stronger reading.
+  Scope of the race-free claim, per composition: the REGULARITY
+  check (fd, not name) and the final component (``O_NOFOLLOW``) are
+  race-free everywhere. CONTAINMENT is race-free in
+  :func:`read_contained` / :func:`read_contained_bytes`, whose open
+  re-walks the confined path ANCHORED
+  (:func:`core.source.beneath.open_regular_beneath` — ``openat2``
+  ``RESOLVE_BENEATH`` fast path or a dir-fd component walk), so an
+  attacker with concurrent write access inside the target tree who
+  swaps an INTERMEDIATE directory for an out-of-tree symlink between
+  ``confine()``'s resolve and the open gets a refusal, not an
+  out-of-root read. Sites that compose ``confine`` with a BY-NAME
+  ``read_text_capped`` open instead retain that resolve-then-open
+  window — compose with ``open_regular_beneath`` when the tree is
+  concurrently attacker-writable.
 
 Sites that need distinct refusal messaging (outside-root vs
 unreadable) compose :func:`core.paths.confine` with
@@ -51,12 +55,14 @@ from pathlib import Path
 from typing import IO
 
 from core.paths import confine
+from core.source.beneath import open_regular_beneath
 
 __all__ = [
     "DEFAULT_MAX_SOURCE_CHARS",
     "open_regular",
     "read_bytes_capped",
     "read_contained",
+    "read_contained_bytes",
     "read_text_capped",
 ]
 
@@ -126,6 +132,11 @@ def read_text_capped(
     f = open_regular(path, "r", encoding="utf-8", errors=errors)
     if f is None:
         return None
+    return _text_capped_from(f, max_chars)
+
+
+def _text_capped_from(f: IO, max_chars: int) -> tuple[str, bool] | None:
+    """Capped read + truncation shaping on an already-vetted stream."""
     try:
         with f:
             content = f.read(max_chars + 1)
@@ -156,6 +167,10 @@ def read_bytes_capped(
     f = open_regular(path, "rb")
     if f is None:
         return None
+    return _bytes_capped_from(f, max_bytes)
+
+
+def _bytes_capped_from(f: IO, max_bytes: int) -> tuple[bytes, bool] | None:
     try:
         with f:
             data = f.read(max_bytes + 1)
@@ -181,9 +196,56 @@ def read_contained(
     returns the capped prefix (trailing partial line dropped) —
     callers that must distinguish truncation use
     :func:`read_text_capped` with :func:`core.paths.confine`.
+
+    The open is ANCHORED: after ``confine`` proves containment, the
+    confined path is re-walked relative to the root fd
+    (:func:`core.source.beneath.open_regular_beneath`), so a
+    concurrent swap of an intermediate directory between the check
+    and the open refuses instead of steering the read out of root —
+    the residual this module previously documented as open.
     """
-    resolved = confine(root, candidate)
-    if resolved is None or not resolved.is_file():
+    anchored = _open_contained(
+        root, candidate, "r", encoding="utf-8", errors=errors,
+    )
+    if anchored is None:
         return None
-    got = read_text_capped(resolved, max_chars, errors=errors)
+    got = _text_capped_from(anchored, max_chars)
     return None if got is None else got[0]
+
+
+def read_contained_bytes(
+    root: str | Path,
+    candidate: str | Path,
+    max_bytes: int,
+) -> tuple[bytes, bool] | None:
+    """Containment-checked, capped binary read of *candidate* under
+    *root* — :func:`read_contained`'s bytes flavor, for artifact
+    readers (crash files, SARIF sidecars) that must not decode.
+
+    Returns ``(data, truncated)`` with :func:`read_bytes_capped`
+    semantics, or ``None`` on escape / non-regular / unreadable.
+    Anchored open, same as :func:`read_contained`.
+    """
+    anchored = _open_contained(root, candidate, "rb")
+    if anchored is None:
+        return None
+    return _bytes_capped_from(anchored, max_bytes)
+
+
+def _open_contained(
+    root: str | Path,
+    candidate: str | Path,
+    mode: str,
+    **kwargs,
+) -> IO | None:
+    """confine + anchored re-walk: the shared open behind the
+    ``read_contained*`` pair."""
+    resolved = confine(root, candidate)
+    if resolved is None:
+        return None
+    try:
+        base_resolved = Path(root).resolve()
+        rel = resolved.relative_to(base_resolved)
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return open_regular_beneath(base_resolved, rel, mode, **kwargs)
