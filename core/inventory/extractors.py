@@ -2138,6 +2138,15 @@ except ImportError:
 # clearing ``_TS_PARSER_LOCAL.parsers`` here clears the shared cache.
 _TS_PARSER_LOCAL = _ts_cache._TS_PARSER_LOCAL
 
+# PHP string/comment container node types: a token whose ancestry
+# includes one of these is string/comment TEXT that error recovery
+# re-tokenized (a broken ``${``/``{$`` interpolation), not code — the
+# orphan-function recovery must never mint an item from it.
+_PHP_STRING_ANCESTOR_TYPES = frozenset({
+    "string", "encapsed_string", "heredoc", "nowdoc",
+    "shell_command_expression", "comment",
+})
+
 def _ts_language(lang: str):
     """Load tree-sitter language grammar. Returns None if not installed.
 
@@ -2343,8 +2352,14 @@ class TreeSitterExtractor:
         # function ends after any string-literal form feed.
         self._source_lines = split_lines(content)
         self._seen_cache = (0, set())
+        self._php_recovered: list[FunctionInfo] = []
         functions: list[FunctionInfo] = []
         self._walk(_tree.root_node, functions, class_name=None, class_attributes=())
+        if self.language == "php" and self._php_recovered:
+            # Resolve the spans the lone-token recovery deferred and
+            # clamp parsed spans that error-recovery inflated over a
+            # recovered declaration (see _php_fill_recovered_spans).
+            self._php_fill_recovered_spans(functions)
         if self.language in ("c", "cpp"):
             # Fill the spans the orphan-declarator recovery deferred
             # (fragmented K&R body openers) from one shared brace-
@@ -2545,6 +2560,12 @@ class TreeSitterExtractor:
         recovery_parent = (
             self.language in ("c", "cpp")
             and node.type in ("translation_unit", "ERROR")
+        ) or (
+            # PHP orphan-function recovery (see
+            # _recover_php_orphan_function) needs the same shared
+            # sibling context at file scope and inside ERROR nodes.
+            self.language == "php"
+            and node.type in ("program", "ERROR")
         )
         kids = node.children
         stack: list[tuple[
@@ -2561,6 +2582,9 @@ class TreeSitterExtractor:
             rec = (
                 self.language in ("c", "cpp")
                 and ptype in ("translation_unit", "ERROR")
+            ) or (
+                self.language == "php"
+                and ptype in ("program", "ERROR")
             )
             pkids = parent.children
             stack.extend(
@@ -2669,6 +2693,22 @@ class TreeSitterExtractor:
                 # C/C++ ERROR node recovery: look for function_declarator
                 # inside large ERROR nodes.
                 self._recover_c_error_node(child, functions)
+            elif (child.type == "function"
+                  and self.language == "php"
+                  and sibling_ctx is not None):
+                # PHP fragmented-parse recovery: a construct the
+                # grammar cannot parse inside a function body (e.g.
+                # the removed-in-PHP-8 curly-brace offset syntax
+                # ``$arr{"key"}``) makes tree-sitter drop the whole
+                # enclosing function_definition and scatter its header
+                # tokens (``function`` / name / formal_parameters /
+                # ``{``) as loose siblings under the ERROR node. The
+                # function then vanished from the inventory entirely:
+                # its span was swallowed by the surrounding
+                # interstitial item, so it was never scheduled for
+                # review and invisible to coverage.
+                self._recover_php_orphan_function(
+                    child, functions, sibling_ctx)
             else:
                 _descend(child, class_name, class_attributes)
 
@@ -2750,6 +2790,229 @@ class TreeSitterExtractor:
             line_end=end_line,
             metadata=FunctionMetadata(visibility=None),
         ))
+
+    def _recover_php_orphan_function(
+        self, kw_node: "Node", functions: list[FunctionInfo],
+        sibling_ctx: tuple[list, int],
+    ) -> None:
+        """Recover a PHP function whose header tokens sit loose under
+        an ERROR/program node.
+
+        When a body construct the grammar cannot parse (legacy
+        curly-brace offset syntax ``$arr{"k"}``, other PHP-4-era
+        forms) breaks the enclosing ``function_definition``,
+        tree-sitter's error recovery emits the header as a loose token
+        run — ``function``, ``name``, ``formal_parameters``, ``{`` —
+        followed by the body's statements as further siblings. Without
+        recovery the function owns no inventory item at all and the
+        interstitial synthesiser swallows its span, so the code is
+        never scheduled for review.
+
+        The span end is bounded by the sibling stream: consecutive
+        statement/token siblings extend the body; the body closes at a
+        loose depth-zero ``}`` token, or at the first sibling that
+        starts the NEXT top-level construct (another ``function``
+        keyword, a parsed function/class node, or a comment that
+        docblocks one — a comment followed by more statements is body
+        text and keeps extending). An unbounded header (no body
+        evidence at all) recovers nothing — a span guess over the rest
+        of the file would swallow every sibling item.
+        """
+        # STRING-DEBRIS guard: a terminated comment/string keeps its
+        # text inside the comment/string node, but a BROKEN
+        # interpolation (``"... ${ junk }"``) makes tree-sitter
+        # re-tokenize the string's own text as loose tokens — a
+        # ``function`` keyword spelled in string data then reaches
+        # this recovery and mints a phantom item for text that is not
+        # code. The re-tokenized region still hangs under the string
+        # node, so string-class ancestry identifies the debris.
+        anc = kw_node.parent
+        while anc is not None:
+            if anc.type in _PHP_STRING_ANCESTOR_TYPES:
+                return
+            anc = anc.parent
+        seen_names = self._seen_names(functions)
+        siblings, idx = sibling_ctx
+        j = idx + 1
+        # Optional by-reference marker: ``function &name(...)``.
+        if j < len(siblings) and siblings[j].type == "&":
+            j += 1
+        if j >= len(siblings) or siblings[j].type != "name":
+            # Header tokens split across nesting levels: cascading
+            # errors can leave the ``function`` keyword ALONE in a
+            # tiny ERROR node while the name+parameter text was parsed
+            # as an expression elsewhere. With string-class ancestry
+            # screened above, the keyword token is sound evidence (a
+            # terminated comment/string keeps its text inside its own
+            # node), so recover the name from the source line at the
+            # token's position; the span end is deferred to
+            # _php_fill_recovered_spans (bounded by the next
+            # declaration).
+            self._recover_php_lone_function_token(kw_node, functions)
+            return
+        name_node = siblings[j]
+        name = name_node.text.decode()
+        if not name or name in seen_names:
+            return
+        j += 1
+        if j >= len(siblings) or siblings[j].type != "formal_parameters":
+            self._recover_php_lone_function_token(kw_node, functions)
+            return
+        params_node = siblings[j]
+        j += 1
+
+        _NEXT_DECL = ("function", *self.func_types, *self.class_types)
+        depth = 0
+        opened = False
+        end_line: int | None = None
+        k = j
+        while k < len(siblings):
+            sib = siblings[k]
+            t = sib.type
+            if t == "{":
+                depth += 1
+                opened = True
+            elif t == "}":
+                depth -= 1
+                if opened and depth <= 0:
+                    end_line = sib.end_point[0] + 1
+                    break
+            elif t in _NEXT_DECL:
+                # Next top-level construct: body ended on the previous
+                # sibling (tree-sitter folded the closing brace into
+                # the last recovered statement node).
+                break
+            elif t == "comment":
+                # A docblock owning the next declaration terminates the
+                # body; a comment followed by more statements is body
+                # commentary and keeps extending.
+                nxt = siblings[k + 1] if k + 1 < len(siblings) else None
+                if nxt is not None and nxt.type in _NEXT_DECL:
+                    break
+            else:
+                end_line = sib.end_point[0] + 1
+            k += 1
+        if end_line is None:
+            return
+        line_start = kw_node.start_point[0] + 1
+        if end_line < line_start:
+            return
+        params = []
+        for param in params_node.children:
+            pname, ptype = self._parse_param(param)
+            if pname and pname not in ("(", ")", ",", "self", "this"):
+                params.append((pname, ptype))
+        fi = FunctionInfo(
+            name=name,
+            line_start=line_start,
+            line_end=end_line,
+            signature=(
+                f"function {name}"
+                + params_node.text.decode()[:160]
+            ),
+            metadata=FunctionMetadata(parameters=params),
+        )
+        functions.append(fi)
+        self._php_recovered.append(fi)
+
+    # The by-reference marker's trailing gap is folded into its own
+    # gated group and the pre-paren gap is bounded, so no adjacent
+    # unbounded repeats with a failable continuation remain (ReDoS-
+    # idiom census discipline; the input is a single hostile source
+    # line).
+    _PHP_LONE_FN_HEADER = re.compile(
+        r"function\s+(?:&[ \t]{0,8})?([A-Za-z_\x80-\xff]\w*)[ \t]{0,8}\(",
+    )
+
+    def _recover_php_lone_function_token(
+        self, kw_node: "Node", functions: list[FunctionInfo],
+    ) -> None:
+        """Recover a PHP function from a bare ``function`` keyword token.
+
+        Fallback for header runs the sibling matcher cannot stitch
+        (name/params absorbed into expression nodes under other
+        parents). The name comes from the source line at the token's
+        own position — sound for tokens that pass the caller's
+        string-ancestry screen: a terminated comment/string keeps its
+        text inside its own node, and the re-tokenized debris a broken
+        interpolation produces is screened out by ancestry before this
+        fallback runs. The span end is deferred
+        (``line_end=None``) and resolved by _php_fill_recovered_spans:
+        bounding by the next declaration slightly over-covers trailing
+        docblocks/interstitial lines, which is the cheap direction —
+        it never swallows another declaration line, while dropping the
+        function entirely erased it from review scheduling and
+        coverage.
+        """
+        row = kw_node.start_point[0]
+        col = kw_node.start_point[1]
+        if row >= len(self._source_lines):
+            return
+        m = self._PHP_LONE_FN_HEADER.match(self._source_lines[row], col)
+        if not m:
+            # Anonymous closure (``function (...)``) or a header the
+            # line does not complete — nothing recoverable.
+            return
+        name = m.group(1)
+        if name in self._seen_names(functions):
+            return
+        fi = FunctionInfo(
+            name=name,
+            line_start=row + 1,
+            line_end=None,
+            signature=self._source_lines[row][col:col + 200].split("{")[0].strip(),
+            metadata=FunctionMetadata(),
+        )
+        functions.append(fi)
+        self._php_recovered.append(fi)
+
+    def _php_fill_recovered_spans(
+        self, functions: list[FunctionInfo],
+    ) -> None:
+        """Post-pass for PHP error recovery: fill deferred ends and
+        clamp error-inflated parsed spans.
+
+        1. Deferred ends (lone-token recovery): a recovered function's
+           span runs to the line before the next declaration (any
+           function with a later start), else end of file.
+        2. Clamping: when error recovery merges the NEXT declarations
+           into a parsed function's body (the parse produced one
+           function_definition spanning several real functions), the
+           parsed span contains a recovered declaration's start line.
+           Clamp the parsed end to the recovered start - 1 — the
+           recovered functions own their lines again. Only recovered
+           declarations trigger the clamp: legitimately nested named
+           functions parse as nested function_definition nodes and
+           are never in the recovered set.
+        """
+        starts = sorted(
+            f.line_start for f in functions
+            if f.kind == KIND_FUNCTION and f.line_start
+        )
+        for fi in self._php_recovered:
+            if fi.line_end is None:
+                pos = bisect.bisect_right(starts, fi.line_start)
+                fi.line_end = (
+                    starts[pos] - 1 if pos < len(starts)
+                    else len(self._source_lines)
+                )
+        recovered_starts = sorted(
+            f.line_start for f in self._php_recovered if f.line_start
+        )
+        for fn in functions:
+            # Clamp EVERY function (parsed or recovered) at the next
+            # recovered declaration inside its span: parsed spans can
+            # be error-inflated over the recovered functions, and a
+            # recovered span's loose-brace count can overshoot into
+            # the next fragmented declaration the same way.
+            if fn.kind != KIND_FUNCTION:
+                continue
+            if not fn.line_start or fn.line_end is None:
+                continue
+            pos = bisect.bisect_right(recovered_starts, fn.line_start)
+            if pos < len(recovered_starts) and \
+                    recovered_starts[pos] <= fn.line_end:
+                fn.line_end = recovered_starts[pos] - 1
 
     def _recover_c_error_node(self, error_node: "Node", functions: list[FunctionInfo]) -> None:
         """Extract functions from C/C++ ERROR nodes caused by macro annotations.
