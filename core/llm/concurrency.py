@@ -227,6 +227,42 @@ def _read_tuning() -> dict:
         return {}
 
 
+#: Recognised ``llm_account_posture`` values. ``shared`` = the LLM
+#: account has other consumers (sibling runs, other hosts, the
+#: operator's interactive session) — keep the fair-share ceilings.
+#: ``solo`` = the operator asserts the account's quota belongs to this
+#: host's runs — auto derivation may use the solo ceiling.
+LLM_ACCOUNT_POSTURES = ("shared", "solo")
+
+# Once-per-process memo for the junk-posture warning: the reader runs
+# on every derivation (fan-out loops call it per batch), and a typo'd
+# tuning.json would otherwise repeat the same warning dozens of times
+# per run.
+_posture_warning_emitted = False
+
+
+def read_tuning_llm_account_posture() -> str:
+    """Read ``llm_account_posture`` from tuning.json.
+
+    Returns ``"shared"`` or ``"solo"``. Absent, non-string, or
+    unrecognised values read as ``"shared"`` (with a once-per-process
+    warning for the unrecognised case) — the conservative direction: a
+    typo must never silently over-provision a quota other consumers
+    depend on.
+    """
+    global _posture_warning_emitted
+    val = _read_tuning().get("llm_account_posture", "shared")
+    if val in LLM_ACCOUNT_POSTURES:
+        return val
+    if val != "shared" and not _posture_warning_emitted:
+        _posture_warning_emitted = True
+        logger.warning(
+            'tuning.json: "llm_account_posture" must be one of %s — '
+            'using "shared"', "/".join(LLM_ACCOUNT_POSTURES),
+        )
+    return "shared"
+
+
 def read_tuning_max_llm_workers() -> int | None:
     """Read ``max_llm_workers`` from tuning.json.  Returns None for
     ``"auto"`` or when the key is absent/unparseable."""

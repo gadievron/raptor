@@ -88,6 +88,42 @@ def test_written_file_loads_through_core_tuning(tune_mod):
     assert t.joern_cpg_timeout_s == 99
 
 
+@pytest.mark.parametrize("producer,expected", [
+    ("_max_values", "solo"),
+    ("_balanced_values", "shared"),
+    ("_default_values", "shared"),
+])
+def test_profiles_set_llm_account_posture(tune_mod, producer, expected):
+    path = tune_mod._TUNING_PATH
+    tune_mod._write_tuning(getattr(tune_mod, producer)())
+    raw = load_json_with_comments(path)
+    assert raw["llm_account_posture"] == expected
+
+
+def test_profiles_replace_hand_set_posture_both_directions(tune_mod):
+    # Profiles OWN the posture: a retune resets it in BOTH directions
+    # (it is not preserved like operator-only passthrough keys).
+    path = tune_mod._TUNING_PATH
+    path.write_text(json.dumps({"llm_account_posture": "solo"}))
+    tune_mod._write_tuning(tune_mod._default_values())
+    assert load_json_with_comments(path)["llm_account_posture"] == "shared"
+    path.write_text(json.dumps({"llm_account_posture": "shared"}))
+    tune_mod._write_tuning(tune_mod._max_values())
+    assert load_json_with_comments(path)["llm_account_posture"] == "solo"
+
+
+def test_posture_round_trips_through_readers(tune_mod, monkeypatch):
+    # Written by the profile writer → readable by BOTH the core.tuning
+    # loader (no unknown-key warning path) and the concurrency reader.
+    import core.llm.concurrency as conc
+    from core.tuning import load_tuning
+    path = tune_mod._TUNING_PATH
+    tune_mod._write_tuning(tune_mod._max_values())
+    load_tuning(path)  # must not raise; posture stays passthrough
+    monkeypatch.setattr(conc, "_tuning_path", lambda: path)
+    assert conc.read_tuning_llm_account_posture() == "solo"
+
+
 def test_main_help_and_unknown_profile(tune_mod, monkeypatch, capsys):
     monkeypatch.setattr("sys.argv", ["raptor-tune", "--help"])
     assert tune_mod.main() == 0

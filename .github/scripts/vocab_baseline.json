@@ -1721,11 +1721,11 @@
     "kind": "literal"
   },
   "core/tuning/__init__.py::_KEY_COMMENTS": {
-    "count": 15,
+    "count": 16,
     "kind": "literal"
   },
   "core/tuning/__init__.py::_VALID_KEYS": {
-    "count": 15,
+    "count": 16,
     "kind": "literal"
   },
   "core/understand_graph/queries.py::_DANGEROUS": {

@@ -158,6 +158,21 @@ class TestLoadTuning(unittest.TestCase):
             t = load_tuning(p)
             self.assertEqual(t.max_semgrep_workers, _detect_semgrep_workers())
 
+    def test_llm_account_posture_is_valid_passthrough(self):
+        # The posture is a recognised key (no unknown-key warning) but
+        # a passthrough one: consumed raw by core/llm/concurrency.py,
+        # never resolved into the Tuning dataclass.
+        with TemporaryDirectory() as d:
+            p = Path(d) / "tuning.json"
+            p.write_text(json.dumps({
+                "llm_account_posture": "solo",
+                "max_semgrep_workers": 8,
+            }))
+            with self.assertNoLogs("core.tuning", level="WARNING"):
+                t = load_tuning(p)
+            self.assertEqual(t.max_semgrep_workers, 8)
+            self.assertFalse(hasattr(t, "llm_account_posture"))
+
     def test_unknown_key_warns(self):
         with TemporaryDirectory() as d:
             p = Path(d) / "tuning.json"
