@@ -106,6 +106,53 @@ class TestMagicValueRule:
         assert any("non-integer" in s["reason"] for s in manifest["skipped"])
 
 
+class TestPlantedSymlinkDefense:
+    """The seed dir sits in the reused, target-writable run dir: a
+    planted DANGLING symlink passes ``exists() == False``, so the old
+    exists()-gated ``write_bytes`` created the attacker-chosen target.
+    The exclusive create refuses and records the drop instead."""
+
+    def test_dangling_symlink_at_seed_name_refused_and_recorded(
+        self, tmp_path,
+    ):
+        victim = tmp_path / "victim"
+        (tmp_path / "smt_000_magic_raw").symlink_to(victim)
+
+        manifest = synthesize_seeds([_record({"magic": 0xDEAD})], tmp_path)
+
+        assert not victim.exists()
+        assert all(s["seed"] != "smt_000_magic_raw"
+                   for s in manifest["seeds"])
+        assert any(s.get("seed") == "smt_000_magic_raw"
+                   for s in manifest["skipped"])
+
+    def test_dict_write_replaces_planted_symlink(self, tmp_path):
+        victim = tmp_path / "victim"
+        victim.write_text("do not touch")
+        (tmp_path / "smt-witness.dict").symlink_to(victim)
+
+        synthesize_seeds([_record({"magic": 0xDEAD})], tmp_path)
+
+        dict_path = tmp_path / "smt-witness.dict"
+        assert victim.read_text() == "do not touch"
+        assert not dict_path.is_symlink()
+        assert "smt_magic" in dict_path.read_text()
+
+    def test_merge_replaces_planted_dangling_symlink(self, tmp_path):
+        seed_dir = tmp_path / "seeds"
+        seed_dir.mkdir()
+        (seed_dir / "smt-witness.dict").write_text('k="v"\n')
+        victim = tmp_path / "victim"
+        (tmp_path / "fuzz.dict").symlink_to(victim)
+
+        target = merge_witness_dict(seed_dir, tmp_path)
+
+        assert target == tmp_path / "fuzz.dict"
+        assert not victim.exists()
+        assert not target.is_symlink()
+        assert target.read_text() == 'k="v"\n'
+
+
 class TestDictionary:
     def test_dict_file_format_and_escaping(self, tmp_path):
         synthesize_seeds([_record({"magic": 0xDEAD})], tmp_path)

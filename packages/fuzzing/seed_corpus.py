@@ -16,7 +16,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from core.atomic_fs import write_new_bytes
 from core.json import load_json, load_json_bounded, save_json
+from core.paths import confine
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -372,6 +374,21 @@ def prepare_seed_corpus(options: SeedCorpusOptions) -> dict:
                 Path(kind) / f"seed-{counters[kind]:04d}{path.suffix.lower()}"
             )
             destination = out_dir / destination_relative
+            # Vet the kind-dir chain before mkdir/write: the reset
+            # above owns the known kind names, but the exclusive
+            # create below hardens only the FINAL component and
+            # mkdir(parents=True) follows a planted intermediate
+            # symlink — belt-and-braces containment so a link
+            # surviving into the reset→write window can never carry
+            # the seed outside out_dir.
+            if confine(out_dir, destination_relative.parent) is None:
+                counters[kind] -= 1
+                skipped.append({
+                    "path": relative_posix,
+                    "reason": "kind directory resolves outside the "
+                              "output directory (planted symlink?)",
+                })
+                continue
             destination.parent.mkdir(parents=True, exist_ok=True)
             # Bounded copy, not copyfile: the source tree is the
             # SCANNED repo, and a file can grow between the stat
@@ -385,7 +402,11 @@ def prepare_seed_corpus(options: SeedCorpusOptions) -> dict:
                      "size": len(data)}
                 )
                 continue
-            destination.write_bytes(data)
+            # Exclusive create (replace=True unlinks a planted
+            # symlink itself): out_dir is reused run output — a
+            # dangling symlink at a deterministic seed-NNNN name
+            # would route a plain write_bytes anywhere on disk.
+            write_new_bytes(destination, data, replace=True)
             sha256 = _sha256_file(destination)
             seeds.append(
                 {
@@ -487,7 +508,10 @@ def prepare_builtin_seed_corpus(out_dir: Path, profile: str = "default") -> dict
     for item, name, source_rel in selected:
         source = BUILTIN_SEED_CORPUS_DIR / source_rel
         destination = out_dir / name
-        shutil.copyfile(source, destination)
+        # Exclusive-create copy: copyfile opens the destination with
+        # O_TRUNC and follows a symlink surviving the reset (built-in
+        # seeds are small repo-shipped files — whole-read is fine).
+        write_new_bytes(destination, source.read_bytes(), replace=True)
         copied.append({
             "name": name,
             "source": source_rel.as_posix(),

@@ -48,7 +48,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from core.atomic_fs import open_exclusive_artifact
+from core.atomic_fs import open_exclusive_artifact, write_text_atomically
 from core.hash import sha256_file
 from core.json import load_json, save_json
 from core.security.log_sanitisation import sanitise_for_terminal
@@ -1183,7 +1183,13 @@ def _write_fuzz_dict(out_dir: Path, entries: dict[str, str]) -> tuple[str | None
     if not added:
         return (str(target) if target.is_file() else None), caps_hit
     try:
-        target.write_text("\n".join([*existing, *added]) + "\n", encoding="utf-8")
+        # Atomic read-merge-write commit: the dict lives in the same
+        # reused, target-writable dir as the hardened seed writer —
+        # the is_file() gate above follows symlinks and the plain
+        # write_text would too; os.replace over a planted symlink
+        # replaces the symlink itself, never follows it.
+        write_text_atomically(
+            target, "\n".join([*existing, *added]) + "\n")
     except OSError:
         caps_hit.append("dict_merge_failed")
         return None, caps_hit

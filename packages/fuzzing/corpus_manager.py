@@ -7,7 +7,9 @@ Manages fuzzing corpus (seed inputs).
 
 from pathlib import Path
 
+from core.atomic_fs import write_new_bytes
 from core.logging import get_logger
+from core.paths import confine
 
 logger = get_logger()
 
@@ -61,7 +63,11 @@ class CorpusManager:
             )
             raise ValueError(msg)
         seed_file = self.corpus_dir / name
-        seed_file.write_bytes(data)
+        # Exclusive create with lstat-honest replace: the flat-name
+        # validation above cannot stop a symlink PLANTED at a valid
+        # seed name in the (target-writable) corpus dir — a plain
+        # write_bytes would follow it out of the corpus.
+        write_new_bytes(seed_file, data, replace=True)
         logger.debug("Added seed: %s (%d bytes)", name, len(data))
         return seed_file
 
@@ -116,11 +122,38 @@ class CorpusManager:
                         "corpus_manager: skipping %s (%s bytes > %s cap)", fpath, st.st_size, self._MAX_SEED_BYTES
                     )
                     continue
-                dest = self.corpus_dir / fpath.relative_to(source)
+                rel = fpath.relative_to(source)
+                dest = self.corpus_dir / rel
+                # Vet the INTERMEDIATE chain before creating or
+                # writing anything: the exclusive create hardens only
+                # the final component, and mkdir(parents=True) itself
+                # follows a planted intermediate-directory symlink —
+                # a link at corpus_dir/sub aimed at an operator dir
+                # would carry both the mkdir and the seed write
+                # outside the corpus. confine() resolves symlinks;
+                # a refused chain is skipped loudly. Check-then-write
+                # is accepted here: staging runs before the campaign
+                # child spawns, so planted entries are a previous
+                # run's leftovers, not live racers.
+                if confine(self.corpus_dir, rel.parent) is None:
+                    logger.warning(
+                        "corpus_manager: skipping %s — its directory "
+                        "chain resolves outside the corpus dir "
+                        "(planted symlink?)", rel,
+                    )
+                    continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                # Bounded read — file may have grown between stat and read.
+                # Bounded read — file may have grown between stat and
+                # read. Exclusive-create the destination (replace=True
+                # unlinks a planted symlink ITSELF): the source-side
+                # symlink checks above say nothing about what occupies
+                # the destination name in the corpus dir.
                 with Path(fpath).open("rb") as fh:
-                    dest.write_bytes(fh.read(self._MAX_SEED_BYTES + 1)[:self._MAX_SEED_BYTES])
+                    write_new_bytes(
+                        dest,
+                        fh.read(self._MAX_SEED_BYTES + 1)[:self._MAX_SEED_BYTES],
+                        replace=True,
+                    )
                 count += 1
 
         logger.info("Copied %s files to corpus from %s", count, source_dir)
