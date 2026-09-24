@@ -151,6 +151,202 @@ _DISPATCH_TABLE_VALUE_CAP = 64
 INDIRECTION_BRACKET_DISPATCH = "bracket_dispatch"  # JS obj[<var>](...) / Py HANDLERS[k]()
 INDIRECTION_EVAL = "eval"                        # JS eval / new Function
 
+# --- argument-fact caps ----------------------------------------------------
+# Bounds on the literal-argument facts harvested per call expression
+# (decorator calls, module-scope constructor assignments, and
+# string+ref-shaped call sites). Each cap trades fact completeness on
+# generated / hostile code against inventory size on every file.
+
+# Longest literal string recorded as an argument fact. Higher keeps
+# giant hand-written patterns (very long regex URL patterns) usable
+# by consumers; lower stops one embedded blob (a base64 constant
+# passed positionally) from inflating every record it appears in.
+# Over-cap literals are treated as NON-literal — the consumer sees an
+# argument position with no usable literal and degrades exactly as it
+# does for a computed value.
+_ARG_STRING_CAP = 1024
+
+# Positional / keyword argument positions examined per call. Higher
+# covers machine-generated mega-signatures; lower bounds per-call
+# work and record size. Real registration APIs take < 10 arguments.
+_ARG_POSITIONAL_CAP = 32
+_ARG_KEYWORD_CAP = 32
+
+# Elements recorded from a list/tuple keyword literal (e.g.
+# ``methods=["GET", "POST"]``). Higher keeps huge literal lists
+# whole; lower keeps one generated list from dominating the record.
+# The first N are kept — an over-approximation SOURCE for consumers,
+# never absence evidence.
+_ARG_LIST_CAP = 16
+
+# Module-scope constructor assignments recorded per file. Higher
+# keeps every object of a machine-generated module; lower stops a
+# hostile file from minting thousands of records. Real modules bind
+# a handful of framework objects. First N kept; later assignments to
+# an ALREADY-recorded name still overwrite (runtime order).
+_CONSTRUCTED_OBJECT_CAP = 256
+
+# String+ref call sites recorded per file. Higher keeps every
+# registration of a giant generated URL table in one file; lower
+# bounds record growth on log-heavy files (a literal message plus an
+# identifier argument matches the shape too). 2000 covers the
+# largest hand-written URL modules observed; the first N are kept —
+# an over-approximation SOURCE for consumers, never absence evidence.
+_STRING_REF_CALL_CAP = 2000
+
+
+@dataclass(slots=True)
+class CallArgumentFacts:
+    """Literal / reference argument facts for ONE call expression.
+
+    Captures only what a static consumer can act on: literal string
+    arguments (by position or keyword), literal string-list keywords,
+    and name/attribute-chain arguments (function references). A
+    position present in ``arg_count`` but absent from every fact list
+    was something else — a computed value, a non-string literal, a
+    lambda — and consumers must treat it as dynamic.
+
+      * ``arg_count`` — total positional argument count (including
+        unrecorded ones), so "position 0 has no literal" is
+        distinguishable from "there was no argument".
+      * ``string_args`` — ``(position, literal)`` for positional
+        string constants.
+      * ``ref_args`` — ``(position, chain)`` for positional
+        name/attribute chains (``views.detail`` → ``["views",
+        "detail"]``).
+      * ``call_ref_args`` — ``(position, chain)`` for positional
+        CALL arguments whose callee has a chain
+        (``views.MyView.as_view()`` → ``["views", "MyView",
+        "as_view"]``).
+      * ``kw_strings`` / ``kw_string_lists`` / ``kw_refs`` /
+        ``kw_call_refs`` — the keyword-argument counterparts
+        (``methods=["GET"]`` → ``kw_string_lists``;
+        ``view_func=handler`` → ``kw_refs``;
+        ``view_func=V.as_view()`` → ``kw_call_refs``).
+
+    All strings and containers are bounded by the ``_ARG_*`` caps
+    above.
+    """
+    arg_count: int = 0
+    string_args: list[tuple[int, str]] = field(default_factory=list)
+    ref_args: list[tuple[int, list[str]]] = field(default_factory=list)
+    call_ref_args: list[tuple[int, list[str]]] = field(default_factory=list)
+    kw_strings: dict[str, str] = field(default_factory=dict)
+    kw_string_lists: dict[str, list[str]] = field(default_factory=dict)
+    kw_refs: dict[str, list[str]] = field(default_factory=dict)
+    kw_call_refs: dict[str, list[str]] = field(default_factory=dict)
+
+    def has_ref(self) -> bool:
+        """True when any argument is function-reference shaped."""
+        return bool(self.ref_args or self.call_ref_args
+                    or self.kw_refs or self.kw_call_refs)
+
+    def to_dict(self) -> dict:
+        """Serialise, omitting empty fact lists (most calls have a
+        couple of facts at most; empty keys would dominate)."""
+        out: dict = {"arg_count": self.arg_count}
+        if self.string_args:
+            out["string_args"] = [[p, s] for p, s in self.string_args]
+        if self.ref_args:
+            out["ref_args"] = [[p, list(ch)] for p, ch in self.ref_args]
+        if self.call_ref_args:
+            out["call_ref_args"] = [
+                [p, list(ch)] for p, ch in self.call_ref_args
+            ]
+        if self.kw_strings:
+            out["kw_strings"] = dict(self.kw_strings)
+        if self.kw_string_lists:
+            out["kw_string_lists"] = {
+                k: list(v) for k, v in self.kw_string_lists.items()
+            }
+        if self.kw_refs:
+            out["kw_refs"] = {k: list(v) for k, v in self.kw_refs.items()}
+        if self.kw_call_refs:
+            out["kw_call_refs"] = {
+                k: list(v) for k, v in self.kw_call_refs.items()
+            }
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict) -> CallArgumentFacts:
+        def _pos_pairs(value: object) -> list[tuple[int, str]]:
+            return [
+                (int(e[0] or 0), str(e[1]))
+                for e in (value if isinstance(value, list) else [])
+                if isinstance(e, (list, tuple)) and len(e) >= 2
+            ]
+
+        def _pos_chains(value: object) -> list[tuple[int, list[str]]]:
+            return [
+                (int(e[0] or 0), [str(p) for p in e[1]])
+                for e in (value if isinstance(value, list) else [])
+                if isinstance(e, (list, tuple)) and len(e) >= 2
+                and isinstance(e[1], (list, tuple))
+            ]
+
+        def _str_map(value: object) -> dict[str, str]:
+            if not isinstance(value, dict):
+                return {}
+            return {str(k): str(v) for k, v in value.items()}
+
+        def _chain_map(value: object) -> dict[str, list[str]]:
+            if not isinstance(value, dict):
+                return {}
+            return {
+                str(k): [str(p) for p in v]
+                for k, v in value.items()
+                if isinstance(v, (list, tuple))
+            }
+
+        return cls(
+            arg_count=int(d.get("arg_count") or 0),
+            string_args=_pos_pairs(d.get("string_args")),
+            ref_args=_pos_chains(d.get("ref_args")),
+            call_ref_args=_pos_chains(d.get("call_ref_args")),
+            kw_strings=_str_map(d.get("kw_strings")),
+            kw_string_lists=_chain_map(d.get("kw_string_lists")),
+            kw_refs=_chain_map(d.get("kw_refs")),
+            kw_call_refs=_chain_map(d.get("kw_call_refs")),
+        )
+
+
+@dataclass(slots=True)
+class StringRefCall:
+    """One call site whose first positional argument is a literal
+    string AND that passes at least one function-reference-shaped
+    argument — the structural fingerprint of name→handler
+    registration APIs (URL confs, ``add_url_rule``-style route
+    registration, CLI subcommand tables). Framework-agnostic: the
+    extractor records the SHAPE; classifying a site as an actual
+    registration is the consumer's join against the file's imports.
+
+    ``chain`` is the callee chain (``path(...)`` → ``["path"]``;
+    ``app.add_url_rule(...)`` → ``["app", "add_url_rule"]``).
+    """
+    line: int
+    chain: list[str]
+    caller: str | None = None
+    args: CallArgumentFacts = field(default_factory=CallArgumentFacts)
+
+
+@dataclass(slots=True)
+class ConstructedObject:
+    """One module-scope ``NAME = Chain(...)`` constructor assignment.
+
+    Records which callable a module-level name was bound to
+    (``app = Flask(__name__)`` → chain ``["Flask"]``) plus the
+    constructor call's literal-argument facts (``APIRouter(
+    prefix="/v1")`` keeps the prefix). Consumers join the chain
+    against the file's import map to type the object — the
+    receiver-binding step instance-bound decorator registrars need
+    (``@app.route`` resolves only if ``app``'s construction is
+    known). Module scope matches ``dispatch_tables``: the binding
+    exists at import time.
+    """
+    chain: list[str]
+    line: int
+    args: CallArgumentFacts = field(default_factory=CallArgumentFacts)
+
 
 @dataclass(slots=True)
 class CallSite:
@@ -221,14 +417,24 @@ class DecoratedFunction:
     ``decorators`` is a list of attribute chains, one per
     ``@decorator`` line. ``@functools.cache`` →
     ``[["functools", "cache"]]``. ``@app.route("/x")`` →
-    ``[["app", "route"]]`` (the call arguments aren't stored;
-    only the chain that names the decorator). Decorators that
-    aren't a plain name/attribute chain (e.g. ``@make_deco()``)
-    are NOT recorded — we have no qualified name to match.
+    ``[["app", "route"]]``. Decorators whose NAME isn't a plain
+    name/attribute chain (e.g. ``@make_deco()(...)`` — the
+    decorator is a call result) are NOT recorded — we have no
+    qualified name to match.
+
+    ``decorator_args`` is index-aligned with ``decorators``: the
+    :class:`CallArgumentFacts` of a decorator that is a CALL
+    (``@app.route("/x", methods=["GET"])``), or ``None`` for a
+    bare decorator (``@staticmethod``). The distinction matters
+    to registration consumers: a bare framework decorator and a
+    zero-argument call are different registration shapes.
     """
     name: str
     line: int
     decorators: list[list[str]] = field(default_factory=list)
+    decorator_args: list[CallArgumentFacts | None] = field(
+        default_factory=list,
+    )
 
 
 @dataclass(slots=True)
@@ -332,6 +538,18 @@ class FileCallGraph:
     getattr_calls: list[tuple[int, str | None, str | None]] = field(
         default_factory=list,
     )
+    # Registration-shape facts (Python only today; other extractors
+    # leave them empty). ``constructed_objects`` binds module-level
+    # names to their constructor chains so consumers can type
+    # instance receivers (``@app.route`` needs ``app``'s
+    # construction); ``string_ref_calls`` records the
+    # literal-string-plus-function-reference call shape that
+    # name→handler registration APIs share. Both serialise only
+    # when non-empty.
+    constructed_objects: dict[str, ConstructedObject] = field(
+        default_factory=dict,
+    )
+    string_ref_calls: list[StringRefCall] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         # Default-None fields (``caller``, ``receiver_class``) are
@@ -397,7 +615,15 @@ class FileCallGraph:
             ],
             "decorated_functions": [
                 {"name": d.name, "line": d.line,
-                 "decorators": [list(ch) for ch in d.decorators]}
+                 "decorators": [list(ch) for ch in d.decorators],
+                 # ``decorator_args`` omitted when no decorator was a
+                 # call — the majority (``@staticmethod``-style), and
+                 # an all-None list carries no information.
+                 **({"decorator_args": [
+                     a.to_dict() if a is not None else None
+                     for a in d.decorator_args
+                 ]} if any(a is not None for a in d.decorator_args)
+                    else {})}
                 for d in self.decorated_functions
             ],
             "relative_imports": [list(ri) for ri in self.relative_imports],
@@ -423,6 +649,24 @@ class FileCallGraph:
             ]
         if self.getattr_calls:
             out["getattr_calls"] = [list(t) for t in self.getattr_calls]
+        if self.constructed_objects:
+            constructed: dict = {}
+            for name, co in self.constructed_objects.items():
+                co_entry: dict = {"chain": list(co.chain), "line": co.line}
+                args = co.args.to_dict()
+                # A zero-argument constructor's facts are all-empty —
+                # omitting them round-trips to the default instance.
+                if args != {"arg_count": 0}:
+                    co_entry["args"] = args
+                constructed[name] = co_entry
+            out["constructed_objects"] = constructed
+        if self.string_ref_calls:
+            out["string_ref_calls"] = [
+                {"line": c.line, "chain": list(c.chain),
+                 **({"caller": c.caller} if c.caller is not None else {}),
+                 "args": c.args.to_dict()}
+                for c in self.string_ref_calls
+            ]
         return out
 
     @classmethod
@@ -462,14 +706,7 @@ class FileCallGraph:
                 for k in (d.get("classes") or [])
             ],
             decorated_functions=[
-                DecoratedFunction(
-                    name=str(df.get("name", "")),
-                    line=int(df.get("line") or 0),
-                    decorators=[
-                        list(ch) for ch in (df.get("decorators") or [])
-                        if isinstance(ch, (list, tuple))
-                    ],
-                )
+                _decorated_function_from_dict(df)
                 for df in (d.get("decorated_functions") or [])
             ],
             package_name=d.get("package_name"),
@@ -506,7 +743,60 @@ class FileCallGraph:
                 for t in (d.get("getattr_calls") or [])
                 if isinstance(t, (list, tuple)) and len(t) >= 3
             ],
+            constructed_objects={
+                str(name): ConstructedObject(
+                    chain=[str(p) for p in (co.get("chain") or [])],
+                    line=int(co.get("line") or 0),
+                    args=_argument_facts_from(co.get("args")),
+                )
+                for name, co in (d.get("constructed_objects") or {}).items()
+                if isinstance(co, dict)
+            },
+            string_ref_calls=[
+                StringRefCall(
+                    line=int(c.get("line") or 0),
+                    chain=list(c.get("chain") or []),
+                    caller=c.get("caller"),
+                    args=_argument_facts_from(c.get("args")),
+                )
+                for c in (d.get("string_ref_calls") or [])
+                if isinstance(c, dict)
+            ],
         )
+
+
+def _argument_facts_from(raw: object) -> CallArgumentFacts:
+    """Argument facts from a serialised value of unknown shape —
+    non-dicts degrade to the empty default."""
+    if isinstance(raw, dict):
+        return CallArgumentFacts.from_dict(raw)
+    return CallArgumentFacts()
+
+
+def _decorated_function_from_dict(df: dict) -> DecoratedFunction:
+    """Rebuild one decorated-function record, index-aligning
+    ``decorator_args`` with the kept ``decorators`` (a malformed
+    chain entry drops BOTH its chain and its args so the alignment
+    contract survives hand-corrupted artifacts). Inventories written
+    before ``decorator_args`` existed default every entry to None."""
+    raw_chains = df.get("decorators") or []
+    raw_args = df.get("decorator_args")
+    if not isinstance(raw_args, list) or len(raw_args) != len(raw_chains):
+        raw_args = [None] * len(raw_chains)
+    chains: list[list[str]] = []
+    args: list[CallArgumentFacts | None] = []
+    for ch, a in zip(raw_chains, raw_args):
+        if not isinstance(ch, (list, tuple)):
+            continue
+        chains.append(list(ch))
+        args.append(CallArgumentFacts.from_dict(a)
+                    if isinstance(a, dict) else None)
+    return DecoratedFunction(
+        name=str(df.get("name", "")),
+        line=int(df.get("line") or 0),
+        decorators=chains,
+        decorator_args=args,
+    )
 
 
 def _drive_visit(visitor, root) -> None:
@@ -651,6 +941,7 @@ class _PythonCallGraph(ast.NodeVisitor):
         # ``_enclosing``, otherwise ``@app.route(...)`` looks like
         # a call from inside the decorated function — wrong scope.
         decorator_chains: list[list[str]] = []
+        decorator_args: list[CallArgumentFacts | None] = []
         for deco in getattr(node, "decorator_list", []) or []:
             # ``@foo`` → name node
             # ``@foo.bar`` → attribute chain
@@ -659,6 +950,12 @@ class _PythonCallGraph(ast.NodeVisitor):
             chain = _decorator_chain(deco)
             if chain is not None:
                 decorator_chains.append(chain)
+                # Literal-argument facts, index-aligned with the
+                # chain list; None marks a bare (non-call) decorator.
+                decorator_args.append(
+                    _call_argument_facts(deco)
+                    if isinstance(deco, ast.Call) else None,
+                )
             # Walk the decorator expression in the OUTER scope so
             # any nested calls inside the decorator (e.g.
             # ``@app.route(rule_for("x"))``) attribute to the
@@ -673,6 +970,7 @@ class _PythonCallGraph(ast.NodeVisitor):
                     name=node.name,
                     line=getattr(node, "lineno", 0),
                     decorators=decorator_chains,
+                    decorator_args=decorator_args,
                 ),
             )
         # Now push the function name and walk the body. Skip the
@@ -756,7 +1054,49 @@ class _PythonCallGraph(ast.NodeVisitor):
                     chains.append(chain)
             if chains:
                 self.graph.dispatch_tables[node.targets[0].id] = chains
+        # Module-scope ``NAME = Chain(...)`` constructor assignments —
+        # the object-binding fact behind instance-receiver joins
+        # (``app = Flask(__name__)`` types every later ``app.<m>``).
+        # Same scoping rule as dispatch tables; single-Name targets
+        # only.
+        if (not self._enclosing and not self._class_stack
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            self._record_constructed(node.targets[0].id, node.value)
         self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        # Annotated form of the constructor assignment
+        # (``app: Flask = Flask(__name__)``) — common in typed
+        # codebases, same binding semantics as the bare form.
+        # Dispatch-table harvesting stays Assign-only (an annotated
+        # dict-of-functions table is rare enough not to warrant the
+        # extra shape).
+        if (not self._enclosing and not self._class_stack
+                and isinstance(node.target, ast.Name)
+                and node.value is not None):
+            self._record_constructed(node.target.id, node.value)
+        self.generic_visit(node)
+
+    def _record_constructed(self, name: str, value: ast.AST) -> None:
+        """Record one module-scope constructor assignment when the
+        value is a call on a name/attribute chain. A later
+        assignment to the same name overwrites (runtime order); new
+        names past the cap are dropped — see _CONSTRUCTED_OBJECT_CAP.
+        """
+        if not isinstance(value, ast.Call):
+            return
+        chain = _attribute_chain(value.func)
+        if chain is None:
+            return
+        table = self.graph.constructed_objects
+        if name not in table and len(table) >= _CONSTRUCTED_OBJECT_CAP:
+            return
+        table[name] = ConstructedObject(
+            chain=chain,
+            line=getattr(value, "lineno", 0),
+            args=_call_argument_facts(value),
+        )
 
     # ------------------------------------------------------------------
     # Calls + indirection
@@ -852,6 +1192,26 @@ class _PythonCallGraph(ast.NodeVisitor):
             caller=caller,
             receiver_class=receiver_class,
         ))
+        # Registration-shape fact: first positional argument is a
+        # literal string AND some argument is function-reference
+        # shaped — ``path("users/", views.detail)``,
+        # ``app.add_url_rule("/x", view_func=h)``. The extractor
+        # records the SHAPE only; whether a site is a real
+        # registration is the consumer's import join. Per-file
+        # capped — see _STRING_REF_CALL_CAP.
+        if (node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and len(self.graph.string_ref_calls)
+                < _STRING_REF_CALL_CAP):
+            arg_facts = _call_argument_facts(node)
+            if arg_facts.has_ref():
+                self.graph.string_ref_calls.append(StringRefCall(
+                    line=getattr(node, "lineno", 0),
+                    chain=chain,
+                    caller=caller,
+                    args=arg_facts,
+                ))
         self.generic_visit(node)
 
 
@@ -880,6 +1240,64 @@ def _is_builtin_call(
         if qualified == f"builtins.{builtin_name}":
             return True
     return chain == ["builtins", builtin_name]
+
+
+def _call_argument_facts(node: ast.Call) -> CallArgumentFacts:
+    """Harvest the literal / reference argument facts of one call.
+
+    Anything that is neither a bounded literal string, a literal
+    string list, a name/attribute chain, nor a call-on-a-chain is
+    deliberately NOT recorded — its position stays visible through
+    ``arg_count`` (positional) or simply absent (keyword), and
+    consumers treat it as dynamic. Over-cap literals degrade the
+    same way (see _ARG_STRING_CAP).
+    """
+    facts = CallArgumentFacts(arg_count=len(node.args))
+    for pos, arg in enumerate(node.args[:_ARG_POSITIONAL_CAP]):
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            if len(arg.value) <= _ARG_STRING_CAP:
+                facts.string_args.append((pos, arg.value))
+            continue
+        chain = _attribute_chain(arg)
+        if chain is not None:
+            facts.ref_args.append((pos, chain))
+            continue
+        if isinstance(arg, ast.Call):
+            call_chain = _attribute_chain(arg.func)
+            if call_chain is not None:
+                facts.call_ref_args.append((pos, call_chain))
+    for kw in node.keywords[:_ARG_KEYWORD_CAP]:
+        if kw.arg is None:
+            # ``**kwargs`` splat — nothing static to record.
+            continue
+        value = kw.value
+        if isinstance(value, ast.Constant) and isinstance(value.value, str):
+            if len(value.value) <= _ARG_STRING_CAP:
+                facts.kw_strings[kw.arg] = value.value
+            continue
+        if isinstance(value, (ast.List, ast.Tuple)):
+            elements = value.elts[:_ARG_LIST_CAP]
+            literals = [
+                e.value for e in elements
+                if isinstance(e, ast.Constant) and isinstance(e.value, str)
+                and len(e.value) <= _ARG_STRING_CAP
+            ]
+            # Record only when every examined element is a literal —
+            # a mixed list is not a usable literal fact (recording
+            # the literal half would misstate e.g. an HTTP-method
+            # list). First _ARG_LIST_CAP elements examined.
+            if literals and len(literals) == len(elements):
+                facts.kw_string_lists[kw.arg] = literals
+            continue
+        chain = _attribute_chain(value)
+        if chain is not None:
+            facts.kw_refs[kw.arg] = chain
+            continue
+        if isinstance(value, ast.Call):
+            call_chain = _attribute_chain(value.func)
+            if call_chain is not None:
+                facts.kw_call_refs[kw.arg] = call_chain
+    return facts
 
 
 def _decorator_chain(deco: ast.AST) -> list[str] | None:

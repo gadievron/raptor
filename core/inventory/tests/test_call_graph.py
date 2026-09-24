@@ -578,3 +578,231 @@ def test_dispatch_facts_omitted_from_dict_when_empty():
     assert "dispatch_tables" not in d
     assert "subscript_calls" not in d
     assert "getattr_calls" not in d
+
+# ---------------------------------------------------------------------------
+# Registration-shape facts (decorator_args / constructed_objects /
+# string_ref_calls)
+# ---------------------------------------------------------------------------
+
+
+def test_decorator_args_aligned_with_chains():
+    g = extract_call_graph_python(
+        "@app.route('/users/<int:uid>', methods=['GET', 'POST'])\n"
+        "@staticmethod\n"
+        "def user(uid):\n    pass\n"
+    )
+    assert len(g.decorated_functions) == 1
+    df = g.decorated_functions[0]
+    assert df.decorators == [["app", "route"], ["staticmethod"]]
+    assert len(df.decorator_args) == 2
+    route_args, bare = df.decorator_args
+    assert bare is None
+    assert route_args is not None
+    assert route_args.arg_count == 1
+    assert route_args.string_args == [(0, "/users/<int:uid>")]
+    assert route_args.kw_string_lists == {"methods": ["GET", "POST"]}
+
+
+def test_decorator_args_zero_arg_call_distinct_from_bare():
+    """``@app.route()`` is a CALL with no arguments — its facts entry
+    exists (arg_count 0) while ``@app.route`` gets None. Registration
+    consumers need the distinction."""
+    g = extract_call_graph_python(
+        "@app.route()\ndef a():\n    pass\n"
+        "@app.route\ndef b():\n    pass\n"
+    )
+    a, b = g.decorated_functions
+    assert a.decorator_args[0] is not None
+    assert a.decorator_args[0].arg_count == 0
+    assert b.decorator_args[0] is None
+
+
+def test_decorator_args_dynamic_pattern_not_recorded_as_literal():
+    g = extract_call_graph_python(
+        "@app.route(BASE + '/x')\ndef d():\n    pass\n"
+    )
+    args = g.decorated_functions[0].decorator_args[0]
+    assert args is not None
+    assert args.arg_count == 1
+    assert args.string_args == []
+
+
+def test_decorator_args_mixed_method_list_not_recorded():
+    """A partially-literal list would misstate the fact — dropped
+    whole."""
+    g = extract_call_graph_python(
+        "@app.route('/x', methods=['GET', VERB])\ndef d():\n    pass\n"
+    )
+    args = g.decorated_functions[0].decorator_args[0]
+    assert args is not None
+    assert args.kw_string_lists == {}
+
+
+def test_constructed_object_recorded_with_kwargs():
+    g = extract_call_graph_python(
+        "from fastapi import APIRouter\n"
+        "router = APIRouter(prefix='/v1')\n"
+    )
+    co = g.constructed_objects["router"]
+    assert co.chain == ["APIRouter"]
+    assert co.line == 2
+    assert co.args.kw_strings == {"prefix": "/v1"}
+
+
+def test_constructed_object_annotated_assignment():
+    g = extract_call_graph_python(
+        "app: Flask = Flask(__name__)\n"
+    )
+    assert g.constructed_objects["app"].chain == ["Flask"]
+
+
+def test_constructed_object_module_scope_only():
+    g = extract_call_graph_python(
+        "def make():\n    app = Flask(__name__)\n"
+        "class C:\n    app = Flask(__name__)\n"
+    )
+    assert g.constructed_objects == {}
+
+
+def test_constructed_object_non_call_values_skipped():
+    g = extract_call_graph_python(
+        "a = 1\nb = other\nc = [Flask(__name__)]\nd = f()()\n"
+    )
+    assert g.constructed_objects == {}
+
+
+def test_constructed_object_later_assignment_wins():
+    g = extract_call_graph_python(
+        "app = Flask(__name__)\napp = Quart(__name__)\n"
+    )
+    assert g.constructed_objects["app"].chain == ["Quart"]
+
+
+def test_constructed_object_cap():
+    from core.inventory.call_graph import _CONSTRUCTED_OBJECT_CAP
+    src = "".join(
+        f"o{i} = C{i}()\n" for i in range(_CONSTRUCTED_OBJECT_CAP + 5)
+    )
+    g = extract_call_graph_python(src)
+    assert len(g.constructed_objects) == _CONSTRUCTED_OBJECT_CAP
+    # Overwrites of already-recorded names still land past the cap.
+    g2 = extract_call_graph_python(src + "o0 = D0()\n")
+    assert g2.constructed_objects["o0"].chain == ["D0"]
+
+
+def test_string_ref_call_positional_ref():
+    g = extract_call_graph_python(
+        "urlpatterns = [path('users/<int:pk>/', views.detail,"
+        " name='detail')]\n"
+    )
+    assert len(g.string_ref_calls) == 1
+    site = g.string_ref_calls[0]
+    assert site.chain == ["path"]
+    assert site.caller is None
+    assert site.args.string_args == [(0, "users/<int:pk>/")]
+    assert site.args.ref_args == [(1, ["views", "detail"])]
+    assert site.args.kw_strings == {"name": "detail"}
+
+
+def test_string_ref_call_kw_ref_and_call_ref():
+    g = extract_call_graph_python(
+        "app.add_url_rule('/a', view_func=handler)\n"
+        "app.add_url_rule('/b', view_func=Views.as_view('b'))\n"
+        "path('c/', views.ItemView.as_view())\n"
+    )
+    a, b, c = g.string_ref_calls
+    assert a.args.kw_refs == {"view_func": ["handler"]}
+    assert b.args.kw_call_refs == {"view_func": ["Views", "as_view"]}
+    assert c.args.call_ref_args == [(1, ["views", "ItemView", "as_view"])]
+
+
+def test_string_ref_call_requires_string_first_arg_and_ref():
+    g = extract_call_graph_python(
+        "f(x, 'not-first')\n"           # string not at position 0
+        "g('only-strings', 'again')\n"  # no reference-shaped argument
+        "h(rule, handler)\n"            # no literal string at all
+    )
+    assert g.string_ref_calls == []
+
+
+def test_string_ref_call_records_enclosing_caller():
+    g = extract_call_graph_python(
+        "def setup(app):\n    app.add_url_rule('/x', view_func=h)\n"
+    )
+    assert g.string_ref_calls[0].caller == "setup"
+    assert g.string_ref_calls[0].line == 2
+
+
+def test_string_ref_call_per_file_cap():
+    from core.inventory.call_graph import _STRING_REF_CALL_CAP
+    src = "".join(
+        f"path('r{i}/', views.v{i})\n"
+        for i in range(_STRING_REF_CALL_CAP + 5)
+    )
+    g = extract_call_graph_python(src)
+    assert len(g.string_ref_calls) == _STRING_REF_CALL_CAP
+
+
+def test_argument_fact_string_cap_degrades_to_dynamic():
+    from core.inventory.call_graph import _ARG_STRING_CAP
+    big = "x" * (_ARG_STRING_CAP + 1)
+    g = extract_call_graph_python(
+        f"@app.route('{big}')\ndef d():\n    pass\n"
+    )
+    args = g.decorated_functions[0].decorator_args[0]
+    assert args is not None
+    assert args.arg_count == 1
+    assert args.string_args == []
+
+
+def test_registration_facts_round_trip():
+    g = extract_call_graph_python(
+        "app = Flask(__name__)\n"
+        "@app.route('/x', methods=['GET'])\n"
+        "def x():\n    pass\n"
+        "app.add_url_rule('/y', view_func=y)\n"
+    )
+    g2 = FileCallGraph.from_dict(g.to_dict())
+    assert g2.to_dict() == g.to_dict()
+    assert g2.decorated_functions[0].decorator_args[0].string_args == [
+        (0, "/x"),
+    ]
+    assert g2.constructed_objects["app"].chain == ["Flask"]
+    assert g2.string_ref_calls[0].args.kw_refs == {"view_func": ["y"]}
+
+
+def test_registration_facts_absent_from_old_inventories():
+    g = FileCallGraph.from_dict({
+        "imports": {},
+        "calls": [],
+        "decorated_functions": [
+            {"name": "f", "line": 1, "decorators": [["app", "route"]]},
+        ],
+    })
+    assert g.constructed_objects == {}
+    assert g.string_ref_calls == []
+    # Pre-fact decorated functions default every args slot to None,
+    # index-aligned with the chains.
+    assert g.decorated_functions[0].decorator_args == [None]
+
+
+def test_registration_facts_misaligned_args_dropped():
+    """A hand-corrupted artifact whose decorator_args length disagrees
+    with decorators must not desynchronise the alignment — args reset
+    to all-None."""
+    g = FileCallGraph.from_dict({
+        "decorated_functions": [
+            {"name": "f", "line": 1,
+             "decorators": [["a"], ["b"]],
+             "decorator_args": [{"arg_count": 1}]},
+        ],
+    })
+    assert g.decorated_functions[0].decorator_args == [None, None]
+
+
+def test_registration_facts_omitted_from_dict_when_empty():
+    d = extract_call_graph_python("x = 1\n").to_dict()
+    assert "constructed_objects" not in d
+    assert "string_ref_calls" not in d
+    assert all("decorator_args" not in df
+               for df in d["decorated_functions"])
