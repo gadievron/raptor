@@ -40,6 +40,8 @@ from __future__ import annotations
 import logging
 import re
 
+from core.source import open_regular
+
 logger = logging.getLogger(__name__)
 
 DETECTOR_NAME = "asm_zero_len_loop"
@@ -430,7 +432,13 @@ def scan_inventory_asm(checklist: dict | None) -> list[dict]:
         if not gen_path:
             continue
         try:
-            with open(gen_path, "rb") as fh:
+            # gen_path arrives from checklist records: fd-checked
+            # regular + O_NOFOLLOW + O_NONBLOCK (FIFO/symlink plants
+            # refuse), read bounded as before.
+            fh = open_regular(gen_path, "rb")
+            if fh is None:
+                continue
+            with fh:
                 text = fh.read(_MAX_ASM_BYTES).decode("utf-8", "replace")
         except OSError as exc:
             logger.warning(

@@ -31,6 +31,8 @@ import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from core.source import open_regular
 from typing import Any
 
 from core.sarif.parser import load_sarif
@@ -637,7 +639,10 @@ def _load_source_lines(
                     "%s (> %d bytes)", candidate, _MAX_SOURCE_FILE_BYTES,
                 )
             else:
-                with candidate.open("rb") as fh:
+                fh = open_regular(candidate, "rb")
+                if fh is None:
+                    raise OSError(f"not a readable regular file: {candidate}")
+                with fh:
                     raw = fh.read(_MAX_SOURCE_FILE_BYTES + 1)
                 if len(raw) > _MAX_SOURCE_FILE_BYTES:
                     logger.warning(

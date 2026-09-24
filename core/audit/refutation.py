@@ -26,6 +26,8 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.source import open_regular
 from types import SimpleNamespace
 from typing import Any
 
@@ -162,7 +164,10 @@ def _threading_primitives_seen(target_path) -> bool:
             if scanned > _VETO_SCAN_MAX_FILES:
                 break
             try:
-                with open(_os.path.join(root, fn), "rb") as f:
+                f = open_regular(_os.path.join(root, fn), "rb")
+                if f is None:
+                    continue
+                with f:
                     if _THREADING_PRIMITIVE_RE.search(
                             f.read(_VETO_SCAN_MAX_BYTES)):
                         seen = True

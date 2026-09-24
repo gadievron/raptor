@@ -19,6 +19,8 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+
+from core.source import read_text_capped
 from typing import TYPE_CHECKING
 
 from core.json import load_json
@@ -145,11 +147,9 @@ def is_kernel_tree(target_path: str | Path) -> bool:
             result = True
         else:
             makefile = root / "Makefile"
-            if makefile.is_file():
-                head = makefile.read_text(
-                    encoding="utf-8", errors="replace",
-                )[:65536]
-                result = bool(_KBUILD_OBJ_RE.search(head))
+            got = read_text_capped(makefile, 65536)
+            if got is not None:
+                result = bool(_KBUILD_OBJ_RE.search(got[0]))
     except OSError:
         result = False
 

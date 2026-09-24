@@ -29,6 +29,9 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+
+from core.paths import confine
+from core.source import read_text_capped
 from typing import Any, TYPE_CHECKING
 
 from core.dataflow.validator import ValidatorVerdict
@@ -591,11 +594,13 @@ def _function_referenced_as_pointer_scan(
     else:
         files = [p for p in target.rglob("*") if p.suffix in EXTS]
     for path in files:
-        try:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                text = f.read()
-        except OSError:
+        resolved = confine(target, path)
+        if resolved is None:
             continue
+        got = read_text_capped(resolved)
+        if got is None:
+            continue
+        text = got[0]
         # Strip the function's own definition line so we don't
         # match it as a self-reference. Cheap heuristic: skip lines
         # containing both the name AND `(` AND `{` on same line, OR

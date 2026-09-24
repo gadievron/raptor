@@ -47,6 +47,8 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from core.source import open_regular
 from typing import Any
 
 from core.inventory.exclusions import generated_marker_corroborated
@@ -478,8 +480,11 @@ def _read_file(file_path: str, target_path: Path | None) -> str:
     resolved = safe_join(target_path, file_path)
     if resolved is None:
         return ""
+    fh = open_regular(resolved, "rb")
+    if fh is None:
+        return ""
     try:
-        with open(resolved, "rb") as fh:
+        with fh:
             raw = fh.read(_MAX_STRUCTURE_BYTES)
     except OSError:
         return ""

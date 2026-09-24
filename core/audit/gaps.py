@@ -17,6 +17,8 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+
+from core.source import open_regular
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -1427,7 +1429,10 @@ def _read_spans(
         if resolved.stat().st_size > _MAX_HYDRATED_FILE_BYTES:
             logger.debug("skipping oversized file for hydration: %s", file_path)
             return None
-        with open(resolved, "rb") as probe:
+        probe = open_regular(resolved, "rb")
+        if probe is None:
+            return None
+        with probe:
             if b"\0" in probe.read(8192):
                 logger.debug("skipping binary-looking file: %s", file_path)
                 return None
@@ -1440,7 +1445,11 @@ def _read_spans(
         nxt = 0
         spent = 0
 
-        with open(resolved, encoding="utf-8", errors="replace") as fh:
+        fh = open_regular(resolved, "r", encoding="utf-8",
+                          errors="replace")
+        if fh is None:
+            return None
+        with fh:
             for lineno, text in enumerate(fh, start=1):
                 if lineno > last_line:
                     break

@@ -42,7 +42,8 @@ from pathlib import Path
 from typing import Any
 from typing import TYPE_CHECKING
 
-from core.source import read_text_capped
+from core.paths import confine
+from core.source import DEFAULT_MAX_SOURCE_CHARS, read_bytes_capped, read_text_capped
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -486,10 +487,16 @@ def _find_definitions(
         for path in _c_family_files(root, budget):
             if not budget.ok() or len(results) >= _MAX_DEFINITIONS:
                 break
-            try:
-                raw = path.read_bytes()
-            except OSError:
+            resolved_p = confine(root, path)
+            if resolved_p is None:
                 continue
+            got = read_bytes_capped(resolved_p, DEFAULT_MAX_SOURCE_CHARS)
+            if got is None or got[1]:
+                # over-cap refuses whole (a truncated definition
+                # must not parse as the real one), same as the WUR
+                # scan's skip
+                continue
+            raw = got[0]
             if not prefilter.search(raw):
                 continue
             lang = _language_of(str(path)) or "c"
@@ -616,7 +623,10 @@ def _constants_for_root(
     for path in _c_family_files(Path(root), budget):
         if not budget.ok():
             break
-        got = read_text_capped(path)
+        resolved = confine(Path(root), path)
+        if resolved is None:
+            continue
+        got = read_text_capped(resolved)
         if got is None:
             continue
         text = _strip_include_guard(got[0])
