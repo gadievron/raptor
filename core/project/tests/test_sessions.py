@@ -553,6 +553,76 @@ class RunLedgerTest(_RegistryCase):
         self.assertEqual(len(sessions.ledger_runs(pid=os.getpid())), 1)
 
 
+class AllSessionsRunningRunsTest(_RegistryCase):
+    """Box-wide running-record observation: only registered live
+    sessions count; orphan ledgers, dead pids, and foreign-stamped
+    entries never inflate the view."""
+
+    def setUp(self):
+        super().setUp()
+        self.run_root = Path(self._tmp.name) / "runs"
+        self.run_root.mkdir()
+        sessions.record_session("obsapp", pid=os.getpid())
+
+    def _mk_run(self, name: str) -> Path:
+        d = self.run_root / name
+        d.mkdir()
+        (d / ".raptor-run.json").write_text(
+            '{"status": "running"}', encoding="utf-8")
+        return d
+
+    def test_live_session_running_records_returned(self):
+        d = self._mk_run("audit_1")
+        done = self._mk_run("audit_2")
+        sessions.ledger_record_start(d, pid=os.getpid())
+        sessions.ledger_record_start(done, pid=os.getpid())
+        (done / ".raptor-run.json").write_text(
+            '{"status": "completed"}', encoding="utf-8")
+        sessions.ledger_record_finish(done, "completed", pid=os.getpid())
+        runs = sessions.ledger_running_runs_all_sessions()
+        self.assertEqual([r["run_id"] for r in runs], ["audit_1"])
+        self.assertEqual(runs[0]["session_pid"], os.getpid())
+        self.assertEqual(runs[0]["status"], "running")
+
+    def test_orphan_ledger_never_counts(self):
+        # A ledger file whose session entry is gone is an orphan —
+        # no owner, no liveness proof, no observation. Use a LIVE pid
+        # (pid 1: kill-0 answers EPERM → alive) so this fixture
+        # isolates the ENTRY gate — a dead-pid fixture would pass on
+        # the kill-0 fallback alone and mask a dropped orphan check.
+        (self.sessions_dir / "1.run").write_text(
+            f"running 100 x_1 {self.run_root}/x\n", encoding="utf-8")
+        self.assertEqual(
+            sessions.ledger_running_runs_all_sessions(), [])
+
+    def test_dead_pid_session_never_counts(self):
+        # Pre-stamp (v1) entry: liveness falls back to kill-0, and a
+        # dead pid's stale running lines must not inflate the count.
+        self._write_v1(DEAD_PID, "obsapp")
+        (self.sessions_dir / f"{DEAD_PID}.run").write_text(
+            f"running 100 y_1 {self.run_root}/y\n", encoding="utf-8")
+        self.assertEqual(
+            sessions.ledger_running_runs_all_sessions(), [])
+
+    def test_foreign_stamped_entry_never_counts(self):
+        # A v2 entry whose identity stamp does not verify (recycled
+        # pid, other boot) reads as dead for observation purposes.
+        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        (self.sessions_dir / "777777").write_text(
+            "project=obsapp\nsince=x\nv=2\nstarttime=1\nboot_id=zz\n",
+            encoding="utf-8")
+        (self.sessions_dir / "777777.run").write_text(
+            f"running 100 z_1 {self.run_root}/z\n", encoding="utf-8")
+        self.assertEqual(
+            sessions.ledger_running_runs_all_sessions(), [])
+
+    def test_missing_sessions_dir_reads_empty(self):
+        with patch.object(sessions, "SESSIONS_DIR",
+                          Path(self._tmp.name) / "nonexistent"):
+            self.assertEqual(
+                sessions.ledger_running_runs_all_sessions(), [])
+
+
 class UseCommandAwarenessTest(unittest.TestCase):
     """/project use writes the registry and prints the awareness line.
 

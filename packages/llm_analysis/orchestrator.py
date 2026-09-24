@@ -886,14 +886,20 @@ def orchestrate(
     if max_parallel <= 0:
         from core.llm.concurrency import (
             derive_max_workers,
+            emit_llm_sibling_banner,
             read_tuning_llm_account_posture,
         )
         max_parallel = derive_max_workers(analysis_model_name) if analysis_model_name else 3
+        posture = read_tuning_llm_account_posture()
         logger.info(
             "auto workers: model=%s posture=%s → max_parallel=%d",
-            analysis_model_name or "(cc)",
-            read_tuning_llm_account_posture(), max_parallel,
+            analysis_model_name or "(cc)", posture, max_parallel,
         )
+        # Sibling observation: an honest banner about who else is on
+        # the account right now — a heuristic, never a gate, and
+        # contained (a poisoned sibling must not abort startup).
+        emit_llm_sibling_banner(posture, max_parallel,
+                                self_run_dir=out_dir, log=logger)
     analysis_models_all = role_resolution.get("analysis_models", [])
     n_analysis = len(analysis_models_all)
     if n_analysis > 1:
