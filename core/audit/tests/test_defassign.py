@@ -653,3 +653,41 @@ class TestInitDeclaratorSizeReads:
             "x",
         )
         assert r.proven
+
+
+class TestClosureReadDiscipline:
+    def test_fifo_include_refuses_instead_of_wedging(self, tmp_path):
+        """A FIFO planted as an in-tree header resolves into the
+        closure but must refuse at the open (unresolved), not block
+        the BFS forever. Bounded child so a regression fails instead
+        of hanging the suite."""
+        import multiprocessing
+        import os
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "a.c").write_text('#include "wedge.h"\n')
+        os.mkfifo(tmp_path / "src" / "wedge.h")
+
+        child = multiprocessing.Process(
+            target=resolve_include_closure, args=(tmp_path, "src/a.c"),
+        )
+        child.start()
+        child.join(timeout=20)
+        try:
+            assert not child.is_alive(), (
+                "resolve_include_closure blocked on an in-tree FIFO"
+            )
+        finally:
+            if child.is_alive():
+                child.kill()
+                child.join()
+
+    def test_fifo_member_lands_in_unresolved(self, tmp_path):
+        import os
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "a.c").write_text('#include "wedge.h"\n')
+        os.mkfifo(tmp_path / "src" / "wedge.h")
+        files, unresolved = resolve_include_closure(tmp_path, "src/a.c")
+        assert any("wedge.h" in u for u in unresolved)
+        assert all("wedge.h" not in str(f) for f in files)

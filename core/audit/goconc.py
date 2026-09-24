@@ -97,6 +97,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from core.source import read_text_capped
 from typing import Any, Iterator, Mapping
 
 logger = logging.getLogger(__name__)
@@ -188,9 +190,21 @@ def load_go_package(
         if path.name.endswith("_test.go"):
             continue
         try:
-            text = _strip_bom(
-                path.read_text(encoding="utf-8", errors="strict"),
+            # Capped fd read (FIFO plants refuse instead of blocking;
+            # a single file over the package budget refuses like the
+            # cumulative check below). errors="strict" preserved: an
+            # undecodable file refuses the whole package, as before.
+            # resolve() first so a symlinked sibling (generated-tree
+            # layouts) keeps reading as it always did — the capped
+            # reader refuses final-component links by design. Stated
+            # traversal parity, not containment: this helper receives
+            # no target root to confine against.
+            got = read_text_capped(
+                path.resolve(), _MAX_PACKAGE_BYTES, errors="strict",
             )
+            if got is None or got[1]:
+                return None
+            text = _strip_bom(got[0])
         except (OSError, ValueError, UnicodeDecodeError):
             return None
         files[path.name] = text

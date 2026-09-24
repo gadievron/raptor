@@ -1191,10 +1191,12 @@ def _expanded_second_pass(
 
         if not is_c_family(file_path):
             return None
-        try:
-            source = full_path.read_text(errors="replace")
-        except OSError:
+        from core.source import read_text_capped
+
+        got = read_text_capped(full_path)
+        if got is None:
             return None
+        source = got[0]
         if line_start and line_end:
             lines = source.split("\n")
             segment = "\n".join(lines[max(0, line_start - 1):line_end])
@@ -1706,10 +1708,12 @@ def _filter_identifier_consistent(
     """
     import re
 
-    try:
-        file_lines = full_path.read_text(errors="replace").splitlines()
-    except OSError:
+    from core.source import read_text_capped
+
+    got = read_text_capped(full_path)
+    if got is None:
         return []
+    file_lines = got[0].splitlines()
 
     patterns = [
         re.compile(r"\b" + re.escape(ident) + r"\b")

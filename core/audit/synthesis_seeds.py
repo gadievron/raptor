@@ -81,13 +81,15 @@ def _snippet_for(
     """Bounded source snippet under path containment; "" on any miss."""
     if not file_path or line_start <= 0:
         return ""
-    try:
-        target = Path(target_path).resolve()
-        full = (target / file_path).resolve()
-        full.relative_to(target)
-        lines = full.read_text(encoding="utf-8", errors="replace").splitlines()
-    except (ValueError, OSError):
+    # Contained + capped + fd-checked regular: file_path is
+    # record-derived and the file target-writable (a FIFO plant
+    # wedged the raw read; oversize buffered whole).
+    from core.source import read_contained
+
+    text = read_contained(Path(target_path), file_path)
+    if text is None:
         return ""
+    lines = text.splitlines()
     end = min(line_end or line_start, line_start + 120, len(lines))
     return "\n".join(lines[line_start - 1: end])[:8000]
 

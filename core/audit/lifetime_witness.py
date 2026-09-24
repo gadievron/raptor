@@ -680,11 +680,13 @@ def _lifetime_macro_table(
     defs: dict[str, list[MacroDef]] = {}
     poisoned: set[str] = set()
     scanned = 0
+    from core.source import read_text_capped
+
     for path in files:
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        got = read_text_capped(path)
+        if got is None:
             continue
+        text = got[0]
         scanned += 1
         for line in _join_continuations(_strip_comments(text)):
             dm = _DIRECTIVE_RE.match(line)

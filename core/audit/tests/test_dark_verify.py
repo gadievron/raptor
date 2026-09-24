@@ -6734,3 +6734,44 @@ class TestConfirmReceiptProvenance:
         parts = (result.outcomes[0].evidence_tool or "").split("+")
         assert "dark_verify:confirmed" in parts
         assert "smt" in parts
+
+
+class TestSpliceSourceRead:
+    """_read_splice_source: spec.file is record-derived — the join is
+    contained and the read refuses (never truncates or blocks)."""
+
+    def _call(self, root, rel):
+        from core.audit.dark_verify._execute import _read_splice_source
+        return _read_splice_source(root, rel)
+
+    def test_reads_in_tree_source(self, tmp_path):
+        (tmp_path / "main.go").write_text("func main() {}\n")
+        assert "main" in self._call(tmp_path, "main.go")
+
+    def test_escaping_paths_raise(self, tmp_path):
+        root = tmp_path / "root"
+        root.mkdir()
+        secret = tmp_path / "secret.go"
+        secret.write_text("package secret\n")
+        with pytest.raises(OSError, match="escapes"):
+            self._call(root, "../secret.go")
+        with pytest.raises(OSError, match="escapes"):
+            self._call(root, str(secret))
+
+    def test_fifo_raises_instead_of_wedging(self, tmp_path):
+        import os
+
+        os.mkfifo(tmp_path / "wedge.go")
+        with pytest.raises(OSError, match="not a regular file"):
+            self._call(tmp_path, "wedge.go")
+
+    def test_oversize_refuses_never_truncates(self, tmp_path):
+        from core.source import DEFAULT_MAX_SOURCE_CHARS
+
+        big = tmp_path / "big.go"
+        with big.open("w") as fh:  # raw-open: test fixture writes its own sparse tmp plant
+            fh.write("package big\n")
+            fh.seek(DEFAULT_MAX_SOURCE_CHARS + 1024 * 1024)
+            fh.write("x")
+        with pytest.raises(OSError, match="exceeds the read cap"):
+            self._call(tmp_path, "big.go")

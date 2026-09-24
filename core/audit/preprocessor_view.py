@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 
 from core.run.scratch import scratch_dir
+from core.source import read_text_capped
 
 from ._util import safe_join
 from .compiler_sweep import _derive_include_dirs
@@ -658,12 +659,11 @@ def recover_macro_defined_functions(
     def _original_text(rel: str) -> str:
         if rel not in original_cache:
             resolved = safe_join(target_path, rel)
-            try:
-                original_cache[rel] = (
-                    resolved.read_text(errors="replace") if resolved else ""
-                )
-            except OSError:
-                original_cache[rel] = ""
+            got = (
+                read_text_capped(resolved)
+                if resolved is not None else None
+            )
+            original_cache[rel] = "" if got is None else got[0]
         return original_cache[rel]
 
     recovered: list = []
@@ -756,13 +756,12 @@ def augment_checklist_with_macro_functions(
         if Path(path).suffix not in tu_suffixes:
             continue
         resolved = safe_join(target_path, path)
-        if resolved is None or not resolved.is_file():
+        if resolved is None:
             continue
-        try:
-            raw = resolved.read_text(errors="replace")
-        except OSError:
+        got = read_text_capped(resolved)
+        if got is None:
             continue
-        if not _MACRO_INVOCATION_RE.search(raw):
+        if not _MACRO_INVOCATION_RE.search(got[0]):
             continue
         budget -= 1
         try:
