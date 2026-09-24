@@ -90,7 +90,7 @@ jobs:
           # an EXECUTED confirmed sweep, so without the binary those
           # tests can only skip. Installed here so the nightly keeps
           # covering the sweep → record → report → feedback chain.
-          uv tool install semgrep==1.177.0
+          uv pip install semgrep==1.177.0
           # Grammar wheels: grammar-dependent tests skip-with-reason
           # where these are absent (every PR tier), which means the
           # span-accurate detection paths were never exercised in CI
