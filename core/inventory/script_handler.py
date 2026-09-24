@@ -148,19 +148,29 @@ def php_interstitial_is_handler(source: str | None) -> bool:
             line = line[end + 2:].strip()
             if not line:
                 continue
-        if line.startswith("*"):
+        if line.startswith("*") and "$" not in line and "(" not in line:
             # Docblock-body heuristic: span hydration can slice
             # mid-docblock, where in_comment was never armed, so a
-            # ``*``-led line reads as comment prose. But ``*`` also
-            # begins a valid CONTINUATION of the previous statement
-            # (numeric-string arithmetic after an unterminated
-            # ``include '1'``), and a close tag on such a line
-            # re-enters markup/code — only the pre-close-tag portion
-            # is skippable prose. Without a close tag the whole line
-            # skips as before; with one, the remainder goes through
-            # the segment scan (a genuine docblock line mentioning
-            # ``?>`` classifies toward inclusion — one review slot,
-            # the cheap direction).
+            # ``*``-led line reads as comment prose. But ``*`` (and
+            # ``**``) also begins a valid CONTINUATION of the
+            # previous statement — numeric-string arithmetic after an
+            # unterminated ``include '1'`` — so the payload can live
+            # in the star line ITSELF, with or without a close tag.
+            # A line is skippable prose ONLY when it cannot carry
+            # code: no ``$`` (no variable, no superglobal) AND no
+            # ``(`` (no call). Anything else goes through the normal
+            # statement/segment scan — which prices docblock tag
+            # lines like ``@param string $x`` at one review slot
+            # each (inclusion is the cheap direction; prose without
+            # those characters still skips). ``*`` / ``**`` are the
+            # only continuation operators skipped at all — ``/`` /
+            # ``+`` / ``%`` continuations already classify True, and
+            # ``//`` / ``#`` really are comments.
+            #
+            # Even for guard-passing prose, a close tag still ends
+            # the comment context: the pre-close-tag portion is the
+            # only skippable part, the remainder re-enters markup /
+            # code through the segment scan.
             tag = line.find("?>")
             if tag < 0:
                 continue
