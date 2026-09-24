@@ -436,3 +436,34 @@ class TestGlobalVariableList:
         assert not _php_interstitial_is_handler("global $a, $b;\n")
         assert not _php_interstitial_is_handler(
             "global $a ,$b_2 , $C;\n")
+
+
+class TestStarContinuationCloseTag:
+    """A line-leading ``*`` is usually a docblock-body slice, but it
+    also continues the previous statement (numeric-string arithmetic
+    after an unterminated literal include) — and a close tag on that
+    line re-enters markup/code, so the docblock skip may discard only
+    the pre-close-tag portion."""
+
+    def test_star_arithmetic_close_tag_reentry_is_handler_code(self):
+        assert _php_interstitial_is_handler(
+            "include '1'\n* 2 ?><?php system($_GET['c']);\n")
+        assert _php_interstitial_is_handler(
+            "include '1'\n** 2 ?><?php system($_GET['c']);\n")
+        assert _php_interstitial_is_handler(
+            "include '1'\n* 2 ?>output\n")
+
+    def test_docblock_body_slice_stays_skipped(self):
+        # Two-direction: a genuine mid-docblock hydration slice (no
+        # close tag) keeps the skip.
+        assert not _php_interstitial_is_handler(
+            "* @param string $x\n"
+            "* @return int\n"
+            "*/\n"
+            "include('a.php');\n")
+
+    def test_real_docblock_still_swallows_close_tags(self):
+        # With in_comment armed by a real /* opener, ?> inside the
+        # docblock stays comment prose (PHP-correct).
+        assert not _php_interstitial_is_handler(
+            "/**\n * example: x ?><?php y\n */\ninclude('a.php');\n")
