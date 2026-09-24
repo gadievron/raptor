@@ -1239,6 +1239,27 @@ def build_inventory(
     from core.inventory import save_checklist
     save_checklist(str(output_path), inventory)
 
+    # PHP include-graph derivation (Layer 1, hint-tier) — mechanical
+    # fold of the walker's include edges into include-graph.json
+    # beside the checklist. Inventory-time placement makes every
+    # pipeline (audit context, validate Stage C, map ride-alongs) a
+    # consumer with zero extra orchestration. Best-effort — graph
+    # trouble never blocks the inventory.
+    if any(f.get('language') == 'php' for f in files_info):
+        try:
+            from .include_graph import (
+                build_include_graph,
+                save_include_graph,
+            )
+            include_graph = build_include_graph(
+                inventory,
+                target_root=str(target) if target.is_dir() else None,
+            )
+            save_include_graph(str(output_path), include_graph)
+        except Exception:                                  # noqa: BLE001
+            logger.warning("include-graph derivation failed",
+                           exc_info=True)
+
     logger.info("Built inventory: %d files, %d items "
                 "(%d functions, %d SLOC, %d skipped, %d excluded)",
                 len(files_info), total_items, total_functions,
@@ -1873,6 +1894,44 @@ def _process_single_file(
                             "handler span-hash backfill failed for %s",
                             rel_path, exc_info=True,
                         )
+                # Same carried-gap rule for the PHP include edges: a
+                # record written before the edge layer existed never
+                # re-parses on the SHA fast path, so backfill the
+                # include layer from the (byte-identical) content —
+                # exact, not a guess. Key presence marks extraction
+                # ran (empty ``includes`` is a real "no includes"),
+                # so this runs at most once per pre-edge record.
+                # Deliberately NOT the stamp rule above (re-derive
+                # every reuse): healing edges means a full
+                # tree-sitter parse per PHP file per build — the very
+                # cost the SHA gate exists to skip — while the stamp
+                # heals with one line-scan. The tamper exposure is
+                # also a tier lower: include edges feed hint-tier
+                # prompt context only (no verdict path reads the
+                # graph), so a tampered edge steers where a tampered
+                # stamp would suppress.
+                if language == 'php':
+                    cg = old_entry.get('call_graph')
+                    if isinstance(cg, dict) and 'includes' not in cg:
+                        try:
+                            fresh = extract_call_graph_php(content)
+                            if fresh.includes_extracted:
+                                fd = fresh.to_dict()
+                                for k in ('includes', 'defines',
+                                          'includes_truncated',
+                                          'direct_access_guard'):
+                                    if k in fd:
+                                        cg[k] = fd[k]
+                                from .include_graph import (
+                                    anchor_literal_include_targets,
+                                )
+                                anchor_literal_include_targets(
+                                    cg, rel_path)
+                        except Exception:
+                            logger.debug(
+                                "include-edge backfill failed for %s",
+                                rel_path, exc_info=True,
+                            )
                 return old_entry
 
         # The parser reads a TranslationView (its parse_text), not raw
@@ -2018,6 +2077,11 @@ def _process_single_file(
             record['call_graph'] = extract_call_graph_php(
                 parse_text, _tree=_shared_tree,
             ).to_dict()
+            # Layer-0 include edges ride the same parse; pure-literal
+            # edges anchor relative to this file (path arithmetic
+            # only — existence is the include-graph derivation's job).
+            from .include_graph import anchor_literal_include_targets
+            anchor_literal_include_targets(record['call_graph'], rel_path)
         elif language == 'lua':
             record['call_graph'] = extract_call_graph_lua(
                 parse_text, _tree=_shared_tree,
