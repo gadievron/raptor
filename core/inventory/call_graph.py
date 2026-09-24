@@ -137,6 +137,17 @@ INDIRECTION_DUNDER_IMPORT = "dunder_import"     # __import__("x.y")
 # treats them the same as the Python flags: any present →
 # UNCERTAIN for queries against names this file mentions.
 INDIRECTION_DYNAMIC_IMPORT = "dynamic_import"   # JS import(<var>) / require(<var>)
+
+# Cap on harvested value chains per module-scope dispatch-table dict
+# literal. Higher captures machine-generated mega-registries exactly
+# but lets one hostile file inflate every inventory record (and every
+# downstream graph's fan-out) with tens of thousands of chains; lower
+# keeps records small but silently drops real handlers from big
+# hand-written tables, losing edges a graph consumer could have
+# originated from. 64 covers every hand-written table observed in
+# real projects; a table that overflows keeps its first 64 values —
+# still an over-approximation SOURCE, never absence evidence.
+_DISPATCH_TABLE_VALUE_CAP = 64
 INDIRECTION_BRACKET_DISPATCH = "bracket_dispatch"  # JS obj[<var>](...) / Py HANDLERS[k]()
 INDIRECTION_EVAL = "eval"                        # JS eval / new Function
 
@@ -256,6 +267,31 @@ class FileCallGraph:
     string dispatch" — a file that contains
     ``getattr(requests, 'get')`` is a confounder for queries about
     ``requests.get`` even if no static call chain has tail ``get``.
+
+    ``dispatch_tables`` / ``subscript_calls`` / ``getattr_calls``
+    (Python only today; other extractors leave them empty) carry the
+    per-site facts behind the file-scoped indirection flags, so a
+    graph assembler can turn the two common literal dynamic-dispatch
+    idioms into explicit lower-confidence edges instead of a blanket
+    "this file is uncertain" verdict:
+
+      * ``dispatch_tables`` — module-scope ``NAME = {...}`` dict
+        literals whose values are name / attribute chains
+        (``HANDLERS = {"a": handle_a}`` → ``{"HANDLERS":
+        [["handle_a"]]}``). Keys are not recorded — consumers
+        over-approximate a ``NAME[k]()`` call as reaching every
+        value, which is the sound direction for edge origination.
+      * ``subscript_calls`` — call sites whose callee is a
+        subscript with a name-chain root (``HANDLERS[k](...)`` →
+        chain ``["HANDLERS"]``). These have no callee name so they
+        are NOT in ``calls``; recording the root name lets a
+        consumer join against ``dispatch_tables``.
+      * ``getattr_calls`` — one ``(line, caller, attr_or_None)``
+        triple per ``getattr(obj, ...)`` site. ``attr`` is the
+        literal second argument when constant, ``None`` when
+        opaque. Unlike the file-scoped ``getattr_targets`` set,
+        each triple keeps the enclosing caller so an edge can be
+        attributed to the function that dispatches.
     """
     imports: dict[str, str] = field(default_factory=dict)
     calls: list[CallSite] = field(default_factory=list)
@@ -284,6 +320,16 @@ class FileCallGraph:
     # :mod:`core.analysis.reachability` consumes these to model
     # ``__init__.py`` re-exports.
     relative_imports: list[tuple[int, str, str, str | None]] = field(
+        default_factory=list,
+    )
+    # Literal dynamic-dispatch facts — see the class docstring.
+    # ``dispatch_tables``: table name → list of value chains.
+    # ``subscript_calls``: CallSite records whose ``chain`` is the
+    # SUBSCRIPT ROOT (the table being indexed), not a callee name.
+    # ``getattr_calls``: (line, caller_or_None, attr_or_None) triples.
+    dispatch_tables: dict[str, list[list[str]]] = field(default_factory=dict)
+    subscript_calls: list[CallSite] = field(default_factory=list)
+    getattr_calls: list[tuple[int, str | None, str | None]] = field(
         default_factory=list,
     )
 
@@ -361,6 +407,22 @@ class FileCallGraph:
         # mixed-language repo's files.
         if self.package_name is not None:
             out["package_name"] = self.package_name
+        # The literal dynamic-dispatch facts are omitted when empty
+        # (the common case for every file that doesn't use the
+        # idiom) — same size rationale as ``argument_identifiers``.
+        if self.dispatch_tables:
+            out["dispatch_tables"] = {
+                name: [list(ch) for ch in chains]
+                for name, chains in self.dispatch_tables.items()
+            }
+        if self.subscript_calls:
+            out["subscript_calls"] = [
+                {"line": c.line, "chain": list(c.chain),
+                 **({"caller": c.caller} if c.caller is not None else {})}
+                for c in self.subscript_calls
+            ]
+        if self.getattr_calls:
+            out["getattr_calls"] = [list(t) for t in self.getattr_calls]
         return out
 
     @classmethod
@@ -415,6 +477,34 @@ class FileCallGraph:
                 (int(r[0] or 0), str(r[1] or ""), str(r[2] or ""),
                  r[3] if len(r) > 3 else None)
                 for r in rel if isinstance(r, (list, tuple)) and len(r) >= 3
+            ],
+            # Inventories written before these facts existed simply
+            # lack the keys — default to empty (consumers degrade to
+            # the file-scoped indirection flags, exactly the pre-fact
+            # behaviour).
+            dispatch_tables={
+                str(name): [
+                    [str(p) for p in ch]
+                    for ch in chains if isinstance(ch, (list, tuple))
+                ]
+                for name, chains in (d.get("dispatch_tables") or {}).items()
+                if isinstance(chains, (list, tuple))
+            },
+            subscript_calls=[
+                CallSite(
+                    line=int(c.get("line") or 0),
+                    chain=list(c.get("chain") or []),
+                    caller=c.get("caller"),
+                )
+                for c in (d.get("subscript_calls") or [])
+                if isinstance(c, dict)
+            ],
+            getattr_calls=[
+                (int(t[0] or 0),
+                 str(t[1]) if t[1] is not None else None,
+                 str(t[2]) if t[2] is not None else None)
+                for t in (d.get("getattr_calls") or [])
+                if isinstance(t, (list, tuple)) and len(t) >= 3
             ],
         )
 
@@ -636,6 +726,39 @@ class _PythonCallGraph(ast.NodeVisitor):
             self._class_stack.pop()
 
     # ------------------------------------------------------------------
+    # Dispatch tables
+    # ------------------------------------------------------------------
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        # Module-scope ``NAME = {key: fn, ...}`` dict literals whose
+        # values are name / attribute chains — the dict-of-functions
+        # dispatch idiom behind ``NAME[k](...)`` calls. Module scope
+        # means "not inside any def / class body": the two scope
+        # stacks track exactly that, so a table defined under a
+        # module-level ``if`` / ``try`` still qualifies (it binds the
+        # module namespace at import, same as a bare assignment).
+        # Single-Name targets only — tuple unpacking / attribute
+        # targets carry too much ambiguity for a useful join key.
+        # Values that aren't chains (literals, lambdas, calls) are
+        # skipped individually; keys are not recorded (consumers
+        # over-approximate to every value). A later assignment to the
+        # same name overwrites the earlier harvest — runtime order.
+        if (not self._enclosing and not self._class_stack
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Dict)):
+            chains: list[list[str]] = []
+            for value in node.value.values:
+                if len(chains) >= _DISPATCH_TABLE_VALUE_CAP:
+                    break
+                chain = _attribute_chain(value)
+                if chain is not None:
+                    chains.append(chain)
+            if chains:
+                self.graph.dispatch_tables[node.targets[0].id] = chains
+        self.generic_visit(node)
+
+    # ------------------------------------------------------------------
     # Calls + indirection
     # ------------------------------------------------------------------
 
@@ -651,6 +774,19 @@ class _PythonCallGraph(ast.NodeVisitor):
             # callable-name signal and stay invisible.
             if isinstance(node.func, ast.Subscript):
                 self.graph.indirection.add(INDIRECTION_BRACKET_DISPATCH)
+                # Record the subscript ROOT when it has a static name
+                # (``HANDLERS[k](...)`` → ``["HANDLERS"]``) so a graph
+                # assembler can join it against ``dispatch_tables``.
+                # A rootless subscript (``f()[0](...)``) has nothing
+                # to join on — the file-level flag is all we keep.
+                root_chain = _attribute_chain(node.func.value)
+                if root_chain is not None:
+                    self.graph.subscript_calls.append(CallSite(
+                        line=getattr(node, "lineno", 0),
+                        chain=root_chain,
+                        caller=(self._enclosing[-1]
+                                if self._enclosing else None),
+                    ))
             self.generic_visit(node)
             return
 
@@ -669,12 +805,22 @@ class _PythonCallGraph(ast.NodeVisitor):
         # ``builtins.getattr(obj, …)`` are also seen.
         if _is_builtin_call(chain, "getattr", self.graph.imports) and len(node.args) >= 2:
             second = node.args[1]
+            attr_literal: str | None = None
             if (isinstance(second, ast.Constant)
                     and isinstance(second.value, str)):
                 self.graph.indirection.add(INDIRECTION_GETATTR)
                 self.graph.getattr_targets.add(second.value)
+                attr_literal = second.value
             else:
                 self.graph.indirection.add(INDIRECTION_GETATTR_OPAQUE)
+            # Per-site record keeps the enclosing caller so a graph
+            # assembler can attribute a heuristic edge to the
+            # dispatching function (the file-scoped sets above can't).
+            self.graph.getattr_calls.append((
+                getattr(node, "lineno", 0),
+                self._enclosing[-1] if self._enclosing else None,
+                attr_literal,
+            ))
 
         # Indirection: importlib.import_module("x.y")
         if chain == ["importlib", "import_module"]:
