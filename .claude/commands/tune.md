@@ -10,9 +10,9 @@ Show or update RAPTOR resource tuning.
 ## Usage
 
 - `/tune` — show current resolved values and hardware info
-- `/tune max` — rewrite tuning.json to use all available resources
-- `/tune balanced` — rewrite tuning.json with conservative values for shared machines
-- `/tune default` — reset tuning.json to shipped defaults
+- `/tune max` — rewrite tuning.json to use all available resources (also sets `llm_account_posture=solo` — the LLM account is declared this host's alone)
+- `/tune balanced` — rewrite tuning.json with conservative values for shared machines (`llm_account_posture=shared`)
+- `/tune default` — reset tuning.json to shipped defaults (`llm_account_posture=shared`)
 
 ## Implementation
 

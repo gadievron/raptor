@@ -240,9 +240,12 @@ contradicts the configured region.
 
 - **Worker cap:** Bedrock quota is shared account-wide (most visibly
   with a live Claude Code session on the same account), so analysis
-  parallelism is clamped to 8 workers by default;
-  `RAPTOR_BEDROCK_MAX_WORKERS` overrides, `tuning.json`'s
-  `max_llm_workers` beats both.
+  parallelism is clamped to 8 workers by default. The cap is
+  posture-aware: `tuning.json`'s `llm_account_posture=solo` raises it
+  to 16 (the account is declared this host's alone — still a ceiling,
+  since bursting past the quota's token-rate churns 429s even solo).
+  `RAPTOR_BEDROCK_MAX_WORKERS` overrides posture in both directions,
+  `tuning.json`'s `max_llm_workers` beats everything.
 - **Entitlement preflight:** at dispatcher startup, one 1-token probe
   per configured (model, surface, region, profile) combination turns
   an un-entitled model into an actionable warning up front instead of
