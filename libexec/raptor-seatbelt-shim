@@ -559,7 +559,7 @@ def main() -> int:
                   "RAPTOR_SESSION_PID", "RAPTOR_SESSION_TOKEN",
                   "RAPTOR_ALLOW_DEGRADED_UNTRUSTED",
                   "RAPTOR_DIR", "RAPTOR_OUT_DIR", "RAPTOR_TARGET_KIND",
-                  "RAPTOR_SCORECARD_PATH",
+                  "RAPTOR_SCORECARD_PATH", "RAPTOR_LLM_TRANSCRIPT",
                   "RAPTOR_SANITIZER_CUT", "RAPTOR_SANITIZER_CUT_NO_LEXICAL",
                   "RAPTOR_SANITIZER_CUT_PARITY_LOG",
                   "RAPTOR_SANITIZER_CUT_AUDIT_DIR")

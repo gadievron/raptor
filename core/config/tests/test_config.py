@@ -121,6 +121,31 @@ class TestGetSafeEnv:
                             "RAPTOR_EF_CONFIG", "RAPTOR_EF_CACHE_DIR"):
                 assert blocked not in env, blocked
 
+    def test_llm_transcript_var_survives_scrub_and_llm_env(self):
+        """RAPTOR_LLM_TRANSCRIPT must cross the subprocess boundary:
+        raptor.py spawns the analysis scripts through get_llm_env
+        (built on get_safe_env), and a stripped var means record mode
+        silently produces a paid run with NO transcript while replay
+        mode silently dispatches LIVE — the two failures the
+        transcript seam exists to prevent. Parse-validated in the
+        child; no injection surface beyond same-UID file access."""
+        with patch.dict(os.environ, {
+            "RAPTOR_LLM_TRANSCRIPT": "replay:/tmp/t.jsonl",
+        }):
+            safe = RaptorConfig.get_safe_env()
+            llm = RaptorConfig.get_llm_env()
+        assert safe.get("RAPTOR_LLM_TRANSCRIPT") == "replay:/tmp/t.jsonl"
+        assert llm.get("RAPTOR_LLM_TRANSCRIPT") == "replay:/tmp/t.jsonl"
+
+    def test_llm_transcript_var_stripped_from_target_envs(self):
+        """Target-bound envs must NOT carry the transcript var — it is
+        a framework tell plus a host path leaking the run layout, and
+        no target consumes it. Membership in TARGET_ENV_STRIP_SET is
+        what the table-driven strip harnesses key on."""
+        assert (
+            "RAPTOR_LLM_TRANSCRIPT" in RaptorConfig.TARGET_ENV_STRIP_SET
+        )
+
     def test_redb_ceiling_override_survives_scrub(self):
         """RAPTOR_REDB_MAX_BYTES must reach scrub-spawned children:
         the RE-database ceiling is resolved per process, so stripping
