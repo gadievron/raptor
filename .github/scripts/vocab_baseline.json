@@ -1409,6 +1409,11 @@
     "count": 10,
     "kind": "literal"
   },
+  "core/orchestration/binary_study_bridge.py::_CONCEPT_STOPWORDS": {
+    "count": 26,
+    "kind": "literal",
+    "note": "English log-noise stopwords filtering anchor-stem concept derivation (generic words like error/failed/unknown carry no format or domain signal) — a natural-language noise filter, not a project-API name vocabulary; nothing here is learnable from a target"
+  },
   "core/orchestration/context_map_sinks.py::exec_targets": {
     "count": 15,
     "kind": "literal"

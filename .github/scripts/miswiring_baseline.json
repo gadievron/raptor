@@ -40,9 +40,6 @@
     "artifacts:orphan_reader::auto-sink-watch.json": {
       "note": "single-literal read/variable write false positive: libexec/raptor-validation-helper's auto sink-watch builds ledger_path from the one literal with load_json in the classification window (read), then writes via save_json(ledger_path, ...) further down the same function through the variable \u2014 invisible to the literal-name index; helper-owned freshness ledger, both halves in one function by design (same class as the baselined coverage-read.json entry)"
     },
-    "artifacts:orphan_reader::binary-hunt-*.json": {
-      "note": "glob reader over the hunt artifacts; the writer mints the same names as f-string binary-hunt-{slug}.json (packages/binary_analysis/hunt.py _write_hunt_artifacts), which the census cannot join to the glob"
-    },
     "artifacts:orphan_reader::c.*.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
