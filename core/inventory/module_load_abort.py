@@ -59,7 +59,16 @@ Per-language detection currently handled:
     init body's top scope (not inside a conditional / loop).
   * Rust: ``compile_error!(...)`` at module scope.
   * PHP: file-scope ``throw new <Class>`` / ``die`` / ``exit`` at
-    brace-depth zero, statement-initial (conditional forms skipped).
+    brace-depth zero, statement-initial (conditional forms skipped),
+    AND with no call-shaped top-level code before it. PHP hoists
+    top-level function declarations at compile time — they bind
+    before ANY statement runs — so a late file-scope abort proves
+    nothing about bindings, and any top-level call before the abort
+    may already have executed the file's functions (a live page whose
+    dispatch chain ends in ``exit()`` is the canonical shape). The
+    witness is therefore only earned when nothing call-shaped
+    (``name(...)``, ``new``, include/require, ``goto``) precedes the
+    abort outside function bodies.
   * Ruby: unconditional column-0 ``raise`` / ``abort`` / ``exit`` /
     ``fail`` at nesting depth zero (modifier forms skipped).
 
@@ -642,15 +651,77 @@ _PHP_ABORT = re.compile(r"throw\s+new\s+([A-Za-z_\\][\w\\]*)|die\b|exit\b")
 # after ``<?php`` sees ``last_significant is None`` and counts as initial.)
 _PHP_STMT_BOUNDARY = frozenset({";", "{", "}"})
 
-_PHP_RETURN = re.compile(r"return\b")
+# Case-insensitive: PHP keywords fold case, and this is a
+# DISQUALIFIER — a file-scope ``Return;`` ends the include exactly
+# like ``return;``, so a case-sensitive miss here keeps a wrong
+# witness (suppression-unsafe), unlike the abort trigger's own
+# lowercase calibration, which only misses a witness (fail-safe).
+_PHP_RETURN = re.compile(r"return\b", re.IGNORECASE)
+
+# Alternative (colon) syntax markers: ``if (...): ... endif;`` blocks
+# open NO brace, so the depth model reads their bodies as file scope —
+# an abort inside one looked unconditional. The end keywords are
+# mandatory for the colon form, so their presence anywhere in the code
+# view means the depth model cannot be trusted for this file; abstain
+# wholesale (a missed deferral, the module-wide cheap direction).
+# IGNORECASE for the same disqualifier-fails-unsafe reason as above.
+_PHP_ALT_SYNTAX_END = re.compile(
+    r"\b(?:endif|endforeach|endfor|endwhile|endswitch|enddeclare)\b",
+    re.IGNORECASE,
+)
+
+# Words whose trailing ``(`` is a language construct, not a call into
+# user code: control headers, inspection constructs, output
+# constructs, and the aborts themselves (an abort's own argument list
+# must not disqualify its witness; calls INSIDE the arguments still
+# match at their own position).
+_PHP_NONCALL_PAREN_WORDS = frozenset({
+    "if", "elseif", "for", "foreach", "while", "switch", "catch",
+    "match", "declare", "isset", "unset", "empty", "list", "array",
+    "echo", "print", "return", "exit", "die", "define", "use",
+    # Declaration headers: ``function name(`` / anonymous
+    # ``function (`` / arrow ``fn(`` open a parameter list, not a
+    # call site (the name case is handled by the preceding-word
+    # check in the walk).
+    "function", "fn",
+})
+
+# Whole words that execute code even without a paren-shaped call
+# site: ``new`` runs a constructor, the include family executes
+# another file (which can call back into this one — PHP hoisting
+# makes this file's functions callable the moment it is compiled),
+# and ``goto`` breaks the top-to-bottom execution model the whole
+# walk assumes (a jump can skip the abort entirely). IGNORECASE:
+# keywords fold case in PHP, and these are disqualifiers — a
+# case-sensitive miss on ``Goto skip;`` would keep a witness for a
+# file whose execution jumps past the abort (suppression-unsafe),
+# while the abort trigger's own lowercase calibration only misses a
+# witness (fail-safe).
+_PHP_EXEC_WORD = re.compile(
+    r"(?:new|include(?:_once)?|require(?:_once)?|goto)\b",
+    re.IGNORECASE,
+)
+
+# First characters (either case) that can start one of the
+# disqualifier words checked in the walk's word branch: return /
+# new / include(_once) / require(_once) / goto / namespace.
+_PHP_WORD_BRANCH_CHARS = frozenset("rnigRNIG")
+
+# ``namespace`` declaration head: inside a namespace, an unqualified
+# function name resolves namespace-first, so the one plain-function
+# exemption in _PHP_NONCALL_PAREN_WORDS (``define`` — every other
+# entry is a reserved construct and cannot be shadowed) can bind to a
+# hoisted namespace-local shadow that executes user code.
+_PHP_NAMESPACE = re.compile(r"namespace\b", re.IGNORECASE)
 # A brace provably opening a PHP function/method/closure body: a
 # ``function`` keyword with no brace/semicolon between it and the
 # ``{`` (covers names, parameter lists, ``use (...)`` closures and
 # return-type declarations). Same abstain doctrine as the JS matcher:
 # an unproven brace counts as file-scope, so a ``return`` inside it
 # withholds the witness (a file-scope return ends the include before
-# any later abort line runs).
-_PHP_FN_BRACE = re.compile(r"\bfunction\b[^{};]*$")
+# any later abort line runs). IGNORECASE so an upper-cased
+# ``FUNCTION`` header classifies its body identically.
+_PHP_FN_BRACE = re.compile(r"\bfunction\b[^{};]*$", re.IGNORECASE)
 
 
 def _detect_php(content: str) -> ModuleLoadAbort | None:
@@ -673,10 +744,17 @@ def _detect_php(content: str) -> ModuleLoadAbort | None:
     # is statement-initial and the tag chars never read as a boundary
     # (the close tags and surrounding HTML are already blanked).
     stripped = _PHP_TAG.sub(_spaces, stripped)
+    # Alternative (colon) syntax anywhere in the file breaks the
+    # brace-depth model — abstain wholesale (see _PHP_ALT_SYNTAX_END).
+    if _PHP_ALT_SYNTAX_END.search(stripped):
+        return None
     depth = 0
     fn_depth = 0
     brace_is_fn: list[bool] = []
     last_significant = None  # last non-whitespace char seen
+    # A namespace declaration makes unqualified function names resolve
+    # namespace-first (see _PHP_NAMESPACE / the define exemption).
+    namespace_seen = False
     i = 0
     n = len(stripped)
     while i < n:
@@ -698,14 +776,103 @@ def _detect_php(content: str) -> ModuleLoadAbort | None:
             depth = max(0, depth - 1)
             if brace_is_fn and brace_is_fn.pop():
                 fn_depth -= 1
-        elif c == "r" and fn_depth == 0 and (
+        elif c == "(" and fn_depth == 0:
+            # Call-shaped top-level code disqualifies any later abort.
+            # PHP hoists top-level declarations at compile time: every
+            # function in the file is bound before the first statement
+            # runs, so top-level code before the abort can CALL them
+            # (the live-page shape: a dispatch chain that invokes the
+            # file's functions and only then ends in ``exit()``).
+            # Include/require before the abort likewise hands control
+            # to another file that can call back in. Only construct
+            # parens (control headers, isset/list/echo/... and
+            # declaration parameter lists) are exempt; calls inside
+            # their arguments still match at their own ``(``.
+            #
+            # Coverage boundary (mechanism note): the disqualifier
+            # models the EXPLICIT execution statements of the linear
+            # top-level flow — call shapes, ``new``, include/require,
+            # ``goto``, ``return``. Execution reached through other
+            # language surfaces follows those surfaces' own shapes;
+            # the documented shape pins live in the test suite.
+            j = i - 1
+            while j >= 0 and stripped[j].isspace():
+                j -= 1
+            prev = stripped[j] if j >= 0 else ""
+            if prev in ")]\"'":
+                # ``(expr)(...)`` / ``$a['k'](...)`` dynamic calls,
+                # and the string-callable form ``'name'();`` — the
+                # blanked view spaces string INTERIORS but keeps the
+                # quotes, so the surviving quote before ``(`` is the
+                # call witness.
+                return None
+            if prev and (prev.isalnum() or prev in "_$"):
+                k = j
+                while k >= 0 and (stripped[k].isalnum()
+                                  or stripped[k] in "_$\\"):
+                    k -= 1
+                raw_word = stripped[k + 1:j + 1]
+                word = raw_word.split("\\")[-1].lower()
+                if k >= 0 and stripped[k] in ">:":
+                    # ``->word(`` / ``::word(`` is a user method or
+                    # static call whatever the word says: construct
+                    # names are constructs only in plain-call
+                    # position (semi-reserved words are legal method
+                    # names since PHP 7), so ``$o->exit(...)`` is
+                    # user code executing before the abort.
+                    return None
+                if "\\" in raw_word.lstrip("\\"):
+                    # A QUALIFIED name (``a\b(...)``, leading
+                    # backslash or not) always names a user function:
+                    # language constructs cannot be namespace-
+                    # qualified, and only a single LEADING backslash
+                    # names a global builtin. The bare-word exemption
+                    # below must never see it.
+                    return None
+                if word == "define" and namespace_seen \
+                        and not raw_word.startswith("\\"):
+                    # ``define`` is the one plain FUNCTION in the
+                    # exemption list (everything else is a reserved
+                    # construct and cannot be shadowed). Inside a
+                    # namespace, the unqualified name resolves
+                    # namespace-first, so a hoisted local
+                    # ``function define(...)`` shadow executes user
+                    # code. Scoped drop rather than removing the
+                    # exemption entirely: genuine top-abort preludes
+                    # commonly ``define()`` constants, and only
+                    # namespaced files carry the shadow resolution —
+                    # a leading-backslash ``\define(`` names the
+                    # global builtin explicitly and stays exempt.
+                    return None
+                if word not in _PHP_NONCALL_PAREN_WORDS:
+                    # ``function name(`` is a declaration header, not
+                    # a call: exempt when the word before the name is
+                    # the function keyword.
+                    m = j - len(word)
+                    while m >= 0 and stripped[m].isspace():
+                        m -= 1
+                    p = m
+                    while p >= 0 and (stripped[p].isalnum()
+                                      or stripped[p] in "_"):
+                        p -= 1
+                    if stripped[p + 1:m + 1].lower() != "function":
+                        return None
+        elif c in _PHP_WORD_BRANCH_CHARS and fn_depth == 0 and (
                 i == 0 or not (stripped[i - 1].isalnum()
                                or stripped[i - 1] in "_$")):
-            if _PHP_RETURN.match(stripped, i):
+            if c in "rR" and _PHP_RETURN.match(stripped, i):
                 # A file-scope return (directly, or inside an executed
                 # conditional block) ends the include before any later
                 # abort runs. Abstain — toward no suppression.
                 return None
+            if _PHP_EXEC_WORD.match(stripped, i):
+                # ``new`` runs a constructor, include/require executes
+                # another file (which can call this file's hoisted
+                # functions), ``goto`` may skip the abort entirely.
+                # Any of them before the abort → no witness.
+                return None
+            if c in "nN" and _PHP_NAMESPACE.match(stripped, i):
+                namespace_seen = True
         elif depth == 0 and (c in "tde") and (
                 last_significant is None or last_significant in _PHP_STMT_BOUNDARY):
             # Only attempt a match at a statement boundary at file scope.
