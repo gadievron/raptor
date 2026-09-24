@@ -123,3 +123,73 @@ def test_prunable_journal_passes_gate(tmp_path, monkeypatch):
     else:
         passed_gate = False
     assert passed_gate, "gate refused a losslessly-prunable journal"
+
+
+def test_segment_start_auto_compacts_oversized_journal(
+    tmp_path, monkeypatch,
+):
+    """Per-segment re-emission is load-bearing (verdict_reuse: each
+    run carries a complete record), so resume keeps re-emitting — and
+    instead auto-compacts at the segment boundary once the journal
+    passes the threshold. The newest row per identity survives; the
+    original is backed up."""
+    mod = _load_cli()
+    out = _mk_resumable_run(tmp_path)
+    append_entry(out, _entry(1, cost_usd=0.5))
+    for _ in range(6):
+        append_entry(
+            out,
+            _entry(1, reused=True, reused_from_run="run-0", cost_usd=0.0),
+        )
+    journal = out / "review-journal.jsonl"
+    before = journal.stat().st_size
+    # Threshold derives from the loader budget at call time; setting
+    # the budget to the file size puts the threshold at half of it
+    # (over -> auto-compact) while the loader still reads complete.
+    monkeypatch.setattr(journal_mod, "_MAX_JOURNAL_BYTES", before)
+
+    import core.audit.resume as resume_mod
+
+    class _Sentinel(Exception):
+        pass
+
+    def _boom(*a, **k):
+        raise _Sentinel
+
+    monkeypatch.setattr(resume_mod, "compute_drift", _boom)
+    try:
+        mod.cmd_resume(_resume_args(out))
+    except _Sentinel:
+        pass
+    assert journal.stat().st_size < before
+    backup = out / "review-journal.jsonl.pre-compact"
+    assert backup.stat().st_size == before
+    # The run's asserted state is intact: one reused row survives
+    # alongside the $-bearing live row.
+    entries = journal_mod.load_entries(out)
+    assert sum(1 for e in entries if e.reused) == 1
+    assert any(e.cost_usd == 0.5 for e in entries)
+
+
+def test_segment_start_under_threshold_untouched(tmp_path, monkeypatch):
+    mod = _load_cli()
+    out = _mk_resumable_run(tmp_path)
+    append_entry(out, _entry(1))
+    journal = out / "review-journal.jsonl"
+    before = journal.read_bytes()
+
+    import core.audit.resume as resume_mod
+
+    class _Sentinel(Exception):
+        pass
+
+    def _boom(*a, **k):
+        raise _Sentinel
+
+    monkeypatch.setattr(resume_mod, "compute_drift", _boom)
+    try:
+        mod.cmd_resume(_resume_args(out))
+    except _Sentinel:
+        pass
+    assert journal.read_bytes() == before
+    assert not (out / "review-journal.jsonl.pre-compact").exists()
