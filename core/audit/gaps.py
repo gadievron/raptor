@@ -15,7 +15,6 @@ Gaps are sorted by priority:
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 from core.source import open_regular
@@ -25,6 +24,7 @@ from typing import Any
 from core.artifacts.context_map_budget import CONTEXT_MAP_CONSUMER_MAX_BYTES
 from core.coverage.journal import make_function_key
 from core.inventory.languages import SCRIPT_PER_FILE_LANGUAGES
+from core.inventory.script_handler import interstitial_is_handler
 from core.json import load_json, save_json
 
 from ._util import extract_context_map_set, safe_join
@@ -79,98 +79,12 @@ def _script_interstitials_enabled(include_kinds: set | None) -> bool:
     return not positive
 
 
-# File-scope PHP statements that are wiring, not handler logic:
-# namespace/strictness declarations and scope declarations. The
-# include family is handled separately — it is wiring ONLY with a
-# literal-string argument. Everything else (assignments, superglobal
-# reads, echo/output, control flow, calls) counts as handler code.
-_PHP_WIRING_STMT_RE = re.compile(
-    r"^(?:use|namespace|global)\b|^declare\s*\(",
-)
-_PHP_INCLUDE_KEYWORD_RE = re.compile(
-    r"^(?:include|include_once|require|require_once)\b",
-)
-# include/require with a single literal-string argument (parens
-# optional). A non-literal argument — variable, concatenation,
-# constant — makes the statement a request-controllable dispatcher
-# (``include($_GET['page'] . '.php')`` is the classic local-file-
-# inclusion shape), which is exactly handler code, never wiring.
-# The optional parens gate their own whitespace ((?:\(\s*)? /
-# (?:\s*\))?): the naive \s*\(?\s* put two whitespace runs around
-# an optional atom — quadratic on an "include"-opening statement
-# ending in a long space run. Match set unchanged.
-_PHP_LITERAL_INCLUDE_RE = re.compile(
-    r"^(?:include|include_once|require|require_once)\b\s*(?:\(\s*)?"
-    r"(?:'[^'\n]*'|\"[^\"\n]*\")(?:\s*\))?\s*$",
-)
-
-
-def _php_wiring_statement(stmt: str) -> bool:
-    """Whether one ``;``-delimited file-scope statement is wiring."""
-    if _PHP_INCLUDE_KEYWORD_RE.match(stmt):
-        return bool(_PHP_LITERAL_INCLUDE_RE.match(stmt))
-    return bool(_PHP_WIRING_STMT_RE.match(stmt))
-
-
-def _php_interstitial_is_handler(source: str | None) -> bool:
-    """True when a PHP file-scope span carries statements beyond
-    include/require-style boilerplate.
-
-    Comment-aware, statement-wise (``;``-split, so a boilerplate
-    keyword opening the line cannot swallow a second statement —
-    ``global $x; $x = $_GET['q'];`` is handler code) classifier,
-    deliberately biased toward inclusion: an unrecognised line
-    (including raw markup — output surface) counts as handler code,
-    as does a ``;`` inside a string literal splitting a wiring
-    statement apart. The cost of a false positive is one review slot;
-    a false negative writes off a request handler.
-    """
-    if not source:
-        return False
-    in_comment = False
-    for raw in source.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        if in_comment:
-            end = line.find("*/")
-            if end < 0:
-                continue
-            in_comment = False
-            line = line[end + 2:].strip()
-            if not line:
-                continue
-        # Peel tag markers so ``<?php status_handler();`` classifies
-        # its statement (and ``<?= $x ?>`` its expression).
-        for marker in ("<?php", "<?=", "<?"):
-            if line.startswith(marker):
-                line = line[len(marker):].strip()
-                break
-        if line.endswith("?>"):
-            line = line[:-2].strip()
-        if not line:
-            continue
-        if line.startswith(("//", "#")):
-            continue
-        if line.startswith("/*"):
-            end = line.find("*/", 2)
-            if end < 0:
-                in_comment = True
-                continue
-            line = line[end + 2:].strip()
-            if not line:
-                continue
-        if line.startswith("*"):
-            continue  # docblock body
-        for stmt in line.split(";"):
-            stmt = stmt.strip()
-            if not stmt:
-                continue
-            if stmt.startswith(("//", "#")):
-                break  # trailing comment: rest of the line is prose
-            if not _php_wiring_statement(stmt):
-                return True
-    return False
+# The script-handler content classifier lives in
+# ``core.inventory.script_handler`` (the one shared home): the
+# inventory builder stamps the verdict on checklist items at build
+# time, and every consumer — including this module — reads that stamp.
+# ``interstitial_is_handler`` is imported above only for the
+# stamp-absent recompute fallback in ``compute_gaps``.
 
 
 def _resolve_reviewable_kinds(include_kinds: set | None) -> frozenset:
@@ -630,7 +544,8 @@ def compute_gaps(
                     and not isinstance(_ls, bool)
                     and _ls > 0
                 ):
-                    script_handler = _php_interstitial_is_handler(
+                    script_handler = interstitial_is_handler(
+                        file_language,
                         _function_source(
                             file_path, _ls, item.get("line_end"),
                         ),

@@ -22,9 +22,11 @@ import pytest
 from core.audit.gaps import (
     PRIORITY_DEAD_CODE,
     _compute_priority,
-    _php_interstitial_is_handler,
     _script_interstitials_enabled,
     compute_gaps,
+)
+from core.inventory.script_handler import (
+    php_interstitial_is_handler as _php_interstitial_is_handler,
 )
 
 _PHP_HANDLER = """\
