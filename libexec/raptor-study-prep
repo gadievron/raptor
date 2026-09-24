@@ -48,6 +48,7 @@ from dataclasses import asdict  # noqa: E402
 from core.concepts.model import StudyItem  # noqa: E402
 from core.json import load_json, loads, save_json  # noqa: E402
 from core.paths import confine  # noqa: E402
+from core.source import read_text_capped  # noqa: E402
 
 # Study artifacts (reading/study lists) are small RAPTOR-written run
 # output.
@@ -1763,10 +1764,13 @@ def _scan_file_result(
     When concept_filter is set, bail early if none of the terms appear in the
     file content — avoids the expensive extraction on irrelevant files.
     """
-    try:
-        content = sf.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    # Capped read (shared default): the tree is untrusted repo
+    # content — extraction is additive, so a huge generated file's
+    # prefix only loses items past the cap.
+    got = read_text_capped(sf, errors="replace")
+    if got is None:
         return [], [], [], {}
+    content = got[0]
 
     if concept_filter:
         # Terms arrive lowercased; compare against lowercased content so
@@ -2044,10 +2048,11 @@ def _scope_from_reading_list(
             if fpath in collected:
                 continue
             collected.add(fpath)
-            try:
-                src = fpath.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            # Capped read: an include past the cap just isn't chased.
+            got = read_text_capped(fpath, errors="replace")
+            if got is None:
                 continue
+            src = got[0]
             for inc in _extract_includes(src):
                 resolved = _resolve_include(inc, search_dirs, source_root)
                 if resolved and resolved not in collected:
@@ -2076,11 +2081,12 @@ def _grep_scope(
     hit_files: list[Path] = []
     regex = re.compile(pattern)
     for sf in source_files:
-        try:
-            text = sf.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        # Capped read: a term past the cap only leaves the file out
+        # of the scope (and an empty scope falls back to everything).
+        got = read_text_capped(sf, errors="replace")
+        if got is None:
             continue
-        if regex.search(text):
+        if regex.search(got[0]):
             hit_files.append(sf)
     print(
         f"study-prep: grep-scoped {len(source_files)} -> {len(hit_files)} "
@@ -2241,10 +2247,10 @@ def _discover_docs(
             # Check first 4KB of content — require struct/type context
             # for short stems to avoid false positives (e.g. "page" matches
             # everything in mm/ docs)
-            try:
-                snippet = doc_file.read_text(encoding="utf-8", errors="ignore")[:4096]
-            except OSError:
+            got = read_text_capped(doc_file, 4096, errors="ignore")
+            if got is None:
                 continue
+            snippet = got[0]
             snippet_lower = snippet.lower()
             # Extract document title from RST heading
             doc_title = ""
@@ -2919,11 +2925,11 @@ def main() -> None:
         # Collect all #include paths from already-scanned files
         all_includes: set[str] = set()
         for sf in source_files:
-            try:
-                content = sf.read_text(encoding="utf-8", errors="ignore")
-            except OSError:
+            # Capped read: an include past the cap isn't collected.
+            got = read_text_capped(sf, errors="ignore")
+            if got is None:
                 continue
-            all_includes.update(_extract_includes(content))
+            all_includes.update(_extract_includes(got[0]))
 
         # Resolve against search_dirs WITHOUT the target-dir constraint
         # (that's the point of pass 1.5), but CONFINED to each search
@@ -2942,11 +2948,12 @@ def main() -> None:
                     continue
                 if str(candidate) in scanned_paths:
                     break
-                try:
-                    snippet = candidate.read_text(
-                        encoding="utf-8", errors="ignore")[:8192]
-                except OSError:
+                # Capped read (bounded probe): the old slice-after-
+                # read buffered the whole header just to keep 8 KB.
+                got = read_text_capped(candidate, 8192, errors="ignore")
+                if got is None:
                     break
+                snippet = got[0]
                 if any(term in snippet.lower() for term in ext_terms):
                     ext_headers.append(candidate)
                     scanned_paths.add(str(candidate))
