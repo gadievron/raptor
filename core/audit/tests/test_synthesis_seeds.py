@@ -206,6 +206,41 @@ class TestCrashSeeds:
         target = _target(tmp_path)
         assert seeds_from_crash_contexts([tmp_path / "none"], target) == []
 
+    def test_exploitability_renders_on_key_presence_only(self, tmp_path):
+        # Display contract for the graded field's "?" placeholder:
+        # an ABSENT exploitability key renders the module's "?"
+        # placeholder, and any PRESENT value — the explicit None and
+        # junk shapes included — renders exactly as the raw value
+        # (str()) does. Presence/absence is the only split; no
+        # graded level is ever consumed or defaulted, so a re-spell
+        # that reads the value through a default (absent would
+        # render "None") or through truthiness (None/junk would
+        # collapse into "?") breaks one of these pins.
+        target = _target(tmp_path)
+        loc = str(target / "src" / "a.c")
+        contexts = [
+            self._ctx(target, crash_id=f"c{i}",
+                      source_location=f"{loc}:{i + 1}", **kw)
+            for i, kw in enumerate([
+                {},                          # "likely" from _ctx base
+                {"exploitability": None},    # explicit None: present
+                {"exploitability": 0},       # junk shape: present
+            ])
+        ]
+        absent = self._ctx(target, crash_id="c3",
+                           source_location=f"{loc}:4")
+        del absent["exploitability"]
+        contexts.append(absent)
+        run = self._crash_run(tmp_path, contexts)
+        seeds = seeds_from_crash_contexts([run], target, max_seeds=4)
+        rendered = {
+            s.seed.provenance: s.seed.reasoning for s in seeds
+        }
+        assert "exploitability likely)." in rendered["crash:c0"]
+        assert "exploitability None)." in rendered["crash:c1"]
+        assert "exploitability 0)." in rendered["crash:c2"]
+        assert "exploitability ?)." in rendered["crash:c3"]
+
 
 class TestCvefixSeeds:
     def _corpus(self, tmp_path, entries) -> Path:

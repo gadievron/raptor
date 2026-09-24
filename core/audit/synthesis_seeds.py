@@ -256,11 +256,24 @@ def seeds_from_crash_contexts(
             extra = ""
             if isinstance(analysis, dict):
                 extra = str(analysis.get("reasoning") or "")[:300]
+            # Key-membership + branch for the graded verdict field,
+            # never a defaulted raw read: this line is display-only
+            # (the module's "?" placeholder convention, shared with
+            # the crash_id/signal siblings), so an ABSENT key renders
+            # the placeholder and any PRESENT value — an explicit
+            # None or a junk shape included — renders exactly as the
+            # raw value always did. No level is ever consumed, and
+            # the membership spelling keeps the site outside the
+            # tri-state closure's misread vocabulary by construction
+            # instead of behind a line-keyed exemption.
+            level = (
+                ctx["exploitability"] if "exploitability" in ctx else "?"
+            )
             reasoning = (
                 f"Fuzzing crash {ctx.get('crash_id', '?')}: "
                 f"{crash_type or 'crash'} at {rel}:{line} "
                 f"(signal {ctx.get('signal', '?')}, "
-                f"exploitability {ctx.get('exploitability', '?')})."
+                f"exploitability {level})."
             )
             if extra:
                 reasoning = f"{reasoning} {extra}"

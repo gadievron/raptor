@@ -151,13 +151,11 @@ _BOOL_ALIAS_GET_KEYS: frozenset[str] = frozenset({"exploitable"})
 #: still fails overall, so silent re-arm needs a careless
 #: re-adjudication on top; re-verify the rationale whenever an
 #: entry's file moves.
-_ALLOWLIST: frozenset[tuple[str, int]] = frozenset({
-    # Display-only interpolation: the graded level is embedded in a
-    # human-readable seed-reasoning string next to sibling fields
-    # that share the module's "?" placeholder convention; no verdict
-    # semantics are consumed and "?" reads as absent, not as a level.
-    ("core/audit/synthesis_seeds.py", 257),
-})
+#: Currently EMPTY — every previously exempted site has been
+#: re-spelled out of the misread vocabulary (key membership /
+#: read_verdict), the scan's preferred direction: a retired entry
+#: cannot be displaced by line churn, an exemption can.
+_ALLOWLIST: frozenset[tuple[str, int]] = frozenset()
 
 
 def _read_key(node: ast.AST, keys) -> str | None:
