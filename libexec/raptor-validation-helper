@@ -1351,6 +1351,12 @@ def prepare_C(workdir, target=None):
     # when prerequisites aren't met.
     _run_cocci_prereqs(workdir, findings_data, target=target)
 
+    # --- Include-graph facts (PHP targets) ---
+    # Hint-tier includer-set evidence for the reachability check,
+    # census-qualified. Advisory like cocci_prereqs — never decides
+    # finding status. Silent skip when no graph was derived.
+    _attach_include_facts(workdir, findings_data)
+
     _save_findings(workdir, findings_data)
     failed = sum(1 for f in findings_data["findings"] if f.get("checklist_verified") is False)
     print(f"Inventory check: {failed} failed, {len(findings_data['findings']) - failed} passed")
@@ -1414,6 +1420,68 @@ def _run_cocci_prereqs(workdir, findings_data, target=None):
             )
     total = len(findings_data.get("findings", []))
     print(f"Cocci structural pre-check: {flagged} orphan-fn warnings across {total} findings")
+
+
+def _attach_include_facts(workdir, findings_data):
+    """Stage C includer-set attachment from include-graph.json.
+
+    Annotates each finding whose file has an include-graph entry with
+    ``include_facts``: the file's role, its includer set, and the
+    MANDATORY two-component census + qualifier (an includer-set fact
+    without its completeness qualifier is the dishonest shape the
+    include-graph design forbids). Hint-tier, advisory — the Stage C
+    LLM consults it for the reachability check; it never decides
+    finding status.
+    """
+    try:
+        from core.inventory.include_graph import (
+            include_facts_for_file,
+            load_include_graph,
+        )
+    except ImportError:
+        return
+    graph = load_include_graph(workdir)
+    if not graph:
+        return
+    graph_paths = list(graph.get("files") or {})
+    graph_target = (graph.get("target_path")
+                    if isinstance(graph.get("target_path"), str) else "")
+    attached = 0
+    for finding in findings_data.get("findings", []):
+        if finding.get("status") == "disproven":
+            continue
+        fpath = finding.get("file", "")
+        if not isinstance(fpath, str) or not fpath:
+            continue
+        facts = include_facts_for_file(graph, fpath)
+        fp = fpath.replace("\\", "/")
+        if facts is None and fp.startswith("/") and graph_target:
+            # Absolute finding path: strip the graph's own target
+            # prefix — exact, never a guess. A bare tail-endswith
+            # here wrong-attached: /x/cache/b.php ends with /b.php,
+            # so it would receive key "b.php"'s facts even though
+            # its real relative path (cache/b.php) is a different
+            # file (or no graph key at all).
+            root = graph_target.rstrip("/")
+            if fp.startswith(root + "/"):
+                facts = include_facts_for_file(graph, fp[len(root) + 1:])
+        elif facts is None and not fp.startswith("/"):
+            # Relative shortened path: accept only a key whose OWN
+            # tail is the finding path, component-aligned from the
+            # key's left, and unique — "cache/b.php" never matches
+            # key "b.php" (subdir sibling), and two same-named keys
+            # refuse rather than guess.
+            matches = [k for k in graph_paths
+                       if k == fp or k.endswith("/" + fp)]
+            if len(matches) == 1:
+                facts = include_facts_for_file(graph, matches[0])
+        if facts is None:
+            continue
+        finding["include_facts"] = facts
+        attached += 1
+    if attached:
+        print(f"Include-graph facts: attached to {attached} finding(s) "
+              "(hint-tier, census-qualified)")
 
 
 # ---------------------------------------------------------------------------
