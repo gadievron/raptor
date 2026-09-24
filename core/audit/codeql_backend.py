@@ -10,6 +10,9 @@ import logging
 import os
 import stat as stat_mod
 from pathlib import Path
+
+from core.paths import confine
+from core.source import open_regular, read_text_capped
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -193,8 +196,21 @@ def _sink_discovery_fingerprint(target_path, scope_dirs) -> str | None:
 
         from .prep_cache import content_fingerprint
 
+        # The fingerprint needs whole-file bytes (a capped read
+        # would make files differing past the cap fingerprint equal
+        # and serve a stale extraction), so the open is the hardened
+        # one instead: fd-checked regular + O_NOFOLLOW + O_NONBLOCK
+        # refuses FIFO/symlink plants; regular-file reads cannot
+        # block.
+        def _whole_bytes(p: Path) -> bytes:
+            fh = open_regular(p, "rb")
+            if fh is None:
+                return b""
+            with fh:
+                return fh.read()
+
         return content_fingerprint(
-            (rel, path.read_bytes())
+            (rel, _whole_bytes(path))
             for path, rel, _lang in iter_discovery_source_files(
                 Path(target_path), scope_dirs=scope_dirs,
             )
@@ -394,10 +410,13 @@ def build_taint_summary(
                 continue
             if not _admit_taint_file(path, budget):
                 continue
-            try:
-                content = path.read_text(errors="replace")
-            except OSError:
+            resolved = confine(target_path, path)
+            if resolved is None:
                 continue
+            got = read_text_capped(resolved)
+            if got is None:
+                continue
+            content = got[0]
             rel = str(path.relative_to(target_path))
             try:
                 summaries = extract_summaries_for_file(content, rel)

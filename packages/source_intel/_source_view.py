@@ -25,6 +25,8 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from core.source import open_regular
+
 #: Byte ceiling on files admitted to the view. The whole file is read
 #: and scanned per (path, mtime, size); a planted multi-GB "source
 #: file" would otherwise turn every per-finding lexical check into a
@@ -57,8 +59,21 @@ def sanitized_source(file_path: str) -> str | None:
 def _sanitized_source_cached(
     file_path: str, _mtime_ns: int, _size: int,
 ) -> str | None:
+    # resolve() first: the capped opener refuses final-component
+    # symlinks by design, and this helper receives no target root to
+    # confine against — resolve-first restores the pre-hardening
+    # traversal of symlinked sources while the open stays fd-vetted
+    # regular + capped.
     try:
-        with Path(file_path).open(encoding="utf-8", errors="replace") as f:
+        resolved = Path(file_path).resolve()
+    except OSError:
+        return None
+    f = open_regular(resolved, "r", encoding="utf-8",
+                     errors="replace")
+    if f is None:
+        return None
+    try:
+        with f:
             # Re-capped at read time: the file may have grown between
             # the stat gate and this read (target-writable trees).
             text = f.read(MAX_SOURCE_BYTES + 1)

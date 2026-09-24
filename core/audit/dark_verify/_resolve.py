@@ -37,6 +37,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from core.source import open_regular, read_text_capped
 from typing import TYPE_CHECKING
 
 from ._types import _SUPPORTED_LANGS
@@ -432,9 +434,10 @@ def _go_module_path(target_root: Path | None) -> str | None:
     if target_root is None:
         return None
     try:
-        text = (target_root / "go.mod").read_text(
-            encoding="utf-8", errors="replace",
-        )
+        got = read_text_capped(target_root / "go.mod")
+        if got is None:
+            return None
+        text = got[0]
     except OSError:
         return None
     for line in text.splitlines():
@@ -475,8 +478,20 @@ def _resolve_go(spec: DarkWitnessSpec, target_root: Path | None) -> str | None:
 def _java_package_decl(source_file: Path) -> str | None:
     """Package declared by *source_file*: ``""`` for the default
     package, None when the file cannot be read (refuse upstream)."""
+    # resolve() first: symlinked sources keep reading (the capped
+    # opener refuses final-component links by design); no target
+    # root is in scope here to confine against, so this is stated
+    # traversal parity, not containment.
     try:
-        with source_file.open("r", encoding="utf-8", errors="replace") as fh:
+        source_file = source_file.resolve()
+    except OSError:
+        return None
+    fh = open_regular(source_file, "r", encoding="utf-8",
+                      errors="replace")
+    if fh is None:
+        return None
+    try:
+        with fh:
             head = fh.read(_JAVA_DECL_SCAN_BYTES)
     except OSError:
         return None

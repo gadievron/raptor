@@ -35,6 +35,9 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.paths import confine
+from core.source import read_text_capped
 from typing import Any
 
 from .fail_open_roles import (
@@ -176,14 +179,13 @@ def harvest_wur_from_target(target_path: Path) -> frozenset[str]:
     except OSError:
         return frozenset()
     for p in paths[:_MAX_WUR_SCAN_FILES]:
-        try:
-            if p.stat().st_size > _MAX_WUR_FILE_BYTES:
-                continue
-            texts[str(p)] = p.read_text(
-                encoding="utf-8", errors="replace",
-            )
-        except OSError:
+        resolved = confine(target_path, p)
+        if resolved is None:
             continue
+        got = read_text_capped(resolved, _MAX_WUR_FILE_BYTES)
+        if got is None or got[1]:
+            continue
+        texts[str(p)] = got[0]
     return harvest_wur_declarations(texts)
 
 
