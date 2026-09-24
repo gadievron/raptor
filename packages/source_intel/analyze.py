@@ -817,8 +817,15 @@ def _axis_dirs(rules_root: Path) -> list[Path]:
 # =====================================================================
 
 
-_C_CPP_EXTS: tuple[str, ...] = (
-    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh",
+# Single home for the package's C-family extension set — cache.py's
+# staleness signature and adapter.py's pointer-reference guard import
+# it. Three hand-copied sets had drifted (one missing .hh, one
+# missing .hxx): a static function referenced as a callback only in a
+# header spelt with the missing extension read as dead code — a wrong
+# Not Exploitable, the one direction the dead-code axis promises not
+# to err in. Compare against ``suffix.lower()``.
+C_CPP_EXTS: tuple[str, ...] = (
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx",
 )
 
 
@@ -838,7 +845,7 @@ def _checklist_has_c_cpp(checklist: dict[str, Any] | None) -> bool:
     return any(
         isinstance(f, dict) and (
             f.get("language") in ("c", "cpp")
-            or str(f.get("path", "")).lower().endswith(_C_CPP_EXTS)
+            or str(f.get("path", "")).lower().endswith(C_CPP_EXTS)
         )
         for f in files
     )
@@ -851,13 +858,13 @@ def _has_c_cpp_source(target: Path, max_files: int = 200) -> bool:
     """
     if not target.is_dir():
         # Single-file target — accept if it's C-family.
-        return target.suffix.lower() in _C_CPP_EXTS
+        return target.suffix.lower() in C_CPP_EXTS
     seen = 0
     for entry in target.rglob("*"):
         if not entry.is_file():
             continue
         seen += 1
-        if entry.suffix.lower() in _C_CPP_EXTS:
+        if entry.suffix.lower() in C_CPP_EXTS:
             return True
         if seen >= max_files:
             return False
@@ -2402,7 +2409,7 @@ def _scan_alias_observations(target: Path) -> list[AttributeEvidence]:
     observations: list[AttributeEvidence] = []
     if not target.is_dir():
         # Single-file target — scan that file directly.
-        if target.is_file() and target.suffix.lower() in _C_CPP_EXTS:
+        if target.is_file() and target.suffix.lower() in C_CPP_EXTS:
             return _scan_alias_in_file(target)
         return observations
 
@@ -2413,7 +2420,7 @@ def _scan_alias_observations(target: Path) -> list[AttributeEvidence]:
             break
         if not entry.is_file():
             continue
-        if entry.suffix.lower() not in _C_CPP_EXTS:
+        if entry.suffix.lower() not in C_CPP_EXTS:
             continue
         seen_files += 1
         observations.extend(_scan_alias_in_file(entry))
@@ -2430,13 +2437,13 @@ def _scan_c_level_source_inputs(target: Path) -> list[CLevelSourceEvidence]:
     context without changing verdict policy.
     """
     files: list[Path] = []
-    if target.is_file() and target.suffix.lower() in _C_CPP_EXTS:
+    if target.is_file() and target.suffix.lower() in C_CPP_EXTS:
         files = [target]
     elif target.is_dir():
         for entry in sorted(target.rglob("*")):
             if len(files) >= 500:
                 break
-            if entry.is_file() and entry.suffix.lower() in _C_CPP_EXTS:
+            if entry.is_file() and entry.suffix.lower() in C_CPP_EXTS:
                 files.append(entry)
 
     observations: list[CLevelSourceEvidence] = []
@@ -2627,7 +2634,7 @@ def _scan_project_alias_observations(
             break
         if not entry.is_file():
             continue
-        if entry.suffix.lower() not in _C_CPP_EXTS:
+        if entry.suffix.lower() not in C_CPP_EXTS:
             continue
         seen_files += 1
         resolved = confine(target, entry)

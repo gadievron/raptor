@@ -36,6 +36,7 @@ from typing import Any, TYPE_CHECKING
 
 from core.dataflow.validator import ValidatorVerdict
 from packages.source_intel.analyze import (
+    C_CPP_EXTS,
     GRADE_DOMINATES,
     GRADE_SAME_FUNCTION,
     GRADE_SAME_PATH,
@@ -588,11 +589,17 @@ def _function_referenced_as_pointer_scan(
         r"(?:\s*[,;)}]|\s*$|\s+\w)",
         _re.MULTILINE,
     )
-    EXTS = {".c", ".h", ".cc", ".cpp", ".hpp", ".cxx", ".hxx"}
+    # Shared extension set (analyze.C_CPP_EXTS): this scan is the
+    # final guard before a static function is declared dead code, so
+    # a header extension missing here (.hh had drifted out) wrongly
+    # suppressed callback-only-referenced functions.
     if target.is_file():
         files = [target]
     else:
-        files = [p for p in target.rglob("*") if p.suffix in EXTS]
+        files = [
+            p for p in target.rglob("*")
+            if p.suffix.lower() in C_CPP_EXTS
+        ]
     for path in files:
         resolved = confine(target, path)
         if resolved is None:

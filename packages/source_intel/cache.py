@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from packages.source_intel.analyze import (
+    C_CPP_EXTS,
     SCHEMA_VERSION,
     SourceIntelResult,
     _shipped_rules_root,
@@ -125,12 +126,9 @@ class SourceIntelCache:
 # =====================================================================
 
 
-# Extension set matches the consumers that key staleness off these
-# walks (adapter's pointer-reference scan includes .hxx, so the
-# signature must observe .hxx edits too).
-_C_CPP_EXTS: tuple[str, ...] = (
-    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".hh", ".hxx",
-)
+# The staleness walks key off ``C_CPP_EXTS`` (imported above): the
+# analyze scans and adapter's pointer-reference scan share the same
+# set, so the signature observes exactly the files they read.
 
 # Content-hash budget for `_hash_target_tree`. Every matching file's
 # path + (mtime, size) always participates in the hash; only the first
@@ -146,7 +144,7 @@ def _sorted_source_files(target: Path) -> list[Path]:
     return sorted(
         (
             entry for entry in target.rglob("*")
-            if entry.is_file() and entry.suffix.lower() in _C_CPP_EXTS
+            if entry.is_file() and entry.suffix.lower() in C_CPP_EXTS
         ),
         key=str,
     )
