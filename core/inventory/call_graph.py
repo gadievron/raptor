@@ -50,6 +50,7 @@ when its grammar isn't installed). The resolver in
 from __future__ import annotations
 
 import ast
+import hashlib
 import logging
 import warnings
 from dataclasses import dataclass, field
@@ -463,6 +464,144 @@ class ClassDef:
     nested: bool = False
 
 
+@dataclass(slots=True)
+class IncludeEdge:
+    """One structured include/require edge (PHP walker only today).
+
+    ``shape`` is the census classification from
+    :func:`core.inventory.script_handler.classify_include_argument` —
+    a syntactic class, never a resolution verdict (constant prefixes
+    resolve per entry, not per statement). ``target`` is populated
+    only for pure-literal edges anchorable relative to the including
+    file (builder-side; the walker itself has no file path).
+    ``conditional`` is True when ANY enclosing construct at any depth
+    is a branch/loop/try/ternary or the right operand of a logical
+    operator — conservative in the guarantee direction by
+    construction. ``span_hash`` is SHA-256[:12] of the include
+    expression's source text (staleness key).
+    """
+
+    line: int
+    keyword: str
+    raw: str
+    shape: str
+    const_name: str | None = None
+    literal_tail: str | None = None
+    literal_stem: str | None = None
+    target: str | None = None
+    candidates: list[str] = field(default_factory=list)
+    conditional: bool = False
+    position: str = "file_scope"
+    enclosing_function: str | None = None
+    span_hash: str = ""
+
+    def to_dict(self) -> dict:
+        out: dict = {
+            "line": self.line,
+            "keyword": self.keyword,
+            "raw": self.raw,
+            "shape": self.shape,
+            "conditional": self.conditional,
+            "position": self.position,
+            "span_hash": self.span_hash,
+        }
+        # Optional fields omitted when unset — most edges carry only
+        # a subset, and the checklist is size-sensitive.
+        if self.const_name is not None:
+            out["const_name"] = self.const_name
+        if self.literal_tail is not None:
+            out["literal_tail"] = self.literal_tail
+        if self.literal_stem is not None:
+            out["literal_stem"] = self.literal_stem
+        if self.target is not None:
+            out["target"] = self.target
+        if self.candidates:
+            out["candidates"] = list(self.candidates)
+        if self.enclosing_function is not None:
+            out["enclosing_function"] = self.enclosing_function
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "IncludeEdge":
+        """Checklist JSON is a run-dir artifact (attacker-writable
+        shapes) — coerce types, never trust them."""
+
+        def _s(v: object) -> str | None:
+            return v if isinstance(v, str) else None
+
+        return cls(
+            line=int(d.get("line") or 0)
+            if isinstance(d.get("line"), int) else 0,
+            keyword=_s(d.get("keyword")) or "include",
+            raw=_s(d.get("raw")) or "",
+            shape=_s(d.get("shape")) or "dynamic",
+            const_name=_s(d.get("const_name")),
+            literal_tail=_s(d.get("literal_tail")),
+            literal_stem=_s(d.get("literal_stem")),
+            target=_s(d.get("target")),
+            candidates=[c for c in (d.get("candidates") or [])
+                        if isinstance(c, str)],
+            conditional=bool(d.get("conditional", False)),
+            position=_s(d.get("position")) or "file_scope",
+            enclosing_function=_s(d.get("enclosing_function")),
+            span_hash=_s(d.get("span_hash")) or "",
+        )
+
+
+@dataclass(slots=True)
+class IncludeDefine:
+    """One literal-named ``define('NAME', …)`` statement (PHP).
+
+    The phase-1b per-entry environment walk consumes these in
+    document order: unconditional file-scope defines seed/extend the
+    entry's constant environment; ``fallback`` marks the
+    ``if (!defined('NAME')) define('NAME', …)`` shape (a no-op under
+    a carried binding, a binding supplier standalone). Records are
+    captured completely at Layer 0 so the walk needs no re-parse.
+    ``value`` is set only when the second argument is a single string
+    literal — the only value class the walk propagates; anything else
+    keeps ``value=None`` with the capped ``raw_value`` for honesty.
+    """
+
+    line: int
+    name: str
+    value: str | None = None
+    raw_value: str | None = None
+    conditional: bool = False
+    fallback: bool = False
+    position: str = "file_scope"
+
+    def to_dict(self) -> dict:
+        out: dict = {
+            "line": self.line,
+            "name": self.name,
+            "conditional": self.conditional,
+            "fallback": self.fallback,
+            "position": self.position,
+        }
+        if self.value is not None:
+            out["value"] = self.value
+        if self.raw_value is not None:
+            out["raw_value"] = self.raw_value
+        return out
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "IncludeDefine":
+        def _s(v: object) -> str | None:
+            return v if isinstance(v, str) else None
+
+        return cls(
+            line=int(d.get("line") or 0)
+            if isinstance(d.get("line"), int) else 0,
+            name=_s(d.get("name")) or "",
+            value=_s(d.get("value")),
+            raw_value=_s(d.get("raw_value")),
+            conditional=bool(d.get("conditional", False)),
+            fallback=bool(d.get("fallback", False)),
+            position=_s(d.get("position")) or "file_scope",
+        )
+
+
 @dataclass
 class FileCallGraph:
     """All call-graph data for one Python file.
@@ -550,6 +689,25 @@ class FileCallGraph:
         default_factory=dict,
     )
     string_ref_calls: list[StringRefCall] = field(default_factory=list)
+    # Structured include edges + define records (PHP walker only
+    # today; the file-scoped INDIRECTION_DYNAMIC_IMPORT flag stays
+    # for compatibility). ``includes_extracted`` marks that the
+    # walker's include layer RAN — it gates serialization (so the
+    # keys are present, even empty, exactly when extraction
+    # happened) and lets the builder's SHA-reuse path distinguish
+    # "no includes in this file" from "record predates the edge
+    # layer / parse failed" for exact backfill.
+    includes: list[IncludeEdge] = field(default_factory=list)
+    defines: list[IncludeDefine] = field(default_factory=list)
+    includes_extracted: bool = False
+    includes_truncated: bool = False
+    # First file-scope direct-access guard, when present:
+    # ``{"line": N, "constant": "IN_APP"}`` for
+    # ``if (!defined('IN_APP')) die(...)`` /
+    # ``defined('IN_APP') or exit`` shapes. Role evidence for the
+    # include graph ("dual" is a query over includer-index +
+    # this field, never a stored label).
+    direct_access_guard: dict | None = None
 
     def to_dict(self) -> dict:
         # Default-None fields (``caller``, ``receiver_class``) are
@@ -667,6 +825,16 @@ class FileCallGraph:
                  "args": c.args.to_dict()}
                 for c in self.string_ref_calls
             ]
+        # Include layer: keys present exactly when extraction ran
+        # (even if empty), so downstream can tell "no includes" from
+        # "pre-edge-layer record" and backfill only the latter.
+        if self.includes_extracted:
+            out["includes"] = [e.to_dict() for e in self.includes]
+            out["defines"] = [d.to_dict() for d in self.defines]
+            if self.includes_truncated:
+                out["includes_truncated"] = True
+            if self.direct_access_guard is not None:
+                out["direct_access_guard"] = dict(self.direct_access_guard)
         return out
 
     @classmethod
@@ -762,6 +930,22 @@ class FileCallGraph:
                 for c in (d.get("string_ref_calls") or [])
                 if isinstance(c, dict)
             ],
+            includes=[
+                IncludeEdge.from_dict(e)
+                for e in (d.get("includes") or [])
+                if isinstance(e, dict)
+            ],
+            defines=[
+                IncludeDefine.from_dict(x)
+                for x in (d.get("defines") or [])
+                if isinstance(x, dict)
+            ],
+            includes_extracted="includes" in d,
+            includes_truncated=bool(d.get("includes_truncated", False)),
+            direct_access_guard=(
+                dict(d["direct_access_guard"])
+                if isinstance(d.get("direct_access_guard"), dict) else None
+            ),
         )
 
 
@@ -4516,16 +4700,89 @@ class _PhpCallGraph:
     _DYNAMIC_INCLUDE: ClassVar[set[str]] = {
         "include", "include_once", "require", "require_once",
     }
+    _INCLUDE_EXPRS: ClassVar[dict[str, str]] = {
+        "include_expression": "include",
+        "include_once_expression": "include_once",
+        "require_expression": "require",
+        "require_once_expression": "require_once",
+    }
+    # Constructs under which execution is not straight-line. An
+    # include/define with ANY of these as ancestor is flagged
+    # ``conditional`` — conservative in the guarantee direction (a
+    # false ``conditional: true`` only withholds a future guarantee;
+    # a false ``false`` would fabricate one).
+    _CONDITIONAL_NODES: ClassVar[set[str]] = {
+        "if_statement", "else_clause", "else_if_clause",
+        "switch_statement", "switch_block", "case_statement",
+        "default_statement", "while_statement", "do_statement",
+        "for_statement", "foreach_statement", "try_statement",
+        "catch_clause", "finally_clause", "match_expression",
+        "conditional_expression",
+    }
+    # Short-circuit operators: the RIGHT operand only runs when the
+    # left decides so — conditional for edge/define purposes.
+    _LOGICAL_OPS: ClassVar[set[str]] = {"or", "and", "xor",
+                                        "||", "&&", "??"}
+    _ABORT_NAMES: ClassVar[set[str]] = {"die", "exit"}
+    # File-scope statement types that keep the guard-eligible
+    # PROLOGUE open: declaration/definition statements with no
+    # runtime effect on a direct request. Guard evidence is honest
+    # only while the file's straight-line prefix is inert — anything
+    # executable or output-producing before the guard (calls,
+    # assignments, echo/markup, loops, non-guard branches, aborts,
+    # returns, goto/labels) means a direct request runs THAT first,
+    # so a later "guard" protects nothing (bottom-of-file guards)
+    # or never runs at all (post-abort/post-goto plants).
+    #: declare_statement is deliberately absent: it is inert only in
+    #: its bare-directive form (body-aware check in _prologue_inert).
+    _PROLOGUE_INERT_STMTS: ClassVar[set[str]] = {
+        "php_tag", "comment", "namespace_definition",
+        "namespace_use_declaration", "const_declaration",
+        "empty_statement", "function_definition",
+        "class_declaration", "interface_declaration",
+        "trait_declaration", "enum_declaration",
+    }
+    # Hostile-content bounds: a planted file with millions of
+    # include/define statements must not balloon the checklist.
+    _MAX_INCLUDE_EDGES: ClassVar[int] = 4096
+    _MAX_DEFINES: ClassVar[int] = 1024
+    _MAX_RAW_LEN: ClassVar[int] = 300
 
     def __init__(self) -> None:
         self.graph = FileCallGraph()
         self._enclosing: list[str] = []
         self._class_stack: list[ClassDef] = []
+        # Include-layer state: depth of enclosing conditional
+        # constructs, and the constant names of enclosing
+        # ``!defined('NAME')`` if-conditions (fallback-define
+        # detection).
+        self._cond_depth = 0
+        self._notdef_guards: list[str] = []
+        # Guard-eligibility window (see _PROLOGUE_INERT_STMTS).
+        self._guard_prologue_open = True
+        self.graph.includes_extracted = True
 
     def walk(self, node) -> None:
         _drive_visit(self, node)
 
     def _visit(self, node: Node):
+        # Guard-prologue tracking happens exactly where file-scope
+        # statements are ITERATED (program children here, braced
+        # namespace bodies in the namespace arm) — never via
+        # node.parent, which py-tree-sitter resolves by walking from
+        # the root (O(depth) per call: a per-node parent check made
+        # extraction quadratic in expression depth). Classification
+        # runs BEFORE the child is visited, so a guard inside an
+        # inert statement still records, while a guard nested in the
+        # first payload statement is already ineligible.
+        if node.type == "program":
+            for c in node.children:
+                if (self._guard_prologue_open
+                        and not self._prologue_inert(c)):
+                    self._guard_prologue_open = False
+                yield c
+            return
+
         if node.type == self._NAMESPACE_DEF:
             # ``namespace Foo\Bar;`` — capture as dotted package
             # name. The namespace_name child carries the parts.
@@ -4538,7 +4795,18 @@ class _PhpCallGraph:
                     self.graph.package_name = ".".join(parts)
             # Descend into the namespace body (declarations live
             # inside compound_statement if braced, or as siblings).
+            # Braced-body children are file-scope statements: they
+            # get the same prologue classification as program
+            # children (yielded directly — the compound wrapper has
+            # no handler of its own).
             for c in node.children:
+                if c.type == "compound_statement":
+                    for s in c.children:
+                        if (self._guard_prologue_open
+                                and not self._prologue_inert(s)):
+                            self._guard_prologue_open = False
+                        yield s
+                    continue
                 yield c
             return
 
@@ -4615,13 +4883,55 @@ class _PhpCallGraph:
                 yield c
             return
 
-        if node.type in (
-            "include_expression", "include_once_expression",
-            "require_expression", "require_once_expression",
-        ):
+        if node.type in self._INCLUDE_EXPRS:
+            self._record_include_edge(node)
+            # The lossy file-scoped flag stays for compatibility with
+            # existing indirection consumers.
             self.graph.indirection.add(INDIRECTION_DYNAMIC_IMPORT)
             for c in node.children:
                 yield c
+            return
+
+        if node.type == "if_statement":
+            guard = self._not_defined_guard_name(node)
+            self._maybe_record_access_guard(node, guard)
+            self._cond_depth += 1
+            if guard is not None:
+                self._notdef_guards.append(guard)
+            try:
+                for c in node.children:
+                    yield c
+            finally:
+                if guard is not None:
+                    self._notdef_guards.pop()
+                self._cond_depth -= 1
+            return
+
+        if node.type in self._CONDITIONAL_NODES:
+            self._cond_depth += 1
+            try:
+                for c in node.children:
+                    yield c
+            finally:
+                self._cond_depth -= 1
+            return
+
+        if node.type == "binary_expression":
+            # ``defined('X') or die(...)`` at file scope is a
+            # direct-access guard; more generally the RIGHT operand
+            # of a short-circuit operator executes conditionally.
+            self._maybe_record_or_die_guard(node)
+            pushed = False
+            try:
+                for c in node.children:
+                    if not pushed and c.type in self._LOGICAL_OPS:
+                        self._cond_depth += 1
+                        pushed = True
+                        continue
+                    yield c
+            finally:
+                if pushed:
+                    self._cond_depth -= 1
             return
 
         for c in node.children:
@@ -4716,6 +5026,417 @@ class _PhpCallGraph:
             self.graph.indirection.add(INDIRECTION_EVAL)
         if chain[0] in self._DYNAMIC_INCLUDE:
             self.graph.indirection.add(INDIRECTION_DYNAMIC_IMPORT)
+        # define('NAME', …) — walk input for the include graph's
+        # per-entry constant-environment resolution (phase 1b).
+        if (node.type == self._FUNCTION_CALL and len(chain) == 1
+                and chain[0].lower() == "define"):
+            self._record_define(node)
+
+    # ---- include layer (structured edges, defines, guards) --------
+
+    def _record_include_edge(self, node) -> None:
+        """One include/require expression → structured IncludeEdge.
+
+        Classification goes through the ONE include-argument
+        classifier in :mod:`core.inventory.script_handler` (the
+        wiring test is the other consumer) — a census of syntactic
+        shape, never a resolution verdict.
+        """
+        from core.inventory.script_handler import classify_include_argument
+        if self.graph.includes_truncated:
+            return
+        if len(self.graph.includes) >= self._MAX_INCLUDE_EDGES:
+            self.graph.includes_truncated = True
+            return
+        arg = None
+        for c in node.children:
+            if c.is_named:
+                arg = c
+                break
+        while arg is not None and arg.type == "parenthesized_expression":
+            inner = None
+            for c in arg.children:
+                if c.is_named:
+                    inner = c
+                    break
+            if inner is None:
+                break
+            arg = inner
+        raw_full = (arg.text.decode("utf-8", errors="replace")
+                    if arg is not None else "")
+        cls = classify_include_argument(raw_full)
+        raw = raw_full
+        if len(raw) > self._MAX_RAW_LEN:
+            raw = raw[:self._MAX_RAW_LEN] + "…"
+        # Oversized literal material is planted, not path-shaped —
+        # drop rather than truncate (a truncated tail would silently
+        # mis-match at graph derivation).
+        tail = cls.literal_tail
+        if tail is not None and len(tail) > 512:
+            tail = None
+        stem = cls.literal_stem
+        if stem is not None and len(stem) > 512:
+            stem = None
+        self.graph.includes.append(IncludeEdge(
+            line=node.start_point[0] + 1,
+            keyword=self._INCLUDE_EXPRS[node.type],
+            raw=raw,
+            shape=cls.shape,
+            const_name=cls.const_name,
+            literal_tail=tail,
+            literal_stem=stem,
+            conditional=self._cond_depth > 0,
+            position="function_body" if self._enclosing else "file_scope",
+            enclosing_function=(
+                self._enclosing[-1] if self._enclosing else None),
+            span_hash=hashlib.sha256(node.text).hexdigest()[:12],
+        ))
+
+    def _record_define(self, node) -> None:
+        """Record a literal-named ``define('NAME', …)`` statement."""
+        if len(self.graph.defines) >= self._MAX_DEFINES:
+            return
+        args_node = self._first_child_of_type(node, (self._ARGS,))
+        if args_node is None:
+            return
+        args = [c for c in args_node.children if c.type == "argument"]
+        if len(args) < 2:
+            return
+        name = self._plain_string_value(args[0])
+        if name is None or len(name) > 256:
+            # Dynamic-named defines can never seed a constant
+            # environment; oversized names are planted.
+            return
+        value = self._plain_string_value(args[1])
+        raw_value = None
+        if value is None:
+            raw_value = args[1].text.decode("utf-8", errors="replace")
+            if len(raw_value) > self._MAX_RAW_LEN:
+                raw_value = raw_value[:self._MAX_RAW_LEN] + "…"
+        elif len(value) > 512:
+            # Same planted-material rule as edge tails.
+            value, raw_value = None, value[:self._MAX_RAW_LEN] + "…"
+        self.graph.defines.append(IncludeDefine(
+            line=node.start_point[0] + 1,
+            name=name,
+            value=value,
+            raw_value=raw_value,
+            conditional=self._cond_depth > 0,
+            fallback=name in self._notdef_guards,
+            position="function_body" if self._enclosing else "file_scope",
+        ))
+
+    def _plain_string_value(self, arg_node) -> str | None:
+        """The argument's plain string-literal value, or None."""
+        expr = None
+        for c in arg_node.children:
+            if c.is_named:
+                expr = c
+                break
+        if expr is None or expr.type not in ("string", "encapsed_string"):
+            return None
+        parts: list[str] = []
+        for c in expr.children:
+            if c.type == "string_content":
+                parts.append(c.text.decode("utf-8", errors="replace"))
+            elif c.type == "escape_sequence":
+                t = c.text.decode("utf-8", errors="replace")
+                parts.append({"\\\\": "\\", "\\'": "'", '\\"': '"',
+                              "\\$": "$"}.get(t, t))
+            elif c.is_named:
+                return None  # interpolation hole — not a plain literal
+        return "".join(parts)
+
+    def _unwrap_parens(self, node):
+        cur = node
+        while cur is not None and cur.type == "parenthesized_expression":
+            nxt = None
+            for c in cur.children:
+                if c.is_named:
+                    nxt = c
+                    break
+            cur = nxt
+        return cur
+
+    def _defined_call_constant(self, call_node) -> str | None:
+        """``defined('NAME')`` → ``NAME``; anything else → None."""
+        fn = self._first_child_of_type(call_node, (self._NAME,))
+        if fn is None or fn.text.decode(
+                "utf-8", errors="replace").lower() != "defined":
+            return None
+        args_node = self._first_child_of_type(call_node, (self._ARGS,))
+        if args_node is None:
+            return None
+        args = [c for c in args_node.children if c.type == "argument"]
+        if len(args) != 1:
+            return None
+        return self._plain_string_value(args[0])
+
+    def _prologue_inert(self, node) -> bool:
+        """Whether one file-scope statement keeps guard eligibility
+        open. The one rule: an inert WRAPPER is inert only when its
+        body/values are — a payload can otherwise hide inside a
+        prologue-shaped statement (a declare block body, a
+        side-effectful define() value, a ``!defined(NEVER_SET)``
+        branch body) and execute on a direct request before the
+        guard the wrapper shields."""
+        t = node.type
+        if t in self._PROLOGUE_INERT_STMTS:
+            return True
+        if t == "declare_statement":
+            # Bare-directive form only: ``declare(ticks=1) f();`` /
+            # ``declare(...) { ... }`` execute their body.
+            return not any(
+                c.is_named and c.type not in ("declare_directive",
+                                              "comment")
+                for c in node.children)
+        if t == "if_statement":
+            # ``!defined('N')`` shape AND an inert body: the branch
+            # RUNS on a direct request whenever the probed constant
+            # is undefined, so a payload body would execute first.
+            if self._not_defined_guard_name(node) is None:
+                return False
+            return all(self._inert_simple_stmt(s)
+                       for s in self._if_body_stmts(node))
+        if t == "expression_statement":
+            return self._inert_simple_stmt(node)
+        if t in ("text", "text_interpolation"):
+            # Markup output; whitespace-only chunks (and a bare
+            # close/open tag pair) stay inert.
+            txt = node.text.decode("utf-8", errors="replace")
+            for tag in ("?>", "<?php", "<?=", "<?"):
+                txt = txt.replace(tag, " ")
+            return not txt.strip()
+        return False
+
+    def _inert_simple_stmt(self, stmt) -> bool:
+        """Whether one statement is prologue-inert on its own:
+        abort, include (side-effect-free argument), literal define,
+        or the or-die guard expression."""
+        if stmt.type in ("comment", "empty_statement"):
+            return True
+        if self._stmt_is_abort(stmt):
+            return True
+        expr = stmt
+        while expr is not None and expr.type in (
+            "expression_statement", "error_suppression_expression",
+            "parenthesized_expression",
+        ):
+            nxt = None
+            for c in expr.children:
+                if c.is_named:
+                    nxt = c
+                    break
+            expr = nxt
+        if expr is None:
+            return True  # bare ';'
+        if expr.type in self._INCLUDE_EXPRS:
+            # Adjudication: an include with an inert ARGUMENT stays
+            # prologue-inert even though the INCLUDED file's payload
+            # executes before the guard on a direct request. Scoped
+            # precisely, guard evidence claims "THIS file's own
+            # below-guard payload is not directly reachable"; the
+            # included file keeps its own role, guard, and census
+            # attention in the graph, so its exposure is never
+            # hidden behind this file's guard — and refusing
+            # includes would void guard evidence on the dominant
+            # honest idiom (bootstrap requires before the guard).
+            # A side-effectful ARGUMENT is different: it is this
+            # statement's own execution (a call computing the path
+            # runs right here), so it closes the prologue.
+            return self._include_arg_side_effect_free(expr)
+        if expr.type == self._FUNCTION_CALL:
+            return self._is_literal_define(expr)
+        if expr.type == "binary_expression":
+            # ``defined('N') or die`` IS the guard — inert.
+            return self._or_die_guard_constant(expr) is not None
+        return False
+
+    #: Argument-subtree node kinds that EXECUTE when the enclosing
+    #: statement runs — a prologue-inert wrapper carrying one is not
+    #: inert (seed set, closed over grammar expression kinds).
+    _SIDE_EFFECT_NODES: ClassVar[set[str]] = {
+        "function_call_expression", "scoped_call_expression",
+        "member_call_expression", "nullsafe_member_call_expression",
+        "object_creation_expression", "assignment_expression",
+        "augmented_assignment_expression", "update_expression",
+        "shell_command_expression", "include_expression",
+        "include_once_expression", "require_expression",
+        "require_once_expression", "ERROR",
+    }
+    _MAX_ARG_SCAN_NODES: ClassVar[int] = 10_000
+
+    def _include_arg_side_effect_free(self, include_node) -> bool:
+        """Whether the include's argument subtree is free of
+        executing constructs (calls, assignments, nested includes,
+        backticks, parse errors). Bounded single pass — each node
+        belongs to at most one file-scope statement, so the total
+        cost across a file stays linear; oversized arguments refuse
+        toward closing the prologue."""
+        stack = [c for c in include_node.children if c.is_named]
+        seen = 0
+        while stack:
+            cur = stack.pop()
+            seen += 1
+            if seen > self._MAX_ARG_SCAN_NODES:
+                return False
+            if cur.type in self._SIDE_EFFECT_NODES:
+                return False
+            stack.extend(c for c in cur.children if c.is_named)
+        return True
+
+    def _is_literal_define(self, call_node) -> bool:
+        """``define('NAME', <scalar literal>[, <scalar literal>])``
+        — the only define shape that is inert on execution (a call
+        or expression value runs on a direct request)."""
+        fn = self._first_child_of_type(call_node, (self._NAME,))
+        if fn is None or fn.text.decode(
+                "utf-8", errors="replace").lower() != "define":
+            return False
+        args_node = self._first_child_of_type(call_node, (self._ARGS,))
+        if args_node is None:
+            return False
+        args = [c for c in args_node.children if c.type == "argument"]
+        if len(args) < 2:
+            return False
+        if self._plain_string_value(args[0]) is None:
+            return False
+        return all(self._literal_scalar_arg(a) for a in args[1:])
+
+    def _literal_scalar_arg(self, arg_node) -> bool:
+        expr = None
+        for c in arg_node.children:
+            if c.is_named:
+                expr = c
+                break
+        if expr is None:
+            return False
+        if expr.type in ("integer", "float", "boolean", "null"):
+            return True
+        if expr.type in ("string", "encapsed_string"):
+            return self._plain_string_value(arg_node) is not None
+        return False
+
+    def _if_body_stmts(self, node) -> list:
+        """The if's consequence statements (braced, colon-syntax, or
+        the brace-less single-statement form); else clauses never
+        participate."""
+        for c in node.children:
+            if c.type in ("compound_statement", "colon_block"):
+                return [s for s in c.children if s.is_named]
+            if c.is_named and c.type not in (
+                "parenthesized_expression", "else_clause",
+                "else_if_clause",
+            ):
+                return [c]
+        return []
+
+    def _not_defined_guard_name(self, node) -> str | None:
+        """The N of an ``if (!defined('N'))`` condition, or None."""
+        cond = self._first_child_of_type(
+            node, ("parenthesized_expression",))
+        if cond is None:
+            return None
+        expr = self._unwrap_parens(cond)
+        if expr is None or expr.type != "unary_op_expression":
+            return None
+        if not any(c.type == "!" for c in expr.children):
+            return None
+        operand = None
+        for c in expr.children:
+            if c.is_named:
+                operand = c
+                break
+        # ``!(defined('N'))`` unwraps; ``!!defined('N')`` (inverted —
+        # dies when DEFINED) leaves a unary operand and refuses.
+        operand = self._unwrap_parens(operand)
+        if operand is None or operand.type != self._FUNCTION_CALL:
+            return None
+        return self._defined_call_constant(operand)
+
+    def _maybe_record_access_guard(self, node, guard: str | None) -> None:
+        """``if (!defined('N')) die/exit`` at file scope → the file's
+        direct-access guard (role evidence for the include graph).
+
+        Two positional requirements, both hostile-plant defenses:
+        unconditional file scope (a guard nested under another branch
+        never executes on the plant's terms), and the file's inert
+        PROLOGUE still open (see _PROLOGUE_INERT_STMTS) — a guard
+        after executable file-scope code either never runs
+        (post-abort/post-goto plants) or runs after the payload a
+        direct request already executed (bottom-of-file guards), so
+        recording it would render a web-reachable handler as a
+        guarded library. Adjudicated over demoting guard evidence
+        wholesale: prologue-position guards are exactly the honest
+        idiom, and the rule needs no cross-statement flow analysis.
+        """
+        if (guard is None or self._enclosing or self._cond_depth
+                or not self._guard_prologue_open
+                or self.graph.direct_access_guard is not None):
+            return
+        for stmt in self._if_body_stmts(node):
+            if self._stmt_is_abort(stmt):
+                self.graph.direct_access_guard = {
+                    "line": node.start_point[0] + 1,
+                    "constant": guard,
+                }
+                return
+
+    def _or_die_guard_constant(self, node) -> str | None:
+        """The N of a ``defined('N') or/|| die/exit`` expression, or
+        None when the node is not that shape."""
+        kids = list(node.children)
+        op_i = next((i for i, c in enumerate(kids)
+                     if c.type in ("or", "||")), None)
+        if op_i is None or op_i == 0 or op_i == len(kids) - 1:
+            return None
+        left = kids[op_i - 1]
+        if left.type != self._FUNCTION_CALL:
+            return None
+        const = self._defined_call_constant(left)
+        if const is None:
+            return None
+        return const if self._stmt_is_abort(kids[op_i + 1]) else None
+
+    def _maybe_record_or_die_guard(self, node) -> None:
+        """``defined('N') or die/exit`` at file scope — the other
+        idiomatic direct-access guard spelling. Same positional
+        requirements (unconditional scope + open prologue) as the
+        if form."""
+        if (self._enclosing or self._cond_depth
+                or not self._guard_prologue_open
+                or self.graph.direct_access_guard is not None):
+            return
+        const = self._or_die_guard_constant(node)
+        if const is not None:
+            self.graph.direct_access_guard = {
+                "line": node.start_point[0] + 1,
+                "constant": const,
+            }
+
+    def _stmt_is_abort(self, stmt) -> bool:
+        """Whether a statement/expression is a die/exit abort."""
+        expr = stmt
+        while expr is not None and expr.type in (
+            "expression_statement", "error_suppression_expression",
+            "parenthesized_expression",
+        ):
+            nxt = None
+            for c in expr.children:
+                if c.is_named:
+                    nxt = c
+                    break
+            expr = nxt
+        if expr is None:
+            return False
+        if expr.type == self._NAME:
+            return expr.text.decode(
+                "utf-8", errors="replace").lower() in self._ABORT_NAMES
+        if expr.type == self._FUNCTION_CALL:
+            fn = self._first_child_of_type(expr, (self._NAME,))
+            return (fn is not None and fn.text.decode(
+                "utf-8", errors="replace").lower() in self._ABORT_NAMES)
+        return expr.type == "exit_statement"
 
     def _function_call_chain(self, node) -> list[str] | None:
         # function_call_expression: function (qualified_name | name | variable) + arguments
