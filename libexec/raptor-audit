@@ -16,6 +16,7 @@ Subcommands:
     stale    — list annotations with stale source hashes
     ast      — extract function AST subtree and call targets
     critique — identify gaps in tool coverage
+    journal  — journal maintenance (compact duplicate re-emission rows)
 """
 
 from __future__ import annotations
@@ -2340,6 +2341,55 @@ def _check_legacy_state(project_dir: Path) -> str | None:
     )
 
 
+def cmd_journal(args: argparse.Namespace) -> int:
+    """Journal maintenance. ``journal compact <out-dir>`` atomically
+    rewrites the run's review journal without its duplicate
+    re-emission rows (newest per identity kept; corrections, claim
+    rows, $-bearing rows, and unparseable lines always survive — the
+    final verdict per function and the journal spend floor are
+    unchanged). The original is preserved as
+    ``review-journal.jsonl.pre-compact``.
+    """
+    if getattr(args, "journal_command", None) != "compact":
+        print(
+            "error: usage: raptor-audit journal compact <out-dir>",
+            file=sys.stderr,
+        )
+        return 1
+    out_dir = Path(args.out_dir).resolve()
+    if not out_dir.is_dir():
+        print(f"error: {out_dir} is not a directory", file=sys.stderr)
+        return 1
+    from core.coverage.journal_compact import CompactRefused, compact_journal
+    try:
+        stats = compact_journal(out_dir)
+    except CompactRefused as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    ratio = f"{stats.ratio:.1f}x" if stats.bytes_after else "n/a"
+    print(f"journal: {stats.journal_path}")
+    print(
+        f"  rows:  {stats.rows_before} -> {stats.rows_after} "
+        f"({stats.dropped_reemissions} duplicate re-emission row(s) "
+        "dropped)"
+    )
+    print(
+        f"  bytes: {stats.bytes_before} -> {stats.bytes_after} "
+        f"({ratio})"
+    )
+    if stats.kept_unparseable:
+        print(
+            f"  kept verbatim: {stats.kept_unparseable} line(s) the "
+            "reader cannot parse (never deleted)"
+        )
+    print(
+        f"  spend floor: ${stats.spend_usd_after:.2f} (unchanged — "
+        "only zero-cost duplicates drop)"
+    )
+    print(f"  backup: {stats.backup_path}")
+    return 0
+
+
 def cmd_resume(args: argparse.Namespace) -> int:
     """Re-enter a failed/interrupted audit run AS THE SAME RUN.
 
@@ -3337,6 +3387,23 @@ def main() -> int:
              "subagent background shell (see `run --help`)",
     )
 
+    p_journal = sub.add_parser(
+        "journal",
+        help="Review-journal maintenance",
+    )
+    journal_sub = p_journal.add_subparsers(dest="journal_command")
+    p_jcompact = journal_sub.add_parser(
+        "compact",
+        help="Atomically drop duplicate re-emission rows (newest per "
+             "identity kept; verdicts, spend floor, corrections, and "
+             "claim rows preserved; original backed up as "
+             "review-journal.jsonl.pre-compact)",
+    )
+    p_jcompact.add_argument(
+        "out_dir",
+        help="Run output directory containing review-journal.jsonl",
+    )
+
     args = parser.parse_args()
     if getattr(args, "project", None) is not None:
         from core.run.pin import set_process_project
@@ -3370,6 +3437,7 @@ def main() -> int:
         "ast": cmd_ast,
         "run": cmd_run,
         "resume": cmd_resume,
+        "journal": cmd_journal,
     }
 
     return dispatch[args.command](args)
