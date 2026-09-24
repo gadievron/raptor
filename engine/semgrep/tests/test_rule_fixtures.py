@@ -141,6 +141,22 @@ _CASES = {
         ["weak_password_hash_pos.php"],
         ["weak_password_hash_neg.php"],
     ),
+    "php/unserialize-taint.yaml": (
+        ["unserialize_taint_pos.php"],
+        ["unserialize_taint_neg.php"],
+    ),
+    "php/attr-xss.yaml": (
+        ["attr_xss_pos.php"],
+        ["attr_xss_neg.php"],
+    ),
+    "php/open-redirect.yaml": (
+        ["open_redirect_pos.php"],
+        ["open_redirect_neg.php"],
+    ),
+    "php/include-injection.yaml": (
+        ["include_injection_pos.php"],
+        ["include_injection_neg.php"],
+    ),
 }
 
 pytestmark = pytest.mark.skipif(
@@ -279,6 +295,51 @@ def test_every_rule_has_cwe_metadata():
             if not rule.get("metadata", {}).get("cwe"):
                 missing.append(f"{rule.get('id')} ({rule_file.name})")
     assert not missing, "rules with no cwe metadata:\n  " + "\n  ".join(missing)
+
+
+# --- PHP web-family exact-line pins ------------------------------------------
+
+# rule file → (positive fixture, expected (line, rule-id suffix) set).
+# The fires-at-least-once positive gate would let a single sub-shape
+# (the interpolated header form, the assignment-hop include, the
+# unquoted-attribute rule) regress silently; exact (line, id) sets
+# keep every variant individually witnessed.
+_PHP_EXACT_LINES = {
+    "php/unserialize-taint.yaml": ("unserialize_taint_pos.php", {
+        (3, "request-data"), (8, "request-data"),
+        (12, "request-data"), (16, "request-data"),
+    }),
+    "php/attr-xss.yaml": ("attr_xss_pos.php", {
+        (4, "single-quote-attr"), (8, "single-quote-attr"),
+        (12, "unquoted-attr"), (15, "single-quote-attr"),
+    }),
+    "php/open-redirect.yaml": ("open_redirect_pos.php", {
+        (4, "header-location"), (8, "header-location"),
+        (12, "header-location"), (15, "header-location"),
+        (19, "header-location"), (22, "header-location"),
+    }),
+    "php/include-injection.yaml": ("include_injection_pos.php", {
+        (4, "request-path"), (7, "request-path"),
+        (11, "request-path"), (16, "request-path"),
+        (23, "request-path"),
+    }),
+}
+
+
+@pytest.mark.parametrize("rule_rel", sorted(_PHP_EXACT_LINES))
+def test_php_web_family_exact_lines(rule_rel: str):
+    fixture, expected = _PHP_EXACT_LINES[rule_rel]
+    results = _run_semgrep(
+        _RULES_DIR / rule_rel, [_FIXTURES / fixture],
+    )["results"]
+    fired = {
+        (r["start"]["line"], r["check_id"].rsplit(".", 1)[-1])
+        for r in results
+    }
+    assert fired == expected, (
+        f"{rule_rel} variant coverage drifted on {fixture}: "
+        f"fired {sorted(fired)}, expected {sorted(expected)}"
+    )
 
 
 # --- case-insensitive algorithm names (JCA / OpenSSL lookup) ----------------

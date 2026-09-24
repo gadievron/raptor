@@ -1,0 +1,73 @@
+rules:
+  # CWE-601: open redirect — a Location response header built from
+  # request-derived data. Sources are the request parameters plus the
+  # attacker-controlled $_SERVER members that commonly seed
+  # "self"-redirect URLs: HTTP_HOST and HTTP_X_FORWARDED_HOST (client
+  # header echoes — a host-header-derived base URL redirects to an
+  # attacker host), PHP_SELF (carries decoded PATH_INFO), REQUEST_URI
+  # and QUERY_STRING (raw request echoes). The sink is any header()
+  # call whose first argument starts with a Location: literal —
+  # concatenated and interpolated forms both match.
+  #
+  # Known FP modes:
+  #   - Guard-shaped validation is invisible to taint mode: a strict
+  #     equality/preg_match check on the value in an early-return
+  #     branch still fires. The in_array/array_key_exists/isset
+  #     sanitizers are by-side-effect and blind to haystack content
+  #     and branch polarity (the php/unsafe-reflection.yaml
+  #     precedent) — a membership check suppresses, a comparison
+  #     does not.
+  #   - urlencode/rawurlencode clear taint on the redirect TARGET
+  #     path assumption (an encoded value cannot introduce a scheme
+  #     or authority); a value encoded and used as the ENTIRE URL
+  #     would be a broken redirect, not a working open one.
+  # Known FN modes:
+  #   - A base URL assembled from HTTP_HOST inside a helper function
+  #     and returned to the redirecting caller is invisible to
+  #     single-function taint (helper indirection).
+  #   - Non-header redirects (meta refresh markup, JavaScript
+  #     location assignments) are out of the header() sink scope by
+  #     design — they are output-encoding shapes, not response-header
+  #     shapes.
+  - id: raptor.php.open-redirect.header-location
+    mode: taint
+    languages: [php]
+    severity: MEDIUM
+    message: >
+      A Location response header is built from request-derived data
+      (request parameter, host header, or request-URI echo), so the
+      redirect target is attacker-influenced (open redirect —
+      phishing bounce, and token leakage via Referer). Compare the
+      value against a fixed allowlist of local paths, or send a
+      server-configured absolute base URL.
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET[...]
+          - pattern: $_POST[...]
+          - pattern: $_REQUEST[...]
+          - pattern: $_COOKIE[...]
+          - patterns:
+              - pattern: $_SERVER[$KEY]
+              - metavariable-regex:
+                  metavariable: $KEY
+                  regex: ^['"](HTTP_HOST|HTTP_X_FORWARDED_HOST|PHP_SELF|REQUEST_URI|QUERY_STRING)['"]$
+    pattern-sanitizers:
+      - pattern: urlencode(...)
+      - pattern: rawurlencode(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: in_array($V, ...)
+              - pattern: array_key_exists($V, ...)
+              - pattern: isset($MAP[$V])
+          - focus-metavariable: $V
+    pattern-sinks:
+      - patterns:
+          - pattern: header($ARG, ...)
+          - metavariable-regex:
+              metavariable: $ARG
+              regex: '^[''"][Ll]ocation\s*:'
+    metadata:
+      cwe: ["CWE-601"]

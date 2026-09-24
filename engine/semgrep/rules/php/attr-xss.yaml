@@ -1,0 +1,103 @@
+rules:
+  # CWE-79: reflected XSS, attribute-context subset — request data
+  # concatenated into a single-quoted or unquoted HTML attribute with
+  # NO output encoding at all. Both rules key on the string literal
+  # immediately concatenated before the tainted value: an unclosed
+  # single-quoted attribute opener (ends ...=' or ...='<text>), or an
+  # unquoted attribute opener (ends ...=). An embedded quote or
+  # whitespace in the value closes the attribute and adds
+  # event-handler attributes — htmlspecialchars alone does not help
+  # in the unquoted context, which is why the fix is ENT_QUOTES plus
+  # a quoted attribute.
+  #
+  # Division of labour: ANY htmlspecialchars/htmlentities call clears
+  # taint here — the encoded-but-wrong-flags residual (ENT_COMPAT /
+  # ENT_NOQUOTES into a quoted attribute) is php/attr-encoding.yaml's
+  # (CWE-116) job, so the two rules never double-claim one shape.
+  #
+  # Known FP modes:
+  #   - The sink is the concatenation expression, not an echo: a
+  #     tainted value concatenated after an attribute-opener-shaped
+  #     literal fires even when the result never reaches output —
+  #     bounded by requiring a <tag prefix in the literal (a config
+  #     line ending in = stays silent).
+  # Known FN modes:
+  #   - Flagless htmlspecialchars($x) clears taint, but before PHP
+  #     8.1 the default flags do not encode single quotes, so on
+  #     legacy runtimes the single-quoted-attribute breakout survives
+  #     encoding (the php/attr-encoding.yaml precedent: flagging the
+  #     flagless call would FP on every modern codebase).
+  #   - Full-html-pipeline shapes — the opener and the value assembled
+  #     in different statements or via printf/sprintf templates,
+  #     heredocs, or a template function — are missed: no literal is
+  #     concatenated adjacent to the tainted value.
+  #   - Double-quoted attributes and text content are deliberately
+  #     out of scope: this is the narrow quote-breakout subset, not a
+  #     claim on the whole echo-XSS class.
+  - id: raptor.php.attr-xss.single-quote-attr
+    mode: taint
+    languages: [php]
+    severity: HIGH
+    message: >
+      Request data is concatenated into a single-quoted HTML attribute
+      (the preceding literal opens ...=' and never closes it) with no
+      output encoding. An embedded single quote closes the attribute
+      and injects event-handler attributes. Encode with
+      htmlspecialchars($v, ENT_QUOTES) at the emission site.
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET[...]
+          - pattern: $_POST[...]
+          - pattern: $_REQUEST[...]
+          - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: htmlspecialchars(...)
+      - pattern: htmlentities(...)
+      - pattern: urlencode(...)
+      - pattern: rawurlencode(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+    pattern-sinks:
+      - patterns:
+          - pattern: $LIT . $V
+          - focus-metavariable: $V
+          - metavariable-regex:
+              metavariable: $LIT
+              regex: .*<[a-zA-Z][^>]*='[^']*"$
+    metadata:
+      cwe: ["CWE-79"]
+  - id: raptor.php.attr-xss.unquoted-attr
+    mode: taint
+    languages: [php]
+    severity: HIGH
+    message: >
+      Request data is concatenated as an unquoted HTML attribute value
+      (the preceding literal ends with attr=) with no output encoding.
+      Whitespace in the value starts a new attribute, so even
+      htmlspecialchars cannot contain it. Quote the attribute AND
+      encode with htmlspecialchars($v, ENT_QUOTES).
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET[...]
+          - pattern: $_POST[...]
+          - pattern: $_REQUEST[...]
+          - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: htmlspecialchars(...)
+      - pattern: htmlentities(...)
+      - pattern: urlencode(...)
+      - pattern: rawurlencode(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+    pattern-sinks:
+      - patterns:
+          - pattern: $LIT . $V
+          - focus-metavariable: $V
+          # Balanced single quotes required (the lookahead): a literal
+          # whose tail sits inside an unclosed single-quoted attribute
+          # belongs to the single-quote rule above, not here.
+          - metavariable-regex:
+              metavariable: $LIT
+              regex: ^(?=(?:[^']*'[^']*')*[^']*"$).*<[a-zA-Z][^>]*[a-zA-Z0-9_-]="$
+    metadata:
+      cwe: ["CWE-79"]

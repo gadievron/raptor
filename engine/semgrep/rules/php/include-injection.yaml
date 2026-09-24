@@ -1,0 +1,72 @@
+rules:
+  # CWE-22: include-injection — cookie/request data concatenated or
+  # interpolated into an include/require(_once) path. Scoped to the
+  # code-inclusion sinks ONLY: a traversal into include executes the
+  # reached file (or a remote/wrapper URL where configuration allows),
+  # which is a code-execution class, not the read/write file-op
+  # traversal the generic CWE-22 file-op shapes cover — fopen/
+  # file_get_contents/readfile sinks are deliberately out of scope
+  # here so this rule never claims that ground.
+  #
+  # A constant directory prefix or a constant '.php' suffix does NOT
+  # neutralize: ../ climbs out of the prefix, and on legacy runtimes
+  # a %00/long-path trick — or simply targeting another in-tree .php
+  # file — defeats the suffix.
+  #
+  # Known FP modes:
+  #   - Sequence-stripping "fixes" (str_replace('..', '', $p) and
+  #     similar) still fire — DELIBERATE: single-pass stripping is
+  #     bypassable (....// survives one round), so clearing taint on
+  #     it would launder the classic broken remediation.
+  #   - A correct character-class allowlist rewrite
+  #     (preg_replace('/[^a-z0-9_]/', '', $p)) also still fires —
+  #     the pattern cannot read regex semantics, so it cannot tell
+  #     the safe rewrite from the bypassable strip. Guard-shaped
+  #     validation (preg_match allowlist in an aborting branch) is
+  #     likewise invisible.
+  #   - The in_array/array_key_exists/isset sanitizers are
+  #     by-side-effect and blind to haystack content and branch
+  #     polarity (the php/unsafe-reflection.yaml precedent).
+  # Known FN modes:
+  #   - Taint through helper indirection (a getter function wrapping
+  #     the superglobal read) is invisible to single-function taint.
+  #   - basename() clears taint wholesale: a value that only selects
+  #     among same-directory .php files is still attacker file
+  #     selection within that directory — stated residual, accepted
+  #     because basename removes the traversal and wrapper vectors
+  #     that make the class code-execution.
+  - id: raptor.php.include-injection.request-path
+    mode: taint
+    languages: [php]
+    severity: HIGH
+    message: >
+      Request data reaches an include/require path. Path traversal
+      sequences (or a stream wrapper, where configuration allows)
+      make the interpreter execute an attacker-chosen file — constant
+      prefixes and .php suffixes do not contain it. Resolve the value
+      through a literal-keyed allowlist map (or basename() plus an
+      allowlist) before including.
+    pattern-sources:
+      - pattern-either:
+          - pattern: $_GET[...]
+          - pattern: $_POST[...]
+          - pattern: $_REQUEST[...]
+          - pattern: $_COOKIE[...]
+    pattern-sanitizers:
+      - pattern: basename(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: in_array($V, ...)
+              - pattern: array_key_exists($V, ...)
+              - pattern: isset($MAP[$V])
+          - focus-metavariable: $V
+    pattern-sinks:
+      - pattern: include $PATH;
+      - pattern: include_once $PATH;
+      - pattern: require $PATH;
+      - pattern: require_once $PATH;
+    metadata:
+      cwe: ["CWE-22"]
