@@ -90,6 +90,20 @@ def decompiler_rules_for_hypothesis(
     return resolved
 
 
+def decompiler_rules_for_tree() -> list[Path]:
+    """The whole curated decompiler corpus, for tree-scope sweeps.
+
+    Tree-wide widening of :func:`decompiler_rules_for_hypothesis` —
+    same resolution path (its no-hypothesis branch already resolves
+    every rule file in the corpus), so the two consumers can never
+    select from different rule sets. Used by the audit's decomp-tree
+    sweep (:mod:`core.audit.decomp_sweep`), which has no hypothesis
+    to narrow by: every curated decompiler-tolerant rule runs over
+    the whole tree.
+    """
+    return decompiler_rules_for_hypothesis("", "")
+
+
 def run_heap_copy_check(
     function_name: str,
     decompiled_c: str,

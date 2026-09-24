@@ -147,6 +147,36 @@ def evidence_hash_composite(hashes: Iterable[str]) -> str:
 
 CONFIDENCE_GRADES = ("inferred", "observed", "traced", "corroborated", "documented", "tested")
 
+#: Decompiled-evidence grading ceiling — the ONE spelling shared by
+#: every consumer that grades decomp-derived evidence (binary --study's
+#: domain-model clamp, the audit's tree-wide decomp sweep records).
+#: Decompilation is derived evidence about a binary, not ground truth:
+#: nothing whose evidence is decompilation-only may grade above this
+#: ceiling, and it always carries :data:`DECOMP_EVIDENCE_TAG` so
+#: downstream weight policies can see the provenance.
+DECOMP_EVIDENCE_MAX_CONFIDENCE = "traced"
+DECOMP_EVIDENCE_TAG = "decompiled-evidence"
+
+
+def clamp_decomp_confidence(confidence: object) -> str:
+    """Clamp *confidence* to the decompiled-evidence ceiling.
+
+    Grades above :data:`DECOMP_EVIDENCE_MAX_CONFIDENCE` come back as
+    the ceiling; legal below-ceiling grades pass through unchanged so
+    an honestly lower grade ("observed") is never inflated. Unknown
+    grades floor to ``"inferred"`` — the unknown-grade fallback must
+    never LIFT a grade.
+    """
+    c = str(confidence or "inferred")
+    try:
+        if (CONFIDENCE_GRADES.index(c)
+                > CONFIDENCE_GRADES.index(DECOMP_EVIDENCE_MAX_CONFIDENCE)):
+            return DECOMP_EVIDENCE_MAX_CONFIDENCE
+    except ValueError:
+        return "inferred"
+    return c
+
+
 LIFECYCLE_STATES = (
     "discovered",
     "proposed",
