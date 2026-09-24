@@ -97,6 +97,8 @@ operator's behalf.
 | `--gateway-budget <usd>` | `$25` | Per-run raise of the dispatcher-gateway spend cap on gateway-minted runs (any positive finite USD; the anti-runaway request cap scales with it, never below 10k). No uncapped spelling — dispatcher child tokens carry a finite budget by contract. Argv-only (no env twin); no effect on direct-credential runs (noted loudly) |
 | `--timeout-seconds <n>` | `1800` | Wall-clock deadline for the OpenAnt child (hard-killed at it, every credential posture). Positive integer, no ceiling; on gateway-minted runs the token TTL follows it (timeout + 600s slack), so raising it never strands a live child on an expired token |
 | `--max-findings <n>` | `50` | Cap findings rendered in the markdown report (severity-first, truncation stated; must be >= 1). `openant_findings.json` is never capped |
+| `--resume <run-dir>` | off | Complete a truncated prior run, paying only for the remainder (see § Resume) |
+| `--forecast` | off | Free phases only (parse + unit census): print a pre-spend cost forecast and exit with $0 LLM spend (report `outcome=forecast_only` — not a scan, no findings artifact). Combines with `--resume` to price completing a truncated run |
 | `--openant-core <path>` | auto-detect at `<raptor-parent>/libs/openant-core` (`$OPENANT_CORE` applies to direct unscrubbed invocations only — the dispatch lane's safe-env rebuild drops it) | Path to openant-core (flag surface is consent-gated: a core that is not a clean pinned checkout refuses at startup) |
 | `--openant-core-unpinned` | off | Consent to run a `--openant-core` checkout that is not a clean pinned checkout this run (the project `config` trust marker grants the same, standing) |
 
@@ -106,6 +108,72 @@ operator's behalf.
 - `reachable` — functions reachable from entry points (balanced, recommended)
 - `codeql` — functions flagged by CodeQL dataflow (targeted, cheapest)
 - `exploitable` — only functions already marked exploitable
+
+---
+
+## Resume
+
+`--resume <prior-run-dir>` completes a truncated scan (budget
+exhaustion, timeout, kill) for the cost of the remainder. It creates a
+NEW run directory (own lifecycle) seeded from the prior run's
+`openant_scan` state — the prior directory is never mutated — and
+re-invokes the pinned scan against it: the upstream checkpoint
+machinery restores completed units at zero LLM cost, retries errored
+units, and rebuilds the outputs (findings, `pipeline_output.json`)
+over the union. A fresh gateway token is minted for the resume with
+the standard (or `--gateway-budget`) budget applying to the remainder;
+all credential hygiene (staging, scrub, revocation, settlement)
+applies unchanged.
+
+- The prior run's scan-shape config (model, level, enhance, verify,
+  language) is ADOPTED — a resume completes the same scan; conflicting
+  flags are overridden with a loud warning. Operational knobs
+  (`--workers`, `--timeout-seconds`, `--gateway-budget`,
+  `--max-findings`) stay per-run.
+- Detected drift REFUSES loudly (exit 2, report
+  `outcome=resume_refused`): a different target path, a git target
+  whose tree changed since the prior run, or an openant-core / pin
+  change. Upstream checkpoints are path-keyed and content-blind, so
+  this validation is the only target/core drift gate a resume has;
+  undetectable drift (non-git target, prior run predating fingerprint
+  recording) warns loudly instead.
+- **Trust:** the prior run dir is trusted as THIS installation's own
+  output. Its checkpoint contents shape the resumed run's verdicts —
+  upstream adopts completed checkpoints without content
+  authentication (the identity sidecar filters unknown writers, it is
+  not an authenticity seal), and the drift gates verify
+  target/pin/core IDENTITY only. Resume only run dirs you trust.
+  Mitigations: the report the gates read is parent-written at the
+  run-dir top level, outside the scan child's sandbox bind, and
+  seeding refuses anything but regular files/dirs (a planted symlink,
+  FIFO, or device in the prior scan state refuses the whole resume
+  and leaves nothing behind).
+- Resuming a COMPLETE run refuses with "nothing to resume".
+- The resumed run's report records `resume.resumed_from`, the prior
+  cost, this run's cost, and the combined figure. Note the small
+  honest re-spend: the app-context step regenerates (one small LLM
+  call) — it is included in the forecast.
+
+```bash
+/openant --resume out/openant_<timestamp>            # finish it
+/openant --resume out/openant_<timestamp> --forecast # price finishing it
+```
+
+## Cost forecast
+
+`--forecast` runs only the free phases — parse + unit census (the
+pinned `parse` step is LLM-free; context generation is NOT, so it is
+excluded) — prints a forecast RANGE and exits with $0 LLM spend. The
+run's report carries `outcome=forecast_only` and writes no
+`openant_findings.json`, so it can never read as a scan.
+
+Every gateway-minted real run prints the same forecast line before its
+child token is minted — informational, never blocking (a forecast
+failure warns and the scan proceeds). Resumed runs always print it,
+priced over the remainder only. The estimator is measured-calibration
+(see `packages/openant/forecast.py`): analyze input tokens track unit
+size nearly exactly; enhance is agent-iteration-dominated, hence the
+wider band. `--verify` is noted but not priced (uncalibrated).
 
 ---
 
