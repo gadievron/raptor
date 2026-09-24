@@ -1306,6 +1306,21 @@ def cmd_report(args: argparse.Namespace) -> int:
     out_dir = Path(args.out)
     target_path = Path(args.target) if args.target else None
 
+    # In-session finalization: the orchestrator writes
+    # findings-graded.json itself, but in-session runs (reviews via
+    # `record`) had no graded export at all — suspicious/dark results
+    # never reached the /validate import or cross-run dedup. Derive
+    # one from the journal when absent, BEFORE the report generator
+    # reads dark findings from it. Best-effort: a derivation failure
+    # must not block the report.
+    try:
+        from core.audit.findings_export import export_graded_from_journal
+        export_graded_from_journal(out_dir)
+    except Exception as exc:  # noqa: BLE001 — report still renders
+        print(f"WARNING: journal-derived graded export skipped: "
+              f"{sanitise_for_terminal(str(exc), max_len=300)}",
+              file=sys.stderr)
+
     report = generate_report(out_dir, target_path=target_path)
     write_report(report, out_dir)
 
