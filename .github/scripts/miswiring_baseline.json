@@ -40,6 +40,9 @@
     "artifacts:orphan_reader::auto-sink-watch.json": {
       "note": "single-literal read/variable write false positive: libexec/raptor-validation-helper's auto sink-watch builds ledger_path from the one literal with load_json in the classification window (read), then writes via save_json(ledger_path, ...) further down the same function through the variable \u2014 invisible to the literal-name index; helper-owned freshness ledger, both halves in one function by design (same class as the baselined coverage-read.json entry)"
     },
+    "artifacts:orphan_reader::binary-hunt-*.json": {
+      "note": "glob reader over the hunt artifacts; the writer mints the same names as f-string binary-hunt-{slug}.json (packages/binary_analysis/hunt.py _write_hunt_artifacts), which the census cannot join to the glob"
+    },
     "artifacts:orphan_reader::c.*.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
@@ -190,14 +193,14 @@
     "artifacts:write_only_artifact::adversarial-matrix.json": {
       "note": "operator-facing run artifact from --adversarial (adversarial_test.write_matrix); surfaced when the atomic-write idiom became visible to the writer classifier"
     },
-    "artifacts:write_only_artifact::analysis-gaps.jsonl": {
-      "note": "durable analysis-gap trail in the run directory (binary-study child-timeout records): operator-facing evidence for humans/jq, same class as suppressions.jsonl; additive schema, consumers must tolerate unknown keys"
-    },
     "artifacts:write_only_artifact::agentic-report.md": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::aggregation.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
+    },
+    "artifacts:write_only_artifact::analysis-gaps.jsonl": {
+      "note": "durable analysis-gap trail in the run directory (binary-study child-timeout records): operator-facing evidence for humans/jq, same class as suppressions.jsonl; additive schema, consumers must tolerate unknown keys"
     },
     "artifacts:write_only_artifact::annotations.json": {
       "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
@@ -373,9 +376,6 @@
     "artifacts:write_only_artifact::observation-status.json": {
       "note": "operator-facing layer-resolution audit trail; surfaced when the atomic-write idiom became visible to the writer classifier"
     },
-    "artifacts:write_only_artifact::oracle_summary.md": {
-      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
-    },
     "artifacts:write_only_artifact::openant-report.md": {
       "note": "operator-facing output: /openant standalone run writes a markdown summary next to the JSON findings; consumed by the operator reviewing results, no in-repo production reader by design"
     },
@@ -385,8 +385,8 @@
     "artifacts:write_only_artifact::openant_findings.json": {
       "note": "variable-path read false positive: raptor_agentic.py writes openant_findings.json then passes the Path to run_validation_phase(openant_findings_path=...) which reads it via load_json, and core/project/findings_utils.load_findings_from_dir reads it as the standalone-/openant fallback via its size-gated loader; the detector cannot trace either path indirection"
     },
-    "artifacts:write_only_artifact::raptor_openant_report.json": {
-      "note": "operator-facing output: /openant standalone run writes the machine-readable run summary; consumed by the operator only \u2014 project merge lists it in KNOWN_FILES (deliberately not artefact-copied, like raptor_agentic_report.json) but no production code reads it back; findings visibility rides openant_findings.json"
+    "artifacts:write_only_artifact::oracle_summary.md": {
+      "note": "artifact triaged at baseline cut: operator/LLM-facing output, externally produced input, or wiring pending"
     },
     "artifacts:write_only_artifact::patch-verify.json": {
       "note": "operator/LLM-facing output: the frida runtime regression oracle writes both runs' evidence as patch-verify.json and prints its path; the machine-consumed verdict rides the CLI exit code and the in-process return value, so no in-repo literal-name production reader exists by design (tests read the file back)"
@@ -414,6 +414,9 @@
     },
     "artifacts:write_only_artifact::r.yml": {
       "note": "externally consumed: raptor-self-test writes a scratch Semgrep rule file that semgrep (external tool) reads via --config"
+    },
+    "artifacts:write_only_artifact::raptor_openant_report.json": {
+      "note": "operator-facing output: /openant standalone run writes the machine-readable run summary; consumed by the operator only \u2014 project merge lists it in KNOWN_FILES (deliberately not artefact-copied, like raptor_agentic_report.json) but no production code reads it back; findings visibility rides openant_findings.json"
     },
     "artifacts:write_only_artifact::release-order.json": {
       "note": "operator-facing run artifact: release_order channel prepass receipts (core/audit/release_order.py), consumed via /review and manual triage \u2014 no production reader by design (the audit-log artifact pattern)"
@@ -703,11 +706,11 @@
     "plumbing:orphan_config_field:core/binary/elf.py:_SectionHeader.sh_link": {
       "note": "kept: spec-defined ELF section-header member (2026-08-17 config-orphan pass). The canonical .dynstr resolution is sections[dynsym.sh_link]; today elf.py matches by name+type (elf.py:198-205), which fails on renamed sections from exotic toolchains \u2014 sh_link is the upgrade path. Struct unpack offsets come from the format string, so the field is layout-inert."
     },
-    "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
-      "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
-    },
     "plumbing:orphan_config_field:core/build/build_detector.py:BuildSystem.detected_files": {
       "note": "construction-time provenance: the detector stores which build files drove the detection (the same list its confidence score is computed from) on the result object for debugging and tests; nothing dereferences the field programmatically by design"
+    },
+    "plumbing:orphan_config_field:core/llm/tool_use/types.py:TurnStarted.input_token_estimate": {
+      "note": "kept: published observability API (2026-08-17 config-orphan pass). TurnStarted is a frozen event dataclass exported in core.llm.tool_use.__all__ for external subscribers; per-turn input-token telemetry is the point of the event. The in-repo hunt_dispatch subscriber deliberately skips TurnStarted; the value is computed regardless for the context-policy gate (loop.py)."
     }
   },
   "version": 1

@@ -579,6 +579,11 @@ _REPORT_WRITER_FILES = (
     # hostile-binary content routed through the module's _md_escape
     # (md_inline chokepoint).
     "packages/binary_analysis/hunt.py",
+    # Sibling-consistency pass: sibling-clusters.md writer plus the
+    # payload it renders — member names, callee names and engine
+    # explanations are hostile-binary content, escaped at row/matrix
+    # construction (_esc) and rendered through md_inline.
+    "packages/binary_analysis/siblings.py",
     "packages/binary_analysis/investigation.py",
     "packages/binary_analysis/pipeline.py",
     # cve_diff terminal lanes: bench result echoes (agent/tool error
@@ -1251,6 +1256,48 @@ _ALLOWLIST: tuple[AllowlistEntry, ...] = (
         audit_note=(
             "helper returns a line of int statistics counters (its own "
             "counts['error'] read is the adjudicated count entry above)"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/siblings.py",
+        func_name="run_siblings",
+        kind="unsanitised_llm_value",
+        detail="rows",
+        audit_note=(
+            "_asymmetry_rows escapes every hostile slot at row "
+            "construction (escape_nonprintable via the module's _esc "
+            "on group ids, property names, outliers, explanations); "
+            "the taint is the rows list flowing into the payload, not "
+            "unescaped content"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/siblings.py",
+        func_name="run_siblings",
+        kind="unsanitised_llm_value",
+        detail="contract_rows",
+        audit_note=(
+            "same rows shape from the same _asymmetry_rows escape "
+            "chokepoint (export-contract lane); escaped at "
+            "construction before joining the payload"
+        ),
+    ),
+    AllowlistEntry(
+        file="packages/binary_analysis/siblings.py",
+        func_name="run_siblings",
+        kind="unsanitised_llm_value",
+        detail="payload",
+        audit_note=(
+            "hostile-text payload slots (names, explanations, matrix "
+            "keys, notes) are escaped at construction (_esc / "
+            "_escaped_matrix / _asymmetry_rows) and the markdown "
+            "renderer routes every slot through md_inline; the seed "
+            "`file` value deliberately carries binary_path_key bytes "
+            "unescaped IN-VALUE for join fidelity with the audit "
+            "inventory — display duty for that one field sits with "
+            "consumers (the intake loader escapes at load). The local "
+            "helpers sit outside the audit's sanitiser vocabulary, so "
+            "the assembled dict still reads as taint"
         ),
     ),
     AllowlistEntry(

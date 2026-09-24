@@ -903,6 +903,29 @@ def _anchor_family_groups(
 # ── Binary shared-callee-signature groups ────────────────────────────
 
 
+def distinctive_callee_set(
+    binary_callees: dict[str, set[str]],
+) -> set[str]:
+    """Callees distinctive enough to be family evidence.
+
+    Caller counts run over the WHOLE substrate (not just the
+    resolver's input) — distinctiveness is a property of the binary.
+    A callee needs 2..:data:`CALLEE_HUB_MAX_CALLERS` callers: below,
+    it corroborates nothing; above, it is a hub (allocator, logging
+    shim, libc wrapper) — shared vocabulary, not family evidence.
+    Shared with the check-vector consumers so "distinctive" means one
+    thing everywhere.
+    """
+    caller_count: dict[str, int] = defaultdict(int)
+    for caller in sorted(binary_callees):
+        for callee in binary_callees[caller]:
+            caller_count[callee] += 1
+    return {
+        callee for callee, count in caller_count.items()
+        if 2 <= count <= CALLEE_HUB_MAX_CALLERS
+    }
+
+
 def _shared_callee_signature_groups(
     binary_callees: dict[str, set[str]],
     functions: list[dict[str, Any]],
@@ -922,16 +945,7 @@ def _shared_callee_signature_groups(
 
     func_by_name = _name_index(functions)
 
-    # Caller counts over the WHOLE substrate (not just the resolver's
-    # input) — distinctiveness is a property of the binary.
-    caller_count: dict[str, int] = defaultdict(int)
-    for caller in sorted(binary_callees):
-        for callee in binary_callees[caller]:
-            caller_count[callee] += 1
-    distinctive = {
-        callee for callee, count in caller_count.items()
-        if 2 <= count <= CALLEE_HUB_MAX_CALLERS
-    }
+    distinctive = distinctive_callee_set(binary_callees)
     if not distinctive:
         return []
 
