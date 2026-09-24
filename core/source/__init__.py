@@ -22,6 +22,7 @@ from core.source.contained import (
     open_regular,
     read_bytes_capped,
     read_contained,
+    read_contained_bytes,
     read_text_capped,
 )
 from core.source.gated import (
@@ -52,6 +53,7 @@ __all__ = [
     "open_regular_beneath",
     "read_bytes_capped",
     "read_contained",
+    "read_contained_bytes",
     "read_context",
     "read_lines",
     "read_text_capped",

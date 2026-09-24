@@ -164,3 +164,116 @@ class TestRegularFileGuard:
         p.write_text("int y;")
         assert read_text_capped(p) == ("int y;", False)
         assert read_bytes_capped(p, 100) == (b"int y;", False)
+
+
+class TestReadContainedBytes:
+    def test_reads_binary(self, tmp_path):
+        from core.source.contained import read_contained_bytes
+        (tmp_path / "a.bin").write_bytes(b"\x00\x01\x02")
+        assert read_contained_bytes(tmp_path, "a.bin", 16) == (
+            b"\x00\x01\x02", False)
+
+    def test_over_cap_flags_truncated(self, tmp_path):
+        from core.source.contained import read_contained_bytes
+        (tmp_path / "a.bin").write_bytes(b"abcdef")
+        assert read_contained_bytes(tmp_path, "a.bin", 4) == (b"abcd", True)
+
+    def test_escape_refused(self, tmp_path):
+        from core.source.contained import read_contained_bytes
+        root = tmp_path / "root"
+        root.mkdir()
+        (tmp_path / "secret.bin").write_bytes(b"SECRET")
+        assert read_contained_bytes(root, "../secret.bin", 64) is None
+        assert read_contained_bytes(
+            root, tmp_path / "secret.bin", 64) is None
+
+    def test_fifo_refused(self, tmp_path):
+        from core.source.contained import read_contained_bytes
+        os.mkfifo(tmp_path / "wedge.bin")
+        assert read_contained_bytes(tmp_path, "wedge.bin", 64) is None
+
+
+class TestReadContainedEncoding:
+    def test_utf8_decoding_is_locale_independent(self, tmp_path):
+        """read_contained decodes utf-8 explicitly — under a C locale
+        the fdopen default would mojibake multibyte content into
+        prompts/reports. Exercised in a child forced to the C locale
+        with UTF-8 mode off (the parent's locale can't prove it)."""
+        import os
+        import subprocess
+        import sys
+        from pathlib import Path
+
+        (tmp_path / "u.c").write_bytes("// héllo\n".encode())
+        repo = Path(__file__).resolve().parents[3]
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1])\n"
+            "from core.source.contained import read_contained\n"
+            "got = read_contained(sys.argv[2], 'u.c')\n"
+            "assert got == '// h\\xe9llo\\n', repr(got)\n"
+        )
+        env = {**os.environ, "LC_ALL": "C",
+               "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0"}
+        env.pop("PYTHONIOENCODING", None)
+        proc = subprocess.run(
+            [sys.executable, "-c", code, str(repo), str(tmp_path)],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        assert proc.returncode == 0, proc.stderr
+
+
+class TestAnchoredContainment:
+    """The intermediate-swap residual is CLOSED: a directory swapped
+    for an out-of-tree symlink between confine()'s resolve and the
+    open refuses instead of steering the read out of root."""
+
+    def _swap_tree(self, tmp_path):
+        root = tmp_path / "root"
+        (root / "mid").mkdir(parents=True)
+        (root / "mid" / "leaf.txt").write_text("benign")
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "leaf.txt").write_text("SECRET")
+        return root, outside
+
+    def test_swap_between_confine_and_open_refuses(
+            self, tmp_path, monkeypatch):
+        """Deterministic race: perform the swap INSIDE the confine
+        seam, after resolution succeeds and before the open runs —
+        the exact interleaving the docstring previously documented
+        as an open residual. The by-name open this replaced read
+        the out-of-tree SECRET here."""
+        from core.source import contained
+        root, outside = self._swap_tree(tmp_path)
+        real_confine = contained.confine
+
+        def confine_then_swap(base, candidate):
+            resolved = real_confine(base, candidate)
+            if resolved is not None:
+                (root / "mid").rename(tmp_path / "mid-evicted")
+                (root / "mid").symlink_to(outside)
+            return resolved
+
+        monkeypatch.setattr(contained, "confine", confine_then_swap)
+        assert contained.read_contained(root, "mid/leaf.txt") is None
+
+    def test_swap_refuses_bytes_flavor_too(self, tmp_path, monkeypatch):
+        from core.source import contained
+        root, outside = self._swap_tree(tmp_path)
+        real_confine = contained.confine
+
+        def confine_then_swap(base, candidate):
+            resolved = real_confine(base, candidate)
+            if resolved is not None:
+                (root / "mid").rename(tmp_path / "mid-evicted")
+                (root / "mid").symlink_to(outside)
+            return resolved
+
+        monkeypatch.setattr(contained, "confine", confine_then_swap)
+        assert contained.read_contained_bytes(
+            root, "mid/leaf.txt", 64) is None
+
+    def test_benign_nested_read_still_works(self, tmp_path):
+        from core.source.contained import read_contained
+        root, _ = self._swap_tree(tmp_path)
+        assert read_contained(root, "mid/leaf.txt") == "benign"
