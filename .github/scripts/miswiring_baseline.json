@@ -190,9 +190,6 @@
     "artifacts:write_only_artifact::adversarial-matrix.json": {
       "note": "operator-facing run artifact from --adversarial (adversarial_test.write_matrix); surfaced when the atomic-write idiom became visible to the writer classifier"
     },
-    "artifacts:write_only_artifact::atheris-crashes.json": {
-      "note": "operator-facing sidecar in the atheris campaign dir (normalized per-crash records carrying the Python exception triage signal): the same records ride in-process on AtherisResult.crash_records and into the campaign result dict; the file exists for humans/jq, same class as suppressions.jsonl"
-    },
     "artifacts:write_only_artifact::analysis-gaps.jsonl": {
       "note": "durable analysis-gap trail in the run directory (binary-study child-timeout records): operator-facing evidence for humans/jq, same class as suppressions.jsonl; additive schema, consumers must tolerate unknown keys"
     },
