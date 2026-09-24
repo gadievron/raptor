@@ -34,6 +34,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+from core.paths import confine
+from core.source import read_text_capped
+
 
 
 #: Per-family substring markers — the expansion of a discovered macro
@@ -183,10 +186,13 @@ def discover_aliases(target: Path) -> DiscoveryResult:
             if entry.suffix.lower() not in _HEADER_EXTS:
                 continue
             headers_seen += 1
-            try:
-                text = _join_continuations(entry.read_text(encoding="utf-8", errors="replace"))
-            except OSError:
+            resolved_entry = confine(root, entry)
+            if resolved_entry is None:
                 continue
+            got = read_text_capped(resolved_entry)
+            if got is None:
+                continue
+            text = _join_continuations(got[0])
             for m in _DEFINE_RE.finditer(text):
                 name = m.group(1)
                 expansion = m.group(2).strip()
@@ -292,6 +298,10 @@ def _iter_source_files(scan_roots: list[Path]):
     seen = 0
     yielded: set[Path] = set()
     for root in scan_roots:
+        try:
+            root_resolved = root.resolve()
+        except OSError:
+            continue
         for entry in root.rglob("*"):
             if seen >= _MAX_FILES_SOURCE_SCAN:
                 return
@@ -305,9 +315,17 @@ def _iter_source_files(scan_roots: list[Path]):
                 continue
             if resolved in yielded:
                 continue
+            if not (resolved == root_resolved
+                    or resolved.is_relative_to(root_resolved)):
+                # symlink escaping the scan root: never read content
+                # from outside the tree being scanned
+                continue
             yielded.add(resolved)
             seen += 1
-            yield entry
+            # yield the RESOLVED path: in-root symlinked sources stay
+            # readable through the capped reader (which refuses
+            # final-component links by design)
+            yield resolved
 
 
 def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
@@ -342,10 +360,10 @@ def _count_usage(scan_roots: list[Path], names: set[str]) -> dict[str, int]:
     )
 
     for entry in _iter_source_files(scan_roots):
-        try:
-            text = entry.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        got = read_text_capped(entry)
+        if got is None:
             continue
+        text = got[0]
         for line in text.split("\n"):
             # Skip lines that DEFINE one of our candidates — those
             # aren't usage, they're definition. (A define line may

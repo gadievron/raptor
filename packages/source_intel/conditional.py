@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
+from core.source import read_text_capped
+
 
 # Match preprocessor directives. Group 1 is the directive name; group 2
 # is the rest of the line (the condition for #if-family openers).
@@ -76,11 +78,16 @@ def _index_file_stat(
     """Cached parse behind :func:`_index_file` — keyed on the stat
     identity captured by the caller (the extra params exist purely
     to participate in the lru_cache key)."""
-    path = Path(path_str)
+    # resolve-first traversal parity (no target root in scope to
+    # confine against); the open stays fd-vetted regular + capped.
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        resolved = Path(path_str).resolve()
     except OSError:
         return ()
+    got = read_text_capped(resolved)
+    if got is None:
+        return ()
+    text = got[0]
 
     blocks: list[ConditionalBlock] = []
     open_stack: list[tuple[int, str, str]] = []  # (line, directive, condition)

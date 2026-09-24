@@ -26,6 +26,9 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
+
+from core.paths import confine
+from core.source import read_text_capped
 from typing import Any
 
 from core.build.build_flags import BuildFlagsContext, extract_flags
@@ -2438,10 +2441,13 @@ def _scan_c_level_source_inputs(target: Path) -> list[CLevelSourceEvidence]:
     observations: list[CLevelSourceEvidence] = []
     seen: set[tuple[str, int, str, str]] = set()
     for path in files:
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
+        resolved = confine(target, path)
+        if resolved is None:
             continue
+        got = read_text_capped(resolved)
+        if got is None:
+            continue
+        lines = got[0].splitlines()
         in_block_comment = False
         for line_no, line in enumerate(lines, start=1):
             if _PREPROC_LINE_RE.match(line):
@@ -2621,10 +2627,13 @@ def _scan_project_alias_observations(
         if entry.suffix.lower() not in _C_CPP_EXTS:
             continue
         seen_files += 1
-        try:
-            text = entry.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        resolved = confine(target, entry)
+        if resolved is None:
             continue
+        got = read_text_capped(resolved)
+        if got is None:
+            continue
+        text = got[0]
         file_lines = text.split("\n")
         for family, alias_name in alias_pairs:
             # Word-boundary check; substring would risk false positives
@@ -2686,10 +2695,16 @@ def _scan_alias_in_file(path: Path) -> list[AttributeEvidence]:
     declaration, ``function_name`` stays empty (the consumer
     renders the file-level observation either way).
     """
+    # resolve-first traversal parity (no target root in scope to
+    # confine against); the open stays fd-vetted regular + capped.
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        resolved = path.resolve()
     except OSError:
         return []
+    got = read_text_capped(resolved)
+    if got is None:
+        return []
+    text = got[0]
 
     observations: list[AttributeEvidence] = []
     file_lines = text.split("\n")
