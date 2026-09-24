@@ -145,3 +145,74 @@ class TestAmbiguousStrippedKeyFallback:
         # Exact line-key match keeps precedence over the bare fallback.
         assert by_id["src/db.go:Stmt.Scan"]["actual"] == "clean"
         assert by_id["src/db.go:Stmt.Scan"]["match"] is True
+
+
+class TestScriptHandlerInventoryCredit:
+    """Labels anchored in stamped handler spans join the inventoried
+    set: an unreviewed one scores the triage-skip presumption (or the
+    pin-matched-no-gap error), not label-drift
+    ``function_not_in_checklist``. Unstamped interstitials keep the
+    exclusion — no fabricated credit on unclassified spans."""
+
+    @staticmethod
+    def _checklist(stamped: bool) -> dict:
+        item = {"name": "interstitial:8-9", "kind": "interstitial",
+                "line_start": 8, "line_end": 9}
+        if stamped:
+            item["script_handler"] = True
+        return {"files": [{
+            "path": "mod/save.php", "language": "php",
+            "items": [
+                {"name": "helper", "kind": "function",
+                 "line_start": 4, "line_end": 6},
+                item,
+            ],
+        }]}
+
+    def _score(self, tmp_path, stamped: bool):
+        src = tmp_path / "src"
+        src.mkdir(exist_ok=True)
+        out = tmp_path / "runout" / "repo"
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "checklist.json").write_text(
+            json.dumps(self._checklist(stamped)))
+        (out / ".audit-log.jsonl").write_text("")
+        label = _label(
+            "mod/save.php:interstitial:8-9", line_start=8,
+            expected="clean", file="mod/save.php",
+        )
+        results, _ = rc._run_audit(
+            [label], {"repo": src}, out_dir=tmp_path / "runout",
+        )
+        return results[0]
+
+    def test_stamped_handler_span_is_inventoried(
+            self, tmp_path, no_pipeline):
+        row = self._score(tmp_path, stamped=True)
+        # in_inventory + triage default → triage-skip presumption.
+        assert row["actual"] == "clean"
+        assert row.get("evidence_tool") == "triage:classifier"
+
+    def test_unstamped_interstitial_stays_uncredited(
+            self, tmp_path, no_pipeline):
+        row = self._score(tmp_path, stamped=False)
+        assert row["actual"] == "error"
+        assert "function_not_in_checklist" in (
+            row.get("error_reason") or "")
+
+    def test_load_inventoried_functions_stamp_gate(self, tmp_path):
+        out = tmp_path / "audit"
+        out.mkdir()
+        ck = self._checklist(stamped=True)
+        ck["files"][0]["items"].append(
+            {"name": "interstitial:1-3", "kind": "interstitial",
+             "line_start": 1, "line_end": 3, "script_handler": False})
+        ck["files"][0]["items"].append(
+            {"name": "interstitial:20-21", "kind": "interstitial",
+             "line_start": 20, "line_end": 21})
+        (out / "checklist.json").write_text(json.dumps(ck))
+        got = rc._load_inventoried_functions(out)
+        assert ("mod/save.php", "helper") in got
+        assert ("mod/save.php", "interstitial:8-9") in got
+        assert ("mod/save.php", "interstitial:1-3") not in got
+        assert ("mod/save.php", "interstitial:20-21") not in got

@@ -887,19 +887,30 @@ def _label_preprocessor_dead(src_dir: Path | None, label: Any) -> bool:
 
 
 def _load_inventoried_functions(audit_dir: Path | None) -> set:
-    """Return {(file, function_name)} for every function in the checklist."""
+    """Return {(file, function_name)} for every function in the checklist.
+
+    Interstitial spans are excluded (synthetic residue, not reviewable
+    units) — EXCEPT spans stamped ``script_handler: true``, which gap
+    selection schedules like functions: a label anchored in one must
+    score as inventoried (triage-skip presumption / pin-matched-no-gap)
+    rather than the label-drift ``function_not_in_checklist`` error. A
+    missing stamp keeps the exclusion — attributing corpus credit on an
+    unclassified span would fabricate a verdict.
+    """
     if audit_dir is None:
         return set()
     ck_path = audit_dir / "checklist.json"
     ck = load_json(ck_path, max_bytes=_MAX_CHECKLIST_BYTES)
     if not isinstance(ck, dict):
         return set()
+    from core.inventory.script_handler import script_handler_stamp
     result = set()
     for f in ck.get("files", []):
         fpath = f.get("path", "")
         for item in f.get("items", []):
             name = item.get("name", "")
-            if name and not name.startswith("interstitial:"):
+            if name and (not name.startswith("interstitial:")
+                         or script_handler_stamp(item) is True):
                 result.add((fpath, name))
     return result
 
@@ -1146,7 +1157,14 @@ def _run_audit(
                 error_reason = ""
                 if outcome is None:
                     fn_name = label.function_id.rsplit(":", 1)[-1]
-                    if fn_name.count(".") > 0:
+                    if ":interstitial:" in label.function_id:
+                        # Interstitial names carry a colon
+                        # (``interstitial:<start>-<end>``), so the
+                        # file:name rsplit above keeps only the range —
+                        # restore the full span name for the inventory
+                        # join (stamped handler spans are inventoried).
+                        fn_name = "interstitial:" + fn_name
+                    elif fn_name.count(".") > 0:
                         fn_name = fn_name.rsplit(".", 1)[-1]
                     in_inventory = (label.source.file, fn_name) in inventoried
                     hypothesis = ""
