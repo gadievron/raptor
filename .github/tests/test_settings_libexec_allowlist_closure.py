@@ -74,6 +74,12 @@ PENDING_OPERATOR_DECISION: dict[str, str] = {
                                          "enumeration",
     "raptor-review": "audit-results navigation CLI (/review dispatch)",
     "raptor-binary-study": "binary --study dispatch",
+    "raptor-binary-study-oneshot": "one-shot binary --study dispatch "
+                                   "(sequences raptor-ghidra import + "
+                                   "raptor-binary-study, both likewise "
+                                   "un-allowlisted today — the prompts "
+                                   "are consistent family-wide until "
+                                   "the operator grants the family)",
     "raptor-clone-repo": "hardened clone helper the oss/crash lanes "
                          "mandate over bare git clone",
     "raptor-fetch-attachment": "hardened attachment fetcher",

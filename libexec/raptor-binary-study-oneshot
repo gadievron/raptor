@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+# ruff: noqa: RUF100, I001
+# (preamble protection; see .github/tests/test_libexec_marker_coverage.py)
+"""One-shot binary study: raw binary → Ghidra import → deep study.
+
+Thin sequencing glue over EXISTING tools, nothing more: the raw-binary
+onramp + import live in ``raptor-ghidra import`` (which creates the
+Ghidra project via analyzeHeadless and continues through the normal
+import path), and the study loop lives in ``raptor-binary-study``
+(which keeps its stated boundary — it never imports the hostile
+bundle itself; this stub imports FIRST, then hands it the produced
+database). Both children run under the ONE lifecycle the caller
+started for this run.
+
+Flow (raw binary in, domain-model.json out):
+
+  1. If a cached ``re-database.json`` already resolves for the
+     binary, reuse it (no re-import).
+  2. Else ``raptor-ghidra import <binary> --decompile-all --out
+     <output_dir>/ghidra-import``.
+  3. ``raptor-binary-study <re-database.json> <output_dir>`` with the
+     created ``.gpr`` (when one exists) for reading-list-driven
+     incremental decompilation between passes.
+
+Failure modes (documented, deliberate):
+  * Occupied import destination is TERMINAL — the landed semantics:
+    silently reusing a pre-existing project would trust possibly
+    stale or poisoned analysis, and degrading to the fallback
+    importers would overwrite a full-fidelity database with a
+    symbols-only one. The child's message names the two operator
+    options (pass the existing .gpr, or remove the directory); this
+    stub propagates the failure, it never works around it.
+  * No Ghidra install: the import child degrades to the r2/objdump
+    fallback importers itself (symbols-only database); the study
+    then warns that it sees call structure and types only.
+
+Usage:
+    raptor-binary-study-oneshot <binary> <output_dir>
+        [--identifier A,B] [--concept X] [--model M]
+        [--batch-target N] [--max-passes N] [--decompile-batch N]
+        [--max-cost USD] [--prep-only] [--no-bridge-seeds] [-v]
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+# ─── trust-marker check (do not import; inline by design) ───
+# fmt: off
+import os  # noqa: E402
+if not (os.environ.get("CLAUDECODE")
+        or os.environ.get("_RAPTOR_TRUSTED")):
+    sys.stderr.write(
+        f"{sys.argv[0]}: internal dispatch script.\n"
+        "  Run via 'bin/raptor' instead.\n"
+        "  Tests / power users: set _RAPTOR_TRUSTED=1 to bypass.\n"
+    )
+    sys.exit(2)
+# fmt: on
+# ─── end trust-marker check ─────────────────────────────────
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import core.startup.process_init  # noqa: E402,F401
+from core.security.log_sanitisation import sanitise_for_terminal as _sft  # noqa: E402
+
+import argparse  # noqa: E402
+import signal  # noqa: E402
+import subprocess  # noqa: E402
+
+
+#: Wall bound per child. The import child runs analyzeHeadless full
+#: auto-analysis (its own internal timeout is 3600s) and the study
+#: child bounds its own subprocesses — this is the belt-and-braces
+#: outer bound so a wedged child cannot hang the one-shot run
+#: indefinitely. Generous on purpose: a large binary legitimately
+#: spends most of an hour in each leg; too tight and the stub kills
+#: healthy work, too loose and a hang costs a workday.
+_CHILD_TIMEOUT_S = 2 * 3600
+
+
+def _fail(msg: str) -> int:
+    print(f"error: {msg}", file=sys.stderr)
+    return 1
+
+
+def _run(cmd: list[str]) -> int:
+    # cmd embeds the operator's binary path (tab-completed hostile
+    # filenames are still hostile bytes on a terminal) — escape the
+    # echoed command line.
+    printable = _sft(" ".join(str(c) for c in cmd), max_len=2000)
+    print(f"binary-study-oneshot: running {printable}", file=sys.stderr)
+    # Own process group + killpg on timeout: the import child spawns
+    # a JVM (analyzeHeadless) — killing only the direct child would
+    # orphan grandchildren still holding the project lock.
+    try:
+        proc = subprocess.Popen(cmd, start_new_session=True)
+    except OSError as exc:
+        print(f"binary-study-oneshot: failed to run "
+              f"{_sft(str(cmd[0]), max_len=300)}: "
+              f"{_sft(str(exc), max_len=300)}", file=sys.stderr)
+        return 1
+    try:
+        return proc.wait(timeout=_CHILD_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        print(f"binary-study-oneshot: child produced no exit within "
+              f"{_CHILD_TIMEOUT_S}s — killing its process group",
+              file=sys.stderr)
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            proc.kill()
+        proc.wait()
+        return 1
+
+
+def _cache_anchor_mismatch(binary: Path, redb_path: Path) -> bool:
+    """True when the cached database provably belongs to a DIFFERENT
+    binary than *binary*.
+
+    The cache candidate chain is stem-keyed: a stale same-stem
+    database (or a rebuilt binary) would silently redirect the whole
+    study — and the bridge's anchor gate would then coherently match
+    the WRONG binary's maps. Compare the binary's content anchor
+    against the anchor the cached database's fids carry; either side
+    underivable means unverifiable (legacy fid-free caches), which
+    keeps today's reuse behaviour rather than forcing a re-import
+    the operator did not ask for.
+    """
+    from core.binary.addrmap import content_anchor, from_fid
+    from core.json import load_json
+    from core.json.utils import RE_DATABASE_MAX_BYTES
+
+    expected = content_anchor(binary)
+    if not expected:
+        return False
+    try:
+        raw = load_json(redb_path, max_bytes=RE_DATABASE_MAX_BYTES)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(raw, dict):
+        return False
+    for fn in raw.get("functions") or []:
+        if isinstance(fn, dict):
+            parsed = from_fid(fn.get("fid"))
+            if parsed is not None:
+                return parsed[0] != expected
+    return False
+
+
+def _cached_redb(binary: Path) -> "Path | None":
+    """An already-imported database for *binary*, if one exists —
+    the same RAPTOR-owned candidate chain every redb reader uses,
+    with an anchor gate on top (stem-keyed candidates can belong to
+    a different build of the same name; see
+    :func:`_cache_anchor_mismatch`)."""
+    from packages.ghidra.roundtrip import redb_cache_candidates
+    for cand in redb_cache_candidates(binary):
+        if not cand.is_file():
+            continue
+        if _cache_anchor_mismatch(binary, cand):
+            print(f"binary-study-oneshot: cached database "
+                  f"{_sft(str(cand), max_len=300)} is for a "
+                  "different build (content-anchor mismatch) — "
+                  "ignoring it", file=sys.stderr)
+            continue
+        return cand
+    return None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        prog="raptor-binary-study-oneshot",
+        description="Raw binary → Ghidra import → deep study, one "
+                    "invocation (sequences raptor-ghidra import and "
+                    "raptor-binary-study).",
+    )
+    ap.add_argument("binary", type=Path, help="Raw binary to study.")
+    ap.add_argument("output_dir", type=Path,
+                    help="Output directory for study artefacts.")
+    ap.add_argument("--identifier", default=None,
+                    help="Comma-separated identifiers to study.")
+    ap.add_argument("--concept", default=None,
+                    help="Comma-separated abstract concepts to study.")
+    ap.add_argument("--model", default=None,
+                    help="LLM model override for study-run.")
+    ap.add_argument("--batch-target", type=int, default=None,
+                    help="Items per Phase-2 study batch.")
+    ap.add_argument("--max-passes", type=int, default=None,
+                    help="Outer prep+study passes.")
+    ap.add_argument("--decompile-batch", type=int, default=None,
+                    help="Max functions decompiled between passes.")
+    ap.add_argument("--max-cost", type=float, default=None,
+                    metavar="USD",
+                    help="Total LLM budget across all study passes "
+                         "(passed through to raptor-binary-study).")
+    ap.add_argument("--prep-only", action="store_true",
+                    help="Import + prep only (phase 2 in-session).")
+    ap.add_argument("--no-bridge-seeds", action="store_true",
+                    help="Skip the map→study bridge seeding.")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    parsed = ap.parse_args()
+
+    binary = parsed.binary
+    if not binary.is_file():
+        return _fail(
+            f"binary not found: {_sft(str(binary), max_len=300)}")
+    if binary.suffix in (".gpr", ".json"):
+        # Those inputs already have a database route — this stub is
+        # the RAW-binary onramp only. Refuse loudly rather than
+        # import something that is not a binary.
+        return _fail(
+            f"{_sft(str(binary), max_len=300)} is not a raw binary "
+            "— run raptor-binary-study on it directly")
+
+    output_dir = parsed.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+    libexec = Path(__file__).resolve().parent
+
+    redb = _cached_redb(binary)
+    gpr: "Path | None" = None
+    if redb is not None:
+        print(f"binary-study-oneshot: reusing cached database "
+              f"{_sft(str(redb), max_len=300)} (no re-import)",
+              file=sys.stderr)
+    else:
+        import_dir = output_dir / "ghidra-import"
+        rc = _run([
+            sys.executable, str(libexec / "raptor-ghidra"), "import",
+            str(binary), "--decompile-all", "--out", str(import_dir),
+        ])
+        if rc != 0:
+            # Includes the occupied-destination refusal — terminal
+            # per the landed semantics (see module docstring); the
+            # child already printed the operator's options.
+            print("binary-study-oneshot: import failed — not "
+                  "starting the study", file=sys.stderr)
+            return rc
+        redb = import_dir / "re-database.json"
+        if not redb.is_file():
+            return _fail(
+                f"import reported success but wrote no {redb}")
+    # The onramp creates <import-dir>/ghidra-project/<stem>/raptor.gpr;
+    # the fallback importers create none. Only pass --gpr when it
+    # exists — the study runs fine without incremental decompilation.
+    candidate_gpr = (redb.parent / "ghidra-project" / binary.stem
+                     / "raptor.gpr")
+    if candidate_gpr.is_file():
+        gpr = candidate_gpr
+
+    cmd = [sys.executable, str(libexec / "raptor-binary-study"),
+           str(redb), str(output_dir)]
+    if parsed.identifier:
+        cmd.extend(["--identifier", parsed.identifier])
+    if parsed.concept:
+        cmd.extend(["--concept", parsed.concept])
+    if parsed.model:
+        cmd.extend(["--model", parsed.model])
+    if parsed.batch_target is not None:
+        cmd.extend(["--batch-target", str(parsed.batch_target)])
+    if parsed.max_passes is not None:
+        cmd.extend(["--max-passes", str(parsed.max_passes)])
+    if parsed.decompile_batch is not None:
+        cmd.extend(["--decompile-batch", str(parsed.decompile_batch)])
+    if parsed.max_cost is not None:
+        cmd.extend(["--max-cost", str(parsed.max_cost)])
+    if parsed.prep_only:
+        cmd.append("--prep-only")
+    if parsed.no_bridge_seeds:
+        cmd.append("--no-bridge-seeds")
+    if gpr is not None:
+        cmd.extend(["--gpr", str(gpr)])
+    if parsed.verbose:
+        cmd.append("-v")
+    return _run(cmd)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
