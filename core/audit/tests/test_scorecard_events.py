@@ -35,6 +35,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from core.audit.scorecard_events import (
     buffer_confirmed_findings,
     buffer_event,
@@ -773,6 +775,20 @@ class TestOrchestratedRunBinding:
     """Binding of the whole wiring on a real (tiny, LLM-free)
     orchestrated run: emission site → result buffer → flush → sidecar,
     and the scorecard-disabled suppression."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_mechanical_detectors(self, monkeypatch) -> None:
+        """Stub the pre-loop mechanical-detector pass at its seam (the
+        test_consistency_wiring / test_peer_group idiom): it does real
+        I/O — sandboxed coccinelle spawns where spatch is installed,
+        plus the detector-cache import-closure fingerprint — seconds
+        per run, entirely orthogonal to the binding under test (review
+        outcome → self_consistency event → buffer → flush → sidecar),
+        and enough to trip the default-tier duration guard on a loaded
+        CI runner."""
+        from core.audit import orchestrator as orch
+        monkeypatch.setattr(orch, "_run_mechanical_detectors",
+                            lambda *a, **k: ({}, set()))
 
     @staticmethod
     def _setup_target(tmp_path: Path):
