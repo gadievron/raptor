@@ -565,9 +565,13 @@ def try_build_cfg(
     unsupported or the builder fails. ``file_path`` comes from gap
     records (LLM-writable), so the join is containment-checked — an
     escaping path reads as builder-unavailable, never an out-of-root
-    file read.
+    file read — and the read itself is the contained/capped one: a
+    raw ``read_text`` here wedged the whole audit on an in-tree
+    reader-less FIFO (containment says nothing about regularity) and
+    buffered planted multi-hundred-MB files whole per gap record.
     """
     from core.paths import confine
+    from core.source import read_contained
 
     ext = Path(file_path).suffix
     full_path = confine(target_path, file_path)
@@ -581,7 +585,13 @@ def try_build_cfg(
     if ext == ".py":
         try:
             from core.analysis.cfg_builder import build_python_cfg
-            src = source or full_path.read_text(errors="replace")
+            src = source or read_contained(target_path, file_path)
+            if src is None:
+                logger.debug(
+                    "try_build_cfg: unreadable or non-regular file %r",
+                    file_path,
+                )
+                return None
             return build_python_cfg(src, function_name)
         except Exception:
             logger.debug(
