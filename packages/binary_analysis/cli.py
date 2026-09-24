@@ -69,6 +69,7 @@ _COMMANDS = {
     "trace-parser",
     "harness",
     "corpus",
+    "hunt",
     "fuzz",
     "graph",
     "report",
@@ -160,6 +161,39 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Per-sample read cap in bytes (default: {DEFAULT_MAX_BYTES_PER_SAMPLE})",
     )
     corpus_p.add_argument("--out", help="Explicit output directory")
+    hunt_p = sub.add_parser(
+        "hunt",
+        help="Operator-steered anchor-family and call-graph hunt over a mapped binary",
+    )
+    hunt_p.add_argument(
+        "target",
+        help="Existing binary run directory, or a binary (mapped first, like map)",
+    )
+    hunt_p.add_argument(
+        "--anchor", action="append", default=[], metavar="TEXT",
+        help="Anchor string to hunt (repeatable; substring match by default)",
+    )
+    hunt_p.add_argument(
+        "--anchor-re", action="store_true",
+        help="Treat --anchor values as regexes (size/complexity bounded)",
+    )
+    hunt_p.add_argument(
+        "--calls", metavar="FID_OR_NAME",
+        help="List callers of this function (fid or name)",
+    )
+    hunt_p.add_argument(
+        "--and-not-calls", metavar="FID_OR_NAME",
+        help="Subtract callers of this function from --calls (chokepoint residual)",
+    )
+    hunt_p.add_argument(
+        "--transitive", action="store_true",
+        help="Walk callers transitively (bounded depth) instead of direct only",
+    )
+    hunt_p.add_argument(
+        "--max-depth", type=_positive_int, default=None,
+        help="Transitive caller depth (clamped to the documented cap)",
+    )
+    hunt_p.add_argument("--json", action="store_true", help="Emit compact JSON")
 
     fuzz_p = sub.add_parser("fuzz", help="Hand off to RAPTOR's existing fuzz workflow")
     fuzz_p.add_argument("target", help="Binary to fuzz")
@@ -806,6 +840,178 @@ def _run_corpus(args: argparse.Namespace) -> int:
     return 0
 
 
+def _validate_hunt_flags(args: argparse.Namespace) -> str | None:
+    """Flag-surface validation for ``hunt``; returns an error string.
+
+    Runs BEFORE any lifecycle or analysis so a bad flag combination
+    (or an over-complex operator regex) refuses without side effects.
+    """
+    from packages.binary_analysis.hunt import HuntError, compile_anchor_matcher
+    if not args.anchor and not args.calls:
+        return "hunt needs --anchor and/or --calls"
+    if args.anchor_re and not args.anchor:
+        return "--anchor-re requires --anchor"
+    for flag, value in (
+        ("--and-not-calls", args.and_not_calls),
+        ("--transitive", args.transitive or None),
+        ("--max-depth", args.max_depth),
+    ):
+        if value is not None and not args.calls:
+            return f"{flag} requires --calls"
+    if args.max_depth is not None and not args.transitive:
+        # Silently-inert flags are a lie about what ran: direct-caller
+        # mode is depth 1 by definition, so a depth without
+        # --transitive must refuse rather than be ignored.
+        return "--max-depth requires --transitive"
+    if args.anchor:
+        try:
+            compile_anchor_matcher(list(args.anchor), regex=args.anchor_re)
+        except HuntError as exc:
+            return str(exc)
+    return None
+
+
+def _hunt_run_dir_for_binary(args: argparse.Namespace, target: Path) -> Path | None:
+    """Bare-binary mode: map first (full lifecycle parity with
+    ``map``), then hunt inside the fresh run dir."""
+    from core.project.oplock import OpLockContention
+    from core.run.pin import ProjectArgvError
+    try:
+        out_dir = get_output_dir(
+            "understand",
+            target_name=target.stem,
+            explicit_out=None,
+            target_path=str(target),
+        )
+    except TargetMismatchError as exc:
+        print(f"raptor-binary: {exc}", file=sys.stderr)
+        return None
+    try:
+        start_run(out_dir, "understand", target=str(target))
+    except (OpLockContention, ProjectArgvError) as e:
+        print(f"raptor-binary: {e}", file=sys.stderr)
+        return None
+    # Same failure shape as map: an analyse crash must fail the run
+    # (not strand it permanently "running") and surface a scrubbed
+    # one-liner, never a raw traceback.
+    try:
+        result = analyse_blackbox_binary(target, out_dir=out_dir)
+        payload = map_result_payload(result, out_dir)
+        save_json(out_dir / "map-result.json", payload)
+    except KeyboardInterrupt:
+        fail_run(out_dir, "binary hunt interrupted")
+        raise
+    except Exception as exc:  # noqa: BLE001 - operator-facing clean failure
+        fail_run(out_dir, f"binary hunt failed: {type(exc).__name__}: {sanitise_for_terminal(str(exc), max_len=300)}")
+        print(f"raptor-binary: hunt map phase failed: {type(exc).__name__}: "
+              f"{sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
+        return None
+    return out_dir
+
+
+def _print_hunt_summary(results: list[dict[str, Any]]) -> None:
+    _sft = sanitise_for_terminal
+    for payload in results:
+        print(f"Mode: hunt ({_sft(str(payload.get('mode')))})")
+        if payload.get("mode") == "anchor":
+            families = payload.get("families") or []
+            print(f"Families: {len(families)}")
+            for family in families[:3]:
+                members = family.get("members") or []
+                names = ", ".join(
+                    _sft(str(m.get("name"))) for m in members[:4]
+                )
+                print(f"  - {_sft(str(family.get('id')))}: "
+                      f"{len(members)} member(s) — {names}")
+        else:
+            query = payload.get("query") or {}
+            print(f"Callers of {_sft(str(query.get('resolved_calls')))}: "
+                  f"{int(payload.get('caller_count') or 0)}")
+            residual = payload.get("residual")
+            if isinstance(residual, dict):
+                print(f"Chokepoint residual: {int(residual.get('count') or 0)} "
+                      f"(hypothesis tier — review queue, not findings)")
+        # Degradation and substrate-rejection notes reach the terminal,
+        # not just the JSON: a partial scan or a rejected re-database
+        # must be visible where the operator is looking.
+        for note in (payload.get("substrate_notes") or []):
+            print(f"  ⚠️ {_sft(str(note))}")
+        for line in payload.get("truncation_lines") or []:
+            print(f"  ⚠️ {_sft(str(line))}")
+        artifacts = payload.get("artifacts") or {}
+        print(f"Artifact: {artifacts.get('json')}")
+        print(f"Report: {artifacts.get('report')}")
+
+
+def _run_hunt(args: argparse.Namespace) -> int:
+    from packages.binary_analysis.hunt import (
+        HuntError,
+        run_anchor_hunt,
+        run_calls_hunt,
+    )
+    error = _validate_hunt_flags(args)
+    if error is not None:
+        print(f"raptor-binary: {error}", file=sys.stderr)
+        return 2
+    target = Path(args.target).expanduser().resolve()
+    lifecycle_dir: Path | None = None
+    if target.is_dir():
+        run_dir = target
+    elif target.is_file():
+        run_dir_or_none = _hunt_run_dir_for_binary(args, target)
+        if run_dir_or_none is None:
+            return 1
+        run_dir = run_dir_or_none
+        lifecycle_dir = run_dir
+    else:
+        print(f"raptor-binary: target is neither a run directory nor a file: {target}", file=sys.stderr)
+        return 2
+    results: list[dict[str, Any]] = []
+    try:
+        if args.anchor:
+            results.append(run_anchor_hunt(
+                run_dir, list(args.anchor), regex=args.anchor_re,
+            ))
+        if args.calls:
+            results.append(run_calls_hunt(
+                run_dir,
+                args.calls,
+                and_not_calls=args.and_not_calls,
+                transitive=args.transitive,
+                max_depth=args.max_depth,
+            ))
+        if lifecycle_dir is not None:
+            complete_run(lifecycle_dir)
+    except KeyboardInterrupt:
+        if lifecycle_dir is not None:
+            fail_run(lifecycle_dir, "binary hunt interrupted")
+        raise
+    except HuntError as exc:
+        # HuntError messages embed operator input pre-escaped, but the
+        # terminal scrub is the last line of defence either way.
+        if lifecycle_dir is not None:
+            fail_run(lifecycle_dir, f"binary hunt refused: {sanitise_for_terminal(str(exc), max_len=300)}")
+        print(f"raptor-binary: hunt refused: "
+              f"{sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 - operator-facing clean failure
+        if lifecycle_dir is not None:
+            fail_run(lifecycle_dir, f"binary hunt failed: {type(exc).__name__}: {sanitise_for_terminal(str(exc), max_len=300)}")
+        print(f"raptor-binary: hunt failed: {type(exc).__name__}: "
+              f"{sanitise_for_terminal(str(exc), max_len=300)}", file=sys.stderr)
+        return 1
+    if args.json:
+        # ensure_ascii: same terminal-JSON lane as the handoff print —
+        # payload strings are escaped at capture, but C1 controls in a
+        # hand-edited artifact must not reach the terminal raw.
+        for payload in results:
+            print(json.dumps(payload, sort_keys=True, ensure_ascii=True,
+                             default=str))
+        return 0
+    _print_hunt_summary(results)
+    return 0
+
+
 def _run_fuzz(args: argparse.Namespace) -> int:
     target = Path(args.target).expanduser().resolve()
     cmd = [
@@ -954,6 +1160,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_harness(args)
     if args.command == "corpus":
         return _run_corpus(args)
+    if args.command == "hunt":
+        return _run_hunt(args)
     if args.command == "fuzz":
         return _run_fuzz(args)
     if args.command == "graph":
