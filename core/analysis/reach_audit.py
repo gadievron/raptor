@@ -56,6 +56,11 @@ _STAGE_VERDICTS = frozenset({
     "frida_call_edge", "binary_oracle_absent", "build_excluded",
     "framework_callable", "registered_via_call", "binary_call_edge",
     "reachable", "no_path_from_entry", "called", "not_called",
+    # The interstitial vacuity stage returns "uncertain" EXPLICITLY (a
+    # terminal stop, not a fall-through): interstitial spans must never
+    # reach the graph stages below it. Deliberately outside the
+    # dead/live partition — uncertain is the neither-claim bucket.
+    "uncertain",
 })
 
 # NOTE: single-threaded use assumed — no synchronisation on this global.
@@ -171,6 +176,44 @@ def _stage_registered(ctx: _ClassifyCtx, R) -> str | None:
     return None
 
 
+def _stage_interstitial_vacuous(ctx: _ClassifyCtx, R) -> str | None:
+    """Interstitial spans never enter a call graph — stop at uncertain.
+
+    An ``interstitial`` checklist item is a synthetic file-scope span
+    (name ``interstitial:<start>-<end>``), not a callable symbol: no
+    extractor emits call edges into or out of that NAME, so the graph
+    stages below (entry-reachability, 1-hop) can only ever manufacture
+    ``no_path_from_entry`` / ``not_called`` for it — a vacuous verdict,
+    not evidence. Reachable for script-per-file handler spans is not
+    claimed either (whether the file is request-addressable is
+    deployment knowledge the graph doesn't have); ``uncertain`` keeps
+    every consumer's behavior at "analyse it". The sound line-based
+    witnesses above (module_aborts, lexical_dead) still apply — a
+    handler span below an unconditional module abort is dead
+    regardless of kind.
+
+    Sites resolve to interstitial items only via
+    ``core.inventory.lookup.lookup_function``'s stamp-gated handler
+    enclosure; the guard keys on item kind, so an unstamped
+    interstitial reaching here (a direct caller) gets the same
+    vacuity treatment.
+    """
+    items = _candidate_items(ctx.inventory, ctx.file_path, ctx.name)
+    for it in items:
+        if isinstance(it, dict) and it.get("kind") == "interstitial":
+            return "uncertain"
+    # Name-shape fallback for spans the item index cannot resolve
+    # (span boundaries drift between checklist vintages, so a caller
+    # holding an older span name misses the index): the ``:`` makes
+    # the prefix impossible as a real identifier in any inventoried
+    # language, and the 1-hop stage below returns NOT_CALLED even for
+    # names with no inventory item at all — exactly the manufactured
+    # verdict this stage exists to stop.
+    if not items and ctx.name.startswith("interstitial:"):
+        return "uncertain"
+    return None
+
+
 def _stage_entry(ctx: _ClassifyCtx, R) -> str | None:
     er = R.entry_reachability(ctx.inventory, ctx.target)
     if er == "reachable":
@@ -272,6 +315,13 @@ PRECEDENCE = (
     _stage_build_excluded,
     _stage_framework,
     _stage_registered,
+    # Interstitial spans stop here: their synthetic names never enter
+    # a call graph, so the graph stages below could only manufacture
+    # vacuous dead verdicts for them (see the stage docstring). MUST
+    # precede _stage_entry / _stage_one_hop; sits after the sound
+    # line-based dead witnesses and the runtime promotes above, which
+    # all remain valid for a file-scope span.
+    _stage_interstitial_vacuous,
     # Binary direct-call-edge promote (Inc 2b Tier 1). Affirmative
     # reachability evidence: if the binary shows an incoming direct
     # call to this function, it's reachable in this build — even when
