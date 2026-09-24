@@ -38,6 +38,14 @@ function double_quoted_attr_out_of_scope() {
     // clean-when-silent consequence as above.
     echo '<a href="' . $_GET['u'] . '">go</a>';
 }
+function single_quote_delimited_launder() {
+    // Documented FN: the opener is a single-quote-delimited PHP
+    // literal with an escaped quote, so the double-quote-delimited
+    // anchor regexes cannot see it (stated in-rule; the
+    // php/attr-encoding.yaml delimiter restriction). Same accepted
+    // clean-when-silent consequence as above.
+    echo '<font color=\'' . $_POST['color'] . '\'>x</font>';
+}
 function legacy_flagless_launder() {
     // Documented FN: flagless htmlspecialchars clears taint, but
     // before PHP 8.1 the default flags leave single quotes unencoded

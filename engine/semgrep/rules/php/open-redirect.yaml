@@ -25,10 +25,11 @@ rules:
   #   - A base URL assembled from HTTP_HOST inside a helper function
   #     and returned to the redirecting caller is invisible to
   #     single-function taint (helper indirection).
-  #   - Non-header redirects (meta refresh markup, JavaScript
-  #     location assignments) are out of the header() sink scope by
-  #     design — they are output-encoding shapes, not response-header
-  #     shapes.
+  #   - Non-Location redirects are out of the sink scope by design:
+  #     meta refresh markup and JavaScript location assignments are
+  #     output-encoding shapes, not response-header shapes, and a
+  #     'Refresh: 0; url=...' header stays silent — the anchor is the
+  #     Location: literal only.
   - id: raptor.php.open-redirect.header-location
     mode: taint
     languages: [php]

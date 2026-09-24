@@ -31,6 +31,11 @@ rules:
   #     in different statements or via printf/sprintf templates,
   #     heredocs, or a template function — are missed: no literal is
   #     concatenated adjacent to the tainted value.
+  #   - The literal anchors key on double-quote-DELIMITED PHP strings
+  #     (the regexes require the closing "), so an opener written as a
+  #     single-quote-delimited literal with an escaped quote
+  #     ('<font color=\'') is missed — the php/attr-encoding.yaml
+  #     precedent, where the same delimiter restriction is stated.
   #   - Double-quoted attributes and text content are deliberately
   #     out of scope: this is the narrow quote-breakout subset, not a
   #     claim on the whole echo-XSS class.
