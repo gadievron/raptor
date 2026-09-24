@@ -1387,6 +1387,16 @@
     "kind": "literal",
     "note": "closed loop-outcome taxonomy: the shared Literal alias both LoopTerminated.reason and ToolLoopResult.terminated_by annotate (previously two hand-synced copies baselined separately) \u2014 termination-state enum values, not a learned name vocabulary"
   },
+  "core/llm/transcript.py::_base_record": {
+    "count": 12,
+    "kind": "literal",
+    "note": "serializer field manifest for the LLM transcript JSONL record shape (persistence schema keys the replayer reads back, not a learned name vocabulary)"
+  },
+  "core/llm/transcript.py::_miss_report": {
+    "count": 10,
+    "kind": "literal",
+    "note": "diagnostic report field manifest for a replay miss (structured error-report keys quoted into the raised message and the miss ledger, not a learned name vocabulary)"
+  },
   "core/logging/__init__.py::_RESERVED_LOGRECORD_NAMES": {
     "count": 23,
     "kind": "literal"
