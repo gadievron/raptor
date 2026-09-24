@@ -48,6 +48,11 @@ CONSISTENCY_SITES_PROMPT_CAP = 5
 # is in the fail_open_census audit-log record.
 FAIL_OPEN_LEADS_PROMPT_CAP = 5
 
+# Bound on rendered includer sites in the include-topology block
+# (caller-contract MAX_SITES_RENDERED precedent); the full includer
+# set lives in include-graph.json.
+MAX_INCLUDERS_RENDERED = 10
+
 
 def _safe_path(target_path: Path, file_path: str) -> Path | None:
     """Join target_path / file_path with traversal guard.
@@ -281,6 +286,12 @@ def assemble_context(
         source=ctx.get("source", ""),
         has_inventory=bool(context_map),
     )
+    # PHP include topology (hint-tier, prompt-context only): the
+    # file's role, includer set, and the mandatory two-component
+    # census from include-graph.json. Steering context for
+    # hypothesis formation — NO verdict path reads it. Absent for
+    # non-PHP files and pre-graph runs (graceful None).
+    ctx["include_context"] = _build_include_context(out_dir, file_path)
 
     strategies = None
     try:
@@ -1037,6 +1048,45 @@ def format_context_for_prompt(
         rc = ctx["role_context"]
         sections.append(PromptSection(
             "role", "\n### Role & reachability\n" + rc["reachability_note"], 1))
+
+    if ctx.get("include_context"):
+        # Hint-tier include topology (PHP): role, includer set, and
+        # the MANDATORY two-component census qualifier. Steering
+        # context only — the block itself says so, and no verdict
+        # path consumes it.
+        ic = ctx["include_context"]
+        ip = ["\n### Include topology (hint-tier)"]
+        includers = ic.get("includers") or []
+        total = ic.get("includer_total", len(includers))
+        if ic.get("role") == "library":
+            guard = "yes" if ic.get("direct_access_guard") else "no"
+            ip.append(
+                f"- File role: library — included by {total} file(s); "
+                f"file-scope direct-access guard: {guard}. (In classic "
+                f"PHP any webroot file is also directly requestable — "
+                f"'library' does not mean unreachable.)")
+        elif ic.get("role") == "designed_entry":
+            ip.append(
+                "- File role: designed entry — no includers found "
+                "in the tree.")
+        for inc in includers[:MAX_INCLUDERS_RENDERED]:
+            ident = _defend_identifier(
+                f"{inc.get('file', '?')}:{inc.get('line', '?')}",
+                max_length=512,
+            )
+            cond = ", conditional" if inc.get("conditional") else ""
+            ip.append(
+                f"- included by `{ident}` "
+                f"({inc.get('keyword', 'include')}, "
+                f"{inc.get('position', 'file_scope')}{cond})")
+        extra = total - min(len(includers), MAX_INCLUDERS_RENDERED)
+        if extra > 0:
+            ip.append(f"- (+{extra} more includers — full set in "
+                      "include-graph.json)")
+        ip.append("- Census: " + _defend_identifier(
+            str(ic.get("qualifier", "")), max_length=400))
+        sections.append(PromptSection("include_context",
+                                      "\n".join(ip), 1))
 
     if ctx.get("threat_model"):
         # Operator-authored project threat model (assemble_context
@@ -4948,6 +4998,51 @@ def _detect_framework_guarantees(
     except Exception:
         logger.debug("framework detection failed", exc_info=True)
         return []
+
+
+# Include-graph artifact memo: keyed by (path, mtime, size) so a
+# rebuilt graph invalidates naturally; the graph is re-read once per
+# run, not once per reviewed function.
+_include_graph_memo: "BoundedMemo[dict[str, Any] | None]" = BoundedMemo(8)
+
+def _build_include_context(
+    out_dir: Path | None, file_path: str,
+) -> dict[str, Any] | None:
+    """Hint-tier include-topology facts for one file, or None.
+
+    Reads ``include-graph.json`` (written at inventory build). The
+    returned block always carries the two-component census and its
+    qualifier — an includer-set fact without the completeness
+    qualifier is exactly the dishonest shape the include-graph
+    design forbids. Enum fields are re-validated here because the
+    artifact lives in a run directory (JSON shapes are not trusted).
+    """
+    if not out_dir:
+        return None
+    try:
+        from core.inventory.include_graph import (
+            include_facts_for_file,
+            load_include_graph,
+            resolve_artifact_path,
+        )
+    except ImportError:
+        return None
+    try:
+        artifact = resolve_artifact_path(out_dir)
+        if artifact is None:
+            return None
+        st = artifact.stat()
+        key = (str(artifact), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    graph, _cached = _include_graph_memo.get_or_compute(
+        key, lambda: load_include_graph(out_dir))
+    if not graph:
+        return None
+    # Enum/bound re-validation of the untrusted artifact lives in
+    # include_facts_for_file — the ONE query both consumers (this
+    # block and validate stage C) go through.
+    return include_facts_for_file(graph, file_path) or None
 
 
 def _load_project_context(
