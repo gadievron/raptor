@@ -360,6 +360,29 @@ Examples:
     ap.add_argument("--plan-only", action="store_true",
                     help="With --orchestrator, print the plan and exit without running")
     ap.add_argument(
+        "--engine",
+        choices=["afl", "libfuzzer", "atheris"],
+        default=None,
+        help="Force a specific engine on the orchestrator path. "
+             "Honoured only when the detected target kind supports it "
+             "(atheris drives python-pkg targets); otherwise the plan "
+             "blocks with the reason. Implies --orchestrator.")
+    py_harness_group = ap.add_mutually_exclusive_group()
+    py_harness_group.add_argument(
+        "--py-harness", metavar="FILE",
+        help="Operator-written atheris TestOneInput harness (.py) for "
+             "python-pkg targets. Implies --orchestrator.")
+    py_harness_group.add_argument(
+        "--py-entry", metavar="MODULE:FUNCTION",
+        help="Scaffold a template atheris harness around this entry "
+             "point (simple case only: a target function taking one "
+             "bytes/str argument; the generated file is clearly "
+             "marked). Implies --orchestrator.")
+    ap.add_argument(
+        "--py-input", choices=["bytes", "text"], default="bytes",
+        help="Payload type the scaffolded harness feeds the entry "
+             "point (with --py-entry; default: bytes)")
+    ap.add_argument(
         "--no-verify-exploits",
         action="store_true",
         help="Skip the compile-verify step on LLM-emitted exploits "
@@ -582,6 +605,15 @@ Examples:
     # ORCHESTRATOR PATH (new): capability detection + libFuzzer/AFL++ + telemetry
     # ========================================================================
     use_orchestrator = args.orchestrator
+    if args.engine or args.py_harness or args.py_entry:
+        # Engine selection and the atheris harness flags are
+        # orchestrator-path features; the legacy AFL++ path has no
+        # equivalents, so silently dropping them is never OK.
+        if args.legacy:
+            ap.error(
+                "--legacy cannot be combined with --engine / "
+                "--py-harness / --py-entry (orchestrator-path flags)")
+        use_orchestrator = True
     if binary_path.is_dir() and not args.orchestrator:
         # Directory targets (source trees, crates, packages) only the
         # orchestrator can plan — the legacy path requires a binary
@@ -651,7 +683,12 @@ Examples:
             logger.warning("--no-env-build wins over --env-build "
                            "(negative flag precedence)")
         plan = orch.plan(binary_path, env_build=env_build_consent,
-                         run_dir=out_dir)
+                         run_dir=out_dir,
+                         engine=args.engine,
+                         py_harness=(Path(args.py_harness)
+                                     if args.py_harness else None),
+                         py_entry=args.py_entry,
+                         py_payload=args.py_input)
         print(plan.summary())
 
         if args.plan_only:

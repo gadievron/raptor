@@ -532,7 +532,8 @@ def _detect_python_pkg(pkg_dir: Path) -> TargetInfo:
         info.blockers.append("atheris not installed. Install with: pip install atheris")
     info.hints.append(
         "Atheris fuzzes Python code (and Python C extensions) using libFuzzer. "
-        "RAPTOR's harness generator can scaffold an atheris harness from a "
-        "function name."
+        "Pass --py-harness <file> for an operator-written TestOneInput "
+        "harness, or --py-entry module:function to scaffold the simple "
+        "bytes/str case."
     )
     return info

@@ -54,6 +54,13 @@ With custom corpus:
 python3 raptor.py fuzz --binary /path/to/binary --corpus /path/to/seeds --duration 3600
 ```
 
+Python package via atheris (alpha; needs `pip install atheris` and a harness —
+`--py-harness <file>` for an operator-written TestOneInput harness, or
+`--py-entry module:function` to scaffold the simple bytes/str case):
+```bash
+python3 raptor.py fuzz --binary /path/to/pypkg --py-entry mypkg.parser:parse --duration 600
+```
+
 ## macOS Shared Memory Fix
 
 If fuzzing fails with "shmget() failed", run:
