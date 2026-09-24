@@ -89,6 +89,14 @@ class LibFuzzerRunner:
 
     _STATS_RE = LIBFUZZER_STATS_RE
 
+    # -print_final_stats=1 summary lines (``stat::name: value``) —
+    # the only execution count a crash-terminated campaign prints
+    # (it dies before any NEW/pulse status line). Matched per line
+    # (no MULTILINE anchor-restart) with every window bounded.
+    _FINAL_STATS_RE = re.compile(
+        r"^stat::([A-Za-z_]{1,64}):\s{1,64}(\d{1,18})$",
+    )
+
     #: Engine label used in operator-facing log lines. Subclasses
     #: driving libFuzzer through a front-end (atheris) override it so
     #: their campaigns do not report as "libFuzzer".
@@ -265,6 +273,10 @@ class LibFuzzerRunner:
                     timeout=self.max_total_time + max(30, self.timeout_seconds + 5),
                     cwd=str(self.output_dir),
                     env=env,
+                    # env is get_safe_env() + identity scrub from
+                    # _campaign_env() — acknowledged as filtered so the
+                    # sandbox does not warn about a raw caller env.
+                    env_caller_filtered=True,
                 )
             returncode = completed.returncode
         except subprocess.TimeoutExpired:
@@ -441,6 +453,22 @@ class LibFuzzerRunner:
             result.stats.coverage_features = max(result.stats.coverage_features, int(ft))
             result.stats.corpus_size = max(result.stats.corpus_size, int(corp))
             result.stats.executions_per_second = int(eps)
+
+        # -print_final_stats summary: a campaign that dies on its
+        # first crash prints no NEW/pulse status line at all, so
+        # without these the run reports 0 executions to the audit's
+        # iteration derating.
+        for line in stderr.splitlines():
+            match = self._FINAL_STATS_RE.match(line)
+            if not match:
+                continue
+            name, value = match.group(1), int(match.group(2))
+            if name == "number_of_executed_units":
+                result.stats.total_executions = max(
+                    result.stats.total_executions, value)
+            elif name == "average_exec_per_sec" and value:
+                result.stats.executions_per_second = (
+                    result.stats.executions_per_second or value)
 
         # Crash detection. leak- artifacts are produced by LSAN
         # (detect_leaks=1 is set on the campaign env) and end the
