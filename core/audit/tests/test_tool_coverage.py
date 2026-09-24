@@ -172,6 +172,28 @@ class TestIsClassCovered:
             ) is True
             assert is_class_covered(cwe, "", "", self.ALL_TOOLS) is False
 
+    def test_preexisting_web_family_rows_now_systematically_armed(self):
+        """DOCUMENTED consequence, not a change: CWE-502/79/601/22
+        carried semgrep coverage rows before the PHP web-family legs
+        existed, but no PHP semgrep leg ever dispatched for them — on
+        PHP targets the rows were dormant (only cached SARIF or the
+        keyword-mapped dynamic rules could stamp semgrep receipts).
+        The cwe_dispatch entries make semgrep receipts systematic on
+        PHP targets, so silence in these classes now resolves
+        clean-when-silent through the pre-existing rows despite each
+        rule adjudicating a narrow sub-shape (one-arg unserialize
+        only; the quote-breakout attribute subset; header-Location
+        sinks only; include/require sinks only) and each having
+        helper-indirection FNs — the shapes are committed as
+        executable FN fixtures beside each rule. Accepted per the
+        CWE-88/327 precedent above; the rule-granular receipt design
+        (see the _CWE_TOOL_MAP comment) is the path to closing it."""
+        for cwe in ("CWE-502", "CWE-79", "CWE-601", "CWE-22"):
+            assert is_class_covered(
+                cwe, "", "", self.ALL_TOOLS, ran_tools={"semgrep"},
+            ) is True
+            assert is_class_covered(cwe, "", "", self.ALL_TOOLS) is False
+
     def test_php_family_mechanisms_name_but_never_cover(self):
         """Mechanism keywords for the unmapped families are
         naming-only (the CWE-480/481 pattern): the class appears in
