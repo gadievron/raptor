@@ -220,7 +220,7 @@ AWS credentials alone never select Bedrock.
 | `RAPTOR_BEDROCK_PROFILE` | unset | AWS named profile for SigV4 signing; also an opt-in signal. Per-model `aws_profile` > this > ambient `AWS_PROFILE`. |
 | `RAPTOR_BEDROCK_REGION` | unset | Region pin. Per-model entry > this > ambient `AWS_REGION`/`AWS_DEFAULT_REGION`; never a silent default. |
 | `RAPTOR_BEDROCK_API` | `mantle` | HTTP surface: `mantle` (SSE streaming) or `runtime` (legacy InvokeModel). Case-insensitive; unrecognised values quietly fall back to `mantle`. Per-model `bedrock_api` always wins. |
-| `RAPTOR_BEDROCK_MAX_WORKERS` | `8` | Bedrock concurrency cap, clamped 1–32; quota is per-account-per-region. Same inversion: `tuning.json max_llm_workers` wins. |
+| `RAPTOR_BEDROCK_MAX_WORKERS` | `8` (`16` under `llm_account_posture=solo`) | Bedrock concurrency cap, clamped 1–32; quota is per-account-per-region. Beats the tuning posture in both directions; same inversion as CC: `tuning.json max_llm_workers` wins. |
 | `RAPTOR_BEDROCK_PREFLIGHT_CACHE` | `~/.raptor/cache/bedrock-preflight.json` | Entitlement-preflight cache path (successes cached 24 h, failures never; the preflight is advisory and never blocks startup). Read at import — set before launch. |
 
 ### LLM response cache and scorecard

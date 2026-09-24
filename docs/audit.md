@@ -53,7 +53,7 @@ full flag table.
 | `--max-time <seconds>` | Wall-clock time limit |
 | `--no-supervisor-bound` | Do not default a wall budget under a capped Claude subagent shell (see [Running long audits](#running-long-audits)) |
 | `--review-passes <N>` | Independent review passes per function for self-consistency (default: 1) |
-| `--max-workers <N>` | Concurrent review workers (1-32; values above the cap are clamped). Overrides the transport-derived default — the operator owns the rate-limit consequences (the adaptive throttle still backs off on 429s). Also accepted by `resume` for a single segment |
+| `--max-workers <N>` | Concurrent review workers (1-32; values above the cap are clamped). Overrides the transport-derived default — the operator owns the rate-limit consequences (the adaptive throttle still backs off on 429s). Also accepted by `resume` for a single segment. Without the flag, the auto default is account-posture-aware: `tuning.json`'s `llm_account_posture` selects the fair-share (`shared`, default) or solo ceiling, and startup prints the posture plus a sibling-run observation (live LLM-consuming runs seen in the session run ledger) — a banner heuristic, never a gate |
 | `--subsystem-depth <N>` | Directory grouping depth for subsystem-ordered review (default: 0) |
 | `--max-propagation-depth <N>` | Override adaptive constraint propagation depth (default: auto-calibrated p90+2, floor 5, cap 15) |
 | `--model <name>` | Model ID (repeatable for multi-model consensus) |

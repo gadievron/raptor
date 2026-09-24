@@ -30,7 +30,8 @@ based on system hardware.
 | `joern_heap_mb` | `"auto"` | JVM heap for Joern; auto = 25% system RAM, min 1024. A proportional value landing in the compressed-oops dead zone (32-48 GiB) clamps down to 31 GiB — more effective capacity than an uncompressed 33-48 GiB heap; above 48 GiB stays proportional |
 | `joern_cpg_timeout_s` | `300` | CPG generation timeout |
 | `joern_query_timeout_s` | `300` | Per-query timeout |
-| `max_llm_workers` | `"auto"` | Parallel LLM API calls; beats the RPM-derived and claudecode caps |
+| `max_llm_workers` | `"auto"` | Parallel LLM API calls; an explicit number beats the RPM-derived, posture, and claudecode caps |
+| `llm_account_posture` | `"shared"` | Who else spends the LLM account: `shared` keeps the fair-share auto ceilings; `solo` asserts the account belongs to this host's runs and raises the account-contention (Bedrock) ceiling. Profiles own it: `max` writes `solo`, `balanced`/`default` write `shared`. Unrecognised values warn and read as `shared` |
 | `throttle_cooldown_s` | `30` | Cooldown after an LLM rate-limit response |
 | `default_max_cost_usd` | `"auto"` | Standing USD ceiling applied when a run configures **no** LLM cost cap anywhere; a CLI/programmatic cap always wins. `"auto"` (or any non-positive/non-numeric value) = no default — uncapped runs print a warning banner instead |
 | `max_semgrep_workers` | `"auto"` | Parallel Semgrep packs; auto = half CPUs. Each pack's `--jobs` is divided so concurrent packs share the host instead of each claiming every core |
