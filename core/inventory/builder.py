@@ -69,6 +69,7 @@ from .languages import (
     refine_language,
 )
 from .module_load_abort import detect_module_load_abort
+from .script_handler import stamp_script_handler_items
 from .translation_view import detect_macro_call_targets, preprocess_view
 
 logger = logging.getLogger(__name__)
@@ -1825,6 +1826,16 @@ def _process_single_file(
             old_entry = old_files[rel_path]
             if old_entry.get('sha256') == sha256:
                 old_entry['_stat'] = file_stat
+                # Reused records predating the script_handler stamp
+                # would carry the gap forward run after run (the SHA
+                # match skips the parse indefinitely). Content is
+                # byte-identical to what the old parse saw, so
+                # backfilling only the missing stamps is exact.
+                items_list = old_entry.get('items')
+                if isinstance(items_list, list):
+                    stamp_script_handler_items(
+                        items_list, language, content, only_missing=True,
+                    )
                 return old_entry
 
         # The parser reads a TranslationView (its parse_text), not raw
@@ -1863,6 +1874,15 @@ def _process_single_file(
         }
         if _uncorroborated_generated:
             record['generated_marker'] = 'uncorroborated'
+        # Script-per-file languages: classify each interstitial span
+        # (handler vs wiring) ONCE, here, and persist the verdict on
+        # the item — the single source of truth every consumer reads
+        # (gap selection, gap-for-site binding, coverage denominators,
+        # lookup enclosure, diff carry-forward, corpus credit) instead
+        # of each recomputing from source. Classified over the raw
+        # ``content`` — the same bytes gap-side hydration reads — not
+        # the translation view.
+        stamp_script_handler_items(record['items'], language, content)
         # Per-item span hashes (core.staleness format: SHA-256[:12] of
         # the raw span lines). The function-level inventory diff
         # compares these across runs to find added/changed functions
