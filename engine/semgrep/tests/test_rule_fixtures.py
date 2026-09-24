@@ -302,7 +302,7 @@ def test_every_rule_has_cwe_metadata():
 # rule file → (positive fixture, expected (line, rule-id suffix) set).
 # The fires-at-least-once positive gate would let a single sub-shape
 # (the interpolated header form, the assignment-hop include, the
-# unquoted-attribute rule) regress silently; exact (line, id) sets
+# unquoted-attribute shape) regress silently; exact (line, id) sets
 # keep every variant individually witnessed.
 _PHP_EXACT_LINES = {
     "php/unserialize-taint.yaml": ("unserialize_taint_pos.php", {

@@ -25,8 +25,12 @@ rules:
   # whole-pack scan silently STRIPPED this rule from exactly the
   # concat-heavy files it targets. The text anchor scans flat and
   # also covers openers mid-chain (a leading expression before the
-  # opener literal needs no separate pattern). The regex classes are
-  # newline-bounded, so a sink candidate never spans lines.
+  # opener literal needs no separate pattern). The literal-content
+  # classes are newline-bounded, so an OPENER LITERAL never spans
+  # lines, and only whitespace may sit between literal, dot, and
+  # value — that whitespace may span lines (dot-continuation across
+  # lines still fires), while a comment in between is a pinned
+  # boundary shape.
   #
   # Division of labour: ANY htmlspecialchars/htmlentities call
   # (qualified or not) clears taint here — the encoded-but-wrong-flags
