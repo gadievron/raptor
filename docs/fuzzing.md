@@ -1,7 +1,8 @@
 # Fuzzing
 
 RAPTOR's fuzzing subsystem orchestrates coverage-guided fuzzing campaigns
-against compiled binaries and source-level targets.  It detects what kind of
+against compiled binaries, source-level targets, and Python packages.  It
+detects what kind of
 target it is looking at, probes the host for available tooling, selects the
 appropriate fuzzing engine, manages corpus generation, and triages crashes into
 deduplicated, ranked findings wrapped as `core.witness.Witness` objects for
@@ -67,6 +68,53 @@ uses it when available.
 
 The orchestrator detects libFuzzer-instrumented binaries by scanning for the
 `LLVMFuzzerTestOneInput` symbol.
+
+### Atheris (Python, alpha)
+
+Coverage-guided fuzzing for Python packages via
+[atheris](https://github.com/google/atheris) — libFuzzer driving a Python
+`TestOneInput(data: bytes)` callback.  Detected automatically for `python-pkg`
+targets (a directory with `pyproject.toml` or `setup.py`); force it with
+`--engine atheris`.  Alpha caveats up front: single-instance campaigns that
+stop at the first crash (libFuzzer semantics), no Python coverage bridge yet,
+and no LLM harness synthesis — the harness is yours or a mechanical template.
+
+Atheris needs a harness.  Two routes:
+
+- **Operator harness** (`--py-harness <file>`): a `.py` file you wrote that
+  defines `TestOneInput` and calls `atheris.Setup`/`atheris.Fuzz`.  This is
+  the recommended route for anything beyond the trivial case.
+- **Template scaffold** (`--py-entry module:function`, optionally
+  `--py-input bytes|text`): for the simple case only — a target function
+  taking a single `bytes` or `str` argument.  RAPTOR generates a
+  clearly-marked harness file into the run directory (no LLM involved; the
+  entry point must be a plain dotted-identifier chain).  The scaffold treats
+  EVERY uncaught exception as a crash: if the target legitimately raises on
+  malformed input (a parser's `ValueError`), edit the generated file to
+  swallow the expected types before trusting the crash list.
+
+```bash
+python3 raptor.py fuzz --binary /path/to/pypkg --py-entry mypkg.parser:parse
+python3 raptor.py fuzz --binary /path/to/pypkg --py-harness ./fuzz_parse.py
+```
+
+Crashes are usually uncaught Python exceptions: the exception type and
+traceback parsed from atheris output become the triage signal on the
+normalized crash records (`atheris/atheris-crashes.json`), and each crash
+artifact is wrapped as a Witness under `<out>/witnesses/`
+(`produced_by: atheris`) — the same record shape and store the AFL++ path
+uses, so `/validate` and `raptor-verified-outcomes` consume atheris crashes
+with no extra wiring.
+
+Containment: atheris executes target code in-process, so the harness
+interpreter itself runs as an untrusted target under the full sandbox —
+network deny, read restriction to the harness/package/corpus/output paths
+plus the Python runtime, write scoping to the run directory, resource
+rlimits, and a scrubbed (never ambient) environment.
+
+atheris is an optional dependency.  When it is not importable the detector
+still reports the target with an install hint (`pip install atheris`) and
+the plan blocks instead of running.
 
 ## Target Detection
 
@@ -167,6 +215,10 @@ python3 raptor.py fuzz --binary <path> [flags]
 | `--orchestrator` | Force the orchestrator pipeline (target detection + capability checks + engine selection) |
 | `--legacy` | Force the legacy AFL++-only path |
 | `--plan-only` | Print the campaign plan and exit without running |
+| `--engine <afl\|libfuzzer\|atheris>` | Force a specific engine; honoured only when the detected target kind supports it, otherwise the plan blocks. Implies `--orchestrator` |
+| `--py-harness <file>` | Operator-written atheris `TestOneInput` harness for python-pkg targets. Implies `--orchestrator` |
+| `--py-entry <module:function>` | Scaffold a template atheris harness around this entry point (simple bytes/str case only). Implies `--orchestrator` |
+| `--py-input <bytes\|text>` | Payload type the scaffolded harness feeds the entry point (default: bytes) |
 
 ### Witness and exploit flags
 
@@ -462,7 +514,14 @@ out/fuzz_<binary>_<timestamp>/
     witnesses/                -- LLM-exploit Witness objects
                                  (skipped with --no-record-witnesses)
   witnesses/                  -- Crash Witness objects for the fuzz
-                                 crashes themselves (always recorded)
+                                 crashes themselves (always recorded;
+                                 atheris campaigns write here too)
+  atheris/                    -- atheris campaign results (python-pkg targets)
+    corpus/                   -- working corpus (seeds staged in)
+    crashes/                  -- crash-* / timeout-* / oom-* artifacts
+    atheris-crashes.json      -- normalized crash records with the
+                                 Python exception triage signal
+  atheris-harness/            -- generated template harness (--py-entry only)
   binary-context-map.json     -- radare2 binary analysis (when enabled)
   coverage-fuzz.json          -- Function-precise runtime coverage record
                                  (gcov-instrumented targets; reaches the
