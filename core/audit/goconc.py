@@ -177,9 +177,19 @@ def load_go_package(
     here — :func:`check_goroutine_isolation` decides membership from
     the parsed tree, where a comment or encoding quirk cannot fool it.
     """
+    from ._util import safe_join
+
     try:
-        anchor = Path(target_path) / rel_file
-        if anchor.suffix != ".go" or not anchor.is_file():
+        # rel_file arrives on outcome records (LLM-writable): confine
+        # the join — absolute discards target_path, ``..`` escapes it,
+        # and the sibling glob below would then sweep an arbitrary
+        # host directory into the witness. Refusal returns None ("no
+        # adjudication"), never a verdict. The sibling reads below
+        # deliberately stay containment-free (resolve-then-read):
+        # only the anchor entry is record-derived.
+        anchor = safe_join(Path(target_path), rel_file)
+        if anchor is None or anchor.suffix != ".go" \
+                or not anchor.is_file():
             return None
         siblings = sorted(anchor.parent.glob("*.go"))
     except OSError:
